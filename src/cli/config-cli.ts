@@ -69,6 +69,7 @@ type ConfigSetOperation = {
 
 const OLLAMA_API_KEY_PATH: PathSegment[] = ["models", "providers", "ollama", "apiKey"];
 const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
+const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
 const CONFIG_SET_EXAMPLE_VALUE = formatCliCommand(
   "openclaw config set gateway.port 19001 --strict-json",
@@ -350,6 +351,48 @@ function ensureValidOllamaProviderForApiKeySet(
     api: "ollama",
     models: [],
   });
+}
+
+function pruneInactiveGatewayAuthCredentials(params: {
+  root: Record<string, unknown>;
+  operations: ConfigSetOperation[];
+}): string[] {
+  const touchedGatewayAuthMode = params.operations.some((operation) =>
+    pathEquals(operation.requestedPath, GATEWAY_AUTH_MODE_PATH),
+  );
+  if (!touchedGatewayAuthMode) {
+    return [];
+  }
+
+  const gatewayRaw = params.root.gateway;
+  if (!gatewayRaw || typeof gatewayRaw !== "object" || Array.isArray(gatewayRaw)) {
+    return [];
+  }
+  const gateway = gatewayRaw as Record<string, unknown>;
+  const authRaw = gateway.auth;
+  if (!authRaw || typeof authRaw !== "object" || Array.isArray(authRaw)) {
+    return [];
+  }
+  const auth = authRaw as Record<string, unknown>;
+  const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
+
+  const removedPaths: string[] = [];
+  const remove = (key: "token" | "password") => {
+    if (Object.hasOwn(auth, key)) {
+      delete auth[key];
+      removedPaths.push(`gateway.auth.${key}`);
+    }
+  };
+
+  if (mode === "token") {
+    remove("password");
+  } else if (mode === "password") {
+    remove("token");
+  } else if (mode === "trusted-proxy") {
+    remove("token");
+    remove("password");
+  }
+  return removedPaths;
 }
 
 function toDotPath(path: PathSegment[]): string {
@@ -964,6 +1007,10 @@ export async function runConfigSet(opts: {
       ensureValidOllamaProviderForApiKeySet(next, operation.setPath);
       setAtPath(next, operation.setPath, operation.value);
     }
+    const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({
+      root: next,
+      operations,
+    });
     const nextConfig = next as OpenClawConfig;
 
     if (opts.cliOptions.dryRun) {
@@ -1051,6 +1098,13 @@ export async function runConfigSet(opts: {
     }
 
     await writeConfigFile(next);
+    if (removedGatewayAuthPaths.length > 0) {
+      runtime.log(
+        info(
+          `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${String(nextConfig.gateway?.auth?.mode ?? "<unset>")}.`,
+        ),
+      );
+    }
     if (operations.length === 1) {
       runtime.log(
         info(
