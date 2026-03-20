@@ -18,6 +18,7 @@ import {
   __testing,
   acquireSessionWriteLock,
   cleanStaleLockFiles,
+  isSessionLockHeld,
   resolveSessionLockMaxHoldFromTimeout,
 } from "./session-write-lock.js";
 
@@ -396,5 +397,40 @@ describe("acquireSessionWriteLock", () => {
 
     expect(process.listeners("SIGINT")).toContain(keepAlive);
     process.off("SIGINT", keepAlive);
+  });
+
+  it("calls onForceRelease when watchdog releases a lock", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const sessionFile = path.join(root, "session.jsonl");
+      let forceReleaseCalled = false;
+      await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 500,
+        maxHoldMs: 1,
+        onForceRelease: () => {
+          forceReleaseCalled = true;
+        },
+      });
+
+      await __testing.runLockWatchdogCheck(Date.now() + 1000);
+      expect(forceReleaseCalled).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("isSessionLockHeld returns true when lock is held", async () => {
+    await withTempSessionLockFile(async ({ sessionFile }) => {
+      expect(isSessionLockHeld(sessionFile)).toBe(false);
+
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      expect(isSessionLockHeld(sessionFile)).toBe(true);
+
+      await lock.release();
+      expect(isSessionLockHeld(sessionFile)).toBe(false);
+    });
   });
 });
