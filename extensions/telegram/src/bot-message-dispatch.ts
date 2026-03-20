@@ -40,7 +40,6 @@ import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
-import { retryTelegramFinalReplyDelivery } from "./final-reply-retry.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
   type ArchivedPreview,
