@@ -26,6 +26,14 @@
         "reason": "Filesystem guard scans are sensitive to contention."
       },
       {
+        "file": "src/infra/git-commit.test.ts",
+        "reason": "Mutates process.cwd() and core loader seams."
+      },
+      {
+        "file": "src/plugins/loader.test.ts",
+        "reason": "Constructs real Jiti loader boundaries that are stable under forks but flaky under vmForks on Node 24 CI."
+      },
+      {
         "file": "src/config/doc-baseline.integration.test.ts",
         "reason": "Rebuilds bundled config baselines through many channel schema subprocesses; keep out of the shared lane."
       },
