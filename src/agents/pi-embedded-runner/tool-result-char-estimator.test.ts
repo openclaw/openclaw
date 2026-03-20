@@ -27,7 +27,7 @@ describe("tool-result-char-estimator", () => {
     const cache = createMessageCharEstimateCache();
     expect(() => estimateMessageCharsCached(malformed, cache)).not.toThrow();
     // Malformed block should be estimated via the unknown-block fallback, not zero
-    expect(estimateMessageCharsCached(malformed, cache)).toBeGreaterThanOrEqual(0);
+    expect(estimateMessageCharsCached(malformed, cache)).toBeGreaterThan(0);
   });
 
   it("does not crash on toolResult with null content entries", () => {

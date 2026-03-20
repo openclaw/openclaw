@@ -223,6 +223,29 @@ describe("pruneContextMessages", () => {
     ).not.toThrow();
   });
 
+  it("does not crash on toolResult with null content entries", () => {
+    const malformedToolResult = {
+      role: "toolResult",
+      toolName: "read",
+      content: [null, { type: "text", text: "ok" }],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const messages: AgentMessage[] = [
+      makeUser("hello"),
+      malformedToolResult,
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    expect(() =>
+      pruneContextMessages({
+        messages,
+        settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        ctx: CONTEXT_WINDOW_1M,
+      }),
+    ).not.toThrow();
+  });
+
   it("handles well-formed thinking blocks correctly", () => {
     const messages: AgentMessage[] = [
       makeUser("hello"),
