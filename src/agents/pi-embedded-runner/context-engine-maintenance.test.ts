@@ -1,0 +1,106 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const rewriteTranscriptEntriesInSessionFileMock = vi.fn(async (_params?: unknown) => ({
+  changed: true,
+  bytesFreed: 123,
+  rewrittenEntries: 2,
+}));
+
+vi.mock("./transcript-rewrite.js", () => ({
+  rewriteTranscriptEntriesInSessionFile: (...args: unknown[]) =>
+    rewriteTranscriptEntriesInSessionFileMock(...args),
+}));
+
+import {
+  buildContextEngineMaintenanceRuntimeContext,
+  runContextEngineMaintenance,
+} from "./context-engine-maintenance.js";
+
+describe("buildContextEngineMaintenanceRuntimeContext", () => {
+  beforeEach(() => {
+    rewriteTranscriptEntriesInSessionFileMock.mockClear();
+  });
+
+  it("adds a transcript rewrite helper that targets the current session file", async () => {
+    const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      runtimeContext: { workspaceDir: "/tmp/workspace" },
+    });
+
+    expect(runtimeContext.workspaceDir).toBe("/tmp/workspace");
+    expect(typeof runtimeContext.rewriteTranscriptEntries).toBe("function");
+
+    const result = await runtimeContext.rewriteTranscriptEntries?.({
+      replacements: [
+        { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
+      ],
+    });
+
+    expect(result).toEqual({
+      changed: true,
+      bytesFreed: 123,
+      rewrittenEntries: 2,
+    });
+    expect(rewriteTranscriptEntriesInSessionFileMock).toHaveBeenCalledWith({
+      sessionFile: "/tmp/session.jsonl",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      request: {
+        replacements: [
+          { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
+        ],
+      },
+    });
+  });
+});
+
+describe("runContextEngineMaintenance", () => {
+  beforeEach(() => {
+    rewriteTranscriptEntriesInSessionFileMock.mockClear();
+  });
+
+  it("passes a rewrite-capable runtime context into maintain()", async () => {
+    const maintain = vi.fn(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+
+    const result = await runContextEngineMaintenance({
+      contextEngine: {
+        info: { id: "test", name: "Test Engine" },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+        compact: async () => ({ ok: true, compacted: false }),
+        maintain,
+      },
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      reason: "turn",
+      runtimeContext: { workspaceDir: "/tmp/workspace" },
+    });
+
+    expect(result).toEqual({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    });
+    expect(maintain).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile: "/tmp/session.jsonl",
+        runtimeContext: expect.objectContaining({
+          workspaceDir: "/tmp/workspace",
+        }),
+      }),
+    );
+    const runtimeContext = maintain.mock.calls[0]?.[0]?.runtimeContext as
+      | { rewriteTranscriptEntries?: (request: unknown) => Promise<unknown> }
+      | undefined;
+    expect(typeof runtimeContext?.rewriteTranscriptEntries).toBe("function");
+  });
+});

@@ -106,6 +106,7 @@ import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-tt
 import type { CompactEmbeddedPiSessionParams } from "../compact.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
+import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {
@@ -2042,6 +2043,18 @@ export async function runEmbeddedAttempt(
             sessionKey: params.sessionKey,
             sessionFile: params.sessionFile,
           });
+          await runContextEngineMaintenance({
+            contextEngine: params.contextEngine,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            sessionFile: params.sessionFile,
+            reason: "bootstrap",
+            runtimeContext: buildAfterTurnRuntimeContext({
+              attempt: params,
+              workspaceDir: effectiveWorkspace,
+              agentDir,
+            }),
+          });
         } catch (bootstrapErr) {
           log.warn(`context engine bootstrap failed: ${String(bootstrapErr)}`);
         }
@@ -3021,6 +3034,17 @@ export async function runEmbeddedAttempt(
                 }
               }
             }
+          }
+
+          if (!promptError && !aborted && !yieldAborted) {
+            await runContextEngineMaintenance({
+              contextEngine: params.contextEngine,
+              sessionId: sessionIdUsed,
+              sessionKey: params.sessionKey,
+              sessionFile: params.sessionFile,
+              reason: "turn",
+              runtimeContext: afterTurnRuntimeContext,
+            });
           }
         }
 
