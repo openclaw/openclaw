@@ -449,7 +449,9 @@ const plugin = {
     // Fetches the live skill.md from soundchain.io for any agent to understand
     // the full SoundChain platform capabilities, API endpoints, and architecture.
     api.registerTool(
-      ((ctx) => ({
+      ((ctx) => {
+        if (ctx.sandboxed) return null;
+        return {
         name: "soundchain_platform_docs" as const,
         description: "Fetch SoundChain platform documentation (skill.md) — API endpoints, architecture, and agent gateway capabilities.",
         inputSchema: Type.Object({}),
@@ -467,7 +469,8 @@ const plugin = {
             return json({ error: "Failed to fetch skill.md", message: String(err) });
           }
         },
-      })) as OpenClawPluginToolFactory,
+      };
+      }) as OpenClawPluginToolFactory,
       { optional: true },
     );
 

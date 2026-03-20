@@ -195,10 +195,14 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
           // so we compare createdAt to detect new messages in existing conversations.
           const lastSeen = new Map<string, string>();
           let interval: ReturnType<typeof setInterval> | undefined;
+          let followInterval: ReturnType<typeof setInterval> | undefined;
+          let aborted = false;
 
           // Cleanup helper
           const cleanup = () => {
+            aborted = true;
             if (interval) clearInterval(interval);
+            if (followInterval) clearInterval(followInterval);
             activeClients.delete(account.accountId);
             ctx.log?.info(`[${account.accountId}] SoundChain channel stopped`);
           };
@@ -229,6 +233,9 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
             ctx.log?.warn?.(`[${account.accountId}] Initial chat seed failed: ${err}`);
           }
 
+          // If aborted during seed, stop here — don't register timers
+          if (aborted) return;
+
           // Auto-follow all users on startup, then re-check every 5 minutes
           const autoFollowAll = async () => {
             try {
@@ -256,17 +263,7 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
 
           // Run immediately on startup, then every 5 minutes to catch new users
           autoFollowAll();
-          const followInterval = setInterval(autoFollowAll, 5 * 60 * 1000);
-
-          // Clear follow interval on abort
-          ctx.abortSignal.addEventListener(
-            "abort",
-            () => {
-              clearInterval(followInterval);
-              cleanup();
-            },
-            { once: true },
-          );
+          followInterval = setInterval(autoFollowAll, 5 * 60 * 1000);
 
           // Poll for new inbound messages (starts AFTER seed completes)
           interval = setInterval(async () => {
