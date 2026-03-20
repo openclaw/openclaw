@@ -1,7 +1,6 @@
 export const DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai/";
 export const DEEPINFRA_DEFAULT_MODEL_ID = "openai/gpt-oss-120b";
 export const DEEPINFRA_DEFAULT_MODEL_REF = `deepinfra/${DEEPINFRA_DEFAULT_MODEL_ID}`;
-export const DEEPINFRA_DEFAULT_MODEL_NAME = "gpt-oss-120b";
 export type DeepInfraModelCatalogEntry = {
   id: string;
   name: string;
@@ -10,6 +9,8 @@ export type DeepInfraModelCatalogEntry = {
   contextWindow: number;
   maxTokens: number;
 };
+
+const DEEPINFRA_DEFAULT_MODEL_NAME = "gpt-oss-120b";
 
 /**
  * Static fallback catalog used by the sync onboarding path and as a
