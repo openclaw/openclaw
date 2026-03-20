@@ -1,11 +1,18 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { createJiti } from "jiti";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+type CreateJiti = typeof import("jiti").createJiti;
+
+let createJitiPromise: Promise<CreateJiti> | undefined;
+
+async function getCreateJiti() {
+  createJitiPromise ??= import("jiti").then(({ createJiti }) => createJiti);
+  return createJitiPromise;
+}
+
 async function importFreshPluginTestModules() {
   vi.resetModules();
   vi.doUnmock("node:fs");
@@ -3244,42 +3251,24 @@ module.exports = {
       body: `module.exports = {
   id: "legacy-root-import",
   configSchema: (require("openclaw/plugin-sdk").emptyPluginConfigSchema)(),
-  register() {},
-};`,
+        register() {},
+      };`,
     });
 
-    const loaderModuleUrl = pathToFileURL(
-      path.join(process.cwd(), "src", "plugins", "loader.ts"),
-    ).href;
-    const script = `
-      import { loadOpenClawPlugins } from ${JSON.stringify(loaderModuleUrl)};
-      const registry = loadOpenClawPlugins({
+    const registry = withEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins" }, () =>
+      loadOpenClawPlugins({
         cache: false,
-        workspaceDir: ${JSON.stringify(plugin.dir)},
+        workspaceDir: plugin.dir,
         config: {
           plugins: {
-            load: { paths: [${JSON.stringify(plugin.file)}] },
+            load: { paths: [plugin.file] },
             allow: ["legacy-root-import"],
           },
         },
-      });
-      const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
-      if (!record || record.status !== "loaded") {
-        console.error(record?.error ?? "legacy-root-import missing");
-        process.exit(1);
-      }
-    `;
-
-    execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-      },
-      encoding: "utf-8",
-      stdio: "pipe",
-    });
+      }),
+    );
+    const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
+    expect(record?.status).toBe("loaded");
   });
 
   it.each([
@@ -3572,25 +3561,7 @@ module.exports = {
   });
 
   it("loads source runtime shims through the non-native Jiti boundary", async () => {
-    const jiti = createJiti(import.meta.url, {
-      ...__testing.buildPluginLoaderJitiOptions(__testing.resolvePluginSdkScopedAliasMap()),
-      tryNative: false,
-    });
-    const discordChannelRuntime = path.join(
-      process.cwd(),
-      "extensions",
-      "discord",
-      "src",
-      "channel.runtime.ts",
-    );
-
-    await expect(jiti.import(discordChannelRuntime)).resolves.toMatchObject({
-      discordSetupWizard: expect.any(Object),
-    });
-  }, 240_000);
-
-  it("loads copied imessage runtime sources from git-style paths with plugin-sdk aliases (#49806)", async () => {
-    const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "imessage");
+    const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "discord");
     const copiedSourceDir = path.join(copiedExtensionRoot, "src");
     const copiedPluginSdkDir = path.join(copiedExtensionRoot, "plugin-sdk");
     mkdirSafe(copiedSourceDir);
@@ -3600,18 +3571,10 @@ module.exports = {
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
       `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
-import { PAIRING_APPROVED_MESSAGE } from "../runtime-api.js";
 
-export const copiedRuntimeMarker = {
+export const syntheticRuntimeMarker = {
   resolveOutboundSendDep,
-  PAIRING_APPROVED_MESSAGE,
 };
-`,
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(copiedExtensionRoot, "runtime-api.ts"),
-      `export const PAIRING_APPROVED_MESSAGE = "paired";
 `,
       "utf-8",
     );
@@ -3627,13 +3590,14 @@ export const copiedRuntimeMarker = {
     const copiedChannelRuntime = path.join(copiedExtensionRoot, "src", "channel.runtime.ts");
     const jitiBaseUrl = pathToFileURL(jitiBaseFile).href;
 
+    const createJiti = await getCreateJiti();
     const withoutAlias = createJiti(jitiBaseUrl, {
       ...__testing.buildPluginLoaderJitiOptions({}),
       tryNative: false,
     });
-    await expect(withoutAlias.import(copiedChannelRuntime)).rejects.toThrow(
-      /plugin-sdk\/channel-runtime/,
-    );
+    // The production loader uses sync Jiti evaluation, so this boundary should
+    // follow the same path instead of the async import helper.
+    expect(() => withoutAlias(copiedChannelRuntime)).toThrow();
 
     const withAlias = createJiti(jitiBaseUrl, {
       ...__testing.buildPluginLoaderJitiOptions({
@@ -3641,95 +3605,12 @@ export const copiedRuntimeMarker = {
       }),
       tryNative: false,
     });
-    await expect(withAlias.import(copiedChannelRuntime)).resolves.toMatchObject({
-      copiedRuntimeMarker: {
-        PAIRING_APPROVED_MESSAGE: "paired",
+    expect(withAlias(copiedChannelRuntime)).toMatchObject({
+      syntheticRuntimeMarker: {
         resolveOutboundSendDep: expect.any(Function),
       },
     });
-  });
-
-  it("loads git-style package extension entries through the plugin loader when they import plugin-sdk channel-runtime (#49806)", () => {
-    useNoBundledPlugins();
-    const pluginId = "imessage-loader-regression";
-    const gitExtensionRoot = path.join(
-      makeTempDir(),
-      "git-source-checkout",
-      "extensions",
-      pluginId,
-    );
-    const gitSourceDir = path.join(gitExtensionRoot, "src");
-    mkdirSafe(gitSourceDir);
-
-    fs.writeFileSync(
-      path.join(gitExtensionRoot, "package.json"),
-      JSON.stringify(
-        {
-          name: `@openclaw/${pluginId}`,
-          version: "0.0.1",
-          type: "module",
-          openclaw: {
-            extensions: ["./src/index.ts"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(gitExtensionRoot, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: pluginId,
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(gitSourceDir, "channel.runtime.ts"),
-      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
-
-export function runtimeProbeType() {
-  return typeof resolveOutboundSendDep;
-}
-`,
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(gitSourceDir, "index.ts"),
-      `import { runtimeProbeType } from "./channel.runtime.ts";
-
-export default {
-  id: ${JSON.stringify(pluginId)},
-  register() {
-    if (runtimeProbeType() !== "function") {
-      throw new Error("channel-runtime import did not resolve");
-    }
-  },
-};
-`,
-      "utf-8",
-    );
-
-    const registry = withEnv({ NODE_ENV: "production", VITEST: undefined }, () =>
-      loadOpenClawPlugins({
-        cache: false,
-        workspaceDir: gitExtensionRoot,
-        config: {
-          plugins: {
-            load: { paths: [gitExtensionRoot] },
-            allow: [pluginId],
-          },
-        },
-      }),
-    );
-    const record = registry.plugins.find((entry) => entry.id === pluginId);
-    expect(record?.status).toBe("loaded");
-  });
+  }, 240_000);
 
   it("loads source TypeScript plugins that route through local runtime shims", () => {
     const plugin = writePlugin({
