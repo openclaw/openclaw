@@ -531,6 +531,10 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth_permanent");
   });
 
+  it("treats HTTP 404 as model_not_found", () => {
+    expect(classifyFailoverReasonFromHttpStatus(404)).toBe("model_not_found");
+    expect(classifyFailoverReasonFromHttpStatus(404, "Not Found")).toBe("model_not_found");
+  });
   it("treats HTTP 422 as format error", () => {
     expect(classifyFailoverReasonFromHttpStatus(422)).toBe("format");
     expect(classifyFailoverReasonFromHttpStatus(422, "check open ai req parameter error")).toBe(
