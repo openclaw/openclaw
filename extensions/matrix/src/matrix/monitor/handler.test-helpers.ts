@@ -62,6 +62,7 @@ type MatrixHandlerTestHarnessOptions = {
     queuedFinal: boolean;
     counts: { final: number; block: number; tool: number };
   }>;
+  inboundDeduper?: MatrixMonitorHandlerParams["inboundDeduper"];
   shouldAckReaction?: () => boolean;
   enqueueSystemEvent?: (...args: unknown[]) => void;
   getRoomInfo?: MatrixMonitorHandlerParams["getRoomInfo"];
@@ -179,6 +180,7 @@ export function createMatrixHandlerTestHarness(
     startupMs: options.startupMs ?? 0,
     startupGraceMs: options.startupGraceMs ?? 0,
     dropPreStartupMessages: options.dropPreStartupMessages ?? true,
+    inboundDeduper: options.inboundDeduper,
     directTracker: {
       isDirectMessage: async () => options.isDirectMessage ?? true,
     },

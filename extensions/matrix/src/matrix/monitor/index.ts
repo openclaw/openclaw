@@ -25,6 +25,7 @@ import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
+import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 
@@ -136,6 +137,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   setActiveMatrixClient(client, auth.accountId);
   let cleanedUp = false;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
+  const inboundDeduper = await createMatrixInboundEventDeduper({
+    auth,
+    env: process.env,
+  });
   const cleanup = async () => {
     if (cleanedUp) {
       return;
@@ -143,6 +148,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     cleanedUp = true;
     try {
       threadBindingManager?.stop();
+      await inboundDeduper.stop();
     } finally {
       await releaseSharedClientInstance(client, "persist");
       setActiveMatrixClient(null, auth.accountId);
@@ -219,6 +225,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     startupMs,
     startupGraceMs,
     dropPreStartupMessages,
+    inboundDeduper,
     directTracker,
     getRoomInfo,
     getMemberDisplayName,

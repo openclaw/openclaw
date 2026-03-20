@@ -5,6 +5,13 @@ const hoisted = vi.hoisted(() => {
   const state = {
     startClientError: null as Error | null,
   };
+  const inboundDeduper = {
+    claimEvent: vi.fn(() => true),
+    commitEvent: vi.fn(async () => undefined),
+    releaseEvent: vi.fn(),
+    flush: vi.fn(async () => undefined),
+    stop: vi.fn(async () => undefined),
+  };
   const client = {
     id: "matrix-client",
     hasPersistedSyncState: vi.fn(() => false),
@@ -26,6 +33,7 @@ const hoisted = vi.hoisted(() => {
     callOrder,
     client,
     createMatrixRoomMessageHandler,
+    inboundDeduper,
     logger,
     releaseSharedClientInstance,
     resolveTextChunkLimit,
@@ -190,6 +198,10 @@ vi.mock("./handler.js", () => ({
   createMatrixRoomMessageHandler: hoisted.createMatrixRoomMessageHandler,
 }));
 
+vi.mock("./inbound-dedupe.js", () => ({
+  createMatrixInboundEventDeduper: vi.fn(async () => hoisted.inboundDeduper),
+}));
+
 vi.mock("./legacy-crypto-restore.js", () => ({
   maybeRestoreLegacyMatrixBackup: vi.fn(),
 }));
@@ -217,6 +229,11 @@ describe("monitorMatrixProvider", () => {
     hoisted.setActiveMatrixClient.mockReset();
     hoisted.stopThreadBindingManager.mockReset();
     hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
+    hoisted.inboundDeduper.claimEvent.mockReset().mockReturnValue(true);
+    hoisted.inboundDeduper.commitEvent.mockReset().mockResolvedValue(undefined);
+    hoisted.inboundDeduper.releaseEvent.mockReset();
+    hoisted.inboundDeduper.flush.mockReset().mockResolvedValue(undefined);
+    hoisted.inboundDeduper.stop.mockReset().mockResolvedValue(undefined);
     hoisted.createMatrixRoomMessageHandler.mockReset().mockReturnValue(vi.fn());
     Object.values(hoisted.logger).forEach((mock) => mock.mockReset());
   });

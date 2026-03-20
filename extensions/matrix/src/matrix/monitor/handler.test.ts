@@ -989,3 +989,155 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("matrix monitor handler durable inbound dedupe", () => {
+  it("skips replayed inbound events before session recording", async () => {
+    const inboundDeduper = {
+      claimEvent: vi.fn(() => false),
+      commitEvent: vi.fn(async () => undefined),
+      releaseEvent: vi.fn(),
+    };
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      inboundDeduper,
+      dispatchReplyFromConfig: vi.fn(async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      })),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$dup",
+        body: "hello",
+      }),
+    );
+
+    expect(inboundDeduper.claimEvent).toHaveBeenCalledWith({
+      roomId: "!room:example.org",
+      eventId: "$dup",
+    });
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
+    expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
+  });
+
+  it("commits inbound events before reply side effects", async () => {
+    const callOrder: string[] = [];
+    const inboundDeduper = {
+      claimEvent: vi.fn(() => {
+        callOrder.push("claim");
+        return true;
+      }),
+      commitEvent: vi.fn(async () => {
+        callOrder.push("commit");
+      }),
+      releaseEvent: vi.fn(() => {
+        callOrder.push("release");
+      }),
+    };
+    const recordInboundSession = vi.fn(async () => {
+      callOrder.push("record");
+    });
+    const dispatchReplyFromConfig = vi.fn(async () => {
+      callOrder.push("dispatch");
+      return {
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      };
+    });
+    const { handler } = createMatrixHandlerTestHarness({
+      inboundDeduper,
+      recordInboundSession,
+      dispatchReplyFromConfig,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$commit-order",
+        body: "hello",
+      }),
+    );
+
+    expect(callOrder).toEqual(["claim", "record", "dispatch", "commit"]);
+    expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
+  });
+
+  it("releases a claimed event when reply dispatch fails before completion", async () => {
+    const inboundDeduper = {
+      claimEvent: vi.fn(() => true),
+      commitEvent: vi.fn(async () => undefined),
+      releaseEvent: vi.fn(),
+    };
+    const runtime = {
+      error: vi.fn(),
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      inboundDeduper,
+      runtime: runtime as never,
+      recordInboundSession: vi.fn(async () => {
+        throw new Error("disk failed");
+      }),
+      dispatchReplyFromConfig: vi.fn(async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      })),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$release-on-error",
+        body: "hello",
+      }),
+    );
+
+    expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
+    expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
+      roomId: "!room:example.org",
+      eventId: "$release-on-error",
+    });
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("matrix handler failed"));
+  });
+
+  it("commits a claimed event when dispatch completes without a final reply", async () => {
+    const callOrder: string[] = [];
+    const inboundDeduper = {
+      claimEvent: vi.fn(() => {
+        callOrder.push("claim");
+        return true;
+      }),
+      commitEvent: vi.fn(async () => {
+        callOrder.push("commit");
+      }),
+      releaseEvent: vi.fn(() => {
+        callOrder.push("release");
+      }),
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      inboundDeduper,
+      recordInboundSession: vi.fn(async () => {
+        callOrder.push("record");
+      }),
+      dispatchReplyFromConfig: vi.fn(async () => {
+        callOrder.push("dispatch");
+        return {
+          queuedFinal: false,
+          counts: { final: 0, block: 0, tool: 0 },
+        };
+      }),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$no-final",
+        body: "hello",
+      }),
+    );
+
+    expect(callOrder).toEqual(["claim", "record", "dispatch", "commit"]);
+    expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
+  });
+});
