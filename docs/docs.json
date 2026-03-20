@@ -1076,6 +1076,7 @@
                 "group": "Extensions",
                 "pages": [
                   "plugins/building-extensions",
+                  "plugins/sdk-migration",
                   "plugins/architecture",
                   "plugins/community",
                   "plugins/bundles",
