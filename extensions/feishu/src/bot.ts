@@ -67,7 +67,8 @@ export async function resolveGroupName(params: {
   log: (...args: unknown[]) => void;
 }): Promise<string | undefined> {
   const { account, chatId, log } = params;
-  const cached = groupNameCache.get(chatId);
+  const cacheKey = `${account.accountId}:${chatId}`;
+  const cached = groupNameCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.name || undefined;
   }
@@ -76,13 +77,13 @@ export async function resolveGroupName(params: {
     const chatInfo = await getChatInfo(client, chatId);
     const name = chatInfo?.name?.trim();
     if (name) {
-      groupNameCache.set(chatId, {
+      groupNameCache.set(cacheKey, {
         name,
         expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
       });
       return name;
     }
-    groupNameCache.set(chatId, {
+    groupNameCache.set(cacheKey, {
       name: "",
       expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
     });
@@ -90,7 +91,7 @@ export async function resolveGroupName(params: {
     log(
       `feishu[${account.accountId}]: getChatInfo failed for ${chatId}: ${String(err)}`,
     );
-    groupNameCache.set(chatId, {
+    groupNameCache.set(cacheKey, {
       name: "",
       expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
     });
