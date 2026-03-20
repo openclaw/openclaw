@@ -31,6 +31,13 @@ const SafeRelativeModulePathSchema = z
   .string()
   .refine(isSafeRelativeModulePath, "module must be a safe relative path (no absolute paths)");
 
+const HookSessionTargetSchema = z.union([
+  z.literal("main"),
+  z.literal("isolated"),
+  z.literal("current"),
+  z.string().regex(/^session:.+$/),
+]);
+
 export const HookMappingSchema = z
   .object({
     id: z.string().optional(),
@@ -45,6 +52,7 @@ export const HookMappingSchema = z
     name: z.string().optional(),
     agentId: z.string().optional(),
     sessionKey: z.string().optional().register(sensitive),
+    sessionTarget: HookSessionTargetSchema.optional(),
     messageTemplate: z.string().optional(),
     textTemplate: z.string().optional(),
     deliver: z.boolean().optional(),

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
+import type { HookSessionTarget } from "../config/types.hooks.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import type { HookMessageChannel } from "./hooks.js";
 
@@ -13,6 +14,7 @@ export type HookMappingResolved = {
   name?: string;
   agentId?: string;
   sessionKey?: string;
+  sessionTarget?: HookSessionTarget;
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
@@ -50,6 +52,7 @@ export type HookAction =
       agentId?: string;
       wakeMode: "now" | "next-heartbeat";
       sessionKey?: string;
+      sessionTarget?: HookSessionTarget;
       deliver?: boolean;
       allowUnsafeExternalContent?: boolean;
       channel?: HookMessageChannel;
@@ -90,6 +93,7 @@ type HookTransformResult = Partial<{
   wakeMode: "now" | "next-heartbeat";
   name: string;
   sessionKey: string;
+  sessionTarget: HookSessionTarget;
   deliver: boolean;
   allowUnsafeExternalContent: boolean;
   channel: HookMessageChannel;
@@ -102,6 +106,26 @@ type HookTransformResult = Partial<{
 type HookTransformFn = (
   ctx: HookMappingContext,
 ) => HookTransformResult | Promise<HookTransformResult>;
+
+function getHookSessionTargetError() {
+  return 'sessionTarget must be "main", "isolated", "current", or "session:<id>"';
+}
+
+function resolveHookSessionTarget(raw: unknown): HookSessionTarget | null {
+  if (raw === undefined) {
+    return "isolated";
+  }
+  if (raw === "main" || raw === "isolated" || raw === "current") {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith("session:") && trimmed.length > "session:".length) {
+      return trimmed as HookSessionTarget;
+    }
+  }
+  return null;
+}
 
 export function resolveHookMappings(
   hooks?: HooksConfig,
@@ -208,6 +232,7 @@ function normalizeHookMapping(
     name: mapping.name,
     agentId: mapping.agentId?.trim() || undefined,
     sessionKey: mapping.sessionKey,
+    sessionTarget: mapping.sessionTarget,
     messageTemplate: mapping.messageTemplate,
     textTemplate: mapping.textTemplate,
     deliver: mapping.deliver,
@@ -261,6 +286,7 @@ function buildActionFromMapping(
       agentId: mapping.agentId,
       wakeMode: mapping.wakeMode ?? "now",
       sessionKey: renderOptional(mapping.sessionKey, ctx),
+      sessionTarget: mapping.sessionTarget ?? "isolated",
       deliver: mapping.deliver,
       allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
       channel: mapping.channel,
@@ -299,6 +325,7 @@ function mergeAction(
     name: override.name ?? baseAgent?.name,
     agentId: override.agentId ?? baseAgent?.agentId,
     sessionKey: override.sessionKey ?? baseAgent?.sessionKey,
+    sessionTarget: override.sessionTarget ?? baseAgent?.sessionTarget,
     deliver: typeof override.deliver === "boolean" ? override.deliver : baseAgent?.deliver,
     allowUnsafeExternalContent:
       typeof override.allowUnsafeExternalContent === "boolean"
@@ -322,6 +349,11 @@ function validateAction(action: HookAction): HookMappingResult {
   if (!action.message?.trim()) {
     return { ok: false, error: "hook mapping requires message" };
   }
+  const sessionTarget = resolveHookSessionTarget(action.sessionTarget);
+  if (!sessionTarget) {
+    return { ok: false, error: getHookSessionTargetError() };
+  }
+  action.sessionTarget = sessionTarget;
   return { ok: true, action };
 }
 

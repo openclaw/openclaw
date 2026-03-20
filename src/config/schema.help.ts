@@ -1261,6 +1261,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Target agent ID for mapping execution when action routing should not use defaults. Use dedicated automation agents to isolate webhook behavior from interactive operator sessions.",
   "hooks.mappings[].sessionKey":
     "Explicit session key override for mapping-delivered messages to control thread continuity. Use stable scoped keys so repeated events correlate without leaking into unrelated conversations.",
+  "hooks.mappings[].sessionTarget":
+    'Agent session target mode for mapping execution. Use "isolated" to force a fresh session every run, or "main", "current", or "session:<id>" when the hook should resume an existing session instead of starting over.',
   "hooks.mappings[].messageTemplate":
     "Template for synthesizing structured mapping input into the final message content sent to the target action path. Keep templates deterministic so downstream parsing and behavior remain stable.",
   "hooks.mappings[].textTemplate":

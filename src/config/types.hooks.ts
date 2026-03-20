@@ -8,6 +8,8 @@ export type HookMappingTransform = {
   export?: string;
 };
 
+export type HookSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
+
 export type HookMappingConfig = {
   id?: string;
   match?: HookMappingMatch;
@@ -17,6 +19,11 @@ export type HookMappingConfig = {
   /** Route this hook to a specific agent (unknown ids fall back to the default agent). */
   agentId?: string;
   sessionKey?: string;
+  /**
+   * Session target mode for agent hook execution.
+   * "isolated" forces a fresh session each time; other values allow session reuse.
+   */
+  sessionTarget?: HookSessionTarget;
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;

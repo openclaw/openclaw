@@ -321,6 +321,53 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("passes through explicit sessionTarget for direct and mapped agent hooks", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:"],
+      mappings: [
+        {
+          match: { path: "mapped-resume" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionKey: "hook:mapped:resume",
+          sessionTarget: "main",
+        },
+      ],
+    };
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const direct = await postHook(port, "/hooks/agent", {
+        message: "Resume this",
+        sessionKey: "hook:direct:resume",
+        sessionTarget: "main",
+      });
+      expect(direct.status).toBe(200);
+      await waitForSystemEvent();
+
+      const directCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string; job?: { sessionTarget?: string } }
+        | undefined;
+      expect(directCall?.sessionKey).toBe("hook:direct:resume");
+      expect(directCall?.job?.sessionTarget).toBe("main");
+      drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOkOnce();
+      const mapped = await postHook(port, "/hooks/mapped-resume", { subject: "hello" });
+      expect(mapped.status).toBe(200);
+      await waitForSystemEvent();
+
+      const mappedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string; job?: { sessionTarget?: string } }
+        | undefined;
+      expect(mappedCall?.sessionKey).toBe("hook:mapped:resume");
+      expect(mappedCall?.job?.sessionTarget).toBe("main");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
   test("dedupes repeated /hooks/agent deliveries by idempotency key", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {
