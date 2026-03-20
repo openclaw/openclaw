@@ -158,61 +158,113 @@ export interface MessagingClient {
   followUser(profileId: string): Promise<void>;
 }
 
+/**
+ * Dual-mode client: tries Vercel REST API first (always available),
+ * falls back to Lambda GraphQL if REST fails.
+ */
 export function createMessagingClient(apiUrl: string, token: string): MessagingClient {
+  // Derive base URL for REST endpoints: https://soundchain.io
+  const baseUrl = "https://soundchain.io";
+
+  async function restGet(path: string): Promise<Record<string, unknown>> {
+    const res = await fetch(`${baseUrl}${path}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`REST ${path}: ${res.status}`);
+    return (await res.json()) as Record<string, unknown>;
+  }
+
+  async function restPost(
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const res = await fetch(`${baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`REST ${path}: ${res.status}`);
+    return (await res.json()) as Record<string, unknown>;
+  }
+
   return {
     async getChats(): Promise<Chat[]> {
-      const data = await graphql(apiUrl, token, CHATS_QUERY);
-      const connection = data.chats as { nodes?: Chat[] } | undefined;
-      return connection?.nodes ?? [];
+      try {
+        const data = await restGet("/api/pulse/chats");
+        return (data.chats as Chat[]) ?? [];
+      } catch {
+        // Fallback to GraphQL
+        const data = await graphql(apiUrl, token, CHATS_QUERY);
+        const connection = data.chats as { nodes?: Chat[] } | undefined;
+        return connection?.nodes ?? [];
+      }
     },
 
     async sendMessage(toProfileId: string, message: string): Promise<ChatMessage> {
-      const data = await graphql(apiUrl, token, SEND_MESSAGE_MUTATION, {
-        toId: toProfileId,
-        message,
-      });
-      const payload = data.sendMessage as { message?: ChatMessage } | undefined;
-      const result = payload?.message;
-      if (!result) throw new Error("sendMessage returned null");
-      return result;
+      try {
+        const data = await restPost("/api/pulse/send", { toId: toProfileId, message });
+        const result = data.message as ChatMessage | undefined;
+        if (!result) throw new Error("sendMessage returned null");
+        return result;
+      } catch {
+        // Fallback to GraphQL
+        const data = await graphql(apiUrl, token, SEND_MESSAGE_MUTATION, {
+          toId: toProfileId,
+          message,
+        });
+        const payload = data.sendMessage as { message?: ChatMessage } | undefined;
+        const result = payload?.message;
+        if (!result) throw new Error("sendMessage returned null");
+        return result;
+      }
     },
 
     async getUnreadCount(): Promise<number> {
-      const data = await graphql(apiUrl, token, UNREAD_COUNT_QUERY);
-      return (data.unreadMessageCount as number | undefined) ?? 0;
+      try {
+        const data = await restGet("/api/pulse/chats");
+        const chats = (data.chats as Chat[]) ?? [];
+        return chats.filter((c) => c.unread).length;
+      } catch {
+        const data = await graphql(apiUrl, token, UNREAD_COUNT_QUERY);
+        return (data.unreadMessageCount as number | undefined) ?? 0;
+      }
     },
 
     async getAllUsers(): Promise<UserProfile[]> {
-      const allUsers: UserProfile[] = [];
-      let cursor: string | null = null;
-      let hasNext = true;
-
-      while (hasNext) {
-        const page: Record<string, unknown> = { first: 50 };
-        if (cursor) page.after = cursor;
-
-        const data = await graphql(apiUrl, token, EXPLORE_USERS_QUERY, { page });
-        const connection = data.exploreUsers as
-          | {
-              nodes?: UserProfile[];
-              pageInfo?: { hasNextPage?: boolean; endCursor?: string };
-            }
-          | undefined;
-
-        const nodes = connection?.nodes ?? [];
-        allUsers.push(...nodes);
-
-        hasNext = connection?.pageInfo?.hasNextPage ?? false;
-        cursor = connection?.pageInfo?.endCursor ?? null;
+      try {
+        const data = await restGet("/api/pulse/users?limit=100");
+        return (data.users as UserProfile[]) ?? [];
+      } catch {
+        // Fallback to GraphQL pagination
+        const allUsers: UserProfile[] = [];
+        let cursor: string | null = null;
+        let hasNext = true;
+        while (hasNext) {
+          const page: Record<string, unknown> = { first: 50 };
+          if (cursor) page.after = cursor;
+          const data = await graphql(apiUrl, token, EXPLORE_USERS_QUERY, { page });
+          const connection = data.exploreUsers as
+            | { nodes?: UserProfile[]; pageInfo?: { hasNextPage?: boolean; endCursor?: string } }
+            | undefined;
+          allUsers.push(...(connection?.nodes ?? []));
+          hasNext = connection?.pageInfo?.hasNextPage ?? false;
+          cursor = connection?.pageInfo?.endCursor ?? null;
+        }
+        return allUsers;
       }
-
-      return allUsers;
     },
 
     async followUser(profileId: string): Promise<void> {
-      await graphql(apiUrl, token, FOLLOW_PROFILE_MUTATION, {
-        input: { followedId: profileId },
-      });
+      try {
+        await restPost("/api/pulse/follow", { profileId });
+      } catch {
+        await graphql(apiUrl, token, FOLLOW_PROFILE_MUTATION, {
+          input: { followedId: profileId },
+        });
+      }
     },
   };
 }

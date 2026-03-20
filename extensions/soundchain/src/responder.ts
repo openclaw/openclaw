@@ -25,13 +25,13 @@ const TIMEOUT_MS = 90_000; // Bumped to 90s — content extraction + Claude resp
 const CONTENT_FETCH_TIMEOUT_MS = 15_000;
 
 // Mac Mini node/claude paths (launchd doesn't inherit shell PATH)
-const NODE_DIR = "/Users/frankchavez/local/node/bin";
+const HOME_DIR = process.env.HOME ?? "/Users/soundchain";
+const NODE_DIR = `${HOME_DIR}/.local/bin`;
 const CLAUDE_BIN = `${NODE_DIR}/claude`;
-const SYSTEM_PROMPT_FILE = "/Users/frankchavez/.openclaw/furl-system-prompt.txt";
+const SYSTEM_PROMPT_FILE = `${HOME_DIR}/.openclaw/furl-system-prompt.txt`;
 
-// OAuth token from OpenClaw config — authenticates Claude CLI without interactive login
-const CLAUDE_OAUTH_TOKEN =
-  "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";
+// OAuth token — use env var if set, otherwise rely on existing Claude CLI session
+const CLAUDE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
 
 /**
  * Generate a reply using Claude CLI on the Mac Mini.
@@ -83,9 +83,9 @@ export async function generateReply(senderName: string, message: string): Promis
     const proc = spawn("bash", ["-c", cmd], {
       env: {
         ...process.env,
-        HOME: process.env.HOME ?? "/Users/frankchavez",
+        HOME: process.env.HOME ?? "/Users/soundchain",
         PATH: `${NODE_DIR}:${process.env.PATH ?? "/usr/bin:/bin"}`,
-        CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_OAUTH_TOKEN,
+        ...(CLAUDE_OAUTH_TOKEN ? { CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_OAUTH_TOKEN } : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -150,9 +150,9 @@ function generateReplyInline(senderName: string, message: string): Promise<strin
     const proc = spawn("bash", ["-c", cmd], {
       env: {
         ...process.env,
-        HOME: process.env.HOME ?? "/Users/frankchavez",
+        HOME: process.env.HOME ?? "/Users/soundchain",
         PATH: `${NODE_DIR}:${process.env.PATH ?? "/usr/bin:/bin"}`,
-        CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_OAUTH_TOKEN,
+        ...(CLAUDE_OAUTH_TOKEN ? { CLAUDE_CODE_OAUTH_TOKEN: CLAUDE_OAUTH_TOKEN } : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
