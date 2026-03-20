@@ -1,13 +1,13 @@
 ---
 name: session-memory
-description: "Save session context to memory when /new or /reset command is issued"
+description: "Save session context to memory when /new or /reset command is issued, or on idle/daily automatic resets"
 homepage: https://docs.openclaw.ai/automation/hooks#session-memory
 metadata:
   {
     "openclaw":
       {
         "emoji": "💾",
-        "events": ["command:new", "command:reset"],
+        "events": ["command:new", "command:reset", "session:idle_reset", "session:daily_reset"],
         "requires": { "config": ["workspace.dir"] },
         "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with OpenClaw" }],
       },

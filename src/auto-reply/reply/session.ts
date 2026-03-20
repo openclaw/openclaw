@@ -5,7 +5,7 @@ import {
   normalizeConversationText,
   parseTelegramChatIdFromTarget,
 } from "../../acp/conversation-id.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -36,6 +36,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
@@ -333,9 +334,10 @@ export async function initSessionState(params: {
     resetType,
     resetOverride: channelReset,
   });
-  const freshEntry = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
-    : false;
+  const freshnessResult = entry
+    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy })
+    : { fresh: false, dailyResetAt: undefined, idleExpiresAt: undefined };
+  const freshEntry = freshnessResult.fresh;
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
@@ -365,6 +367,22 @@ export async function initSessionState(params: {
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
+    // Emit session reset events for idle/daily resets (not explicit /new or /reset commands)
+    // so that session-memory and other hooks can save context on automatic resets.
+    if (!resetTriggered && entry) {
+      const staleIdle =
+        freshnessResult.idleExpiresAt != null && now > freshnessResult.idleExpiresAt;
+      const resetEventAction = staleIdle ? "idle_reset" : "daily_reset";
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      const hookEvent = createInternalHookEvent("session", resetEventAction, sessionKey ?? "", {
+        sessionEntry: entry,
+        previousSessionEntry: entry,
+        workspaceDir,
+        cfg,
+      });
+      void triggerInternalHook(hookEvent).catch(() => {});
+    }
+
     // When a reset trigger (/new, /reset) starts a new session, carry over
     // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
     // so the user doesn't have to re-enable them every time.
