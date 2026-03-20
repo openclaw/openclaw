@@ -35,12 +35,12 @@ Legend:
 
 - `PASS`, `FAIL`, `BLOCKED`, `PENDING`
 
-| Approach                  | Task 1 Flight                                          | Task 2 Form          | Task 3 Web Summary                                  | Task 4 X Summary | Task 5 Multi-step | Notes                                                                                                                                          |
-| ------------------------- | ------------------------------------------------------ | -------------------- | --------------------------------------------------- | ---------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user` (existing-session) | PASS (median `121.0s`; `r1`: `107.2s`, `r2`: `134.9s`) | PASS (`r1`: `63.1s`) | PASS (median `39.0s`; `r1`: `49.2s`, `r2`: `28.7s`) | PENDING          | PENDING           | Control lane passes when Chrome exposes standard CDP endpoint (example: launch with `--remote-debugging-port=9333` and attach via browser URL) |
-| `openclaw` (managed)      | PASS (median `69.9s`; `r1`: `85.4s`, `r2`: `54.5s`)    | PASS (`r1`: `78.8s`) | PASS (median `33.9s`; `r1`: `29.1s`, `r2`: `38.6s`) | PENDING          | PENDING           | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`)                                                          |
-| Claude-in-Chrome          | PENDING                                                | PENDING              | PENDING                                             | PENDING          | PENDING           | Investigation/adaptation track                                                                                                                 |
-| Browserbase               | BLOCKED                                                | BLOCKED              | BLOCKED                                             | BLOCKED          | BLOCKED           | Credential-blocked (no Browserbase key configured)                                                                                             |
+| Approach                  | Task 1 Flight                                          | Task 2 Form          | Task 3 Web Summary                                  | Task 4 X Summary     | Task 5 Multi-step     | Notes                                                                                                                                                                                            |
+| ------------------------- | ------------------------------------------------------ | -------------------- | --------------------------------------------------- | -------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `user` (existing-session) | PASS (median `121.0s`; `r1`: `107.2s`, `r2`: `134.9s`) | PASS (`r1`: `63.1s`) | PASS (median `39.0s`; `r1`: `49.2s`, `r2`: `28.7s`) | FAIL (`r1`: `40.3s`) | FAIL (`r1`: `59.3s`)  | Control lane passes when Chrome exposes standard CDP endpoint (example: launch with `--remote-debugging-port=9333` and attach via browser URL); heavier social/travel flows still time out early |
+| `openclaw` (managed)      | PASS (median `69.9s`; `r1`: `85.4s`, `r2`: `54.5s`)    | PASS (`r1`: `78.8s`) | PASS (median `33.9s`; `r1`: `29.1s`, `r2`: `38.6s`) | PASS (`r1`: `66.5s`) | FAIL (`r1`: `126.2s`) | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`); survives more sites than `user` but still times out in long multi-step travel workflows                   |
+| Claude-in-Chrome          | PENDING                                                | PENDING              | PENDING                                             | PENDING              | PENDING               | Investigation/adaptation track                                                                                                                                                                   |
+| Browserbase               | BLOCKED                                                | BLOCKED              | BLOCKED                                             | BLOCKED              | BLOCKED               | Credential-blocked (no Browserbase key configured)                                                                                                                                               |
 
 ## Current blocker summary
 
@@ -141,6 +141,43 @@ Task 2, run 1:
   - run 1: `78.8s`
   - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task2_r1/agent.json`
   - note: concrete public test target used: `https://www.selenium.dev/selenium/web/web-form.html`
+
+Task 4, run 1:
+
+- `user`
+  - result: `FAIL`
+  - run 1: `40.3s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task4_r1/agent.json`
+  - note: opening the requested X post timed out immediately and the browser tool advised not to retry
+- `openclaw`
+  - result: `PASS`
+  - run 1: `66.5s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task4_r1/agent.json`
+  - note: requested post URL looked unavailable, so the run fell back to another visible public `@OpenAI` post and summarized that instead
+
+Supplemental real-site commerce smoke, early read:
+
+- `user` on Emirates booking flow:
+  - result: `FAIL`
+  - run 1: `44.9s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task6_r1/agent.json`
+  - note: `emirates.com` timed out on the initial open step
+- `openclaw` on Emirates booking flow:
+  - status: `INCOMPLETE`
+  - note: run 1 reached the booking form, then hit selector ambiguity on repeated airport fields before a clean completion/failure summary was produced; run 2 used an explicit screenshot/snapshot-first prompt and avoided the immediate selector failure, but still did not finish cleanly inside the benchmark window
+
+Task 5, run 1:
+
+- `user`
+  - result: `FAIL`
+  - run 1: `59.3s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task5_r1/agent.json`
+  - note: failed on the first page open while trying to start the flight search/comparison flow
+- `openclaw`
+  - result: `FAIL`
+  - run 1: `126.2s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task5_r1/agent.json`
+  - note: opened the flight search page, but a later required snapshot timed out before the compare-and-open-details flow could finish
 
 ## Command-level benchmark runbook (week 1)
 
