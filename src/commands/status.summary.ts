@@ -198,7 +198,7 @@ export async function getStatusSummary(
     ? await loadChannelSummaryModule().then(({ buildChannelSummary }) =>
         buildChannelSummary(cfg, {
           colorize: true,
-          includeAllowFrom: true,
+          includeAllowFrom: includeSensitive,
           sourceConfig: options.sourceConfig,
         }),
       )
