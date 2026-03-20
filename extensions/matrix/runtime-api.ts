@@ -3,4 +3,27 @@
 // matrix-js-sdk during plain runtime-api import.
 export * from "./src/auth-precedence.js";
 export * from "./helper-api.js";
-export * from "./thread-bindings-runtime.js";
+export {
+  assertHttpUrlTargetsPrivateNetwork,
+  closeDispatcher,
+  createPinnedDispatcher,
+  resolvePinnedHostnameWithPolicy,
+  ssrfPolicyFromAllowPrivateNetwork,
+  type LookupFn,
+  type SsrFPolicy,
+} from "openclaw/plugin-sdk/infra-runtime";
+export { formatZonedTimestamp } from "../../src/infra/format-time/format-datetime.js";
+export {
+  setMatrixThreadBindingIdleTimeoutBySessionKey,
+  setMatrixThreadBindingMaxAgeBySessionKey,
+} from "./thread-bindings-runtime.js";
+export { writeJsonFileAtomically } from "../../src/plugin-sdk/json-store.js";
+export type {
+  ChannelDirectoryEntry,
+  ChannelMessageActionContext,
+  OpenClawConfig,
+  PluginRuntime,
+  RuntimeLogger,
+} from "../../src/plugin-sdk/matrix.js";
+export type { RuntimeEnv } from "../../src/runtime.js";
+export type { WizardPrompter } from "../../src/wizard/prompts.js";

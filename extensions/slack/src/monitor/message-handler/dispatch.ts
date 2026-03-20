@@ -1,12 +1,15 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  logAckFailure,
+  logTypingFailure,
+  removeAckReactionAfterReply,
+} from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { removeAckReactionAfterReply } from "openclaw/plugin-sdk/channel-runtime";
-import { logAckFailure, logTypingFailure } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/config-runtime";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/infra-runtime";
+import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";

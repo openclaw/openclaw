@@ -10,7 +10,7 @@ import {
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramReactionLevel,
-} from "openclaw/plugin-sdk/telegram";
+} from "../../../extensions/telegram/api.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";

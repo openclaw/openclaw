@@ -5,7 +5,7 @@ import {
   type ParsedChatTarget,
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
-} from "openclaw/plugin-sdk/imessage-core";
+} from "../../imessage/api.js";
 
 export type BlueBubblesService = "imessage" | "sms" | "auto";
 
