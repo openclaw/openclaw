@@ -106,7 +106,11 @@ export function resolveConfiguredSubagentTargetReadiness(
   if (!runtimeMapped) {
     reasons.push("workspace does not resolve through the runtime path map");
   }
-  if (!fs.existsSync(promptPath)) {
+  // Agents with skipBootstrap: true intentionally skip workspace file seeding.
+  // Do not flag missing AGENTS.md as a readiness failure for those agents.
+  const targetEntry = cfg.agents?.list?.find((a) => normalizeAgentId(a.id) === normalizedTargetId);
+  const targetSkipsBootstrap = targetEntry?.skipBootstrap === true;
+  if (!targetSkipsBootstrap && !fs.existsSync(promptPath)) {
     reasons.push("workspace is missing AGENTS.md");
   }
   return buildWorkspaceReadiness({
