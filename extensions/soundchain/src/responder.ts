@@ -144,7 +144,8 @@ export async function generateReply(senderName: string, message: string): Promis
  */
 function generateReplyInline(senderName: string, message: string): Promise<string> {
   const safeMessage = message.replace(/'/g, "'\\''");
-  const userMsg = `[DM from ${senderName} on SoundChain Pulse]: ${safeMessage}`;
+  const safeSender = senderName.replace(/'/g, "'\\''");
+  const userMsg = `[DM from ${safeSender} on SoundChain Pulse]: ${safeMessage}`;
   const cmd = `${CLAUDE_BIN} --print --dangerously-skip-permissions --model claude-haiku-4-5-20251001 --system-prompt "$(cat ${SYSTEM_PROMPT_FILE})" '${userMsg}'`;
 
   return new Promise((resolve) => {

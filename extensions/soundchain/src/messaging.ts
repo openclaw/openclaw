@@ -177,9 +177,12 @@ export function createMessagingClient(apiUrl: string, token: string): MessagingC
     baseUrl = "https://soundchain.io";
   }
 
+  const REST_TIMEOUT_MS = 10_000;
+
   async function restGet(path: string): Promise<Record<string, unknown>> {
     const res = await fetch(`${baseUrl}${path}`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(REST_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`REST ${path}: ${res.status}`);
     return (await res.json()) as Record<string, unknown>;
@@ -196,6 +199,7 @@ export function createMessagingClient(apiUrl: string, token: string): MessagingC
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(REST_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`REST ${path}: ${res.status}`);
     return (await res.json()) as Record<string, unknown>;
