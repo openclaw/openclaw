@@ -1,0 +1,31 @@
+{
+  "id": "freqtrade",
+  "name": "Freqtrade Trading Bot",
+  "description": "Connect to a freqtrade crypto trading bot to check status, view trades, manage positions, and run backtests. Supports dry-run safety mode.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiUrl": {
+        "type": "string",
+        "description": "Freqtrade REST API URL (e.g. http://localhost:8080)"
+      },
+      "username": {
+        "type": "string",
+        "description": "Freqtrade API username"
+      },
+      "password": {
+        "type": "string",
+        "description": "Freqtrade API password"
+      },
+      "dryRun": {
+        "type": "boolean",
+        "description": "Safety guard — when true, forcebuy/forcesell are blocked. Default true."
+      },
+      "exchange": {
+        "type": "string",
+        "description": "Display-only exchange name (e.g. binance, kraken)"
+      }
+    }
+  }
+}

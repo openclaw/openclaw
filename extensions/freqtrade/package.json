@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/extension-freqtrade",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OpenClaw extension for freqtrade crypto trading bot — status, trades, balance, backtesting",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
