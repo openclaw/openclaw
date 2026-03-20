@@ -30,6 +30,7 @@ export {
 export {
   getScopedCredentialValue,
   getTopLevelCredentialValue,
+  mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
   setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,

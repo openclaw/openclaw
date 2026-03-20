@@ -3,7 +3,9 @@ import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  getScopedCredentialValue,
   MAX_SEARCH_COUNT,
+  mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readNumberParam,
@@ -13,6 +15,7 @@ import {
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
+  setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
@@ -265,20 +268,9 @@ export function createGrokWebSearchProvider(): WebSearchProviderPlugin {
     autoDetectOrder: 30,
     credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.xai.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => {
-      const grok = searchConfig?.grok;
-      return grok && typeof grok === "object" && !Array.isArray(grok)
-        ? (grok as Record<string, unknown>).apiKey
-        : undefined;
-    },
-    setCredentialValue: (searchConfigTarget, value) => {
-      const scoped = searchConfigTarget.grok;
-      if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
-        searchConfigTarget.grok = { apiKey: value };
-        return;
-      }
-      (scoped as Record<string, unknown>).apiKey = value;
-    },
+    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "grok"),
+    setCredentialValue: (searchConfigTarget, value) =>
+      setScopedCredentialValue(searchConfigTarget, "grok", value),
     getConfiguredCredentialValue: (config) =>
       resolveProviderWebSearchPluginConfig(config, "xai")?.apiKey,
     setConfiguredCredentialValue: (configTarget, value) => {
@@ -286,20 +278,11 @@ export function createGrokWebSearchProvider(): WebSearchProviderPlugin {
     },
     createTool: (ctx) =>
       createGrokToolDefinition(
-        (() => {
-          const searchConfig = ctx.searchConfig as SearchConfigRecord | undefined;
-          const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "xai");
-          if (!pluginConfig) {
-            return searchConfig;
-          }
-          return {
-            ...(searchConfig ?? {}),
-            grok: {
-              ...resolveGrokConfig(searchConfig),
-              ...pluginConfig,
-            },
-          } as SearchConfigRecord;
-        })(),
+        mergeScopedSearchConfig(
+          ctx.searchConfig as SearchConfigRecord | undefined,
+          "grok",
+          resolveProviderWebSearchPluginConfig(ctx.config, "xai"),
+        ) as SearchConfigRecord | undefined,
       ),
   };
 }
