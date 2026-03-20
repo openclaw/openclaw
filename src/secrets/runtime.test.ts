@@ -18,9 +18,14 @@ const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
 }));
 
-vi.mock("../plugins/web-search-providers.js", () => ({
-  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
-}));
+vi.mock("../plugins/web-search-providers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/web-search-providers.js")>();
+  return {
+    ...actual,
+    resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+    resolveBundledPluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+  };
+});
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;

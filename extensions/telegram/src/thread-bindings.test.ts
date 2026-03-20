@@ -15,12 +15,13 @@ import {
 describe("telegram thread bindings", () => {
   let stateDirOverride: string | undefined;
 
-  beforeEach(() => {
-    __testing.resetTelegramThreadBindingsForTests();
+  beforeEach(async () => {
+    await __testing.resetTelegramThreadBindingsForTests();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
+    await __testing.resetTelegramThreadBindingsForTests();
     if (stateDirOverride) {
       delete process.env.OPENCLAW_STATE_DIR;
       fs.rmSync(stateDirOverride, { recursive: true, force: true });
@@ -90,7 +91,7 @@ describe("telegram thread bindings", () => {
       "./thread-bindings.js?scope=shared-b",
     );
 
-    bindingsA.__testing.resetTelegramThreadBindingsForTests();
+    await bindingsA.__testing.resetTelegramThreadBindingsForTests();
 
     try {
       const managerA = bindingsA.createTelegramThreadBindingManager({
@@ -123,7 +124,7 @@ describe("telegram thread bindings", () => {
           ?.getByConversationId("-100200300:topic:44")?.targetSessionKey,
       ).toBe("agent:main:subagent:child-shared");
     } finally {
-      bindingsA.__testing.resetTelegramThreadBindingsForTests();
+      await bindingsA.__testing.resetTelegramThreadBindingsForTests();
     }
   });
 
@@ -237,7 +238,7 @@ describe("telegram thread bindings", () => {
       reason: "test-detach",
     });
 
-    __testing.resetTelegramThreadBindingsForTests();
+    await __testing.resetTelegramThreadBindingsForTests();
 
     const reloaded = createTelegramThreadBindingManager({
       accountId: "default",

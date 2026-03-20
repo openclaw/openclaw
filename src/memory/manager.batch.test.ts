@@ -5,7 +5,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { useFastShortTimeouts } from "../../test/helpers/fast-short-timeouts.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
-import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
 type MemoryIndexManager = import("./index.js").MemoryIndexManager;
 type MemoryIndexModule = typeof import("./index.js");
@@ -13,6 +12,16 @@ type MemoryIndexModule = typeof import("./index.js");
 const embedBatch = vi.fn(async (_texts: string[]) => [] as number[][]);
 const embedQuery = vi.fn(async () => [0.5, 0.5, 0.5]);
 let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
+const fetchWithSsrFGuardMock = vi.fn();
+
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (...args: Parameters<typeof actual.fetchWithSsrFGuard>) =>
+      fetchWithSsrFGuardMock(...args),
+  };
+});
 
 describe("memory indexing with OpenAI batches", () => {
   let fixtureRoot: string;
@@ -21,7 +30,7 @@ describe("memory indexing with OpenAI batches", () => {
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
 
-  async function readOpenAIBatchUploadRequests(body: FormData) {
+  async function readOpenAIBatchUploadRequests(body: Pick<FormData, "entries">) {
     let uploadedRequests: Array<{ custom_id?: string }> = [];
     const entries = body.entries() as IterableIterator<[string, FormDataEntryValue]>;
     for (const [key, value] of entries) {
@@ -47,10 +56,15 @@ describe("memory indexing with OpenAI batches", () => {
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url.endsWith("/files")) {
         const body = init?.body;
-        if (!(body instanceof FormData)) {
+        if (
+          !body ||
+          typeof body !== "object" ||
+          !("entries" in body) ||
+          typeof body.entries !== "function"
+        ) {
           throw new Error("expected FormData upload");
         }
-        uploadedRequests = await readOpenAIBatchUploadRequests(body);
+        uploadedRequests = await readOpenAIBatchUploadRequests(body as Pick<FormData, "entries">);
         return new Response(JSON.stringify({ id: "file_1" }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -90,6 +104,18 @@ describe("memory indexing with OpenAI batches", () => {
       throw new Error(`unexpected fetch ${url}`);
     });
     return { fetchMock, state };
+  }
+
+  function installFetchGuardMock(
+    fetchMock: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  ): void {
+    fetchWithSsrFGuardMock.mockImplementation(
+      async (params: { url: string; init?: RequestInit }) => ({
+        response: await fetchMock(params.url, params.init),
+        finalUrl: params.url,
+        release: async () => {},
+      }),
+    );
   }
 
   function createBatchCfg(): OpenClawConfig {
@@ -146,6 +172,7 @@ describe("memory indexing with OpenAI batches", () => {
   });
 
   beforeEach(async () => {
+    fetchWithSsrFGuardMock.mockReset();
     embedBatch.mockClear();
     embedQuery.mockClear();
     embedBatch.mockImplementation(async (texts: string[]) =>
@@ -179,8 +206,7 @@ describe("memory indexing with OpenAI batches", () => {
 
     const { fetchMock } = createOpenAIBatchFetchMock();
 
-    vi.stubGlobal("fetch", fetchMock);
-    mockPublicPinnedHostname();
+    installFetchGuardMock(fetchMock);
 
     try {
       if (!manager) {
@@ -222,8 +248,7 @@ describe("memory indexing with OpenAI batches", () => {
       },
     });
 
-    vi.stubGlobal("fetch", fetchMock);
-    mockPublicPinnedHostname();
+    installFetchGuardMock(fetchMock);
 
     try {
       if (!manager) {
@@ -262,8 +287,7 @@ describe("memory indexing with OpenAI batches", () => {
             }),
     });
 
-    vi.stubGlobal("fetch", fetchMock);
-    mockPublicPinnedHostname();
+    installFetchGuardMock(fetchMock);
 
     try {
       if (!manager) {
