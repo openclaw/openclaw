@@ -270,15 +270,18 @@ async function emitToolResultOutput(params: {
     return;
   }
 
+  // Suppress failed tool results from user-visible output.  Previously the
+  // isToolError guard only covered the media-only path below, so error text
+  // leaked to Telegram/WhatsApp when verbose tool output was enabled.  (#51065)
+  if (isToolError) {
+    return;
+  }
+
   if (ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
       ctx.emitToolOutput(toolName, meta, outputText);
     }
-    return;
-  }
-
-  if (isToolError) {
     return;
   }
 
