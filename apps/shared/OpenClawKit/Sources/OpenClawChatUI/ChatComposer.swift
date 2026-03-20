@@ -280,6 +280,9 @@ struct OpenClawChatComposer: View {
                 },
                 onPasteImageAttachment: { data, fileName, mimeType in
                     self.viewModel.addImageAttachment(data: data, fileName: fileName, mimeType: mimeType)
+                },
+                onDropFileURLs: { urls in
+                    self.viewModel.addAttachments(urls: urls)
                 })
             .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
             .padding(.horizontal, 4)
@@ -489,6 +492,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? ChatComposerNSTextView else { return }
         textView.onPasteImageAttachment = self.onPasteImageAttachment
+        textView.onDropFileURLs = self.onDropFileURLs
 
         if self.shouldFocus, let window = scrollView.window {
             window.makeFirstResponder(textView)

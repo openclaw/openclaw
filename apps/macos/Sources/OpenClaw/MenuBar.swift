@@ -155,8 +155,12 @@ struct OpenClawApp: App {
             HoverHUDController.shared.dismiss(reason: "statusItemRightClick")
             WebChatManager.shared.closePanel()
             WebChatManager.shared.closeWindow()
-            self.isMenuPresented = true
-            self.updateStatusHighlight()
+            // Deactivate the app briefly so MenuBarExtra menu can appear
+            // (SwiftUI menu won't show while an NSWindow is key)
+            DispatchQueue.main.async {
+                self.isMenuPresented = true
+                self.updateStatusHighlight()
+            }
         }
         handler.onHoverChanged = { [self] inside in
             HoverHUDController.shared.statusItemHoverChanged(
