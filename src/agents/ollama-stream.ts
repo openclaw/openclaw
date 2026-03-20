@@ -367,7 +367,13 @@ export function buildAssistantMessage(
       const rawArgs = tc.function.arguments;
       const normalizedArgs =
         typeof rawArgs === "string"
-          ? (JSON.parse(rawArgs) as Record<string, unknown>)
+          ? (() => {
+              try {
+                return JSON.parse(rawArgs) as Record<string, unknown>;
+              } catch {
+                return {} as Record<string, unknown>;
+              }
+            })()
           : (rawArgs ?? {});
       content.push({
         type: "toolCall",
