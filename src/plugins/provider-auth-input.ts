@@ -1,4 +1,6 @@
+import { OLLAMA_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   isValidEnvSecretRefId,
@@ -108,6 +110,13 @@ function resolveDefaultFilePointerId(provider: string): string {
   return `/providers/${encodeJsonPointerToken(provider)}/apiKey`;
 }
 
+/**
+ * Providers that run locally and do not require an API key.
+ * When these providers are used in non-interactive ref mode, we return a
+ * synthetic marker instead of throwing for a missing env var mapping.
+ */
+const AUTH_OPTIONAL_LOCAL_PROVIDERS = new Set(["ollama"]);
+
 function resolveRefFallbackInput(params: {
   config: OpenClawConfig;
   provider: string;
@@ -115,6 +124,20 @@ function resolveRefFallbackInput(params: {
 }): { ref: SecretRef; resolvedValue: string } {
   const fallbackEnvVar = params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider);
   if (!fallbackEnvVar) {
+    // Local providers like Ollama don't require API keys — return a synthetic
+    // auth marker so non-interactive setup doesn't throw.
+    if (AUTH_OPTIONAL_LOCAL_PROVIDERS.has(normalizeProviderId(params.provider))) {
+      return {
+        ref: {
+          source: "env",
+          provider: resolveDefaultSecretProviderAlias(params.config, "env", {
+            preferFirstProviderForSource: true,
+          }),
+          id: "OLLAMA_HOST",
+        },
+        resolvedValue: OLLAMA_LOCAL_AUTH_MARKER,
+      };
+    }
     throw new Error(
       `No default environment variable mapping found for provider "${params.provider}". Set a provider-specific env var, or re-run setup in an interactive terminal to configure a ref.`,
     );
