@@ -6,7 +6,12 @@ final class CalendarService: CalendarServicing {
     func events(params: OpenClawCalendarEventsParams) async throws -> OpenClawCalendarEventsPayload {
         let store = EKEventStore()
         let status = EKEventStore.authorizationStatus(for: .event)
-        let authorized = EventKitAuthorization.allowsRead(status: status)
+        let authorized: Bool
+        if status == .notDetermined {
+            authorized = await Self.requestEventAccess(store: store)
+        } else {
+            authorized = EventKitAuthorization.allowsRead(status: status)
+        }
         guard authorized else {
             throw NSError(domain: "Calendar", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
@@ -39,7 +44,12 @@ final class CalendarService: CalendarServicing {
     func add(params: OpenClawCalendarAddParams) async throws -> OpenClawCalendarAddPayload {
         let store = EKEventStore()
         let status = EKEventStore.authorizationStatus(for: .event)
-        let authorized = EventKitAuthorization.allowsWrite(status: status)
+        let authorized: Bool
+        if status == .notDetermined {
+            authorized = await Self.requestEventAccess(store: store)
+        } else {
+            authorized = EventKitAuthorization.allowsWrite(status: status)
+        }
         guard authorized else {
             throw NSError(domain: "Calendar", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
@@ -93,6 +103,22 @@ final class CalendarService: CalendarServicing {
             calendarTitle: event.calendar.title)
 
         return OpenClawCalendarAddPayload(event: payload)
+    }
+
+    private static func requestEventAccess(store: EKEventStore) async -> Bool {
+        if #available(iOS 17.0, *) {
+            return await withCheckedContinuation { continuation in
+                store.requestFullAccessToEvents { granted, _ in
+                    continuation.resume(returning: granted)
+                }
+            }
+        }
+
+        return await withCheckedContinuation { continuation in
+            store.requestAccess(to: .event) { granted, _ in
+                continuation.resume(returning: granted)
+            }
+        }
     }
 
     private static func resolveCalendar(
