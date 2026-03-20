@@ -500,3 +500,36 @@ describe("normalizeCronJobPatch", () => {
     expect(schedule.staggerMs).toBe(30_000);
   });
 });
+
+describe("coercePayload — script kind trimming", () => {
+  it("trims whitespace from command and cwd", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "trim-test",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: { kind: "script", command: "  ~/scripts/run.sh  ", cwd: "  ~/scripts  " },
+    });
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.command).toBe("~/scripts/run.sh");
+    expect(payload.cwd).toBe("~/scripts");
+  });
+
+  it("removes cwd when whitespace-only", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "blank-cwd",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: { kind: "script", command: "~/scripts/run.sh", cwd: "   " },
+    });
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.cwd).toBeUndefined();
+  });
+
+  it("removes command when whitespace-only", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "blank-cmd",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: { kind: "script", command: "   " },
+    });
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.command).toBeUndefined();
+  });
+});
