@@ -1,12 +1,17 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Command } from "commander";
-import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
+import type {
+  ApiKeyCredential,
+  AuthProfileCredential,
+  OAuthCredential,
+} from "../agents/auth-profiles/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
+import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
@@ -111,24 +116,122 @@ export type ProviderAuthContext = {
   };
 };
 
+export type ProviderNonInteractiveApiKeyResult = {
+  key: string;
+  source: "profile" | "env" | "flag";
+  envVarName?: string;
+};
+
+export type ProviderResolveNonInteractiveApiKeyParams = {
+  provider: string;
+  flagValue?: string;
+  flagName: `--${string}`;
+  envVar: string;
+  envVarName?: string;
+  allowProfile?: boolean;
+  required?: boolean;
+};
+
+export type ProviderNonInteractiveApiKeyCredentialParams = {
+  provider: string;
+  resolved: ProviderNonInteractiveApiKeyResult;
+  email?: string;
+  metadata?: Record<string, string>;
+};
+
+export type ProviderAuthMethodNonInteractiveContext = {
+  authChoice: string;
+  config: OpenClawConfig;
+  baseConfig: OpenClawConfig;
+  opts: OnboardOptions;
+  runtime: RuntimeEnv;
+  agentDir?: string;
+  workspaceDir?: string;
+  resolveApiKey: (
+    params: ProviderResolveNonInteractiveApiKeyParams,
+  ) => Promise<ProviderNonInteractiveApiKeyResult | null>;
+  toApiKeyCredential: (
+    params: ProviderNonInteractiveApiKeyCredentialParams,
+  ) => ApiKeyCredential | null;
+};
+
 export type ProviderAuthMethod = {
   id: string;
   label: string;
   hint?: string;
   kind: ProviderAuthKind;
   run: (ctx: ProviderAuthContext) => Promise<ProviderAuthResult>;
+  runNonInteractive?: (
+    ctx: ProviderAuthMethodNonInteractiveContext,
+  ) => Promise<OpenClawConfig | null>;
+};
+
+export type ProviderDiscoveryOrder = "simple" | "profile" | "paired" | "late";
+
+export type ProviderDiscoveryContext = {
+  config: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  resolveProviderApiKey: (providerId?: string) => {
+    apiKey: string | undefined;
+    discoveryApiKey?: string;
+  };
+};
+
+export type ProviderDiscoveryResult =
+  | { provider: ModelProviderConfig }
+  | { providers: Record<string, ModelProviderConfig> }
+  | null
+  | undefined;
+
+export type ProviderPluginDiscovery = {
+  order?: ProviderDiscoveryOrder;
+  run: (ctx: ProviderDiscoveryContext) => Promise<ProviderDiscoveryResult>;
+};
+
+export type ProviderPluginWizardOnboarding = {
+  choiceId?: string;
+  choiceLabel?: string;
+  choiceHint?: string;
+  groupId?: string;
+  groupLabel?: string;
+  groupHint?: string;
+  methodId?: string;
+};
+
+export type ProviderPluginWizardModelPicker = {
+  label?: string;
+  hint?: string;
+  methodId?: string;
+};
+
+export type ProviderPluginWizard = {
+  onboarding?: ProviderPluginWizardOnboarding;
+  modelPicker?: ProviderPluginWizardModelPicker;
+};
+
+export type ProviderModelSelectedContext = {
+  config: OpenClawConfig;
+  model: string;
+  prompter: WizardPrompter;
+  agentDir?: string;
+  workspaceDir?: string;
 };
 
 export type ProviderPlugin = {
   id: string;
+  pluginId?: string;
   label: string;
   docsPath?: string;
   aliases?: string[];
   envVars?: string[];
-  models?: ModelProviderConfig;
   auth: ProviderAuthMethod[];
+  discovery?: ProviderPluginDiscovery;
+  wizard?: ProviderPluginWizard;
   formatApiKey?: (cred: AuthProfileCredential) => string;
   refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
+  onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
 export type OpenClawPluginGatewayMethod = {

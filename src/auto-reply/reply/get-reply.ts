@@ -175,6 +175,7 @@ export async function getReplyFromConfig(
 
   await applyResetModelOverride({
     cfg,
+    agentId,
     resetTriggered,
     bodyStripped,
     sessionCtx,

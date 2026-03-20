@@ -1,4 +1,3 @@
-import { ChannelType } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureConfiguredAcpBindingSessionMock = vi.hoisted(() => vi.fn());
@@ -13,7 +12,13 @@ vi.mock("../../acp/persistent-bindings.js", () => ({
 
 import { __testing as sessionBindingTesting } from "../../infra/outbound/session-binding-service.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.js";
+import {
+  createDiscordMessage,
+  createDiscordPreflightArgs,
+  createGuildEvent,
+  createGuildTextClient,
+  DEFAULT_PREFLIGHT_CFG,
+} from "./message-handler.preflight.test-helpers.js";
 
 const GUILD_ID = "guild-1";
 const CHANNEL_ID = "channel-1";
@@ -48,70 +53,36 @@ function createConfiguredDiscordBinding() {
 }
 
 function createBasePreflightParams(overrides?: Record<string, unknown>) {
-  const message = {
+  const message = createDiscordMessage({
     id: "m-1",
-    content: "<@bot-1> hello",
-    timestamp: new Date().toISOString(),
     channelId: CHANNEL_ID,
-    attachments: [],
+    content: "<@bot-1> hello",
     mentionedUsers: [{ id: "bot-1" }],
-    mentionedRoles: [],
-    mentionedEveryone: false,
     author: {
       id: "user-1",
       bot: false,
       username: "alice",
     },
-  } as unknown as import("@buape/carbon").Message;
-
-  const client = {
-    fetchChannel: async (channelId: string) => {
-      if (channelId === CHANNEL_ID) {
-        return {
-          id: CHANNEL_ID,
-          type: ChannelType.GuildText,
-          name: "general",
-        };
-      }
-      return null;
-    },
-  } as unknown as import("@buape/carbon").Client;
+  });
 
   return {
-    cfg: {
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-    } as import("../../config/config.js").OpenClawConfig,
+    ...createDiscordPreflightArgs({
+      cfg: DEFAULT_PREFLIGHT_CFG,
+      discordConfig: {
+        allowBots: true,
+      } as NonNullable<import("../../config/config.js").OpenClawConfig["channels"]>["discord"],
+      data: createGuildEvent({
+        channelId: CHANNEL_ID,
+        guildId: GUILD_ID,
+        author: message.author,
+        message,
+      }),
+      client: createGuildTextClient(CHANNEL_ID),
+      botUserId: "bot-1",
+    }),
     discordConfig: {
       allowBots: true,
     } as NonNullable<import("../../config/config.js").OpenClawConfig["channels"]>["discord"],
-    accountId: "default",
-    token: "token",
-    runtime: {} as import("../../runtime.js").RuntimeEnv,
-    botUserId: "bot-1",
-    guildHistories: new Map(),
-    historyLimit: 0,
-    mediaMaxBytes: 1_000_000,
-    textLimit: 2_000,
-    replyToMode: "all",
-    dmEnabled: true,
-    groupDmEnabled: true,
-    ackReactionScope: "direct",
-    groupPolicy: "open",
-    threadBindings: createNoopThreadBindingManager("default"),
-    data: {
-      channel_id: CHANNEL_ID,
-      guild_id: GUILD_ID,
-      guild: {
-        id: GUILD_ID,
-        name: "Guild One",
-      },
-      author: message.author,
-      message,
-    } as unknown as import("./listeners.js").DiscordMessageEvent,
-    client,
     ...overrides,
   } satisfies Parameters<typeof preflightDiscordMessage>[0];
 }

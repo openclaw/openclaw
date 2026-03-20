@@ -50,6 +50,18 @@ function isBotCommandsTooMuchError(err: unknown): boolean {
   return false;
 }
 
+function formatTelegramCommandRetrySuccessLog(params: {
+  initialCount: number;
+  acceptedCount: number;
+}): string {
+  const omittedCount = Math.max(0, params.initialCount - params.acceptedCount);
+  return (
+    `Telegram accepted ${params.acceptedCount} commands after BOT_COMMANDS_TOO_MUCH ` +
+    `(started with ${params.initialCount}; omitted ${omittedCount}). ` +
+    "Reduce plugin/skill/custom commands to expose more menu entries."
+  );
+}
+
 export function buildPluginTelegramMenuCommands(params: {
   specs: TelegramPluginCommandSpec[];
   existingCommands: Set<string>;
@@ -196,13 +208,23 @@ export function syncTelegramMenuCommands(params: {
     }
 
     let retryCommands = commandsToRegister;
+    const initialCommandCount = commandsToRegister.length;
     while (retryCommands.length > 0) {
       try {
         await withTelegramApiErrorLogging({
           operation: "setMyCommands",
           runtime,
+          shouldLog: (err) => !isBotCommandsTooMuchError(err),
           fn: () => bot.api.setMyCommands(retryCommands),
         });
+        if (retryCommands.length < initialCommandCount) {
+          runtime.log?.(
+            formatTelegramCommandRetrySuccessLog({
+              initialCount: initialCommandCount,
+              acceptedCount: retryCommands.length,
+            }),
+          );
+        }
         await writeCachedCommandHash(accountId, botIdentity, currentHash);
         return;
       } catch (err) {

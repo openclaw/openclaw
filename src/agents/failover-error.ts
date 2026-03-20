@@ -170,7 +170,9 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
       "ECONNREFUSED",
       "ENETUNREACH",
       "EHOSTUNREACH",
+      "EHOSTDOWN",
       "ENETRESET",
+      "EPIPE",
       "EAI_AGAIN",
     ].includes(code)
   ) {

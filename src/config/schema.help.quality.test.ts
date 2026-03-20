@@ -296,6 +296,7 @@ const TARGET_KEYS = [
   "web.reconnect.jitter",
   "web.reconnect.maxAttempts",
   "discovery",
+  "discovery.wideArea.domain",
   "discovery.wideArea.enabled",
   "discovery.mdns",
   "discovery.mdns.mode",

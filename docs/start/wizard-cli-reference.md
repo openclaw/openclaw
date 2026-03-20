@@ -16,7 +16,7 @@ For the short guide, see [Onboarding Wizard (CLI)](/start/wizard).
 
 Local mode (default) walks you through:
 
-- Model and auth setup (OpenAI Code subscription OAuth, Anthropic API key or setup token, plus MiniMax, GLM, Moonshot, and AI Gateway options)
+- Model and auth setup (OpenAI Code subscription OAuth, Anthropic API key or setup token, plus MiniMax, GLM, Ollama, Moonshot, and AI Gateway options)
 - Workspace location and bootstrap files
 - Gateway settings (port, bind, auth, tailscale)
 - Channels and providers (Telegram, WhatsApp, Discord, Google Chat, Mattermost plugin, Signal)
@@ -177,6 +177,11 @@ What you set:
   <Accordion title="Synthetic (Anthropic-compatible)">
     Prompts for `SYNTHETIC_API_KEY`.
     More detail: [Synthetic](/providers/synthetic).
+  </Accordion>
+  <Accordion title="Ollama (Cloud and local open models)">
+    Prompts for base URL (default `http://127.0.0.1:11434`), then offers Cloud + Local or Local mode.
+    Discovers available models and suggests defaults.
+    More detail: [Ollama](/providers/ollama).
   </Accordion>
   <Accordion title="Moonshot and Kimi Coding">
     Moonshot (Kimi K2) and Kimi Coding configs are auto-written.

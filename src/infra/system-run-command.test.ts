@@ -55,6 +55,8 @@ describe("system run command helpers", () => {
   test("extractShellCommandFromArgv supports fish and pwsh wrappers", () => {
     expect(extractShellCommandFromArgv(["fish", "-c", "echo hi"])).toBe("echo hi");
     expect(extractShellCommandFromArgv(["pwsh", "-Command", "Get-Date"])).toBe("Get-Date");
+    expect(extractShellCommandFromArgv(["pwsh", "-File", "script.ps1"])).toBe("script.ps1");
+    expect(extractShellCommandFromArgv(["powershell", "-f", "script.ps1"])).toBe("script.ps1");
     expect(extractShellCommandFromArgv(["pwsh", "-EncodedCommand", "ZQBjAGgAbwA="])).toBe(
       "ZQBjAGgAbwA=",
     );
@@ -91,6 +93,18 @@ describe("system run command helpers", () => {
       throw new Error("unreachable");
     }
     expect(res.shellPayload).toBe(null);
+    expect(res.commandText).toBe("echo hi");
+  });
+
+  test("validateSystemRunCommandConsistency trims rawCommand before comparison", () => {
+    const res = validateSystemRunCommandConsistency({
+      argv: ["echo", "hi"],
+      rawCommand: "  echo hi  ",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
     expect(res.commandText).toBe("echo hi");
   });
 
@@ -178,6 +192,55 @@ describe("system run command helpers", () => {
     }
     expect(res.message).toContain("rawCommand requires params.command");
     expect(res.details?.code).toBe("MISSING_COMMAND");
+  });
+
+  test("resolveSystemRunCommand treats non-array command values as missing", () => {
+    const res = resolveSystemRunCommand({
+      command: "echo hi",
+      rawCommand: "echo hi",
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.details?.code).toBe("MISSING_COMMAND");
+  });
+
+  test("resolveSystemRunCommand returns an empty success payload when no command is provided", () => {
+    const res = resolveSystemRunCommand({});
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.argv).toEqual([]);
+    expect(res.commandText).toBe("");
+    expect(res.shellPayload).toBeNull();
+    expect(res.previewText).toBeNull();
+  });
+
+  test("resolveSystemRunCommand stringifies non-string argv tokens", () => {
+    const res = resolveSystemRunCommand({
+      command: ["echo", 123, false, null],
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.argv).toEqual(["echo", "123", "false", "null"]);
+    expect(res.commandText).toBe("echo 123 false null");
+  });
+
+  test("resolveSystemRunCommandRequest trims legacy rawCommand shell payloads", () => {
+    const res = resolveSystemRunCommandRequest({
+      command: ["/bin/sh", "-lc", "echo hi"],
+      rawCommand: "  echo hi  ",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.previewText).toBe("echo hi");
+    expect(res.commandText).toBe('/bin/sh -lc "echo hi"');
   });
 
   test("resolveSystemRunCommandRequest accepts legacy shell payloads but returns canonical command text", () => {

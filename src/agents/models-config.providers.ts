@@ -4,6 +4,7 @@ import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
+import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
@@ -14,10 +15,8 @@ import {
 import {
   buildHuggingfaceProvider,
   buildKilocodeProviderWithDiscovery,
-  buildOllamaProvider,
   buildVeniceProvider,
   buildVercelAiGatewayProvider,
-  buildVllmProvider,
   resolveOllamaApiBase,
 } from "./models-config.providers.discovery.js";
 import {
@@ -57,8 +56,12 @@ export {
   XIAOMI_DEFAULT_MODEL_ID,
 } from "./models-config.providers.static.js";
 import {
+  groupPluginDiscoveryProvidersByOrder,
+  normalizePluginDiscoveryResult,
+  resolvePluginDiscoveryProviders,
+} from "../plugins/provider-discovery.js";
+import {
   MINIMAX_OAUTH_MARKER,
-  OLLAMA_LOCAL_AUTH_MARKER,
   QWEN_OAUTH_MARKER,
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
@@ -70,6 +73,11 @@ export { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
+type SecretDefaults = {
+  env?: string;
+  file?: string;
+  exec?: string;
+};
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -97,13 +105,7 @@ function resolveAwsSdkApiKeyVarName(env: NodeJS.ProcessEnv = process.env): strin
 
 function normalizeHeaderValues(params: {
   headers: ProviderConfig["headers"] | undefined;
-  secretDefaults:
-    | {
-        env?: string;
-        file?: string;
-        exec?: string;
-      }
-    | undefined;
+  secretDefaults: SecretDefaults | undefined;
 }): { headers: ProviderConfig["headers"] | undefined; mutated: boolean } {
   const { headers } = params;
   if (!headers) {
@@ -276,15 +278,155 @@ function normalizeAntigravityProvider(provider: ProviderConfig): ProviderConfig 
   return normalizeProviderModels(provider, normalizeAntigravityModelId);
 }
 
+function normalizeSourceProviderLookup(
+  providers: ModelsConfig["providers"] | undefined,
+): Record<string, ProviderConfig> {
+  if (!providers) {
+    return {};
+  }
+  const out: Record<string, ProviderConfig> = {};
+  for (const [key, provider] of Object.entries(providers)) {
+    const normalizedKey = key.trim();
+    if (!normalizedKey || !isRecord(provider)) {
+      continue;
+    }
+    out[normalizedKey] = provider;
+  }
+  return out;
+}
+
+function resolveSourceManagedApiKeyMarker(params: {
+  sourceProvider: ProviderConfig | undefined;
+  sourceSecretDefaults: SecretDefaults | undefined;
+}): string | undefined {
+  const sourceApiKeyRef = resolveSecretInputRef({
+    value: params.sourceProvider?.apiKey,
+    defaults: params.sourceSecretDefaults,
+  }).ref;
+  if (!sourceApiKeyRef || !sourceApiKeyRef.id.trim()) {
+    return undefined;
+  }
+  return sourceApiKeyRef.source === "env"
+    ? sourceApiKeyRef.id.trim()
+    : resolveNonEnvSecretRefApiKeyMarker(sourceApiKeyRef.source);
+}
+
+function resolveSourceManagedHeaderMarkers(params: {
+  sourceProvider: ProviderConfig | undefined;
+  sourceSecretDefaults: SecretDefaults | undefined;
+}): Record<string, string> {
+  const sourceHeaders = isRecord(params.sourceProvider?.headers)
+    ? (params.sourceProvider.headers as Record<string, unknown>)
+    : undefined;
+  if (!sourceHeaders) {
+    return {};
+  }
+  const markers: Record<string, string> = {};
+  for (const [headerName, headerValue] of Object.entries(sourceHeaders)) {
+    const sourceHeaderRef = resolveSecretInputRef({
+      value: headerValue,
+      defaults: params.sourceSecretDefaults,
+    }).ref;
+    if (!sourceHeaderRef || !sourceHeaderRef.id.trim()) {
+      continue;
+    }
+    markers[headerName] =
+      sourceHeaderRef.source === "env"
+        ? resolveEnvSecretRefHeaderValueMarker(sourceHeaderRef.id)
+        : resolveNonEnvSecretRefHeaderValueMarker(sourceHeaderRef.source);
+  }
+  return markers;
+}
+
+export function enforceSourceManagedProviderSecrets(params: {
+  providers: ModelsConfig["providers"];
+  sourceProviders: ModelsConfig["providers"] | undefined;
+  sourceSecretDefaults?: SecretDefaults;
+  secretRefManagedProviders?: Set<string>;
+}): ModelsConfig["providers"] {
+  const { providers } = params;
+  if (!providers) {
+    return providers;
+  }
+  const sourceProvidersByKey = normalizeSourceProviderLookup(params.sourceProviders);
+  if (Object.keys(sourceProvidersByKey).length === 0) {
+    return providers;
+  }
+
+  let nextProviders: Record<string, ProviderConfig> | null = null;
+  for (const [providerKey, provider] of Object.entries(providers)) {
+    if (!isRecord(provider)) {
+      continue;
+    }
+    const sourceProvider = sourceProvidersByKey[providerKey.trim()];
+    if (!sourceProvider) {
+      continue;
+    }
+    let nextProvider = provider;
+    let providerMutated = false;
+
+    const sourceApiKeyMarker = resolveSourceManagedApiKeyMarker({
+      sourceProvider,
+      sourceSecretDefaults: params.sourceSecretDefaults,
+    });
+    if (sourceApiKeyMarker) {
+      params.secretRefManagedProviders?.add(providerKey.trim());
+      if (nextProvider.apiKey !== sourceApiKeyMarker) {
+        providerMutated = true;
+        nextProvider = {
+          ...nextProvider,
+          apiKey: sourceApiKeyMarker,
+        };
+      }
+    }
+
+    const sourceHeaderMarkers = resolveSourceManagedHeaderMarkers({
+      sourceProvider,
+      sourceSecretDefaults: params.sourceSecretDefaults,
+    });
+    if (Object.keys(sourceHeaderMarkers).length > 0) {
+      const currentHeaders = isRecord(nextProvider.headers)
+        ? (nextProvider.headers as Record<string, unknown>)
+        : undefined;
+      const nextHeaders = {
+        ...(currentHeaders as Record<string, NonNullable<ProviderConfig["headers"]>[string]>),
+      };
+      let headersMutated = !currentHeaders;
+      for (const [headerName, marker] of Object.entries(sourceHeaderMarkers)) {
+        if (nextHeaders[headerName] === marker) {
+          continue;
+        }
+        headersMutated = true;
+        nextHeaders[headerName] = marker;
+      }
+      if (headersMutated) {
+        providerMutated = true;
+        nextProvider = {
+          ...nextProvider,
+          headers: nextHeaders,
+        };
+      }
+    }
+
+    if (!providerMutated) {
+      continue;
+    }
+    if (!nextProviders) {
+      nextProviders = { ...providers };
+    }
+    nextProviders[providerKey] = nextProvider;
+  }
+
+  return nextProviders ?? providers;
+}
+
 export function normalizeProviders(params: {
   providers: ModelsConfig["providers"];
   agentDir: string;
   env?: NodeJS.ProcessEnv;
-  secretDefaults?: {
-    env?: string;
-    file?: string;
-    exec?: string;
-  };
+  secretDefaults?: SecretDefaults;
+  sourceProviders?: ModelsConfig["providers"];
+  sourceSecretDefaults?: SecretDefaults;
   secretRefManagedProviders?: Set<string>;
 }): ModelsConfig["providers"] {
   const { providers } = params;
@@ -403,7 +545,7 @@ export function normalizeProviders(params: {
       }
     }
 
-    if (normalizedKey === "google") {
+    if (normalizedKey === "google" || normalizedKey === "google-vertex") {
       const googleNormalized = normalizeGoogleProvider(normalizedProvider);
       if (googleNormalized !== normalizedProvider) {
         mutated = true;
@@ -434,13 +576,20 @@ export function normalizeProviders(params: {
     next[normalizedKey] = normalizedProvider;
   }
 
-  return mutated ? next : providers;
+  const normalizedProviders = mutated ? next : providers;
+  return enforceSourceManagedProviderSecrets({
+    providers: normalizedProviders,
+    sourceProviders: params.sourceProviders,
+    sourceSecretDefaults: params.sourceSecretDefaults,
+    secretRefManagedProviders: params.secretRefManagedProviders,
+  });
 }
 
 type ImplicitProviderParams = {
   agentDir: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
 };
 
@@ -464,6 +613,7 @@ function withApiKey(
   build: (params: {
     apiKey: string;
     discoveryApiKey?: string;
+    explicitProvider?: ProviderConfig;
   }) => ProviderConfig | Promise<ProviderConfig>,
 ): ImplicitProviderLoader {
   return async (ctx) => {
@@ -472,7 +622,11 @@ function withApiKey(
       return undefined;
     }
     return {
-      [providerKey]: await build({ apiKey, discoveryApiKey }),
+      [providerKey]: await build({
+        apiKey,
+        discoveryApiKey,
+        explicitProvider: ctx.explicitProviders?.[providerKey],
+      }),
     };
   };
 }
@@ -505,8 +659,38 @@ function mergeImplicitProviderSet(
 
 const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   withApiKey("minimax", async ({ apiKey }) => ({ ...buildMinimaxProvider(), apiKey })),
-  withApiKey("moonshot", async ({ apiKey }) => ({ ...buildMoonshotProvider(), apiKey })),
-  withApiKey("kimi-coding", async ({ apiKey }) => ({ ...buildKimiCodingProvider(), apiKey })),
+  withApiKey("moonshot", async ({ apiKey, explicitProvider }) => {
+    const explicitBaseUrl = explicitProvider?.baseUrl;
+    return {
+      ...buildMoonshotProvider(),
+      ...(typeof explicitBaseUrl === "string" && explicitBaseUrl.trim()
+        ? { baseUrl: explicitBaseUrl.trim() }
+        : {}),
+      apiKey,
+    };
+  }),
+  withApiKey("kimi-coding", async ({ apiKey, explicitProvider }) => {
+    const builtInProvider = buildKimiCodingProvider();
+    const explicitBaseUrl = explicitProvider?.baseUrl;
+    const explicitHeaders = isRecord(explicitProvider?.headers)
+      ? (explicitProvider.headers as ProviderConfig["headers"])
+      : undefined;
+    return {
+      ...builtInProvider,
+      ...(typeof explicitBaseUrl === "string" && explicitBaseUrl.trim()
+        ? { baseUrl: explicitBaseUrl.trim() }
+        : {}),
+      ...(explicitHeaders
+        ? {
+            headers: {
+              ...builtInProvider.headers,
+              ...explicitHeaders,
+            },
+          }
+        : {}),
+      apiKey,
+    };
+  }),
   withApiKey("synthetic", async ({ apiKey }) => ({ ...buildSyntheticProvider(), apiKey })),
   withApiKey("venice", async ({ apiKey }) => ({ ...(await buildVeniceProvider()), apiKey })),
   withApiKey("xiaomi", async ({ apiKey }) => ({ ...buildXiaomiProvider(), apiKey })),
@@ -615,56 +799,35 @@ async function resolveCloudflareAiGatewayImplicitProvider(
   return undefined;
 }
 
-async function resolveOllamaImplicitProvider(
+async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
+  order: import("../plugins/types.js").ProviderDiscoveryOrder,
 ): Promise<Record<string, ProviderConfig> | undefined> {
-  const ollamaKey = ctx.resolveProviderApiKey("ollama").apiKey;
-  const explicitOllama = ctx.explicitProviders?.ollama;
-  const hasExplicitModels =
-    Array.isArray(explicitOllama?.models) && explicitOllama.models.length > 0;
-  if (hasExplicitModels && explicitOllama) {
-    return {
-      ollama: {
-        ...explicitOllama,
-        baseUrl: resolveOllamaApiBase(explicitOllama.baseUrl),
-        api: explicitOllama.api ?? "ollama",
-        apiKey: ollamaKey ?? explicitOllama.apiKey ?? OLLAMA_LOCAL_AUTH_MARKER,
-      },
-    };
-  }
-
-  const ollamaBaseUrl = explicitOllama?.baseUrl;
-  const hasExplicitOllamaConfig = Boolean(explicitOllama);
-  const ollamaProvider = await buildOllamaProvider(ollamaBaseUrl, {
-    quiet: !ollamaKey && !hasExplicitOllamaConfig,
+  const providers = resolvePluginDiscoveryProviders({
+    config: ctx.config,
+    workspaceDir: ctx.workspaceDir,
+    env: ctx.env,
   });
-  if (ollamaProvider.models.length === 0 && !ollamaKey && !explicitOllama?.apiKey) {
-    return undefined;
+  const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
+  const discovered: Record<string, ProviderConfig> = {};
+  for (const provider of byOrder[order]) {
+    const result = await provider.discovery?.run({
+      config: ctx.config ?? {},
+      agentDir: ctx.agentDir,
+      workspaceDir: ctx.workspaceDir,
+      env: ctx.env,
+      resolveProviderApiKey: (providerId) =>
+        ctx.resolveProviderApiKey(providerId?.trim() || provider.id),
+    });
+    mergeImplicitProviderSet(
+      discovered,
+      normalizePluginDiscoveryResult({
+        provider,
+        result,
+      }),
+    );
   }
-  return {
-    ollama: {
-      ...ollamaProvider,
-      apiKey: ollamaKey ?? explicitOllama?.apiKey ?? OLLAMA_LOCAL_AUTH_MARKER,
-    },
-  };
-}
-
-async function resolveVllmImplicitProvider(
-  ctx: ImplicitProviderContext,
-): Promise<Record<string, ProviderConfig> | undefined> {
-  if (ctx.explicitProviders?.vllm) {
-    return undefined;
-  }
-  const { apiKey: vllmKey, discoveryApiKey } = ctx.resolveProviderApiKey("vllm");
-  if (!vllmKey) {
-    return undefined;
-  }
-  return {
-    vllm: {
-      ...(await buildVllmProvider({ apiKey: discoveryApiKey })),
-      apiKey: vllmKey,
-    },
-  };
+  return Object.keys(discovered).length > 0 ? discovered : undefined;
 }
 
 export async function resolveImplicitProviders(
@@ -701,15 +864,17 @@ export async function resolveImplicitProviders(
   for (const loader of SIMPLE_IMPLICIT_PROVIDER_LOADERS) {
     mergeImplicitProviderSet(providers, await loader(context));
   }
+  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "simple"));
   for (const loader of PROFILE_IMPLICIT_PROVIDER_LOADERS) {
     mergeImplicitProviderSet(providers, await loader(context));
   }
+  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "profile"));
   for (const loader of PAIRED_IMPLICIT_PROVIDER_LOADERS) {
     mergeImplicitProviderSet(providers, await loader(context));
   }
+  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "paired"));
   mergeImplicitProviderSet(providers, await resolveCloudflareAiGatewayImplicitProvider(context));
-  mergeImplicitProviderSet(providers, await resolveOllamaImplicitProvider(context));
-  mergeImplicitProviderSet(providers, await resolveVllmImplicitProvider(context));
+  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "late"));
 
   if (!providers["github-copilot"]) {
     const implicitCopilot = await resolveImplicitCopilotProvider({
