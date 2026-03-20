@@ -190,14 +190,18 @@ export function createSlackPluginBase(params: {
     },
     agentPrompt: {
       messageToolHints: ({ cfg, accountId }) =>
-        isSlackInteractiveRepliesEnabled({ cfg, accountId })
+        (isSlackInteractiveRepliesEnabled({ cfg, accountId })
           ? [
               "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
               "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
             ]
           : [
               "- Slack interactive replies are disabled. If needed, ask to set `channels.slack.capabilities.interactiveReplies=true` (or the same under `channels.slack.accounts.<account>.capabilities`).",
-            ],
+            ]
+        ).concat([
+          "- Slack uses mrkdwn (not Markdown). Use *bold* (not **bold**), _italic_ (not *italic*), and ~strikethrough~ (not ~~strikethrough~~).",
+          "- Slack does not support headings (#). Use *bold* text instead.",
+        ]),
     },
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
