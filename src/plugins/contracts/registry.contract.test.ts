@@ -146,6 +146,7 @@ describe("plugin contract registry", () => {
     expect(findWebSearchIdsForPlugin("google")).toEqual(["gemini"]);
     expect(findWebSearchIdsForPlugin("moonshot")).toEqual(["kimi"]);
     expect(findWebSearchIdsForPlugin("perplexity")).toEqual(["perplexity"]);
+    expect(findWebSearchIdsForPlugin("tavily")).toEqual(["tavily"]);
     expect(findWebSearchIdsForPlugin("xai")).toEqual(["grok"]);
   });
 

@@ -187,6 +187,7 @@ describe("resolvePluginWebSearchProviders", () => {
       "moonshot:kimi",
       "perplexity:perplexity",
       "firecrawl:firecrawl",
+      "tavily:tavily",
     ]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
