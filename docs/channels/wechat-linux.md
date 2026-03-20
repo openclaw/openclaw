@@ -57,6 +57,137 @@ Minimal config:
 - Sends final agent replies back to WeChat as text, images, or files.
 - Keeps DM pairing and group mention safety behavior aligned with other OpenClaw channels.
 
+## Why `contact.db` matters
+
+The bridge decrypts `contact/contact.db` on startup and uses it to:
+
+- build the contact cache for sender ids and display names
+- resolve manual send targets by display name
+- normalize group and direct chat metadata before routing into OpenClaw
+
+If `contact.db` cannot be decrypted, the bridge cannot build a stable contact map. In practice that means `probe` fails or `watch` exits before normal message routing starts.
+
+Common symptoms:
+
+- PyWxDump prints `[*] 解密 contact.db ...` followed by `[-] contact.db 解密失败`
+- `openclaw channels status --probe` shows a bridge error such as `contact_db_decrypt_failed`
+- message routing works on one machine but fails on another after copying an old key file
+
+## Portable `contact.db` recovery checklist
+
+Use this when you move the setup to another Linux host or when WeChat starts using a different local account directory.
+
+1. Find the active `db_storage` directory.
+2. Regenerate `~/.wx_db_keys.json` against that exact directory.
+3. Decrypt and verify `contact.db` before starting OpenClaw.
+4. Pin `channels.wechat-linux.dbDir` so later restarts do not pick a stale directory.
+
+### 1. Find the active `db_storage`
+
+Auto-discovery usually checks these locations:
+
+- `~/Documents/xwechat_files/<wxid_...>/db_storage`
+- `~/xwechat_files/<wxid_...>/db_storage`
+
+If the host has multiple `wxid_*` directories, do not rely on the oldest or alphabetically first directory. Use the directory opened by the currently running `wechat` process, then set it explicitly in config.
+
+Example:
+
+```bash
+python3 - <<'PY'
+import os
+import subprocess
+
+result = subprocess.run(["pgrep", "-x", "wechat"], capture_output=True, text=True, check=False)
+seen = {}
+for raw_pid in result.stdout.split():
+    fd_dir = f"/proc/{raw_pid}/fd"
+    if not os.path.isdir(fd_dir):
+        continue
+    for fd_name in os.listdir(fd_dir):
+        try:
+            target = os.readlink(os.path.join(fd_dir, fd_name)).replace(" (deleted)", "")
+        except OSError:
+            continue
+        marker = "/db_storage/"
+        if marker in target and target.endswith(".db"):
+            db_dir = f"{target.split(marker, 1)[0]}{marker[:-1]}"
+            seen[db_dir] = seen.get(db_dir, 0) + 1
+for path, count in sorted(seen.items(), key=lambda item: (-item[1], item[0])):
+    print(count, path)
+PY
+```
+
+### 2. Regenerate the key file
+
+PyWxDump stores derived keys in `~/.wx_db_keys.json`. Those keys are tied to the actual encrypted databases, so copying an old file from another host or another WeChat account directory often causes `contact.db` decryption failures.
+
+The usual recovery flow is:
+
+```bash
+cd "/path/to/PyWxDump"
+sudo sysctl kernel.yama.ptrace_scope=0
+python3 tools/linux_get_wx_key.py --db-dir "/home/user/Documents/xwechat_files/wxid_example/db_storage"
+sudo sysctl kernel.yama.ptrace_scope=1
+```
+
+Notes:
+
+- Only lower `kernel.yama.ptrace_scope` long enough to extract keys.
+- Restore the original value immediately after extraction.
+- If the host already runs WeChat with a different active account directory, regenerate the key file again for that directory.
+
+### 3. Verify `contact.db` before starting OpenClaw
+
+Do not assume a fresh key file is correct. Verify it by decrypting and opening `contact.db` directly:
+
+```bash
+cd "/path/to/PyWxDump"
+python3 tools/linux_decrypt_wx_db.py \
+  --key-file "$HOME/.wx_db_keys.json" \
+  --db-dir "/home/user/Documents/xwechat_files/wxid_example/db_storage" \
+  --output "$HOME/wx_decrypted"
+
+sqlite3 "$HOME/wx_decrypted/contact/contact.db" "SELECT count(*) FROM contact;"
+```
+
+If the SQLite query works, the key file and `dbDir` match the live account directory.
+
+### 4. Pin the OpenClaw config
+
+Once you know the right directory, keep OpenClaw on that directory instead of relying on automatic fallback:
+
+```bash
+openclaw config set channels.wechat-linux.keyFile "$HOME/.wx_db_keys.json"
+openclaw config set channels.wechat-linux.outputDir "$HOME/wx_decrypted"
+openclaw config set channels.wechat-linux.dbDir "/home/user/Documents/xwechat_files/wxid_example/db_storage"
+openclaw channels status --probe
+```
+
+This is especially important on machines that have:
+
+- multiple `wxid_*` directories under `xwechat_files`
+- copied backups from another host
+- stale databases from an old login
+
+## Portable install notes
+
+When moving this setup to another machine, the safest assumption is:
+
+- `pythonPath` may change
+- `dbDir` may change
+- `~/.wx_db_keys.json` must be regenerated
+- `outputDir` can be reused, but its decrypted files should be treated as disposable cache
+
+The shortest reliable bring-up order is:
+
+1. Install WeChat and sign in.
+2. Confirm the active `db_storage`.
+3. Regenerate `~/.wx_db_keys.json`.
+4. Decrypt and verify `contact.db`.
+5. Update `channels.wechat-linux.pythonPath`, `keyFile`, `outputDir`, and `dbDir`.
+6. Run `openclaw channels status --probe`.
+
 ## Access control
 
 DMs:
