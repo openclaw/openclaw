@@ -233,6 +233,7 @@ export function buildGatewayCronService(params: {
     cronEnabled,
     cronConfig: params.cfg.cron,
     defaultAgentId,
+    resolveCronAgentId: (requested) => resolveCronAgent(requested).agentId,
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => {
@@ -291,7 +292,7 @@ export function buildGatewayCronService(params: {
           sessionKey = customSessionId;
         }
       }
-      return await runCronIsolatedAgentTurn({
+      const result = await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
         job,
@@ -301,6 +302,7 @@ export function buildGatewayCronService(params: {
         sessionKey,
         lane: "cron",
       });
+      return { ...result, resolvedAgentId: agentId };
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
@@ -490,7 +492,9 @@ export function buildGatewayCronService(params: {
             summary: evt.summary,
             delivered: evt.delivered,
             deliveryStatus: evt.deliveryStatus,
+            deliveryAttempted: evt.deliveryAttempted,
             deliveryError: evt.deliveryError,
+            resolvedAgentId: evt.resolvedAgentId,
             sessionId: evt.sessionId,
             sessionKey: evt.sessionKey,
             runAtMs: evt.runAtMs,

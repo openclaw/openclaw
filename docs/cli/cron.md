@@ -75,3 +75,9 @@ openclaw cron add \
 ```
 
 `--light-context` applies to isolated agent-turn jobs only. For cron runs, lightweight mode keeps bootstrap context empty instead of injecting the full workspace bootstrap set.
+
+Run outcome fields are separated:
+
+- queue/scheduling status: from `cron add` / `cron run` responses.
+- execution status: run-log `status` and `error`.
+- delivery status: run-log `delivered`, `deliveryStatus`, `deliveryAttempted`, and `resolvedAgentId`.

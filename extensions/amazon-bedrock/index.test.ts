@@ -1,3 +1,4 @@
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/extensions/plugin-registration.js";
 import amazonBedrockPlugin from "./index.js";
@@ -25,7 +26,11 @@ describe("amazon-bedrock provider plugin", () => {
     const wrapped = provider.wrapStreamFn?.({
       provider: "amazon-bedrock",
       modelId: "amazon.nova-micro-v1:0",
-      streamFn: (_model: unknown, _context: unknown, options: Record<string, unknown>) => options,
+      streamFn: ((
+        _model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => options) as StreamFn,
     } as never);
 
     expect(

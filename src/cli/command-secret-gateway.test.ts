@@ -283,21 +283,33 @@ describe("resolveCommandSecretRefsViaGateway", () => {
             web: {
               search: {
                 provider: "gemini",
-                gemini: {
-                  apiKey: { source: "env", provider: "default", id: envKey },
+              },
+            },
+          },
+          plugins: {
+            entries: {
+              google: {
+                enabled: true,
+                config: {
+                  webSearch: {
+                    apiKey: { source: "env", provider: "default", id: envKey },
+                  },
                 },
               },
             },
           },
         } as OpenClawConfig,
         commandName: "agent",
-        targetIds: new Set(["tools.web.search.gemini.apiKey"]),
+        targetIds: new Set(["plugins.entries.google.config.webSearch.apiKey"]),
       });
 
-      expect(result.resolvedConfig.tools?.web?.search?.gemini?.apiKey).toBe(
-        "gemini-local-fallback-key",
+      const pluginEntries = result.resolvedConfig.plugins?.entries as
+        | Record<string, { config?: { webSearch?: { apiKey?: unknown } } }>
+        | undefined;
+      expect(pluginEntries?.google?.config?.webSearch?.apiKey).toBe("gemini-local-fallback-key");
+      expect(result.targetStatesByPath["plugins.entries.google.config.webSearch.apiKey"]).toBe(
+        "resolved_local",
       );
-      expect(result.targetStatesByPath["tools.web.search.gemini.apiKey"]).toBe("resolved_local");
       expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
   }, 300_000);

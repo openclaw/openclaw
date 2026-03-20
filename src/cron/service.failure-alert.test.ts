@@ -27,7 +27,7 @@ function createFailureAlertCron(params: {
   storePath: string;
   cronConfig?: CronServiceParams["cronConfig"];
   runIsolatedAgentJob: NonNullable<CronServiceParams["runIsolatedAgentJob"]>;
-  sendCronFailureAlert: NonNullable<CronServiceParams["sendCronFailureAlert"]>;
+  sendCronFailureAlert?: NonNullable<CronServiceParams["sendCronFailureAlert"]>;
 }) {
   return new CronService({
     storePath: params.storePath,
@@ -37,7 +37,7 @@ function createFailureAlertCron(params: {
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),
     runIsolatedAgentJob: params.runIsolatedAgentJob,
-    sendCronFailureAlert: params.sendCronFailureAlert,
+    ...(params.sendCronFailureAlert ? { sendCronFailureAlert: params.sendCronFailureAlert } : {}),
   });
 }
 
@@ -263,6 +263,59 @@ describe("CronService failure alerts", () => {
 
     await cron.run(bestEffortJob.id, "force");
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("uses resolved agent context for fallback failure alerts", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "temporary upstream error",
+    }));
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+        },
+      },
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "fallback alert resolved agent",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "run report" },
+      agentId: "Ops Team",
+      delivery: { mode: "none" },
+    });
+
+    await cron.run(job.id, "force");
+
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining('Cron job "fallback alert resolved agent" failed 1 times'),
+      expect.objectContaining({ agentId: "ops-team" }),
+    );
+    expect(requestHeartbeatNow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: `cron:${job.id}:failure-alert`,
+        agentId: "ops-team",
+      }),
+    );
 
     cron.stop();
     await store.cleanup();

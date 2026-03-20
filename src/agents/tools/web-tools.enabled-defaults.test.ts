@@ -15,78 +15,86 @@ function installMockFetch(payload: unknown) {
   return mockFetch;
 }
 
+function webSearchPluginId(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
+  return provider === "gemini"
+    ? "google"
+    : provider === "grok"
+      ? "xai"
+      : provider === "kimi"
+        ? "moonshot"
+        : provider;
+}
+
+function withWebSearchProviderConfig(
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi",
+  providerConfig?: Record<string, unknown>,
+) {
+  return {
+    tools: {
+      web: {
+        search: {
+          provider,
+        },
+      },
+    },
+    ...(providerConfig
+      ? {
+          plugins: {
+            entries: {
+              [webSearchPluginId(provider)]: {
+                enabled: true,
+                config: {
+                  webSearch: providerConfig,
+                },
+              },
+            },
+          },
+        }
+      : {}),
+  };
+}
+
 function createPerplexitySearchTool(perplexityConfig?: {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
 }) {
   return createWebSearchTool({
-    config: {
-      tools: {
-        web: {
-          search: {
-            provider: "perplexity",
-            ...(perplexityConfig ? { perplexity: perplexityConfig } : {}),
-          },
-        },
-      },
-    },
+    config: withWebSearchProviderConfig("perplexity", perplexityConfig),
     sandboxed: true,
   });
 }
 
-function createBraveSearchTool(braveConfig?: { mode?: "web" | "llm-context" }) {
+function createBraveSearchTool(braveConfig?: { apiKey?: string; mode?: "web" | "llm-context" }) {
   return createWebSearchTool({
-    config: {
-      tools: {
-        web: {
-          search: {
-            provider: "brave",
-            apiKey: "brave-config-test", // pragma: allowlist secret
-            ...(braveConfig ? { brave: braveConfig } : {}),
-          },
-        },
-      },
-    },
+    config: withWebSearchProviderConfig("brave", {
+      apiKey: "brave-config-test", // pragma: allowlist secret
+      ...braveConfig,
+    }),
     sandboxed: true,
   });
 }
 
 function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; model?: string }) {
   return createWebSearchTool({
-    config: {
-      tools: {
-        web: {
-          search: {
-            provider: "kimi",
-            ...(kimiConfig ? { kimi: kimiConfig } : {}),
-          },
-        },
-      },
-    },
+    config: withWebSearchProviderConfig("kimi", kimiConfig),
     sandboxed: true,
   });
 }
 
 function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
-  const searchConfig =
+  const providerConfig =
     provider === "perplexity"
-      ? { provider, perplexity: { apiKey: "pplx-config-test" } } // pragma: allowlist secret
+      ? { apiKey: "pplx-config-test" } // pragma: allowlist secret
       : provider === "grok"
-        ? { provider, grok: { apiKey: "xai-config-test" } } // pragma: allowlist secret
+        ? { apiKey: "xai-config-test" } // pragma: allowlist secret
         : provider === "gemini"
-          ? { provider, gemini: { apiKey: "gemini-config-test" } } // pragma: allowlist secret
+          ? { apiKey: "gemini-config-test" } // pragma: allowlist secret
           : provider === "kimi"
-            ? { provider, kimi: { apiKey: "moonshot-config-test" } } // pragma: allowlist secret
-            : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
+            ? { apiKey: "moonshot-config-test" } // pragma: allowlist secret
+            : { apiKey: "brave-config-test" }; // pragma: allowlist secret
   return createWebSearchTool({
-    config: {
-      tools: {
-        web: {
-          search: searchConfig,
-        },
-      },
-    },
+    config: withWebSearchProviderConfig(provider, providerConfig),
     sandboxed: true,
   });
 }
@@ -177,9 +185,25 @@ describe("web tools defaults", () => {
           web: {
             search: {
               provider: "brave",
-              apiKey: "brave-config-test", // pragma: allowlist secret
-              gemini: {
-                apiKey: "gemini-config-test", // pragma: allowlist secret
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: "gemini-config-test", // pragma: allowlist secret
+                },
+              },
+            },
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: "brave-config-test", // pragma: allowlist secret
+                },
               },
             },
           },
@@ -668,8 +692,26 @@ describe("web_search Perplexity lazy resolution", () => {
           web: {
             search: {
               provider: "gemini",
-              gemini: { apiKey: "gemini-config-test" }, // pragma: allowlist secret
-              perplexity: perplexityConfig as { apiKey?: string; baseUrl?: string; model?: string },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: { apiKey: "gemini-config-test" }, // pragma: allowlist secret
+              },
+            },
+            perplexity: {
+              enabled: true,
+              config: {
+                webSearch: perplexityConfig as {
+                  apiKey?: string;
+                  baseUrl?: string;
+                  model?: string;
+                },
+              },
             },
           },
         },
@@ -876,18 +918,7 @@ describe("web_search external content wrapping", () => {
     });
 
     const tool = createWebSearchTool({
-      config: {
-        tools: {
-          web: {
-            search: {
-              provider: "brave",
-              brave: {
-                mode: "llm-context",
-              },
-            },
-          },
-        },
-      },
+      config: withWebSearchProviderConfig("brave", { mode: "llm-context" }),
       sandboxed: true,
     });
     const result = await tool?.execute?.("call-1", {
@@ -930,18 +961,7 @@ describe("web_search external content wrapping", () => {
     });
 
     const tool = createWebSearchTool({
-      config: {
-        tools: {
-          web: {
-            search: {
-              provider: "brave",
-              brave: {
-                mode: "llm-context",
-              },
-            },
-          },
-        },
-      },
+      config: withWebSearchProviderConfig("brave", { mode: "llm-context" }),
       sandboxed: true,
     });
     const result = await tool?.execute?.("call-1", { query: "test", freshness: "week" });
@@ -977,18 +997,7 @@ describe("web_search external content wrapping", () => {
     });
 
     const tool = createWebSearchTool({
-      config: {
-        tools: {
-          web: {
-            search: {
-              provider: "brave",
-              brave: {
-                mode: "llm-context",
-              },
-            },
-          },
-        },
-      },
+      config: withWebSearchProviderConfig("brave", { mode: "llm-context" }),
       sandboxed: true,
     });
     const result = await tool?.execute?.("call-1", input);

@@ -44,4 +44,40 @@ describe("skills entries config schema", () => {
       ),
     ).toBe(true);
   });
+
+  it("accepts skills policy global+agent override shape", () => {
+    const res = OpenClawSchema.safeParse({
+      skills: {
+        policy: {
+          globalEnabled: ["web-search", "weather"],
+          agentOverrides: {
+            ops: {
+              enabled: ["jira"],
+              disabled: ["weather"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects unknown fields under skills policy overrides", () => {
+    const res = OpenClawSchema.safeParse({
+      skills: {
+        policy: {
+          globalEnabled: ["web-search"],
+          agentOverrides: {
+            ops: {
+              enabled: ["jira"],
+              nope: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+  });
 });

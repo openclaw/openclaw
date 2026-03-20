@@ -89,26 +89,20 @@ export function createNativeCommandTestParams(
     counts: { block: 0, final: 0, tool: 0 },
   };
   const telegramDeps: TelegramBotDeps = {
-    loadConfig: vi.fn(() => ({}) as OpenClawConfig) as TelegramBotDeps["loadConfig"],
-    resolveStorePath: vi.fn(
-      (storePath?: string) => storePath ?? "/tmp/sessions.json",
-    ) as TelegramBotDeps["resolveStorePath"],
-    readChannelAllowFromStore: vi.fn(
-      async () => [],
-    ) as TelegramBotDeps["readChannelAllowFromStore"],
-    upsertChannelPairingRequest: vi.fn(async () => ({
-      code: "PAIRCODE",
-      created: true,
-    })) as TelegramBotDeps["upsertChannelPairingRequest"],
-    enqueueSystemEvent: vi.fn() as TelegramBotDeps["enqueueSystemEvent"],
-    dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-      async () => dispatchResult,
-    ) as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
+    loadConfig: vi.fn(() => ({})),
+    resolveStorePath: vi.fn((storePath?: string) => storePath ?? "/tmp/sessions.json"),
+    readChannelAllowFromStore: vi.fn(async () => []),
+    upsertChannelPairingRequest: vi.fn(async () => ({ code: "PAIRCODE", created: true })),
+    enqueueSystemEvent: vi.fn(),
     buildModelsProviderData: vi.fn(async () => ({
       byProvider: new Map<string, Set<string>>(),
       providers: [],
-      resolvedDefault: { provider: "openai", model: "gpt-4.1" },
-    })) as TelegramBotDeps["buildModelsProviderData"],
+      resolvedDefault: { provider: "openai", model: "gpt-5.4-mini" },
+    })),
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    })),
     listSkillCommandsForAgents,
     wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
   };

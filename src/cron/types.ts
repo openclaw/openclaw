@@ -126,10 +126,14 @@ export type CronJobState = {
   scheduleErrorCount?: number;
   /** Explicit delivery outcome, separate from execution outcome. */
   lastDeliveryStatus?: CronDeliveryStatus;
+  /** Whether the last run attempted announce/direct delivery at all. */
+  lastDeliveryAttempted?: boolean;
   /** Delivery-specific error text when available. */
   lastDeliveryError?: string;
   /** Whether the last run's output was delivered to the target channel. */
   lastDelivered?: boolean;
+  /** Effective agent id resolved at runtime for the last run. */
+  lastResolvedAgentId?: string;
 };
 
 export type CronJob = CronJobBase<

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
+import {
+  __resetGoogleChatFetchWithSsrFGuardForTest,
+  __setGoogleChatFetchWithSsrFGuardForTest,
+  downloadGoogleChatMedia,
+  sendGoogleChatMessage,
+} from "./api.js";
 
 vi.mock("./auth.js", () => ({
   getGoogleChatAccessToken: vi.fn().mockResolvedValue("token"),
@@ -12,6 +17,13 @@ const account = {
   credentialSource: "inline",
   config: {},
 } as ResolvedGoogleChatAccount;
+
+const withStubbedGoogleChatFetchGuard = () =>
+  __setGoogleChatFetchWithSsrFGuardForTest(async ({ url, init, fetchImpl }) => ({
+    response: await (fetchImpl ?? fetch)(url, init),
+    finalUrl: String(url),
+    release: async () => undefined,
+  }));
 
 function stubSuccessfulSend(name: string) {
   const fetchMock = vi
@@ -31,9 +43,11 @@ async function expectDownloadToRejectForResponse(response: Response) {
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    __resetGoogleChatFetchWithSsrFGuardForTest();
   });
 
   it("rejects when content-length exceeds max bytes", async () => {
+    withStubbedGoogleChatFetchGuard();
     const body = new ReadableStream({
       start(controller) {
         controller.enqueue(new Uint8Array([1, 2, 3]));
@@ -48,6 +62,7 @@ describe("downloadGoogleChatMedia", () => {
   });
 
   it("rejects when streamed payload exceeds max bytes", async () => {
+    withStubbedGoogleChatFetchGuard();
     const chunks = [new Uint8Array(6), new Uint8Array(6)];
     let index = 0;
     const body = new ReadableStream({
@@ -70,9 +85,11 @@ describe("downloadGoogleChatMedia", () => {
 describe("sendGoogleChatMessage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    __resetGoogleChatFetchWithSsrFGuardForTest();
   });
 
   it("adds messageReplyOption when sending to an existing thread", async () => {
+    withStubbedGoogleChatFetchGuard();
     const fetchMock = stubSuccessfulSend("spaces/AAA/messages/123");
 
     await sendGoogleChatMessage({
@@ -91,6 +108,7 @@ describe("sendGoogleChatMessage", () => {
   });
 
   it("does not set messageReplyOption for non-thread sends", async () => {
+    withStubbedGoogleChatFetchGuard();
     const fetchMock = stubSuccessfulSend("spaces/AAA/messages/124");
 
     await sendGoogleChatMessage({

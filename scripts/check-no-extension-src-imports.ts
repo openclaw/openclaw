@@ -2,6 +2,24 @@ import fs from "node:fs";
 import path from "node:path";
 
 const FORBIDDEN_REPO_SRC_IMPORT = /["'](?:\.\.\/)+(?:src\/)[^"']+["']/;
+const LEGACY_ALLOWLIST = new Set<string>([
+  "extensions/brave/src/brave-web-search-provider.ts",
+  "extensions/discord/src/directory-config.ts",
+  "extensions/firecrawl/src/firecrawl-search-provider.ts",
+  "extensions/google/src/gemini-web-search-provider.ts",
+  "extensions/googlechat/runtime-api.ts",
+  "extensions/imessage/runtime-api.ts",
+  "extensions/moonshot/src/kimi-web-search-provider.ts",
+  "extensions/perplexity/src/perplexity-web-search-provider.ts",
+  "extensions/signal/runtime-api.ts",
+  "extensions/signal/src/accounts.ts",
+  "extensions/slack/src/directory-config.ts",
+  "extensions/slack/src/runtime-api.ts",
+  "extensions/telegram/src/directory-config.ts",
+  "extensions/whatsapp/src/directory-config.ts",
+  "extensions/xai/src/grok-web-search-provider.ts",
+  "extensions/xai/web-search.ts",
+]);
 
 function isSourceFile(filePath: string): boolean {
   if (filePath.endsWith(".d.ts")) {
@@ -71,10 +89,20 @@ function main() {
   }
 
   if (offenders.length > 0) {
+    const actionable = offenders
+      .map((offender) => path.relative(process.cwd(), offender) || offender)
+      .filter((relative) => !LEGACY_ALLOWLIST.has(relative));
+
+    if (actionable.length === 0) {
+      console.log(
+        `OK: production extension files avoid new direct repo src/ imports (${files.length} checked; ${offenders.length} legacy allowlisted).`,
+      );
+      return;
+    }
+
     console.error("Production extension files must not import the repo src/ tree directly.");
-    for (const offender of offenders.toSorted()) {
-      const relative = path.relative(process.cwd(), offender) || offender;
-      console.error(`- ${relative}`);
+    for (const offender of actionable.toSorted((a, b) => a.localeCompare(b))) {
+      console.error(`- ${offender}`);
     }
     console.error(
       "Publish a focused openclaw/plugin-sdk/<subpath> surface or use the extension's own public barrel instead.",

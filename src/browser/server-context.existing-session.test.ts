@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteContext } from "./server-context.js";
 import type { BrowserServerState } from "./server-context.js";
@@ -64,6 +65,7 @@ afterEach(() => {
 
 describe("browser server-context existing-session profile", () => {
   it("routes tab operations through the Chrome MCP backend", async () => {
+    const expectedUserDataDir = path.resolve("/tmp/brave-profile");
     fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
     const ctx = createBrowserRouteContext({ getState: () => state });
@@ -98,18 +100,18 @@ describe("browser server-context existing-session profile", () => {
 
     expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
       "chrome-live",
-      "/tmp/brave-profile",
+      expectedUserDataDir,
     );
-    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith("chrome-live", "/tmp/brave-profile");
+    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith("chrome-live", expectedUserDataDir);
     expect(chromeMcp.openChromeMcpTab).toHaveBeenCalledWith(
       "chrome-live",
       "https://openclaw.ai",
-      "/tmp/brave-profile",
+      expectedUserDataDir,
     );
     expect(chromeMcp.focusChromeMcpTab).toHaveBeenCalledWith(
       "chrome-live",
       "7",
-      "/tmp/brave-profile",
+      expectedUserDataDir,
     );
     expect(chromeMcp.closeChromeMcpSession).toHaveBeenCalledWith("chrome-live");
   });

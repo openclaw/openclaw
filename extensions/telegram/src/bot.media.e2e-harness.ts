@@ -155,12 +155,12 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
     created: true,
   })) as TelegramBotDeps["upsertChannelPairingRequest"],
   enqueueSystemEvent: vi.fn() as TelegramBotDeps["enqueueSystemEvent"],
-  dispatchReplyWithBufferedBlockDispatcher: mediaHarnessDispatchReplyWithBufferedBlockDispatcher,
   buildModelsProviderData: vi.fn(async () => ({
     byProvider: new Map<string, Set<string>>(),
     providers: [],
-    resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+    resolvedDefault: { provider: "openai", model: "gpt-5.4-mini" },
   })) as TelegramBotDeps["buildModelsProviderData"],
+  dispatchReplyWithBufferedBlockDispatcher: mediaHarnessDispatchReplyWithBufferedBlockDispatcher,
   listSkillCommandsForAgents: vi.fn(() => []) as TelegramBotDeps["listSkillCommandsForAgents"],
   wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
 };

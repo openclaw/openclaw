@@ -7,6 +7,18 @@ import type { GoogleChatReaction } from "./types.js";
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
 
+let googleChatFetchWithSsrFGuard: typeof fetchWithSsrFGuard = fetchWithSsrFGuard;
+
+export function __setGoogleChatFetchWithSsrFGuardForTest(
+  fetchGuard: typeof fetchWithSsrFGuard,
+): void {
+  googleChatFetchWithSsrFGuard = fetchGuard;
+}
+
+export function __resetGoogleChatFetchWithSsrFGuardForTest(): void {
+  googleChatFetchWithSsrFGuard = fetchWithSsrFGuard;
+}
+
 const headersToObject = (headers?: HeadersInit): Record<string, string> =>
   headers instanceof Headers
     ? Object.fromEntries(headers.entries())
@@ -31,7 +43,7 @@ async function withGoogleChatResponse<T>(params: {
     handleResponse,
   } = params;
   const token = await getGoogleChatAccessToken(account);
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await googleChatFetchWithSsrFGuard({
     url,
     init: {
       ...init,

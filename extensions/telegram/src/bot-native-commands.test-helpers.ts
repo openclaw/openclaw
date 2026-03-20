@@ -125,13 +125,13 @@ export function createNativeCommandsHarness(params?: {
     readChannelAllowFromStore: vi.fn(async () => []),
     upsertChannelPairingRequest: vi.fn(async () => ({ code: "PAIRCODE", created: true })),
     enqueueSystemEvent: vi.fn(),
-    dispatchReplyWithBufferedBlockDispatcher:
-      replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
     buildModelsProviderData: vi.fn(async () => ({
       byProvider: new Map<string, Set<string>>(),
       providers: [],
-      resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+      resolvedDefault: { provider: "openai", model: "gpt-5.4-mini" },
     })),
+    dispatchReplyWithBufferedBlockDispatcher:
+      replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
     listSkillCommandsForAgents: vi.fn(() => []),
     wasSentByBot: vi.fn(() => false),
   };

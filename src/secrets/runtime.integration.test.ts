@@ -263,13 +263,27 @@ describe("secrets runtime snapshot integration", () => {
     await withTempHome("openclaw-secrets-runtime-web-reload-lkg-", async (home) => {
       const prepared = await prepareSecretsRuntimeSnapshot({
         config: asConfig({
+          plugins: {
+            allow: ["google"],
+            entries: {
+              google: {
+                enabled: true,
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "WEB_SEARCH_GEMINI_API_KEY",
+                    },
+                  },
+                },
+              },
+            },
+          },
           tools: {
             web: {
               search: {
                 provider: "gemini",
-                gemini: {
-                  apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
-                },
               },
             },
           },
@@ -285,10 +299,12 @@ describe("secrets runtime snapshot integration", () => {
 
       await expect(
         writeConfigFile({
-          ...loadConfig(),
           plugins: {
+            enabled: true,
+            allow: ["google"],
             entries: {
               google: {
+                enabled: true,
                 config: {
                   webSearch: {
                     apiKey: {
@@ -305,13 +321,6 @@ describe("secrets runtime snapshot integration", () => {
             web: {
               search: {
                 provider: "gemini",
-                gemini: {
-                  apiKey: {
-                    source: "env",
-                    provider: "default",
-                    id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
-                  },
-                },
               },
             },
           },
@@ -322,8 +331,15 @@ describe("secrets runtime snapshot integration", () => {
 
       const activeAfterFailure = getActiveSecretsRuntimeSnapshot();
       expect(activeAfterFailure).not.toBeNull();
-      expect(loadConfig().tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-runtime-key");
-      expect(activeAfterFailure?.sourceConfig.tools?.web?.search?.gemini?.apiKey).toEqual({
+      const activeGoogleWebSearchConfig = loadConfig().plugins?.entries?.google?.config as
+        | { webSearch?: { apiKey?: unknown } }
+        | undefined;
+      expect(activeGoogleWebSearchConfig?.webSearch?.apiKey).toBe("web-search-gemini-runtime-key");
+      const activeSourceGoogleWebSearchConfig = activeAfterFailure?.sourceConfig.plugins?.entries
+        ?.google?.config as
+        | { webSearch?: { apiKey?: unknown } }
+        | undefined;
+      expect(activeSourceGoogleWebSearchConfig?.webSearch?.apiKey).toEqual({
         source: "env",
         provider: "default",
         id: "WEB_SEARCH_GEMINI_API_KEY",

@@ -4,8 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
-import type { MediaUnderstandingProvider } from "./types.js";
+import { MIN_AUDIO_FILE_BYTES } from "./defaults.js";
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -55,6 +54,12 @@ let clearMediaUnderstandingBinaryCacheForTests: () => void;
 
 const TEMP_MEDIA_PREFIX = "openclaw-echo-transcript-test-";
 let suiteTempMediaRootDir = "";
+
+function createSafeAudioFixtureBuffer(size?: number, fill = 0xab): Buffer {
+  const minSafeSize = MIN_AUDIO_FILE_BYTES + 1;
+  const finalSize = Math.max(size ?? minSafeSize, minSafeSize);
+  return Buffer.alloc(finalSize, fill);
+}
 
 async function createTempAudioFile(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(suiteTempMediaRootDir, "case-"));
@@ -163,38 +168,6 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     vi.doMock("../infra/outbound/deliver-runtime.js", () => ({
       deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
     }));
-    vi.doMock("./providers/index.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("./providers/index.js")>();
-      const { deepgramProvider } = await import("./providers/deepgram/index.js");
-      const { groqProvider } = await import("./providers/groq/index.js");
-      return {
-        ...actual,
-        buildMediaUnderstandingRegistry: (
-          overrides?: Record<string, MediaUnderstandingProvider>,
-        ) => {
-          const registry = new Map<string, MediaUnderstandingProvider>([
-            ["groq", groqProvider],
-            ["deepgram", deepgramProvider],
-          ]);
-          for (const [key, provider] of Object.entries(overrides ?? {})) {
-            const normalizedKey = actual.normalizeMediaProviderId(key);
-            const existing = registry.get(normalizedKey);
-            registry.set(
-              normalizedKey,
-              existing
-                ? {
-                    ...existing,
-                    ...provider,
-                    capabilities: provider.capabilities ?? existing.capabilities,
-                  }
-                : provider,
-            );
-          }
-          return registry;
-        },
-      };
-    });
-
     const baseDir = resolvePreferredOpenClawTmpDir();
     await fs.mkdir(baseDir, { recursive: true });
     suiteTempMediaRootDir = await fs.mkdtemp(path.join(baseDir, TEMP_MEDIA_PREFIX));

@@ -204,7 +204,19 @@ describe("finalizeSetupWizard", () => {
           tools: {
             web: {
               search: {
-                apiKey: "",
+                provider: "brave",
+              },
+            },
+          },
+          plugins: {
+            entries: {
+              brave: {
+                enabled: true,
+                config: {
+                  webSearch: {
+                    apiKey: "",
+                  },
+                },
               },
             },
           },

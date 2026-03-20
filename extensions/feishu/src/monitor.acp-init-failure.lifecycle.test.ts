@@ -349,11 +349,13 @@ describe("Feishu ACP-init failure lifecycle", () => {
     await settleAsyncWork();
     await onMessage(event);
     await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+      expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         accountId: "acct-acp",
@@ -374,8 +376,10 @@ describe("Feishu ACP-init failure lifecycle", () => {
     await settleAsyncWork();
     await onMessage(event);
     await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    });
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
     expect(lastRuntime?.error).not.toHaveBeenCalled();
   });
 });

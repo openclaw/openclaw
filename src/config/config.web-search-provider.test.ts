@@ -312,10 +312,6 @@ describe("web search provider auto-detection", () => {
 
   it("explicit provider always wins regardless of keys", () => {
     process.env.BRAVE_API_KEY = "test-brave-key"; // pragma: allowlist secret
-    expect(
-      resolveSearchProvider({ provider: "gemini" } as unknown as Parameters<
-        typeof resolveSearchProvider
-      >[0]),
-    ).toBe("gemini");
+    expect(resolveSearchProvider({ provider: "gemini" })).toBe("gemini");
   });
 });

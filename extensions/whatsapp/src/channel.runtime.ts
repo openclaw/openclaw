@@ -17,15 +17,15 @@ type LogoutWeb = typeof import("./auth-store.js").logoutWeb;
 type ReadWebSelfId = typeof import("./auth-store.js").readWebSelfId;
 type WebAuthExists = typeof import("./auth-store.js").webAuthExists;
 type LoginWeb = typeof import("./login.js").loginWeb;
-type StartWebLoginWithQr = typeof import("./login-qr.js").startWebLoginWithQr;
-type WaitForWebLogin = typeof import("./login-qr.js").waitForWebLogin;
+type StartWebLoginWithQr = typeof import("../login-qr-api.js").startWebLoginWithQr;
+type WaitForWebLogin = typeof import("../login-qr-api.js").waitForWebLogin;
 type WhatsAppSetupWizard = typeof import("./setup-surface.js").whatsappSetupWizard;
 type MonitorWebChannel = typeof import("./auto-reply/monitor.js").monitorWebChannel;
 
-let loginQrPromise: Promise<typeof import("./login-qr.js")> | null = null;
+let loginQrPromise: Promise<typeof import("../login-qr-api.js")> | null = null;
 
 function loadWhatsAppLoginQr() {
-  loginQrPromise ??= import("./login-qr.js");
+  loginQrPromise ??= import("../login-qr-api.js");
   return loginQrPromise;
 }
 

@@ -84,6 +84,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const report = buildWorkspaceSkillStatus(workspaceDir, {
       config: cfg,
+      agentId,
       eligibility: { remote: getRemoteSkillEligibility() },
     });
     respond(true, report, undefined);

@@ -34,6 +34,28 @@ function createPrompter(params: { selectValue?: string; textValue?: string }): {
   return { prompter, notes };
 }
 
+function webSearchPluginId(
+  provider: "brave" | "firecrawl" | "gemini" | "grok" | "kimi" | "perplexity",
+) {
+  return provider === "gemini"
+    ? "google"
+    : provider === "grok"
+      ? "xai"
+      : provider === "kimi"
+        ? "moonshot"
+        : provider;
+}
+
+function readWebSearchApiKey(
+  config: OpenClawConfig,
+  provider: "brave" | "firecrawl" | "gemini" | "grok" | "kimi" | "perplexity",
+) {
+  const entries = config.plugins?.entries as
+    | Record<string, { config?: { webSearch?: { apiKey?: unknown } } }>
+    | undefined;
+  return entries?.[webSearchPluginId(provider)]?.config?.webSearch?.apiKey;
+}
+
 function createPerplexityConfig(apiKey: string, enabled?: boolean): OpenClawConfig {
   return {
     tools: {
@@ -41,7 +63,16 @@ function createPerplexityConfig(apiKey: string, enabled?: boolean): OpenClawConf
         search: {
           provider: "perplexity",
           ...(enabled === undefined ? {} : { enabled }),
-          perplexity: { apiKey },
+        },
+      },
+    },
+    plugins: {
+      entries: {
+        perplexity: {
+          enabled: true,
+          config: {
+            webSearch: { apiKey },
+          },
         },
       },
     },
@@ -97,7 +128,7 @@ describe("setupSearch", () => {
     });
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("perplexity");
-    expect(pluginWebSearchApiKey(result, "perplexity")).toBe("pplx-test-key");
+    expect(readWebSearchApiKey(result, "perplexity")).toBe("pplx-test-key");
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(result.plugins?.entries?.perplexity?.enabled).toBe(true);
   });
@@ -111,7 +142,7 @@ describe("setupSearch", () => {
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("brave");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-test-key");
+    expect(readWebSearchApiKey(result, "brave")).toBe("BSA-test-key");
     expect(result.plugins?.entries?.brave?.enabled).toBe(true);
   });
 
@@ -124,7 +155,7 @@ describe("setupSearch", () => {
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("gemini");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(pluginWebSearchApiKey(result, "google")).toBe("AIza-test");
+    expect(readWebSearchApiKey(result, "gemini")).toBe("AIza-test");
     expect(result.plugins?.entries?.google?.enabled).toBe(true);
   });
 
@@ -137,7 +168,7 @@ describe("setupSearch", () => {
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("firecrawl");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(pluginWebSearchApiKey(result, "firecrawl")).toBe("fc-test-key");
+    expect(readWebSearchApiKey(result, "firecrawl")).toBe("fc-test-key");
     expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
   });
 
@@ -150,7 +181,7 @@ describe("setupSearch", () => {
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("grok");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(result.tools?.web?.search?.grok?.apiKey).toBe("xai-test");
+    expect(readWebSearchApiKey(result, "grok")).toBe("xai-test");
   });
 
   it("sets provider and key for kimi", async () => {
@@ -162,7 +193,7 @@ describe("setupSearch", () => {
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("kimi");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(pluginWebSearchApiKey(result, "moonshot")).toBe("sk-moonshot");
+    expect(readWebSearchApiKey(result, "kimi")).toBe("sk-moonshot");
     expect(result.plugins?.entries?.moonshot?.enabled).toBe(true);
   });
 
@@ -206,7 +237,7 @@ describe("setupSearch", () => {
     const result = await runBlankPerplexityKeyEntry(
       "existing-key", // pragma: allowlist secret
     );
-    expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
+    expect(readWebSearchApiKey(result, "perplexity")).toBe("existing-key");
     expect(result.tools?.web?.search?.enabled).toBe(true);
   });
 
@@ -215,7 +246,7 @@ describe("setupSearch", () => {
       "existing-key", // pragma: allowlist secret
       false,
     );
-    expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
+    expect(readWebSearchApiKey(result, "perplexity")).toBe("existing-key");
     expect(result.tools?.web?.search?.enabled).toBe(false);
   });
 
@@ -224,7 +255,7 @@ describe("setupSearch", () => {
       "stored-pplx-key", // pragma: allowlist secret
     );
     expect(result.tools?.web?.search?.provider).toBe("perplexity");
-    expect(pluginWebSearchApiKey(result, "perplexity")).toBe("stored-pplx-key");
+    expect(readWebSearchApiKey(result, "perplexity")).toBe("stored-pplx-key");
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(prompter.text).not.toHaveBeenCalled();
   });
@@ -235,7 +266,7 @@ describe("setupSearch", () => {
       false,
     );
     expect(result.tools?.web?.search?.provider).toBe("perplexity");
-    expect(pluginWebSearchApiKey(result, "perplexity")).toBe("stored-pplx-key");
+    expect(readWebSearchApiKey(result, "perplexity")).toBe("stored-pplx-key");
     expect(result.tools?.web?.search?.enabled).toBe(false);
     expect(prompter.text).not.toHaveBeenCalled();
   });
@@ -326,7 +357,7 @@ describe("setupSearch", () => {
         secretInputMode: "ref", // pragma: allowlist secret
       });
       expect(result.tools?.web?.search?.provider).toBe("perplexity");
-      expect(pluginWebSearchApiKey(result, "perplexity")).toEqual({
+      expect(readWebSearchApiKey(result, "perplexity")).toEqual({
         source: "env",
         provider: "default",
         id: "PERPLEXITY_API_KEY", // pragma: allowlist secret
@@ -357,7 +388,7 @@ describe("setupSearch", () => {
       const result = await setupSearch(cfg, runtime, prompter, {
         secretInputMode: "ref", // pragma: allowlist secret
       });
-      expect(pluginWebSearchApiKey(result, "perplexity")).toEqual({
+      expect(readWebSearchApiKey(result, "perplexity")).toEqual({
         source: "env",
         provider: "default",
         id: "OPENROUTER_API_KEY", // pragma: allowlist secret
@@ -384,7 +415,7 @@ describe("setupSearch", () => {
       secretInputMode: "ref", // pragma: allowlist secret
     });
     expect(result.tools?.web?.search?.provider).toBe("brave");
-    expect(pluginWebSearchApiKey(result, "brave")).toEqual({
+    expect(readWebSearchApiKey(result, "brave")).toEqual({
       source: "env",
       provider: "default",
       id: "BRAVE_API_KEY",
@@ -426,7 +457,7 @@ describe("setupSearch", () => {
       textValue: "BSA-plain",
     });
     const result = await setupSearch(cfg, runtime, prompter);
-    expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-plain");
+    expect(readWebSearchApiKey(result, "brave")).toBe("BSA-plain");
   });
 
   it("exports all 7 providers in SEARCH_PROVIDER_OPTIONS", () => {

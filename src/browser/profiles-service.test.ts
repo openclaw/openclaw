@@ -194,6 +194,7 @@ describe("BrowserProfilesService", () => {
 
     const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
     const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
+    const expectedUserDataDir = path.resolve(userDataDir);
     fs.mkdirSync(userDataDir, { recursive: true });
 
     const service = createBrowserProfilesService(ctx);
@@ -204,11 +205,11 @@ describe("BrowserProfilesService", () => {
     });
 
     expect(result.transport).toBe("chrome-mcp");
-    expect(result.userDataDir).toBe(userDataDir);
+    expect(result.userDataDir).toBe(expectedUserDataDir);
     expect(state.resolved.profiles["brave-live"]).toEqual({
       driver: "existing-session",
       attachOnly: true,
-      userDataDir,
+      userDataDir: expectedUserDataDir,
       color: expect.any(String),
     });
   });

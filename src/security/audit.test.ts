@@ -1129,6 +1129,7 @@ description: test skill
     const cases: Array<{
       name: string;
       cfg: OpenClawConfig;
+      env?: NodeJS.ProcessEnv;
       expectedSeverity: "info" | "critical";
       detailIncludes: string[];
     }> = [
@@ -1154,10 +1155,87 @@ description: test skill
         expectedSeverity: "info",
         detailIncludes: ["mistral-8b", "sandbox=all"],
       },
+      {
+        name: "explicit web search provider ignores other provider plugin credentials",
+        cfg: {
+          agents: {
+            defaults: { model: { primary: "ollama/mistral-8b" }, sandbox: { mode: "all" } },
+          },
+          plugins: {
+            entries: {
+              google: {
+                config: {
+                  webSearch: {
+                    apiKey: "AIza-test",
+                  },
+                },
+              },
+            },
+          },
+          tools: {
+            web: {
+              search: { provider: "brave" },
+              fetch: { enabled: false },
+            },
+          },
+          browser: { enabled: false },
+        },
+        expectedSeverity: "info",
+        detailIncludes: ["mistral-8b", "sandbox=all", "web=[off]"],
+      },
+      {
+        name: "unresolved web search SecretRef does not count as usable credential",
+        cfg: {
+          agents: {
+            defaults: { model: { primary: "ollama/mistral-8b" }, sandbox: { mode: "all" } },
+          },
+          plugins: {
+            allow: ["brave"],
+            entries: {
+              brave: {
+                enabled: true,
+                config: {
+                  webSearch: {
+                    apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY" },
+                  },
+                },
+              },
+            },
+          },
+          tools: {
+            web: {
+              search: {
+                provider: "brave",
+              },
+              fetch: { enabled: false },
+            },
+          },
+          browser: { enabled: false },
+        },
+        env: {},
+        expectedSeverity: "info",
+        detailIncludes: ["mistral-8b", "sandbox=all", "web=[off]"],
+      },
+      {
+        name: "auto-detect mode still counts provider keys from env",
+        cfg: {
+          agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
+          tools: {
+            web: {
+              search: {},
+              fetch: { enabled: false },
+            },
+          },
+          browser: { enabled: false },
+        },
+        env: { GEMINI_API_KEY: "AIza-test" },
+        expectedSeverity: "critical",
+        detailIncludes: ["mistral-8b", "web_search"],
+      },
     ];
     await Promise.all(
       cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg);
+        const res = await audit(testCase.cfg, testCase.env ? { env: testCase.env } : undefined);
         const finding = res.findings.find((f) => f.checkId === "models.small_params");
         expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
         for (const text of testCase.detailIncludes) {

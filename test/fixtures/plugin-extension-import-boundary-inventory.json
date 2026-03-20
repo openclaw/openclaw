@@ -1,1 +1,34 @@
-[]
+[
+  {
+    "file": "src/plugins/runtime/runtime-whatsapp-login-tool.ts",
+    "line": 1,
+    "kind": "export",
+    "specifier": "../../../extensions/whatsapp/runtime-api.js",
+    "resolvedPath": "extensions/whatsapp/runtime-api.js",
+    "reason": "re-exports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/runtime/runtime-whatsapp-login.runtime.ts",
+    "line": 1,
+    "kind": "import",
+    "specifier": "../../../extensions/whatsapp/runtime-api.js",
+    "resolvedPath": "extensions/whatsapp/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/runtime/runtime-whatsapp-outbound.runtime.ts",
+    "line": 4,
+    "kind": "import",
+    "specifier": "../../../extensions/whatsapp/runtime-api.js",
+    "resolvedPath": "extensions/whatsapp/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/runtime/runtime-whatsapp.ts",
+    "line": 9,
+    "kind": "import",
+    "specifier": "../../../extensions/whatsapp/runtime-api.js",
+    "resolvedPath": "extensions/whatsapp/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
+  }
+]

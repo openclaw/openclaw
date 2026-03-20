@@ -28,10 +28,6 @@ import type { SlackActionContext } from "./action-runtime.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { createSlackActions } from "./channel-actions.js";
 import { createSlackWebClient } from "./client.js";
-import {
-  listSlackDirectoryGroupsFromConfig,
-  listSlackDirectoryPeersFromConfig,
-} from "./directory-config.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { normalizeAllowListLower } from "./monitor/allow-list.js";
@@ -40,6 +36,8 @@ import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import {
   buildComputedAccountStatusSnapshot,
   DEFAULT_ACCOUNT_ID,
+  listSlackDirectoryGroupsFromConfig,
+  listSlackDirectoryPeersFromConfig,
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
   PAIRING_APPROVED_MESSAGE,

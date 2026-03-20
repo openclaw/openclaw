@@ -113,8 +113,11 @@ A cron job is a stored record with:
 - a **schedule** (when it should run),
 - a **payload** (what it should do),
 - optional **delivery mode** (`announce`, `webhook`, or `none`).
-- optional **agent binding** (`agentId`): run the job under a specific agent; if
-  missing or unknown, the gateway falls back to the default agent.
+- optional **agent binding** (`agentId`): run the job under a specific agent;
+  this controls the execution context (agent workspace/auth/session namespace).
+  If missing, cron resolves to the default agent.
+- each run records the effective agent in `state.lastResolvedAgentId` and run
+  history entries as `resolvedAgentId`.
 
 Jobs are identified by a stable `jobId` (used by CLI/Gateway APIs).
 In agent tool calls, `jobId` is canonical; legacy `id` is accepted for compatibility.
@@ -199,6 +202,8 @@ Delivery config:
 
 Announce delivery suppresses messaging tool sends for the run; use `delivery.channel`/`delivery.to`
 to target the chat instead. When `delivery.mode = "none"`, no summary is posted to the main session.
+When `delivery.mode = "announce"`, cron keeps and forwards `delivery.channel` even if `delivery.to`
+is omitted (target resolution can still fall back to the last route). `delivery.to` remains optional.
 
 If `delivery` is omitted for isolated jobs, OpenClaw defaults to `announce`.
 
@@ -685,6 +690,15 @@ Run history:
 ```bash
 openclaw cron runs --id <jobId> --limit 50
 ```
+
+Execution observability is split into separate phases:
+
+- Scheduling accepted: `cron.add`/`cron.run` returns `ok` when the job is stored or
+  manually queued.
+- Execution result: run-history `status` (`ok` / `skipped` / `error`) and `error`.
+- Delivery result (separate from execution): `delivered`, `deliveryStatus`
+  (`delivered` / `not-delivered` / `unknown` / `not-requested`), and
+  `deliveryAttempted`.
 
 Immediate system event without creating a job:
 

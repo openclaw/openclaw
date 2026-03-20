@@ -379,6 +379,15 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/channel-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-runtime")>(
+    "openclaw/plugin-sdk/channel-runtime",
+  );
+  return {
+    ...actual,
+  };
+});
+
 vi.mock("../../../extensions/discord/src/accounts.js", () => ({
   resolveDiscordAccount: resolveDiscordAccountMock,
 }));

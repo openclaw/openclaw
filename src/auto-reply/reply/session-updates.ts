@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
+import {
+  matchesSkillPolicySnapshot,
+  resolveEffectiveSkillPolicy,
+} from "../../agents/skills/policy.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
@@ -144,6 +148,7 @@ export async function ensureSkillSnapshot(params: {
   sessionKey?: string;
   storePath?: string;
   sessionId?: string;
+  agentId?: string;
   isFirstTurnInSession: boolean;
   workspaceDir: string;
   cfg: OpenClawConfig;
@@ -180,9 +185,20 @@ export async function ensureSkillSnapshot(params: {
   let systemSent = sessionEntry?.systemSent ?? false;
   const remoteEligibility = getRemoteSkillEligibility();
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+  const resolvedSkillPolicy = resolveEffectiveSkillPolicy(cfg, params.agentId);
+  const skillPolicy = resolvedSkillPolicy
+    ? {
+        agentId: resolvedSkillPolicy.agentId,
+        globalEnabled: resolvedSkillPolicy.globalEnabled,
+        agentEnabled: resolvedSkillPolicy.agentEnabled,
+        agentDisabled: resolvedSkillPolicy.agentDisabled,
+        effective: resolvedSkillPolicy.effective,
+      }
+    : undefined;
   ensureSkillsWatcher({ workspaceDir, config: cfg });
   const shouldRefreshSnapshot =
-    snapshotVersion > 0 && (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion;
+    (snapshotVersion > 0 && (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion) ||
+    !matchesSkillPolicySnapshot(nextEntry?.skillsSnapshot?.policy, skillPolicy);
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??
@@ -194,6 +210,7 @@ export async function ensureSkillSnapshot(params: {
       isFirstTurnInSession || !current.skillsSnapshot || shouldRefreshSnapshot
         ? buildWorkspaceSkillSnapshot(workspaceDir, {
             config: cfg,
+            agentId: params.agentId,
             skillFilter,
             eligibility: { remote: remoteEligibility },
             snapshotVersion,
@@ -213,6 +230,7 @@ export async function ensureSkillSnapshot(params: {
   const skillsSnapshot = shouldRefreshSnapshot
     ? buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfg,
+        agentId: params.agentId,
         skillFilter,
         eligibility: { remote: remoteEligibility },
         snapshotVersion,
@@ -222,6 +240,7 @@ export async function ensureSkillSnapshot(params: {
         ? undefined
         : buildWorkspaceSkillSnapshot(workspaceDir, {
             config: cfg,
+            agentId: params.agentId,
             skillFilter,
             eligibility: { remote: remoteEligibility },
             snapshotVersion,

@@ -121,7 +121,7 @@ describe("ensureOggOpus", () => {
     const ffmpegCall = execCalls.find((call) => call.command === "ffmpeg");
 
     expect(result.cleanup).toBe(true);
-    expect(result.path).toMatch(/^\/tmp\/voice-.*\.ogg$/);
+    expect(result.path.replaceAll("\\", "/")).toMatch(/^\/tmp\/voice-.*\.ogg$/);
     expect(ffmpegCall).toBeDefined();
     expect(ffmpegCall?.args).toContain("-t");
     expect(ffmpegCall?.args).toContain("1200");

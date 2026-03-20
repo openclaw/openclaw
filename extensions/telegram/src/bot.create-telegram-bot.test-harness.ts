@@ -393,8 +393,8 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   upsertChannelPairingRequest:
     upsertChannelPairingRequest as TelegramBotDeps["upsertChannelPairingRequest"],
   enqueueSystemEvent: enqueueSystemEventSpy as TelegramBotDeps["enqueueSystemEvent"],
+  buildModelsProviderData,
   dispatchReplyWithBufferedBlockDispatcher,
-  buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
   listSkillCommandsForAgents:
     listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],

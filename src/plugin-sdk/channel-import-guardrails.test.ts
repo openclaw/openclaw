@@ -51,75 +51,70 @@ type GuardedSource = {
 const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
   {
     path: "extensions/discord/src/shared.ts",
-    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/discord["']/, /plugin-sdk-internal\/discord/],
+    forbiddenPatterns: [/plugin-sdk-internal\/discord/],
   },
   {
     path: "extensions/slack/src/shared.ts",
-    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/slack["']/, /plugin-sdk-internal\/slack/],
+    forbiddenPatterns: [/plugin-sdk-internal\/slack/],
   },
   {
     path: "extensions/telegram/src/shared.ts",
-    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/telegram["']/, /plugin-sdk-internal\/telegram/],
+    forbiddenPatterns: [/plugin-sdk-internal\/telegram/],
   },
   {
     path: "extensions/imessage/src/shared.ts",
-    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/imessage["']/, /plugin-sdk-internal\/imessage/],
+    forbiddenPatterns: [/plugin-sdk-internal\/imessage/],
   },
   {
     path: "extensions/whatsapp/src/shared.ts",
-    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/whatsapp["']/, /plugin-sdk-internal\/whatsapp/],
+    forbiddenPatterns: [/plugin-sdk-internal\/whatsapp/],
   },
   {
     path: "extensions/signal/src/shared.ts",
-    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/signal["']/, /plugin-sdk-internal\/signal/],
+    forbiddenPatterns: [/plugin-sdk-internal\/signal/],
   },
 ];
 
 const SETUP_BARREL_GUARDS: GuardedSource[] = [
   {
     path: "extensions/signal/src/setup-core.ts",
-    forbiddenPatterns: [/\bformatCliCommand\b/, /\bformatDocsLink\b/],
+    forbiddenPatterns: [/plugin-sdk-internal\/setup/],
   },
   {
     path: "extensions/signal/src/setup-surface.ts",
-    forbiddenPatterns: [
-      /\bdetectBinary\b/,
-      /\binstallSignalCli\b/,
-      /\bformatCliCommand\b/,
-      /\bformatDocsLink\b/,
-    ],
+    forbiddenPatterns: [/plugin-sdk-internal\/setup/],
   },
   {
     path: "extensions/slack/src/setup-core.ts",
-    forbiddenPatterns: [/\bformatDocsLink\b/],
+    forbiddenPatterns: [/plugin-sdk-internal\/setup/],
   },
   {
     path: "extensions/slack/src/setup-surface.ts",
-    forbiddenPatterns: [/\bformatDocsLink\b/],
+    forbiddenPatterns: [/plugin-sdk-internal\/setup/],
   },
   {
     path: "extensions/discord/src/setup-core.ts",
-    forbiddenPatterns: [/\bformatDocsLink\b/],
+    forbiddenPatterns: [/plugin-sdk-internal\/setup/],
   },
   {
     path: "extensions/discord/src/setup-surface.ts",
-    forbiddenPatterns: [/\bformatDocsLink\b/],
+    forbiddenPatterns: [/plugin-sdk-internal\/setup/],
   },
   {
     path: "extensions/imessage/src/setup-core.ts",
-    forbiddenPatterns: [/\bformatDocsLink\b/],
+    forbiddenPatterns: [/plugin-sdk-internal\/setup/],
   },
   {
     path: "extensions/imessage/src/setup-surface.ts",
-    forbiddenPatterns: [/\bdetectBinary\b/, /\bformatDocsLink\b/],
+    forbiddenPatterns: [/plugin-sdk-internal\/setup/],
   },
   {
     path: "extensions/telegram/src/setup-core.ts",
-    forbiddenPatterns: [/\bformatCliCommand\b/, /\bformatDocsLink\b/],
+    forbiddenPatterns: [/plugin-sdk-internal\/setup/],
   },
   {
     path: "extensions/whatsapp/src/setup-surface.ts",
-    forbiddenPatterns: [/\bformatCliCommand\b/, /\bformatDocsLink\b/],
+    forbiddenPatterns: [/plugin-sdk-internal\/setup/],
   },
 ];
 

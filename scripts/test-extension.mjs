@@ -198,6 +198,14 @@ function printNoTestsMessage(plan, requireTests) {
   return 0;
 }
 
+function hasVitestPoolArg(args) {
+  return args.some((arg) => arg === "--pool" || arg.startsWith("--pool="));
+}
+
+function hasVitestMaxWorkersArg(args) {
+  return args.some((arg) => arg === "--maxWorkers" || arg.startsWith("--maxWorkers="));
+}
+
 async function run() {
   const rawArgs = process.argv.slice(2);
   const dryRun = rawArgs.includes("--dry-run");
@@ -306,9 +314,21 @@ async function run() {
     `[test-extension] Running ${plan.testFiles.length} test files for ${plan.extensionId} with ${plan.config}`,
   );
 
+  const poolArgs = hasVitestPoolArg(passthroughArgs) ? [] : ["--pool=forks"];
+  const maxWorkersArgs = hasVitestMaxWorkersArg(passthroughArgs) ? [] : ["--maxWorkers", "1"];
   const child = spawn(
     pnpm,
-    ["exec", "vitest", "run", "--config", plan.config, ...plan.testFiles, ...passthroughArgs],
+    [
+      "exec",
+      "vitest",
+      "run",
+      "--config",
+      plan.config,
+      ...poolArgs,
+      ...maxWorkersArgs,
+      ...plan.testFiles,
+      ...passthroughArgs,
+    ],
     {
       cwd: repoRoot,
       stdio: "inherit",

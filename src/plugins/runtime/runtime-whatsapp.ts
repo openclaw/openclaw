@@ -1,20 +1,84 @@
 import {
-  createRuntimeWhatsAppLoginTool,
   getActiveWebListener,
   getWebAuthAgeMs,
-  handleWhatsAppAction,
   logWebSelfId,
-  loginWeb,
   logoutWeb,
-  monitorWebChannel,
+  monitorWebChannel as monitorWebChannelImpl,
   readWebSelfId,
-  sendMessageWhatsApp,
-  sendPollWhatsApp,
-  startWebLoginWithQr,
-  waitForWebLogin,
   webAuthExists,
-} from "./runtime-whatsapp-boundary.js";
+} from "../../../extensions/whatsapp/runtime-api.js";
+import {
+  createLazyRuntimeMethodBinder,
+  createLazyRuntimeSurface,
+} from "../../shared/lazy-runtime.js";
+import { createRuntimeWhatsAppLoginTool } from "./runtime-whatsapp-login-tool.js";
 import type { PluginRuntime } from "./types.js";
+
+const loadWebOutbound = createLazyRuntimeSurface(
+  () => import("./runtime-whatsapp-outbound.runtime.js"),
+  ({ runtimeWhatsAppOutbound }) => runtimeWhatsAppOutbound,
+);
+
+const loadWebLogin = createLazyRuntimeSurface(
+  () => import("./runtime-whatsapp-login.runtime.js"),
+  ({ runtimeWhatsAppLogin }) => runtimeWhatsAppLogin,
+);
+
+const bindWhatsAppOutboundMethod = createLazyRuntimeMethodBinder(loadWebOutbound);
+const bindWhatsAppLoginMethod = createLazyRuntimeMethodBinder(loadWebLogin);
+
+const sendMessageWhatsAppLazy = bindWhatsAppOutboundMethod(
+  (runtimeWhatsAppOutbound) => runtimeWhatsAppOutbound.sendMessageWhatsApp,
+);
+const sendPollWhatsAppLazy = bindWhatsAppOutboundMethod(
+  (runtimeWhatsAppOutbound) => runtimeWhatsAppOutbound.sendPollWhatsApp,
+);
+const loginWebLazy = bindWhatsAppLoginMethod(
+  (runtimeWhatsAppLogin) => runtimeWhatsAppLogin.loginWeb,
+);
+
+const startWebLoginWithQrLazy: PluginRuntime["channel"]["whatsapp"]["startWebLoginWithQr"] = async (
+  ...args
+) => {
+  const { startWebLoginWithQr } = await loadWebLoginQr();
+  return startWebLoginWithQr(...args);
+};
+
+const waitForWebLoginLazy: PluginRuntime["channel"]["whatsapp"]["waitForWebLogin"] = async (
+  ...args
+) => {
+  const { waitForWebLogin } = await loadWebLoginQr();
+  return waitForWebLogin(...args);
+};
+
+const monitorWebChannelLazy: PluginRuntime["channel"]["whatsapp"]["monitorWebChannel"] = async (
+  ...args
+) => {
+  return await monitorWebChannelImpl(...args);
+};
+
+const handleWhatsAppActionLazy: PluginRuntime["channel"]["whatsapp"]["handleWhatsAppAction"] =
+  async (...args) => {
+    const { handleWhatsAppAction } = await loadWhatsAppActions();
+    return handleWhatsAppAction(...args);
+  };
+
+let webLoginQrPromise: Promise<
+  typeof import("../../../extensions/whatsapp/login-qr-api.js")
+> | null = null;
+let whatsappActionsPromise: Promise<
+  typeof import("openclaw/plugin-sdk/whatsapp-action-runtime")
+> | null = null;
+
+function loadWebLoginQr() {
+  webLoginQrPromise ??= import("openclaw/plugin-sdk/whatsapp-login-qr");
+  return webLoginQrPromise;
+}
+
+function loadWhatsAppActions() {
+  whatsappActionsPromise ??= import("openclaw/plugin-sdk/whatsapp-action-runtime");
+  return whatsappActionsPromise;
+}
 
 export function createRuntimeWhatsApp(): PluginRuntime["channel"]["whatsapp"] {
   return {
@@ -24,13 +88,13 @@ export function createRuntimeWhatsApp(): PluginRuntime["channel"]["whatsapp"] {
     logWebSelfId,
     readWebSelfId,
     webAuthExists,
-    sendMessageWhatsApp,
-    sendPollWhatsApp,
-    loginWeb,
-    startWebLoginWithQr,
-    waitForWebLogin,
-    monitorWebChannel,
-    handleWhatsAppAction,
+    sendMessageWhatsApp: sendMessageWhatsAppLazy,
+    sendPollWhatsApp: sendPollWhatsAppLazy,
+    loginWeb: loginWebLazy,
+    startWebLoginWithQr: startWebLoginWithQrLazy,
+    waitForWebLogin: waitForWebLoginLazy,
+    monitorWebChannel: monitorWebChannelLazy,
+    handleWhatsAppAction: handleWhatsAppActionLazy,
     createLoginTool: createRuntimeWhatsAppLoginTool,
   };
 }

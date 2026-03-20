@@ -343,12 +343,16 @@ describe("Feishu broadcast reply-once lifecycle", () => {
     await settleAsyncWork();
     await onMessageB(event);
     await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(2);
+    });
+    await vi.waitFor(() => {
+      expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
+    });
 
     expect(runtimesByAccount.get("account-A")?.error).not.toHaveBeenCalled();
     expect(runtimesByAccount.get("account-B")?.error).not.toHaveBeenCalled();
 
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(2);
-    expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
     expect(createFeishuReplyDispatcherMock).toHaveBeenCalledWith(
       expect.objectContaining({
         accountId: "account-a",
@@ -386,10 +390,19 @@ describe("Feishu broadcast reply-once lifecycle", () => {
     await settleAsyncWork();
     await onMessageB(event);
     await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(2);
+    });
+    await vi.waitFor(() => {
+      const activeDispatcher = createFeishuReplyDispatcherMock.mock.results[0]?.value
+        .dispatcher as {
+        sendFinalReply: ReturnType<typeof vi.fn>;
+      };
+      expect(activeDispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    });
 
     expect(runtimesByAccount.get("account-A")?.error).not.toHaveBeenCalled();
     expect(runtimesByAccount.get("account-B")?.error).not.toHaveBeenCalled();
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(2);
 
     const activeDispatcher = createFeishuReplyDispatcherMock.mock.results[0]?.value.dispatcher as {
       sendFinalReply: ReturnType<typeof vi.fn>;

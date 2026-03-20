@@ -26,7 +26,8 @@ type AssistantLikeMessage = {
 };
 
 function resolveLiveXaiModel() {
-  return getModel("xai", "grok-4-1-fast-reasoning" as never) ?? getModel("xai", "grok-4");
+  const preferred = "grok-4-1-fast-reasoning" as Parameters<typeof getModel>[1];
+  return getModel("xai", preferred) ?? getModel("xai", "grok-4");
 }
 
 async function collectDoneMessage(
@@ -51,6 +52,9 @@ describeLive("xai live", () => {
   it("returns assistant text for Grok 4.1 Fast Reasoning", async () => {
     const model = resolveLiveXaiModel();
     expect(model).toBeDefined();
+    if (!model) {
+      throw new Error("Expected a live xAI model");
+    }
     const res = await completeSimple(
       model,
       {
@@ -69,6 +73,9 @@ describeLive("xai live", () => {
   it("applies xAI tool wrappers on live tool calls", async () => {
     const model = resolveLiveXaiModel();
     expect(model).toBeDefined();
+    if (!model) {
+      throw new Error("Expected a live xAI model");
+    }
     const agent = { streamFn: streamSimple };
     applyExtraParamsToAgent(agent, undefined, "xai", model.id);
 
@@ -133,8 +140,17 @@ describeLive("xai live", () => {
           web: {
             search: {
               provider: "grok",
-              grok: {
-                model: "grok-4-1-fast",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            xai: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  model: "grok-4-1-fast",
+                },
               },
             },
           },

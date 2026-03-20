@@ -62,6 +62,9 @@ const WEB_RUNTIME_SECRET_PATH_PREFIXES = [
   "tools.web.search.",
   "tools.web.fetch.firecrawl.",
 ] as const;
+const PLUGIN_WEB_SEARCH_SECRET_PATH_RE = /^plugins\.entries\.[^.]+\.config\.webSearch\.apiKey$/;
+const PLUGIN_WEB_SEARCH_SECRET_TARGET_ID_RE =
+  /^plugins\.entries\.(\*|[^.]+)\.config\.webSearch\.apiKey$/;
 
 function normalizeCommandSecretResolutionMode(
   mode?: CommandSecretResolutionModeInput,
@@ -94,13 +97,21 @@ function dedupeDiagnostics(entries: readonly string[]): string[] {
 }
 
 function targetsRuntimeWebPath(path: string): boolean {
-  return WEB_RUNTIME_SECRET_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return (
+    WEB_RUNTIME_SECRET_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    PLUGIN_WEB_SEARCH_SECRET_PATH_RE.test(path)
+  );
 }
 
 function classifyRuntimeWebTargetPathState(params: {
   config: OpenClawConfig;
   path: string;
 }): "active" | "inactive" | "unknown" {
+  const pluginWebSearchMatch = PLUGIN_WEB_SEARCH_SECRET_PATH_RE.exec(params.path);
+  if (pluginWebSearchMatch) {
+    return params.config.tools?.web?.search?.enabled === false ? "inactive" : "active";
+  }
+
   if (params.path === "tools.web.fetch.firecrawl.apiKey") {
     const fetch = params.config.tools?.web?.fetch;
     return fetch?.enabled !== false && fetch?.firecrawl?.enabled !== false ? "active" : "inactive";
@@ -133,6 +144,12 @@ function describeInactiveRuntimeWebTargetPath(params: {
   config: OpenClawConfig;
   path: string;
 }): string | undefined {
+  if (PLUGIN_WEB_SEARCH_SECRET_PATH_RE.test(params.path)) {
+    return params.config.tools?.web?.search?.enabled === false
+      ? "tools.web.search is disabled."
+      : undefined;
+  }
+
   if (params.path === "tools.web.fetch.firecrawl.apiKey") {
     const fetch = params.config.tools?.web?.fetch;
     if (fetch?.enabled === false) {
@@ -182,7 +199,10 @@ function targetsRuntimeWebResolution(params: {
     return false;
   }
   for (const targetId of params.targetIds) {
-    if (WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES.some((prefix) => targetId.startsWith(prefix))) {
+    if (
+      WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES.some((prefix) => targetId.startsWith(prefix)) ||
+      PLUGIN_WEB_SEARCH_SECRET_TARGET_ID_RE.test(targetId)
+    ) {
       return true;
     }
   }
@@ -316,7 +336,9 @@ function isUnsupportedSecretsResolveError(err: unknown): boolean {
 
 function isDirectRuntimeWebTargetPath(path: string): boolean {
   return (
-    path === "tools.web.fetch.firecrawl.apiKey" || /^tools\.web\.search\.[^.]+\.apiKey$/.test(path)
+    path === "tools.web.fetch.firecrawl.apiKey" ||
+    /^tools\.web\.search\.[^.]+\.apiKey$/.test(path) ||
+    PLUGIN_WEB_SEARCH_SECRET_PATH_RE.test(path)
   );
 }
 

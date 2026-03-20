@@ -17,6 +17,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { resolveAllowedAgentIds } from "../gateway/hooks-policy.js";
@@ -325,10 +326,124 @@ function resolveToolPolicies(params: {
   return policies;
 }
 
+const WEB_SEARCH_PROVIDER_CONFIG = {
+  brave: {
+    pluginId: "brave",
+    envVars: ["BRAVE_API_KEY"],
+    legacyPath: "tools.web.search.apiKey",
+    resolveLegacyCredentialValue: (search: Record<string, unknown> | undefined) => search?.apiKey,
+  },
+  firecrawl: {
+    pluginId: "firecrawl",
+    envVars: ["FIRECRAWL_API_KEY"],
+    legacyPath: "tools.web.search.firecrawl.apiKey",
+    resolveLegacyCredentialValue: (search: Record<string, unknown> | undefined) =>
+      (search?.firecrawl as Record<string, unknown> | undefined)?.apiKey,
+  },
+  gemini: {
+    pluginId: "google",
+    envVars: ["GEMINI_API_KEY"],
+    legacyPath: "tools.web.search.gemini.apiKey",
+    resolveLegacyCredentialValue: (search: Record<string, unknown> | undefined) =>
+      (search?.gemini as Record<string, unknown> | undefined)?.apiKey,
+  },
+  grok: {
+    pluginId: "xai",
+    envVars: ["XAI_API_KEY"],
+    legacyPath: "tools.web.search.grok.apiKey",
+    resolveLegacyCredentialValue: (search: Record<string, unknown> | undefined) =>
+      (search?.grok as Record<string, unknown> | undefined)?.apiKey,
+  },
+  kimi: {
+    pluginId: "moonshot",
+    envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+    legacyPath: "tools.web.search.kimi.apiKey",
+    resolveLegacyCredentialValue: (search: Record<string, unknown> | undefined) =>
+      (search?.kimi as Record<string, unknown> | undefined)?.apiKey,
+  },
+  perplexity: {
+    pluginId: "perplexity",
+    envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
+    legacyPath: "tools.web.search.perplexity.apiKey",
+    resolveLegacyCredentialValue: (search: Record<string, unknown> | undefined) =>
+      (search?.perplexity as Record<string, unknown> | undefined)?.apiKey,
+  },
+} as const;
+
+type WebSearchProviderId = keyof typeof WEB_SEARCH_PROVIDER_CONFIG;
+
+function isWebSearchProviderId(value: string): value is WebSearchProviderId {
+  return Object.hasOwn(WEB_SEARCH_PROVIDER_CONFIG, value);
+}
+
+function isSecretRefLike(value: unknown): value is { source: string; provider: string; id: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.source === "string" &&
+    typeof candidate.provider === "string" &&
+    typeof candidate.id === "string"
+  );
+}
+
+function hasConfiguredWebSearchValue(value: unknown, path: string): boolean {
+  if (isSecretRefLike(value)) {
+    return false;
+  }
+  try {
+    return Boolean(normalizeResolvedSecretInputString({ value, path }));
+  } catch {
+    // Unresolved SecretRef placeholders are not usable runtime credentials.
+    return false;
+  }
+}
+
+function hasProviderWebSearchKey(params: {
+  providerId: WebSearchProviderId;
+  search: Record<string, unknown> | undefined;
+  pluginEntries: Record<string, { config?: { webSearch?: Record<string, unknown> } }> | undefined;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  const providerConfig = WEB_SEARCH_PROVIDER_CONFIG[params.providerId];
+  const pluginKey = hasConfiguredWebSearchValue(
+    params.pluginEntries?.[providerConfig.pluginId]?.config?.webSearch?.apiKey,
+    `plugins.entries.${providerConfig.pluginId}.config.webSearch.apiKey`,
+  );
+  const legacyKey = hasConfiguredWebSearchValue(
+    providerConfig.resolveLegacyCredentialValue(params.search),
+    providerConfig.legacyPath,
+  );
+  const envKey = providerConfig.envVars.some((envVar) => {
+    const value = params.env[envVar];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+  return pluginKey || legacyKey || envKey;
+}
+
 function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  const search = cfg.tools?.web?.search;
-  return Boolean(
-    search?.apiKey || search?.perplexity?.apiKey || env.BRAVE_API_KEY || env.PERPLEXITY_API_KEY,
+  const search = cfg.tools?.web?.search as Record<string, unknown> | undefined;
+  const pluginEntries = cfg.plugins?.entries as
+    | Record<string, { config?: { webSearch?: Record<string, unknown> } }>
+    | undefined;
+  const rawProvider =
+    typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+  if (rawProvider && isWebSearchProviderId(rawProvider)) {
+    return hasProviderWebSearchKey({
+      providerId: rawProvider,
+      search,
+      pluginEntries,
+      env,
+    });
+  }
+  return (Object.keys(WEB_SEARCH_PROVIDER_CONFIG) as WebSearchProviderId[]).some((providerId) =>
+    hasProviderWebSearchKey({
+      providerId,
+      search,
+      pluginEntries,
+      env,
+    }),
   );
 }
 

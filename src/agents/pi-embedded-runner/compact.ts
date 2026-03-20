@@ -111,6 +111,7 @@ import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.j
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
   runId?: string;
+  agentId?: string;
   sessionKey?: string;
   messageChannel?: string;
   messageProvider?: string;
@@ -515,6 +516,11 @@ export async function compactEmbeddedPiSessionDirect(
     sessionId: params.sessionId,
     cwd: effectiveWorkspace,
   });
+  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
 
   let restoreSkillEnv: (() => void) | undefined;
   process.chdir(effectiveWorkspace);
@@ -523,6 +529,7 @@ export async function compactEmbeddedPiSessionDirect(
       workspaceDir: effectiveWorkspace,
       config: params.config,
       skillsSnapshot: params.skillsSnapshot,
+      agentId: sessionAgentId,
     });
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
@@ -538,6 +545,7 @@ export async function compactEmbeddedPiSessionDirect(
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      agentId: sessionAgentId,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -668,10 +676,6 @@ export async function compactEmbeddedPiSessionDirect(
             return undefined;
           })()
         : undefined;
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
-      config: params.config,
-    });
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
       ? listChannelSupportedActions(
@@ -1169,6 +1173,7 @@ export async function compactEmbeddedPiSession(
         const { sessionAgentId } = resolveSessionAgentIds({
           sessionKey: params.sessionKey,
           config: params.config,
+          agentId: params.agentId,
         });
         const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
         const hookCtx = {

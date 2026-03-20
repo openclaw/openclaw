@@ -1,8 +1,11 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBrowserAgentActRoutes } from "./agent.act.js";
 import { registerBrowserAgentSnapshotRoutes } from "./agent.snapshot.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
+
+const resolvedFakeScreenshotPath = path.resolve("/tmp/fake.png");
 
 const routeState = vi.hoisted(() => ({
   profileCtx: {
@@ -72,7 +75,7 @@ vi.mock("../screenshot.js", () => ({
 
 vi.mock("../../media/store.js", () => ({
   ensureMediaDir: vi.fn(async () => {}),
-  saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
+  saveMediaBuffer: vi.fn(async () => ({ path: resolvedFakeScreenshotPath })),
 }));
 
 vi.mock("./agent.shared.js", () => ({
@@ -173,7 +176,7 @@ describe("existing-session browser routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({
       ok: true,
-      path: "/tmp/fake.png",
+      path: resolvedFakeScreenshotPath,
       targetId: "7",
     });
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalledWith({

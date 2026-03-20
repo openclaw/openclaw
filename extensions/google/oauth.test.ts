@@ -1,9 +1,37 @@
 import { join, parse } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import {
+  clearCredentialsCache,
+  extractGeminiCliCredentials,
+  setOAuthCredentialsFsForTest,
+} from "./oauth.credentials.js";
+import {
+  __resetOAuthFetchWithSsrfGuardForTest,
+  __setOAuthFetchWithSsrfGuardForTest,
+} from "./oauth.http.js";
+import { loginGeminiCliOAuth } from "./oauth.js";
 
-vi.mock("../../src/infra/wsl.js", () => ({
-  isWSL2Sync: () => false,
-}));
+async function fetchWithSsrFGuardMock(params: {
+  url: string;
+  init?: RequestInit;
+  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+}) {
+  const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+  const response = await fetchImpl(params.url, params.init);
+  return {
+    response,
+    finalUrl: params.url,
+    release: async () => {},
+  };
+}
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  };
+});
 
 vi.mock("../../src/infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: async (params: {
@@ -11,13 +39,7 @@ vi.mock("../../src/infra/net/fetch-guard.js", () => ({
     init?: RequestInit;
     fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   }) => {
-    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
-    const response = await fetchImpl(params.url, params.init);
-    return {
-      response,
-      finalUrl: params.url,
-      release: async () => {},
-    };
+    return await fetchWithSsrFGuardMock(params);
   },
 }));
 
@@ -39,12 +61,7 @@ describe("extractGeminiCliCredentials", () => {
 
   let originalPath: string | undefined;
 
-  async function loadCredentialsModule() {
-    return await import("./oauth.credentials.js");
-  }
-
-  async function installMockFs() {
-    const { setOAuthCredentialsFsForTest } = await loadCredentialsModule();
+  function installMockFs() {
     setOAuthCredentialsFsForTest({
       existsSync: (...args) => mockExistsSync(...args),
       readFileSync: (...args) => mockReadFileSync(...args),
@@ -156,67 +173,60 @@ describe("extractGeminiCliCredentials", () => {
     });
   }
 
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
     originalPath = process.env.PATH;
-    await installMockFs();
+    installMockFs();
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     process.env.PATH = originalPath;
-    const { setOAuthCredentialsFsForTest } = await loadCredentialsModule();
     setOAuthCredentialsFsForTest();
   });
 
-  it("returns null when gemini binary is not in PATH", async () => {
+  it("returns null when gemini binary is not in PATH", () => {
     process.env.PATH = "/nonexistent";
     mockExistsSync.mockReturnValue(false);
 
-    const { extractGeminiCliCredentials, clearCredentialsCache } = await loadCredentialsModule();
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
   });
 
-  it("extracts credentials from oauth2.js in known path", async () => {
+  it("extracts credentials from oauth2.js in known path", () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
-    const { extractGeminiCliCredentials, clearCredentialsCache } = await loadCredentialsModule();
     clearCredentialsCache();
     const result = extractGeminiCliCredentials();
 
     expectFakeCliCredentials(result);
   });
 
-  it("extracts credentials when PATH entry is an npm global shim", async () => {
+  it("extracts credentials when PATH entry is an npm global shim", () => {
     installNpmShimLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
-    const { extractGeminiCliCredentials, clearCredentialsCache } = await loadCredentialsModule();
     clearCredentialsCache();
     const result = extractGeminiCliCredentials();
 
     expectFakeCliCredentials(result);
   });
 
-  it("returns null when oauth2.js cannot be found", async () => {
+  it("returns null when oauth2.js cannot be found", () => {
     installGeminiLayout({ oauth2Exists: false, readdir: [] });
 
-    const { extractGeminiCliCredentials, clearCredentialsCache } = await loadCredentialsModule();
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
   });
 
-  it("returns null when oauth2.js lacks credentials", async () => {
+  it("returns null when oauth2.js lacks credentials", () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: "// no credentials here" });
 
-    const { extractGeminiCliCredentials, clearCredentialsCache } = await loadCredentialsModule();
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
   });
 
-  it("caches credentials after first extraction", async () => {
+  it("caches credentials after first extraction", () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
-    const { extractGeminiCliCredentials, clearCredentialsCache } = await loadCredentialsModule();
     clearCredentialsCache();
 
     // First call
@@ -330,6 +340,7 @@ describe("loginGeminiCliOAuth", () => {
     delete process.env.GEMINI_CLI_OAUTH_CLIENT_SECRET;
     delete process.env.GOOGLE_CLOUD_PROJECT;
     delete process.env.GOOGLE_CLOUD_PROJECT_ID;
+    __setOAuthFetchWithSsrfGuardForTest(fetchWithSsrFGuardMock);
   });
 
   afterEach(() => {
@@ -341,6 +352,7 @@ describe("loginGeminiCliOAuth", () => {
         process.env[key] = value;
       }
     }
+    __resetOAuthFetchWithSsrfGuardForTest();
     vi.unstubAllGlobals();
   });
 
@@ -373,7 +385,6 @@ describe("loginGeminiCliOAuth", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { loginGeminiCliOAuth } = await import("./oauth.js");
     await runRemoteLoginExpectingProjectId(loginGeminiCliOAuth, "daily-project");
     const loadRequests = requests.filter((request) =>
       request.url.includes("v1internal:loadCodeAssist"),
@@ -428,7 +439,6 @@ describe("loginGeminiCliOAuth", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { loginGeminiCliOAuth } = await import("./oauth.js");
     await runRemoteLoginExpectingProjectId(loginGeminiCliOAuth, "env-project");
     expect(requests.filter((url) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
     expect(requests.some((url) => url.includes("v1internal:onboardUser"))).toBe(false);

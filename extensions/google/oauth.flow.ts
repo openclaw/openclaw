@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { isWSL2Sync } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveOAuthClientConfig } from "./oauth.credentials.js";
 import { AUTH_URL, REDIRECT_URI, SCOPES } from "./oauth.shared.js";
+import { isWSL2Sync } from "./runtime-api.js";
 
 export function shouldUseManualOAuthFlow(isRemote: boolean): boolean {
   return isRemote || isWSL2Sync();
@@ -142,7 +142,7 @@ export async function waitForLocalCallback(params: {
     });
 
     server.listen(port, hostname, () => {
-      params.onProgress?.(`Waiting for OAuth callback on ${REDIRECT_URI}…`);
+      params.onProgress?.(`Waiting for OAuth callback on ${REDIRECT_URI}`);
     });
 
     timeout = setTimeout(() => {

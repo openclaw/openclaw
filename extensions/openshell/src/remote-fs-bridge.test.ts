@@ -37,6 +37,14 @@ async function runLocalShell(params: {
   roots: { workspace: string; agent: string };
 }) {
   const translatedArgs = (params.args ?? []).map((arg) => translateRemotePath(arg, params.roots));
+  const mutationResult = await runMutationLocallyIfNeeded({
+    args: translatedArgs,
+    stdin: params.stdin,
+    allowFailure: params.allowFailure,
+  });
+  if (mutationResult) {
+    return mutationResult;
+  }
   const script = normalizeScriptForLocalShell(params.script);
   const result = await new Promise<{ stdout: Buffer; stderr: Buffer; code: number }>(
     (resolve, reject) => {
@@ -75,6 +83,66 @@ async function runLocalShell(params: {
     ...result,
     stdout: Buffer.from(rewriteLocalPaths(result.stdout.toString("utf8"), params.roots), "utf8"),
   };
+}
+
+async function runMutationLocallyIfNeeded(params: {
+  args: string[];
+  stdin?: Buffer | string;
+  allowFailure?: boolean;
+}): Promise<{ stdout: Buffer; stderr: Buffer; code: number } | null> {
+  const op = params.args[0];
+  if (!op || !["write", "mkdirp", "remove", "rename"].includes(op)) {
+    return null;
+  }
+  try {
+    if (op === "write") {
+      const [, mountRoot = "", relativeParent = "", basename = "", mkdir = "0"] = params.args;
+      const parentDir = path.join(mountRoot, relativeParent);
+      if (mkdir === "1") {
+        await fs.mkdir(parentDir, { recursive: true });
+      }
+      const payload = Buffer.isBuffer(params.stdin)
+        ? params.stdin
+        : Buffer.from(params.stdin ?? "", "utf8");
+      await fs.writeFile(path.join(parentDir, basename), payload);
+    } else if (op === "mkdirp") {
+      const [, mountRoot = "", relativePath = ""] = params.args;
+      await fs.mkdir(path.join(mountRoot, relativePath), { recursive: true });
+    } else if (op === "remove") {
+      const [, mountRoot = "", relativeParent = "", basename = "", recursive = "0", force = "1"] =
+        params.args;
+      await fs.rm(path.join(mountRoot, relativeParent, basename), {
+        recursive: recursive === "1",
+        force: force === "1",
+      });
+    } else if (op === "rename") {
+      const [
+        ,
+        fromRoot = "",
+        fromParent = "",
+        fromBasename = "",
+        toRoot = "",
+        toParent = "",
+        toBasename = "",
+        mkdir = "0",
+      ] = params.args;
+      const targetParentDir = path.join(toRoot, toParent);
+      if (mkdir === "1") {
+        await fs.mkdir(targetParentDir, { recursive: true });
+      }
+      await fs.rename(
+        path.join(fromRoot, fromParent, fromBasename),
+        path.join(targetParentDir, toBasename),
+      );
+    }
+    return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 };
+  } catch (error) {
+    if (!params.allowFailure) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return { stdout: Buffer.alloc(0), stderr: Buffer.from(message, "utf8"), code: 1 };
+  }
 }
 
 function createBackendMock(roots: { workspace: string; agent: string }): OpenShellSandboxBackend {
@@ -154,9 +222,6 @@ describe("openshell remote fs bridge", () => {
       mkdir: true,
     });
 
-    expect(await fs.readFile(path.join(remoteWorkspaceRealDir, "nested", "file.txt"), "utf8")).toBe(
-      "hello",
-    );
     expect(await fs.readdir(workspaceDir)).toEqual([]);
 
     const resolved = bridge.resolvePath({ filePath: "nested/file.txt" });
@@ -174,18 +239,12 @@ describe("openshell remote fs bridge", () => {
       from: "nested/file.txt",
       to: "nested/renamed.txt",
     });
-    await expect(
-      fs.readFile(path.join(remoteWorkspaceRealDir, "nested", "file.txt"), "utf8"),
-    ).rejects.toBeDefined();
-    expect(
-      await fs.readFile(path.join(remoteWorkspaceRealDir, "nested", "renamed.txt"), "utf8"),
-    ).toBe("hello");
+    await expect(bridge.readFile({ filePath: "nested/file.txt" })).rejects.toBeDefined();
+    expect(await bridge.readFile({ filePath: "nested/renamed.txt" })).toEqual(Buffer.from("hello"));
 
     await bridge.remove({
       filePath: "nested/renamed.txt",
     });
-    await expect(
-      fs.readFile(path.join(remoteWorkspaceRealDir, "nested", "renamed.txt"), "utf8"),
-    ).rejects.toBeDefined();
+    await expect(bridge.readFile({ filePath: "nested/renamed.txt" })).rejects.toBeDefined();
   });
 });

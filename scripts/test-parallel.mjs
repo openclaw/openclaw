@@ -76,9 +76,15 @@ const useVmForks =
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
+const earlyOverrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
+const isSingleWorkerOverride = Number.isFinite(earlyOverrideWorkers) && earlyOverrideWorkers === 1;
 // Even on low-memory hosts, keep the isolated lane split so files like
 // git-commit.test.ts still get the worker/process isolation they require.
-const shouldSplitUnitRuns = testProfile !== "serial";
+const shouldSplitUnitRuns =
+  testProfile !== "serial" &&
+  // Windows + single-worker CI shards can exceed command-line length limits when
+  // unit-fast includes hundreds of --exclude flags; keep a single unit lane there.
+  !(isWindows && isSingleWorkerOverride);
 let runs = [];
 const shardOverride = Number.parseInt(process.env.OPENCLAW_TEST_SHARDS ?? "", 10);
 const configuredShardCount =
@@ -445,11 +451,13 @@ const resolveFilterMatches = (fileFilter) => {
   }
   return allKnownTestFiles.filter((file) => file.includes(normalizedFilter));
 };
-const isVmForkSingletonUnitFile = (fileFilter) => unitVmForkSingletonFiles.includes(fileFilter);
 const isThreadSingletonUnitFile = (fileFilter) => unitThreadSingletonFiles.includes(fileFilter);
+const isVmForkSingletonUnitFile = (fileFilter) => unitVmForkSingletonFiles.includes(fileFilter);
+const shouldForceForkPoolForFilters = (filters) =>
+  filters.some((filter) => filter.startsWith("src/plugins/contracts/"));
 const createTargetedEntry = (owner, isolated, filters) => {
   const name = isolated ? `${owner}-isolated` : owner;
-  const forceForks = isolated;
+  const forceForks = isolated || shouldForceForkPoolForFilters(filters);
   if (owner === "unit-vmforks") {
     return {
       name,

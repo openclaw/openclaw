@@ -155,10 +155,10 @@ function createProviderSecretRefConfig(
 }
 
 function readProviderKey(config: OpenClawConfig, provider: ProviderUnderTest): unknown {
-  const pluginConfig = config.plugins?.entries?.[providerPluginId(provider)]?.config as
-    | { webSearch?: { apiKey?: unknown } }
+  const entries = config.plugins?.entries as
+    | Record<string, { config?: { webSearch?: { apiKey?: unknown } } }>
     | undefined;
-  return pluginConfig?.webSearch?.apiKey;
+  return entries?.[providerPluginId(provider)]?.config?.webSearch?.apiKey;
 }
 
 function expectInactiveFirecrawlSecretRef(params: {

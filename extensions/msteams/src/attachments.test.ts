@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginRuntime, SsrFPolicy } from "openclaw/plugin-sdk/msteams";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
-import type { PluginRuntime, SsrFPolicy } from "../runtime-api.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsGraphMessageUrls,
@@ -8,6 +8,10 @@ import {
   downloadMSTeamsAttachments,
   downloadMSTeamsGraphMedia,
 } from "./attachments.js";
+import {
+  __resetMSTeamsFetchWithSsrFGuardForTest,
+  __setMSTeamsFetchWithSsrFGuardForTest,
+} from "./attachments/graph.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const GRAPH_HOST = "graph.microsoft.com";
@@ -127,6 +131,13 @@ const runtimeStub: PluginRuntime = createPluginRuntimeMock({
     },
   },
 });
+
+const stubMSTeamsFetchGuard = () =>
+  __setMSTeamsFetchWithSsrFGuardForTest(async ({ url, init, fetchImpl }) => ({
+    response: await (fetchImpl ?? fetch)(url, init),
+    finalUrl: String(url),
+    release: async () => undefined,
+  }));
 
 type DownloadAttachmentsParams = Parameters<typeof downloadMSTeamsAttachments>[0];
 type DownloadGraphMediaParams = Parameters<typeof downloadMSTeamsGraphMedia>[0];
@@ -676,7 +687,12 @@ describe("msteams attachments", () => {
     detectMimeMock.mockClear();
     saveMediaBufferMock.mockClear();
     fetchRemoteMediaMock.mockClear();
+    stubMSTeamsFetchGuard();
     setMSTeamsRuntime(runtimeStub);
+  });
+
+  afterEach(() => {
+    __resetMSTeamsFetchWithSsrFGuardForTest();
   });
 
   describe("buildMSTeamsAttachmentPlaceholder", () => {

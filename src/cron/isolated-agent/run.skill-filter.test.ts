@@ -152,6 +152,50 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     expect(buildWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();
   });
 
+  it("refreshes cached snapshot when effective skills policy changes", async () => {
+    resolveAgentSkillsFilterMock.mockReturnValue(undefined);
+    resolveCronSessionMock.mockReturnValue({
+      storePath: "/tmp/store.json",
+      store: {},
+      sessionEntry: {
+        sessionId: "test-session-id",
+        updatedAt: 0,
+        systemSent: false,
+        skillsSnapshot: {
+          prompt: "<available_skills><skill>alpha</skill></available_skills>",
+          skills: [{ name: "alpha" }],
+          policy: {
+            agentId: "scout",
+            globalEnabled: ["alpha"],
+            agentEnabled: [],
+            agentDisabled: [],
+            effective: ["alpha"],
+          },
+          version: 42,
+        },
+      },
+      systemSent: false,
+      isNewSession: true,
+    });
+
+    await runSkillFilterCase({
+      cfg: {
+        skills: {
+          policy: {
+            globalEnabled: ["alpha", "beta"],
+            agentOverrides: {
+              scout: { disabled: ["alpha"] },
+            },
+          },
+        },
+      },
+      agentId: "scout",
+    });
+
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
+    expect(buildWorkspaceSkillSnapshotMock.mock.calls[0][1]).toHaveProperty("agentId", "scout");
+  });
+
   describe("model fallbacks", () => {
     const defaultFallbacks = [
       "anthropic/claude-opus-4-6",

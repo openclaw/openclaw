@@ -22,6 +22,16 @@ import type {
   MSTeamsInboundMedia,
 } from "./types.js";
 
+let msteamsFetchWithSsrFGuard: typeof fetchWithSsrFGuard = fetchWithSsrFGuard;
+
+export function __setMSTeamsFetchWithSsrFGuardForTest(fetchGuard: typeof fetchWithSsrFGuard): void {
+  msteamsFetchWithSsrFGuard = fetchGuard;
+}
+
+export function __resetMSTeamsFetchWithSsrFGuardForTest(): void {
+  msteamsFetchWithSsrFGuard = fetchWithSsrFGuard;
+}
+
 type GraphHostedContent = {
   id?: string | null;
   contentType?: string | null;
@@ -126,7 +136,7 @@ async function fetchGraphCollection<T>(params: {
   ssrfPolicy?: SsrFPolicy;
 }): Promise<{ status: number; items: T[] }> {
   const fetchFn = params.fetchFn ?? fetch;
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await msteamsFetchWithSsrFGuard({
     url: params.url,
     fetchImpl: fetchFn,
     init: {
@@ -262,7 +272,7 @@ export async function downloadMSTeamsGraphMedia(params: {
   const sharePointMedia: MSTeamsInboundMedia[] = [];
   const downloadedReferenceUrls = new Set<string>();
   try {
-    const { response: msgRes, release } = await fetchWithSsrFGuard({
+    const { response: msgRes, release } = await msteamsFetchWithSsrFGuard({
       url: messageUrl,
       fetchImpl: fetchFn,
       init: {

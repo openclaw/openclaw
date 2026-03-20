@@ -96,6 +96,13 @@ describe("provider wizard contract", () => {
     expect(options.map((option) => option.value)).toEqual([
       ...new Set(options.map((option) => option.value)),
     ]);
+    for (const option of options) {
+      const resolved = resolveProviderPluginChoice({
+        providers: uniqueProviderContractProviders,
+        choice: option.value,
+      });
+      expect(resolved).not.toBeNull();
+    }
   });
 
   it("round-trips every shared wizard choice back to its provider and auth method", () => {
@@ -116,6 +123,9 @@ describe("provider wizard contract", () => {
     expect(
       entries.map((entry) => entry.value).toSorted((left, right) => left.localeCompare(right)),
     ).toEqual(resolveExpectedModelPickerValues(uniqueProviderContractProviders));
+    expect(entries.map((entry) => entry.value)).toEqual([
+      ...new Set(entries.map((entry) => entry.value)),
+    ]);
     for (const entry of entries) {
       const resolved = resolveProviderPluginChoice({
         providers: uniqueProviderContractProviders,

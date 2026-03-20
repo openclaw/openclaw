@@ -175,4 +175,43 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
     },
   );
+
+  it("supports bypassing policy filtering for full-inventory status views", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "policy-visible"),
+      name: "policy-visible",
+      description: "Visible when policy filtering is bypassed",
+    });
+
+    const config = {
+      skills: {
+        policy: {
+          globalEnabled: [],
+          agentOverrides: {
+            ops: {},
+          },
+        },
+      },
+    };
+
+    const filtered = loadWorkspaceSkillEntries(workspaceDir, {
+      config,
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+      agentId: "ops",
+    });
+    expect(filtered.map((entry) => entry.skill.name)).not.toContain("policy-visible");
+
+    const unfiltered = loadWorkspaceSkillEntries(workspaceDir, {
+      config,
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+      agentId: "ops",
+      applyPolicy: false,
+    });
+    expect(unfiltered.map((entry) => entry.skill.name)).toContain("policy-visible");
+  });
 });

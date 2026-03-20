@@ -189,6 +189,7 @@ export async function resolveReplyDirectives(params: {
       ? listSkillCommandsForWorkspace({
           workspaceDir,
           cfg,
+          agentId,
           skillFilter,
         })
       : [];

@@ -16,6 +16,8 @@ type IsolatedRunResult = {
   status: "ok" | "error" | "skipped";
   summary?: string;
   error?: string;
+  delivered?: boolean;
+  deliveryAttempted?: boolean;
 };
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -264,12 +266,13 @@ describe("CronService read ops while job is running", () => {
         expect.objectContaining({ enabled: true, storePath: store.storePath }),
       );
 
-      isolatedRun.completeRun({ status: "ok", summary: "done" });
+      isolatedRun.completeRun({ status: "ok", summary: "done", deliveryAttempted: true });
       await startPromise;
 
       const jobs = await cron.list({ includeDisabled: true });
       expect(jobs[0]?.state.lastStatus).toBe("ok");
       expect(jobs[0]?.state.runningAtMs).toBeUndefined();
+      expect(jobs[0]?.state.lastDeliveryAttempted).toBe(true);
     } finally {
       cron.stop();
       await store.cleanup();

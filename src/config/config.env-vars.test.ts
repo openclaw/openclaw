@@ -8,8 +8,15 @@ import {
   collectConfigRuntimeEnvVars,
   createConfigRuntimeEnv,
 } from "./env-vars.js";
-import { withEnvOverride, withTempHome } from "./test-helpers.js";
+import { buildWebSearchProviderConfig, withEnvOverride, withTempHome } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
+
+function readBraveWebSearchApiKey(config: OpenClawConfig): unknown {
+  const entries = config.plugins?.entries as
+    | Record<string, { config?: { webSearch?: { apiKey?: unknown } } }>
+    | undefined;
+  return entries?.brave?.config?.webSearch?.apiKey;
+}
 
 describe("config env vars", () => {
   it("applies env vars from env block when missing", async () => {
@@ -109,24 +116,21 @@ describe("config env vars", () => {
         await fs.mkdir(stateDir, { recursive: true });
         await fs.writeFile(path.join(stateDir, ".env"), "BRAVE_API_KEY=from-dotenv\n", "utf-8");
 
-        const config: OpenClawConfig = {
-          tools: {
-            web: {
-              search: {
-                apiKey: "${BRAVE_API_KEY}",
-              },
-            },
+        const config = buildWebSearchProviderConfig({
+          provider: "brave",
+          providerConfig: {
+            apiKey: "${BRAVE_API_KEY}",
           },
-        };
+        }) as OpenClawConfig;
 
         loadDotEnv({ quiet: true });
         const first = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
-        expect(first.tools?.web?.search?.apiKey).toBe("from-dotenv");
+        expect(readBraveWebSearchApiKey(first)).toBe("from-dotenv");
 
         delete process.env.BRAVE_API_KEY;
         loadDotEnv({ quiet: true });
         const second = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
-        expect(second.tools?.web?.search?.apiKey).toBe("from-dotenv");
+        expect(readBraveWebSearchApiKey(second)).toBe("from-dotenv");
       });
     });
   });

@@ -112,7 +112,8 @@ describe("createTelegramBot", () => {
       expect(setMyCommandsSpy).toHaveBeenCalled();
     });
 
-    const registered = setMyCommandsSpy.mock.calls.at(-1)?.[0] as Array<{
+    const registeredRaw = setMyCommandsSpy.mock.calls.at(-1)?.[0];
+    const registered = (Array.isArray(registeredRaw) ? registeredRaw : []) as Array<{
       command: string;
       description: string;
     }>;
@@ -153,7 +154,8 @@ describe("createTelegramBot", () => {
       expect(setMyCommandsSpy).toHaveBeenCalled();
     });
 
-    const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
+    const registeredRaw = setMyCommandsSpy.mock.calls[0]?.[0];
+    const registered = (Array.isArray(registeredRaw) ? registeredRaw : []) as Array<{
       command: string;
       description: string;
     }>;
@@ -190,7 +192,8 @@ describe("createTelegramBot", () => {
       expect(setMyCommandsSpy).toHaveBeenCalled();
     });
 
-    const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
+    const registeredRaw = setMyCommandsSpy.mock.calls[0]?.[0];
+    const registered = (Array.isArray(registeredRaw) ? registeredRaw : []) as Array<{
       command: string;
       description: string;
     }>;

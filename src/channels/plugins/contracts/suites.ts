@@ -43,7 +43,7 @@ function resolveContractMessageDiscovery(params: {
       capabilities: [] as readonly ChannelMessageCapability[],
     };
   }
-  const discovery = actions.describeMessageTool({ cfg: params.cfg }) ?? null;
+  const discovery = actions.describeMessageTool?.({ cfg: params.cfg }) ?? null;
   return {
     actions: Array.isArray(discovery?.actions) ? [...discovery.actions] : [],
     capabilities: Array.isArray(discovery?.capabilities) ? discovery.capabilities : [],
@@ -143,6 +143,10 @@ type ChannelActionsContractCase = {
   beforeTest?: () => void;
 };
 
+function hasActionsDiscoverySurface(actions: ChannelPlugin["actions"] | undefined): boolean {
+  return typeof actions?.describeMessageTool === "function";
+}
+
 export function installChannelActionsContractSuite(params: {
   plugin: Pick<ChannelPlugin, "id" | "actions">;
   cases: readonly ChannelActionsContractCase[];
@@ -150,7 +154,7 @@ export function installChannelActionsContractSuite(params: {
 }) {
   it("exposes the base message actions contract", () => {
     expect(params.plugin.actions).toBeDefined();
-    expect(typeof params.plugin.actions?.describeMessageTool).toBe("function");
+    expect(hasActionsDiscoverySurface(params.plugin.actions)).toBe(true);
   });
 
   for (const testCase of params.cases) {
@@ -214,7 +218,7 @@ export function installChannelSurfaceContractSuite(params: {
   it(`exposes the ${surface} surface contract`, () => {
     if (surface === "actions") {
       expect(plugin.actions).toBeDefined();
-      expect(typeof plugin.actions?.describeMessageTool).toBe("function");
+      expect(hasActionsDiscoverySurface(plugin.actions)).toBe(true);
       return;
     }
 

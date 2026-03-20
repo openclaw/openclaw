@@ -1,5 +1,6 @@
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
@@ -47,6 +48,16 @@ export type CronListPageResult = {
   hasMore: boolean;
   nextOffset: number | null;
 };
+
+function resolveManualRunAgentId(state: CronServiceState, job: Pick<CronJob, "agentId">): string {
+  const raw = typeof job.agentId === "string" && job.agentId.trim() ? job.agentId : undefined;
+  const resolved = state.deps.resolveCronAgentId?.(raw);
+  if (typeof resolved === "string" && resolved.trim().length > 0) {
+    return normalizeAgentId(resolved);
+  }
+  return normalizeAgentId(raw ?? state.deps.defaultAgentId ?? DEFAULT_AGENT_ID);
+}
+
 function mergeManualRunSnapshotAfterReload(params: {
   state: CronServiceState;
   jobId: string;
@@ -465,7 +476,11 @@ async function finishPreparedManualRun(
   try {
     coreResult = await executeJobCoreWithTimeout(state, executionJob);
   } catch (err) {
-    coreResult = { status: "error", error: String(err) };
+    coreResult = {
+      status: "error",
+      error: String(err),
+      resolvedAgentId: resolveManualRunAgentId(state, executionJob),
+    };
   }
   const endedAt = state.deps.nowMs();
 
@@ -483,6 +498,8 @@ async function finishPreparedManualRun(
         status: coreResult.status,
         error: coreResult.error,
         delivered: coreResult.delivered,
+        deliveryAttempted: coreResult.deliveryAttempted,
+        resolvedAgentId: coreResult.resolvedAgentId,
         startedAt,
         endedAt,
       },
@@ -497,7 +514,9 @@ async function finishPreparedManualRun(
       summary: coreResult.summary,
       delivered: coreResult.delivered,
       deliveryStatus: job.state.lastDeliveryStatus,
+      deliveryAttempted: job.state.lastDeliveryAttempted,
       deliveryError: job.state.lastDeliveryError,
+      resolvedAgentId: job.state.lastResolvedAgentId ?? coreResult.resolvedAgentId,
       sessionId: coreResult.sessionId,
       sessionKey: coreResult.sessionKey,
       runAtMs: startedAt,

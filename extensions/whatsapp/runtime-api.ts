@@ -3,6 +3,7 @@ export * from "./src/action-runtime.js";
 export * from "./src/agent-tools-login.js";
 export * from "./src/auth-store.js";
 export * from "./src/auto-reply.js";
+export { monitorWebChannel } from "./src/auto-reply/monitor.js";
 export * from "./src/inbound.js";
 export * from "./src/login.js";
 export * from "./src/login-qr.js";

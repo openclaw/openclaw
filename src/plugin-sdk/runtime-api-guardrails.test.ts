@@ -72,6 +72,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export * from "./src/agent-tools-login.js";',
     'export * from "./src/auth-store.js";',
     'export * from "./src/auto-reply.js";',
+    'export { monitorWebChannel } from "./src/auto-reply/monitor.js";',
     'export * from "./src/inbound.js";',
     'export * from "./src/login.js";',
     'export * from "./src/login-qr.js";',

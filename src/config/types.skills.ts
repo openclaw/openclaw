@@ -37,9 +37,21 @@ export type SkillsLimitsConfig = {
   maxSkillFileBytes?: number;
 };
 
+export type SkillPolicyAgentOverride = {
+  enabled?: string[];
+  disabled?: string[];
+};
+
+export type SkillsPolicyConfig = {
+  globalEnabled?: string[];
+  agentOverrides?: Record<string, SkillPolicyAgentOverride>;
+};
+
 export type SkillsConfig = {
   /** Optional bundled-skill allowlist (only affects bundled skills). */
   allowBundled?: string[];
+  /** Optional runtime skill policy: global baseline + per-agent overrides. */
+  policy?: SkillsPolicyConfig;
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;
   limits?: SkillsLimitsConfig;

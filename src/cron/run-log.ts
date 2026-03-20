@@ -13,7 +13,9 @@ export type CronRunLogEntry = {
   summary?: string;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
+  deliveryAttempted?: boolean;
   deliveryError?: string;
+  resolvedAgentId?: string;
   sessionId?: string;
   sessionKey?: string;
   runAtMs?: number;
@@ -308,8 +310,14 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
       ) {
         entry.deliveryStatus = obj.deliveryStatus;
       }
+      if (typeof obj.deliveryAttempted === "boolean") {
+        entry.deliveryAttempted = obj.deliveryAttempted;
+      }
       if (typeof obj.deliveryError === "string") {
         entry.deliveryError = obj.deliveryError;
+      }
+      if (typeof obj.resolvedAgentId === "string" && obj.resolvedAgentId.trim().length > 0) {
+        entry.resolvedAgentId = obj.resolvedAgentId;
       }
       if (typeof obj.sessionId === "string" && obj.sessionId.trim().length > 0) {
         entry.sessionId = obj.sessionId;

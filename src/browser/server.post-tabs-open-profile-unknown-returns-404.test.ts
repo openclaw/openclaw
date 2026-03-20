@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { fetch as realFetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -134,7 +135,7 @@ describe("profile CRUD endpoints", () => {
     expect(createClawdBody.cdpPort).toBeTypeOf("number");
     expect(createClawdBody.userDataDir).toBeNull();
 
-    const explicitUserDataDir = "/tmp/openclaw-brave-profile";
+    const explicitUserDataDir = path.resolve("/tmp/openclaw-brave-profile");
     await fs.promises.mkdir(explicitUserDataDir, { recursive: true });
     const createExistingSession = await realFetch(`${base}/profiles/create`, {
       method: "POST",

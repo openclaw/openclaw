@@ -32,6 +32,7 @@ import {
   normalizeSignalMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
+  type ChannelMessageActionAdapter,
   type ChannelPlugin,
 } from "./runtime-api.js";
 import { getSignalRuntime } from "./runtime.js";

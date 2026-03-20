@@ -149,6 +149,10 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
     ...actual,
+    // Keep explicit pass-through for newly imported symbols that can be dropped
+    // by spread-based mocks under some Vitest module shims.
+    enqueueSystemEvent: (...args: unknown[]) =>
+      actual.enqueueSystemEvent(...(args as Parameters<typeof actual.enqueueSystemEvent>)),
     waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
   };
 });

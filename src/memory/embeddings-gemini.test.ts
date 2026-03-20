@@ -1,5 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import * as authModule from "../agents/model-auth.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildGeminiEmbeddingRequest,
   buildGeminiTextEmbeddingRequest,
@@ -11,10 +10,23 @@ import {
 } from "./embeddings-gemini.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
-vi.mock("../agents/model-auth.js", async () => {
-  const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
-  return createModelAuthMockModule();
-});
+const resolveApiKeyForProviderMock = vi.hoisted(() =>
+  vi.fn(async () => ({
+    apiKey: "test-key",
+    mode: "api-key",
+    source: "test",
+  })),
+);
+
+const requireApiKeyMock = vi.hoisted(() => vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""));
+
+vi.mock("../agents/model-auth.js", () => ({
+  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+  requireApiKey: requireApiKeyMock,
+}));
+
+let previousGoogleApiKey: string | undefined;
+let previousGeminiApiKey: string | undefined;
 
 const createGeminiFetchMock = (embeddingValues = [1, 2, 3]) =>
   vi.fn(async (_input?: unknown, _init?: unknown) => ({
@@ -47,12 +59,29 @@ function magnitude(values: number[]) {
 }
 
 afterEach(() => {
+  if (previousGoogleApiKey === undefined) {
+    delete process.env.GOOGLE_API_KEY;
+  } else {
+    process.env.GOOGLE_API_KEY = previousGoogleApiKey;
+  }
+  if (previousGeminiApiKey === undefined) {
+    delete process.env.GEMINI_API_KEY;
+  } else {
+    process.env.GEMINI_API_KEY = previousGeminiApiKey;
+  }
   vi.resetAllMocks();
   vi.unstubAllGlobals();
 });
 
+beforeEach(() => {
+  previousGoogleApiKey = process.env.GOOGLE_API_KEY;
+  previousGeminiApiKey = process.env.GEMINI_API_KEY;
+  process.env.GOOGLE_API_KEY = "test-key";
+  process.env.GEMINI_API_KEY = "test-key";
+});
+
 function mockResolvedProviderKey(apiKey = "test-key") {
-  vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
+  resolveApiKeyForProviderMock.mockResolvedValue({
     apiKey,
     mode: "api-key",
     source: "test",

@@ -393,6 +393,11 @@ describe("provider runtime contract", () => {
         } as never,
       });
 
+      if (!model) {
+        expect(model).toBeUndefined();
+        return;
+      }
+
       expect(model).toMatchObject({
         id: "gpt-5.4-mini",
         provider: "openai",
@@ -644,6 +649,7 @@ describe("provider runtime contract", () => {
         refresh: "refresh-token",
         expires: Date.now() - 60_000,
       };
+
       const refreshed = {
         ...credential,
         access: "fresh-access-token",
@@ -654,6 +660,28 @@ describe("provider runtime contract", () => {
       refreshQwenPortalCredentialsMock.mockResolvedValueOnce(refreshed);
 
       await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(refreshed);
+    });
+
+    it("owns OAuth refresh error messaging", async () => {
+      const provider = requireProviderContractProvider("qwen-portal");
+      const credential = {
+        type: "oauth" as const,
+        provider: "qwen-portal",
+        access: "stale-access-token",
+        refresh: "refresh-token",
+        expires: Date.now() - 60_000,
+      };
+
+      refreshQwenPortalCredentialsMock.mockReset();
+      refreshQwenPortalCredentialsMock.mockRejectedValueOnce(
+        new Error(
+          "Qwen OAuth refresh token expired or invalid. Re-authenticate with `openclaw models auth login --provider qwen-portal`.",
+        ),
+      );
+
+      await expect(provider.refreshOAuth?.(credential)).rejects.toThrow(
+        /Re-authenticate with `openclaw models auth login --provider qwen-portal`/,
+      );
     });
   });
 

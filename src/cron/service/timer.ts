@@ -1,7 +1,7 @@
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
@@ -48,6 +48,7 @@ type TimedCronRunOutcome = CronRunOutcome &
     jobId: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;
+    resolvedAgentId?: string;
     startedAt: number;
     endedAt: number;
   };
@@ -171,6 +172,33 @@ function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): C
   return resolveCronDeliveryPlan(params.job).requested ? "unknown" : "not-requested";
 }
 
+function resolveDeliveryAttempted(params: {
+  delivered?: boolean;
+  deliveryAttempted?: boolean;
+}): boolean {
+  if (typeof params.deliveryAttempted === "boolean") {
+    return params.deliveryAttempted;
+  }
+  if (typeof params.delivered === "boolean") {
+    return true;
+  }
+  return false;
+}
+
+function resolveCronJobAgentId(state: CronServiceState, job: Pick<CronJob, "agentId">): string {
+  const raw = typeof job.agentId === "string" && job.agentId.trim() ? job.agentId : undefined;
+  const resolved = state.deps.resolveCronAgentId?.(raw);
+  if (typeof resolved === "string" && resolved.trim().length > 0) {
+    return normalizeAgentId(resolved);
+  }
+  return normalizeAgentId(raw ?? state.deps.defaultAgentId ?? DEFAULT_AGENT_ID);
+}
+
+function resolveRequestedCronJobAgentId(job: Pick<CronJob, "agentId">): string | undefined {
+  const raw = typeof job.agentId === "string" && job.agentId.trim() ? job.agentId : undefined;
+  return raw ? normalizeAgentId(raw) : undefined;
+}
+
 function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undefined {
   if (typeof input !== "string") {
     return undefined;
@@ -256,6 +284,8 @@ function emitFailureAlert(
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
+  const resolvedAgentId =
+    params.job.state.lastResolvedAgentId ?? resolveCronJobAgentId(state, params.job);
   const truncatedError = (params.error?.trim() || "unknown error").slice(0, 200);
   const text = [
     `Cron job "${safeJobName}" failed ${params.consecutiveErrors} times`,
@@ -281,9 +311,12 @@ function emitFailureAlert(
     return;
   }
 
-  state.deps.enqueueSystemEvent(text, { agentId: params.job.agentId });
+  state.deps.enqueueSystemEvent(text, { agentId: resolvedAgentId });
   if (params.job.wakeMode === "now") {
-    state.deps.requestHeartbeatNow({ reason: `cron:${params.job.id}:failure-alert` });
+    state.deps.requestHeartbeatNow({
+      reason: `cron:${params.job.id}:failure-alert`,
+      agentId: resolvedAgentId,
+    });
   }
 }
 
@@ -299,6 +332,8 @@ export function applyJobResult(
     status: CronRunStatus;
     error?: string;
     delivered?: boolean;
+    deliveryAttempted?: boolean;
+    resolvedAgentId?: string;
     startedAt: number;
     endedAt: number;
   },
@@ -330,8 +365,16 @@ export function applyJobResult(
   job.state.lastDelivered = result.delivered;
   const deliveryStatus = resolveDeliveryStatus({ job, delivered: result.delivered });
   job.state.lastDeliveryStatus = deliveryStatus;
+  job.state.lastDeliveryAttempted = resolveDeliveryAttempted({
+    delivered: result.delivered,
+    deliveryAttempted: result.deliveryAttempted,
+  });
   job.state.lastDeliveryError =
     deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
+  const effectiveResolvedAgentId = result.resolvedAgentId ?? resolveCronJobAgentId(state, job);
+  job.state.lastResolvedAgentId = effectiveResolvedAgentId
+    ? normalizeAgentId(effectiveResolvedAgentId)
+    : undefined;
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable.
@@ -492,6 +535,8 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     status: result.status,
     error: result.error,
     delivered: result.delivered,
+    deliveryAttempted: result.deliveryAttempted,
+    resolvedAgentId: result.resolvedAgentId,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
@@ -644,6 +689,7 @@ export async function onTimer(state: CronServiceState) {
           jobId: id,
           status: "error",
           error: errorText,
+          resolvedAgentId: resolveCronJobAgentId(state, job),
           startedAt,
           endedAt: state.deps.nowMs(),
         };
@@ -935,6 +981,8 @@ async function runStartupCatchupCandidate(
       error: result.error,
       summary: result.summary,
       delivered: result.delivered,
+      deliveryAttempted: result.deliveryAttempted,
+      resolvedAgentId: result.resolvedAgentId,
       sessionId: result.sessionId,
       sessionKey: result.sessionKey,
       model: result.model,
@@ -944,10 +992,14 @@ async function runStartupCatchupCandidate(
       endedAt: state.deps.nowMs(),
     };
   } catch (err) {
+    const resolvedAgentId = resolveCronJobAgentId(state, candidate.job);
     return {
       jobId: candidate.jobId,
       status: "error",
       error: String(err),
+      resolvedAgentId,
+      deliveryAttempted: false,
+      delivered: false,
       startedAt,
       endedAt: state.deps.nowMs(),
     };
@@ -1007,11 +1059,19 @@ export async function executeJobCore(
   job: CronJob,
   abortSignal?: AbortSignal,
 ): Promise<
-  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+  CronRunOutcome &
+    CronRunTelemetry & {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      resolvedAgentId: string;
+    }
 > {
+  const resolvedAgentId = resolveCronJobAgentId(state, job);
+  const requestedAgentId = resolveRequestedCronJobAgentId(job);
   const resolveAbortError = () => ({
     status: "error" as const,
     error: timeoutErrorMessage(),
+    resolvedAgentId,
   });
   const waitWithAbort = async (ms: number) => {
     if (!abortSignal) {
@@ -1048,6 +1108,7 @@ export async function executeJobCore(
           kind === "systemEvent"
             ? "main job requires non-empty systemEvent text"
             : 'main job requires payload.kind="systemEvent"',
+        resolvedAgentId,
       };
     }
     // Preserve the job session namespace for main-target reminders so heartbeat
@@ -1055,7 +1116,7 @@ export async function executeJobCore(
     // Downstream gateway wiring canonicalizes/guards this key per agent.
     const targetMainSessionKey = job.sessionKey;
     state.deps.enqueueSystemEvent(text, {
-      agentId: job.agentId,
+      agentId: requestedAgentId,
       sessionKey: targetMainSessionKey,
       contextKey: `cron:${job.id}`,
     });
@@ -1072,7 +1133,7 @@ export async function executeJobCore(
         }
         heartbeatResult = await state.deps.runHeartbeatOnce({
           reason,
-          agentId: job.agentId,
+          agentId: resolvedAgentId,
           sessionKey: targetMainSessionKey,
           // Cron-triggered heartbeats should deliver to the last active channel.
           // Without this override, heartbeat target defaults to "none" (since
@@ -1095,20 +1156,20 @@ export async function executeJobCore(
           }
           state.deps.requestHeartbeatNow({
             reason,
-            agentId: job.agentId,
+            agentId: resolvedAgentId,
             sessionKey: targetMainSessionKey,
           });
-          return { status: "ok", summary: text };
+          return { status: "ok", summary: text, resolvedAgentId };
         }
         await waitWithAbort(retryDelayMs);
       }
 
       if (heartbeatResult.status === "ran") {
-        return { status: "ok", summary: text };
+        return { status: "ok", summary: text, resolvedAgentId };
       } else if (heartbeatResult.status === "skipped") {
-        return { status: "skipped", error: heartbeatResult.reason, summary: text };
+        return { status: "skipped", error: heartbeatResult.reason, summary: text, resolvedAgentId };
       } else {
-        return { status: "error", error: heartbeatResult.reason, summary: text };
+        return { status: "error", error: heartbeatResult.reason, summary: text, resolvedAgentId };
       }
     } else {
       if (abortSignal?.aborted) {
@@ -1116,28 +1177,33 @@ export async function executeJobCore(
       }
       state.deps.requestHeartbeatNow({
         reason: `cron:${job.id}`,
-        agentId: job.agentId,
+        agentId: resolvedAgentId,
         sessionKey: targetMainSessionKey,
       });
-      return { status: "ok", summary: text };
+      return { status: "ok", summary: text, resolvedAgentId };
     }
   }
 
   if (job.payload.kind !== "agentTurn") {
-    return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
+    return {
+      status: "skipped",
+      error: "isolated job requires payload.kind=agentTurn",
+      resolvedAgentId,
+    };
   }
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
 
+  const runJob = job.agentId === resolvedAgentId ? job : { ...job, agentId: resolvedAgentId };
   const res = await state.deps.runIsolatedAgentJob({
-    job,
+    job: runJob,
     message: job.payload.message,
     abortSignal,
   });
 
   if (abortSignal?.aborted) {
-    return { status: "error", error: timeoutErrorMessage() };
+    return { status: "error", error: timeoutErrorMessage(), resolvedAgentId };
   }
 
   return {
@@ -1151,6 +1217,7 @@ export async function executeJobCore(
     model: res.model,
     provider: res.provider,
     usage: res.usage,
+    resolvedAgentId: res.resolvedAgentId ?? resolvedAgentId,
   };
 }
 
@@ -1175,12 +1242,18 @@ export async function executeJob(
   let coreResult: {
     status: CronRunStatus;
     delivered?: boolean;
+    deliveryAttempted?: boolean;
+    resolvedAgentId: string;
   } & CronRunOutcome &
     CronRunTelemetry;
   try {
     coreResult = await executeJobCore(state, job);
   } catch (err) {
-    coreResult = { status: "error", error: String(err) };
+    coreResult = {
+      status: "error",
+      error: String(err),
+      resolvedAgentId: resolveCronJobAgentId(state, job),
+    };
   }
 
   const endedAt = state.deps.nowMs();
@@ -1188,6 +1261,8 @@ export async function executeJob(
     status: coreResult.status,
     error: coreResult.error,
     delivered: coreResult.delivered,
+    deliveryAttempted: coreResult.deliveryAttempted,
+    resolvedAgentId: coreResult.resolvedAgentId,
     startedAt,
     endedAt,
   });
@@ -1206,6 +1281,8 @@ function emitJobFinished(
   result: {
     status: CronRunStatus;
     delivered?: boolean;
+    deliveryAttempted?: boolean;
+    resolvedAgentId?: string;
   } & CronRunOutcome &
     CronRunTelemetry,
   runAtMs: number,
@@ -1218,7 +1295,9 @@ function emitJobFinished(
     summary: result.summary,
     delivered: result.delivered,
     deliveryStatus: job.state.lastDeliveryStatus,
+    deliveryAttempted: job.state.lastDeliveryAttempted ?? result.deliveryAttempted,
     deliveryError: job.state.lastDeliveryError,
+    resolvedAgentId: job.state.lastResolvedAgentId ?? result.resolvedAgentId,
     sessionId: result.sessionId,
     sessionKey: result.sessionKey,
     runAtMs,

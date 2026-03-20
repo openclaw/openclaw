@@ -40,7 +40,14 @@ function buildMainSessionSystemEventJob(name: string): CronAddInput {
 function createIsolatedCronWithFinishedBarrier(params: {
   storePath: string;
   delivered?: boolean;
-  onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
+  deliveryAttempted?: boolean;
+  onFinished?: (evt: {
+    jobId: string;
+    delivered?: boolean;
+    deliveryStatus?: string;
+    deliveryAttempted?: boolean;
+    resolvedAgentId?: string;
+  }) => void;
 }) {
   const finished = createFinishedBarrier();
   const cron = new CronService({
@@ -53,6 +60,9 @@ function createIsolatedCronWithFinishedBarrier(params: {
       status: "ok" as const,
       summary: "done",
       ...(params.delivered === undefined ? {} : { delivered: params.delivered }),
+      ...(params.deliveryAttempted === undefined
+        ? {}
+        : { deliveryAttempted: params.deliveryAttempted }),
     })),
     onEvent: (evt) => {
       if (evt.action === "finished") {
@@ -60,6 +70,8 @@ function createIsolatedCronWithFinishedBarrier(params: {
           jobId: evt.jobId,
           delivered: evt.delivered,
           deliveryStatus: evt.deliveryStatus,
+          deliveryAttempted: evt.deliveryAttempted,
+          resolvedAgentId: evt.resolvedAgentId,
         });
       }
       finished.onEvent(evt);
@@ -103,7 +115,9 @@ function expectDeliveryNotRequested(
         state: {
           lastDelivered?: boolean;
           lastDeliveryStatus?: string;
+          lastDeliveryAttempted?: boolean;
           lastDeliveryError?: string;
+          lastResolvedAgentId?: string;
         };
       }
     | undefined,
@@ -111,18 +125,30 @@ function expectDeliveryNotRequested(
   expectSuccessfulCronRun(updated);
   expect(updated?.state.lastDelivered).toBeUndefined();
   expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
+  expect(updated?.state.lastDeliveryAttempted).toBe(false);
   expect(updated?.state.lastDeliveryError).toBeUndefined();
+  expect(updated?.state.lastResolvedAgentId).toBe("main");
 }
 
 async function runIsolatedJobAndReadState(params: {
   job: CronAddInput;
   delivered?: boolean;
-  onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
+  deliveryAttempted?: boolean;
+  onFinished?: (evt: {
+    jobId: string;
+    delivered?: boolean;
+    deliveryStatus?: string;
+    deliveryAttempted?: boolean;
+    resolvedAgentId?: string;
+  }) => void;
 }) {
   const store = await makeStorePath();
   const { cron, finished } = createIsolatedCronWithFinishedBarrier({
     storePath: store.storePath,
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
+    ...(params.deliveryAttempted !== undefined
+      ? { deliveryAttempted: params.deliveryAttempted }
+      : {}),
     ...(params.onFinished ? { onFinished: params.onFinished } : {}),
   });
 
@@ -148,7 +174,9 @@ describe("CronService persists delivered status", () => {
     expectSuccessfulCronRun(updated);
     expect(updated?.state.lastDelivered).toBe(true);
     expect(updated?.state.lastDeliveryStatus).toBe("delivered");
+    expect(updated?.state.lastDeliveryAttempted).toBe(true);
     expect(updated?.state.lastDeliveryError).toBeUndefined();
+    expect(updated?.state.lastResolvedAgentId).toBe("main");
   });
 
   it("persists lastDelivered=false when isolated job explicitly reports not delivered", async () => {
@@ -159,7 +187,9 @@ describe("CronService persists delivered status", () => {
     expectSuccessfulCronRun(updated);
     expect(updated?.state.lastDelivered).toBe(false);
     expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastDeliveryAttempted).toBe(true);
     expect(updated?.state.lastDeliveryError).toBeUndefined();
+    expect(updated?.state.lastResolvedAgentId).toBe("main");
   });
 
   it("persists not-requested delivery state when delivery is not configured", async () => {
@@ -179,7 +209,9 @@ describe("CronService persists delivered status", () => {
     expectSuccessfulCronRun(updated);
     expect(updated?.state.lastDelivered).toBeUndefined();
     expect(updated?.state.lastDeliveryStatus).toBe("unknown");
+    expect(updated?.state.lastDeliveryAttempted).toBe(false);
     expect(updated?.state.lastDeliveryError).toBeUndefined();
+    expect(updated?.state.lastResolvedAgentId).toBe("main");
   });
 
   it("does not set lastDelivered for main session jobs", async () => {
@@ -202,8 +234,16 @@ describe("CronService persists delivered status", () => {
     cron.stop();
   });
 
-  it("emits delivered in the finished event", async () => {
-    let capturedEvent: { jobId: string; delivered?: boolean; deliveryStatus?: string } | undefined;
+  it("emits delivery + execution metadata in the finished event", async () => {
+    let capturedEvent:
+      | {
+          jobId: string;
+          delivered?: boolean;
+          deliveryStatus?: string;
+          deliveryAttempted?: boolean;
+          resolvedAgentId?: string;
+        }
+      | undefined;
     await runIsolatedJobAndReadState({
       job: buildIsolatedAgentTurnJob("event-test"),
       delivered: true,
@@ -215,5 +255,50 @@ describe("CronService persists delivered status", () => {
     expect(capturedEvent).toBeDefined();
     expect(capturedEvent?.delivered).toBe(true);
     expect(capturedEvent?.deliveryStatus).toBe("delivered");
+    expect(capturedEvent?.deliveryAttempted).toBe(true);
+    expect(capturedEvent?.resolvedAgentId).toBe("main");
+  });
+
+  it("preserves explicit agentId context for isolated runs", async () => {
+    const store = await makeStorePath();
+    const runIsolatedAgentJob = vi.fn(async (_params: { job?: { agentId?: string } }) => ({
+      status: "ok" as const,
+      summary: "done",
+      delivered: true,
+      deliveryAttempted: true,
+    }));
+    const finished = createFinishedBarrier();
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      onEvent: (evt) => finished.onEvent(evt),
+    });
+
+    await cron.start();
+    try {
+      const { job } = await runSingleJobAndReadState({
+        cron,
+        finished,
+        job: {
+          ...buildIsolatedAgentTurnJob("explicit-agent"),
+          agentId: "ops",
+          delivery: { mode: "announce", channel: "telegram", to: "123" },
+        },
+      });
+
+      expect(runIsolatedAgentJob).toHaveBeenCalled();
+      const firstCallArg = runIsolatedAgentJob.mock.calls.at(0)?.[0];
+      expect(firstCallArg?.job?.agentId).toBe("ops");
+      const updated = (await cron.list({ includeDisabled: true })).find(
+        (entry) => entry.id === job.id,
+      );
+      expect(updated?.state.lastResolvedAgentId).toBe("ops");
+    } finally {
+      cron.stop();
+    }
   });
 });

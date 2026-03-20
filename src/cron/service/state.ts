@@ -22,7 +22,9 @@ export type CronEvent = {
   summary?: string;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
+  deliveryAttempted?: boolean;
   deliveryError?: string;
+  resolvedAgentId?: string;
   sessionId?: string;
   sessionKey?: string;
   nextRunAtMs?: number;
@@ -44,6 +46,11 @@ export type CronServiceDeps = {
   cronConfig?: CronConfig;
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
+  /**
+   * Resolve the effective cron agent id used for execution. When provided,
+   * this should apply runtime fallback logic (e.g. unknown agent -> default).
+   */
+  resolveCronAgentId?: (requested?: string) => string;
   /** Resolve session store path for a given agent id. */
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */
@@ -100,6 +107,8 @@ export type CronServiceDeps = {
        * if the final per-message ack status is uncertain.
        */
       deliveryAttempted?: boolean;
+      /** Effective agent id actually used by the isolated runner, if known. */
+      resolvedAgentId?: string;
     } & CronRunOutcome &
       CronRunTelemetry
   >;
