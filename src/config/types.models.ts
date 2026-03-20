@@ -10,6 +10,7 @@ export const MODEL_APIS = [
   "github-copilot",
   "bedrock-converse-stream",
   "ollama",
+  "azure-openai-responses"
 ] as const;
 
 export type ModelApi = (typeof MODEL_APIS)[number];
