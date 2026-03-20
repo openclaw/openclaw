@@ -378,7 +378,7 @@ export function createExecTool(
         });
         workdir = resolved.hostWorkdir;
         containerWorkdir = resolved.containerWorkdir;
-      } else {
+      } else if (host !== "node") {
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
 
