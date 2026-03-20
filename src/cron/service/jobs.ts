@@ -31,13 +31,24 @@ import {
   normalizeRequiredName,
 } from "./normalize.js";
 import type { CronServiceState } from "./state.js";
+import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 
-const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_STUCK_RUN_MS = 2 * 60 * 60 * 1000;
+const STUCK_RUN_GRACE_MS = 60 * 1000;
+const MIN_STUCK_RUN_MS = 2 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
 
 function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function resolveStuckRunMs(job: CronJob): number {
+  const timeoutMs = resolveCronJobTimeoutMs(job);
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+    return DEFAULT_STUCK_RUN_MS;
+  }
+  return Math.max(MIN_STUCK_RUN_MS, Math.floor(timeoutMs) + STUCK_RUN_GRACE_MS);
 }
 
 function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
@@ -377,9 +388,10 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   }
 
   const runningAt = job.state.runningAtMs;
-  if (typeof runningAt === "number" && nowMs - runningAt > STUCK_RUN_MS) {
+  const staleAfterMs = resolveStuckRunMs(job);
+  if (typeof runningAt === "number" && nowMs - runningAt > staleAfterMs) {
     state.deps.log.warn(
-      { jobId: job.id, runningAtMs: runningAt },
+      { jobId: job.id, runningAtMs: runningAt, staleAfterMs },
       "cron: clearing stuck running marker",
     );
     job.state.runningAtMs = undefined;

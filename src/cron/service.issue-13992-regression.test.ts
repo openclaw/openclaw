@@ -137,6 +137,39 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     expect(job.state.nextRunAtMs).toBe(futureTime);
   });
 
+  it("should clear stale running markers shortly after the configured job timeout", () => {
+    const now = Date.now();
+    const timeoutSeconds = 15 * 60;
+    const staleRunningAt = now - (timeoutSeconds * 1000 + 61_000);
+    const futureTime = now + 3600_000;
+
+    const job: CronJob = {
+      id: "short-timeout-agent-turn",
+      name: "short timeout agent turn",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 30 * 60_000 },
+      payload: {
+        kind: "agentTurn",
+        message: "monitor",
+        timeoutSeconds,
+      },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      createdAtMs: now - 3600_000,
+      updatedAtMs: now - 3600_000,
+      state: {
+        nextRunAtMs: futureTime,
+        runningAtMs: staleRunningAt,
+      },
+    };
+
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+    recomputeNextRunsForMaintenance(state);
+
+    expect(job.state.runningAtMs).toBeUndefined();
+    expect(job.state.nextRunAtMs).toBe(futureTime);
+  });
+
   it("isolates schedule errors while filling missing nextRunAtMs", () => {
     const now = Date.now();
     const pastDue = now - 1_000;
