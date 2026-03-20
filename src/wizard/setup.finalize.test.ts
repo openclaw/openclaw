@@ -45,7 +45,7 @@ const hasExistingKey = vi.hoisted(() =>
 const hasKeyInEnv = vi.hoisted(() =>
   vi.fn<(entry: Pick<PluginWebSearchProviderEntry, "envVars">) => boolean>(() => false),
 );
-const listWebSearchProviders = vi.hoisted(() =>
+const listConfiguredWebSearchProviders = vi.hoisted(() =>
   vi.fn<(params?: { config?: OpenClawConfig }) => PluginWebSearchProviderEntry[]>(() => []),
 );
 
@@ -92,7 +92,7 @@ vi.mock("../commands/onboard-search.js", () => ({
 }));
 
 vi.mock("../web-search/runtime.js", () => ({
-  listWebSearchProviders,
+  listConfiguredWebSearchProviders,
 }));
 
 vi.mock("../daemon/service.js", () => ({
@@ -186,8 +186,8 @@ describe("finalizeSetupWizard", () => {
     hasExistingKey.mockReturnValue(false);
     hasKeyInEnv.mockReset();
     hasKeyInEnv.mockReturnValue(false);
-    listWebSearchProviders.mockReset();
-    listWebSearchProviders.mockReturnValue([]);
+    listConfiguredWebSearchProviders.mockReset();
+    listConfiguredWebSearchProviders.mockReturnValue([]);
   });
 
   it("resolves gateway password SecretRef for probe and TUI", async () => {
@@ -413,7 +413,7 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("only reports legacy auto-detect for runtime-visible providers", async () => {
-    listWebSearchProviders.mockReturnValue([
+    listConfiguredWebSearchProviders.mockReturnValue([
       {
         id: "perplexity",
         label: "Perplexity Search",
@@ -457,6 +457,66 @@ describe("finalizeSetupWizard", () => {
 
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Web search is available via Perplexity Search (auto-detected)."),
+      "Web search",
+    );
+  });
+
+  it("uses configured provider resolution instead of the active runtime registry", async () => {
+    listConfiguredWebSearchProviders.mockReturnValue([
+      {
+        id: "firecrawl",
+        label: "Firecrawl Search",
+        hint: "Structured results",
+        envVars: ["FIRECRAWL_API_KEY"],
+        placeholder: "fc-...",
+        signupUrl: "https://www.firecrawl.dev/",
+        credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
+      },
+    ]);
+    hasExistingKey.mockImplementation((_config, provider) => provider === "firecrawl");
+
+    const prompter = buildWizardPrompter({
+      select: vi.fn(async () => "later") as never,
+      confirm: vi.fn(async () => false),
+    });
+
+    await finalizeSetupWizard({
+      flow: "advanced",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: true,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {
+        tools: {
+          web: {
+            search: {
+              provider: "firecrawl",
+              enabled: true,
+            },
+          },
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: undefined,
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Web search is enabled, so your agent can look things up online when needed.",
+      ),
       "Web search",
     );
   });

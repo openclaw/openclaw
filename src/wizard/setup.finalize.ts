@@ -30,7 +30,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { restoreTerminalState } from "../terminal/restore.js";
 import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
-import { listWebSearchProviders } from "../web-search/runtime.js";
+import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
@@ -484,11 +484,11 @@ export async function finalizeSetupWizard(
 
   const webSearchProvider = nextConfig.tools?.web?.search?.provider;
   const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
-  const runtimeSearchProviders = listWebSearchProviders({ config: nextConfig });
+  const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
   if (webSearchProvider) {
     const { resolveExistingKey, hasExistingKey, hasKeyInEnv } =
       await import("../commands/onboard-search.js");
-    const entry = runtimeSearchProviders.find((e) => e.id === webSearchProvider);
+    const entry = configuredSearchProviders.find((e) => e.id === webSearchProvider);
     const label = entry?.label ?? webSearchProvider;
     const storedKey = entry ? resolveExistingKey(nextConfig, webSearchProvider) : undefined;
     const keyConfigured = entry ? hasExistingKey(nextConfig, webSearchProvider) : false;
@@ -550,7 +550,7 @@ export async function finalizeSetupWizard(
     // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
     // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
     const { hasExistingKey, hasKeyInEnv } = await import("../commands/onboard-search.js");
-    const legacyDetected = runtimeSearchProviders.find(
+    const legacyDetected = configuredSearchProviders.find(
       (e) => hasExistingKey(nextConfig, e.id) || hasKeyInEnv(e),
     );
     if (legacyDetected) {
