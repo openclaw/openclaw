@@ -8,10 +8,7 @@ const {
   createAudioPlayerMock,
   resolveAgentRouteMock,
   agentCommandMock,
-  buildProviderRegistryMock,
-  createMediaAttachmentCacheMock,
-  normalizeMediaAttachmentsMock,
-  runCapabilityMock,
+  transcribeAudioFileMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -68,14 +65,7 @@ const {
     })),
     resolveAgentRouteMock: vi.fn(() => ({ agentId: "agent-1", sessionKey: "discord:g1:c1" })),
     agentCommandMock: vi.fn(async (_opts?: unknown, _runtime?: unknown) => ({ payloads: [] })),
-    buildProviderRegistryMock: vi.fn(() => ({})),
-    createMediaAttachmentCacheMock: vi.fn(() => ({
-      cleanup: vi.fn(async () => undefined),
-    })),
-    normalizeMediaAttachmentsMock: vi.fn(() => [{ kind: "audio", path: "/tmp/test.wav" }]),
-    runCapabilityMock: vi.fn(async () => ({
-      outputs: [{ kind: "audio.transcription", text: "hello from voice" }],
-    })),
+    transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
   };
 });
 
@@ -95,19 +85,20 @@ vi.mock("@discordjs/voice", () => ({
   joinVoiceChannel: joinVoiceChannelMock,
 }));
 
-vi.mock("../../../../src/routing/resolve-route.js", () => ({
+vi.mock("openclaw/plugin-sdk/routing", () => ({
   resolveAgentRoute: resolveAgentRouteMock,
 }));
 
-vi.mock("../../../../src/commands/agent.js", () => ({
-  agentCommandFromIngress: agentCommandMock,
-}));
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+  return {
+    ...actual,
+    agentCommandFromIngress: agentCommandMock,
+  };
+});
 
-vi.mock("../../../../src/media-understanding/runner.js", () => ({
-  buildProviderRegistry: buildProviderRegistryMock,
-  createMediaAttachmentCache: createMediaAttachmentCacheMock,
-  normalizeMediaAttachments: normalizeMediaAttachmentsMock,
-  runCapability: runCapabilityMock,
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => ({
+  transcribeAudioFile: transcribeAudioFileMock,
 }));
 
 let managerModule: typeof import("./manager.js");
@@ -149,15 +140,8 @@ describe("DiscordVoiceManager", () => {
     resolveAgentRouteMock.mockClear();
     agentCommandMock.mockReset();
     agentCommandMock.mockResolvedValue({ payloads: [] });
-    buildProviderRegistryMock.mockReset();
-    buildProviderRegistryMock.mockReturnValue({});
-    createMediaAttachmentCacheMock.mockClear();
-    normalizeMediaAttachmentsMock.mockReset();
-    normalizeMediaAttachmentsMock.mockReturnValue([{ kind: "audio", path: "/tmp/test.wav" }]);
-    runCapabilityMock.mockReset();
-    runCapabilityMock.mockResolvedValue({
-      outputs: [{ kind: "audio.transcription", text: "hello from voice" }],
-    });
+    transcribeAudioFileMock.mockReset();
+    transcribeAudioFileMock.mockResolvedValue({ text: "hello from voice" });
   });
 
   const createManager = (

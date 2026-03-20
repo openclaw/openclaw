@@ -12,36 +12,50 @@ const mocks = vi.hoisted(() => ({
   resolveStorePathMock: vi.fn(),
 }));
 
-vi.mock("../../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
-  dispatchReplyWithDispatcher: (...args: unknown[]) => mocks.dispatchMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    dispatchReplyWithDispatcher: (...args: unknown[]) => mocks.dispatchMock(...args),
+    finalizeInboundContext: (...args: unknown[]) => mocks.finalizeInboundContextMock(...args),
+  };
+});
 
-vi.mock("../../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => mocks.readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => mocks.upsertPairingRequestMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    readChannelAllowFromStore: (...args: unknown[]) => mocks.readAllowFromStoreMock(...args),
+    upsertChannelPairingRequest: (...args: unknown[]) => mocks.upsertPairingRequestMock(...args),
+  };
+});
 
-vi.mock("../../../../src/routing/resolve-route.js", () => ({
-  resolveAgentRoute: (...args: unknown[]) => mocks.resolveAgentRouteMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
+  return {
+    ...actual,
+    resolveAgentRoute: (...args: unknown[]) => mocks.resolveAgentRouteMock(...args),
+  };
+});
 
-vi.mock("../../../../src/auto-reply/reply/inbound-context.js", () => ({
-  finalizeInboundContext: (...args: unknown[]) => mocks.finalizeInboundContextMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
+  return {
+    ...actual,
+    resolveConversationLabel: (...args: unknown[]) => mocks.resolveConversationLabelMock(...args),
+    createReplyPrefixOptions: (...args: unknown[]) => mocks.createReplyPrefixOptionsMock(...args),
+    recordInboundSessionMetaSafe: (...args: unknown[]) =>
+      mocks.recordSessionMetaFromInboundMock(...args),
+  };
+});
 
-vi.mock("../../../../src/channels/conversation-label.js", () => ({
-  resolveConversationLabel: (...args: unknown[]) => mocks.resolveConversationLabelMock(...args),
-}));
-
-vi.mock("../../../../src/channels/reply-prefix.js", () => ({
-  createReplyPrefixOptions: (...args: unknown[]) => mocks.createReplyPrefixOptionsMock(...args),
-}));
-
-vi.mock("../../../../src/config/sessions.js", () => ({
-  recordSessionMetaFromInbound: (...args: unknown[]) =>
-    mocks.recordSessionMetaFromInboundMock(...args),
-  resolveStorePath: (...args: unknown[]) => mocks.resolveStorePathMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  return {
+    ...actual,
+    resolveStorePath: (...args: unknown[]) => mocks.resolveStorePathMock(...args),
+  };
+});
 
 type SlashHarnessMocks = {
   dispatchMock: ReturnType<typeof vi.fn>;

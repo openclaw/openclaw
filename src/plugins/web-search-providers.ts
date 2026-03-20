@@ -1,60 +1,36 @@
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { listBundledWebSearchProviders as listBundledWebSearchProviderEntries } from "./bundled-web-search.js";
+import { resolveEffectiveEnableState } from "./config-state.js";
+import type { PluginLoadOptions } from "./loader.js";
+import type { PluginWebSearchProviderEntry } from "./types.js";
 import {
-  withBundledPluginAllowlistCompat,
-  withBundledPluginEnablementCompat,
-} from "./bundled-compat.js";
-import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
-import { createPluginLoaderLogger } from "./logger.js";
-import type { WebSearchProviderPlugin } from "./types.js";
+  resolveBundledWebSearchResolutionConfig,
+  sortWebSearchProviders,
+} from "./web-search-providers.shared.js";
 
-const log = createSubsystemLogger("plugins");
+function listBundledWebSearchProviders(): PluginWebSearchProviderEntry[] {
+  return sortWebSearchProviders(listBundledWebSearchProviderEntries());
+}
 
-const BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS = [
-  "brave",
-  "firecrawl",
-  "google",
-  "moonshot",
-  "perplexity",
-  "xai",
-] as const;
-
-export function resolvePluginWebSearchProviders(params: {
+export function resolveBundledPluginWebSearchProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   bundledAllowlistCompat?: boolean;
-}): WebSearchProviderPlugin[] {
-  const allowlistCompat = params.bundledAllowlistCompat
-    ? withBundledPluginAllowlistCompat({
-        config: params.config,
-        pluginIds: BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS,
-      })
-    : params.config;
-  const config = withBundledPluginEnablementCompat({
-    config: allowlistCompat,
-    pluginIds: BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS,
-  });
-  const registry = loadOpenClawPlugins({
-    config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    logger: createPluginLoaderLogger(log),
-    activate: false,
-    cache: false,
-    onlyPluginIds: [...BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS],
-  });
+  onlyPluginIds?: readonly string[];
+}): PluginWebSearchProviderEntry[] {
+  const { config, normalized } = resolveBundledWebSearchResolutionConfig(params);
+  const onlyPluginIdSet =
+    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
 
-  return registry.webSearchProviders
-    .map((entry) => ({
-      ...entry.provider,
-      pluginId: entry.pluginId,
-    }))
-    .toSorted((a, b) => {
-      const aOrder = a.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-      const bOrder = b.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-      if (aOrder !== bOrder) {
-        return aOrder - bOrder;
-      }
-      return a.id.localeCompare(b.id);
-    });
+  return listBundledWebSearchProviders().filter((provider) => {
+    if (onlyPluginIdSet && !onlyPluginIdSet.has(provider.pluginId)) {
+      return false;
+    }
+    return resolveEffectiveEnableState({
+      id: provider.pluginId,
+      origin: "bundled",
+      config: normalized,
+      rootConfig: config,
+    }).enabled;
+  });
 }

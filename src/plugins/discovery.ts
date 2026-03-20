@@ -16,6 +16,14 @@ import type { PluginBundleFormat, PluginDiagnostic, PluginFormat, PluginOrigin }
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 
+const CANONICAL_PACKAGE_ID_ALIASES: Record<string, string> = {
+  "elevenlabs-speech": "elevenlabs",
+  "microsoft-speech": "microsoft",
+  "ollama-provider": "ollama",
+  "sglang-provider": "sglang",
+  "vllm-provider": "vllm",
+};
+
 export type PluginCandidate = {
   idHint: string;
   source: string;
@@ -337,17 +345,16 @@ function deriveIdHint(params: {
   const unscoped = rawPackageName.includes("/")
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
-  const canonicalPackageId =
-    {
-      "ollama-provider": "ollama",
-      "sglang-provider": "sglang",
-      "vllm-provider": "vllm",
-    }[unscoped] ?? unscoped;
+  const canonicalPackageId = CANONICAL_PACKAGE_ID_ALIASES[unscoped] ?? unscoped;
+  const normalizedPackageId =
+    canonicalPackageId.endsWith("-provider") && canonicalPackageId.length > "-provider".length
+      ? canonicalPackageId.slice(0, -"-provider".length)
+      : canonicalPackageId;
 
   if (!params.hasMultipleExtensions) {
-    return canonicalPackageId;
+    return normalizedPackageId;
   }
-  return `${canonicalPackageId}/${base}`;
+  return `${normalizedPackageId}/${base}`;
 }
 
 function addCandidate(params: {

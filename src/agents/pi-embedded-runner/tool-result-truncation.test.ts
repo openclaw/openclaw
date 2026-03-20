@@ -44,6 +44,14 @@ function makeAssistantMessage(text: string): AssistantMessage {
   });
 }
 
+function getFirstToolResultText(message: AgentMessage | ToolResultMessage): string {
+  if (message.role !== "toolResult") {
+    return "";
+  }
+  const firstBlock = message.content[0];
+  return firstBlock && "text" in firstBlock ? firstBlock.text : "";
+}
+
 describe("truncateToolResultText", () => {
   it("returns text unchanged when under limit", () => {
     const text = "hello world";
@@ -134,12 +142,7 @@ describe("truncateToolResultMessage", () => {
     if (result.role !== "toolResult") {
       throw new Error("expected toolResult");
     }
-
-    const firstBlock = result.content[0];
-    expect(firstBlock?.type).toBe("text");
-    expect(firstBlock && "text" in firstBlock ? firstBlock.text : "").toContain(
-      "[persist-truncated]",
-    );
+    expect(getFirstToolResultText(result)).toContain("[persist-truncated]");
   });
 });
 
@@ -209,10 +212,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(truncatedCount).toBe(1);
     const toolResult = result[2];
     expect(toolResult?.role).toBe("toolResult");
-    const firstBlock =
-      toolResult && toolResult.role === "toolResult" ? toolResult.content[0] : undefined;
-    expect(firstBlock?.type).toBe("text");
-    const text = firstBlock && "text" in firstBlock ? firstBlock.text : "";
+    const text = toolResult ? getFirstToolResultText(toolResult) : "";
     expect(text.length).toBeLessThan(bigContent.length);
     expect(text).toContain("truncated");
   });
@@ -242,8 +242,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(truncatedCount).toBe(2);
     for (const msg of result.slice(2)) {
       expect(msg.role).toBe("toolResult");
-      const firstBlock = msg.role === "toolResult" ? msg.content[0] : undefined;
-      const text = firstBlock && "text" in firstBlock ? firstBlock.text : "";
+      const text = getFirstToolResultText(msg);
       expect(text.length).toBeLessThan(500_000);
     }
   });

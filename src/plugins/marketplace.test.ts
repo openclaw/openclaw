@@ -45,21 +45,22 @@ describe("marketplace plugins", () => {
 
       const { listMarketplacePlugins } = await import("./marketplace.js");
       const result = await listMarketplacePlugins({ marketplace: rootDir });
-      expect(result).toEqual({
-        ok: true,
-        sourceLabel: expect.stringContaining(".claude-plugin/marketplace.json"),
-        manifest: {
-          name: "Example Marketplace",
-          version: "1.0.0",
-          plugins: [
-            {
-              name: "frontend-design",
-              version: "0.1.0",
-              description: "Design system bundle",
-              source: { kind: "path", path: "./plugins/frontend-design" },
-            },
-          ],
-        },
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error("expected marketplace listing to succeed");
+      }
+      expect(result.sourceLabel.replaceAll("\\", "/")).toContain(".claude-plugin/marketplace.json");
+      expect(result.manifest).toEqual({
+        name: "Example Marketplace",
+        version: "1.0.0",
+        plugins: [
+          {
+            name: "frontend-design",
+            version: "0.1.0",
+            description: "Design system bundle",
+            source: { kind: "path", path: "./plugins/frontend-design" },
+          },
+        ],
       });
     });
   });
@@ -110,7 +111,9 @@ describe("marketplace plugins", () => {
 
   it("resolves Claude-style plugin@marketplace shortcuts from known_marketplaces.json", async () => {
     await withTempDir(async (homeDir) => {
+      const openClawHome = path.join(homeDir, "openclaw-home");
       await fs.mkdir(path.join(homeDir, ".claude", "plugins"), { recursive: true });
+      await fs.mkdir(openClawHome, { recursive: true });
       await fs.writeFile(
         path.join(homeDir, ".claude", "plugins", "known_marketplaces.json"),
         JSON.stringify({
@@ -126,7 +129,7 @@ describe("marketplace plugins", () => {
 
       const { resolveMarketplaceInstallShortcut } = await import("./marketplace.js");
       const shortcut = await withEnvAsync(
-        { HOME: homeDir },
+        { HOME: homeDir, OPENCLAW_HOME: openClawHome },
         async () => await resolveMarketplaceInstallShortcut("superpowers@claude-plugins-official"),
       );
 
