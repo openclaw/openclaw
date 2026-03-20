@@ -3,7 +3,9 @@ import path from "path";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { ChannelOutboundAdapter } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
+import { relayOutboundToOtherBots } from "./cross-bot-relay.js";
 import { sendMediaFeishu } from "./media.js";
+import { botOpenIds, botNames } from "./monitor.state.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
 
@@ -137,13 +139,31 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           header: header?.title ? header : undefined,
         });
       }
-      return await sendOutboundText({
+      const result = await sendOutboundText({
         cfg,
         to,
         text,
         accountId: accountId ?? undefined,
         replyToMessageId,
       });
+
+      // Cross-bot relay: notify other bots in the same group
+      const feishuCfg = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined }).config;
+      if (feishuCfg?.crossBotRelay && to.startsWith("oc_") && text?.trim()) {
+        const effectiveAccountId = accountId ?? undefined;
+        void relayOutboundToOtherBots({
+          senderAccountId: effectiveAccountId ?? "default",
+          chatId: to,
+          text,
+          messageId: result.messageId,
+          senderBotOpenId: botOpenIds.get(effectiveAccountId ?? "default"),
+          senderBotName: botNames.get(effectiveAccountId ?? "default"),
+        }).catch((err) => {
+          console.error(`[feishu] cross-bot relay failed:`, err);
+        });
+      }
+
+      return result;
     },
     sendMedia: async ({
       cfg,

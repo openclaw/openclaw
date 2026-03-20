@@ -14,9 +14,11 @@ import {
 } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { relayOutboundToOtherBots } from "./cross-bot-relay.js";
 import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
+import { botOpenIds, botNames } from "./monitor.state.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
@@ -311,7 +313,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     text: string;
     useCard: boolean;
     infoKind?: string;
-    sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<void>;
+    sendChunk: (params: {
+      chunk: string;
+      isFirst: boolean;
+    }) => Promise<{ messageId?: string } | void>;
   }) => {
     const chunkSource = params.useCard
       ? params.text
@@ -320,14 +325,32 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       chunkSource,
       core.channel.text.chunkTextWithMode(chunkSource, textChunkLimit, chunkMode),
     );
+    let lastMessageId: string | undefined;
     for (const [index, chunk] of chunks.entries()) {
-      await params.sendChunk({
+      const result = await params.sendChunk({
         chunk,
         isFirst: index === 0,
       });
+      if (result?.messageId) lastMessageId = result.messageId;
     }
     if (params.infoKind === "final") {
       deliveredFinalTexts.add(params.text);
+      // Cross-bot relay: trigger after final reply
+      const feishuCfg = resolveFeishuAccount({ cfg, accountId }).config;
+      if (feishuCfg?.crossBotRelay && chatId?.startsWith("oc_") && params.text?.trim()) {
+        try {
+          await relayOutboundToOtherBots({
+            senderAccountId: accountId ?? "default",
+            chatId,
+            text: params.text,
+            messageId: lastMessageId,
+            senderBotOpenId: botOpenIds.get(accountId ?? "default"),
+            senderBotName: botNames.get(accountId ?? "default"),
+          });
+        } catch (err) {
+          console.error(`[feishu] cross-bot relay (reply-dispatcher) failed:`, err);
+        }
+      }
     }
   };
 
@@ -405,6 +428,23 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               streamText = mergeStreamingText(streamText, text);
               await closeStreaming();
               deliveredFinalTexts.add(text);
+              // Cross-bot relay: trigger after streaming final
+              const feishuCfg = resolveFeishuAccount({ cfg, accountId }).config;
+              if (feishuCfg?.crossBotRelay && chatId?.startsWith("oc_") && text?.trim()) {
+                try {
+                  const streamingMsgId = (streaming as any)?.state?.messageId;
+                  await relayOutboundToOtherBots({
+                    senderAccountId: accountId ?? "default",
+                    chatId,
+                    text,
+                    messageId: streamingMsgId,
+                    senderBotOpenId: botOpenIds.get(accountId ?? "default"),
+                    senderBotName: botNames.get(accountId ?? "default"),
+                  });
+                } catch (err) {
+                  console.error(`[feishu] cross-bot relay (streaming final) failed:`, err);
+                }
+              }
             }
             // Send media even when streaming handled the text
             if (hasMedia) {
