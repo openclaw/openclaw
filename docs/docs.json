@@ -948,6 +948,7 @@
                   "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
+                  "plugins/voice-call",
                   "channels/whatsapp",
                   "channels/zalo",
                   "channels/zalouser"
@@ -1073,15 +1074,13 @@
                 ]
               },
               {
-                "group": "Extensions",
+                "group": "Plugins",
                 "pages": [
                   "plugins/building-extensions",
                   "plugins/sdk-migration",
                   "plugins/architecture",
                   "plugins/community",
                   "plugins/bundles",
-                  "plugins/voice-call",
-                  "plugins/zalouser",
                   "plugins/manifest",
                   "plugins/agent-tools",
                   "tools/capability-cookbook"
