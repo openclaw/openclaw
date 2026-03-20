@@ -698,8 +698,8 @@ export class GatewayClient {
     const rawConnectDelayMs = this.opts.connectDelayMs;
     const connectChallengeTimeoutMs =
       typeof rawConnectDelayMs === "number" && Number.isFinite(rawConnectDelayMs)
-        ? Math.max(250, Math.min(10_000, rawConnectDelayMs))
-        : 2_000;
+        ? Math.max(250, Math.min(30_000, rawConnectDelayMs))
+        : 15_000;
     if (this.connectTimer) {
       clearTimeout(this.connectTimer);
     }
