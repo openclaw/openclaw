@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
+import { shouldBuildBundledCluster } from "./scripts/lib/optional-bundled-clusters.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
@@ -24,6 +25,12 @@ const env = {
   NODE_ENV: "production",
 };
 
+const SUPPRESSED_EVAL_WARNING_PATHS = [
+  "@protobufjs/inquire/index.js",
+  "bottleneck/lib/IORedisConnection.js",
+  "bottleneck/lib/RedisConnection.js",
+] as const;
+
 function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
@@ -44,7 +51,7 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
       return false;
     }
     const haystack = [log.message, log.id, log.importer].filter(Boolean).join("\n");
-    return haystack.includes("@protobufjs/inquire/index.js");
+    return SUPPRESSED_EVAL_WARNING_PATHS.some((path) => haystack.includes(path));
   }
 
   return {
@@ -79,6 +86,9 @@ function listBundledPluginBuildEntries(): Record<string, string> {
 
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory()) {
+      continue;
+    }
+    if (!shouldBuildBundledCluster(dirent.name, process.env)) {
       continue;
     }
 

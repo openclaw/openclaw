@@ -35,6 +35,10 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { sendMessageIMessage } from "./src/send.js";',
   ],
   "extensions/googlechat/runtime-api.ts": ['export * from "openclaw/plugin-sdk/googlechat";'],
+  "extensions/matrix/runtime-api.ts": [
+    'export * from "./src/auth-precedence.js";',
+    'export * from "./helper-api.js";',
+  ],
   "extensions/nextcloud-talk/runtime-api.ts": [
     'export * from "openclaw/plugin-sdk/nextcloud-talk";',
   ],
@@ -70,6 +74,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export * from "./src/auto-reply.js";',
     'export * from "./src/inbound.js";',
     'export * from "./src/login.js";',
+    'export * from "./src/login-qr.js";',
     'export * from "./src/media.js";',
     'export * from "./src/send.js";',
     'export * from "./src/session.js";',

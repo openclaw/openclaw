@@ -13,6 +13,7 @@ import type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
+  PluginCommandContext,
   PluginInteractiveTelegramHandlerContext,
 } from "../plugins/types.js";
 
@@ -52,6 +53,7 @@ export type {
   ProviderAuthResult,
   OpenClawPluginCommandDefinition,
   OpenClawPluginDefinition,
+  PluginCommandContext,
   PluginLogger,
   PluginInteractiveTelegramHandlerContext,
 } from "../plugins/types.js";
@@ -89,7 +91,6 @@ export {
   parseOptionalDelimitedEntries,
 } from "../channels/plugins/helpers.js";
 export { getChatChannelMeta } from "../channels/registry.js";
-export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
   channelTargetSchema,
   channelTargetsSchema,
