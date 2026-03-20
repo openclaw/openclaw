@@ -352,12 +352,40 @@ const unitFastExcludedFiles = [
 const unitAutoSingletonFiles = [
   ...new Set([...unitSingletonIsolatedFiles, ...memoryHeavyUnitFiles]),
 ];
-const unitFastExtraExcludeFile =
-  unitFastExcludedFiles.length > 0
-    ? writeTempJsonArtifact("vitest-unit-fast-excludes", unitFastExcludedFiles)
-    : null;
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
+const unitFastExcludedFileSet = new Set(unitFastExcludedFiles);
+const unitFastCandidateFiles = allKnownUnitFiles.filter(
+  (file) => !unitFastExcludedFileSet.has(file),
+);
+const defaultUnitFastLaneCount = isCI && !isWindows ? 2 : 1;
+const unitFastLaneCount = Math.max(
+  1,
+  parseEnvNumber("OPENCLAW_TEST_UNIT_FAST_LANES", defaultUnitFastLaneCount),
+);
+const unitFastBuckets =
+  unitFastLaneCount > 1
+    ? packFilesByDuration(unitFastCandidateFiles, unitFastLaneCount, estimateUnitDurationMs)
+    : [unitFastCandidateFiles];
+const unitFastEntries = unitFastBuckets
+  .filter((files) => files.length > 0)
+  .map((files, index) => ({
+    name: unitFastBuckets.length === 1 ? "unit-fast" : `unit-fast-${String(index + 1)}`,
+    env: {
+      OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+        `vitest-unit-fast-include-${String(index + 1)}`,
+        files,
+      ),
+    },
+    args: [
+      "vitest",
+      "run",
+      "--config",
+      "vitest.unit.config.ts",
+      `--pool=${useVmForks ? "vmForks" : "forks"}`,
+      ...(disableIsolation ? ["--isolate=false"] : []),
+    ],
+  }));
 const heavyUnitBuckets = packFilesByDuration(
   timedHeavyUnitFiles,
   heavyUnitLaneCount,
@@ -370,23 +398,7 @@ const unitHeavyEntries = heavyUnitBuckets.map((files, index) => ({
 const baseRuns = [
   ...(shouldSplitUnitRuns
     ? [
-        {
-          name: "unit-fast",
-          env:
-            unitFastExtraExcludeFile === null
-              ? undefined
-              : {
-                  OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE: unitFastExtraExcludeFile,
-                },
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.unit.config.ts",
-            `--pool=${useVmForks ? "vmForks" : "forks"}`,
-            ...(disableIsolation ? ["--isolate=false"] : []),
-          ],
-        },
+        ...unitFastEntries,
         ...(unitBehaviorIsolatedFiles.length > 0
           ? [
               {
@@ -1223,14 +1235,17 @@ if (passthroughRequiresSingleRun && passthroughOptionArgs.length > 0) {
 }
 
 if (isMacMiniProfile && targetedEntries.length === 0) {
-  const unitFastEntry = parallelRuns.find((entry) => entry.name === "unit-fast");
-  if (unitFastEntry) {
-    const unitFastCode = await run(unitFastEntry, passthroughOptionArgs);
+  const unitFastEntriesForMacMini = parallelRuns.filter((entry) =>
+    entry.name.startsWith("unit-fast"),
+  );
+  for (const entry of unitFastEntriesForMacMini) {
+    // eslint-disable-next-line no-await-in-loop
+    const unitFastCode = await run(entry, passthroughOptionArgs);
     if (unitFastCode !== 0) {
       process.exit(unitFastCode);
     }
   }
-  const deferredEntries = parallelRuns.filter((entry) => entry.name !== "unit-fast");
+  const deferredEntries = parallelRuns.filter((entry) => !entry.name.startsWith("unit-fast"));
   const failedMacMiniParallel = await runEntriesWithLimit(
     deferredEntries,
     passthroughOptionArgs,
