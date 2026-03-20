@@ -525,6 +525,10 @@
       "types": "./dist/plugin-sdk/tool-send.d.ts",
       "default": "./dist/plugin-sdk/tool-send.js"
     },
+    "./plugin-sdk/backup": {
+      "types": "./dist/plugin-sdk/backup.d.ts",
+      "default": "./dist/plugin-sdk/backup.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
