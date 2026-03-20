@@ -526,6 +526,30 @@
       {
         "file": "src/memory/embeddings-ollama.test.ts",
         "reason": "Ollama embeddings coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/wizard/setup.gateway-config.test.ts",
+        "reason": "Gateway setup wizard coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/plugins/status.test.ts",
+        "reason": "Plugin status coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/tui/tui-session-actions.test.ts",
+        "reason": "TUI session actions coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/infra/state-migrations.test.ts",
+        "reason": "State migrations coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/infra/outbound/message.test.ts",
+        "reason": "Outbound message coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/cli/daemon-cli/install.integration.test.ts",
+        "reason": "Daemon install integration coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
       }
     ],
     "threadSingleton": [
