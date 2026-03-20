@@ -1,9 +1,6 @@
 import { sanitizeExecApprovalDisplayText } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
-import {
-  DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
-  type ExecApprovalDecision,
-} from "../../infra/exec-approvals.js";
+import { getExecApprovalTimeoutMs, type ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import {
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
@@ -21,7 +18,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
-  opts?: { forwarder?: ExecApprovalForwarder },
+  opts?: { forwarder?: ExecApprovalForwarder; config?: { approvals?: { timeoutMs?: number } } },
 ): GatewayRequestHandlers {
   return {
     "exec.approval.request": async ({ params, respond, context, client }) => {
@@ -61,7 +58,7 @@ export function createExecApprovalHandlers(
       };
       const twoPhase = p.twoPhase === true;
       const timeoutMs =
-        typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
+        typeof p.timeoutMs === "number" ? p.timeoutMs : getExecApprovalTimeoutMs(opts?.config);
       const explicitId = typeof p.id === "string" && p.id.trim().length > 0 ? p.id.trim() : null;
       const host = typeof p.host === "string" ? p.host.trim() : "";
       const nodeId = typeof p.nodeId === "string" ? p.nodeId.trim() : "";

@@ -693,7 +693,16 @@ export function createNodesTool(options?: {
 
             // Node requires approval – create a pending approval request on
             // the gateway and wait for the user to approve/deny via the UI.
-            const APPROVAL_TIMEOUT_MS = 120_000;
+            const APPROVAL_TIMEOUT_MS = (() => {
+              const envVal = process.env.OPENCLAW_EXEC_APPROVAL_TIMEOUT_MS;
+              if (envVal) {
+                const parsed = Number(envVal);
+                if (Number.isFinite(parsed) && parsed > 0) {
+                  return parsed;
+                }
+              }
+              return 120_000;
+            })();
             const approvalId = crypto.randomUUID();
             const approvalResult = await callGatewayTool(
               "exec.approval.request",

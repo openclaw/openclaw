@@ -146,6 +146,24 @@ export type ExecApprovalsResolved = {
 // Keep CLI + gateway defaults in sync.
 export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 120_000;
 
+/**
+ * Resolve the exec approval timeout from env var > config > default.
+ * Priority: OPENCLAW_EXEC_APPROVAL_TIMEOUT_MS env var > approvals.timeoutMs config > 120s default.
+ */
+export function getExecApprovalTimeoutMs(config?: { approvals?: { timeoutMs?: number } }): number {
+  const envVal = process.env.OPENCLAW_EXEC_APPROVAL_TIMEOUT_MS;
+  if (envVal) {
+    const parsed = Number(envVal);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  if (typeof config?.approvals?.timeoutMs === "number" && config.approvals.timeoutMs > 0) {
+    return config.approvals.timeoutMs;
+  }
+  return DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
+}
+
 const DEFAULT_SECURITY: ExecSecurity = "deny";
 const DEFAULT_ASK: ExecAsk = "on-miss";
 const DEFAULT_ASK_FALLBACK: ExecSecurity = "deny";

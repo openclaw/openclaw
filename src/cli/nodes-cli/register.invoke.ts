@@ -3,7 +3,7 @@ import { resolveAgentConfig, resolveDefaultAgentId } from "../../agents/agent-sc
 import { loadConfig } from "../../config/config.js";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import {
-  DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  getExecApprovalTimeoutMs,
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
@@ -203,7 +203,7 @@ async function maybeRequestNodesRunApproval(params: {
   }
 
   approvalId = crypto.randomUUID();
-  const approvalTimeoutMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
+  const approvalTimeoutMs = getExecApprovalTimeoutMs();
   // Keep client transport alive while the approver decides.
   const transportTimeoutMs = Math.max(
     parseTimeoutMs(params.opts.timeout) ?? 0,

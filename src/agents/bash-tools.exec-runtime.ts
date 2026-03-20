@@ -90,8 +90,18 @@ export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 export const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
-export const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
-export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = 130_000;
+function resolveApprovalTimeoutMs(): number {
+  const envVal = process.env.OPENCLAW_EXEC_APPROVAL_TIMEOUT_MS;
+  if (envVal) {
+    const parsed = Number(envVal);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return 120_000;
+}
+export const DEFAULT_APPROVAL_TIMEOUT_MS = resolveApprovalTimeoutMs();
+export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS + 10_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 

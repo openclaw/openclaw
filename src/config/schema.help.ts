@@ -628,6 +628,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Debounce window in milliseconds for coalescing rapid skill file changes before reload logic runs. Increase to reduce reload churn on frequent writes, or lower for faster edit feedback.",
   approvals:
     "Approval routing controls for forwarding exec approval requests to chat destinations outside the originating session. Keep this disabled unless operators need explicit out-of-band approval visibility.",
+  "approvals.timeoutMs":
+    "Timeout in milliseconds for exec approval requests before they expire (default: 120000 = 2 minutes). Increase this if approvals are frequently missed. Can also be set via OPENCLAW_EXEC_APPROVAL_TIMEOUT_MS environment variable (env var takes priority).",
   "approvals.exec":
     "Groups exec-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Configure here when approval prompts must reach operational channels instead of only the origin thread.",
   "approvals.exec.enabled":

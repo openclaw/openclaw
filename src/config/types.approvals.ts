@@ -25,5 +25,7 @@ export type ExecApprovalForwardingConfig = {
 };
 
 export type ApprovalsConfig = {
+  /** Timeout in milliseconds for exec approval requests. Can also be set via OPENCLAW_EXEC_APPROVAL_TIMEOUT_MS env var. Default: 120000 (2 minutes). */
+  timeoutMs?: number;
   exec?: ExecApprovalForwardingConfig;
 };
