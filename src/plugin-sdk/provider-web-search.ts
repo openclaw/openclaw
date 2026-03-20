@@ -9,6 +9,7 @@ export { readNumberParam, readStringArrayParam, readStringParam } from "../agent
 export { resolveCitationRedirectUrl } from "../agents/tools/web-search-citation-redirect.js";
 export {
   buildSearchCacheKey,
+  buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
   FRESHNESS_TO_RECENCY,
   isoToPerplexityDate,
@@ -29,6 +30,7 @@ export {
 export {
   getScopedCredentialValue,
   getTopLevelCredentialValue,
+  mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
   setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,

@@ -170,13 +170,6 @@ function createTextEvent(messageId: string) {
   };
 }
 
-async function settleAsyncWork(): Promise<void> {
-  for (let i = 0; i < 6; i += 1) {
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-}
-
 async function setupLifecycleMonitor() {
   const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
     handlers = registered;
@@ -206,6 +199,7 @@ async function setupLifecycleMonitor() {
 
 describe("Feishu reply-once lifecycle", () => {
   beforeEach(async () => {
+    vi.useRealTimers();
     vi.resetModules();
     vi.doUnmock("./bot.js");
     vi.doUnmock("./card-action.js");
@@ -213,7 +207,6 @@ describe("Feishu reply-once lifecycle", () => {
     vi.doUnmock("./runtime.js");
     ({ monitorSingleAccount } = await import("./monitor.account.js"));
     ({ setFeishuRuntime } = await import("./runtime.js"));
-
     vi.clearAllMocks();
     handlers = {};
     lastRuntime = null;
@@ -316,6 +309,7 @@ describe("Feishu reply-once lifecycle", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.resetModules();
     vi.doUnmock("./bot.js");
     vi.doUnmock("./card-action.js");
@@ -333,9 +327,14 @@ describe("Feishu reply-once lifecycle", () => {
     const event = createTextEvent("om_lifecycle_once");
 
     await onMessage(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    });
     await onMessage(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+      expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
+    });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
@@ -375,9 +374,15 @@ describe("Feishu reply-once lifecycle", () => {
     });
 
     await onMessage(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+      expect(lastRuntime?.error).toHaveBeenCalledTimes(1);
+    });
     await onMessage(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+      expect(lastRuntime?.error).toHaveBeenCalledTimes(1);
+    });
 
     expect(lastRuntime?.error).toHaveBeenCalledTimes(1);
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);

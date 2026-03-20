@@ -169,13 +169,6 @@ function createTopicEvent(messageId: string) {
   };
 }
 
-async function settleAsyncWork(): Promise<void> {
-  for (let i = 0; i < 6; i += 1) {
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-}
-
 async function setupLifecycleMonitor() {
   const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
     handlers = registered;
@@ -205,6 +198,7 @@ async function setupLifecycleMonitor() {
 
 describe("Feishu ACP-init failure lifecycle", () => {
   beforeEach(async () => {
+    vi.useRealTimers();
     vi.resetModules();
     vi.doUnmock("./bot.js");
     vi.doUnmock("./card-action.js");
@@ -212,7 +206,6 @@ describe("Feishu ACP-init failure lifecycle", () => {
     vi.doUnmock("./runtime.js");
     ({ monitorSingleAccount } = await import("./monitor.account.js"));
     ({ setFeishuRuntime } = await import("./runtime.js"));
-
     vi.clearAllMocks();
     handlers = {};
     lastRuntime = null;
@@ -346,6 +339,7 @@ describe("Feishu ACP-init failure lifecycle", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.resetModules();
     vi.doUnmock("./bot.js");
     vi.doUnmock("./card-action.js");
@@ -363,9 +357,13 @@ describe("Feishu ACP-init failure lifecycle", () => {
     const event = createTopicEvent("om_topic_msg_1");
 
     await onMessage(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    });
     await onMessage(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
     expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
@@ -388,9 +386,13 @@ describe("Feishu ACP-init failure lifecycle", () => {
     const event = createTopicEvent("om_topic_msg_2");
 
     await onMessage(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    });
     await onMessage(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    });
 
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
     expect(lastRuntime?.error).not.toHaveBeenCalled();

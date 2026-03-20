@@ -15,10 +15,11 @@ import {
   resolveTestRunExitCode,
 } from "./test-parallel-utils.mjs";
 import {
+  loadUnitMemoryHotspotManifest,
   loadTestRunnerBehavior,
   loadUnitTimingManifest,
+  selectUnitHeavyFileGroups,
   packFilesByDuration,
-  selectTimedHeavyFiles,
 } from "./test-runner-manifest.mjs";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
@@ -27,6 +28,25 @@ const pnpm = "pnpm";
 const behaviorManifest = loadTestRunnerBehavior();
 const existingFiles = (entries) =>
   entries.map((entry) => entry.file).filter((file) => fs.existsSync(file));
+let tempArtifactDir = null;
+const ensureTempArtifactDir = () => {
+  if (tempArtifactDir === null) {
+    tempArtifactDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-parallel-"));
+  }
+  return tempArtifactDir;
+};
+const writeTempJsonArtifact = (name, value) => {
+  const filePath = path.join(ensureTempArtifactDir(), `${name}.json`);
+  fs.writeFileSync(filePath, `${JSON.stringify(value)}\n`, "utf8");
+  return filePath;
+};
+const cleanupTempArtifacts = () => {
+  if (tempArtifactDir === null) {
+    return;
+  }
+  fs.rmSync(tempArtifactDir, { recursive: true, force: true });
+  tempArtifactDir = null;
+};
 const existingUnitConfigFiles = (entries) => existingFiles(entries).filter(isUnitConfigTestFile);
 const unitBehaviorIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.isolated);
 const unitSingletonIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.singletonIsolated);
@@ -262,6 +282,7 @@ const inferTarget = (fileFilter) => {
   return { owner: "base", isolated };
 };
 const unitTimingManifest = loadUnitTimingManifest();
+const unitMemoryHotspotManifest = loadUnitMemoryHotspotManifest();
 const parseEnvNumber = (name, fallback) => {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
@@ -300,24 +321,81 @@ const heavyUnitLaneCount = parseEnvNumber(
   defaultHeavyUnitLaneCount,
 );
 const heavyUnitMinDurationMs = parseEnvNumber("OPENCLAW_TEST_HEAVY_UNIT_MIN_MS", 1200);
-const timedHeavyUnitFiles =
-  shouldSplitUnitRuns && heavyUnitFileLimit > 0
-    ? selectTimedHeavyFiles({
+const defaultMemoryHeavyUnitFileLimit =
+  testProfile === "serial" ? 0 : isCI ? 64 : testProfile === "low" ? 8 : 16;
+const memoryHeavyUnitFileLimit = parseEnvNumber(
+  "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_FILE_LIMIT",
+  defaultMemoryHeavyUnitFileLimit,
+);
+const memoryHeavyUnitMinDeltaKb = parseEnvNumber(
+  "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_MIN_KB",
+  unitMemoryHotspotManifest.defaultMinDeltaKb,
+);
+const { memoryHeavyFiles: memoryHeavyUnitFiles, timedHeavyFiles: timedHeavyUnitFiles } =
+  shouldSplitUnitRuns
+    ? selectUnitHeavyFileGroups({
         candidates: allKnownUnitFiles,
-        limit: heavyUnitFileLimit,
-        minDurationMs: heavyUnitMinDurationMs,
-        exclude: unitBehaviorOverrideSet,
+        behaviorOverrides: unitBehaviorOverrideSet,
+        timedLimit: heavyUnitFileLimit,
+        timedMinDurationMs: heavyUnitMinDurationMs,
+        memoryLimit: memoryHeavyUnitFileLimit,
+        memoryMinDeltaKb: memoryHeavyUnitMinDeltaKb,
         timings: unitTimingManifest,
+        hotspots: unitMemoryHotspotManifest,
       })
-    : [];
+    : {
+        memoryHeavyFiles: [],
+        timedHeavyFiles: [],
+      };
+const unitSchedulingOverrideSet = new Set([...unitBehaviorOverrideSet, ...memoryHeavyUnitFiles]);
 const unitFastExcludedFiles = [
-  ...new Set([...unitBehaviorOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
+  ...new Set([...unitSchedulingOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
+];
+const unitAutoSingletonFiles = [
+  ...new Set([...unitSingletonIsolatedFiles, ...memoryHeavyUnitFiles]),
 ];
 // Sharded Linux CI still sees the broadest heap retention in the shared unit-fast lane. Prefer
 // process forks there so the workers release memory more aggressively between files.
 const unitFastPool = useVmForks && !shardedLinuxCi ? "vmForks" : "forks";
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
+const unitFastExcludedFileSet = new Set(unitFastExcludedFiles);
+const unitFastCandidateFiles = allKnownUnitFiles.filter(
+  (file) => !unitFastExcludedFileSet.has(file),
+);
+const defaultUnitFastLaneCount = isCI && !isWindows ? 3 : 1;
+const unitFastLaneCount = Math.max(
+  1,
+  parseEnvNumber("OPENCLAW_TEST_UNIT_FAST_LANES", defaultUnitFastLaneCount),
+);
+// Heap snapshots on current main show long-lived unit-fast workers retaining
+// transformed Vitest/Vite module graphs rather than app objects. Multiple
+// bounded unit-fast lanes only help if we also recycle them serially instead
+// of keeping several transform-heavy workers resident at the same time.
+const unitFastBuckets =
+  unitFastLaneCount > 1
+    ? packFilesByDuration(unitFastCandidateFiles, unitFastLaneCount, estimateUnitDurationMs)
+    : [unitFastCandidateFiles];
+const unitFastEntries = unitFastBuckets
+  .filter((files) => files.length > 0)
+  .map((files, index) => ({
+    name: unitFastBuckets.length === 1 ? "unit-fast" : `unit-fast-${String(index + 1)}`,
+    serialPhase: "unit-fast",
+    env: {
+      OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+        `vitest-unit-fast-include-${String(index + 1)}`,
+        files,
+      ),
+    },
+    args: [
+      "vitest",
+      "run",
+      "--config",
+      "vitest.unit.config.ts",
+      `--pool=${unitFastPool}`,
+      ...(disableIsolation ? ["--isolate=false"] : []),
+    ],
+  }));
 const heavyUnitBuckets = packFilesByDuration(
   timedHeavyUnitFiles,
   heavyUnitLaneCount,
@@ -330,18 +408,7 @@ const unitHeavyEntries = heavyUnitBuckets.map((files, index) => ({
 const baseRuns = [
   ...(shouldSplitUnitRuns
     ? [
-        {
-          name: "unit-fast",
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.unit.config.ts",
-            `--pool=${unitFastPool}`,
-            ...(disableIsolation ? ["--isolate=false"] : []),
-            ...unitFastExcludedFiles.flatMap((file) => ["--exclude", file]),
-          ],
-        },
+        ...unitFastEntries,
         ...(unitBehaviorIsolatedFiles.length > 0
           ? [
               {
@@ -358,7 +425,7 @@ const baseRuns = [
             ]
           : []),
         ...unitHeavyEntries,
-        ...unitSingletonIsolatedFiles.map((file) => ({
+        ...unitAutoSingletonFiles.map((file) => ({
           name: `${path.basename(file, ".test.ts")}-isolated`,
           args: [
             "vitest",
@@ -621,6 +688,8 @@ const keepGatewaySerial =
   !parallelGatewayEnabled;
 const parallelRuns = keepGatewaySerial ? runs.filter((entry) => entry.name !== "gateway") : runs;
 const serialRuns = keepGatewaySerial ? runs.filter((entry) => entry.name === "gateway") : [];
+const serialPrefixRuns = parallelRuns.filter((entry) => entry.serialPhase);
+const deferredParallelRuns = parallelRuns.filter((entry) => !entry.serialPhase);
 const baseLocalWorkers = Math.max(4, Math.min(16, hostCpuCount));
 const loadAwareDisabledRaw = process.env.OPENCLAW_TEST_LOAD_AWARE?.trim().toLowerCase();
 const loadAwareDisabled = loadAwareDisabledRaw === "0" || loadAwareDisabledRaw === "false";
@@ -704,7 +773,7 @@ const maxWorkersForRun = (name) => {
   if (resolvedOverride) {
     return resolvedOverride;
   }
-  if (shardedLinuxCi && name === "unit-fast") {
+  if (shardedLinuxCi && name.startsWith("unit-fast")) {
     return 1;
   }
   if (name.endsWith("-threads") || name.endsWith("-vmforks")) {
@@ -992,7 +1061,12 @@ const runOnce = (entry, extraArgs = []) =>
     try {
       child = spawn(pnpm, args, {
         stdio: ["inherit", "pipe", "pipe"],
-        env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: resolvedNodeOptions },
+        env: {
+          ...process.env,
+          ...entry.env,
+          VITEST_GROUP: entry.name,
+          NODE_OPTIONS: resolvedNodeOptions,
+        },
         shell: isWindows,
       });
       captureTreeSample("spawn");
@@ -1144,6 +1218,7 @@ const shutdown = (signal) => {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("exit", cleanupTempArtifacts);
 
 if (process.env.OPENCLAW_TEST_LIST_LANES === "1") {
   const entriesToPrint = targetedEntries.length > 0 ? targetedEntries : runs;
@@ -1198,25 +1273,36 @@ if (passthroughRequiresSingleRun && passthroughOptionArgs.length > 0) {
   process.exit(2);
 }
 
-const shouldFrontloadUnitFast =
-  targetedEntries.length === 0 && (isMacMiniProfile || shardedLinuxCi);
-
-if (shouldFrontloadUnitFast) {
-  const unitFastEntry = parallelRuns.find((entry) => entry.name === "unit-fast");
-  if (unitFastEntry) {
-    const unitFastCode = await run(unitFastEntry, passthroughOptionArgs);
+if (serialPrefixRuns.length > 0) {
+  const failedSerialPrefix = await runEntriesWithLimit(serialPrefixRuns, passthroughOptionArgs, 1);
+  if (failedSerialPrefix !== undefined) {
+    process.exit(failedSerialPrefix);
+  }
+  const failedDeferredParallel = isMacMiniProfile
+    ? await runEntriesWithLimit(deferredParallelRuns, passthroughOptionArgs, 3)
+    : await runEntries(deferredParallelRuns, passthroughOptionArgs);
+  if (failedDeferredParallel !== undefined) {
+    process.exit(failedDeferredParallel);
+  }
+} else if (isMacMiniProfile && targetedEntries.length === 0) {
+  const unitFastEntriesForMacMini = parallelRuns.filter((entry) =>
+    entry.name.startsWith("unit-fast"),
+  );
+  for (const entry of unitFastEntriesForMacMini) {
+    // eslint-disable-next-line no-await-in-loop
+    const unitFastCode = await run(entry, passthroughOptionArgs);
     if (unitFastCode !== 0) {
       process.exit(unitFastCode);
     }
   }
-  const deferredEntries = parallelRuns.filter((entry) => entry.name !== "unit-fast");
-  const failedDeferredParallel = await runEntriesWithLimit(
+  const deferredEntries = parallelRuns.filter((entry) => !entry.name.startsWith("unit-fast"));
+  const failedMacMiniParallel = await runEntriesWithLimit(
     deferredEntries,
     passthroughOptionArgs,
     isMacMiniProfile ? 3 : topLevelParallelLimit,
   );
-  if (failedDeferredParallel !== undefined) {
-    process.exit(failedDeferredParallel);
+  if (failedMacMiniParallel !== undefined) {
+    process.exit(failedMacMiniParallel);
   }
 } else {
   const failedParallel = await runEntries(parallelRuns, passthroughOptionArgs);

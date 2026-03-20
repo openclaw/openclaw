@@ -14,7 +14,7 @@
         "reason": "Mutates process.cwd() and core loader seams."
       },
       {
-        "file": "src/config/doc-baseline.test.ts",
+        "file": "src/config/doc-baseline.integration.test.ts",
         "reason": "Rebuilds bundled config baselines through many channel schema subprocesses; keep out of the shared lane."
       },
       {
@@ -28,7 +28,7 @@
         "reason": "Clean in isolation, but can hang after sharing the broad lane."
       },
       {
-        "file": "src/config/doc-baseline.test.ts",
+        "file": "src/config/doc-baseline.integration.test.ts",
         "reason": "Builds the full bundled config schema graph and is safer outside the shared unit-fast heap."
       },
       {
@@ -184,6 +184,26 @@
         "reason": "Heartbeat default-unset coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
       },
       {
+        "file": "src/infra/heartbeat-runner.ghost-reminder.test.ts",
+        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
+      },
+      {
+        "file": "src/infra/heartbeat-runner.transcript-prune.test.ts",
+        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
+      },
+      {
+        "file": "src/infra/heartbeat-runner.sender-prefers-delivery-target.test.ts",
+        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
+      },
+      {
+        "file": "src/infra/heartbeat-runner.model-override.test.ts",
+        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
+      },
+      {
+        "file": "src/plugins/loader.git-path-regression.test.ts",
+        "reason": "Constructs a real Jiti boundary and is safer outside shared workers that may have mocked jiti earlier."
+      },
+      {
         "file": "src/infra/outbound/outbound-session.test.ts",
         "reason": "Outbound session coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
       },
@@ -326,6 +346,26 @@
       {
         "file": "src/config/sessions/store.pruning.test.ts",
         "reason": "Session store pruning coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 rerun OOM lane."
+      },
+      {
+        "file": "src/infra/outbound/message-action-runner.plugin-dispatch.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 22 OOM lane."
+      },
+      {
+        "file": "src/config/schema.hints.test.ts",
+        "reason": "Missing from unit timings and retained a recurring shared unit-fast heap spike across the March 20, 2026 Linux Node 22 and Node 24 OOM lanes."
+      },
+      {
+        "file": "src/memory/manager.read-file.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/memory/manager.sync-errors-do-not-crash.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/cron/service.every-jobs-fire.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
       }
     ],
     "threadSingleton": [
