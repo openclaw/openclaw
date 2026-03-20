@@ -246,6 +246,17 @@ function extractOllamaImages(content: unknown): string[] {
     .map((part) => part.data);
 }
 
+function parseToolArguments(args: unknown): Record<string, unknown> {
+  if (typeof args === "string") {
+    try {
+      return JSON.parse(args) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  return (args as Record<string, unknown>) ?? {};
+}
+
 function extractToolCalls(content: unknown): OllamaToolCall[] {
   if (!Array.isArray(content)) {
     return [];
@@ -254,9 +265,13 @@ function extractToolCalls(content: unknown): OllamaToolCall[] {
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
-      result.push({ function: { name: part.name, arguments: part.arguments } });
+      result.push({
+        function: { name: part.name, arguments: parseToolArguments(part.arguments) },
+      });
     } else if (part.type === "tool_use") {
-      result.push({ function: { name: part.name, arguments: part.input } });
+      result.push({
+        function: { name: part.name, arguments: parseToolArguments(part.input) },
+      });
     }
   }
   return result;
