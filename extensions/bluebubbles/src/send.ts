@@ -90,7 +90,7 @@ function resolvePrivateApiDecision(params: {
   const { privateApiStatus, wantsReplyThread, wantsEffect } = params;
   const needsPrivateApi = wantsReplyThread || wantsEffect;
   const canUsePrivateApi =
-    needsPrivateApi && isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
+    isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
   const throwEffectDisabledError = wantsEffect && privateApiStatus === false;
   if (!needsPrivateApi || privateApiStatus !== null) {
     return { canUsePrivateApi, throwEffectDisabledError };
