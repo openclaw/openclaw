@@ -56,7 +56,7 @@ Related:
 
 - [/providers/anthropic](/providers/anthropic)
 - [/reference/token-use](/reference/token-use)
-- [FAQ: Why am I seeing HTTP 429 (rate_limit_error) from Anthropic?](/help/faq#quick-start-and-first-run-setup)
+- [FAQ: Why am I seeing HTTP 429 (rate_limit_error) from Anthropic?](/help/faq#why-am-i-seeing-http-429-rate_limit_error-from-anthropic)
 
 ## No replies
 
