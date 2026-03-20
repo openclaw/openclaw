@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import JSON5 from "json5";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { getSubagentDepth, parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { resolveDefaultAgentId } from "./agent-scope.js";
 
 type SessionDepthEntry = {
@@ -10,14 +10,6 @@ type SessionDepthEntry = {
   spawnDepth?: unknown;
   spawnedBy?: unknown;
 };
-
-function parseSessionDepthStore(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return JSON5.parse(raw);
-  }
-}
 
 function normalizeSpawnDepth(value: unknown): number | undefined {
   if (typeof value === "number") {
@@ -45,7 +37,7 @@ function normalizeSessionKey(value: unknown): string | undefined {
 function readSessionStore(storePath: string): Record<string, SessionDepthEntry> {
   try {
     const raw = fs.readFileSync(storePath, "utf-8");
-    const parsed = parseSessionDepthStore(raw);
+    const parsed = parseJsonWithJson5Fallback(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as Record<string, SessionDepthEntry>;
     }
