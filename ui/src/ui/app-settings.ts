@@ -22,6 +22,11 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { loadSkills } from "./controllers/skills.ts";
+import {
+  loadTerminalSessions,
+  startTerminalPolling,
+  stopTerminalPolling,
+} from "./controllers/terminal.ts";
 import { loadUsage } from "./controllers/usage.ts";
 import {
   inferBasePathFromPathname,
@@ -281,6 +286,9 @@ export async function refreshActiveTab(host: SettingsHost) {
     await loadConfigSchema(host as unknown as OpenClawApp);
     await loadConfig(host as unknown as OpenClawApp);
   }
+  if (host.tab === "terminal") {
+    await loadTerminalSessions(host as unknown as Parameters<typeof loadTerminalSessions>[0]);
+  }
   if (host.tab === "debug") {
     await loadDebug(host as unknown as OpenClawApp);
     host.eventLog = host.eventLogBuffer;
@@ -445,6 +453,11 @@ function applyTabSelection(
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
   } else {
     stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  }
+  if (next === "terminal") {
+    startTerminalPolling(host as unknown as Parameters<typeof startTerminalPolling>[0]);
+  } else {
+    stopTerminalPolling(host as unknown as Parameters<typeof stopTerminalPolling>[0]);
   }
 
   if (options.refreshPolicy === "always" || host.connected) {
