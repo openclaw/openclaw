@@ -10,7 +10,7 @@ type Pending = {
 };
 
 export class OutboundThrottle {
-  private readonly delayMs: number;
+  readonly delayMs: number;
   private lastDoneAt = 0;
   private queue: Pending[] = [];
   /** True while a run() is executing fn(); blocks concurrent run() from starting. */
@@ -90,7 +90,7 @@ function getThrottleForChannel(channelId: string, key: string, delayMs: number):
     throttleByChannel.set(channelId, byKey);
   }
   let throttle = byKey.get(key);
-  if (!throttle) {
+  if (!throttle || throttle.delayMs !== Math.max(0, Math.floor(delayMs))) {
     throttle = new OutboundThrottle(delayMs);
     byKey.set(key, throttle);
   }

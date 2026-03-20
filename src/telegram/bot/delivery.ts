@@ -256,20 +256,19 @@ export async function deliverReplies(params: {
               logVerbose(
                 "telegram sendVoice forbidden (recipient has voice messages blocked in privacy settings); falling back to text",
               );
-              await throttled(() =>
-                sendTelegramVoiceFallbackText({
-                  bot,
-                  chatId,
-                  runtime,
-                  text: fallbackText,
-                  chunkText,
-                  replyToId: replyToMessageIdForPayload,
-                  thread,
-                  linkPreview,
-                  replyMarkup,
-                  replyQuoteText,
-                }),
-              );
+              await sendTelegramVoiceFallbackText({
+                bot,
+                chatId,
+                runtime,
+                text: fallbackText,
+                chunkText,
+                throttled,
+                replyToId: replyToMessageIdForPayload,
+                thread,
+                linkPreview,
+                replyMarkup,
+                replyQuoteText,
+              });
               if (replyToMessageIdForPayload && !hasReplied) {
                 hasReplied = true;
               }
@@ -518,6 +517,7 @@ async function sendTelegramVoiceFallbackText(opts: {
   runtime: RuntimeEnv;
   text: string;
   chunkText: (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
+  throttled: <T>(fn: () => Promise<T>) => Promise<T>;
   replyToId?: number;
   thread?: TelegramThreadSpec | null;
   linkPreview?: boolean;
@@ -527,15 +527,17 @@ async function sendTelegramVoiceFallbackText(opts: {
   const chunks = opts.chunkText(opts.text);
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
-    await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
-      replyToMessageId: opts.replyToId,
-      replyQuoteText: opts.replyQuoteText,
-      thread: opts.thread,
-      textMode: "html",
-      plainText: chunk.text,
-      linkPreview: opts.linkPreview,
-      replyMarkup: i === 0 ? opts.replyMarkup : undefined,
-    });
+    await opts.throttled(() =>
+      sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
+        replyToMessageId: opts.replyToId,
+        replyQuoteText: opts.replyQuoteText,
+        thread: opts.thread,
+        textMode: "html",
+        plainText: chunk.text,
+        linkPreview: opts.linkPreview,
+        replyMarkup: i === 0 ? opts.replyMarkup : undefined,
+      }),
+    );
   }
 }
 
