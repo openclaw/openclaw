@@ -568,4 +568,105 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Normalized talk.provider/providers shape (trimmed provider ids and merged missing compatibility fields).",
     ]);
   });
+
+  it("migrates tools.message.allowCrossContextSend to canonical crossContext settings", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        message: {
+          allowCrossContextSend: true,
+          crossContext: {
+            allowWithinProvider: false,
+            allowAcrossProviders: false,
+          },
+        },
+      },
+    });
+
+    expect(res.config.tools?.message).toEqual({
+      crossContext: {
+        allowWithinProvider: true,
+        allowAcrossProviders: true,
+      },
+    });
+    expect(res.changes).toEqual([
+      "Moved tools.message.allowCrossContextSend → tools.message.crossContext.allowWithinProvider/allowAcrossProviders (true).",
+    ]);
+  });
+
+  it("migrates legacy deepgram media options to providerOptions.deepgram", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        media: {
+          audio: {
+            deepgram: {
+              detectLanguage: true,
+              smartFormat: true,
+            },
+            providerOptions: {
+              deepgram: {
+                punctuate: false,
+              },
+            },
+            models: [
+              {
+                provider: "deepgram",
+                deepgram: {
+                  punctuate: true,
+                },
+              },
+            ],
+          },
+          models: [
+            {
+              provider: "deepgram",
+              deepgram: {
+                smartFormat: false,
+              },
+              providerOptions: {
+                deepgram: {
+                  detect_language: true,
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(res.config.tools?.media?.audio).toEqual({
+      providerOptions: {
+        deepgram: {
+          detect_language: true,
+          smart_format: true,
+          punctuate: false,
+        },
+      },
+      models: [
+        {
+          provider: "deepgram",
+          providerOptions: {
+            deepgram: {
+              punctuate: true,
+            },
+          },
+        },
+      ],
+    });
+    expect(res.config.tools?.media?.models).toEqual([
+      {
+        provider: "deepgram",
+        providerOptions: {
+          deepgram: {
+            smart_format: false,
+            detect_language: true,
+          },
+        },
+      },
+    ]);
+    expect(res.changes).toEqual([
+      "Merged tools.media.audio.deepgram → tools.media.audio.providerOptions.deepgram (filled missing canonical fields from legacy).",
+      "Moved tools.media.audio.models[0].deepgram → tools.media.audio.models[0].providerOptions.deepgram.",
+      "Merged tools.media.models[0].deepgram → tools.media.models[0].providerOptions.deepgram (filled missing canonical fields from legacy).",
+    ]);
+  });
 });
