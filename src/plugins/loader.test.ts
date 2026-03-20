@@ -123,6 +123,7 @@ function writePlugin(params: {
   body: string;
   dir?: string;
   filename?: string;
+  packageJson?: Record<string, unknown>;
 }): TempPlugin {
   const dir = params.dir ?? makeTempDir();
   const filename = params.filename ?? `${params.id}.cjs`;
@@ -141,7 +142,41 @@ function writePlugin(params: {
     ),
     "utf-8",
   );
+  if (params.packageJson) {
+    fs.writeFileSync(
+      path.join(dir, "package.json"),
+      JSON.stringify(params.packageJson, null, 2),
+      "utf-8",
+    );
+  }
   return { dir, file, id: params.id };
+}
+
+function writePluginDependencyStub(params: {
+  pluginDir: string;
+  packageName: string;
+  body?: string;
+}) {
+  const packageDir = path.join(params.pluginDir, "node_modules", ...params.packageName.split("/"));
+  mkdirSafe(packageDir);
+  fs.writeFileSync(
+    path.join(packageDir, "package.json"),
+    JSON.stringify(
+      {
+        name: params.packageName,
+        version: "1.0.0",
+        main: "index.js",
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(packageDir, "index.js"),
+    params.body ?? "module.exports = {};\n",
+    "utf-8",
+  );
 }
 
 function loadBundledMemoryPluginRegistry(options?: {
@@ -910,6 +945,83 @@ describe("loadOpenClawPlugins", () => {
 
     const bundled = registry.plugins.find((entry) => entry.id === "bundled");
     expect(bundled?.status).toBe("disabled");
+  });
+
+  it("allows plugin-sdk imports that stay within the plugin boundary", () => {
+    const plugin = writePlugin({
+      id: "sdk-allowed",
+      body: `require("openclaw/plugin-sdk/core");
+require("./helper.cjs");
+module.exports = { id: "sdk-allowed", register() {} };`,
+    });
+    fs.writeFileSync(path.join(plugin.dir, "helper.cjs"), 'module.exports = "ok";\n', "utf-8");
+
+    const registry = loadRegistryFromSinglePlugin({ plugin });
+    const record = registry.plugins.find((entry) => entry.id === plugin.id);
+
+    expect(record?.status).toBe("loaded");
+  });
+
+  it("allows declared third-party package imports", () => {
+    const plugin = writePlugin({
+      id: "declared-dep",
+      body: `require("left-pad");
+module.exports = { id: "declared-dep", register() {} };`,
+      packageJson: {
+        name: "declared-dep",
+        dependencies: {
+          "left-pad": "1.3.0",
+        },
+      },
+    });
+    writePluginDependencyStub({
+      pluginDir: plugin.dir,
+      packageName: "left-pad",
+      body: "module.exports = (value) => value;\n",
+    });
+
+    const registry = loadRegistryFromSinglePlugin({ plugin });
+    const record = registry.plugins.find((entry) => entry.id === plugin.id);
+
+    expect(record?.status).toBe("loaded");
+  });
+
+  it("blocks private OpenClaw package imports", () => {
+    const plugin = writePlugin({
+      id: "private-openclaw-import",
+      body: `require("openclaw/runtime");
+module.exports = { id: "private-openclaw-import", register() {} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({ plugin });
+    const record = registry.plugins.find((entry) => entry.id === plugin.id);
+
+    expect(record?.status).toBe("error");
+    expect(record?.error).toContain("plugin import policy violation");
+    expect(record?.error).toContain('"openclaw/runtime"');
+  });
+
+  it("blocks relative imports that escape the plugin root", () => {
+    const pluginDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "relative-escape",
+      dir: pluginDir,
+      filename: "index.cjs",
+      body: `require("../outside.cjs");
+module.exports = { id: "relative-escape", register() {} };`,
+    });
+    fs.writeFileSync(
+      path.join(path.dirname(pluginDir), "outside.cjs"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+
+    const registry = loadRegistryFromSinglePlugin({ plugin });
+    const record = registry.plugins.find((entry) => entry.id === plugin.id);
+
+    expect(record?.status).toBe("error");
+    expect(record?.error).toContain("plugin import policy violation");
+    expect(record?.error).toContain('"../outside.cjs"');
   });
 
   it("handles bundled telegram plugin enablement and override rules", () => {

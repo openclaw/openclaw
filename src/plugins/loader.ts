@@ -21,6 +21,7 @@ import {
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
+import { validatePluginImportPolicy } from "./import-policy.js";
 import { clearPluginInteractiveHandlers } from "./interactive.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
@@ -206,6 +207,7 @@ export const __testing = {
   resolvePluginSdkAliasFile,
   resolvePluginRuntimeModulePath,
   shouldPreferNativeJiti,
+  validatePluginImportPolicy,
   maxPluginRegistryCacheEntries: MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
 };
 
@@ -1144,6 +1146,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
+
+    const importPolicy = validatePluginImportPolicy({
+      entryPath: safeSource,
+      rootDir: pluginRoot,
+    });
+    if (!importPolicy.ok) {
+      const [firstViolation] = importPolicy.violations;
+      const detail = firstViolation
+        ? `${firstViolation.file}:${firstViolation.line} ${firstViolation.kind} "${firstViolation.specifier}" (${firstViolation.reason})`
+        : "unknown import policy violation";
+      pushPluginLoadError(`plugin import policy violation: ${detail}`);
+      continue;
+    }
 
     let mod: OpenClawPluginModule | null = null;
     try {
