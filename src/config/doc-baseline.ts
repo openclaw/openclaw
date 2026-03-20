@@ -269,7 +269,12 @@ function resolveFirstExistingPath(candidates: string[]): string | null {
 }
 
 async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> {
-  const [{ loadPluginManifestRegistry }, { buildConfigSchema }] = await Promise.all([
+  const [
+    { listChannelPluginCatalogEntries },
+    { loadPluginManifestRegistry },
+    { buildConfigSchema },
+  ] = await Promise.all([
+    import("../channels/plugins/catalog.js"),
     import("../plugins/manifest-registry.js"),
     import("./schema.js"),
   ]);
@@ -286,6 +291,12 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
     env,
     config: {},
   });
+  const channelCatalogById = new Map(
+    listChannelPluginCatalogEntries({
+      workspaceDir: repoRoot,
+      env,
+    }).map((entry) => [entry.id, entry.meta] as const),
+  );
   logConfigDocBaselineDebug(`loaded ${manifestRegistry.plugins.length} bundled plugin manifests`);
   const bundledChannelPlugins = manifestRegistry.plugins.filter(
     (plugin) => plugin.origin === "bundled" && plugin.channels.length > 0,
@@ -295,16 +306,20 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
       ? await bundledChannelPlugins.reduce<Promise<ChannelSurfaceMetadata[]>>(
           async (promise, plugin) => {
             const loaded = await promise;
+            const catalogMeta = channelCatalogById.get(plugin.id);
+            const label = catalogMeta?.label ?? plugin.name ?? plugin.id;
+            const description = catalogMeta?.blurb ?? plugin.description;
             loaded.push(
               (await loadChannelSurfaceMetadata(
                 plugin.rootDir,
                 plugin.id,
-                plugin.name ?? plugin.id,
+                label,
+                description,
                 repoRoot,
               )) ?? {
                 id: plugin.id,
-                label: plugin.name ?? plugin.id,
-                description: plugin.description,
+                label,
+                description,
                 configSchema: plugin.configSchema,
                 configUiHints: plugin.configUiHints,
               },
@@ -314,21 +329,26 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
           Promise.resolve([]),
         )
       : await Promise.all(
-          bundledChannelPlugins.map(
-            async (plugin) =>
+          bundledChannelPlugins.map(async (plugin) => {
+            const catalogMeta = channelCatalogById.get(plugin.id);
+            const label = catalogMeta?.label ?? plugin.name ?? plugin.id;
+            const description = catalogMeta?.blurb ?? plugin.description;
+            return (
               (await loadChannelSurfaceMetadata(
                 plugin.rootDir,
                 plugin.id,
-                plugin.name ?? plugin.id,
+                label,
+                description,
                 repoRoot,
               )) ?? {
                 id: plugin.id,
-                label: plugin.name ?? plugin.id,
-                description: plugin.description,
+                label,
+                description,
                 configSchema: plugin.configSchema,
                 configUiHints: plugin.configUiHints,
-              },
-          ),
+              }
+            );
+          }),
         );
   logConfigDocBaselineDebug(
     `loaded ${channelPlugins.length} bundled channel entries from channel surfaces`,
@@ -359,6 +379,7 @@ async function loadChannelSurfaceMetadata(
   rootDir: string,
   id: string,
   label: string,
+  description: string | undefined,
   repoRoot: string,
 ): Promise<ChannelSurfaceMetadata | null> {
   logConfigDocBaselineDebug(`resolve channel config surface ${rootDir}`);
@@ -386,6 +407,7 @@ async function loadChannelSurfaceMetadata(
     return {
       id,
       label,
+      description,
       configSchema: configSurface.schema,
       configUiHints: configSurface.uiHints as ConfigSchemaResponse["uiHints"] | undefined,
     };

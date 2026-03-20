@@ -70,6 +70,26 @@ describe("config doc baseline integration", () => {
     expect(tokenEntry?.tags).toContain("security");
   });
 
+  it("uses human-readable channel metadata for top-level channel sections", async () => {
+    const baseline = await getSharedBaseline();
+    const byPath = new Map(baseline.entries.map((entry) => [entry.path, entry]));
+
+    expect(byPath.get("channels.discord")).toMatchObject({
+      label: "Discord",
+      help: "very well supported right now.",
+    });
+    expect(byPath.get("channels.msteams")).toMatchObject({
+      label: "Microsoft Teams",
+      help: "Bot Framework; enterprise support.",
+    });
+    expect(byPath.get("channels.matrix")).toMatchObject({
+      label: "Matrix",
+      help: "open protocol; install the plugin to enable.",
+    });
+    expect(byPath.get("channels.msteams")?.label).not.toContain("@openclaw/");
+    expect(byPath.get("channels.matrix")?.help).not.toContain("homeserver");
+  });
+
   it("matches array help hints that still use [] notation", async () => {
     const baseline = await getSharedBaseline();
     const byPath = new Map(baseline.entries.map((entry) => [entry.path, entry]));
