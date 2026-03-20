@@ -35,7 +35,7 @@ title: "Features"
 **Channels:**
 
 - WhatsApp, Telegram, Discord, iMessage (built-in)
-- Mattermost, Matrix, MS Teams, Nostr, and more (plugins)
+- Mattermost, Matrix, Microsoft Teams, Nostr, and more (plugins)
 - Group chat support with mention-based activation
 - DM safety with allowlists and pairing
 
