@@ -4,8 +4,6 @@ import type {
   ICryptoStorageProvider,
   MatrixClient,
 } from "@vector-im/matrix-bot-sdk";
-import http from "node:http";
-import https from "node:https";
 import { ensureMatrixCryptoRuntime } from "../deps.js";
 import { loadMatrixSdk } from "../sdk-runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
@@ -14,24 +12,6 @@ import {
   resolveMatrixStoragePaths,
   writeStorageMeta,
 } from "./storage.js";
-
-// Optimized HTTP agents for keep-alive connections
-// These settings are tuned for better performance in Windows environments
-const keepAliveAgent = new http.Agent({
-  keepAlive: true,
-  keepAliveMsecs: 30000,
-  maxSockets: 50,
-  maxFreeSockets: 10,
-  timeout: 60000,
-});
-
-const keepAliveHttpsAgent = new https.Agent({
-  keepAlive: true,
-  keepAliveMsecs: 30000,
-  maxSockets: 50,
-  maxFreeSockets: 10,
-  timeout: 60000,
-});
 
 // Flag to track if we've configured the request function
 let requestFunctionConfigured = false;
@@ -44,14 +24,9 @@ function configureOptimizedRequestFn() {
   try {
     const req = require("request");
 
-    // Create a wrapped request function with optimized agent settings
-    // Note: request.defaults() expects agent to be an object with http/https keys,
-    // NOT a function. Function-based agent selection is for native http.request() only.
+    // Create a wrapped request function with keep-alive enabled
+    // 'forever: true' automatically enables keep-alive with connection pooling
     const optimizedRequest = req.defaults({
-      agent: {
-        http: keepAliveAgent,
-        https: keepAliveHttpsAgent,
-      },
       forever: true,
       pool: {
         maxSockets: 50,
@@ -63,10 +38,10 @@ function configureOptimizedRequestFn() {
     setRequestFn(optimizedRequest);
     requestFunctionConfigured = true;
 
-    LogService.info("MatrixClientLite", "Optimized HTTP Agent keepAlive configured");
+    LogService.info("MatrixClientLite", "HTTP keepAlive enabled (forever: true, pool: 50 sockets)");
   } catch (err) {
     const { LogService } = loadMatrixSdk();
-    LogService.warn("MatrixClientLite", "Failed to configure optimized HTTP Agent:", err);
+    LogService.warn("MatrixClientLite", "Failed to configure HTTP keepAlive:", err);
   }
 }
 
