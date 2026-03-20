@@ -49,3 +49,14 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+## Exec provider tools
+
+These packages implement OpenClaw's exec secret provider protocol. They are not
+in-process plugins — install them globally with npm and reference the script
+path in `secrets.providers.<name>.command`.
+
+- **openclaw-secret-providers** — Exec secret provider scripts for Azure Key Vault, macOS Keychain, and 1Password. Includes `openclaw-secrets` CLI helper to generate ready-to-paste `openclaw.json` config snippets.
+  npm: `openclaw-secret-providers`
+  repo: `https://github.com/Arry8/openclaw-secret-providers`
+  install: `npm install -g openclaw-secret-providers`
