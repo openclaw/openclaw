@@ -60,6 +60,9 @@ async function graphql(
     signal: AbortSignal.timeout(10_000),
   });
 
+  if (!res.ok) {
+    throw new Error(`SoundChain GraphQL HTTP error ${res.status}: ${res.statusText}`);
+  }
   const json = (await res.json()) as GraphQLResponse;
 
   if (json.errors && json.errors.length > 0) {
@@ -258,7 +261,10 @@ export function createMessagingClient(apiUrl: string, token: string): MessagingC
         const allUsers: UserProfile[] = [];
         let cursor: string | null = null;
         let hasNext = true;
-        while (hasNext) {
+        const MAX_PAGES = 20; // Cap at 1,000 users (20 × 50)
+        let pageCount = 0;
+        while (hasNext && pageCount < MAX_PAGES) {
+          pageCount++;
           const page: Record<string, unknown> = { first: 50 };
           if (cursor) page.after = cursor;
           const data = await graphql(apiUrl, token, EXPLORE_USERS_QUERY, { page });

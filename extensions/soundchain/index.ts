@@ -461,6 +461,7 @@ const plugin = {
         async execute() {
           try {
             const res = await fetch("https://soundchain.io/skill.md");
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const text = await res.text();
             return json({
               platform: "SoundChain",

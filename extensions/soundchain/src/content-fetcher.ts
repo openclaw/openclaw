@@ -229,7 +229,7 @@ async function fetchYouTubeTranscript(
     if (typeof captionUrl !== "string") return null;
 
     // Fetch caption XML
-    const captionRes = await fetch(captionUrl, {
+    const captionRes = await safeFetch(captionUrl, {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     const xml = await captionRes.text();
