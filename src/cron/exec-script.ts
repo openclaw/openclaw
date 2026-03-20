@@ -50,8 +50,10 @@ export async function execCronScript(params: ExecCronScriptParams): Promise<Cron
   // Detect interpreter from extension so scripts don't require chmod +x.
   // When no interpreter is found the file is executed directly (still needs +x).
   const interpreter = resolveScriptInterpreter(resolvedCommand);
-  const execCmd = interpreter ?? resolvedCommand;
-  const execArgs = interpreter ? [resolvedCommand, ...(payload.args ?? [])] : (payload.args ?? []);
+  const execCmd = interpreter?.cmd ?? resolvedCommand;
+  const execArgs = interpreter
+    ? [...interpreter.args, resolvedCommand, ...(payload.args ?? [])]
+    : (payload.args ?? []);
 
   return new Promise<CronRunOutcome>((resolve) => {
     let settled = false;
@@ -118,36 +120,58 @@ export async function execCronScript(params: ExecCronScriptParams): Promise<Cron
   });
 }
 
+type Interpreter = { cmd: string; args: string[] };
+
 /**
- * Map a script file extension to an interpreter binary so scripts don't need
- * the executable bit set. Returns null for unknown extensions — caller falls
- * back to direct execution (which still requires chmod +x).
+ * Map a script file extension to an interpreter + leading args so scripts don't
+ * need the executable bit set. Returns null for unknown extensions — caller falls
+ * back to direct execution (which still requires chmod +x on POSIX).
  *
  * Mapping is intentionally conservative: only unambiguous, widely-available
  * runtimes are covered. New entries should only be added when there is a single
  * obvious choice for the extension.
+ *
+ * Windows-native extensions (.bat, .cmd, .ps1) are only mapped on win32; on
+ * other platforms they return null so the user gets a clear spawn error.
+ *
+ * Exported for unit testing only — treat as internal.
  */
-function resolveScriptInterpreter(scriptPath: string): string | null {
+export function resolveScriptInterpreter(scriptPath: string): Interpreter | null {
   const ext = path.extname(scriptPath).toLowerCase();
+
+  // Windows-native script types — only applicable on win32.
+  if (process.platform === "win32") {
+    switch (ext) {
+      case ".bat":
+      case ".cmd":
+        return { cmd: "cmd.exe", args: ["/C"] };
+      case ".ps1":
+        return {
+          cmd: "powershell.exe",
+          args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"],
+        };
+    }
+  }
+
   switch (ext) {
     case ".sh":
-      return "sh";
+      return { cmd: "sh", args: [] };
     case ".bash":
-      return "bash";
+      return { cmd: "bash", args: [] };
     case ".zsh":
-      return "zsh";
+      return { cmd: "zsh", args: [] };
     case ".js":
     case ".cjs":
     case ".mjs":
-      return "node";
+      return { cmd: "node", args: [] };
     case ".ts":
       // Uses bun for TypeScript. If bun is not installed the spawn will fail
       // with an error message. Users can ensure bun is available or use a shebang.
-      return "bun";
+      return { cmd: "bun", args: [] };
     case ".py":
-      return "python3";
+      return { cmd: "python3", args: [] };
     case ".rb":
-      return "ruby";
+      return { cmd: "ruby", args: [] };
     default:
       return null;
   }

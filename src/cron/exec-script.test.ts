@@ -1,9 +1,9 @@
-// Authored by: cc (Claude Code) | 2026-03-15
+// Authored by: cc (Claude Code) | 2026-03-20
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { execCronScript } from "./exec-script.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { execCronScript, resolveScriptInterpreter } from "./exec-script.js";
 
 let tmpDir: string;
 
@@ -130,5 +130,58 @@ describe("execCronScript", () => {
     expect(result.status).toBe("ok");
     // Resolves to realpath in case tmpDir is a symlink (macOS /var -> /private/var).
     expect(fs.realpathSync(result.summary ?? "")).toBe(fs.realpathSync(tmpDir));
+  });
+});
+
+describe("resolveScriptInterpreter — Windows extensions", () => {
+  // Mocks process.platform to verify win32 branch without a real Windows host.
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubWin32() {
+    vi.stubGlobal("process", { ...process, platform: "win32" });
+  }
+
+  it("maps .bat to cmd.exe /C on win32", () => {
+    stubWin32();
+    expect(resolveScriptInterpreter("script.bat")).toEqual({ cmd: "cmd.exe", args: ["/C"] });
+  });
+
+  it("maps .cmd to cmd.exe /C on win32", () => {
+    stubWin32();
+    expect(resolveScriptInterpreter("script.cmd")).toEqual({ cmd: "cmd.exe", args: ["/C"] });
+  });
+
+  it("maps .ps1 to powershell.exe with bypass flags on win32", () => {
+    stubWin32();
+    expect(resolveScriptInterpreter("script.ps1")).toEqual({
+      cmd: "powershell.exe",
+      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"],
+    });
+  });
+
+  it("returns null for .bat on non-Windows", () => {
+    // On macOS/Linux .bat has no mapping — caller falls back to direct exec.
+    vi.stubGlobal("process", { ...process, platform: "linux" });
+    expect(resolveScriptInterpreter("script.bat")).toBeNull();
+  });
+
+  it("returns null for .cmd on non-Windows", () => {
+    vi.stubGlobal("process", { ...process, platform: "darwin" });
+    expect(resolveScriptInterpreter("script.cmd")).toBeNull();
+  });
+
+  it("returns null for .ps1 on non-Windows", () => {
+    vi.stubGlobal("process", { ...process, platform: "linux" });
+    expect(resolveScriptInterpreter("script.ps1")).toBeNull();
+  });
+
+  it("existing POSIX mappings are unaffected on win32", () => {
+    stubWin32();
+    expect(resolveScriptInterpreter("script.sh")).toEqual({ cmd: "sh", args: [] });
+    expect(resolveScriptInterpreter("script.py")).toEqual({ cmd: "python3", args: [] });
+    expect(resolveScriptInterpreter("script.js")).toEqual({ cmd: "node", args: [] });
   });
 });
