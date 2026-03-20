@@ -22,6 +22,30 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+const KNOWN_RUNTIME_PLATFORMS = new Set([
+  "aix",
+  "android",
+  "darwin",
+  "freebsd",
+  "haiku",
+  "linux",
+  "netbsd",
+  "openbsd",
+  "sunos",
+  "win32",
+]);
+
+function normalizeRequestedPlatform(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  return KNOWN_RUNTIME_PLATFORMS.has(normalized) ? normalized : undefined;
+}
+
 function collectSkillBins(entries: SkillEntry[]): string[] {
   const bins = new Set<string>();
   for (const entry of entries) {
@@ -88,7 +112,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     });
     respond(true, report, undefined);
   },
-  "skills.bins": ({ params, respond }) => {
+  "skills.bins": ({ params, client, respond }) => {
     if (!validateSkillsBinsParams(params)) {
       respond(
         false,
@@ -102,6 +126,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     const cfg = loadConfig();
     const agentIds = listAgentIds(cfg);
+    const targetPlatform = normalizeRequestedPlatform(client?.connect?.client?.platform);
     const bins = new Set<string>();
     for (const agentId of agentIds) {
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
@@ -109,9 +134,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
         config: cfg,
         agentId,
         // skills.bins powers remote node-host trust bootstrap. Keep config/policy gates
-        // (enabled, allowBundled, skills.policy), but skip host-local runtime checks so
-        // remote-only bins are preserved.
+        // (enabled, allowBundled, skills.policy), scope by requester platform, and skip
+        // host-local runtime checks so remote-only bins are preserved.
         applyEligibility: false,
+        ...(targetPlatform ? { targetPlatform } : {}),
       });
       for (const bin of collectSkillBins(entries)) {
         bins.add(bin);
