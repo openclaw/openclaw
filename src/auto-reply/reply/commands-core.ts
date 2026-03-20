@@ -1,7 +1,8 @@
 import { resetAcpSessionInPlace } from "../../acp/persistent-bindings.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { isAcpSessionKey } from "../../routing/session-key.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
 import { handleAcpCommand } from "./commands-acp.js";
@@ -94,6 +95,25 @@ export async function emitResetCommandHooks(params: {
         cfg: params.cfg,
       });
     }
+  }
+
+  // Fire before_reset plugin hook (fire-and-forget) — lets plugins like mind-memory react to /new or /reset
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("before_reset")) {
+    const prevEntry = params.previousSessionEntry;
+    void hookRunner
+      .runBeforeReset(
+        { sessionFile: prevEntry?.sessionFile, messages: [], reason: params.action },
+        {
+          agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+          sessionKey: params.sessionKey,
+          sessionId: prevEntry?.sessionId,
+          workspaceDir: params.workspaceDir,
+        },
+      )
+      .catch((err: unknown) => {
+        logVerbose(`before_reset plugin hook failed: ${String(err)}`);
+      });
   }
 }
 

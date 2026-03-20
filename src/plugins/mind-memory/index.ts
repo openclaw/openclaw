@@ -841,7 +841,7 @@ export default function register(api: PluginApi) {
         const glossaryPath = path.join(narrativeDir, "GLOSSARY.md");
         const summaryPath = path.join(narrativeDir, "SUMMARY.md");
         const workspaceDir = resolveAgentWorkspaceDir(api.config, agentId);
-        const sessionsDir = resolveSessionTranscriptsDirForAgent(api.config, agentId);
+        const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
 
         const agents = await resolveNarrativeAgents();
         if (!agents) {

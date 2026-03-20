@@ -954,12 +954,41 @@ Now write the full SUMMARY.md document with the sections above:`;
         this.log(`   Excluding current session: ${currentSessionBasename}`);
       }
 
-      // Sort by mtime descending (newest first) and take top 5
+      // Sort by mtime descending (newest first), skip empty/stub sessions, take top 5 non-empty
       const recentFiles = [...jsonlFiles].map(async (f) => ({ path: f, stat: await fs.stat(f) }));
       const settledFiles = await Promise.all(recentFiles);
-      const sortedFiles = settledFiles
+      const candidateFiles = settledFiles
         .toSorted((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime())
-        .slice(0, 5);
+        .slice(0, 20); // read up to 20 candidates to find 5 with real content
+
+      // Filter out sessions with no user messages (e.g. empty restart sessions)
+      const nonEmptyFiles: typeof candidateFiles = [];
+      for (const f of candidateFiles) {
+        if (nonEmptyFiles.length >= 5) {
+          break;
+        }
+        try {
+          const raw = await fs.readFile(f.path, "utf-8");
+          const hasUserMsg = raw.split("\n").some((line) => {
+            const t = line.trim();
+            if (!t) {
+              return false;
+            }
+            try {
+              const e = JSON.parse(t) as { type?: string; message?: { role?: string } };
+              return e.type === "message" && e.message?.role === "user";
+            } catch {
+              return false;
+            }
+          });
+          if (hasUserMsg) {
+            nonEmptyFiles.push(f);
+          }
+        } catch {
+          // skip unreadable
+        }
+      }
+      const sortedFiles = nonEmptyFiles;
 
       this.log(`   Scanning top ${sortedFiles.length} files in ${sessionsDir}`);
       for (const f of sortedFiles) {
