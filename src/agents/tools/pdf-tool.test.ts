@@ -36,6 +36,8 @@ async function loadCreatePdfTool() {
 
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
 const OPENAI_PDF_MODEL = "openai/gpt-5.4-mini";
+const CODEX_PDF_MODEL = "openai-codex/gpt-5.4";
+const TEST_PDF_INPUT = { base64: "dGVzdA==", filename: "doc.pdf" } as const;
 const FAKE_PDF_MEDIA = {
   kind: "document",
   buffer: Buffer.from("%PDF-1.4 fake"),
@@ -85,6 +87,7 @@ async function stubPdfToolInfra(
     mockLoad?: boolean;
     provider?: string;
     input?: string[];
+    api?: string;
     modelFound?: boolean;
   },
 ) {
@@ -102,6 +105,13 @@ async function stubPdfToolInfra(
       : () =>
           ({
             provider: params?.provider ?? "anthropic",
+            api:
+              params?.api ??
+              (params?.provider === "openai-codex"
+                ? "openai-codex-responses"
+                : params?.provider === "openai"
+                  ? "openai-responses"
+                  : "anthropic-messages"),
             maxTokens: 8192,
             input: params?.input ?? ["text", "document"],
           }) as never;
@@ -469,6 +479,46 @@ describe("createPdfTool", () => {
         content: [{ type: "text", text: "fallback summary" }],
         details: { native: false, model: OPENAI_PDF_MODEL },
       });
+      const [, context] = completeMock.mock.calls[0] ?? [];
+      expect(context?.systemPrompt).toBeUndefined();
+    });
+  });
+
+  it("adds Codex instructions for PDF extraction fallback requests", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, {
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        input: ["text", "image"],
+      });
+
+      const extractModule = await import("../../media/pdf-extract.js");
+      vi.spyOn(extractModule, "extractPdfContent").mockResolvedValue({
+        text: "Extracted content",
+        images: [],
+      });
+
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "codex summary" }],
+      } as never);
+
+      const cfg = withPdfModel(CODEX_PDF_MODEL);
+      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
+
+      expect(result).toMatchObject({
+        content: [{ type: "text", text: "codex summary" }],
+        details: { native: false, model: CODEX_PDF_MODEL },
+      });
+      expect(completeMock).toHaveBeenCalledTimes(1);
+      const [, context] = completeMock.mock.calls[0] ?? [];
+      expect(context?.systemPrompt).toContain("Analyze the provided PDF content");
     });
   });
 
