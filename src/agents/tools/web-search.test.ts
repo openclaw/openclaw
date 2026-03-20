@@ -3,6 +3,7 @@ import { __testing as braveTesting } from "../../../extensions/brave/src/brave-w
 import { __testing as moonshotTesting } from "../../../extensions/moonshot/src/kimi-web-search-provider.js";
 import { __testing as perplexityTesting } from "../../../extensions/perplexity/web-search-provider.js";
 import { __testing as xaiTesting } from "../../../extensions/xai/src/grok-web-search-provider.js";
+import { buildUnsupportedSearchFilterResponse } from "../../plugin-sdk/provider-web-search.js";
 import { withEnv } from "../../test-utils/env.js";
 const {
   inferPerplexityBaseUrlFromApiKey,
@@ -195,6 +196,30 @@ describe("web_search date normalization", () => {
   it("rejects invalid ISO dates", () => {
     expect(isoToPerplexityDate("1/15/2024")).toBeUndefined();
     expect(isoToPerplexityDate("invalid")).toBeUndefined();
+  });
+});
+
+describe("web_search unsupported filter response", () => {
+  it("returns undefined when no unsupported filter is set", () => {
+    expect(buildUnsupportedSearchFilterResponse({ query: "openclaw" }, "gemini")).toBeUndefined();
+  });
+
+  it("maps non-date filters to provider-specific unsupported errors", () => {
+    expect(buildUnsupportedSearchFilterResponse({ country: "us" }, "grok")).toEqual({
+      error: "unsupported_country",
+      message:
+        "country filtering is not supported by the grok provider. Only Brave and Perplexity support country filtering.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    });
+  });
+
+  it("collapses date filters to unsupported_date_filter", () => {
+    expect(buildUnsupportedSearchFilterResponse({ date_before: "2026-03-19" }, "kimi")).toEqual({
+      error: "unsupported_date_filter",
+      message:
+        "date_after/date_before filtering is not supported by the kimi provider. Only Brave and Perplexity support date filtering.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    });
   });
 });
 
