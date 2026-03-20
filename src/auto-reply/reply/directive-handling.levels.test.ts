@@ -33,4 +33,30 @@ describe("resolveCurrentDirectiveLevels", () => {
     expect(result.currentThinkLevel).toBe("minimal");
     expect(resolveDefaultThinkingLevel).not.toHaveBeenCalled();
   });
+
+  it("uses config reasoningDefault when session reasoning is unset", async () => {
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentCfg: {
+        reasoningDefault: "stream",
+      },
+      resolveDefaultThinkingLevel: vi.fn().mockResolvedValue("off"),
+    });
+
+    expect(result.currentReasoningLevel).toBe("stream");
+  });
+
+  it("keeps session reasoning override over config reasoningDefault", async () => {
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {
+        reasoningLevel: "on",
+      },
+      agentCfg: {
+        reasoningDefault: "stream",
+      },
+      resolveDefaultThinkingLevel: vi.fn().mockResolvedValue("off"),
+    });
+
+    expect(result.currentReasoningLevel).toBe("on");
+  });
 });

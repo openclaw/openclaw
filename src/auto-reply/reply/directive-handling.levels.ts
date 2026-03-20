@@ -10,6 +10,7 @@ export async function resolveCurrentDirectiveLevels(params: {
   };
   agentCfg?: {
     thinkingDefault?: unknown;
+    reasoningDefault?: unknown;
     verboseDefault?: unknown;
     elevatedDefault?: unknown;
   };
@@ -32,7 +33,9 @@ export async function resolveCurrentDirectiveLevels(params: {
     (params.sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
     (params.agentCfg?.verboseDefault as VerboseLevel | undefined);
   const currentReasoningLevel =
-    (params.sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ?? "off";
+    (params.sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
+    (params.agentCfg?.reasoningDefault as ReasoningLevel | undefined) ??
+    "off";
   const currentElevatedLevel =
     (params.sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
     (params.agentCfg?.elevatedDefault as ElevatedLevel | undefined);

@@ -266,6 +266,26 @@ describe("createModelSelectionState respects session model override", () => {
 });
 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
+  it("returns config reasoningDefault when set", async () => {
+    const state = await createModelSelectionState({
+      cfg: {
+        agents: {
+          defaults: {
+            reasoningDefault: "stream",
+          },
+        },
+      } as OpenClawConfig,
+      agentCfg: undefined,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      provider: "openai",
+      model: "gpt-4o-mini",
+      hasModelDirective: false,
+    });
+
+    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("stream");
+  });
+
   it("returns on when catalog model has reasoning true", async () => {
     const { loadModelCatalog } = await import("../../agents/model-catalog.js");
     vi.mocked(loadModelCatalog).mockResolvedValueOnce([
