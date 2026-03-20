@@ -1820,13 +1820,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             sendMessage: sendMessageMattermost,
           });
           runtime.log?.(`delivered reply to ${to}`);
-          // Dequeue and delete the preview for this specific turn only.
-          // Over-limit turns are enqueued FIFO in onAssistantMessageStart;
-          // dequeuing one-at-a-time ensures turn B's preview is not deleted
-          // by turn A's delivery (ID=2965255734 / ID=2965091873).
-          const orphanToDelete = pendingOrphanDeletes.shift();
-          if (orphanToDelete && blockStreamingClient) {
-            void deleteMattermostPost(blockStreamingClient, orphanToDelete).catch(() => {});
+          // Dequeue and delete the over-limit preview for this turn — but ONLY
+          // on final payloads that are not skipped-turn re-deliveries. The same
+          // deliver() callback fires for tool summaries and block messages; shifting
+          // unconditionally would consume a queue entry on the wrong payload and
+          // delete a preview before its own final has been re-sent (ID=2965341948).
+          if (isFinal && pendingOrphanDeletes.length > 0 && blockStreamingClient) {
+            const orphanToDelete = pendingOrphanDeletes.shift();
+            if (orphanToDelete) {
+              void deleteMattermostPost(blockStreamingClient, orphanToDelete).catch(() => {});
+            }
           }
         },
         onError: (err, info) => {
@@ -1900,6 +1903,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   // value has changed by the time the POST resolves, the result belongs
                   // to the previous turn and must be discarded / the post deleted.
                   currentTurnSeq++;
+                  // Reset the failure latch so each turn can independently attempt
+                  // streaming — a transient 429/500 in turn A should not prevent
+                  // turns B, C, etc. from streaming (ID=2965341951).
+                  previewSendFailed = false;
 
                   // Stop the interval and reset turn-local text/ID state immediately
                   // so new onPartialReply calls start fresh for the next turn.
