@@ -13,19 +13,25 @@ Search API or Perplexity Sonar via OpenRouter.
 
 <Note>
 This page covers the Perplexity **provider** setup. For the Perplexity
-**tool** (how the agent uses it), see [Perplexity tool](/perplexity).
+**tool** (how the agent uses it), see [Perplexity tool](/tools/perplexity-search).
 </Note>
 
 - Type: web search provider (not a model provider)
 - Auth: `PERPLEXITY_API_KEY` (direct) or `OPENROUTER_API_KEY` (via OpenRouter)
-- Config path: `tools.web.search.perplexity.apiKey`
+- Config path: `plugins.entries.perplexity.config.webSearch.apiKey`
 
 ## Quick start
 
 1. Set the API key:
 
 ```bash
-openclaw config set tools.web.search.perplexity.apiKey "pplx-xxxxxxxxxxxx"
+openclaw configure --section web
+```
+
+Or set it directly:
+
+```bash
+openclaw config set plugins.entries.perplexity.config.webSearch.apiKey "pplx-xxxxxxxxxxxx"
 ```
 
 2. The agent will automatically use Perplexity for web searches when configured.

@@ -1,5 +1,8 @@
 {
   "id": "perplexity",
+  "providerAuthEnvVars": {
+    "perplexity": ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"]
+  },
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Perplexity API Key",

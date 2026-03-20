@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-runtime";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
@@ -13,7 +14,6 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
-import { issuePairingChallenge } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
@@ -292,14 +292,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (!sender) {
         return;
       }
-      await issuePairingChallenge({
+      await createChannelPairingChallengeIssuer({
         channel: "imessage",
-        senderId: decision.senderId,
-        senderIdLine: `Your iMessage sender id: ${decision.senderId}`,
-        meta: {
-          sender: decision.senderId,
-          chatId: chatId ? String(chatId) : undefined,
-        },
         upsertPairingRequest: async ({ id, meta }) =>
           await upsertChannelPairingRequest({
             channel: "imessage",
@@ -307,6 +301,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             accountId: accountInfo.accountId,
             meta,
           }),
+      })({
+        senderId: decision.senderId,
+        senderIdLine: `Your iMessage sender id: ${decision.senderId}`,
+        meta: {
+          sender: decision.senderId,
+          chatId: chatId ? String(chatId) : undefined,
+        },
         onCreated: () => {
           logVerbose(`imessage pairing request sender=${decision.senderId}`);
         },
@@ -393,7 +394,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       );
     }
 
-    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
       cfg,
       agentId: decision.route.agentId,
       channel: "imessage",
@@ -401,7 +402,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
 
     const dispatcher = createReplyDispatcher({
-      ...prefixOptions,
+      ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
       deliver: async (payload) => {
         const target = ctxPayload.To;

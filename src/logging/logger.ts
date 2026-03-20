@@ -35,8 +35,14 @@ function resolveDefaultLogDir(): string {
   return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
 }
 
+function resolveDefaultLogFile(defaultLogDir: string): string {
+  return canUseNodeFs()
+    ? path.join(defaultLogDir, "openclaw.log")
+    : `${POSIX_OPENCLAW_TMP_DIR}/openclaw.log`;
+}
+
 export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
-export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // legacy single-file path
+export const DEFAULT_LOG_FILE = resolveDefaultLogFile(DEFAULT_LOG_DIR); // legacy single-file path
 
 const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";

@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { discordPlugin } from "../../../extensions/discord/src/channel.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -44,9 +43,7 @@ import {
 import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
 
 beforeEach(() => {
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
-  );
+  setActivePluginRegistry(createTestRegistry([]));
 });
 
 describe("delivery-queue", () => {
@@ -1194,6 +1191,30 @@ describe("resolveOutboundSessionRoute", () => {
           from: "feishu:oc_ambiguous_chat",
           to: "oc_ambiguous_chat",
           chatType: "direct",
+        },
+      },
+      {
+        name: "Slack user DM target",
+        cfg: perChannelPeerCfg,
+        channel: "slack",
+        target: "user:U12345ABC",
+        expected: {
+          sessionKey: "agent:main:slack:direct:u12345abc",
+          from: "slack:U12345ABC",
+          to: "user:U12345ABC",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Slack channel target without thread",
+        cfg: baseConfig,
+        channel: "slack",
+        target: "channel:C999XYZ",
+        expected: {
+          sessionKey: "agent:main:slack:channel:c999xyz",
+          from: "slack:channel:C999XYZ",
+          to: "channel:C999XYZ",
+          chatType: "channel",
         },
       },
     ];
