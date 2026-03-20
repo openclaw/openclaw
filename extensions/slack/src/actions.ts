@@ -84,11 +84,18 @@ export async function reactSlackMessage(
   opts: SlackActionClientOpts = {},
 ) {
   const client = await getClient(opts);
-  await client.reactions.add({
-    channel: channelId,
-    timestamp: messageId,
-    name: normalizeEmoji(emoji),
-  });
+  try {
+    await client.reactions.add({
+      channel: channelId,
+      timestamp: messageId,
+      name: normalizeEmoji(emoji),
+    });
+  } catch (error: unknown) {
+    const slackError = error as { data?: { error?: string } };
+    if (slackError?.data?.error !== "already_reacted") {
+      throw error;
+    }
+  }
 }
 
 export async function removeSlackReaction(
