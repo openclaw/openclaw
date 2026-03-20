@@ -194,10 +194,11 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
           // The chats query returns one entry per conversation (id = conversation ID),
           // so we compare createdAt to detect new messages in existing conversations.
           const lastSeen = new Map<string, string>();
+          let interval: ReturnType<typeof setInterval> | undefined;
 
           // Cleanup helper
           const cleanup = () => {
-            clearInterval(interval);
+            if (interval) clearInterval(interval);
             activeClients.delete(account.accountId);
             ctx.log?.info(`[${account.accountId}] SoundChain channel stopped`);
           };
@@ -267,8 +268,8 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
             { once: true },
           );
 
-          // Poll for new inbound messages
-          const interval = setInterval(async () => {
+          // Poll for new inbound messages (starts AFTER seed completes)
+          interval = setInterval(async () => {
             try {
               const chats = await client.getChats();
 

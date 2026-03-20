@@ -163,8 +163,18 @@ export interface MessagingClient {
  * falls back to Lambda GraphQL if REST fails.
  */
 export function createMessagingClient(apiUrl: string, token: string): MessagingClient {
-  // Derive base URL for REST endpoints: https://soundchain.io
-  const baseUrl = "https://soundchain.io";
+  // Derive REST base URL from the configured apiUrl
+  // e.g. "https://api.soundchain.io/graphql" → "https://soundchain.io"
+  // e.g. "https://staging.soundchain.io/graphql" → "https://staging.soundchain.io"
+  let baseUrl: string;
+  try {
+    const parsed = new URL(apiUrl);
+    // Strip "api." prefix if present, remove /graphql path
+    const host = parsed.hostname.replace(/^api\./, "");
+    baseUrl = `${parsed.protocol}//${host}`;
+  } catch {
+    baseUrl = "https://soundchain.io";
+  }
 
   async function restGet(path: string): Promise<Record<string, unknown>> {
     const res = await fetch(`${baseUrl}${path}`, {
