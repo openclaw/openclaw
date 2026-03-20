@@ -209,6 +209,94 @@ describe("config cli", () => {
         apiKey: "ollama-local", // pragma: allowlist secret
       });
     });
+
+    it("drops gateway.auth.password when switching mode to token", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          auth: {
+            mode: "password",
+            token: "token-keep",
+            password: "password-drop", // pragma: allowlist secret
+            allowTailscale: true,
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.gateway?.auth).toEqual({
+        mode: "token",
+        token: "token-keep",
+        allowTailscale: true,
+      });
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Removed inactive gateway.auth.password for gateway.auth.mode=token",
+        ),
+      );
+    });
+
+    it("drops gateway.auth.token when switching mode to password", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "token-drop",
+            password: "password-keep", // pragma: allowlist secret
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "gateway.auth.mode", "password"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.gateway?.auth).toEqual({
+        mode: "password",
+        password: "password-keep", // pragma: allowlist secret
+      });
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Removed inactive gateway.auth.token for gateway.auth.mode=password",
+        ),
+      );
+    });
+
+    it("applies mode-based credential cleanup using the final batch result", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          auth: {
+            mode: "password",
+            token: "token-keep",
+            password: "password-drop", // pragma: allowlist secret
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "--batch-json",
+        '[{"path":"gateway.auth.password","value":"password-updated"},{"path":"gateway.auth.mode","value":"token"}]',
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.gateway?.auth).toEqual({
+        mode: "token",
+        token: "token-keep",
+      });
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Removed inactive gateway.auth.password for gateway.auth.mode=token",
+        ),
+      );
+    });
   });
 
   describe("config get", () => {

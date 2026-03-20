@@ -1625,6 +1625,35 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(registry.diagnostics.some((d) => d.level === "error")).toBe(true);
   });
 
+  it("throws when strict plugin loading sees plugin errors", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "configurable",
+      filename: "configurable.cjs",
+      body: `module.exports = { id: "configurable", register() {} };`,
+    });
+
+    expect(() =>
+      loadOpenClawPlugins({
+        cache: false,
+        throwOnLoadError: true,
+        config: {
+          plugins: {
+            enabled: true,
+            load: { paths: [plugin.file] },
+            allow: ["configurable"],
+            entries: {
+              configurable: {
+                enabled: true,
+                config: "nope" as unknown as Record<string, unknown>,
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow("plugin load failed: configurable: invalid config: <root>: must be object");
+  });
+
   it("fails when plugin export id mismatches manifest id", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -3460,6 +3489,47 @@ module.exports = {
       }),
     );
     expect(subpaths).toEqual(["channel-runtime", "core"]);
+  });
+
+  it("builds plugin-sdk aliases from the module being loaded, not the loader location", () => {
+    const fixture = createPluginSdkAliasFixture({
+      srcFile: "channel-runtime.ts",
+      distFile: "channel-runtime.js",
+      packageExports: {
+        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+      },
+    });
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
+    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(distRootAlias, "module.exports = {};\n", "utf-8");
+    const sourcePluginEntry = path.join(fixture.root, "extensions", "demo", "src", "index.ts");
+    fs.mkdirSync(path.dirname(sourcePluginEntry), { recursive: true });
+    fs.writeFileSync(sourcePluginEntry, 'export const plugin = "demo";\n', "utf-8");
+
+    const sourceAliases = withEnv({ NODE_ENV: undefined }, () =>
+      __testing.buildPluginLoaderAliasMap(sourcePluginEntry),
+    );
+    expect(fs.realpathSync(sourceAliases["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(sourceRootAlias),
+    );
+    expect(fs.realpathSync(sourceAliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
+      fs.realpathSync(path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts")),
+    );
+
+    const distPluginEntry = path.join(fixture.root, "dist", "extensions", "demo", "index.js");
+    fs.mkdirSync(path.dirname(distPluginEntry), { recursive: true });
+    fs.writeFileSync(distPluginEntry, 'export const plugin = "demo";\n', "utf-8");
+
+    const distAliases = withEnv({ NODE_ENV: undefined }, () =>
+      __testing.buildPluginLoaderAliasMap(distPluginEntry),
+    );
+    expect(fs.realpathSync(distAliases["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(distRootAlias),
+    );
+    expect(fs.realpathSync(distAliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
+      fs.realpathSync(path.join(fixture.root, "dist", "plugin-sdk", "channel-runtime.js")),
+    );
   });
 
   it("does not resolve plugin-sdk alias files from cwd fallback when package root is not an OpenClaw root", () => {
