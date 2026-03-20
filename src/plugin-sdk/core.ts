@@ -85,6 +85,7 @@ export {
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
 export {
+  clearAccountEntryFields,
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
