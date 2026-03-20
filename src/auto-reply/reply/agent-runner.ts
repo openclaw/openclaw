@@ -1393,33 +1393,8 @@ export async function runReplyAgent(params: {
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
-    if (replyPayloads.length === 0) {
-      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
-    }
-
-    const successfulCronAdds = runResult.successfulCronAdds ?? 0;
-    const hasReminderCommitment = replyPayloads.some(
-      (payload) =>
-        !payload.isError &&
-        typeof payload.text === "string" &&
-        hasUnbackedReminderCommitment(payload.text),
-    );
-    // Suppress the guard note when an existing cron job (created in a prior
-    // turn) already covers the commitment — avoids false positives (#32228).
-    const coveredByExistingCron =
-      hasReminderCommitment && successfulCronAdds === 0
-        ? await hasSessionRelatedCronJobs({
-            cronStorePath: cfg.cron?.store,
-            sessionKey,
-          })
-        : false;
-    const guardedReplyPayloads =
-      hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
-        ? appendUnscheduledReminderNote(replyPayloads)
-        : replyPayloads;
-
-    await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
-
+    // Emit model.usage before the replyPayloads early return so streamed runs
+    // (where buildReplyPayloads suppresses the final array) still get usage events.
     if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
@@ -1460,9 +1435,10 @@ export async function runReplyAgent(params: {
         durationMs: Date.now() - runStartedAt,
       };
       // Include model-originated content when explicitly opted in via captureContent config.
-      // Intentionally uses replyPayloads (pre-guard) rather than guardedReplyPayloads:
-      // gen_ai.completion should capture model-originated output, not system-injected
-      // post-processing like reminder notes or usage lines.
+      // Uses payloadArray (pre-suppression) rather than replyPayloads so that
+      // streamed runs still capture content even when replyPayloads is empty.
+      // Excludes isError and isReasoning payloads: errors aren't model output,
+      // and reasoning/CoT is stripped before delivery and should not leak to OTEL.
       // Note: followupRun.prompt is the queue body, which may diverge from the
       // effective prompt the model actually sees (attempt.ts adds bootstrap warnings,
       // hook context, thread-history notes, etc.). This is a known approximation at
@@ -1473,8 +1449,11 @@ export async function runReplyAgent(params: {
         if (typeof followupRun.prompt === "string") {
           usageEvent.inputText = followupRun.prompt;
         }
-        const outputTexts = replyPayloads
-          .filter((p): p is typeof p & { text: string } => typeof p.text === "string" && !p.isError)
+        const outputTexts = payloadArray
+          .filter(
+            (p): p is typeof p & { text: string } =>
+              typeof p.text === "string" && !p.isError && p.isReasoning !== true,
+          )
           .map((p) => p.text);
         if (outputTexts.length > 0) {
           usageEvent.outputText = outputTexts.join("\n");
@@ -1482,6 +1461,33 @@ export async function runReplyAgent(params: {
       }
       emitDiagnosticEvent(usageEvent);
     }
+
+    if (replyPayloads.length === 0) {
+      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
+
+    const successfulCronAdds = runResult.successfulCronAdds ?? 0;
+    const hasReminderCommitment = replyPayloads.some(
+      (payload) =>
+        !payload.isError &&
+        typeof payload.text === "string" &&
+        hasUnbackedReminderCommitment(payload.text),
+    );
+    // Suppress the guard note when an existing cron job (created in a prior
+    // turn) already covers the commitment — avoids false positives (#32228).
+    const coveredByExistingCron =
+      hasReminderCommitment && successfulCronAdds === 0
+        ? await hasSessionRelatedCronJobs({
+            cronStorePath: cfg.cron?.store,
+            sessionKey,
+          })
+        : false;
+    const guardedReplyPayloads =
+      hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
+        ? appendUnscheduledReminderNote(replyPayloads)
+        : replyPayloads;
+
+    await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
     const responseUsageRaw =
       activeSessionEntry?.responseUsage ??
