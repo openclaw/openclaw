@@ -5,7 +5,7 @@ import {
   normalizeConversationText,
   parseTelegramChatIdFromTarget,
 } from "../../acp/conversation-id.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -30,6 +30,7 @@ import {
 } from "../../config/sessions.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -584,6 +585,21 @@ export async function initSessionState(params: {
     SessionId: sessionId,
     IsNewSession: isNewSession ? "true" : "false",
   };
+
+  // When a session is auto-reset (idle timeout or daily reset), emit a
+  // session:reset internal hook so the session-memory hook can persist
+  // the outgoing session context — just as it does for manual /new and /reset.
+  if (isNewSession && !resetTriggered && previousSessionEntry) {
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const autoResetEvent = createInternalHookEvent("session", "reset", sessionKey, {
+      sessionEntry,
+      previousSessionEntry,
+      commandSource: "auto-reset",
+      workspaceDir,
+      cfg,
+    });
+    void triggerInternalHook(autoResetEvent).catch(() => {});
+  }
 
   // Run session plugin hooks (fire-and-forget)
   const hookRunner = getGlobalHookRunner();
