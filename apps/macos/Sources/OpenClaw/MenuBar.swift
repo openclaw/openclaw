@@ -154,6 +154,7 @@ struct OpenClawApp: App {
         handler.onRightClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemRightClick")
             WebChatManager.shared.closePanel()
+            WebChatManager.shared.closeWindow()
             self.isMenuPresented = true
             self.updateStatusHighlight()
         }

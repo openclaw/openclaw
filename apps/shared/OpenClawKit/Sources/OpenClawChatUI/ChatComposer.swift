@@ -472,6 +472,12 @@ private struct ChatComposerTextView: NSViewRepresentable {
             self.onSend()
         }
         textView.onPasteImageAttachment = self.onPasteImageAttachment
+        textView.onDropFileURLs = { [viewModel = self.viewModel] urls in
+            viewModel.addAttachments(urls: urls)
+        }
+        textView.onDropFileURLs = { [viewModel = self.viewModel] urls in
+            viewModel.addAttachments(urls: urls)
+        }
 
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -525,6 +531,19 @@ private struct ChatComposerTextView: NSViewRepresentable {
 private final class ChatComposerNSTextView: NSTextView {
     var onSend: (() -> Void)?
     var onPasteImageAttachment: ((_ data: Data, _ fileName: String, _ mimeType: String) -> Void)?
+    /// Callback to route dropped file URLs to the attachment handler instead of inserting as text.
+    var onDropFileURLs: (([URL]) -> Void)?
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        let pboard = sender.draggingPasteboard
+        if let urls = pboard.readObjects(forClasses: [NSURL.self], options: [
+            .urlReadingFileURLsOnly: true
+        ]) as? [URL], !urls.isEmpty, let handler = self.onDropFileURLs {
+            handler(urls)
+            return true
+        }
+        return super.performDragOperation(sender)
+    }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         var types = super.readablePasteboardTypes

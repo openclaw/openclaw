@@ -108,6 +108,11 @@ final class WebChatManager {
         self.panelController?.close()
     }
 
+    func closeWindow() {
+        self.windowController?.close()
+        self.onPanelVisibilityChanged?(false)
+    }
+
     func preferredSessionKey() async -> String {
         if let cachedPreferredSessionKey { return cachedPreferredSessionKey }
         let key = await GatewayConnection.shared.mainSessionKey()

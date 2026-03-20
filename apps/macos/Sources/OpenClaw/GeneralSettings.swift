@@ -67,6 +67,13 @@ struct GeneralSettings: View {
                         subtitle: "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
                         binding: self.$state.peekabooBridgeEnabled)
 
+                    if voiceWakeSupported {
+                        SettingsToggleRow(
+                            title: "Talk Mode",
+                            subtitle: "Enable hands-free voice conversation with your assistant.",
+                            binding: self.talkBinding)
+                    }
+
                     SettingsToggleRow(
                         title: "Enable debug tools",
                         subtitle: "Show the Debug tab with development utilities.",
@@ -99,6 +106,14 @@ struct GeneralSettings: View {
         Binding(
             get: { !self.state.isPaused },
             set: { self.state.isPaused = !$0 })
+    }
+
+    private var talkBinding: Binding<Bool> {
+        Binding(
+            get: { self.state.talkEnabled },
+            set: { newValue in
+                Task { await self.state.setTalkEnabled(newValue) }
+            })
     }
 
     private var connectionSection: some View {
