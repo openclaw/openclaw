@@ -136,12 +136,20 @@
         "reason": "Plugin auto-enable coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
       },
       {
+        "file": "src/cron/service.runs-one-shot-main-job-disables-it.test.ts",
+        "reason": "One-shot cron service coverage retained a top shared unit-fast heap spike in the March 19, 2026 Linux Node 22 OOM lane."
+      },
+      {
         "file": "src/cron/isolated-agent/run.sandbox-config-preserved.test.ts",
         "reason": "Isolated-agent sandbox config coverage retained a large shared unit-fast heap spike on Linux CI."
       },
       {
         "file": "src/cron/store.test.ts",
         "reason": "Cron store coverage retained a large shared unit-fast heap spike on Linux Node 24 CI."
+      },
+      {
+        "file": "src/infra/exec-approval-forwarder.test.ts",
+        "reason": "Exec approval forwarder coverage retained a top shared unit-fast heap spike in the March 19, 2026 Linux Node 22 OOM lane."
       },
       {
         "file": "src/infra/heartbeat-runner.respects-ackmaxchars-heartbeat-acks.test.ts",
