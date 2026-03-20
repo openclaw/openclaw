@@ -236,12 +236,20 @@ jobs:
       - name: Configure Node test resources
         if: (github.event_name != 'pull_request' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
         env:
+          EVENT_NAME: ${{ github.event_name }}
           SHARD_COUNT: ${{ matrix.shard_count || '' }}
           SHARD_INDEX: ${{ matrix.shard_index || '' }}
         run: |
           # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
-          # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
-          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
+          # Pull request lanes still hit shared unit-fast OOMs when unit-fast and
+          # isolated runs overlap. Keep pushes on the faster worker budget, but
+          # serialize PR test runs onto the low-profile path to lower peak RSS.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "OPENCLAW_TEST_PROFILE=low" >> "$GITHUB_ENV"
+            echo "OPENCLAW_TEST_WORKERS=1" >> "$GITHUB_ENV"
+          else
+            echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
+          fi
           echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
           if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
             echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
@@ -725,7 +733,7 @@ jobs:
         run: pnpm canvas:a2ui:bundle
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        run: ${{ matrix.command }}
+        run: ${{ matrix.command }} -- --testTimeout=300000
 
   # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
   # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;
