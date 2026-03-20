@@ -202,4 +202,24 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
   });
+
+  it("handles /model list by opening model selector instead of setting model", async () => {
+    const harness = createHarness();
+    harness.state.sessionInfo = { modelProvider: "openai", model: "gpt-4" };
+    const { handleCommand, addSystem } = harness;
+
+    await handleCommand("/model list");
+
+    expect(addSystem).toHaveBeenCalledWith(expect.stringContaining("model"));
+  });
+
+  it("handles /model status by showing current model", async () => {
+    const harness = createHarness();
+    harness.state.sessionInfo = { modelProvider: "anthropic", model: "claude-3" };
+    const { handleCommand, addSystem } = harness;
+
+    await handleCommand("/model status");
+
+    expect(addSystem).toHaveBeenCalledWith("model: anthropic/claude-3");
+  });
 });
