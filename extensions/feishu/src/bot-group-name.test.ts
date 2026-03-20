@@ -4,8 +4,8 @@ import { resolveGroupName } from "./bot.js";
 /**
  * Unit tests for resolveGroupName() in bot.ts.
  *
- * Covers: successful lookup, API failure, empty name, negative caching,
- *         positive cache reuse, and cache expiration.
+ * Covers: successful lookup, API failure, empty name, cache reuse,
+ *         negative caching, undefined response, and cross-account isolation.
  */
 
 // ---- hoisted mocks (following bot.test.ts pattern) ----
@@ -21,8 +21,8 @@ vi.mock("./client.js", () => ({
 }));
 
 // ---- helpers ----
-function makeAccount() {
-  return { accountId: "test-account", appId: "cli_test", appSecret: "secret" } as any;
+function makeAccount(id = "test-account") {
+  return { accountId: id, appId: "cli_test", appSecret: "secret" } as any;
 }
 
 function makeFakeClient() {
@@ -77,28 +77,24 @@ describe("resolveGroupName", () => {
 
   it("uses cached result on second call within TTL", async () => {
     mockGetChatInfo.mockResolvedValue({ name: "Cached Group" });
-    // First call — hits API
     const name1 = await resolveGroupName({ account, chatId: "oc_test_chat_004", log });
     expect(name1).toBe("Cached Group");
     expect(mockGetChatInfo).toHaveBeenCalledTimes(1);
 
-    // Second call — should use cache
     const name2 = await resolveGroupName({ account, chatId: "oc_test_chat_004", log });
     expect(name2).toBe("Cached Group");
     expect(mockGetChatInfo).toHaveBeenCalledTimes(1); // no additional API call
   });
 
-  it("caches negative result and returns undefined without re-calling API", async () => {
+  it("caches negative result and skips API on retry", async () => {
     mockGetChatInfo.mockRejectedValue(new Error("fail"));
-    // First call — fails and caches negative result
     const name1 = await resolveGroupName({ account, chatId: "oc_test_chat_005", log });
     expect(name1).toBeUndefined();
     expect(mockGetChatInfo).toHaveBeenCalledTimes(1);
 
-    // Second call — should use negative cache
     const name2 = await resolveGroupName({ account, chatId: "oc_test_chat_005", log });
     expect(name2).toBeUndefined();
-    expect(mockGetChatInfo).toHaveBeenCalledTimes(1); // no additional API call
+    expect(mockGetChatInfo).toHaveBeenCalledTimes(1); // negative cache hit
   });
 
   it("returns undefined for missing chatInfo response", async () => {
@@ -109,5 +105,29 @@ describe("resolveGroupName", () => {
       log,
     });
     expect(name).toBeUndefined();
+  });
+
+  it("isolates cache entries across different accounts", async () => {
+    const accountA = makeAccount("account-a");
+    const accountB = makeAccount("account-b");
+
+    // Account A fails → negative cache
+    mockGetChatInfo.mockRejectedValueOnce(new Error("no permission"));
+    const nameA = await resolveGroupName({
+      account: accountA,
+      chatId: "oc_shared_group",
+      log,
+    });
+    expect(nameA).toBeUndefined();
+
+    // Account B succeeds for the SAME chatId → should NOT be blocked by A's cache
+    mockGetChatInfo.mockResolvedValueOnce({ name: "Shared Group" });
+    const nameB = await resolveGroupName({
+      account: accountB,
+      chatId: "oc_shared_group",
+      log,
+    });
+    expect(nameB).toBe("Shared Group");
+    expect(mockGetChatInfo).toHaveBeenCalledTimes(2); // both accounts hit API
   });
 });
