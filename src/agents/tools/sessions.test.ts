@@ -601,7 +601,7 @@ describe("sessions_send gating", () => {
         sessions: { visibility: "all" },
       },
     });
-    const calls = [];
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: Record<string, unknown> };
       calls.push(request);
@@ -642,6 +642,19 @@ describe("sessions_send gating", () => {
       status: "ok",
       delivery: { status: "disabled", mode: "none" },
     });
+    await vi.waitFor(
+      () => {
+        expect(calls.filter((call) => call.method === "agent")).toHaveLength(2);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+    expect(
+      calls.some(
+        (call) =>
+          typeof call.params?.extraSystemPrompt === "string" &&
+          call.params.extraSystemPrompt.includes("Agent-to-agent announce step"),
+      ),
+    ).toBe(false);
     expect(calls.some((call) => call.method === "send")).toBe(false);
   });
 
@@ -686,7 +699,7 @@ describe("sessions_send gating", () => {
         : "";
     expect(extraSystemPrompt).toContain("This message was delivered via sessions_send.");
     expect(extraSystemPrompt).toContain(
-      "For a private reply back to the sender, use sessions_send targeting agent:main:main.",
+      "For a private reply back to the sender, use sessions_send targeting agent:main:main",
     );
     expect(extraSystemPrompt).toContain(
       "Do not use channel messaging tools for private agent-to-agent replies",

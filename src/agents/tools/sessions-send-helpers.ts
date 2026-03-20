@@ -95,7 +95,7 @@ export function buildAgentToAgentMessageContext(params: {
   lines.push("This message was delivered via sessions_send.");
   if (params.requesterSessionKey) {
     lines.push(
-      `For a private reply back to the sender, use sessions_send targeting ${params.requesterSessionKey}.`,
+      `For a private reply back to the sender, use sessions_send targeting ${params.requesterSessionKey} (if your sessions visibility allows that target).`,
     );
   }
   lines.push(
@@ -122,7 +122,7 @@ export function buildAgentToAgentReplyContext(params: {
     ...buildAgentSessionLines(params),
     "This conversation is happening through sessions_send.",
     params.requesterSessionKey
-      ? `If you need to continue privately with the sender outside this ping-pong step, use sessions_send targeting ${params.requesterSessionKey}.`
+      ? `If you need to continue privately with the sender outside this ping-pong step, use sessions_send targeting ${params.requesterSessionKey} (if your sessions visibility allows that target).`
       : undefined,
     "Avoid channel messaging tools for private replies unless you explicitly intend to post externally.",
     `If you want to stop the ping-pong, reply exactly "${REPLY_SKIP_TOKEN}".`,
