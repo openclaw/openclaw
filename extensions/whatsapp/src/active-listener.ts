@@ -59,7 +59,7 @@ _global[GLOBAL_CURRENT_KEY] ??= null;
 function getListeners(): Map<string, ActiveWebListener> {
   // Re-seed defensively in case a fresh process hasn't run the top-level init.
   _global[GLOBAL_LISTENERS_KEY] ??= new Map<string, ActiveWebListener>();
-  return _global[GLOBAL_LISTENERS_KEY];
+  return _global[GLOBAL_LISTENERS_KEY]!;
 }
 
 function getCurrentListener(): ActiveWebListener | null {
