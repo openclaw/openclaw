@@ -430,6 +430,54 @@
       {
         "file": "src/acp/translator.set-session-mode.test.ts",
         "reason": "ACP session-mode translator coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/infra/outbound/message-action-runner.context.test.ts",
+        "reason": "Message action runner context coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/secrets/runtime-web-tools.test.ts",
+        "reason": "Runtime web tools coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/cron/service.rearm-timer-when-running.test.ts",
+        "reason": "Cron timer rearm coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/cron/service.failure-alert.test.ts",
+        "reason": "Failure alert cron coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/image-generation/runtime.test.ts",
+        "reason": "Image generation runtime coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/config/talk-defaults.test.ts",
+        "reason": "Talk defaults coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/routing/resolve-route.test.ts",
+        "reason": "Resolve-route coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/image-generation/providers/openai.test.ts",
+        "reason": "OpenAI image generation provider coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/config/sessions/session-key.test.ts",
+        "reason": "Session key coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/cron/isolated-agent.model-formatting.test.ts",
+        "reason": "Isolated-agent model formatting coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/infra/session-cost-usage.test.ts",
+        "reason": "Session cost usage coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/config/sessions/store.pruning.test.ts",
+        "reason": "Session store pruning coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
       }
     ],
     "threadSingleton": [

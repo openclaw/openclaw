@@ -18,64 +18,120 @@ import {
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
 
-const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
-  resolvePluginWebSearchProvidersMock: vi.fn((params?: { config?: OpenClawConfig }) => {
-    const configuredCredentialValue = (
-      params?.config?.plugins?.entries?.google?.config as
-        | { webSearch?: { apiKey?: unknown } }
-        | undefined
-    )?.webSearch?.apiKey;
+const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvidersMock } =
+  vi.hoisted(() => ({
+    resolveBundledPluginWebSearchProvidersMock: vi.fn((params?: { config?: OpenClawConfig }) => {
+      const configuredCredentialValue = (
+        params?.config?.plugins?.entries?.google?.config as
+          | { webSearch?: { apiKey?: unknown } }
+          | undefined
+      )?.webSearch?.apiKey;
 
-    return [
-      {
-        pluginId: "google",
-        id: "gemini",
-        label: "Gemini (Google Search)",
-        hint: "Google Search grounding",
-        envVars: ["GEMINI_API_KEY"],
-        placeholder: "AIza...",
-        signupUrl: "https://aistudio.google.com/apikey",
-        autoDetectOrder: 20,
-        credentialPath: "plugins.entries.google.config.webSearch.apiKey",
-        inactiveSecretPaths: ["plugins.entries.google.config.webSearch.apiKey"],
-        getCredentialValue: (searchConfig?: Record<string, unknown>) => {
-          const gemini = searchConfig?.gemini;
-          return gemini && typeof gemini === "object" && !Array.isArray(gemini)
-            ? (gemini as Record<string, unknown>).apiKey
-            : undefined;
-        },
-        setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => {
-          const gemini = searchConfigTarget.gemini;
-          if (!gemini || typeof gemini !== "object" || Array.isArray(gemini)) {
-            searchConfigTarget.gemini = { apiKey: value };
-            return;
-          }
-          (gemini as Record<string, unknown>).apiKey = value;
-        },
-        getConfiguredCredentialValue: () => configuredCredentialValue,
-        setConfiguredCredentialValue: (configTarget: OpenClawConfig, value: unknown) => {
-          configTarget.plugins ??= {};
-          configTarget.plugins.entries ??= {};
-          configTarget.plugins.entries.google ??= {};
-          configTarget.plugins.entries.google.config ??= {};
-          (
-            configTarget.plugins.entries.google.config as {
-              webSearch?: { apiKey?: unknown };
+      return [
+        {
+          pluginId: "google",
+          id: "gemini",
+          label: "Gemini (Google Search)",
+          hint: "Google Search grounding",
+          envVars: ["GEMINI_API_KEY"],
+          placeholder: "AIza...",
+          signupUrl: "https://aistudio.google.com/apikey",
+          autoDetectOrder: 20,
+          credentialPath: "plugins.entries.google.config.webSearch.apiKey",
+          inactiveSecretPaths: ["plugins.entries.google.config.webSearch.apiKey"],
+          getCredentialValue: (searchConfig?: Record<string, unknown>) => {
+            const gemini = searchConfig?.gemini;
+            return gemini && typeof gemini === "object" && !Array.isArray(gemini)
+              ? (gemini as Record<string, unknown>).apiKey
+              : undefined;
+          },
+          setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => {
+            const gemini = searchConfigTarget.gemini;
+            if (!gemini || typeof gemini !== "object" || Array.isArray(gemini)) {
+              searchConfigTarget.gemini = { apiKey: value };
+              return;
             }
-          ).webSearch ??= {};
-          (
-            configTarget.plugins.entries.google.config as {
-              webSearch: { apiKey?: unknown };
-            }
-          ).webSearch.apiKey = value;
+            (gemini as Record<string, unknown>).apiKey = value;
+          },
+          getConfiguredCredentialValue: () => configuredCredentialValue,
+          setConfiguredCredentialValue: (configTarget: OpenClawConfig, value: unknown) => {
+            configTarget.plugins ??= {};
+            configTarget.plugins.entries ??= {};
+            configTarget.plugins.entries.google ??= {};
+            configTarget.plugins.entries.google.config ??= {};
+            (
+              configTarget.plugins.entries.google.config as {
+                webSearch?: { apiKey?: unknown };
+              }
+            ).webSearch ??= {};
+            (
+              configTarget.plugins.entries.google.config as {
+                webSearch: { apiKey?: unknown };
+              }
+            ).webSearch.apiKey = value;
+          },
+          createTool: () => null,
         },
-        createTool: () => null,
-      },
-    ];
-  }),
-}));
+      ];
+    }),
+    resolvePluginWebSearchProvidersMock: vi.fn((params?: { config?: OpenClawConfig }) => {
+      const configuredCredentialValue = (
+        params?.config?.plugins?.entries?.google?.config as
+          | { webSearch?: { apiKey?: unknown } }
+          | undefined
+      )?.webSearch?.apiKey;
+
+      return [
+        {
+          pluginId: "google",
+          id: "gemini",
+          label: "Gemini (Google Search)",
+          hint: "Google Search grounding",
+          envVars: ["GEMINI_API_KEY"],
+          placeholder: "AIza...",
+          signupUrl: "https://aistudio.google.com/apikey",
+          autoDetectOrder: 20,
+          credentialPath: "plugins.entries.google.config.webSearch.apiKey",
+          inactiveSecretPaths: ["plugins.entries.google.config.webSearch.apiKey"],
+          getCredentialValue: (searchConfig?: Record<string, unknown>) => {
+            const gemini = searchConfig?.gemini;
+            return gemini && typeof gemini === "object" && !Array.isArray(gemini)
+              ? (gemini as Record<string, unknown>).apiKey
+              : undefined;
+          },
+          setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => {
+            const gemini = searchConfigTarget.gemini;
+            if (!gemini || typeof gemini !== "object" || Array.isArray(gemini)) {
+              searchConfigTarget.gemini = { apiKey: value };
+              return;
+            }
+            (gemini as Record<string, unknown>).apiKey = value;
+          },
+          getConfiguredCredentialValue: () => configuredCredentialValue,
+          setConfiguredCredentialValue: (configTarget: OpenClawConfig, value: unknown) => {
+            configTarget.plugins ??= {};
+            configTarget.plugins.entries ??= {};
+            configTarget.plugins.entries.google ??= {};
+            configTarget.plugins.entries.google.config ??= {};
+            (
+              configTarget.plugins.entries.google.config as {
+                webSearch?: { apiKey?: unknown };
+              }
+            ).webSearch ??= {};
+            (
+              configTarget.plugins.entries.google.config as {
+                webSearch: { apiKey?: unknown };
+              }
+            ).webSearch.apiKey = value;
+          },
+          createTool: () => null,
+        },
+      ];
+    }),
+  }));
 
 vi.mock("../plugins/web-search-providers.js", () => ({
+  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
