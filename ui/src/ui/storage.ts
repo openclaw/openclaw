@@ -194,10 +194,7 @@ export function loadSettings(): UiSettings {
     navCollapsed: false,
     navWidth: 220,
     navGroupsCollapsed: {},
-    vncWsUrl:
-      typeof location !== "undefined"
-        ? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/vnc`
-        : "ws://localhost:18789/vnc",
+    vncWsUrl: `${defaultUrl.replace(/\/$/, "")}/api/debug-vnc`,
     vncTarget: "localhost:5900",
     borderRadius: 50,
   };

@@ -89,6 +89,7 @@ import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./u
 import { generateUUID } from "./uuid.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 import "./components/claw-computer-panel.ts";
+import "./components/claw-image-panel.ts";
 
 declare global {
   interface Window {
@@ -178,6 +179,7 @@ export class OpenClawApp extends LitElement {
 
   @state() showClawComputer = false;
   @state() clawComputerWidth = 600;
+  @state() activeClawTool = "vnc"; // vnc, browser, images
 
   @state() nodesLoading = false;
   @state() nodes: Array<Record<string, unknown>> = [];
@@ -734,6 +736,10 @@ export class OpenClawApp extends LitElement {
 
   setClawComputerWidth(width: number) {
     this.clawComputerWidth = width;
+  }
+
+  setActiveClawTool(tool: string) {
+    this.activeClawTool = tool;
   }
 
   render() {

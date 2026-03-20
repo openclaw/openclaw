@@ -801,6 +801,28 @@ export function createGatewayHttpServer(opts: {
             }),
         },
         {
+          name: "debug-image",
+          run: async () => {
+            if (requestPath === "/api/debug-image") {
+              try {
+                const fs = await import("node:fs");
+                const img = fs.readFileSync(
+                  "/home/fish/.openclaw/workspace/linux-desktop-control/images/desktop_screeshot_20260318_181311_annotated.png",
+                );
+                res.statusCode = 200;
+                res.setHeader("Content-Type", "image/png");
+                res.setHeader("Access-Control-Allow-Origin", "*");
+                res.end(img);
+              } catch {
+                res.statusCode = 404;
+                res.end("Not Found");
+              }
+              return true;
+            }
+            return false;
+          },
+        },
+        {
           name: "slack",
           run: () => handleSlackHttpRequest(req, res),
         },
@@ -955,6 +977,58 @@ export function attachGatewayUpgradeHandler(opts: {
       if (scopedCanvas.rewrittenUrl) {
         req.url = scopedCanvas.rewrittenUrl;
       }
+
+      const url = new URL(req.url ?? "/", "http://localhost");
+      if (url.pathname === "/api/debug-vnc") {
+        const target = url.searchParams.get("target");
+        let host = process.env.OPENCLAW_VNC_HOST || "localhost";
+        let port = parseInt(process.env.OPENCLAW_VNC_PORT || "5900", 10);
+        if (target) {
+          if (target.includes(":")) {
+            const parts = target.split(":");
+            host = parts[0] || host;
+            const p = parseInt(parts[1] || "", 10);
+            if (!isNaN(p)) {
+              port = p;
+            }
+          } else {
+            host = target;
+          }
+        }
+
+        const net = await import("node:net");
+        // Reuse the same wss for upgrading, but handle connection directly
+        // Or better yet, we can create an ad-hoc WebSocketServer just for this upgrade
+        // to avoid mixing with gateway clients.
+        const { WebSocketServer: VncWss } = await import("ws");
+        const vncWss = new VncWss({ noServer: true, perMessageDeflate: false });
+        vncWss.handleUpgrade(req, socket, head, (ws) => {
+          const tcpSocket = net.connect(port, host);
+          tcpSocket.on("data", (data) => {
+            if (ws.readyState === ws.OPEN) {
+              ws.send(data);
+            }
+          });
+          ws.on("message", (data) => {
+            if (!tcpSocket.writable) {
+              return;
+            }
+            if (Buffer.isBuffer(data)) {
+              tcpSocket.write(data);
+            } else if (Array.isArray(data)) {
+              tcpSocket.write(Buffer.concat(data));
+            } else {
+              tcpSocket.write(Buffer.from(data));
+            }
+          });
+          ws.on("close", () => tcpSocket.end());
+          tcpSocket.on("close", () => ws.close());
+          tcpSocket.on("error", () => ws.close());
+          ws.on("error", () => tcpSocket.end());
+        });
+        return;
+      }
+
       if (canvasHost) {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (url.pathname === CANVAS_WS_PATH) {

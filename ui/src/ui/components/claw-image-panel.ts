@@ -1,40 +1,15 @@
-// @ts-ignore - noVNC types are not available
-import RFB from "@novnc/novnc";
 import { LitElement, html, css } from "lit";
 import { customElement, state, property } from "lit/decorators.js";
 import { createRef, ref, Ref } from "lit/directives/ref.js";
 
-// Compatible with both .default and non-.default versions
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const RFBClass = (RFB as any).default || RFB;
-
-// RFB instance type definition
-interface RFBInstance {
-  disconnect(): void;
-  addEventListener(event: string, callback: (e: unknown) => void): void;
-  scaleViewport: boolean;
-  clipViewport: boolean;
-  resizeSession: boolean;
-  resize?(): void;
-}
-
-@customElement("claw-computer-panel")
-export class ClawComputerPanel extends LitElement {
-  @property() vncUrl = "";
-  @property() vncTarget = "";
-  @property() password = "";
-
-  @state() status = "等待連接...";
-  @state() isConnected = false;
-  @state() isFitted = true;
-
+@customElement("claw-image-panel")
+export class ClawImagePanel extends LitElement {
   // Floating window state
   @state() private isFloating = false;
   @state() private dockedOffsetY = 0;
   @state() private dockedOffsetX = 0;
   @state() private floatingRect = { x: 0, y: 0, width: 600, height: 400 };
 
-  private rfb: RFBInstance | null = null;
   private screenRef: Ref<HTMLDivElement> = createRef<HTMLDivElement>();
   private dragStart = { x: 0, y: 0 };
   private initialRect = {
@@ -62,7 +37,8 @@ export class ClawComputerPanel extends LitElement {
   private resizeObserver: ResizeObserver | null = null;
   private readonly TOOLBAR_SPACE = 50;
 
-  @property({ type: String }) activeTool = "vnc"; // vnc, browser, images
+  @property({ type: String }) activeTool = "images"; // vnc, browser, images
+  @property({ type: String }) imageUrl = "";
 
   @property({ type: Boolean }) enabled = false;
 
@@ -125,16 +101,8 @@ export class ClawComputerPanel extends LitElement {
     }
   }
 
-  updated(changedProperties: Map<string, unknown>) {
-    if (changedProperties.has("enabled")) {
-      if (this.enabled) {
-        if (!this.isConnected) {
-          setTimeout(() => void this.connect(), 100);
-        }
-      } else {
-        this.disconnect();
-      }
-    }
+  updated(_changedProperties: Map<string, unknown>) {
+    // No connection logic needed
   }
 
   static styles = css`
@@ -455,7 +423,6 @@ export class ClawComputerPanel extends LitElement {
 
     return html`
       <div class="container">
-        ${!this.isConnected ? html`<div class="status-overlay">${this.status}</div>` : null}
         <div class="screen-container">
           <!-- Top Toolbar (Dock Mode Icons) - Fixed at top of container -->
           ${
@@ -505,6 +472,7 @@ export class ClawComputerPanel extends LitElement {
             class="screen ${displayFloating ? "floating" : ""}"
             style="${screenStyle}"
           >
+            <img src="${this.imageUrl}" style="max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: auto;" />
             <div class="drag-handle" @mousedown=${this.handleDragStart}></div>
             ${
               displayFloating
@@ -898,115 +866,14 @@ export class ClawComputerPanel extends LitElement {
     // 注意：这里不再单独限制 height，因为 height 已经和 width 绑定了
 
     this.floatingRect = { x, y, width, height };
-
-    if (this.rfb) {
-      requestAnimationFrame(() => this.rfb?.resize?.());
-    }
   };
 
   private handleResizeEnd = () => {
     this.cleanupResizeListeners();
-    setTimeout(() => this.rfb?.resize?.(), 50);
   };
-
-  private connect = async () => {
-    let url =
-      this.vncUrl ||
-      `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/debug-vnc`;
-
-    if (this.vncTarget) {
-      try {
-        const urlObj = new URL(url);
-        urlObj.searchParams.set("target", this.vncTarget);
-        url = urlObj.toString();
-      } catch {
-        if (url.includes("?")) {
-          url += `&target=${encodeURIComponent(this.vncTarget)}`;
-        } else {
-          url += `?target=${encodeURIComponent(this.vncTarget)}`;
-        }
-      }
-    }
-
-    if (this.rfb) {
-      this.rfb.disconnect();
-    }
-
-    this.status = "正在連接...";
-    let screen = this.screenRef.value;
-
-    if (!screen) {
-      screen = this.shadowRoot?.querySelector(".screen") as HTMLDivElement;
-    }
-
-    if (!screen) {
-      console.error("Screen element not found");
-      this.status = "初始化失败：找不到屏幕元素";
-      return;
-    }
-
-    const existingCanvases = screen.querySelectorAll("canvas");
-    existingCanvases.forEach((canvas) => canvas.remove());
-
-    try {
-      const Constructor = RFBClass as new (
-        target: HTMLElement,
-        url: string,
-        options?: unknown,
-      ) => RFBInstance;
-
-      this.rfb = new Constructor(screen, url, {
-        credentials: { password: this.password || undefined },
-        resizeSession: true,
-        clipViewport: true,
-      });
-
-      this.rfb.addEventListener("securityfailure", (e: unknown) => {
-        const event = e as CustomEvent;
-        console.error("VNC security failure:", event.detail);
-        this.status = `Security negotiation failed: ${event.detail.reason || "Unknown reason"}`;
-      });
-
-      if (this.rfb) {
-        this.rfb.scaleViewport = this.isFitted;
-      }
-
-      this.rfb?.addEventListener("connect", () => {
-        this.isConnected = true;
-        this.status = "已連線成功 ✓（改變視窗大小會自動適配）";
-        setTimeout(() => this.rfb?.resize?.(), 100);
-      });
-
-      this.rfb?.addEventListener("disconnect", () => {
-        this.isConnected = false;
-        this.status = "連線中斷";
-        this.rfb = null;
-      });
-    } catch (error) {
-      console.error("Failed to create RFB instance:", error);
-      this.status = `连接失败: ${error as string}`;
-    }
-  };
-
-  private disconnect = () => {
-    if (this.rfb) {
-      this.rfb.disconnect();
-    }
-  };
-
-  private setFitMode(fitted: boolean) {
-    this.isFitted = fitted;
-    if (this.rfb) {
-      this.rfb.scaleViewport = fitted;
-      this.rfb.clipViewport = true;
-      setTimeout(() => this.rfb?.resize?.(), 50);
-    }
-  }
 
   private handleResize = () => {
-    if (this.rfb && this.isConnected) {
-      setTimeout(() => this.rfb?.resize?.(), 80);
-    }
+    // No-op for image
   };
 
   private toggleFullscreen = () => {
@@ -1025,12 +892,6 @@ export class ClawComputerPanel extends LitElement {
     window.addEventListener("resize", this.handleResize);
     window.addEventListener("blur", this.handleWindowBlur);
     this.setupResizeObserver();
-
-    if (this.enabled && this.vncUrl) {
-      setTimeout(() => {
-        void this.connect();
-      }, 100);
-    }
   }
 
   disconnectedCallback() {
@@ -1040,6 +901,5 @@ export class ClawComputerPanel extends LitElement {
     this.cleanupDragListeners();
     this.cleanupResizeListeners();
     this.cleanupResizeObserver();
-    this.disconnect();
   }
 }

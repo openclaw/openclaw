@@ -380,6 +380,11 @@ export function renderApp(state: AppViewState) {
       ? rawDeliveryToSuggestions.filter((value) => isHttpUrl(value))
       : rawDeliveryToSuggestions;
 
+  const gatewayHttpUrl = state.settings.gatewayUrl
+    .replace(/^ws:\/\//i, "http://")
+    .replace(/^wss:\/\//i, "https://");
+  const debugImageUrl = `${gatewayHttpUrl}/api/debug-image`;
+
   return html`
     ${renderCommandPalette({
       open: state.paletteOpen,
@@ -1524,16 +1529,35 @@ export function renderApp(state: AppViewState) {
                 flex-direction: column;
               "
             >
-              <claw-computer-panel
-                .enabled=${state.showClawComputer}
-                .vncUrl=${state.settings.vncWsUrl}
-                .vncTarget=${state.settings.vncTarget}
-                .password=${state.settings.vncPassword}
-                @close=${() => state.toggleClawComputer()}
-                @float=${() => state.setClawComputerWidth(0)}
-                @dock=${() => state.setClawComputerWidth(600)}
-                style="flex: 1; min-height: 0;"
-              ></claw-computer-panel>
+              ${
+                state.activeClawTool === "images"
+                  ? html`
+                <claw-image-panel
+                  .enabled=${state.showClawComputer}
+                  .activeTool=${state.activeClawTool}
+                  .imageUrl=${debugImageUrl}
+                  @tool-change=${(e: CustomEvent) => state.setActiveClawTool(e.detail.tool)}
+                  @close=${() => state.toggleClawComputer()}
+                  @float=${() => state.setClawComputerWidth(0)}
+                  @dock=${() => state.setClawComputerWidth(600)}
+                  style="flex: 1; min-height: 0;"
+                ></claw-image-panel>
+              `
+                  : html`
+                <claw-computer-panel
+                  .enabled=${state.showClawComputer}
+                  .activeTool=${state.activeClawTool}
+                  .vncUrl=${state.settings.vncWsUrl}
+                  .vncTarget=${state.settings.vncTarget}
+                  .password=${state.settings.vncPassword}
+                  @tool-change=${(e: CustomEvent) => state.setActiveClawTool(e.detail.tool)}
+                  @close=${() => state.toggleClawComputer()}
+                  @float=${() => state.setClawComputerWidth(0)}
+                  @dock=${() => state.setClawComputerWidth(600)}
+                  style="flex: 1; min-height: 0;"
+                ></claw-computer-panel>
+              `
+              }
             </div>
           </div>
         `

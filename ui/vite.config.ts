@@ -1,7 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
-import { vncProxyPlugin } from "./vnc-proxy-plugin.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -41,7 +40,6 @@ export default defineConfig(() => {
       strictPort: true,
     },
     plugins: [
-      vncProxyPlugin(),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {

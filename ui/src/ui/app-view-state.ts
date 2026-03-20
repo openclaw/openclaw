@@ -373,5 +373,7 @@ export type AppViewState = {
     showClawComputer: boolean;
     toggleClawComputer: () => void;
     clawComputerWidth: number;
+    activeClawTool: string;
     setClawComputerWidth: (width: number) => void;
+    setActiveClawTool: (tool: string) => void;
   };

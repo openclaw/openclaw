@@ -134,6 +134,8 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      vncTarget: "localhost:5900",
+      vncWsUrl: "wss://gateway.example:8443/api/debug-vnc",
       sessionsByGateway: {
         "wss://gateway.example:8443/openclaw": {
           sessionKey: "agent",
@@ -250,6 +252,8 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      vncTarget: "localhost:5900",
+      vncWsUrl: "wss://gateway.example:8443/api/debug-vnc",
     });
     expect(loadSettings()).toMatchObject({
       gatewayUrl: gwUrl,
@@ -269,6 +273,8 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      vncTarget: "localhost:5900",
+      vncWsUrl: "wss://gateway.example:8443/api/debug-vnc",
       sessionsByGateway: {
         [gwUrl]: {
           sessionKey: "main",
