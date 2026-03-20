@@ -567,14 +567,14 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.onPreviewDelivered).toHaveBeenCalledWith(HELLO_FINAL, 999);
   });
 
-  it("calls onPreviewDelivered when preview is retained on ambiguous error", async () => {
+  it("does not call onPreviewDelivered when preview is retained on ambiguous error", async () => {
     const harness = createHarness({ answerMessageId: 999 });
     harness.editPreview.mockRejectedValue(new Error("500: Internal Server Error"));
 
     const result = await deliverFinalAnswer(harness, HELLO_FINAL);
 
     expect(result).toBe("preview-retained");
-    expect(harness.onPreviewDelivered).toHaveBeenCalledWith(HELLO_FINAL, 999);
+    expect(harness.onPreviewDelivered).not.toHaveBeenCalled();
   });
 
   it("calls onPreviewDelivered when DM draft preview is materialized", async () => {

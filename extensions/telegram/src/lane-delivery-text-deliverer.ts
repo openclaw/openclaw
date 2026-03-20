@@ -434,7 +434,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       if (finalized === "retained") {
         params.retainPreviewOnCleanupByLane.answer = true;
-        params.onPreviewDelivered?.(text, archivedPreview.messageId);
+        // Do not emit onPreviewDelivered for retained paths — the edit
+        // failed/was ambiguous, so the visible message may still be stale.
         return "preview-retained";
       }
     }
@@ -531,7 +532,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         }
         if (finalized === "retained") {
           markActivePreviewComplete(laneName);
-          params.onPreviewDelivered?.(text, previewMessageId ?? lane.stream?.messageId());
+          // Do not emit onPreviewDelivered for retained paths — the edit
+          // failed/was ambiguous, so the visible message may still be stale.
           return "preview-retained";
         }
       } else if (!hasMedia && !payload.isError && text.length > params.draftMaxChars) {
