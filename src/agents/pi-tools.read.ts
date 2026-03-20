@@ -456,6 +456,10 @@ function normalizeAliasFamily(
   canonicalKey: string,
   aliasKeys: readonly string[],
 ): void {
+  normalizeTextLikeParam(record, canonicalKey);
+  for (const alias of aliasKeys) {
+    normalizeTextLikeParam(record, alias);
+  }
   if (!hasConcreteValue(record, canonicalKey)) {
     const candidate = firstAliasValue(record, aliasKeys);
     if (candidate !== undefined) {

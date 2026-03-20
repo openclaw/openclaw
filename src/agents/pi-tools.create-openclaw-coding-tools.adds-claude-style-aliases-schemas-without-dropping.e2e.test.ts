@@ -153,6 +153,20 @@ describe("createOpenClawCodingTools", () => {
       );
     });
 
+    it("promotes alias text when canonical structured text normalizes blank", () => {
+      const normalized = __testing.normalizeToolParams({
+        oldText: [{ type: "text", text: "   " }],
+        oldString: "needle",
+        newText: [{ type: "text", text: "replacement" }],
+      });
+
+      expect(normalized).toMatchObject({
+        oldText: "needle",
+        newText: "replacement",
+      });
+      expect(normalized).not.toHaveProperty("oldString");
+    });
+
     it("adds apply_patch guidance to the edit tool description", () => {
       const base: AgentTool = {
         name: "edit",
@@ -205,6 +219,11 @@ describe("createOpenClawCodingTools", () => {
     const schema = browser.parameters as { type?: unknown; anyOf?: unknown };
     expect(schema.type).toBe("object");
     expect(schema.anyOf).toBeUndefined();
+  });
+  it("routes the default unsandboxed edit tool through OpenClaw edit guidance", () => {
+    const edit = defaultTools.find((tool) => tool.name === "edit");
+    expect(edit).toBeDefined();
+    expect(edit?.description).toMatch(/prefer apply_patch/i);
   });
   it("mentions Chrome extension relay in browser tool description", () => {
     const browser = createBrowserTool();

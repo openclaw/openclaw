@@ -34,6 +34,7 @@ import {
 import {
   assertRequiredParams,
   CLAUDE_PARAM_GROUPS,
+  createOpenClawEditTool,
   createOpenClawReadTool,
   createSandboxedEditTool,
   createSandboxedReadTool,
@@ -340,10 +341,7 @@ export function createOpenClawCodingTools(options?: {
         return [];
       }
       // Wrap with param normalization for Claude Code compatibility
-      const wrapped = wrapToolParamNormalization(
-        createEditTool(workspaceRoot),
-        CLAUDE_PARAM_GROUPS.edit,
-      );
+      const wrapped = createOpenClawEditTool(createEditTool(workspaceRoot) as AnyAgentTool);
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     return [tool];
