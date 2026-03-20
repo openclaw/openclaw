@@ -6,6 +6,8 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { validateTalkConfigResult } from "./protocol/index.js";
@@ -346,6 +348,56 @@ describe("gateway talk.config", () => {
       expect(fetchUrl).toContain("output_format=pcm_44100");
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("allows extension speech providers through talk.speak", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      talk: {
+        provider: "acme",
+        providers: {
+          acme: {
+            voiceId: "plugin-voice",
+          },
+        },
+      },
+    });
+
+    const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
+    setActivePluginRegistry({
+      ...createEmptyPluginRegistry(),
+      speechProviders: [
+        {
+          pluginId: "acme-plugin",
+          source: "test",
+          provider: {
+            id: "acme",
+            label: "Acme Speech",
+            isConfigured: () => true,
+            synthesize: async () => ({
+              audioBuffer: Buffer.from([7, 8, 9]),
+              outputFormat: "mp3",
+              fileExtension: ".mp3",
+              voiceCompatible: false,
+            }),
+          },
+        },
+      ],
+    });
+
+    try {
+      await withServer(async (ws) => {
+        await connectOperator(ws, ["operator.read", "operator.write"]);
+        const res = await fetchTalkSpeak(ws, {
+          text: "Hello from plugin talk mode.",
+        });
+        expect(res.ok).toBe(true);
+        expect(res.payload?.provider).toBe("acme");
+        expect(res.payload?.audioBase64).toBe(Buffer.from([7, 8, 9]).toString("base64"));
+      });
+    } finally {
+      setActivePluginRegistry(previousRegistry);
     }
   });
 });
