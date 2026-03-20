@@ -91,6 +91,7 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 vi.mock("../accounts.js", () => ({
+  resolveConfiguredMatrixBotUserIds: vi.fn(() => new Set<string>()),
   resolveMatrixAccount: () => ({
     accountId: "default",
     config: {
