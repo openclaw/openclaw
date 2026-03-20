@@ -247,6 +247,44 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("passes reconnect retry state through inbound messages", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const controller = new AbortController();
+    const disconnectRetryPolicy = {
+      initialMs: 5_000,
+      maxMs: 60_000,
+      factor: 2,
+      jitter: 0,
+      maxAttempts: 6,
+    };
+
+    const { listener, sock } = await startInboxMonitor(onMessage, {
+      disconnectRetryWindowActive: () => true,
+      disconnectRetryPolicy,
+      disconnectRetryAbortSignal: controller.signal,
+    });
+
+    const upsert = buildMessageUpsert({
+      id: "abc-retry-state",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        disconnectRetryWindowActive: expect.any(Function),
+        disconnectRetryPolicy,
+        disconnectRetryAbortSignal: controller.signal,
+      }),
+    );
+
+    await listener.close();
+  });
+
   it("deduplicates redelivered messages by id", async () => {
     const onMessage = vi.fn(async () => {
       return;

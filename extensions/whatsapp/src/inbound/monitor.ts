@@ -42,8 +42,12 @@ export async function monitorWebInbox(options: {
   socketRef?: { current: WASocket | null };
   /** Whether disconnect-class send errors should retry for a reconnect gap. */
   shouldRetryDisconnect?: () => boolean;
+  /** Whether the monitor is currently in a reconnect gap after a connection close. */
+  disconnectRetryWindowActive?: () => boolean;
   /** Reconnect timing used to size disconnect retry windows for in-flight replies. */
-  disconnectRetryPolicy?: Pick<ReconnectPolicy, "initialMs" | "maxMs" | "factor">;
+  disconnectRetryPolicy?: ReconnectPolicy;
+  /** Abort signal for in-flight reply retries when monitor shutdown becomes terminal. */
+  disconnectRetryAbortSignal?: AbortSignal;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -405,7 +409,9 @@ export async function monitorWebInbox(options: {
       reply,
       sendMedia,
       shouldRetryDisconnect: options.shouldRetryDisconnect,
+      disconnectRetryWindowActive: options.disconnectRetryWindowActive,
       disconnectRetryPolicy: options.disconnectRetryPolicy,
+      disconnectRetryAbortSignal: options.disconnectRetryAbortSignal,
       mediaPath: enriched.mediaPath,
       mediaType: enriched.mediaType,
       mediaFileName: enriched.mediaFileName,

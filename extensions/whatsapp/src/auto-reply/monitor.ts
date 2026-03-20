@@ -147,6 +147,22 @@ export async function monitorWebChannel(
     current: null,
   };
   let shouldRetryDisconnect = keepAlive;
+  let disconnectRetryWindowActive = false;
+  const disconnectRetryAbortController = new AbortController();
+  if (abortSignal) {
+    if (abortSignal.aborted) {
+      disconnectRetryAbortController.abort();
+    } else {
+      abortSignal.addEventListener("abort", () => disconnectRetryAbortController.abort(), {
+        once: true,
+      });
+    }
+  }
+  const stopDisconnectRetries = () => {
+    shouldRetryDisconnect = false;
+    disconnectRetryWindowActive = false;
+    disconnectRetryAbortController.abort();
+  };
 
   while (true) {
     if (stopRequested()) {
@@ -208,7 +224,9 @@ export async function monitorWebChannel(
       shouldDebounce,
       socketRef,
       shouldRetryDisconnect: () => shouldRetryDisconnect,
+      disconnectRetryWindowActive: () => disconnectRetryWindowActive,
       disconnectRetryPolicy: reconnectPolicy,
+      disconnectRetryAbortSignal: disconnectRetryAbortController.signal,
       onMessage: async (msg: WebInboundMsg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();
@@ -219,6 +237,7 @@ export async function monitorWebChannel(
         await onMessage(msg);
       },
     });
+    disconnectRetryWindowActive = false;
 
     Object.assign(status, createConnectedChannelStatusPatch());
     status.lastError = null;
@@ -341,7 +360,7 @@ export async function monitorWebChannel(
     }
 
     if (!keepAlive) {
-      shouldRetryDisconnect = false;
+      stopDisconnectRetries();
       await closeListener();
       process.removeListener("SIGINT", handleSigint);
       return;
@@ -363,7 +382,7 @@ export async function monitorWebChannel(
     emitStatus();
 
     if (stopRequested() || sigintStop || reason === "aborted") {
-      shouldRetryDisconnect = false;
+      stopDisconnectRetries();
       await closeListener();
       break;
     }
@@ -407,7 +426,7 @@ export async function monitorWebChannel(
     });
 
     if (loggedOut) {
-      shouldRetryDisconnect = false;
+      stopDisconnectRetries();
       runtime.error(
         `WhatsApp session logged out. Run \`${formatCliCommand("openclaw channels login --channel web")}\` to relink.`,
       );
@@ -416,7 +435,7 @@ export async function monitorWebChannel(
     }
 
     if (isNonRetryableWebCloseStatus(statusCode)) {
-      shouldRetryDisconnect = false;
+      stopDisconnectRetries();
       reconnectLogger.warn(
         {
           connectionId,
@@ -436,7 +455,7 @@ export async function monitorWebChannel(
     status.reconnectAttempts = reconnectAttempts;
     emitStatus();
     if (reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts) {
-      shouldRetryDisconnect = false;
+      stopDisconnectRetries();
       reconnectLogger.warn(
         {
           connectionId,
@@ -468,6 +487,7 @@ export async function monitorWebChannel(
       `WhatsApp Web connection closed (status ${statusCode}). Retry ${reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(delay)}… (${errorStr})`,
     );
     shouldRetryDisconnect = true;
+    disconnectRetryWindowActive = true;
     await closeListener();
     try {
       await sleep(delay, abortSignal);

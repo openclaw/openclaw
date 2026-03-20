@@ -8,9 +8,13 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
-import { sleep } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMedia } from "../media.js";
-import { DEFAULT_RECONNECT_POLICY, newConnectionId } from "../reconnect.js";
+import {
+  DEFAULT_RECONNECT_POLICY,
+  newConnectionId,
+  sleepWithAbort,
+  type ReconnectPolicy,
+} from "../reconnect.js";
 import { formatError } from "../session.js";
 import { whatsappOutboundLog } from "./loggers.js";
 import type { WebInboundMsg } from "./types.js";
@@ -28,19 +32,55 @@ const STANDARD_RETRY: RetryStrategy = { maxAttempts: 3, baseMs: 500, factor: 1 }
 const MIN_DISCONNECT_RETRY_BUDGET_MS = 62_000;
 const MIN_DISCONNECT_BASE_MS = 2_000;
 
-function resolveDisconnectRetryStrategy(msg: WebInboundMsg): RetryStrategy {
-  const reconnectInitialMs =
-    msg.disconnectRetryPolicy?.initialMs ?? DEFAULT_RECONNECT_POLICY.initialMs;
-  const reconnectMaxMs = msg.disconnectRetryPolicy?.maxMs ?? DEFAULT_RECONNECT_POLICY.maxMs;
-  const reconnectFactor = msg.disconnectRetryPolicy?.factor ?? DEFAULT_RECONNECT_POLICY.factor;
-
-  const baseMs = Math.max(MIN_DISCONNECT_BASE_MS, reconnectInitialMs);
-  const maxMs = Math.max(baseMs, reconnectMaxMs);
-  const factor = Math.max(1.1, reconnectFactor);
-  const retryBudgetMs = Math.max(
-    MIN_DISCONNECT_RETRY_BUDGET_MS,
-    reconnectMaxMs * 2 + reconnectInitialMs,
+function resolveReconnectPolicy(msg: WebInboundMsg): ReconnectPolicy {
+  const initialMs = Math.max(
+    250,
+    msg.disconnectRetryPolicy?.initialMs ?? DEFAULT_RECONNECT_POLICY.initialMs,
   );
+  const maxMs = Math.max(
+    initialMs,
+    msg.disconnectRetryPolicy?.maxMs ?? DEFAULT_RECONNECT_POLICY.maxMs,
+  );
+  const factor = Math.min(
+    10,
+    Math.max(1.1, msg.disconnectRetryPolicy?.factor ?? DEFAULT_RECONNECT_POLICY.factor),
+  );
+  const jitter = Math.min(
+    1,
+    Math.max(0, msg.disconnectRetryPolicy?.jitter ?? DEFAULT_RECONNECT_POLICY.jitter),
+  );
+  const maxAttempts = Math.max(
+    0,
+    Math.floor(msg.disconnectRetryPolicy?.maxAttempts ?? DEFAULT_RECONNECT_POLICY.maxAttempts),
+  );
+  return { initialMs, maxMs, factor, jitter, maxAttempts };
+}
+
+function computeReconnectDelayCeiling(policy: ReconnectPolicy, attempt: number): number {
+  const baseDelayMs = policy.initialMs * policy.factor ** Math.max(attempt - 1, 0);
+  const withJitterCeilingMs = baseDelayMs * (1 + policy.jitter);
+  return Math.min(policy.maxMs, Math.round(withJitterCeilingMs));
+}
+
+function resolveReconnectSleepAttempts(policy: ReconnectPolicy): number {
+  if (policy.maxAttempts > 0) {
+    return Math.max(0, policy.maxAttempts - 1);
+  }
+  // Keep reply retries bounded even when reconnect itself is configured as unlimited.
+  return Math.max(1, DEFAULT_RECONNECT_POLICY.maxAttempts - 1);
+}
+
+function resolveDisconnectRetryStrategy(msg: WebInboundMsg): RetryStrategy {
+  const reconnectPolicy = resolveReconnectPolicy(msg);
+  const baseMs = Math.max(MIN_DISCONNECT_BASE_MS, reconnectPolicy.initialMs);
+  const maxMs = Math.max(baseMs, reconnectPolicy.maxMs);
+  const factor = Math.max(1.1, reconnectPolicy.factor);
+  const reconnectSleepAttempts = resolveReconnectSleepAttempts(reconnectPolicy);
+  let retryBudgetMs = 0;
+  for (let attempt = 1; attempt <= reconnectSleepAttempts; attempt++) {
+    retryBudgetMs += computeReconnectDelayCeiling(reconnectPolicy, attempt);
+  }
+  retryBudgetMs = Math.max(MIN_DISCONNECT_RETRY_BUDGET_MS, retryBudgetMs);
 
   let sleepBudgetMs = 0;
   let sleepCount = 0;
@@ -117,12 +157,14 @@ export async function deliverWebReply(params: {
         lastErr = err;
         const errText = formatError(err);
         const isDisconnect = /closed|reset|timed\s*out|disconnect|no active socket/i.test(errText);
+        const isReconnectGap = /no active socket|reconnection in progress/i.test(errText);
+        const useDisconnectWindow = isReconnectGap || msg.disconnectRetryWindowActive?.() === true;
         const isLast = attempt >= maxAttempts;
         if (!isDisconnect || isLast) {
           throw err;
         }
 
-        if (msg.shouldRetryDisconnect?.() === false) {
+        if (isReconnectGap && msg.shouldRetryDisconnect?.() === false) {
           throw err;
         }
 
@@ -134,7 +176,7 @@ export async function deliverWebReply(params: {
                 Math.round(strategy.baseMs * Math.pow(strategy.factor, attempt - 2)),
               );
 
-        if (strategy === STANDARD) {
+        if (strategy === STANDARD && useDisconnectWindow) {
           strategy = DISCONNECT;
           maxAttempts = DISCONNECT.maxAttempts;
         }
@@ -142,7 +184,14 @@ export async function deliverWebReply(params: {
         logVerbose(
           `Retrying ${label} to ${msg.from} after failure (${attempt}/${maxAttempts}) in ${backoffMs}ms: ${errText}`,
         );
-        await sleep(backoffMs);
+        try {
+          await sleepWithAbort(backoffMs, msg.disconnectRetryAbortSignal);
+        } catch (sleepErr) {
+          if (msg.disconnectRetryAbortSignal?.aborted || msg.shouldRetryDisconnect?.() === false) {
+            throw err;
+          }
+          throw sleepErr;
+        }
       }
     }
     throw lastErr;

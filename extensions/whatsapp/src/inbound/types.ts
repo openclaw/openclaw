@@ -38,7 +38,9 @@ export type WebInboundMessage = {
   reply: (text: string) => Promise<void>;
   sendMedia: (payload: AnyMessageContent) => Promise<void>;
   shouldRetryDisconnect?: () => boolean;
-  disconnectRetryPolicy?: Pick<ReconnectPolicy, "initialMs" | "maxMs" | "factor">;
+  disconnectRetryWindowActive?: () => boolean;
+  disconnectRetryPolicy?: ReconnectPolicy;
+  disconnectRetryAbortSignal?: AbortSignal;
   mediaPath?: string;
   mediaType?: string;
   mediaFileName?: string;
