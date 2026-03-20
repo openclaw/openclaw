@@ -231,6 +231,10 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 
 ENV NODE_ENV=production
 
+# Allow the heap to grow beyond Node's conservative auto-detected default.
+# Override at runtime with: docker run -e NODE_OPTIONS="--max-old-space-size=2048" ...
+ENV NODE_OPTIONS="--max-old-space-size=1536"
+
 # Security hardening: Run as non-root user
 # The node:24-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
