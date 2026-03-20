@@ -719,7 +719,7 @@ export async function runAgentTurnWithFallback(params: {
         return {
           kind: "final",
           payload: {
-            text: "⚠️ API rate limit reached mid-turn — the model couldn't generate a response after tool calls completed. Please try again in a moment.",
+            text: "⚠️ API rate limit reached — the model couldn't generate a response. Please try again in a moment.",
           },
         };
       }

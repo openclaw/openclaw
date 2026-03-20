@@ -1603,6 +1603,13 @@ export async function runEmbeddedPiAgent(
           // loop (see #8643). The captured lastAssistant has a non-terminal
           // stopReason (e.g. "toolUse") with no text content, producing empty
           // payloads. Surface an error instead of silently dropping the reply.
+          //
+          // Exclusions:
+          //  - didSendDeterministicApprovalPrompt: approval-prompt turns
+          //    intentionally produce empty payloads with stopReason=toolUse
+          //  - lastToolError: suppressed/recoverable tool failures also produce
+          //    empty payloads with stopReason=toolUse; those are handled by
+          //    buildEmbeddedRunPayloads' own warning policy
           if (
             payloads.length === 0 &&
             !aborted &&
@@ -1610,7 +1617,8 @@ export async function runEmbeddedPiAgent(
             !attempt.didSendViaMessagingTool &&
             !attempt.clientToolCall &&
             !attempt.yieldDetected &&
-            !attempt.didSendDeterministicApprovalPrompt
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.lastToolError
           ) {
             const incompleteStopReason = lastAssistant?.stopReason;
             // Only trigger for non-terminal stop reasons (toolUse, etc.) to
@@ -1625,11 +1633,7 @@ export async function runEmbeddedPiAgent(
               return {
                 payloads: [
                   {
-                    text:
-                      incompleteStopReason === "toolUse"
-                        ? "⚠️ API rate limit reached mid-turn — the model couldn't generate a response " +
-                          "after tool calls completed. Please try again in a moment."
-                        : "⚠️ Agent couldn't generate a response after tool calls completed. Please try again.",
+                    text: "⚠️ Agent couldn't generate a response. Please try again.",
                     isError: true,
                   },
                 ],
