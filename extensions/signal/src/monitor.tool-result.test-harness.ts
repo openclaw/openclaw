@@ -162,8 +162,14 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
     "openclaw/plugin-sdk/infra-runtime",
   );
+  const systemEvents = await vi.importActual<typeof import("../../../src/infra/system-events.js")>(
+    "../../../src/infra/system-events.js",
+  );
   return {
     ...actual,
+    enqueueSystemEvent: systemEvents.enqueueSystemEvent,
+    peekSystemEvents: systemEvents.peekSystemEvents,
+    resetSystemEventsForTest: systemEvents.resetSystemEventsForTest,
     waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
     enqueueSystemEvent: (...args: Parameters<typeof actual.enqueueSystemEvent>) => {
       enqueueSystemEventMock(...args);
