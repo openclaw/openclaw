@@ -2892,6 +2892,7 @@ Notes:
 - `exec` child environment is minimal by default; pass required variables explicitly with `passEnv`.
 - Secret refs are resolved at activation time into an in-memory snapshot, then request paths read the snapshot only.
 - Active-surface filtering applies during activation: unresolved refs on enabled surfaces fail startup/reload, while inactive surfaces are skipped with diagnostics.
+- For focused `exec` examples and the resolver stdin/stdout contract, see [Exec Secret Providers](/gateway/exec-secret-providers).
 
 ---
 
