@@ -1,5 +1,5 @@
 ---
-summary: "Web search + fetch tools (Brave, Firecrawl, Gemini, Grok, Kimi, and Perplexity providers)"
+summary: "Web search + fetch tools (Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, and Tavily providers)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need provider API key setup
@@ -11,7 +11,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web using Brave Search API, Firecrawl Search, Gemini with Google Search grounding, Grok, Kimi, or Perplexity Search API.
+- `web_search` — Search the web using Brave Search API, Firecrawl Search, Gemini with Google Search grounding, Grok, Kimi, Perplexity Search API, or Tavily Search API.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -25,8 +25,9 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
   (HTML → markdown/text). It does **not** execute JavaScript.
 - `web_fetch` is enabled by default (unless explicitly disabled).
 - The bundled Firecrawl plugin also adds `firecrawl_search` and `firecrawl_scrape` when enabled.
+- The bundled Tavily plugin also adds `tavily_search` and `tavily_extract` when enabled.
 
-See [Brave Search setup](/tools/brave-search) and [Perplexity Search setup](/tools/perplexity-search) for provider-specific details.
+See [Brave Search setup](/tools/brave-search), [Perplexity Search setup](/tools/perplexity-search), and [Tavily Search setup](/tools/tavily) for provider-specific details.
 
 ## Choosing a search provider
 
@@ -38,6 +39,7 @@ See [Brave Search setup](/tools/brave-search) and [Perplexity Search setup](/too
 | **Grok**                  | AI-synthesized answers + citations | —                                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
 | **Kimi**                  | AI-synthesized answers + citations | —                                                            | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
 | **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter`                 | Supports content extraction controls; OpenRouter uses Sonar compatibility path | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| **Tavily Search API**     | Structured results with snippets   | Use `tavily_search` for Tavily-specific search options       | Search depth, topic filtering, AI answers, URL extraction via `tavily_extract` | `TAVILY_API_KEY`                            |
 
 ### Auto-detection
 
@@ -49,6 +51,7 @@ The table above is alphabetical. If no `provider` is explicitly set, runtime aut
 4. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `plugins.entries.moonshot.config.webSearch.apiKey`
 5. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
 6. **Firecrawl** — `FIRECRAWL_API_KEY` env var or `plugins.entries.firecrawl.config.webSearch.apiKey`
+7. **Tavily** — `TAVILY_API_KEY` env var or `plugins.entries.tavily.config.webSearch.apiKey`
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -97,6 +100,7 @@ See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quicks
 - Grok: `plugins.entries.xai.config.webSearch.apiKey`
 - Kimi: `plugins.entries.moonshot.config.webSearch.apiKey`
 - Perplexity: `plugins.entries.perplexity.config.webSearch.apiKey`
+- Tavily: `plugins.entries.tavily.config.webSearch.apiKey`
 
 All of these fields also support SecretRef objects.
 
@@ -108,6 +112,7 @@ All of these fields also support SecretRef objects.
 - Grok: `XAI_API_KEY`
 - Kimi: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
 - Perplexity: `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
+- Tavily: `TAVILY_API_KEY`
 
 For a gateway install, put these in `~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
 
@@ -175,6 +180,36 @@ For a gateway install, put these in `~/.openclaw/.env` (or your service environm
 ```
 
 When you choose Firecrawl in onboarding or `openclaw configure --section web`, OpenClaw enables the bundled Firecrawl plugin automatically so `web_search`, `firecrawl_search`, and `firecrawl_scrape` are all available.
+
+**Tavily Search:**
+
+```json5
+{
+  plugins: {
+    entries: {
+      tavily: {
+        enabled: true,
+        config: {
+          webSearch: {
+            apiKey: "tvly-...", // optional if TAVILY_API_KEY is set
+            baseUrl: "https://api.tavily.com",
+          },
+        },
+      },
+    },
+  },
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "tavily",
+      },
+    },
+  },
+}
+```
+
+When you choose Tavily in onboarding or `openclaw configure --section web`, OpenClaw enables the bundled Tavily plugin automatically so `web_search`, `tavily_search`, and `tavily_extract` are all available.
 
 **Brave LLM Context mode:**
 
@@ -326,6 +361,7 @@ Search the web using your configured provider.
   - **Grok**: `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `plugins.entries.moonshot.config.webSearch.apiKey`
   - **Perplexity**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
+  - **Tavily**: `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
 - All provider key fields above support SecretRef objects.
 
 ### Config
@@ -368,6 +404,8 @@ If you set `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, use 
 | `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)  |
 
 Firecrawl `web_search` supports `query` and `count`. For Firecrawl-specific controls like `sources`, `categories`, result scraping, or scrape timeout, use `firecrawl_search` from the bundled Firecrawl plugin.
+
+Tavily `web_search` supports `query` and `count` (up to 20 results). For Tavily-specific controls like `search_depth`, `topic`, `include_answer`, or domain filters, use `tavily_search` from the bundled Tavily plugin. For URL content extraction, use `tavily_extract`. See [Tavily](/tools/tavily) for details.
 
 **Examples:**
 

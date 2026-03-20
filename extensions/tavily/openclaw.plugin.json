@@ -1,18 +1,19 @@
 {
-  "id": "brave",
+  "id": "tavily",
+  "skills": ["./skills"],
   "providerAuthEnvVars": {
-    "brave": ["BRAVE_API_KEY"]
+    "tavily": ["TAVILY_API_KEY"]
   },
   "uiHints": {
     "webSearch.apiKey": {
-      "label": "Brave Search API Key",
-      "help": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
+      "label": "Tavily API Key",
+      "help": "Tavily API key for web search and extraction (fallback: TAVILY_API_KEY env var).",
       "sensitive": true,
-      "placeholder": "BSA..."
+      "placeholder": "tvly-..."
     },
-    "webSearch.mode": {
-      "label": "Brave Search Mode",
-      "help": "Brave Search mode: web or llm-context."
+    "webSearch.baseUrl": {
+      "label": "Tavily Base URL",
+      "help": "Tavily API base URL override."
     }
   },
   "configSchema": {
@@ -26,9 +27,8 @@
           "apiKey": {
             "type": ["string", "object"]
           },
-          "mode": {
-            "type": "string",
-            "enum": ["web", "llm-context"]
+          "baseUrl": {
+            "type": "string"
           }
         }
       }

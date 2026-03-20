@@ -1,5 +1,8 @@
 {
   "id": "firecrawl",
+  "providerAuthEnvVars": {
+    "firecrawl": ["FIRECRAWL_API_KEY"]
+  },
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Firecrawl Search API Key",

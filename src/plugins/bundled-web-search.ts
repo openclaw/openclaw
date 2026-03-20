@@ -191,6 +191,21 @@ const BUNDLED_WEB_SEARCH_PROVIDER_DESCRIPTORS = [
     credentialScope: { kind: "scoped", key: "firecrawl" },
     applySelectionConfig: (config) => enablePluginInConfig(config, "firecrawl").config,
   },
+  {
+    pluginId: "tavily",
+    id: "tavily",
+    label: "Tavily Search",
+    hint: "Structured results with domain filters and AI answer summaries",
+    envVars: ["TAVILY_API_KEY"],
+    placeholder: "tvly-...",
+    signupUrl: "https://tavily.com/",
+    docsUrl: "https://docs.openclaw.ai/tools/tavily",
+    autoDetectOrder: 70,
+    credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
+    inactiveSecretPaths: ["plugins.entries.tavily.config.webSearch.apiKey"],
+    credentialScope: { kind: "scoped", key: "tavily" },
+    applySelectionConfig: (config) => enablePluginInConfig(config, "tavily").config,
+  },
 ] as const satisfies ReadonlyArray<BundledWebSearchProviderDescriptor>;
 
 export const BUNDLED_WEB_SEARCH_PLUGIN_IDS = [
