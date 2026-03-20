@@ -5,7 +5,7 @@ import {
   normalizeAccountId,
   resolveLineAccount,
   type LineConfig,
-} from "../../../src/plugin-sdk/line-core.js";
+} from "../runtime-api.js";
 
 const channel = "line" as const;
 
