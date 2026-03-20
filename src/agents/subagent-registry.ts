@@ -18,6 +18,9 @@ export type SubagentRunRecord = {
   task: string;
   cleanup: "delete" | "keep";
   label?: string;
+  spawnMode?: "run" | "acp";
+  runtime?: "subagent" | "acp";
+  streamTo?: "parent";
   createdAt: number;
   startedAt?: number;
   endedAt?: number;
@@ -252,6 +255,9 @@ export function registerSubagentRun(params: {
   cleanup: "delete" | "keep";
   label?: string;
   runTimeoutSeconds?: number;
+  spawnMode?: "run" | "acp";
+  runtime?: "subagent" | "acp";
+  streamTo?: "parent";
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -268,6 +274,9 @@ export function registerSubagentRun(params: {
     task: params.task,
     cleanup: params.cleanup,
     label: params.label,
+    spawnMode: params.spawnMode,
+    runtime: params.runtime,
+    streamTo: params.streamTo,
     createdAt: now,
     startedAt: now,
     archiveAtMs,

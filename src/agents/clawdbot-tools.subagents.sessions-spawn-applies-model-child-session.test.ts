@@ -195,4 +195,116 @@ describe("dna-tools: subagents", () => {
       model: "minimax/MiniMax-M2.1",
     });
   });
+
+  it("sessions_spawn forwards ACP runtime params to the agent run", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    configOverride = {
+      session: { mainKey: "main", scope: "per-sender" },
+      acp: {
+        defaultAgent: "codex",
+        allowedAgents: ["codex", "gemini"],
+      },
+    };
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-acp", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createDNATools({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) throw new Error("missing sessions_spawn tool");
+
+    const result = await tool.execute("call-acp", {
+      task: "delegate via acp",
+      runtime: "acp",
+      streamTo: "parent",
+      thread: true,
+      mode: "session",
+      resumeSessionId: "resume-123",
+      cwd: "/tmp/work",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-acp",
+    });
+
+    const agentCall = calls.find((call) => call.method === "agent");
+    expect(agentCall?.params).toMatchObject({
+      runtime: "acp",
+      streamTo: "parent",
+      thread: true,
+      mode: "session",
+      resumeSessionId: "resume-123",
+      cwd: "/tmp/work",
+      lane: "subagent",
+      deliver: false,
+    });
+    expect((agentCall?.params as { sessionKey?: string } | undefined)?.sessionKey).toContain(
+      ":acp:",
+    );
+  });
+
+  it("sessions_spawn returns the accepted ACP session contract", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    configOverride = {
+      session: { mainKey: "main", scope: "per-sender" },
+      acp: {
+        defaultAgent: "codex",
+        allowedAgents: ["codex"],
+      },
+    };
+    let childSessionKey: string | undefined;
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "agent") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        childSessionKey = params?.sessionKey;
+        return {
+          runId: "run-acp-contract",
+          status: "accepted",
+          mode: "session",
+          streamLogPath: "/tmp/acp-stream.jsonl",
+          note: "initial ACP task queued in isolated session; follow-ups continue in the bound thread.",
+        };
+      }
+      return {};
+    });
+
+    const tool = createDNATools({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) throw new Error("missing sessions_spawn tool");
+
+    const result = await tool.execute("call-acp-contract", {
+      task: "delegate via acp",
+      runtime: "acp",
+      streamTo: "parent",
+      thread: true,
+      mode: "session",
+      agentId: "codex",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-acp-contract",
+      mode: "session",
+      streamLogPath: "/tmp/acp-stream.jsonl",
+      note: expect.stringContaining("initial ACP task queued"),
+      childSessionKey: expect.stringContaining(":acp:"),
+    });
+    expect(childSessionKey).toBe(result.details?.childSessionKey);
+  });
 });

@@ -29,11 +29,18 @@ const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
   label: Type.Optional(Type.String()),
   agentId: Type.Optional(Type.String()),
+  runtime: Type.Optional(Type.String({ enum: ["subagent", "acp"] })),
   model: Type.Optional(Type.String()),
   thinking: Type.Optional(Type.String()),
   runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   // Back-compat alias. Prefer runTimeoutSeconds.
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  cwd: Type.Optional(Type.String()),
+  resumeSessionId: Type.Optional(Type.String()),
+  streamTo: Type.Optional(Type.String({ enum: ["parent"] })),
+  thread: Type.Optional(Type.Boolean()),
+  mode: Type.Optional(Type.String({ enum: ["run", "session"] })),
+  sandbox: Type.Optional(Type.String({ enum: ["inherit", "require"] })),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
 });
 
@@ -81,8 +88,23 @@ export function createSessionsSpawnTool(opts?: {
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const requestedAgentId = readStringParam(params, "agentId");
+      const runtime = params.runtime === "acp" ? "acp" : "subagent";
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");
+      const cwd = readStringParam(params, "cwd");
+      const resumeSessionId = readStringParam(params, "resumeSessionId");
+      const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const thread = typeof params.thread === "boolean" ? params.thread : false;
+      const mode =
+        params.mode === "session" || params.mode === "run"
+          ? (params.mode as "session" | "run")
+          : thread
+            ? "session"
+            : "run";
+      const sandbox =
+        params.sandbox === "require" || params.sandbox === "inherit"
+          ? (params.sandbox as "require" | "inherit")
+          : "inherit";
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete"
           ? (params.cleanup as "keep" | "delete")
@@ -133,10 +155,67 @@ export function createSessionsSpawnTool(opts?: {
       const requesterAgentId = normalizeAgentId(
         opts?.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
       );
+      if (mode === "session" && !thread) {
+        return jsonResult({
+          status: "error",
+          error: 'sessions_spawn mode="session" requires thread=true',
+        });
+      }
+      if (runtime !== "acp" && streamTo) {
+        return jsonResult({
+          status: "error",
+          error: 'sessions_spawn streamTo is only supported for runtime="acp"',
+        });
+      }
+      if (runtime === "acp" && sandbox === "require") {
+        return jsonResult({
+          status: "error",
+          error:
+            'sessions_spawn sandbox="require" is unsupported for runtime="acp" because ACP sessions run outside the sandbox. Use runtime="subagent" or sandbox="inherit".',
+        });
+      }
+      if (runtime === "acp" && opts?.sandboxed) {
+        return jsonResult({
+          status: "forbidden",
+          error:
+            'Sandboxed sessions cannot spawn ACP sessions because runtime="acp" runs on the host. Use runtime="subagent" from sandboxed sessions.',
+        });
+      }
+      if (runtime !== "acp" && resumeSessionId) {
+        return jsonResult({
+          status: "error",
+          error: 'sessions_spawn resumeSessionId requires runtime="acp"',
+        });
+      }
+      const defaultAcpAgentId = cfg.acp ? readStringParam(cfg.acp, "defaultAgent") : undefined;
       const targetAgentId = requestedAgentId
         ? normalizeAgentId(requestedAgentId)
-        : requesterAgentId;
-      if (targetAgentId !== requesterAgentId) {
+        : runtime === "acp"
+          ? normalizeAgentId(defaultAcpAgentId)
+          : requesterAgentId;
+      if (!targetAgentId) {
+        return jsonResult({
+          status: "error",
+          error:
+            runtime === "acp"
+              ? 'sessions_spawn runtime="acp" requires agentId unless acp.defaultAgent is configured'
+              : "sessions_spawn target agent could not be resolved",
+        });
+      }
+      if (runtime === "acp") {
+        const allowedAgents = Array.isArray(cfg.acp?.allowedAgents) ? cfg.acp.allowedAgents : [];
+        const allowSet = new Set(
+          allowedAgents
+            .filter((value) => typeof value === "string" && value.trim())
+            .map((value) => normalizeAgentId(value).toLowerCase()),
+        );
+        if (allowSet.size > 0 && !allowSet.has(targetAgentId.toLowerCase())) {
+          return jsonResult({
+            status: "forbidden",
+            error: `agentId is not allowed for ACP sessions_spawn (allowed: ${Array.from(allowSet).join(", ")})`,
+          });
+        }
+      } else if (targetAgentId !== requesterAgentId) {
         const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
         const allowAny = allowAgents.some((value) => value.trim() === "*");
         const normalizedTargetId = targetAgentId.toLowerCase();
@@ -157,7 +236,10 @@ export function createSessionsSpawnTool(opts?: {
           });
         }
       }
-      const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
+      const childSessionKey =
+        runtime === "acp"
+          ? `agent:${targetAgentId}:acp:${crypto.randomUUID()}`
+          : `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
       const spawnedByKey = requesterInternalKey;
       const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
       const resolvedModel =
@@ -200,16 +282,22 @@ export function createSessionsSpawnTool(opts?: {
           modelWarning = messageText;
         }
       }
-      const childSystemPrompt = buildSubagentSystemPrompt({
-        requesterSessionKey,
-        requesterOrigin,
-        childSessionKey,
-        label: label || undefined,
-        task,
-      });
+      const childSystemPrompt =
+        runtime === "subagent"
+          ? buildSubagentSystemPrompt({
+              requesterSessionKey,
+              requesterOrigin,
+              childSessionKey,
+              label: label || undefined,
+              task,
+            })
+          : undefined;
 
       const childIdem = crypto.randomUUID();
       let childRunId: string = childIdem;
+      let acceptedMode: string | undefined;
+      let acceptedNote: string | undefined;
+      let acceptedStreamLogPath: string | undefined;
       try {
         const response = (await callGateway({
           method: "agent",
@@ -220,6 +308,14 @@ export function createSessionsSpawnTool(opts?: {
             idempotencyKey: childIdem,
             deliver: false,
             lane: AGENT_LANE_SUBAGENT,
+            runtime,
+            mode,
+            thread,
+            cwd: cwd || undefined,
+            model: resolvedModel,
+            streamTo,
+            resumeSessionId,
+            sandbox,
             extraSystemPrompt: childSystemPrompt,
             thinking: thinkingOverride,
             timeout: runTimeoutSeconds > 0 ? runTimeoutSeconds : undefined,
@@ -230,9 +326,18 @@ export function createSessionsSpawnTool(opts?: {
             groupSpace: opts?.agentGroupSpace ?? undefined,
           },
           timeoutMs: 10_000,
-        })) as { runId?: string };
+        })) as { runId?: string; mode?: string; note?: string; streamLogPath?: string };
         if (typeof response?.runId === "string" && response.runId) {
           childRunId = response.runId;
+        }
+        if (typeof response?.mode === "string" && response.mode) {
+          acceptedMode = response.mode;
+        }
+        if (typeof response?.note === "string" && response.note) {
+          acceptedNote = response.note;
+        }
+        if (typeof response?.streamLogPath === "string" && response.streamLogPath) {
+          acceptedStreamLogPath = response.streamLogPath;
         }
       } catch (err) {
         const messageText =
@@ -255,12 +360,18 @@ export function createSessionsSpawnTool(opts?: {
         cleanup,
         label: label || undefined,
         runTimeoutSeconds,
+        spawnMode: runtime === "acp" ? "acp" : "run",
+        runtime,
+        streamTo,
       });
 
       return jsonResult({
         status: "accepted",
         childSessionKey,
         runId: childRunId,
+        mode: acceptedMode,
+        note: acceptedNote,
+        streamLogPath: acceptedStreamLogPath,
         modelApplied: resolvedModel ? modelApplied : undefined,
         warning: modelWarning,
       });

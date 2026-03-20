@@ -101,6 +101,47 @@ describe("subagent registry persistence", () => {
     expect(first.requesterOrigin?.accountId).toBe("acct-main");
   });
 
+  it("persists ACP runtime metadata", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "dna-subagent-"));
+    process.env.DNA_STATE_DIR = tempStateDir;
+
+    vi.resetModules();
+    const mod = await import("./subagent-registry.js");
+
+    mod.registerSubagentRun({
+      runId: "run-acp",
+      childSessionKey: "agent:codex:acp:test",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stream progress back to parent",
+      cleanup: "keep",
+      spawnMode: "acp",
+      runtime: "acp",
+      streamTo: "parent",
+    });
+
+    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
+    const raw = await fs.readFile(registryPath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      runs?: Record<
+        string,
+        {
+          childSessionKey?: string;
+          spawnMode?: string;
+          runtime?: string;
+          streamTo?: string;
+        }
+      >;
+    };
+
+    expect(parsed.runs?.["run-acp"]).toMatchObject({
+      childSessionKey: "agent:codex:acp:test",
+      spawnMode: "acp",
+      runtime: "acp",
+      streamTo: "parent",
+    });
+  });
+
   it("skips cleanup when cleanupHandled was persisted", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "dna-subagent-"));
     process.env.DNA_STATE_DIR = tempStateDir;

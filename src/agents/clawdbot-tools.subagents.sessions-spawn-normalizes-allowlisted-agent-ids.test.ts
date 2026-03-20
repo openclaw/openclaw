@@ -123,6 +123,73 @@ describe("dna-tools: subagents", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("sessions_spawn rejects streamTo for native subagent runtime", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+
+    const tool = createDNATools({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) throw new Error("missing sessions_spawn tool");
+
+    const result = await tool.execute("call-native-stream", {
+      task: "do thing",
+      streamTo: "parent",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    expect(String(result.details?.error)).toMatch(/streamTo.*runtime="acp"/i);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("sessions_spawn uses ACP allowlist and session keys", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      acp: {
+        defaultAgent: "codex",
+        allowedAgents: ["Codex", "Gemini"],
+      },
+    };
+
+    let childSessionKey: string | undefined;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "agent") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        childSessionKey = params?.sessionKey;
+        return { runId: "run-acp-1", status: "accepted", acceptedAt: 5200 };
+      }
+      return {};
+    });
+
+    const tool = createDNATools({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "whatsapp",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) throw new Error("missing sessions_spawn tool");
+
+    const result = await tool.execute("call-acp-allow", {
+      task: "do thing",
+      runtime: "acp",
+      agentId: "codex",
+      streamTo: "parent",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-acp-1",
+    });
+    expect(childSessionKey?.startsWith("agent:codex:acp:")).toBe(true);
+  });
+
   it("sessions_spawn runs cleanup via lifecycle events", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
