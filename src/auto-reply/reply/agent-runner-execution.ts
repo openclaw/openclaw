@@ -502,7 +502,21 @@ export async function runAgentTurnWithFallback(params: {
       const isCompactionFailure = isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
+      const isSandboxSecurityError = /^Sandbox security:/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
+
+      if (isSandboxSecurityError) {
+        // SECURITY: Never post sandbox security errors to public channels.
+        // These errors may contain internal paths, usernames, and PII.
+        // Log the full error internally but post only a generic message.
+        defaultRuntime.error(`Sandbox security error before reply: ${message}`);
+        return {
+          kind: "final",
+          payload: {
+            text: "⚠️ Agent failed to start due to a configuration error. Check logs with `openclaw logs --follow` for details.",
+          },
+        };
+      }
 
       if (
         isCompactionFailure &&
