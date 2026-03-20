@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import type { MsgContext } from "./templating.js";
@@ -25,9 +25,7 @@ describe("resolveCommandAuthorization owner allowlist hot path", () => {
           .filter((entry) => entry.length > 0);
       },
     };
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]),
-    );
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
   });
 
   afterEach(() => {
@@ -81,7 +79,9 @@ describe("resolveCommandAuthorization owner allowlist hot path", () => {
     plugin.config = {
       ...plugin.config,
       formatAllowFrom: ({ cfg, allowFrom }) =>
-        allowFrom.map((entry) => `${(cfg as { testVariant?: string }).testVariant}:${String(entry)}`),
+        allowFrom.map(
+          (entry) => `${(cfg as { testVariant?: string }).testVariant}:${String(entry)}`,
+        ),
     };
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]),
