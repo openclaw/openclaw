@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
@@ -8,11 +8,7 @@ import {
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
-type RunModule = typeof import("./run.js");
-type SandboxConfigModule = typeof import("../../agents/sandbox/config.js");
-
-let runCronIsolatedAgentTurn: RunModule["runCronIsolatedAgentTurn"];
-let resolveSandboxConfigForAgent: SandboxConfigModule["resolveSandboxConfigForAgent"];
+const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 function makeJob(overrides?: Record<string, unknown>) {
   return {
@@ -85,10 +81,7 @@ function expectDefaultSandboxPreserved(
 describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
   let previousFastTestEnv: string | undefined;
 
-  beforeEach(async () => {
-    vi.resetModules();
-    runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-    ({ resolveSandboxConfigForAgent } = await import("../../agents/sandbox/config.js"));
+  beforeEach(() => {
     previousFastTestEnv = clearFastTestEnv();
     resetRunCronIsolatedAgentTurnHarness();
   });
@@ -132,6 +125,7 @@ describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
 
     expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
     const runCfg = runWithModelFallbackMock.mock.calls[0]?.[0]?.cfg;
+    const { resolveSandboxConfigForAgent } = await import("../../agents/sandbox/config.js");
     const resolvedSandbox = resolveSandboxConfigForAgent(runCfg, "specialist");
 
     expectDefaultSandboxPreserved(runCfg);
