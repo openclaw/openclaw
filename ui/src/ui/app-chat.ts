@@ -1,6 +1,5 @@
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
-import { setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
@@ -10,6 +9,7 @@ import { loadModels } from "./controllers/models.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
+import { saveSettings, type UiSettings } from "./storage.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
@@ -36,6 +36,11 @@ export type ChatHost = {
   refreshSessionsAfterChat: Set<string>;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void;
+};
+
+type ChatSessionSettingsHost = {
+  settings: UiSettings;
+  applySessionKey: string;
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
@@ -80,6 +85,33 @@ export async function handleAbortChat(host: ChatHost) {
   }
   host.chatMessage = "";
   await abortChatRun(host as unknown as OpenClawApp);
+}
+
+function isChatSessionSettingsHost(host: ChatHost): host is ChatHost & ChatSessionSettingsHost {
+  return (
+    "settings" in host &&
+    typeof host.settings === "object" &&
+    host.settings !== null &&
+    "applySessionKey" in host &&
+    typeof host.applySessionKey === "string"
+  );
+}
+
+function persistLastActiveSessionKey(host: ChatHost, next: string) {
+  if (!isChatSessionSettingsHost(host)) {
+    return;
+  }
+  const trimmed = next.trim();
+  if (!trimmed || host.settings.lastActiveSessionKey === trimmed) {
+    return;
+  }
+  const settings = {
+    ...host.settings,
+    lastActiveSessionKey: trimmed,
+  };
+  host.settings = settings;
+  host.applySessionKey = settings.lastActiveSessionKey;
+  saveSettings(settings);
 }
 
 function enqueueChatMessage(
@@ -132,10 +164,7 @@ async function sendChatMessageNow(
     host.chatAttachments = opts.previousAttachments;
   }
   if (ok) {
-    setLastActiveSessionKey(
-      host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
-      host.sessionKey,
-    );
+    persistLastActiveSessionKey(host, host.sessionKey);
   }
   if (ok && opts?.restoreDraft && opts.previousDraft?.trim()) {
     host.chatMessage = opts.previousDraft;

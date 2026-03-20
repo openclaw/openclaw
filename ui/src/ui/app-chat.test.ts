@@ -2,6 +2,40 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleSendChat, refreshChatAvatar, type ChatHost } from "./app-chat.ts";
+import { sendChatMessage } from "./controllers/chat.ts";
+import { saveSettings, type UiSettings } from "./storage.ts";
+
+vi.mock("./controllers/chat.ts", () => ({
+  abortChatRun: vi.fn(),
+  loadChatHistory: vi.fn(),
+  sendChatMessage: vi.fn(),
+}));
+
+vi.mock("./storage.ts", async () => {
+  const actual = await vi.importActual<typeof import("./storage.ts")>("./storage.ts");
+  return {
+    ...actual,
+    saveSettings: vi.fn(),
+  };
+});
+
+vi.mock("./app-scroll.ts", async () => {
+  const actual = await vi.importActual<typeof import("./app-scroll.ts")>("./app-scroll.ts");
+  return {
+    ...actual,
+    resetChatScroll: vi.fn(),
+    scheduleChatScroll: vi.fn(),
+  };
+});
+
+vi.mock("./app-tool-stream.ts", async () => {
+  const actual =
+    await vi.importActual<typeof import("./app-tool-stream.ts")>("./app-tool-stream.ts");
+  return {
+    ...actual,
+    resetToolStream: vi.fn(),
+  };
+});
 
 function makeHost(overrides?: Partial<ChatHost>): ChatHost {
   return {
@@ -71,6 +105,7 @@ describe("refreshChatAvatar", () => {
 describe("handleSendChat", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.clearAllMocks();
   });
 
   it("keeps slash-command model changes in sync with the chat header cache", async () => {
@@ -127,5 +162,49 @@ describe("handleSendChat", () => {
       kind: "qualified",
       value: "openai/gpt-5-mini",
     });
+  });
+
+  it("persists the last active session key without depending on app-settings", async () => {
+    vi.mocked(sendChatMessage).mockResolvedValueOnce("run-1");
+
+    const settings: UiSettings = {
+      gatewayUrl: "ws://localhost:18789",
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "system",
+      chatFocusMode: false,
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 220,
+      navGroupsCollapsed: {},
+      borderRadius: 50,
+    };
+    const host = Object.assign(
+      makeHost({
+        chatMessage: "hello",
+        sessionKey: "agent:ops:main",
+      }),
+      {
+        applySessionKey: "main",
+        settings,
+      },
+    ) as ChatHost & { applySessionKey: string; settings: UiSettings };
+
+    await handleSendChat(host);
+
+    expect(vi.mocked(sendChatMessage)).toHaveBeenCalledWith(
+      host as unknown as Parameters<typeof sendChatMessage>[0],
+      "hello",
+      undefined,
+    );
+    expect(host.settings.lastActiveSessionKey).toBe("agent:ops:main");
+    expect(host.applySessionKey).toBe("agent:ops:main");
+    expect(vi.mocked(saveSettings)).toHaveBeenCalledWith(
+      expect.objectContaining({ lastActiveSessionKey: "agent:ops:main" }),
+    );
   });
 });
