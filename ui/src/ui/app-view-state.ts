@@ -8,6 +8,7 @@ import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
+import type { TaskBoardCardVM } from "./task-board/types.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ResolvedTheme, ThemeMode, ThemeName } from "./theme.ts";
 import type {
@@ -192,6 +193,10 @@ export type AppViewState = {
   sessionsPage: number;
   sessionsPageSize: number;
   sessionsActionsOpenKey: string | null;
+  taskBoardLoading: boolean;
+  taskBoardError: string | null;
+  taskBoardCards: TaskBoardCardVM[];
+  taskBoardLastLoadedAt: number | null;
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
@@ -314,6 +319,7 @@ export type AppViewState = {
     setBorderRadius: (value: number) => void;
     applySettings: (next: UiSettings) => void;
     loadOverview: () => Promise<void>;
+    loadTaskBoard: () => Promise<void>;
     loadAssistantIdentity: () => Promise<void>;
     loadCron: () => Promise<void>;
     handleWhatsAppStart: (force: boolean) => Promise<void>;

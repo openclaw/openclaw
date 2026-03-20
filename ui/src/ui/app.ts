@@ -62,6 +62,8 @@ import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
+import { loadTaskBoard as loadTaskBoardInternal } from "./task-board/service.ts";
+import type { TaskBoardCardVM } from "./task-board/types.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type {
   AgentsListResult,
@@ -290,6 +292,11 @@ export class OpenClawApp extends LitElement {
   @state() sessionsPage = 0;
   @state() sessionsPageSize = 10;
   @state() sessionsActionsOpenKey: string | null = null;
+
+  @state() taskBoardLoading = false;
+  @state() taskBoardError: string | null = null;
+  @state() taskBoardCards: TaskBoardCardVM[] = [];
+  @state() taskBoardLastLoadedAt: number | null = null;
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;
@@ -578,6 +585,10 @@ export class OpenClawApp extends LitElement {
 
   async loadOverview() {
     await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0]);
+  }
+
+  async loadTaskBoard() {
+    await loadTaskBoardInternal(this as unknown as Parameters<typeof loadTaskBoardInternal>[0]);
   }
 
   async loadCron() {
