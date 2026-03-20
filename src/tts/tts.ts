@@ -162,6 +162,7 @@ export type TtsDirectiveOverrides = {
   openai?: {
     voice?: string;
     model?: string;
+    speed?: number;
   };
   elevenlabs?: {
     voiceId?: string;
@@ -170,6 +171,9 @@ export type TtsDirectiveOverrides = {
     applyTextNormalization?: "auto" | "on" | "off";
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
+  };
+  microsoft?: {
+    voice?: string;
   };
 };
 
@@ -189,6 +193,17 @@ export type TtsResult = {
   provider?: string;
   outputFormat?: string;
   voiceCompatible?: boolean;
+};
+
+export type TtsSynthesisResult = {
+  success: boolean;
+  audioBuffer?: Buffer;
+  error?: string;
+  latencyMs?: number;
+  provider?: string;
+  outputFormat?: string;
+  voiceCompatible?: boolean;
+  fileExtension?: string;
 };
 
 export type TtsTelephonyResult = {
@@ -601,6 +616,7 @@ function resolveTtsRequestSetup(params: {
   cfg: OpenClawConfig;
   prefsPath?: string;
   providerOverride?: TtsProvider;
+  disableFallback?: boolean;
 }):
   | {
       config: ResolvedTtsConfig;
@@ -621,7 +637,7 @@ function resolveTtsRequestSetup(params: {
   const provider = normalizeSpeechProviderId(params.providerOverride) ?? userProvider;
   return {
     config,
-    providers: resolveTtsProviderOrder(provider, params.cfg),
+    providers: params.disableFallback ? [provider] : resolveTtsProviderOrder(provider, params.cfg),
   };
 }
 
@@ -631,12 +647,44 @@ export async function textToSpeech(params: {
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
+  disableFallback?: boolean;
 }): Promise<TtsResult> {
+  const synthesis = await synthesizeSpeech(params);
+  if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
+    return buildTtsFailureResult([synthesis.error ?? "TTS conversion failed"]);
+  }
+
+  const tempRoot = resolvePreferredOpenClawTmpDir();
+  mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+  const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+  const audioPath = path.join(tempDir, `voice-${Date.now()}${synthesis.fileExtension}`);
+  writeFileSync(audioPath, synthesis.audioBuffer);
+  scheduleCleanup(tempDir);
+
+  return {
+    success: true,
+    audioPath,
+    latencyMs: synthesis.latencyMs,
+    provider: synthesis.provider,
+    outputFormat: synthesis.outputFormat,
+    voiceCompatible: synthesis.voiceCompatible,
+  };
+}
+
+export async function synthesizeSpeech(params: {
+  text: string;
+  cfg: OpenClawConfig;
+  prefsPath?: string;
+  channel?: string;
+  overrides?: TtsDirectiveOverrides;
+  disableFallback?: boolean;
+}): Promise<TtsSynthesisResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
     cfg: params.cfg,
     prefsPath: params.prefsPath,
     providerOverride: params.overrides?.provider,
+    disableFallback: params.disableFallback,
   });
   if ("error" in setup) {
     return { success: false, error: setup.error };
@@ -667,22 +715,14 @@ export async function textToSpeech(params: {
         target,
         overrides: params.overrides,
       });
-      const latencyMs = Date.now() - providerStart;
-
-      const tempRoot = resolvePreferredOpenClawTmpDir();
-      mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
-      const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-      const audioPath = path.join(tempDir, `voice-${Date.now()}${synthesis.fileExtension}`);
-      writeFileSync(audioPath, synthesis.audioBuffer);
-      scheduleCleanup(tempDir);
-
       return {
         success: true,
-        audioPath,
-        latencyMs,
+        audioBuffer: synthesis.audioBuffer,
+        latencyMs: Date.now() - providerStart,
         provider,
         outputFormat: synthesis.outputFormat,
         voiceCompatible: synthesis.voiceCompatible,
+        fileExtension: synthesis.fileExtension,
       };
     } catch (err) {
       errors.push(formatTtsProviderError(provider, err));
