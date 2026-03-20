@@ -170,8 +170,8 @@ What you set:
     Prompts for account ID, gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
     More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway).
   </Accordion>
-  <Accordion title="MiniMax M2.5">
-    Config is auto-written.
+  <Accordion title="MiniMax">
+    Config is auto-written. Hosted default is `MiniMax-M2.7`; `MiniMax-M2.5` stays available.
     More detail: [MiniMax](/providers/minimax).
   </Accordion>
   <Accordion title="Synthetic (Anthropic-compatible)">
