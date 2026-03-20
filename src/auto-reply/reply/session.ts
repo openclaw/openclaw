@@ -558,6 +558,25 @@ export async function initSessionState(params: {
     },
   );
 
+  // When a session is auto-reset (idle timeout or daily reset), emit a
+  // session:reset internal hook so the session-memory hook can persist
+  // the outgoing session context — just as it does for manual /new and /reset.
+  // This MUST fire before archiveSessionTranscripts() so the handler can still
+  // read the original transcript file (which archival renames).
+  if (isNewSession && !resetTriggered && previousSessionEntry) {
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const autoResetEvent = createInternalHookEvent("session", "reset", sessionKey, {
+      sessionEntry,
+      previousSessionEntry,
+      commandSource: "auto-reset",
+      workspaceDir,
+      cfg,
+    });
+    void triggerInternalHook(autoResetEvent).catch((err) => {
+      log.debug("session:reset hook error (auto-reset)", { error: String(err) });
+    });
+  }
+
   // Archive old transcript so it doesn't accumulate on disk (#14869).
   if (previousSessionEntry?.sessionId) {
     archiveSessionTranscripts({
@@ -585,23 +604,6 @@ export async function initSessionState(params: {
     SessionId: sessionId,
     IsNewSession: isNewSession ? "true" : "false",
   };
-
-  // When a session is auto-reset (idle timeout or daily reset), emit a
-  // session:reset internal hook so the session-memory hook can persist
-  // the outgoing session context — just as it does for manual /new and /reset.
-  if (isNewSession && !resetTriggered && previousSessionEntry) {
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const autoResetEvent = createInternalHookEvent("session", "reset", sessionKey, {
-      sessionEntry,
-      previousSessionEntry,
-      commandSource: "auto-reset",
-      workspaceDir,
-      cfg,
-    });
-    void triggerInternalHook(autoResetEvent).catch((err) => {
-      log.debug("session:reset hook error (auto-reset)", { error: String(err) });
-    });
-  }
 
   // Run session plugin hooks (fire-and-forget)
   const hookRunner = getGlobalHookRunner();
