@@ -78,6 +78,26 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Hello");
   });
 
+  it("ignores leaked TUI debug delta updates", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Hello",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "[TUI] evt=health sk=undefined cur=agent:main:main" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Hello");
+  });
+
   it("appends final payload from another run without clearing active stream", () => {
     const state = createState({
       sessionKey: "main",
@@ -123,6 +143,30 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Working...");
     expect(state.chatStreamStartedAt).toBe(123);
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("drops assistant command messages from another run without clearing active stream", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        command: true,
+        content: [{ type: "text", text: "[TUI] evt=chat sk=undefined cur=agent:main:main" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
     expect(state.chatMessages).toEqual([]);
   });
 
@@ -421,6 +465,29 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe(null);
   });
 
+  it("drops leaked TUI debug messages from own run", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "[TUI] evt=health sk=undefined cur=agent:main:main" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+  });
+
   it("does not persist NO_REPLY stream text on final without message", () => {
     const state = createState({
       sessionKey: "main",
@@ -438,11 +505,50 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([]);
   });
 
+  it("does not persist leaked TUI debug stream text on final", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "[TUI] evt=health sk=undefined cur=agent:main:main",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "[TUI] evt=health sk=undefined cur=agent:main:main" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+  });
+
   it("does not persist NO_REPLY stream text on abort", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
       chatStream: "NO_REPLY",
+      chatStreamStartedAt: 100,
+    });
+    const payload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "aborted",
+      message: "not-an-assistant-message",
+    } as unknown as ChatEventPayload;
+
+    expect(handleChatEvent(state, payload)).toBe("aborted");
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("does not persist leaked TUI debug stream text on abort", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "[TUI] evt=health sk=undefined cur=agent:main:main",
       chatStreamStartedAt: 100,
     });
     const payload = {
@@ -509,6 +615,15 @@ describe("loadChatHistory", () => {
       { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
       { role: "assistant", content: [{ type: "text", text: "Real answer" }] },
       { role: "assistant", text: "  NO_REPLY  " },
+      {
+        role: "assistant",
+        command: true,
+        content: [{ type: "text", text: "[TUI] evt=agent sk=agent:main:main cur=agent:main:main" }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "[TUI] evt=health sk=undefined cur=agent:main:main" }],
+      },
     ];
     const mockClient = {
       request: vi.fn().mockResolvedValue({ messages, thinkingLevel: "low" }),
