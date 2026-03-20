@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { createReplyPrefixOptions } from "../runtime-api.js";
+import { createChannelReplyPipeline } from "../runtime-api.js";
 const { sendMessageMattermostMock } = vi.hoisted(() => ({
   sendMessageMattermostMock: vi.fn(),
 }));
@@ -431,7 +431,7 @@ describe("mattermostPlugin", () => {
         },
       };
 
-      const prefixContext = createReplyPrefixOptions({
+      const prefixContext = createChannelReplyPipeline({
         cfg,
         agentId: "main",
         channel: "mattermost",

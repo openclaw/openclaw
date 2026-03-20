@@ -8,16 +8,19 @@ import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
 type SecretRegistryEntry = ReturnType<typeof listSecretTargetRegistryEntries>[number];
 
-const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
-  resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
-}));
+const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvidersMock } =
+  vi.hoisted(() => ({
+    resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+    resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+  }));
 
 vi.mock("../plugins/web-search-providers.js", () => ({
+  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
 function createTestProvider(params: {
-  id: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
+  id: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl" | "tavily";
   pluginId: string;
   order: number;
 }): PluginWebSearchProviderEntry {
@@ -77,6 +80,7 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
     createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
     createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
     createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
+    createTestProvider({ id: "tavily", pluginId: "tavily", order: 70 }),
   ];
 }
 
@@ -191,6 +195,9 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   if (entry.id === "plugins.entries.firecrawl.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "firecrawl");
   }
+  if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");
+  }
   return config;
 }
 
@@ -232,6 +239,8 @@ function buildAuthStoreForTarget(entry: SecretRegistryEntry, envId: string): Aut
 describe("secrets runtime target coverage", () => {
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
+    resolveBundledPluginWebSearchProvidersMock.mockReset();
+    resolvePluginWebSearchProvidersMock.mockReset();
   });
 
   it("handles every openclaw.json registry target when configured as active", async () => {
