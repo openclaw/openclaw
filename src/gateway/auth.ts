@@ -380,6 +380,15 @@ export async function authorizeGatewayConnect(
   );
 
   if (auth.mode === "trusted-proxy") {
+    // Allow local direct connections (loopback, no proxy headers) to bypass
+    // trusted-proxy auth. Local CLI commands connect directly to 127.0.0.1
+    // without going through a reverse proxy, so they lack proxy identity
+    // headers. This is safe because only processes on the same machine can
+    // reach the loopback interface.
+    if (localDirect) {
+      return { ok: true, method: "none" };
+    }
+
     if (!auth.trustedProxy) {
       return { ok: false, reason: "trusted_proxy_config_missing" };
     }

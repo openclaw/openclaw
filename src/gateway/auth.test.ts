@@ -649,4 +649,46 @@ describe("trusted-proxy auth", () => {
     expect(res.ok).toBe(true);
     expect(res.user).toBe("nick@example.com");
   });
+
+  it("allows local direct loopback connections to bypass trusted-proxy auth", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: null,
+      trustedProxies: ["10.0.0.1"],
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "127.0.0.1:18789",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("none");
+  });
+
+  it("does not bypass trusted-proxy auth for non-loopback connections", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: null,
+      trustedProxies: ["10.0.0.1"],
+      req: {
+        socket: { remoteAddress: "192.168.1.50" },
+        headers: {
+          host: "192.168.1.50:18789",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_untrusted_source");
+  });
 });
