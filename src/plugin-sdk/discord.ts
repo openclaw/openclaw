@@ -109,6 +109,7 @@ export {
   createThreadDiscord,
   deleteChannelDiscord,
   editDiscordComponentMessage,
+  registerBuiltDiscordComponentMessage,
   deleteMessageDiscord,
   editChannelDiscord,
   editMessageDiscord,

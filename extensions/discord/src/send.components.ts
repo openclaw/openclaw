@@ -14,6 +14,7 @@ import {
   buildDiscordComponentMessage,
   buildDiscordComponentMessageFlags,
   resolveDiscordComponentAttachmentName,
+  type DiscordComponentBuildResult,
   type DiscordComponentMessageSpec,
 } from "./components.js";
 import {
@@ -53,6 +54,17 @@ type DiscordComponentSendOpts = {
   mediaLocalRoots?: readonly string[];
   filename?: string;
 };
+
+export function registerBuiltDiscordComponentMessage(params: {
+  buildResult: DiscordComponentBuildResult;
+  messageId: string;
+}): void {
+  registerDiscordComponentEntries({
+    entries: params.buildResult.entries,
+    modals: params.buildResult.modals,
+    messageId: params.messageId,
+  });
+}
 
 async function buildDiscordComponentPayload(params: {
   spec: DiscordComponentMessageSpec;
@@ -158,9 +170,8 @@ export async function sendDiscordComponentMessage(
     });
   }
 
-  registerDiscordComponentEntries({
-    entries: buildResult.entries,
-    modals: buildResult.modals,
+  registerBuiltDiscordComponentMessage({
+    buildResult,
     messageId: result.id,
   });
 
@@ -211,9 +222,8 @@ export async function editDiscordComponentMessage(
     });
   }
 
-  registerDiscordComponentEntries({
-    entries: buildResult.entries,
-    modals: buildResult.modals,
+  registerBuiltDiscordComponentMessage({
+    buildResult,
     messageId: result.id ?? messageId,
   });
 

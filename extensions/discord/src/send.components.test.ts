@@ -1,7 +1,11 @@
 import { ChannelType } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerDiscordComponentEntries } from "./components-registry.js";
-import { editDiscordComponentMessage, sendDiscordComponentMessage } from "./send.components.js";
+import {
+  editDiscordComponentMessage,
+  registerBuiltDiscordComponentMessage,
+  sendDiscordComponentMessage,
+} from "./send.components.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ session: { dmScope: "main" } })));
@@ -86,5 +90,22 @@ describe("sendDiscordComponentMessage", () => {
     const args = registerMock.mock.calls[0]?.[0];
     expect(args?.messageId).toBe("msg1");
     expect(args?.entries[0]?.sessionKey).toBe("agent:main:discord:channel:chan-1");
+  });
+
+  it("registers a prebuilt component message against an edited message id", () => {
+    registerBuiltDiscordComponentMessage({
+      messageId: "msg1",
+      buildResult: {
+        components: [],
+        entries: [{ id: "entry-1", kind: "button", label: "Tap" }],
+        modals: [{ id: "modal-1", title: "Modal", fields: [] }],
+      },
+    });
+
+    expect(registerMock).toHaveBeenCalledWith({
+      entries: [{ id: "entry-1", kind: "button", label: "Tap" }],
+      modals: [{ id: "modal-1", title: "Modal", fields: [] }],
+      messageId: "msg1",
+    });
   });
 });

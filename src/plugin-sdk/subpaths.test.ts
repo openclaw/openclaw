@@ -222,6 +222,7 @@ describe("plugin-sdk subpath exports", () => {
     const discordSdk = await import("openclaw/plugin-sdk/discord");
     expect(typeof discordSdk.buildDiscordComponentMessage).toBe("function");
     expect(typeof discordSdk.editDiscordComponentMessage).toBe("function");
+    expect(typeof discordSdk.registerBuiltDiscordComponentMessage).toBe("function");
     expect(typeof discordSdk.resolveDiscordAccount).toBe("function");
   });
 
