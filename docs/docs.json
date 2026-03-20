@@ -1000,7 +1000,11 @@
               },
               {
                 "group": "Multi-agent",
-                "pages": ["concepts/multi-agent", "concepts/presence"]
+                "pages": [
+                  "concepts/multi-agent",
+                  "concepts/presence",
+                  "concepts/delegate-architecture"
+                ]
               },
               {
                 "group": "Messages and delivery",
@@ -1090,6 +1094,7 @@
                 "group": "Automation",
                 "pages": [
                   "automation/hooks",
+                  "automation/standing-orders",
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
                   "automation/troubleshooting",
