@@ -22102,6 +22102,34 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.ackReaction",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.ackReactionScope",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "group-mentions",
+        "group-all",
+        "direct",
+        "all",
+        "none",
+        "off"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.actions",
       "kind": "channel",
       "type": "object",
@@ -22152,7 +22180,27 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.actions.profile",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.actions.reactions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.actions.verification",
       "kind": "channel",
       "type": "boolean",
       "required": false,
@@ -22210,6 +22258,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.avatarUrl",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.chunkMode",
       "kind": "channel",
       "type": "string",
@@ -22225,6 +22283,16 @@
     },
     {
       "path": "channels.matrix.defaultAccount",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.deviceId",
       "kind": "channel",
       "type": "string",
       "required": false,
@@ -22652,6 +22720,20 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.reactionNotifications",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "own"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.replyToMode",
       "kind": "channel",
       "type": "string",
@@ -22860,9 +22942,93 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.startupVerification",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "if-unverified"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.startupVerificationCooldownHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.textChunkLimit",
       "kind": "channel",
       "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.threadBindings.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings.idleHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings.maxAgeHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings.spawnAcpSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings.spawnSubagentSessions",
+      "kind": "channel",
+      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
