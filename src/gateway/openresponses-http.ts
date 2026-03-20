@@ -8,13 +8,14 @@
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
-import type { ImageContent } from "../commands/agent/types.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
+import { renderFileContextBlock } from "../media/file-context.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
   DEFAULT_INPUT_IMAGE_MIMES,
@@ -256,6 +257,7 @@ async function runResponsesAgentCommand(params: {
       bestEffortDeliver: false,
       // HTTP API callers are authenticated operator clients for this gateway context.
       senderIsOwner: true,
+      allowModelOverride: true,
     },
     defaultRuntime,
     params.deps,
@@ -387,10 +389,19 @@ export async function handleOpenResponsesHttpRequest(
                 limits: limits.files,
               });
               if (file.text?.trim()) {
-                fileContexts.push(`<file name="${file.filename}">\n${file.text}\n</file>`);
+                fileContexts.push(
+                  renderFileContextBlock({
+                    filename: file.filename,
+                    content: file.text,
+                  }),
+                );
               } else if (file.images && file.images.length > 0) {
                 fileContexts.push(
-                  `<file name="${file.filename}">[PDF content rendered to images]</file>`,
+                  renderFileContextBlock({
+                    filename: file.filename,
+                    content: "[PDF content rendered to images]",
+                    surroundContentWithNewlines: false,
+                  }),
                 );
               }
               if (file.images && file.images.length > 0) {

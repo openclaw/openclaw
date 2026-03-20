@@ -23,6 +23,10 @@ import { collectTextContentBlocks } from "../content-blocks.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
+import {
+  composeSplitTurnInstructions,
+  resolveCompactionInstructions,
+} from "./compaction-instructions.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
@@ -697,12 +701,33 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
-    const { preparation, customInstructions, signal } = event;
-    if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
-      log.warn(
-        "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
+    const { preparation, customInstructions: eventInstructions, signal } = event;
+    const hasRealSummarizable = preparation.messagesToSummarize.some(isRealConversationMessage);
+    const hasRealTurnPrefix = preparation.turnPrefixMessages.some(isRealConversationMessage);
+    if (!hasRealSummarizable && !hasRealTurnPrefix) {
+      // When there are no summarizable messages AND no real turn-prefix content,
+      // cancelling compaction leaves context unchanged but the SDK re-triggers
+      // _checkCompaction after every assistant response — creating a cancel loop
+      // that blocks cron lanes (#41981).
+      //
+      // Strategy: always return a minimal compaction result so the SDK writes a
+      // boundary entry. The SDK's prepareCompaction() returns undefined when the
+      // last entry is a compaction, which blocks immediate re-triggering within
+      // the same turn. After a new assistant message arrives, if the SDK triggers
+      // compaction again with an empty preparation, we write another boundary —
+      // this is bounded to at most one boundary per LLM round-trip, not a tight
+      // loop.
+      log.info(
+        "Compaction safeguard: no real conversation messages to summarize; writing compaction boundary to suppress re-trigger loop.",
       );
-      return { cancel: true };
+      const fallbackSummary = buildStructuredFallbackSummary(preparation.previousSummary);
+      return {
+        compaction: {
+          summary: fallbackSummary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+        },
+      };
     }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
@@ -715,6 +740,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
     // Fall back to runtime.model which is explicitly passed when building extension paths.
     const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
+    const customInstructions = resolveCompactionInstructions(
+      eventInstructions,
+      runtime?.customInstructions,
+    );
     const summarizationInstructions = {
       identifierPolicy: runtime?.identifierPolicy,
       identifierInstructions: runtime?.identifierInstructions,
@@ -726,7 +755,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // Use a WeakSet to track which session managers have already logged the warning.
       if (!ctx.model && !runtime?.model && !missedModelWarningSessions.has(ctx.sessionManager)) {
         missedModelWarningSessions.add(ctx.sessionManager);
-        console.warn(
+        log.warn(
           "[compaction-safeguard] Both ctx.model and runtime.model are undefined. " +
             "Compaction summarization will not run. This indicates extensionRunner.initialize() " +
             "was not called and model was not passed through runtime registry.",
@@ -737,7 +766,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
     const apiKey = await ctx.modelRegistry.getApiKey(model);
     if (!apiKey) {
-      console.warn(
+      log.warn(
         "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
       );
       return { cancel: true };
@@ -892,7 +921,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               reserveTokens,
               maxChunkTokens,
               contextWindow: contextWindowTokens,
-              customInstructions: `${TURN_PREFIX_INSTRUCTIONS}\n\n${currentInstructions}`,
+              customInstructions: composeSplitTurnInstructions(
+                TURN_PREFIX_INSTRUCTIONS,
+                currentInstructions,
+              ),
               summarizationInstructions,
               previousSummary: undefined,
             });

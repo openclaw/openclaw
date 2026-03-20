@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { compileSafeRegex, hasNestedRepetition, testRegexWithBoundedInput } from "./safe-regex.js";
+import {
+  compileSafeRegex,
+  compileSafeRegexDetailed,
+  hasNestedRepetition,
+  testRegexWithBoundedInput,
+} from "./safe-regex.js";
 
 describe("safe regex", () => {
   it("flags nested repetition patterns", () => {
@@ -26,6 +31,13 @@ describe("safe regex", () => {
     const re = compileSafeRegex("token=([A-Za-z0-9]+)", "gi");
     expect(re).toBeInstanceOf(RegExp);
     expect("TOKEN=abcd1234".replace(re as RegExp, "***")).toBe("***");
+  });
+
+  it("returns structured reject reasons", () => {
+    expect(compileSafeRegexDetailed("   ").reason).toBe("empty");
+    expect(compileSafeRegexDetailed("(a+)+$").reason).toBe("unsafe-nested-repetition");
+    expect(compileSafeRegexDetailed("(invalid").reason).toBe("invalid-regex");
+    expect(compileSafeRegexDetailed("^agent:main$").reason).toBeNull();
   });
 
   it("checks bounded regex windows for long inputs", () => {

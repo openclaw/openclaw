@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
@@ -8,8 +8,11 @@ import {
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
-const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-const { resolveSandboxConfigForAgent } = await import("../../agents/sandbox/config.js");
+type RunModule = typeof import("./run.js");
+type SandboxConfigModule = typeof import("../../agents/sandbox/config.js");
+
+let runCronIsolatedAgentTurn: RunModule["runCronIsolatedAgentTurn"];
+let resolveSandboxConfigForAgent: SandboxConfigModule["resolveSandboxConfigForAgent"];
 
 function makeJob(overrides?: Record<string, unknown>) {
   return {
@@ -54,10 +57,38 @@ function makeParams(overrides?: Record<string, unknown>) {
   };
 }
 
+function expectDefaultSandboxPreserved(
+  runCfg:
+    | {
+        agents?: { defaults?: { sandbox?: unknown } };
+      }
+    | undefined,
+) {
+  expect(runCfg?.agents?.defaults?.sandbox).toEqual({
+    mode: "all",
+    workspaceAccess: "rw",
+    docker: {
+      network: "none",
+      dangerouslyAllowContainerNamespaceJoin: true,
+      dangerouslyAllowExternalBindSources: true,
+    },
+    browser: {
+      enabled: true,
+      autoStart: false,
+    },
+    prune: {
+      maxAgeDays: 7,
+    },
+  });
+}
+
 describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
   let previousFastTestEnv: string | undefined;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+    ({ resolveSandboxConfigForAgent } = await import("../../agents/sandbox/config.js"));
     previousFastTestEnv = clearFastTestEnv();
     resetRunCronIsolatedAgentTurnHarness();
   });
@@ -79,22 +110,7 @@ describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
 
     expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
     const runCfg = runWithModelFallbackMock.mock.calls[0]?.[0]?.cfg;
-    expect(runCfg?.agents?.defaults?.sandbox).toEqual({
-      mode: "all",
-      workspaceAccess: "rw",
-      docker: {
-        network: "none",
-        dangerouslyAllowContainerNamespaceJoin: true,
-        dangerouslyAllowExternalBindSources: true,
-      },
-      browser: {
-        enabled: true,
-        autoStart: false,
-      },
-      prune: {
-        maxAgeDays: 7,
-      },
-    });
+    expectDefaultSandboxPreserved(runCfg);
   });
 
   it("keeps global sandbox defaults when agent override is partial", async () => {
@@ -118,22 +134,7 @@ describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
     const runCfg = runWithModelFallbackMock.mock.calls[0]?.[0]?.cfg;
     const resolvedSandbox = resolveSandboxConfigForAgent(runCfg, "specialist");
 
-    expect(runCfg?.agents?.defaults?.sandbox).toEqual({
-      mode: "all",
-      workspaceAccess: "rw",
-      docker: {
-        network: "none",
-        dangerouslyAllowContainerNamespaceJoin: true,
-        dangerouslyAllowExternalBindSources: true,
-      },
-      browser: {
-        enabled: true,
-        autoStart: false,
-      },
-      prune: {
-        maxAgeDays: 7,
-      },
-    });
+    expectDefaultSandboxPreserved(runCfg);
     expect(resolvedSandbox.mode).toBe("all");
     expect(resolvedSandbox.workspaceAccess).toBe("rw");
     expect(resolvedSandbox.docker).toMatchObject({

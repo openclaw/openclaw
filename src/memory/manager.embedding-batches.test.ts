@@ -25,9 +25,19 @@ const fx = installEmbeddingManagerFixture({
     },
   }),
 });
-const { embedBatch } = fx;
 
 describe("memory embedding batches", () => {
+  async function expectSyncWithFastTimeouts(manager: {
+    sync: (params: { reason: string }) => Promise<void>;
+  }) {
+    const restoreFastTimeouts = useFastShortTimeouts();
+    try {
+      await manager.sync({ reason: "test" });
+    } finally {
+      restoreFastTimeouts();
+    }
+  }
+
   it("splits large files across multiple embedding batches", async () => {
     const memoryDir = fx.getMemoryDir();
     const managerLarge = fx.getManagerLarge();
@@ -44,13 +54,13 @@ describe("memory embedding batches", () => {
     });
 
     const status = managerLarge.status();
-    const totalTexts = embedBatch.mock.calls.reduce(
+    const totalTexts = fx.embedBatch.mock.calls.reduce(
       (sum: number, call: unknown[]) => sum + ((call[0] as string[] | undefined)?.length ?? 0),
       0,
     );
     expect(totalTexts).toBe(status.chunks);
-    expect(embedBatch.mock.calls.length).toBeGreaterThan(1);
-    const inputs: string[] = embedBatch.mock.calls.flatMap(
+    expect(fx.embedBatch.mock.calls.length).toBeGreaterThan(1);
+    const inputs: string[] = fx.embedBatch.mock.calls.flatMap(
       (call: unknown[]) => (call[0] as string[] | undefined) ?? [],
     );
     expect(inputs.every((text) => Buffer.byteLength(text, "utf8") <= 8000)).toBe(true);
@@ -69,7 +79,7 @@ describe("memory embedding batches", () => {
     await fs.writeFile(path.join(memoryDir, "2026-01-04.md"), content);
     await managerSmall.sync({ reason: "test" });
 
-    expect(embedBatch.mock.calls.length).toBe(1);
+    expect(fx.embedBatch.mock.calls.length).toBe(1);
   });
 
   it("retries embeddings on transient rate limit and 5xx errors", async () => {
@@ -84,7 +94,7 @@ describe("memory embedding batches", () => {
       "openai embeddings failed: 502 Bad Gateway (cloudflare)",
     ];
     let calls = 0;
-    embedBatch.mockImplementation(async (texts: string[]) => {
+    fx.embedBatch.mockImplementation(async (texts: string[]) => {
       calls += 1;
       const transient = transientErrors[calls - 1];
       if (transient) {
@@ -93,12 +103,7 @@ describe("memory embedding batches", () => {
       return texts.map(() => [0, 1, 0]);
     });
 
-    const restoreFastTimeouts = useFastShortTimeouts();
-    try {
-      await managerSmall.sync({ reason: "test" });
-    } finally {
-      restoreFastTimeouts();
-    }
+    await expectSyncWithFastTimeouts(managerSmall);
 
     expect(calls).toBe(3);
   }, 10000);
@@ -111,7 +116,7 @@ describe("memory embedding batches", () => {
     await fs.writeFile(path.join(memoryDir, "2026-01-08.md"), content);
 
     let calls = 0;
-    embedBatch.mockImplementation(async (texts: string[]) => {
+    fx.embedBatch.mockImplementation(async (texts: string[]) => {
       calls += 1;
       if (calls === 1) {
         throw new Error("AWS Bedrock embeddings failed: Too many tokens per day");
@@ -119,12 +124,7 @@ describe("memory embedding batches", () => {
       return texts.map(() => [0, 1, 0]);
     });
 
-    const restoreFastTimeouts = useFastShortTimeouts();
-    try {
-      await managerSmall.sync({ reason: "test" });
-    } finally {
-      restoreFastTimeouts();
-    }
+    await expectSyncWithFastTimeouts(managerSmall);
 
     expect(calls).toBe(2);
   }, 10000);
@@ -135,7 +135,9 @@ describe("memory embedding batches", () => {
     await fs.writeFile(path.join(memoryDir, "2026-01-07.md"), "\n\n\n");
     await managerSmall.sync({ reason: "test" });
 
-    const inputs = embedBatch.mock.calls.flatMap((call: unknown[]) => (call[0] as string[]) ?? []);
+    const inputs = fx.embedBatch.mock.calls.flatMap(
+      (call: unknown[]) => (call[0] as string[]) ?? [],
+    );
     expect(inputs).not.toContain("");
   });
 });

@@ -3,15 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
 vi.mock("../config.js", () => ({
   loadConfig: vi.fn().mockReturnValue({}),
 }));
-const { loadConfig } = await import("../config.js");
-const mockLoadConfig = vi.mocked(loadConfig) as ReturnType<typeof vi.fn>;
+
+import { loadConfig } from "../config.js";
+import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
+
+let mockLoadConfig: ReturnType<typeof vi.fn>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -77,6 +79,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   beforeEach(async () => {
+    mockLoadConfig = vi.mocked(loadConfig) as ReturnType<typeof vi.fn>;
     testDir = await createCaseDir("pruning-integ");
     storePath = path.join(testDir, "sessions.json");
     savedCacheTtl = process.env.OPENCLAW_SESSION_CACHE_TTL_MS;

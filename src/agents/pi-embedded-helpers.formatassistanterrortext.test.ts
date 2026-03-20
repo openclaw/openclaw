@@ -4,7 +4,9 @@ import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatAssistantErrorText,
+  getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
+  isRawApiErrorPayload,
 } from "./pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
@@ -32,6 +34,12 @@ describe("formatAssistantErrorText", () => {
   it("returns context overflow for Kimi 'model token limit' errors", () => {
     const msg = makeAssistantError(
       "error, status code: 400, message: Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
+    );
+    expect(formatAssistantErrorText(msg)).toContain("Context overflow");
+  });
+  it("returns context overflow for Ollama 'prompt too long' errors (#34005)", () => {
+    const msg = makeAssistantError(
+      'Ollama API error 400: {"StatusCode":400,"Status":"400 Bad Request","error":"prompt too long; exceeded max context length by 4 tokens"}',
     );
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
@@ -151,5 +159,16 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
     );
+  });
+});
+
+describe("raw API error payload helpers", () => {
+  it("recognizes provider-prefixed JSON payloads for observation fingerprints", () => {
+    const raw =
+      'Ollama API error: {"type":"error","error":{"type":"server_error","message":"Boom"},"request_id":"req_123"}';
+
+    expect(isRawApiErrorPayload(raw)).toBe(true);
+    expect(getApiErrorPayloadFingerprint(raw)).toContain("server_error");
+    expect(getApiErrorPayloadFingerprint(raw)).toContain("req_123");
   });
 });

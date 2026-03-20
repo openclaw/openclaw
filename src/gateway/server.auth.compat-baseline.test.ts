@@ -1,11 +1,15 @@
+import os from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
+  BACKEND_GATEWAY_CLIENT,
   connectReq,
   CONTROL_UI_CLIENT,
   ConnectErrorDetailCodes,
   getFreePort,
   openWs,
   originForPort,
+  rpcReq,
   restoreGatewayToken,
   startGatewayServer,
   testState,
@@ -30,6 +34,27 @@ function expectAuthErrorDetails(params: {
   }
   if (params.recommendedNextStep !== undefined) {
     expect(details?.recommendedNextStep).toBe(params.recommendedNextStep);
+  }
+}
+
+async function expectSharedOperatorScopesPreserved(
+  port: number,
+  auth: { token?: string; password?: string },
+) {
+  const ws = await openWs(port);
+  try {
+    const res = await connectReq(ws, {
+      ...auth,
+      scopes: ["operator.admin"],
+      device: null,
+    });
+    expect(res.ok).toBe(true);
+
+    const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
+    expect(adminRes.ok).toBe(true);
+    expect((adminRes.payload as { enabled?: boolean } | undefined)?.enabled).toBe(false);
+  } finally {
+    ws.close();
   }
 }
 
@@ -60,6 +85,10 @@ describe("gateway auth compatibility baseline", () => {
       } finally {
         ws.close();
       }
+    });
+
+    test("keeps requested scopes for shared-token operator connects without device identity", async () => {
+      await expectSharedOperatorScopesPreserved(port, { token: "secret" });
     });
 
     test("returns stable token-missing details for control ui without token", async () => {
@@ -118,6 +147,52 @@ describe("gateway auth compatibility baseline", () => {
         ws.close();
       }
     });
+
+    test("keeps local backend device-token reconnects out of pairing", async () => {
+      const identityPath = path.join(
+        os.tmpdir(),
+        `openclaw-backend-device-${process.pid}-${port}.json`,
+      );
+      const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
+        await import("../infra/device-identity.js");
+      const { approveDevicePairing, requestDevicePairing, rotateDeviceToken } =
+        await import("../infra/device-pairing.js");
+
+      const identity = loadOrCreateDeviceIdentity(identityPath);
+      const pending = await requestDevicePairing({
+        deviceId: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        clientId: BACKEND_GATEWAY_CLIENT.id,
+        clientMode: BACKEND_GATEWAY_CLIENT.mode,
+        role: "operator",
+        scopes: ["operator.admin"],
+      });
+      await approveDevicePairing(pending.request.requestId);
+
+      const rotated = await rotateDeviceToken({
+        deviceId: identity.deviceId,
+        role: "operator",
+        scopes: ["operator.admin"],
+      });
+      expect(rotated.ok).toBe(true);
+      const rotatedToken = rotated.ok ? rotated.entry.token : "";
+      expect(rotatedToken).toBeTruthy();
+
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          client: { ...BACKEND_GATEWAY_CLIENT },
+          deviceIdentityPath: identityPath,
+          deviceToken: rotatedToken,
+          scopes: ["operator.admin"],
+        });
+        expect(res.ok).toBe(true);
+        expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
+      } finally {
+        ws.close();
+      }
+    });
   });
 
   describe("password mode", () => {
@@ -162,6 +237,10 @@ describe("gateway auth compatibility baseline", () => {
       } finally {
         ws.close();
       }
+    });
+
+    test("keeps requested scopes for shared-password operator connects without device identity", async () => {
+      await expectSharedOperatorScopesPreserved(port, { password: "secret" });
     });
   });
 
