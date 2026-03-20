@@ -575,9 +575,7 @@ describe("createTelegramBot", () => {
 
   it("resets typing network streaks when another Telegram API fetch succeeds", async () => {
     vi.useFakeTimers();
-    const originalFetch = globalThis.fetch;
     const fetchSpy = vi.fn(async () => new Response("{}", { status: 200 }));
-    globalThis.fetch = fetchSpy as unknown as typeof fetch;
     try {
       const onRecoverableSendChatActionNetworkFailure = vi.fn();
       sendChatActionSpy.mockRejectedValue(
@@ -595,6 +593,7 @@ describe("createTelegramBot", () => {
       createTelegramBot({
         token: "tok",
         onRecoverableSendChatActionNetworkFailure,
+        proxyFetch: fetchSpy as unknown as typeof fetch,
       });
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
       const messageCtx = {
@@ -621,7 +620,63 @@ describe("createTelegramBot", () => {
       await handler(messageCtx);
       expect(onRecoverableSendChatActionNetworkFailure).not.toHaveBeenCalled();
     } finally {
-      globalThis.fetch = originalFetch;
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not reset typing network streaks on proxy HTTP error responses", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.fn(async () => new Response("Bad Gateway", { status: 502 }));
+    try {
+      const onRecoverableSendChatActionNetworkFailure = vi.fn();
+      sendChatActionSpy.mockRejectedValue(
+        Object.assign(new TypeError("fetch failed"), {
+          cause: Object.assign(new Error("connect timeout"), {
+            code: "UND_ERR_CONNECT_TIMEOUT",
+          }),
+        }),
+      );
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.typingCallbacks?.onReplyStart?.();
+        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+      });
+
+      createTelegramBot({
+        token: "tok",
+        onRecoverableSendChatActionNetworkFailure,
+        proxyFetch: fetchSpy as unknown as typeof fetch,
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const messageCtx = {
+        message: {
+          chat: { id: 42, type: "private" },
+          from: { id: 999, username: "random" },
+          text: "hi",
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+
+      await handler(messageCtx);
+      expect(onRecoverableSendChatActionNetworkFailure).not.toHaveBeenCalled();
+
+      const clientFetch = (
+        botCtorSpy.mock.calls.at(-1)?.[1] as {
+          client?: { fetch?: typeof fetch };
+        }
+      )?.client?.fetch;
+      expect(clientFetch).toBeTypeOf("function");
+      const proxyResponse = await clientFetch?.("https://api.telegram.org/bottok/getMe");
+      expect(proxyResponse?.ok).toBe(false);
+
+      await handler(messageCtx);
+      expect(onRecoverableSendChatActionNetworkFailure).toHaveBeenCalledTimes(1);
+      expect(onRecoverableSendChatActionNetworkFailure).toHaveBeenCalledWith(
+        expect.objectContaining({
+          consecutiveFailures: 2,
+        }),
+      );
+    } finally {
       vi.useRealTimers();
     }
   });

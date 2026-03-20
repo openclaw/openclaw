@@ -232,7 +232,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     finalFetch = ((input: TelegramFetchInput, init?: TelegramFetchInit) => {
       return Promise.resolve(baseFetch(input, init))
         .then((response) => {
-          noteTelegramNetworkHealthy?.();
+          if (response.ok) {
+            noteTelegramNetworkHealthy?.();
+          }
           return response;
         })
         .catch((err: unknown) => {
