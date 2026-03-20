@@ -293,6 +293,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/synthetic/**"
+"extensions: tavily":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tavily/**"
 "extensions: talk-voice":
   - changed-files:
       - any-glob-to-any-file:
