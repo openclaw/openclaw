@@ -96,6 +96,21 @@ function isAbortError(err: unknown): boolean {
   return readErrorName(err) === "AbortError";
 }
 
+function isWrappedAbortError(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    "message" in err &&
+    typeof err.message === "string" &&
+    err.message.trim().toLowerCase() === "aborted" &&
+    isAbortError((err as Error).cause)
+  );
+}
+
+function isAnyAbortError(err: unknown): boolean {
+  return isAbortError(err) || isWrappedAbortError(err);
+}
+
 export type TelegramDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
@@ -248,7 +263,7 @@ export function createTelegramDraftStream(params: {
         try {
           await sleepWithAbort(delayMs, params.abortSignal);
         } catch (sleepErr) {
-          if (params.abortSignal?.aborted && isAbortError(sleepErr)) {
+          if (params.abortSignal?.aborted && isAnyAbortError(sleepErr)) {
             markPreviewRetryAbortedAfterPreconnectFailure(sleepErr);
           }
           throw sleepErr;

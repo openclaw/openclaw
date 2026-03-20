@@ -351,7 +351,7 @@ describe("createTelegramDraftStream", () => {
     api.sendMessage.mockRejectedValueOnce(preConnectErr);
     sleepWithAbort.mockImplementationOnce(async () => {
       abortController.abort(new Error("poller restart"));
-      throw abortErr;
+      throw new Error("aborted", { cause: abortErr });
     });
     const stream = createDraftStream(api, {
       previewTransport: "message",

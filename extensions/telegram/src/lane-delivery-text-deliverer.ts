@@ -20,6 +20,12 @@ const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const MESSAGE_NOT_FOUND_RE =
   /400:\s*Bad Request:\s*message to edit not found|MESSAGE_ID_INVALID|message can't be edited/i;
+const PREVIEW_EDIT_ABORTED_AFTER_PRECONNECT_FAILURE = Symbol(
+  "openclaw.telegram.preview-edit-aborted-after-preconnect-failure",
+);
+const PREVIEW_EDIT_ABORTED_AFTER_AMBIGUOUS_RETRY = Symbol(
+  "openclaw.telegram.preview-edit-aborted-after-ambiguous-retry",
+);
 
 function extractErrorText(err: unknown): string {
   return typeof err === "string"
@@ -48,6 +54,40 @@ function isMissingPreviewMessageError(err: unknown): boolean {
 
 function isAbortError(err: unknown): boolean {
   return readErrorName(err) === "AbortError";
+}
+
+function isWrappedAbortError(err: unknown): boolean {
+  return (
+    extractErrorText(err).trim().toLowerCase() === "aborted" && isAbortError((err as Error).cause)
+  );
+}
+
+function isAnyAbortError(err: unknown): boolean {
+  return isAbortError(err) || isWrappedAbortError(err);
+}
+
+function markPreviewEditAbortKind(
+  err: unknown,
+  marker:
+    | typeof PREVIEW_EDIT_ABORTED_AFTER_PRECONNECT_FAILURE
+    | typeof PREVIEW_EDIT_ABORTED_AFTER_AMBIGUOUS_RETRY,
+): void {
+  if (!err || typeof err !== "object") {
+    return;
+  }
+  Object.defineProperty(err, marker, {
+    value: true,
+    configurable: true,
+  });
+}
+
+function hasPreviewEditAbortKind(
+  err: unknown,
+  marker:
+    | typeof PREVIEW_EDIT_ABORTED_AFTER_PRECONNECT_FAILURE
+    | typeof PREVIEW_EDIT_ABORTED_AFTER_AMBIGUOUS_RETRY,
+): boolean {
+  return !!err && typeof err === "object" && Boolean((err as Record<PropertyKey, unknown>)[marker]);
 }
 
 export type LaneName = "answer" | "reasoning";
@@ -235,7 +275,19 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         params.log(
           `telegram: ${args.laneName} preview ${args.context} edit hit recoverable network error; retrying in ${delayMs}ms (${String(err)})`,
         );
-        await sleepWithAbort(delayMs, params.abortSignal);
+        try {
+          await sleepWithAbort(delayMs, params.abortSignal);
+        } catch (sleepErr) {
+          if (params.abortSignal?.aborted && isAnyAbortError(sleepErr)) {
+            markPreviewEditAbortKind(
+              sleepErr,
+              isSafeToRetrySendError(err)
+                ? PREVIEW_EDIT_ABORTED_AFTER_PRECONNECT_FAILURE
+                : PREVIEW_EDIT_ABORTED_AFTER_AMBIGUOUS_RETRY,
+            );
+          }
+          throw sleepErr;
+        }
       }
     }
   };
@@ -328,7 +380,20 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           );
           return "fallback";
         }
-        if (isAbortError(err)) {
+        if (hasPreviewEditAbortKind(err, PREVIEW_EDIT_ABORTED_AFTER_PRECONNECT_FAILURE)) {
+          params.log(
+            `telegram: ${args.laneName} preview final edit aborted before completion; falling back to standard send (${String(err)})`,
+          );
+          return "fallback";
+        }
+        if (hasPreviewEditAbortKind(err, PREVIEW_EDIT_ABORTED_AFTER_AMBIGUOUS_RETRY)) {
+          params.log(
+            `telegram: ${args.laneName} preview final edit aborted after ambiguous network failure; keeping existing preview (${String(err)})`,
+          );
+          params.markDelivered();
+          return "retained";
+        }
+        if (isAnyAbortError(err)) {
           params.log(
             `telegram: ${args.laneName} preview final edit aborted before completion; falling back to standard send (${String(err)})`,
           );

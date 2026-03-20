@@ -227,6 +227,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     streamMode?: Parameters<typeof dispatchTelegramMessage>[0]["streamMode"];
     telegramDeps?: TelegramBotDeps;
     bot?: Bot;
+    opts?: Partial<Parameters<typeof dispatchTelegramMessage>[0]["opts"]>;
   }) {
     const bot = params.bot ?? createBot();
     await dispatchTelegramMessage({
@@ -239,7 +240,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       textLimit: 4096,
       telegramCfg: params.telegramCfg ?? {},
       telegramDeps: params.telegramDeps ?? telegramDepsForTest,
-      opts: { token: "token" },
+      opts: { token: "token", ...(params.opts ?? {}) },
     });
   }
 
@@ -2323,11 +2324,18 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const preConnectErr = new Error("connect ECONNREFUSED 149.154.167.220:443");
     (preConnectErr as NodeJS.ErrnoException).code = "ECONNREFUSED";
     editMessageTelegram.mockRejectedValue(preConnectErr);
+    const abortController = new AbortController();
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({
+      context: createContext(),
+      opts: { fetchAbortSignal: abortController.signal },
+    });
 
     // Pre-connect errors are retried for idempotent preview edits.
     expect(editMessageTelegram).toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({ abortSignal: abortController.signal }),
+    );
     const deliverCalls = deliverReplies.mock.calls;
     const finalTextSentViaDeliverReplies = deliverCalls.some((call: unknown[]) =>
       (call[0] as { replies?: Array<{ text?: string }> })?.replies?.some(
