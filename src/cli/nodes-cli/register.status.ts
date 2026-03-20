@@ -341,13 +341,13 @@ export function registerNodesStatusCommands(nodes: Command) {
           const pairedNodes = mergePairedNodes(paired, liveNodes);
           const filteredPaired = pairedNodes.filter((node) => {
             if (connectedOnly) {
-              const live = connectedById?.get(node.nodeId);
+              const live = connectedById.get(node.nodeId);
               if (!live?.connected) {
                 return false;
               }
             }
             if (sinceMs !== undefined) {
-              const live = connectedById?.get(node.nodeId);
+              const live = connectedById.get(node.nodeId);
               const lastConnectedAtMs =
                 typeof node.lastConnectedAtMs === "number"
                   ? node.lastConnectedAtMs
@@ -392,7 +392,7 @@ export function registerNodesStatusCommands(nodes: Command) {
 
           if (filteredPaired.length > 0) {
             const pairedRows = filteredPaired.map((n) => {
-              const live = connectedById?.get(n.nodeId);
+              const live = connectedById.get(n.nodeId);
               const lastConnectedAtMs =
                 typeof n.lastConnectedAtMs === "number"
                   ? n.lastConnectedAtMs
