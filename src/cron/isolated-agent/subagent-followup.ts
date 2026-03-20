@@ -67,11 +67,23 @@ export async function readDescendantSubagentFallbackReply(params: {
         entry.endedAt >= params.runStartedAt &&
         entry.childSessionKey.trim().length > 0,
     )
-    .toSorted((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0));
+    .toSorted((a, b) => {
+      const diff = (b.endedAt ?? 0) - (a.endedAt ?? 0);
+      // Secondary tie-breaker: when endedAt timestamps are equal, prefer the
+      // run that was created later (higher createdAt → more recent attempt).
+      if (diff !== 0) {
+        return diff;
+      }
+      return (b.createdAt ?? 0) - (a.createdAt ?? 0);
+    });
   if (descendants.length === 0) {
     return undefined;
   }
 
+  // Build a map of childSessionKey → latest run.  Because `descendants` is
+  // sorted descending by endedAt (with createdAt as tie-breaker), the first
+  // occurrence for each child key is guaranteed to be the newest run.
+  // Skipping duplicates via `has()` is therefore correct.
   const latestByChild = new Map<string, (typeof descendants)[number]>();
   for (const entry of descendants) {
     const childKey = entry.childSessionKey.trim();
@@ -81,9 +93,9 @@ export async function readDescendantSubagentFallbackReply(params: {
     latestByChild.set(childKey, entry);
   }
 
-  const latestRuns = [...latestByChild.values()].toSorted(
-    (a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0),
-  );
+  // Map preserves insertion order which mirrors the descending endedAt sort
+  // above, so no additional sort is needed.
+  const latestRuns = [...latestByChild.values()];
   for (const entry of latestRuns) {
     let reply = (await readLatestAssistantReply({ sessionKey: entry.childSessionKey }))?.trim();
     // Fall back to the registry's frozen result text when the session transcript
@@ -92,6 +104,12 @@ export async function readDescendantSubagentFallbackReply(params: {
       reply = entry.frozenResultText.trim();
     }
     if (!reply || reply.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
+      continue;
+    }
+    // Skip interim acknowledgements that don't carry real content — these are
+    // status messages like "on it" or "working on it" that the subagent emitted
+    // before producing its actual result.
+    if (isLikelyInterimCronMessage(reply)) {
       continue;
     }
     // Fallback mode should surface the freshest settled descendant result only.
