@@ -5,6 +5,7 @@ import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
+  parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 export {
   extractLeadingHttpStatus,
@@ -223,9 +224,6 @@ export function extractObservedOverflowTokenCount(errorMessage?: string): number
   return undefined;
 }
 
-// Allow provider-wrapped API payloads such as "Ollama API error 400: {...}".
-const ERROR_PAYLOAD_PREFIX_RE =
-  /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)(?:\s+\d{3})?[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
@@ -480,63 +478,6 @@ function shouldRewriteContextOverflowText(raw: string): boolean {
     ERROR_PREFIX_RE.test(raw) ||
     CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(raw)
   );
-}
-
-type ErrorPayload = Record<string, unknown>;
-
-function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return false;
-  }
-  const record = payload as ErrorPayload;
-  if (record.type === "error") {
-    return true;
-  }
-  if (typeof record.request_id === "string" || typeof record.requestId === "string") {
-    return true;
-  }
-  if ("error" in record) {
-    const err = record.error;
-    if (err && typeof err === "object" && !Array.isArray(err)) {
-      const errRecord = err as ErrorPayload;
-      if (
-        typeof errRecord.message === "string" ||
-        typeof errRecord.type === "string" ||
-        typeof errRecord.code === "string"
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function parseApiErrorPayload(raw: string): ErrorPayload | null {
-  if (!raw) {
-    return null;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const candidates = [trimmed];
-  if (ERROR_PAYLOAD_PREFIX_RE.test(trimmed)) {
-    candidates.push(trimmed.replace(ERROR_PAYLOAD_PREFIX_RE, "").trim());
-  }
-  for (const candidate of candidates) {
-    if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(candidate) as unknown;
-      if (isErrorPayloadObject(parsed)) {
-        return parsed;
-      }
-    } catch {
-      // ignore parse errors
-    }
-  }
-  return null;
 }
 
 export function getApiErrorPayloadFingerprint(raw?: string): string | null {
