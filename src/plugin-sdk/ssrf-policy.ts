@@ -1,3 +1,15 @@
+/**
+ * @module ssrf-policy
+ * @security
+ * Enforces SSRF (Server-Side Request Forgery) protection for plugin outbound
+ * network requests. Plugins must declare an allowlist of hostnames they may
+ * contact; this module normalizes and validates URLs against that allowlist.
+ *   - Hostnames are lowercased and stripped of leading dots for safe suffix matching
+ *   - Suffix matching prevents bypasses like "evil.example.com" matching "example.com"
+ *   - The policy is evaluated before any outbound fetch/request by the plugin runtime
+ *
+ * Changes here affect every plugin's network access — review carefully.
+ */
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 
 function normalizeHostnameSuffix(value: string): string {
