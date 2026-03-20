@@ -5,8 +5,7 @@ export type {
 } from "../channels/plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { DiscordAccountConfig, DiscordActionConfig } from "../config/types.js";
-export type { DiscordConfig } from "../config/types.discord.js";
-export type { DiscordPluralKitConfig } from "../../extensions/discord/api.js";
+export type { DiscordConfig, DiscordPluralKitConfig } from "../config/types.discord.js";
 export type { InspectedDiscordAccount } from "../../extensions/discord/api.js";
 export type { ResolvedDiscordAccount } from "../../extensions/discord/api.js";
 export type { DiscordSendComponents, DiscordSendEmbeds } from "../../extensions/discord/api.js";
@@ -52,11 +51,11 @@ export {
 export {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
-} from "../../extensions/discord/src/directory-config.js";
+} from "../../extensions/discord/api.js";
 export {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
-} from "../../extensions/discord/src/group-policy.js";
+} from "../../extensions/discord/api.js";
 export { DiscordConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export {
@@ -81,10 +80,17 @@ export {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
 } from "../../extensions/discord/runtime-api.js";
-export { normalizeExplicitDiscordSessionKey } from "../../extensions/discord/api.js";
+export { normalizeExplicitDiscordSessionKey } from "../../extensions/discord/session-key-api.js";
 export {
   autoBindSpawnedDiscordSubagent,
+  getThreadBindingManager,
   listThreadBindingsBySessionKey,
+  resolveThreadBindingIdleTimeoutMs,
+  resolveThreadBindingInactivityExpiresAt,
+  resolveThreadBindingMaxAgeExpiresAt,
+  resolveThreadBindingMaxAgeMs,
+  setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingMaxAgeBySessionKey,
   unbindThreadBindingsBySessionKey,
 } from "../../extensions/discord/runtime-api.js";
 export { getGateway } from "../../extensions/discord/runtime-api.js";
@@ -93,6 +99,7 @@ export { readDiscordComponentSpec } from "../../extensions/discord/api.js";
 export { resolveDiscordChannelId } from "../../extensions/discord/api.js";
 export {
   addRoleDiscord,
+  auditDiscordChannelPermissions,
   banMemberDiscord,
   createChannelDiscord,
   createScheduledEventDiscord,
@@ -110,23 +117,30 @@ export {
   fetchVoiceStatusDiscord,
   hasAnyGuildPermissionDiscord,
   kickMemberDiscord,
+  listDiscordDirectoryGroupsLive,
+  listDiscordDirectoryPeersLive,
   listGuildChannelsDiscord,
   listGuildEmojisDiscord,
   listPinsDiscord,
   listScheduledEventsDiscord,
   listThreadsDiscord,
+  monitorDiscordProvider,
   moveChannelDiscord,
   pinMessageDiscord,
+  probeDiscord,
   reactMessageDiscord,
   readMessagesDiscord,
   removeChannelPermissionDiscord,
   removeOwnReactionsDiscord,
   removeReactionDiscord,
   removeRoleDiscord,
+  resolveDiscordChannelAllowlist,
+  resolveDiscordUserAllowlist,
   searchMessagesDiscord,
   sendDiscordComponentMessage,
   sendMessageDiscord,
   sendPollDiscord,
+  sendTypingDiscord,
   sendStickerDiscord,
   sendVoiceMessageDiscord,
   setChannelPermissionDiscord,
