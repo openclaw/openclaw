@@ -632,8 +632,8 @@ describe("deliverReplies", () => {
       replyToMode: "off",
       textLimit: 3500,
     });
-    // sendMessage should only be called for the non-empty chunks.
-    expect(sendMessage).toHaveBeenCalled();
+    // sendMessage should only be called once — for the first non-empty chunk (not the trailing whitespace).
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("handles Telegram 400 text-must-be-non-empty error by silently skipping the chunk", async () => {
