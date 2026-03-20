@@ -1,4 +1,4 @@
-// Narrow plugin-sdk surface for the bundled feishu plugin.
+// Private helper surface for the bundled feishu plugin.
 // Keep this list additive and scoped to symbols used under extensions/feishu.
 
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
