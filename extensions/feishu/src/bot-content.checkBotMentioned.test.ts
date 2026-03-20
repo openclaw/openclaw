@@ -12,6 +12,10 @@ function makeEvent(
       message_type: messageType,
       mentions,
       chat_id: "oc_group",
+      message_id: "om_test",
+    },
+    sender: {
+      sender_id: { open_id: "ou_sender" },
     },
   };
 }
