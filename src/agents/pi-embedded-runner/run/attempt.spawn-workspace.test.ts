@@ -39,6 +39,7 @@ const hoisted = vi.hoisted(() => {
     contextFiles: [],
   }));
   const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
+  const initializeGlobalHookRunnerMock = vi.fn();
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
     branch: vi.fn(),
@@ -55,6 +56,7 @@ const hoisted = vi.hoisted(() => {
     acquireSessionWriteLockMock,
     resolveBootstrapContextForRunMock,
     getGlobalHookRunnerMock,
+    initializeGlobalHookRunnerMock,
     sessionManager,
   };
 });
@@ -94,6 +96,7 @@ vi.mock("../../pi-embedded-subscribe.js", () => ({
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: hoisted.getGlobalHookRunnerMock,
+  initializeGlobalHookRunner: hoisted.initializeGlobalHookRunnerMock,
 }));
 
 vi.mock("../../../infra/machine-name.js", () => ({
@@ -214,6 +217,16 @@ vi.mock("../../anthropic-payload-log.js", () => ({
 
 vi.mock("../../cache-trace.js", () => ({
   createCacheTrace: () => undefined,
+}));
+
+vi.mock("../../pi-tools.js", () => ({
+  createOpenClawCodingTools: () => [],
+  resolveToolLoopDetectionConfig: () => undefined,
+}));
+
+vi.mock("../../../image-generation/runtime.js", () => ({
+  generateImage: vi.fn(),
+  listRuntimeImageGenerationProviders: () => [],
 }));
 
 vi.mock("../../model-selection.js", async (importOriginal) => {
@@ -346,10 +359,12 @@ function createDefaultEmbeddedSession(params?: {
 function createContextEngineBootstrapAndAssemble() {
   return {
     bootstrap: vi.fn(async (_params: { sessionKey?: string }) => ({ bootstrapped: true })),
-    assemble: vi.fn(async ({ messages }: { messages: AgentMessage[]; sessionKey?: string }) => ({
-      messages,
-      estimatedTokens: 1,
-    })),
+    assemble: vi.fn(
+      async ({ messages }: { messages: AgentMessage[]; sessionKey?: string; model?: string }) => ({
+        messages,
+        estimatedTokens: 1,
+      }),
+    ),
   };
 }
 
@@ -677,6 +692,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey?: string;
       messages: AgentMessage[];
       tokenBudget?: number;
+      model?: string;
     }) => Promise<AssembleResult>;
     afterTurn?: (params: {
       sessionId: string;
@@ -781,6 +797,22 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expectCalledWithSessionKey(bootstrap, sessionKey);
     expectCalledWithSessionKey(assemble, sessionKey);
     expectCalledWithSessionKey(afterTurn, sessionKey);
+  });
+
+  it("forwards modelId to assemble", async () => {
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+
+    const result = await runAttemptWithContextEngine({
+      bootstrap,
+      assemble,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(assemble).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-test",
+      }),
+    );
   });
 
   it("forwards sessionKey to ingestBatch when afterTurn is absent", async () => {
