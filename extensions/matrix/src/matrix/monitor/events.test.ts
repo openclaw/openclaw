@@ -62,7 +62,7 @@ function createHarness(params?: {
   const ensureVerificationDmTracked = vi.fn(
     params?.ensureVerificationDmTracked ?? (async () => null),
   );
-  const sendMessage = vi.fn(async () => "$notice");
+  const sendMessage = vi.fn(async (_roomId: string, _payload: { body?: string }) => "$notice");
   const invalidateRoom = vi.fn();
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const formatNativeDependencyHint = vi.fn(() => "install hint");
@@ -516,7 +516,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     await vi.waitFor(() => {
       expect(sendMessage).toHaveBeenCalledTimes(1);
     });
-    const roomId = (sendMessage.mock.calls[0]?.[0] ?? "") as string;
+    const roomId = ((sendMessage.mock.calls as unknown[][])[0]?.[0] ?? "") as string;
     const body = getSentNoticeBody(sendMessage, 0);
     expect(roomId).toBe("!dm-active:example.org");
     expect(body).toContain("SAS decimal: 4321 8765 2109");
