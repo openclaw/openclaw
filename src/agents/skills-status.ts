@@ -200,7 +200,8 @@ function buildSkillStatus(
       isEnvSatisfied,
       isConfigSatisfied,
     });
-  const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
+  const forceEnabled = skillConfig?.enabled === true;
+  const eligible = !disabled && !blockedByAllowlist && (forceEnabled || requirementsSatisfied);
 
   return {
     name: entry.skill.name,

@@ -84,6 +84,9 @@ export function shouldIncludeSkill(params: {
   if (!isBundledSkillAllowed(entry, allowBundled)) {
     return false;
   }
+  // enabled: true force-enables, bypassing runtime eligibility (bins, OS, etc.).
+  // Placed after isBundledSkillAllowed so allowBundled still gates bundled skills.
+  // enabled: false short-circuits before that check since the result is the same.
   if (skillConfig?.enabled === true) {
     return true;
   }
