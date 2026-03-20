@@ -150,3 +150,4 @@ export {
   uploadStickerDiscord,
 } from "../../extensions/discord/runtime-api.js";
 export { discordMessageActions } from "../../extensions/discord/runtime-api.js";
+export { normalizeAgentId } from "../routing/session-key.js";

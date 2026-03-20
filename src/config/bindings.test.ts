@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { listRouteBindings, synthesizeDiscordAccountBindings } from "./bindings.js";
+import { listBindings } from "../routing/bindings.js";
 import type { OpenClawConfig } from "./config.js";
 import type { AgentRouteBinding } from "./types.agents.js";
 
@@ -394,5 +395,63 @@ describe("listRouteBindings", () => {
     const result = listRouteBindings(cfg);
     expect(result).toHaveLength(1);
     expect(result[0].agentId).toBe("main");
+  });
+});
+
+describe("listBindings", () => {
+  it("combines explicit and synthesized discord bindings", () => {
+    const cfg = makeConfig({
+      agents: { list: [{ id: "main" }, { id: "theodore" }] },
+      bindings: [{ agentId: "main", match: { channel: "discord" } }],
+      channels: {
+        discord: {
+          accounts: {
+            theodore: { agentId: "theodore" },
+          },
+        },
+      },
+    });
+    const result = listBindings(cfg);
+    expect(result).toHaveLength(2);
+    expect(result.some((b) => b.agentId === "main")).toBe(true);
+    expect(
+      result.some((b) => b.agentId === "theodore" && b.match.accountId === "theodore"),
+    ).toBe(true);
+  });
+
+  it("returns only explicit bindings when no discord accounts have agentId", () => {
+    const cfg = makeConfig({
+      agents: { list: [{ id: "main" }] },
+      bindings: [{ agentId: "main", match: { channel: "discord" } }],
+      channels: {
+        discord: {
+          accounts: {
+            default: {},
+          },
+        },
+      },
+    });
+    const result = listBindings(cfg);
+    expect(result).toHaveLength(1);
+    expect(result[0].agentId).toBe("main");
+  });
+
+  it("does not duplicate when explicit binding already covers a synthesized account", () => {
+    const cfg = makeConfig({
+      agents: { list: [{ id: "main" }, { id: "theodore" }] },
+      bindings: [{ agentId: "main", match: { channel: "discord", accountId: "theodore" } }],
+      channels: {
+        discord: {
+          accounts: {
+            theodore: { agentId: "theodore" },
+          },
+        },
+      },
+    });
+    const result = listBindings(cfg);
+    // explicit binding wins, synthesized is suppressed
+    expect(result).toHaveLength(1);
+    expect(result[0].agentId).toBe("main");
+    expect(result[0].match.accountId).toBe("theodore");
   });
 });

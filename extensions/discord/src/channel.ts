@@ -301,11 +301,6 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       await getDiscordRuntime().channel.discord.sendMessageDiscord(`user:${id}`, message);
     },
   }),
-  config: {
-    describeAccount: (account: ResolvedDiscordAccount) => ({
-      agentId: account.config.agentId,
-    }),
-  },
   allowlist: {
     ...buildLegacyDmAccountAllowlistAdapter({
       channelId: "discord",

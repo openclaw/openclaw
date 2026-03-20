@@ -1,5 +1,6 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,
@@ -75,6 +76,9 @@ export function createDiscordPluginBase(params: {
       describeAccount: (account) => ({
         accountId: account.accountId,
         name: account.name,
+        agentId: account.config.agentId
+          ? normalizeAgentId(account.config.agentId)
+          : undefined,
         enabled: account.enabled,
         configured: Boolean(account.token?.trim()),
         tokenSource: account.tokenSource,
