@@ -31,6 +31,29 @@ function makeLookupFn() {
   >;
 }
 
+async function expectRedactedTelegramFetchError(params: {
+  telegramFileUrl: string;
+  telegramToken: string;
+  redactedTelegramToken: string;
+  fetchImpl: Parameters<typeof fetchRemoteMedia>[0]["fetchImpl"];
+}) {
+  const error = await fetchRemoteMedia({
+    url: params.telegramFileUrl,
+    fetchImpl: params.fetchImpl,
+    lookupFn: makeLookupFn(),
+    maxBytes: 1024,
+    ssrfPolicy: {
+      allowedHostnames: ["api.telegram.org"],
+      allowRfc2544BenchmarkRange: true,
+    },
+  }).catch((err: unknown) => err as Error);
+
+  expect(error).toBeInstanceOf(Error);
+  const errorText = error instanceof Error ? String(error) : "";
+  expect(errorText).not.toContain(params.telegramToken);
+  expect(errorText).toContain(`bot${params.redactedTelegramToken}`);
+}
+
 describe("fetchRemoteMedia", () => {
   const telegramToken = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
   const redactedTelegramToken = `${telegramToken.slice(0, 6)}…${telegramToken.slice(-4)}`;
@@ -100,41 +123,23 @@ describe("fetchRemoteMedia", () => {
       throw new Error(`dial failed for ${telegramFileUrl}`);
     });
 
-    const error = await fetchRemoteMedia({
-      url: telegramFileUrl,
+    await expectRedactedTelegramFetchError({
+      telegramFileUrl,
+      telegramToken,
+      redactedTelegramToken,
       fetchImpl,
-      lookupFn: makeLookupFn(),
-      maxBytes: 1024,
-      ssrfPolicy: {
-        allowedHostnames: ["api.telegram.org"],
-        allowRfc2544BenchmarkRange: true,
-      },
-    }).catch((err: unknown) => err as Error);
-
-    expect(error).toBeInstanceOf(Error);
-    const errorText = error instanceof Error ? String(error) : "";
-    expect(errorText).not.toContain(telegramToken);
-    expect(errorText).toContain(`bot${redactedTelegramToken}`);
+    });
   });
 
   it("redacts Telegram bot tokens from HTTP error messages", async () => {
     const fetchImpl = vi.fn(async () => new Response("unauthorized", { status: 401 }));
 
-    const error = await fetchRemoteMedia({
-      url: telegramFileUrl,
+    await expectRedactedTelegramFetchError({
+      telegramFileUrl,
+      telegramToken,
+      redactedTelegramToken,
       fetchImpl,
-      lookupFn: makeLookupFn(),
-      maxBytes: 1024,
-      ssrfPolicy: {
-        allowedHostnames: ["api.telegram.org"],
-        allowRfc2544BenchmarkRange: true,
-      },
-    }).catch((err: unknown) => err as Error);
-
-    expect(error).toBeInstanceOf(Error);
-    const errorText = error instanceof Error ? String(error) : "";
-    expect(errorText).not.toContain(telegramToken);
-    expect(errorText).toContain(`bot${redactedTelegramToken}`);
+    });
   });
 
   it("blocks private IP literals before fetching", async () => {

@@ -1,13 +1,13 @@
 ---
-summary: "Agent runtime (embedded pi-mono), workspace contract, and session bootstrap"
+summary: "Agent runtime, workspace contract, and session bootstrap"
 read_when:
   - Changing agent runtime, workspace bootstrap, or session behavior
 title: "Agent Runtime"
 ---
 
-# Agent Runtime 🤖
+# Agent Runtime
 
-OpenClaw runs a single embedded agent runtime derived from **pi-mono**.
+OpenClaw runs a single embedded agent runtime.
 
 ## Workspace (required)
 
@@ -63,12 +63,11 @@ OpenClaw loads skills from three locations (workspace wins on name conflict):
 
 Skills can be gated by config/env (see `skills` in [Gateway configuration](/gateway/configuration)).
 
-## pi-mono integration
+## Runtime boundaries
 
-OpenClaw reuses pieces of the pi-mono codebase (models/tools), but **session management, discovery, and tool wiring are OpenClaw-owned**.
-
-- No pi-coding agent runtime.
-- No `~/.pi/agent` or `<workspace>/.pi` settings are consulted.
+The embedded agent runtime is built on the Pi agent core (models, tools, and
+prompt pipeline). Session management, discovery, tool wiring, and channel
+delivery are OpenClaw-owned layers on top of that core.
 
 ## Sessions
 
@@ -77,7 +76,7 @@ Session transcripts are stored as JSONL at:
 - `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl`
 
 The session ID is stable and chosen by OpenClaw.
-Legacy Pi/Tau session folders are **not** read.
+Legacy session folders from other tools are not read.
 
 ## Steering while streaming
 

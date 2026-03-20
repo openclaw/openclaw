@@ -33,7 +33,10 @@ function maybeBootstrapChannelPlugin(params: {
   }
 
   const activeRegistry = getActivePluginRegistry();
-  if ((activeRegistry?.channels?.length ?? 0) > 0) {
+  const activeHasRequestedChannel = activeRegistry?.channels?.some(
+    (entry) => entry?.plugin?.id === params.channel,
+  );
+  if (activeHasRequestedChannel) {
     return;
   }
 
@@ -51,6 +54,9 @@ function maybeBootstrapChannelPlugin(params: {
     loadOpenClawPlugins({
       config: autoEnabled,
       workspaceDir,
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
     });
   } catch {
     // Allow a follow-up resolution attempt if bootstrap failed transiently.

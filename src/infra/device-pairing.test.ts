@@ -8,11 +8,13 @@ import {
   clearDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
+  listDevicePairing,
   removePairedDevice,
   requestDevicePairing,
   rotateDeviceToken,
   verifyDeviceToken,
   type PairedDevice,
+  type RotateDeviceTokenResult,
 } from "./device-pairing.js";
 import { resolvePairingPaths } from "./pairing-files.js";
 
@@ -53,6 +55,14 @@ function requireToken(token: string | undefined): string {
     throw new Error("expected operator token to be issued");
   }
   return token;
+}
+
+function requireRotatedEntry(result: RotateDeviceTokenResult) {
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error(`expected rotated token entry, got ${result.reason}`);
+  }
+  return result.entry;
 }
 
 async function overwritePairedOperatorTokenScopes(baseDir: string, scopes: string[]) {
@@ -115,7 +125,7 @@ describe("device pairing tokens", () => {
     expect(second.request.requestId).toBe(first.request.requestId);
   });
 
-  test("merges pending roles/scopes for the same device before approval", async () => {
+  test("supersedes pending requests when requested roles/scopes change", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     const first = await requestDevicePairing(
       {
@@ -136,15 +146,50 @@ describe("device pairing tokens", () => {
       baseDir,
     );
 
-    expect(second.created).toBe(false);
-    expect(second.request.requestId).toBe(first.request.requestId);
-    expect(second.request.roles).toEqual(["node", "operator"]);
+    expect(second.created).toBe(true);
+    expect(second.request.requestId).not.toBe(first.request.requestId);
+    expect(second.request.role).toBe("operator");
+    expect(second.request.roles).toEqual(["operator"]);
     expect(second.request.scopes).toEqual(["operator.read", "operator.write"]);
 
-    await approveDevicePairing(first.request.requestId, baseDir);
+    const list = await listDevicePairing(baseDir);
+    expect(list.pending).toHaveLength(1);
+    expect(list.pending[0]?.requestId).toBe(second.request.requestId);
+
+    await approveDevicePairing(second.request.requestId, baseDir);
     const paired = await getPairedDevice("device-1", baseDir);
-    expect(paired?.roles).toEqual(["node", "operator"]);
+    expect(paired?.roles).toEqual(["operator"]);
     expect(paired?.scopes).toEqual(["operator.read", "operator.write"]);
+  });
+
+  test("keeps superseded requests interactive when an existing pending request is interactive", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const first = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "node",
+        scopes: [],
+        silent: false,
+      },
+      baseDir,
+    );
+    expect(first.request.silent).toBe(false);
+
+    const second = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.read"],
+        silent: true,
+      },
+      baseDir,
+    );
+
+    expect(second.created).toBe(true);
+    expect(second.request.requestId).not.toBe(first.request.requestId);
+    expect(second.request.silent).toBe(false);
   });
 
   test("rejects bootstrap token replay before pending scope escalation can be approved", async () => {
@@ -204,22 +249,24 @@ describe("device pairing tokens", () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
 
-    await rotateDeviceToken({
+    const downscoped = await rotateDeviceToken({
       deviceId: "device-1",
       role: "operator",
       scopes: ["operator.read"],
       baseDir,
     });
+    expect(downscoped.ok).toBe(true);
     let paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
     expect(paired?.scopes).toEqual(["operator.admin"]);
     expect(paired?.approvedScopes).toEqual(["operator.admin"]);
 
-    await rotateDeviceToken({
+    const reused = await rotateDeviceToken({
       deviceId: "device-1",
       role: "operator",
       baseDir,
     });
+    expect(reused.ok).toBe(true);
     paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
   });
@@ -255,7 +302,7 @@ describe("device pairing tokens", () => {
       scopes: ["operator.admin"],
       baseDir,
     });
-    expect(rotated).toBeNull();
+    expect(rotated).toEqual({ ok: false, reason: "scope-outside-approved-baseline" });
 
     const after = await getPairedDevice("device-1", baseDir);
     expect(after?.tokens?.operator?.token).toEqual(before?.tokens?.operator?.token);
@@ -357,12 +404,13 @@ describe("device pairing tokens", () => {
       scopes: ["operator.talk.secrets"],
       baseDir,
     });
-    expect(rotated?.scopes).toEqual(["operator.talk.secrets"]);
+    const entry = requireRotatedEntry(rotated);
+    expect(entry.scopes).toEqual(["operator.talk.secrets"]);
 
     await expect(
       verifyOperatorToken({
         baseDir,
-        token: requireToken(rotated?.token),
+        token: requireToken(entry.token),
         scopes: ["operator.talk.secrets"],
       }),
     ).resolves.toEqual({ ok: true });
@@ -395,7 +443,7 @@ describe("device pairing tokens", () => {
         scopes: ["operator.admin"],
         baseDir,
       }),
-    ).resolves.toBeNull();
+    ).resolves.toEqual({ ok: false, reason: "missing-approved-scope-baseline" });
   });
 
   test("treats multibyte same-length token input as mismatch without throwing", async () => {
