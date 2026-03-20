@@ -19,7 +19,25 @@ export function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
       ? Math.floor(job.payload.timeoutSeconds * 1_000)
       : undefined;
   if (configuredTimeoutMs === undefined) {
-    return job.payload.kind === "agentTurn" ? AGENT_TURN_SAFETY_TIMEOUT_MS : DEFAULT_JOB_TIMEOUT_MS;
+    // agentTurn jobs get the large safety ceiling since turns can run for a long time.
+    if (job.payload.kind === "agentTurn") {
+      return AGENT_TURN_SAFETY_TIMEOUT_MS;
+    }
+    // systemEvent jobs targeting "main" with wakeMode="now" call runHeartbeatOnce(),
+    // which blocks until the full agent turn completes. The turn duration is
+    // unbounded, so apply the same generous ceiling as agentTurn jobs instead of
+    // the short DEFAULT_JOB_TIMEOUT_MS that was incorrectly timing out long-running
+    // main-session heartbeats. See: https://github.com/openclaw/openclaw/issues/50621
+    if (
+      job.payload.kind === "systemEvent" &&
+      job.sessionTarget === "main" &&
+      job.wakeMode === "now"
+    ) {
+      return AGENT_TURN_SAFETY_TIMEOUT_MS;
+    }
+    // All other systemEvent jobs (wakeMode !== "now") are fire-and-forget:
+    // they enqueue the event and return immediately, so the short default is fine.
+    return DEFAULT_JOB_TIMEOUT_MS;
   }
   return configuredTimeoutMs <= 0 ? undefined : configuredTimeoutMs;
 }
