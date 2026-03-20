@@ -14,6 +14,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { LlamaCppCacheService } from "../../infra/LlamaCppCacheService.js";
 import type { OpenClawPluginApi } from "../../plugins/types.js";
@@ -79,6 +80,8 @@ export default function register(api: PluginApi) {
   const graphService = new GraphService(graphitiUrl, debug);
   const subconscious = new SubconsciousService(graphService, debug);
   const consolidator = new ConsolidationService(graphService, debug);
+  // Track per-session message count for batched episode ingestion (every 8 messages)
+  const sessionMessageCounters = new Map<string, number>();
   const llamaCache = new LlamaCppCacheService(debug);
   // Serializes KV cache slot swaps to prevent races if hyperfocus is toggled
   // while a concurrent request is in flight.
@@ -323,18 +326,23 @@ export default function register(api: PluginApi) {
       const workspaceDir = resolveAgentWorkspaceDir(api.config, agentId);
       const memoryDir = config.memoryDir || path.join(workspaceDir, "memory");
       const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
+      const bootstrapSessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+
+      // Read QUICK.md for observer context
+      const { readFile } = await import("node:fs/promises");
+      const quickContext = await readFile(path.join(narrativeDir, "QUICK.md"), "utf-8").catch(
+        () => undefined,
+      );
+
       await consolidator.bootstrapHistoricalEpisodes(
         sessionId,
         memoryDir,
         [],
         workspaceDir,
         resolveBootstrapChunkSize(api.config),
-      );
-
-      // Read QUICK.md for observer context
-      const { readFile } = await import("node:fs/promises");
-      const quickContext = await readFile(path.join(narrativeDir, "QUICK.md"), "utf-8").catch(
-        () => undefined,
+        bootstrapSessionsDir,
+        activeClient ?? undefined,
+        quickContext ?? undefined,
       );
 
       const flashbacks = await subconscious.getFlashback(
@@ -1003,6 +1011,9 @@ export default function register(api: PluginApi) {
               [],
               workspaceDir,
               resolveBootstrapChunkSize(api.config),
+              sessionsDir,
+              observerAgent,
+              quickContext ?? undefined,
             )
             .catch((e) => process.stderr.write(`⚠️ [MIND] Bootstrap error: ${e}\n`)),
           Promise.resolve())
@@ -1030,7 +1041,38 @@ export default function register(api: PluginApi) {
             .catch(() => {})
         : Promise.resolve(),
       config.graphiti?.enabled !== false
-        ? graphService.addEpisode(sessionId, `user: ${prompt}`, event.timestamp)
+        ? (() => {
+            // Batch episode ingestion: summarize every 8 messages instead of adding one per message.
+            const fileKey = event.sessionFile ?? sessionId;
+            const count = (sessionMessageCounters.get(fileKey) ?? 0) + 1;
+            sessionMessageCounters.set(fileKey, count);
+            if (count % 8 === 0) {
+              // Build window of last 8 messages from recentMessages + current prompt
+              const recent = ((event.recentMessages ?? []) as RecentMessage[]).slice(-7);
+              const batchMsgs = [
+                ...recent.map((m) => ({
+                  role: m.role,
+                  text: (typeof m.content === "string"
+                    ? m.content
+                    : Array.isArray(m.content)
+                      ? (m.content as Array<{ type?: string; text?: string }>)
+                          .filter((p) => p.type === "text")
+                          .map((p) => p.text ?? "")
+                          .join(" ")
+                      : (m.text ?? "")
+                  ).slice(0, 600),
+                })),
+                { role: "user", text: prompt.slice(0, 600) },
+              ];
+              return consolidator
+                .summarizeConversationChunk(batchMsgs, observerAgent, quickContext ?? undefined)
+                .then((episodeBody) =>
+                  graphService.addEpisode(sessionId, episodeBody, event.timestamp),
+                )
+                .catch(() => {});
+            }
+            return Promise.resolve();
+          })()
         : Promise.resolve(),
       !skipResonance && config.graphiti?.enabled !== false
         ? subconscious.getFlashback(

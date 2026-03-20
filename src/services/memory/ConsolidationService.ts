@@ -48,29 +48,6 @@ function extractTextFromUnknown(value: unknown): string {
  * funnel through updateNarrativeStory which acquires this lock.
  * The lock file is created at `<storyPath>.lock`.
  */
-/** Query FalkorDB directly for the current count of Episodic nodes. */
-/** Split text into chunks of at most maxChars, breaking at newlines when possible. */
-function splitIntoChunks(text: string, maxChars: number): string[] {
-  if (text.length <= maxChars) {
-    return [text];
-  }
-  const chunks: string[] = [];
-  let start = 0;
-  while (start < text.length) {
-    let end = start + maxChars;
-    if (end < text.length) {
-      // Try to break at a newline
-      const lastNewline = text.lastIndexOf("\n", end);
-      if (lastNewline > start) {
-        end = lastNewline + 1;
-      }
-    }
-    chunks.push(text.slice(start, end));
-    start = end;
-  }
-  return chunks;
-}
-
 const STORY_LOCK_OPTIONS: FileLockOptions = {
   retries: { retries: 10, factor: 2, minTimeout: 200, maxTimeout: 15_000, randomize: true },
   stale: 120_000, // 2 min stale detection
@@ -101,22 +78,64 @@ export class ConsolidationService {
   // No need for manual triplet extraction.
 
   /**
+   * Summarize a conversation chunk (array of {role, text} turns) into structured facts
+   * using a small LLM + QUICK.md context. Falls back to raw transcript if no agent provided.
+   */
+  async summarizeConversationChunk(
+    messages: Array<{ role: string; text: string }>,
+    agent: { complete: (prompt: string) => Promise<{ text?: string | null }> } | undefined,
+    quickContext?: string,
+  ): Promise<string> {
+    const transcript = messages.map((m) => `[${m.role}]: ${m.text}`).join("\n\n");
+
+    if (!agent) {
+      return transcript;
+    }
+
+    const prompt = `You are a memory extraction assistant. Extract factual statements from a conversation chunk.
+
+BACKGROUND (use only to resolve who people are — do NOT extract facts from this):
+${(quickContext ?? "").slice(0, 1500)}
+
+CONVERSATION:
+${transcript}
+
+TASK:
+The LAST message in the conversation is the one being stored as a memory episode.
+Extract 3-6 concise factual statements that capture what is revealed or decided in that last message.
+Use the earlier conversation only for context to understand the last message.
+Use BACKGROUND only to resolve names and pronouns.
+
+Each fact should:
+- Be a complete standalone sentence (subject + verb + object)
+- Use real names instead of pronouns (e.g. "Julio" not "the user", "Mind" not "the assistant")
+- Be in English
+- Focus on concrete facts, decisions, plans, or events — not meta-observations
+
+Output one fact per line. No bullets, numbers, or explanations.`;
+
+    try {
+      const response = await agent.complete(prompt);
+      const text = (response?.text ?? "").trim();
+      return text.length > 10 ? text : transcript;
+    } catch {
+      return transcript;
+    }
+  }
+
+  /**
    * Bootstrap historical episodes into Graphiti if the graph is empty.
    * This should be called BEFORE flashback retrieval to ensure historical context is available.
    */
   async bootstrapHistoricalEpisodes(
     sessionId: string,
     memoryDir: string,
-    sessionMessages: Array<{
-      role?: string;
-      text?: string;
-      content?: unknown;
-      timestamp?: unknown;
-      created_at?: unknown;
-    }> = [],
+    _sessionMessages: Array<unknown> = [],
     workspaceDir?: string,
-    /** Max chars per episode chunk. Derived from model contextWindow: (contextWindow - 2000) * 3 */
-    chunkSize: number = 12000,
+    _chunkSize: number = 12000,
+    sessionsDir?: string,
+    agent?: { complete: (prompt: string) => Promise<{ text?: string | null }> },
+    quickContext?: string,
   ): Promise<void> {
     try {
       // Check if bootstrap has already been done using a flag file
@@ -144,135 +163,115 @@ export class ConsolidationService {
         // No progress file yet
       }
 
-      this.log(`📥 [MIND] No bootstrap flag found. Ingesting memory history into Graphiti...`);
+      this.log(`📥 [MIND] No bootstrap flag found. Ingesting session history into Graphiti...`);
 
-      // 0. Ingest identity/profile files from workspaceDir (USER.md, SOUL.md, IDENTITY.md, MEMORY.md)
-      if (workspaceDir) {
-        const identityFiles = ["USER.md", "SOUL.md", "IDENTITY.md", "MEMORY.md"];
-        for (const file of identityFiles) {
-          if (processedFiles.has(`__identity__${file}`)) {
-            continue;
-          }
-          const filePath = path.join(workspaceDir, file);
-          try {
-            const content = await fs.readFile(filePath, "utf-8");
-            const chunks = splitIntoChunks(content, chunkSize);
-            this.log(
-              `📥 [MIND] Ingesting identity file: ${file} (${content.length} chars → ${chunks.length} chunk${chunks.length > 1 ? "s" : ""}, chunkSize=${chunkSize})`,
-            );
-            for (let i = 0; i < chunks.length; i++) {
-              if (chunks.length > 1) {
-                this.log(
-                  `  📄 [MIND] ${file} chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`,
-                );
-              }
-              await this.graph.addEpisode(
-                "global_user_memory",
-                `system: Identity/profile file — ${file}${chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : ""}\n\n${chunks[i]}`,
-                undefined,
-                { source: "identity-file" },
-              );
+      // Collect all messages from all session files in chronological order
+      const allMessages: Array<{
+        role: string;
+        text: string;
+        timestamp: number;
+        sessionFile: string;
+      }> = [];
+
+      const targetDir = sessionsDir ?? workspaceDir ?? memoryDir;
+      let sessionFiles: string[] = [];
+      try {
+        const entries = await fs.readdir(targetDir);
+        sessionFiles = entries
+          .filter((f) => f.endsWith(".jsonl") && !f.includes(".deleted") && !f.includes(".reset"))
+          .map((f) => path.join(targetDir, f));
+      } catch {
+        // no sessions dir
+      }
+
+      this.log(`📂 [MIND] Found ${sessionFiles.length} session files to process.`);
+
+      for (const sessionFile of sessionFiles) {
+        try {
+          const content = await fs.readFile(sessionFile, "utf-8");
+          for (const line of content.split("\n")) {
+            const trimmed = line.trim();
+            if (!trimmed) {
+              continue;
             }
-            await fs.appendFile(bootstrapProgressPath, `__identity__${file}\n`);
-          } catch {
-            // File doesn't exist, skip
+            let entry: {
+              type: string;
+              timestamp?: string | number;
+              message?: { role?: string; content?: unknown };
+            };
+            try {
+              entry = JSON.parse(trimmed);
+            } catch {
+              continue;
+            }
+            if (entry.type !== "message" || !entry.message) {
+              continue;
+            }
+            const role = entry.message.role ?? "unknown";
+            if (role !== "user" && role !== "assistant") {
+              continue;
+            }
+            let text = "";
+            const c = entry.message.content;
+            if (typeof c === "string") {
+              text = c;
+            } else if (Array.isArray(c)) {
+              text = (c as Array<{ type?: string; text?: string }>)
+                .filter((p) => p.type === "text")
+                .map((p) => p.text ?? "")
+                .join(" ");
+            }
+            text = text.trim();
+            if (!text || this.isHeartbeatMessage(text)) {
+              continue;
+            }
+            const ts = entry.timestamp ? new Date(entry.timestamp).getTime() : 0;
+            allMessages.push({
+              role,
+              text,
+              timestamp: ts,
+              sessionFile: path.basename(sessionFile),
+            });
           }
+        } catch {
+          // skip unreadable files
         }
       }
 
-      // 1. Ingest Historical MD Files
-      const files = await fs.readdir(memoryDir);
-      const mdFiles = files.filter((f) => f.endsWith(".md")).toSorted();
+      // Sort chronologically (oldest first)
+      allMessages.sort((a, b) => a.timestamp - b.timestamp);
+      this.log(`📊 [MIND] Total messages to process: ${allMessages.length}`);
 
-      for (const file of mdFiles) {
-        if (processedFiles.has(file)) {
-          this.log(`⏭️ [MIND] Skipping already-ingested file: ${file}`);
+      // Process in batches of 8, summarize each batch, add as episode
+      const BATCH_SIZE = 8;
+      let batchIndex = 0;
+
+      for (let i = 0; i < allMessages.length; i += BATCH_SIZE) {
+        const batch = allMessages.slice(i, i + BATCH_SIZE);
+        const batchKey = `__batch__${i}`;
+
+        if (processedFiles.has(batchKey)) {
+          batchIndex++;
           continue;
         }
 
-        const filePath = path.join(memoryDir, file);
-        const content = await fs.readFile(filePath, "utf-8");
+        const episodeTimestamp = batch[batch.length - 1]?.timestamp
+          ? new Date(batch[batch.length - 1].timestamp).toISOString()
+          : undefined;
 
-        let episodeTimestamp: string | undefined;
-        const dateMatch = file.match(/^(\d{4}-\d{2}-\d{2})/);
-        if (dateMatch) {
-          const d = new Date(dateMatch[1]);
-          if (!isNaN(d.getTime())) {
-            d.setHours(23, 59, 59, 999);
-            episodeTimestamp = d.toISOString();
-          }
-        }
-
-        const dateString = episodeTimestamp || file.substring(0, 10);
-        const chunks = splitIntoChunks(content, chunkSize);
+        const chunkMsgs = batch.map((m) => ({ role: m.role, text: m.text.slice(0, 600) }));
         this.log(
-          `📥 [MIND] Ingesting: ${file} (${content.length} chars → ${chunks.length} chunk${chunks.length > 1 ? "s" : ""})`,
-        );
-        for (let i = 0; i < chunks.length; i++) {
-          if (chunks.length > 1) {
-            this.log(
-              `  📄 [MIND] ${file} chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`,
-            );
-          }
-          await this.graph.addEpisode(
-            "global_user_memory", // FORCE GLOBAL ID for historical files
-            `FECHA: ${dateString} | system: Historical memory from ${file}${chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : ""}\n\n${chunks[i]}`,
-            episodeTimestamp,
-            { source: "historical-file" },
-          );
-        }
-
-        await fs.appendFile(bootstrapProgressPath, `${file}\n`);
-      }
-
-      // 2. Ingest Active Session Messages as a SINGLE Transcript Episode (Optimization)
-      if (sessionMessages.length > 0 && !processedFiles.has("__session_messages__")) {
-        this.log(
-          `📥 [MIND] Ingesting ${sessionMessages.length} previous turns as a single transcript batch...`,
+          `📥 [MIND] Bootstrap batch ${batchIndex + 1} (msgs ${i + 1}-${i + batch.length}, ${episodeTimestamp?.slice(0, 10) ?? "?"})`,
         );
 
-        const transcriptLines: string[] = [];
-        let earliestDate = new Date();
+        const episodeBody = await this.summarizeConversationChunk(chunkMsgs, agent, quickContext);
 
-        for (const m of sessionMessages) {
-          const role = m.role || "unknown";
-          let text = m.text || m.content || "";
-          if (Array.isArray(text)) {
-            text = text
-              .map((p: unknown) =>
-                typeof p === "string" ? p : (p as { text?: string }).text || "",
-              )
-              .join(" ");
-          }
-          if (!text) {
-            continue;
-          }
+        await this.graph.addEpisode("global_user_memory", episodeBody, episodeTimestamp, {
+          source: "bootstrap-session",
+        });
 
-          const ts = (m.timestamp || m.created_at) as string | number | Date;
-          const date = ts ? new Date(ts) : new Date();
-          if (date < earliestDate) {
-            earliestDate = date;
-          }
-
-          const timeStr = date.toISOString().split("T")[1].substring(0, 5);
-
-          if (this.isHeartbeatMessage(text as string)) {
-            continue;
-          }
-
-          const textStr = typeof text === "string" ? text : JSON.stringify(text);
-          transcriptLines.push(`[${timeStr}] ${role}: ${textStr}`);
-        }
-
-        if (transcriptLines.length > 0) {
-          const earliestIso = earliestDate.toISOString();
-          const transcriptBody = `FECHA: ${earliestIso} | [TRANSCRIPCIÓN DE SESIÓN]\n${transcriptLines.join("\n")}`;
-
-          await this.graph.addEpisode("global_user_memory", transcriptBody, earliestIso, {
-            source: "message",
-          });
-          await fs.appendFile(bootstrapProgressPath, `__session_messages__\n`);
-        }
+        await fs.appendFile(bootstrapProgressPath, `${batchKey}\n`);
+        batchIndex++;
       }
 
       await fs.writeFile(bootstrapFlagPath, new Date().toISOString());

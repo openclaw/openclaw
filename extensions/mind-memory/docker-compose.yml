@@ -5,6 +5,7 @@ services:
     ports:
       - "8001:8000"
       - "6379:6379"
+      - "3000:3000"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-local}
       - OPENAI_API_URL=${OPENAI_API_URL:-http://192.168.1.250:8081/v1}
@@ -14,6 +15,7 @@ services:
       - EMBEDDER_DIMENSIONS=${EMBEDDER_DIMENSIONS:-1024}
       - FALKORDB_URL=redis://localhost:6379
       - SEMAPHORE_LIMIT=1
+      - LOG_LEVEL=DEBUG
     volumes:
       - falkordb_data:/var/lib/falkordb/data
     restart: unless-stopped
