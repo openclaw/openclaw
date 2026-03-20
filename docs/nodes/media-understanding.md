@@ -92,6 +92,19 @@ Each `models[]` entry can be **provider** or **CLI**:
 }
 ```
 
+Provider entries reuse the standard model-provider auth flow. `tools.media`
+model entries do **not** take an inline `apiKey`. Configure credentials through
+one of these supported sources instead:
+
+- an `auth-profiles.json` profile selected by `profile` / `preferredProfile`
+- the provider's standard environment variable (for example `OPENAI_API_KEY`,
+  `GOOGLE_API_KEY`, `GROQ_API_KEY`)
+- `models.providers.<provider>.apiKey` in config, including plaintext,
+  `${ENV_VAR}` substitution, or a SecretRef object
+
+If none of those sources resolve for a provider entry, media understanding skips
+that entry and falls back to the next configured model.
+
 ```json5
 {
   type: "cli",
@@ -151,6 +164,10 @@ working option**:
    - Audio: OpenAI → Groq → Deepgram → Google
    - Image: OpenAI → Anthropic → Google → MiniMax
    - Video: Google
+
+Provider auto-detection uses the same auth sources listed above. A provider only
+counts as available when OpenClaw can resolve its credential from auth
+profiles, env, or `models.providers.<provider>.apiKey`.
 
 To disable auto-detection, set:
 
