@@ -121,6 +121,10 @@
       "types": "./dist/plugin-sdk/infra-runtime.d.ts",
       "default": "./dist/plugin-sdk/infra-runtime.js"
     },
+    "./plugin-sdk/ssrf-runtime": {
+      "types": "./dist/plugin-sdk/ssrf-runtime.d.ts",
+      "default": "./dist/plugin-sdk/ssrf-runtime.js"
+    },
     "./plugin-sdk/media-runtime": {
       "types": "./dist/plugin-sdk/media-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-runtime.js"
@@ -132,6 +136,18 @@
     "./plugin-sdk/conversation-runtime": {
       "types": "./dist/plugin-sdk/conversation-runtime.d.ts",
       "default": "./dist/plugin-sdk/conversation-runtime.js"
+    },
+    "./plugin-sdk/matrix-runtime-heavy": {
+      "types": "./dist/plugin-sdk/matrix-runtime-heavy.d.ts",
+      "default": "./dist/plugin-sdk/matrix-runtime-heavy.js"
+    },
+    "./plugin-sdk/matrix-runtime-shared": {
+      "types": "./dist/plugin-sdk/matrix-runtime-shared.d.ts",
+      "default": "./dist/plugin-sdk/matrix-runtime-shared.js"
+    },
+    "./plugin-sdk/thread-bindings-runtime": {
+      "types": "./dist/plugin-sdk/thread-bindings-runtime.d.ts",
+      "default": "./dist/plugin-sdk/thread-bindings-runtime.js"
     },
     "./plugin-sdk/text-runtime": {
       "types": "./dist/plugin-sdk/text-runtime.d.ts",
