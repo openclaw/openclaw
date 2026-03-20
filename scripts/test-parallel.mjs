@@ -437,6 +437,22 @@ const unitSingletonEntries = unitSingletonBuckets.map((files, index) => ({
     unitSingletonBuckets.length === 1 ? "unit-singleton" : `unit-singleton-${String(index + 1)}`,
   args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
 }));
+const unitThreadEntries =
+  unitThreadSingletonFiles.length > 0
+    ? [
+        {
+          name: "unit-threads",
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.unit.config.ts",
+            "--pool=threads",
+            ...unitThreadSingletonFiles,
+          ],
+        },
+      ]
+    : [];
 const baseRuns = [
   ...(shouldSplitUnitRuns
     ? [
@@ -469,10 +485,7 @@ const baseRuns = [
             file,
           ],
         })),
-        ...unitThreadSingletonFiles.map((file) => ({
-          name: `${path.basename(file, ".test.ts")}-threads`,
-          args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=threads", file],
-        })),
+        ...unitThreadEntries,
         ...unitVmForkSingletonFiles.map((file) => ({
           name: `${path.basename(file, ".test.ts")}-vmforks`,
           args: [
