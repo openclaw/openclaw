@@ -801,10 +801,6 @@
       "destination": "/install/azure"
     },
     {
-      "source": "/install/azure/azure",
-      "destination": "/install/azure"
-    },
-    {
       "source": "/platforms/fly",
       "destination": "/install/fly"
     },
@@ -1000,7 +996,11 @@
               },
               {
                 "group": "Multi-agent",
-                "pages": ["concepts/multi-agent", "concepts/presence"]
+                "pages": [
+                  "concepts/multi-agent",
+                  "concepts/presence",
+                  "concepts/delegate-architecture"
+                ]
               },
               {
                 "group": "Messages and delivery",
@@ -1076,6 +1076,7 @@
                 "group": "Extensions",
                 "pages": [
                   "plugins/building-extensions",
+                  "plugins/sdk-migration",
                   "plugins/architecture",
                   "plugins/community",
                   "plugins/bundles",
@@ -1090,6 +1091,7 @@
                 "group": "Automation",
                 "pages": [
                   "automation/hooks",
+                  "automation/standing-orders",
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
                   "automation/troubleshooting",
