@@ -1798,7 +1798,7 @@
           if (messages.length === 0) {
             addMsg(
               "assistant",
-              "Hey. I'm the AI agent running on this page — built with the same patterns we sell. Ask me anything about the product, the architecture, or how it all works.",
+              "Hey — AI chat is launching soon. In the meantime, scroll down to see everything included, or check the FAQ. If you have questions, email cruztang@proton.me.",
             );
           } else {
             renderMessages();
@@ -1867,51 +1867,14 @@
 
             hideTyping();
 
-            if (!res.ok) {
-              var errData = await res.json().catch(function () {
-                return {};
-              });
-              addMsg("assistant", errData.error || "Something went wrong. Try again.");
-              sending = false;
-              sendBtn.disabled = false;
-              return;
-            }
+            var data = await res.json();
 
-            // Stream response
-            var reader = res.body.getReader();
-            var decoder = new TextDecoder();
-            var assistantMsg = "";
-            var msgDiv = document.createElement("div");
-            msgDiv.className = "chat-msg assistant";
-            msgContainer.appendChild(msgDiv);
-
-            var buffer = "";
-            while (true) {
-              var result = await reader.read();
-              if (result.done) break;
-
-              buffer += decoder.decode(result.value, { stream: true });
-              var lines = buffer.split("\n");
-              buffer = lines.pop() || "";
-
-              for (var i = 0; i < lines.length; i++) {
-                var line = lines[i];
-                if (line.startsWith("data: ")) {
-                  try {
-                    var data = JSON.parse(line.slice(6));
-                    if (data.text) {
-                      assistantMsg += data.text;
-                      msgDiv.textContent = assistantMsg;
-                      msgContainer.scrollTop = msgContainer.scrollHeight;
-                    }
-                  } catch (e) {}
-                }
-              }
-            }
-
-            if (assistantMsg) {
-              messages.push({ role: "assistant", content: assistantMsg });
-              localStorage.setItem("chat_msgs", JSON.stringify(messages.slice(-30)));
+            if (data.error) {
+              addMsg("assistant", data.error);
+            } else if (data.text) {
+              addMsg("assistant", data.text);
+            } else {
+              addMsg("assistant", "Something went wrong. Try again.");
             }
           } catch (err) {
             hideTyping();
