@@ -33,11 +33,30 @@ type InteractiveDispatchResult =
   | { matched: false; handled: false; duplicate: false }
   | { matched: true; handled: boolean; duplicate: boolean };
 
-const interactiveHandlers = new Map<string, RegisteredInteractiveHandler>();
-const callbackDedupe = createDedupeCache({
-  ttlMs: 5 * 60_000,
-  maxSize: 4096,
-});
+// Use globalThis singletons so that the handlers map and dedupe cache are shared
+// across all module instances.  The Jiti plugin loader (tryNative=false) creates
+// a separate module cache from Node's native ESM loader, so this module can be
+// instantiated twice — once per loader.  A plain module-level Map would give each
+// instance its own empty copy; globalThis ensures both write to / read from the
+// same data.
+const INTERACTIVE_HANDLERS_KEY = Symbol.for("openclaw.interactiveHandlers");
+const CALLBACK_DEDUPE_KEY = Symbol.for("openclaw.interactiveCallbackDedupe");
+
+const g = globalThis as typeof globalThis & {
+  [INTERACTIVE_HANDLERS_KEY]?: Map<string, RegisteredInteractiveHandler>;
+  [CALLBACK_DEDUPE_KEY]?: ReturnType<typeof createDedupeCache>;
+};
+
+const interactiveHandlers: Map<string, RegisteredInteractiveHandler> =
+  g[INTERACTIVE_HANDLERS_KEY] ??
+  (g[INTERACTIVE_HANDLERS_KEY] = new Map<string, RegisteredInteractiveHandler>());
+
+const callbackDedupe =
+  g[CALLBACK_DEDUPE_KEY] ??
+  (g[CALLBACK_DEDUPE_KEY] = createDedupeCache({
+    ttlMs: 5 * 60_000,
+    maxSize: 4096,
+  }));
 
 function toRegistryKey(channel: string, namespace: string): string {
   return `${channel.trim().toLowerCase()}:${namespace.trim()}`;

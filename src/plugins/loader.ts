@@ -22,7 +22,7 @@ import {
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
-import { clearPluginInteractiveHandlers } from "./interactive.js";
+import { clearPluginInteractiveHandlersForPlugin } from "./interactive.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
@@ -858,7 +858,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
   if (shouldActivate) {
     clearPluginCommands();
-    clearPluginInteractiveHandlers();
+    // NOTE: Interactive handlers are cleared per-plugin before each register()
+    // call (see below) rather than globally here. A global clear races with
+    // handler dispatch when multiple loadOpenClawPlugins calls happen with
+    // different cache keys (e.g., gateway vs agent-runtime loads), because
+    // the clear wipes handlers from plugins that may not be re-registered in
+    // the current load scope.
   }
 
   // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
@@ -1354,6 +1359,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       hookPolicy: entry?.hooks,
       registrationMode,
     });
+
+    // Clear this plugin's interactive handlers before re-registration so
+    // the duplicate-namespace check inside registerPluginInteractiveHandler
+    // does not reject the (re-)registration.
+    if (shouldActivate) {
+      clearPluginInteractiveHandlersForPlugin(record.id);
+    }
 
     try {
       const result = register(api);
