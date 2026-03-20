@@ -12,7 +12,12 @@ const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
 }));
 
+const { resolveBundledPluginWebSearchProvidersMock } = vi.hoisted(() => ({
+  resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+}));
+
 vi.mock("../plugins/web-search-providers.js", () => ({
+  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
@@ -177,6 +182,7 @@ function expectInactiveFirecrawlSecretRef(params: {
 describe("runtime web tools resolution", () => {
   beforeEach(() => {
     vi.mocked(webSearchProviders.resolvePluginWebSearchProviders).mockClear();
+    vi.mocked(webSearchProviders.resolveBundledPluginWebSearchProviders).mockClear();
   });
 
   afterEach(() => {
@@ -529,6 +535,48 @@ describe("runtime web tools resolution", () => {
         }),
       ]),
     );
+  });
+
+  it("uses bundled provider resolution for configured bundled providers", async () => {
+    const bundledSpy = vi.mocked(webSearchProviders.resolveBundledPluginWebSearchProviders);
+    const genericSpy = vi.mocked(webSearchProviders.resolvePluginWebSearchProviders);
+
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "gemini",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "GEMINI_PROVIDER_REF" },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        GEMINI_PROVIDER_REF: "gemini-provider-key",
+      },
+    });
+
+    expect(metadata.search.selectedProvider).toBe("gemini");
+    expect(bundledSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bundledAllowlistCompat: true,
+        onlyPluginIds: ["google"],
+      }),
+    );
+    expect(genericSpy).not.toHaveBeenCalled();
   });
 
   it("does not resolve Firecrawl SecretRef when Firecrawl is inactive", async () => {
