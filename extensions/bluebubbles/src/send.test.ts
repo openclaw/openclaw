@@ -524,6 +524,46 @@ describe("send", () => {
       ).rejects.toThrow("Private API must be enabled");
     });
 
+    it("uses private-api for plain sends when Private API is enabled", async () => {
+      mockBlueBubblesPrivateApiStatusOnce(
+        privateApiStatusMock,
+        BLUE_BUBBLES_PRIVATE_API_STATUS.enabled,
+      );
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-uuid-plain-private" } });
+
+      await sendMessageBlueBubbles("+15551234567", "Hello", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+      });
+
+      const sendCall = mockFetch.mock.calls[1];
+      const body = JSON.parse(sendCall[1].body);
+      // Plain sends must use private-api on Tahoe where AppleScript is broken
+      expect(body.method).toBe("private-api");
+      // No reply or effect fields should be set
+      expect(body.selectedMessageGuid).toBeUndefined();
+      expect(body.effectId).toBeUndefined();
+    });
+
+    it("omits method for plain sends when Private API is disabled", async () => {
+      mockBlueBubblesPrivateApiStatusOnce(
+        privateApiStatusMock,
+        BLUE_BUBBLES_PRIVATE_API_STATUS.disabled,
+      );
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-uuid-plain-noprivate" } });
+
+      await sendMessageBlueBubbles("+15551234567", "Hello", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+      });
+
+      const sendCall = mockFetch.mock.calls[1];
+      const body = JSON.parse(sendCall[1].body);
+      expect(body.method).toBeUndefined();
+    });
+
     it("uses private-api when reply metadata is present", async () => {
       mockBlueBubblesPrivateApiStatusOnce(
         privateApiStatusMock,
