@@ -509,9 +509,9 @@ function resolveHeartbeatRunPrompt(params: {
   // Only append workspace path hint for internal prompts (exec/cron) or when using the
   // default heartbeat prompt. User-configured prompts are left unchanged to respect
   // custom instructions (e.g., using HEARTBEAT.md from system prompt instead of workspace).
-  const hasCustomHeartbeatPrompt =
-    typeof (params.heartbeat?.prompt ?? params.cfg.agents?.defaults?.heartbeat?.prompt) ===
-    "string";
+  const resolvedHeartbeatPrompt =
+    params.heartbeat?.prompt ?? params.cfg.agents?.defaults?.heartbeat?.prompt;
+  const hasCustomHeartbeatPrompt = typeof resolvedHeartbeatPrompt === "string";
   const basePrompt = hasExecCompletion
     ? buildExecEventPrompt({ deliverToUser: params.canRelayToUser })
     : hasCronEvents
