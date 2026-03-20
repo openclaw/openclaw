@@ -75,6 +75,10 @@ export function normalizeMessageActionInput(params: {
     explicitChannel.includes(":")
   ) {
     normalizedArgs.target = explicitChannel;
+    // The channel field contained a target identifier, not a valid provider name.
+    // Clear it so downstream code does not treat a target like "channel:123" as
+    // a messaging provider.
+    delete normalizedArgs.channel;
   }
 
   applyTargetToParams({ action, args: normalizedArgs });

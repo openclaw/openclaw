@@ -148,6 +148,9 @@ describe("normalizeMessageActionInput", () => {
 
     expect(normalized.target).toBe("channel:1478210578362269758");
     expect(normalized.to).toBe("channel:1478210578362269758");
+    // The channel field held a target identifier, not a provider name — it must
+    // be cleared so downstream code does not misinterpret it.
+    expect("channel" in normalized).toBe(false);
   });
 
   it("does not promote channel to target when channel is a plain provider name", () => {
