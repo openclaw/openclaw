@@ -96,7 +96,15 @@ export function detectChangedScope(changedPaths) {
     runChannels = true;
   }
 
-  return { runNode, runChannels, runMacos, runMacosNative, runAndroid, runWindows, runSkillsPython };
+  return {
+    runNode,
+    runChannels,
+    runMacos,
+    runMacosNative,
+    runAndroid,
+    runWindows,
+    runSkillsPython,
+  };
 }
 
 /**

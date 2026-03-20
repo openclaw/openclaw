@@ -994,7 +994,7 @@ jobs:
       matrix:
         include:
           - task: test
-            command: ./gradlew --no-daemon :app:testDebugUnitTest
+            command: ./gradlew --no-daemon :app:testPlayDebugUnitTest :app:testThirdPartyDebugUnitTest
           - task: build
             command: ./gradlew --no-daemon :app:assembleDebug
     steps:

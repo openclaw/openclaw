@@ -29,7 +29,7 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 cd apps/android
 ./gradlew :app:assembleDebug
 ./gradlew :app:installDebug
-./gradlew :app:testDebugUnitTest
+./gradlew :app:testPlayDebugUnitTest :app:testThirdPartyDebugUnitTest
 cd ../..
 bun run android:bundle:release
 ```
