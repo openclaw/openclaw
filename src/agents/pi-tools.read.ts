@@ -331,6 +331,10 @@ type RequiredParamGroup = {
 };
 
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
+const EDIT_TOOL_DESCRIPTION_HINT =
+  " Use this only when the target text is known exactly and is unique in the file. If the surrounding text may have drifted or the change spans broader context, prefer apply_patch instead.";
+const EDIT_TOOL_REMEDIATION_HINT =
+  " Read the current file contents and retry with a unique exact oldText snippet, or use apply_patch for context-based edits.";
 
 function parameterValidationError(message: string): Error {
   return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
@@ -596,6 +600,45 @@ export function wrapToolParamNormalization(
   };
 }
 
+function augmentEditToolError(error: unknown): never {
+  if (!(error instanceof Error)) {
+    throw error;
+  }
+
+  if (/prefer apply_patch instead|use apply_patch/i.test(error.message)) {
+    throw error;
+  }
+
+  if (
+    /Could not find the exact text|No changes made to .*replacement produced identical content|Found \d+ occurrences of the text/i.test(
+      error.message,
+    )
+  ) {
+    throw new Error(`${error.message} ${EDIT_TOOL_REMEDIATION_HINT}`);
+  }
+
+  throw error;
+}
+
+export function createOpenClawEditTool(base: AnyAgentTool): AnyAgentTool {
+  const wrapped = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  const description = wrapped.description?.includes(EDIT_TOOL_DESCRIPTION_HINT)
+    ? wrapped.description
+    : `${wrapped.description}${EDIT_TOOL_DESCRIPTION_HINT}`;
+
+  return {
+    ...wrapped,
+    description,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      try {
+        return await wrapped.execute(toolCallId, params, signal, onUpdate);
+      } catch (error) {
+        augmentEditToolError(error);
+      }
+    },
+  };
+}
+
 export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return {
     ...tool,
@@ -641,7 +684,7 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  return createOpenClawEditTool(base);
 }
 
 export function createOpenClawReadTool(

@@ -7,7 +7,11 @@ import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { __testing, createOpenClawCodingTools } from "./pi-tools.js";
-import { createOpenClawReadTool, createSandboxedReadTool } from "./pi-tools.read.js";
+import {
+  createOpenClawEditTool,
+  createOpenClawReadTool,
+  createSandboxedReadTool,
+} from "./pi-tools.read.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 
@@ -147,6 +151,52 @@ describe("createOpenClawCodingTools", () => {
       await expect(wrapped.execute("tool-4", {})).rejects.toThrow(
         /Supply correct parameters before retrying\./,
       );
+    });
+
+    it("adds apply_patch guidance to the edit tool description", () => {
+      const base: AgentTool = {
+        name: "edit",
+        label: "edit",
+        description:
+          "Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits.",
+        parameters: Type.Object({
+          path: Type.String(),
+          oldText: Type.String(),
+          newText: Type.String(),
+        }),
+        execute: vi.fn(),
+      };
+
+      const wrapped = createOpenClawEditTool(
+        base as unknown as Parameters<typeof createOpenClawEditTool>[0],
+      );
+      expect(wrapped.description).toMatch(/prefer apply_patch/i);
+      expect(wrapped.description).toMatch(/known exactly/i);
+    });
+
+    it("augments exact-match edit failures with remediation guidance", async () => {
+      const base: AgentTool = {
+        name: "edit",
+        label: "edit",
+        description: "edit",
+        parameters: Type.Object({
+          path: Type.String(),
+          oldText: Type.String(),
+          newText: Type.String(),
+        }),
+        execute: vi.fn(async () => {
+          throw new Error(
+            "Could not find the exact text in demo.txt. The old text must match exactly including all whitespace and newlines.",
+          );
+        }),
+      };
+
+      const wrapped = createOpenClawEditTool(
+        base as unknown as Parameters<typeof createOpenClawEditTool>[0],
+      );
+      await expect(
+        wrapped.execute("tool-err", { path: "demo.txt", oldText: "a", newText: "b" }),
+      ).rejects.toThrow(/use apply_patch|retry with a unique exact oldText/i);
     });
   });
 
