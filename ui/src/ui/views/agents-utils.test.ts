@@ -141,6 +141,7 @@ describe("renderOverview", () => {
         navCollapsed: false,
         navWidth: 220,
         navGroupsCollapsed: {},
+        borderRadius: 50,
       },
       password: "",
       lastError: null,

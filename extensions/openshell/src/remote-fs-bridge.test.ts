@@ -105,7 +105,7 @@ function rewriteLocalPaths(value: string, roots: { workspace: string; agent: str
 }
 
 function normalizeScriptForLocalShell(script: string) {
-  return script
+  const normalizedScript = script
     .replace(
       'stats=$(stat -c "%F|%h" -- "$1")',
       `stats=$(python3 - "$1" <<'PY'
@@ -125,6 +125,13 @@ kind = 'directory' if stat.S_ISDIR(st.st_mode) else 'regular file' if stat.S_ISR
 print(f"{kind}|{st.st_size}|{int(st.st_mtime)}")
 PY`,
     );
+  const mutationHelperPattern = /python3 \/dev\/fd\/3 "\$@" 3<<'PY'\n([\s\S]*?)\nPY/;
+  const mutationHelperMatch = normalizedScript.match(mutationHelperPattern);
+  if (!mutationHelperMatch) {
+    return normalizedScript;
+  }
+  const helperSource = mutationHelperMatch[1]?.replaceAll("'", `'"'"'`) ?? "";
+  return normalizedScript.replace(mutationHelperPattern, `python3 -c '${helperSource}' "$@"`);
 }
 
 describe("openshell remote fs bridge", () => {

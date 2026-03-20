@@ -469,53 +469,7 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
-      /** Perplexity-specific configuration (used when provider="perplexity"). */
-      perplexity?: {
-        /** API key for Perplexity (defaults to PERPLEXITY_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
-        baseUrl?: string;
-        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
-        model?: string;
-      };
-      /** Firecrawl-specific configuration (used when provider="firecrawl"). */
-      firecrawl?: {
-        /** Firecrawl API key (defaults to FIRECRAWL_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** Base URL for API requests (defaults to "https://api.firecrawl.dev"). */
-        baseUrl?: string;
-      };
-      /** Grok-specific configuration (used when provider="grok"). */
-      grok?: {
-        /** API key for xAI (defaults to XAI_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** Model to use (defaults to "grok-4-1-fast"). */
-        model?: string;
-        /** Include inline citations in response text as markdown links (default: false). */
-        inlineCitations?: boolean;
-      };
-      /** Gemini-specific configuration (used when provider="gemini"). */
-      gemini?: {
-        /** Gemini API key (defaults to GEMINI_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
-        model?: string;
-      };
-      /** Kimi-specific configuration (used when provider="kimi"). */
-      kimi?: {
-        /** Moonshot/Kimi API key (defaults to KIMI_API_KEY or MOONSHOT_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** Base URL for API requests (defaults to "https://api.moonshot.ai/v1"). */
-        baseUrl?: string;
-        /** Model to use (defaults to "moonshot-v1-128k"). */
-        model?: string;
-      };
-      /** Brave-specific configuration (used when provider="brave"). */
-      brave?: {
-        /** Brave Search mode: "web" (standard results) or "llm-context" (pre-extracted page content). Default: "web". */
-        mode?: "web" | "llm-context";
-      };
-    };
+      /** Provider-specific configuration (used when provider="brave"). */
       /** @deprecated Legacy Brave scoped config. */
       brave?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Firecrawl scoped config. */

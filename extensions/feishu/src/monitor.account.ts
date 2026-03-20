@@ -629,12 +629,14 @@ export type MonitorSingleAccountParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   botOpenIdSource?: BotOpenIdSource;
+  fireAndForget?: boolean;
 };
 
 export async function monitorSingleAccount(params: MonitorSingleAccountParams): Promise<void> {
   const { cfg, account, runtime, abortSignal } = params;
   const { accountId } = account;
   const log = runtime?.log ?? console.log;
+  const fireAndForget = params.fireAndForget ?? true;
 
   const botOpenIdSource = params.botOpenIdSource ?? { kind: "fetch" };
   const botIdentity =
@@ -675,7 +677,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       accountId,
       runtime,
       chatHistories,
-      fireAndForget: true,
+      fireAndForget,
     });
 
     if (connectionMode === "webhook") {

@@ -12,10 +12,6 @@ const mocks = vi.hoisted(() => ({
   resolveStorePathMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
-  dispatchReplyWithDispatcher: (...args: unknown[]) => mocks.dispatchMock(...args),
-  finalizeInboundContext: (...args: unknown[]) => mocks.finalizeInboundContextMock(...args),
-}));
 vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {
@@ -42,16 +38,6 @@ vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
-  resolveConversationLabel: (...args: unknown[]) => mocks.resolveConversationLabelMock(...args),
-  createReplyPrefixOptions: (...args: unknown[]) => mocks.createReplyPrefixOptionsMock(...args),
-}));
-
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
-  recordSessionMetaFromInbound: (...args: unknown[]) =>
-    mocks.recordSessionMetaFromInboundMock(...args),
-  resolveStorePath: (...args: unknown[]) => mocks.resolveStorePathMock(...args),
-}));
 vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
   return {

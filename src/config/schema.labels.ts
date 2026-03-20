@@ -216,9 +216,23 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.message.broadcast.enabled": "Enable Message Broadcast",
   "tools.web.search.enabled": "Enable Web Search Tool",
   "tools.web.search.provider": "Web Search Provider",
+  "tools.web.search.apiKey": "Brave Search API Key",
   "tools.web.search.maxResults": "Web Search Max Results",
   "tools.web.search.timeoutSeconds": "Web Search Timeout (sec)",
   "tools.web.search.cacheTtlMinutes": "Web Search Cache TTL (min)",
+  "tools.web.search.firecrawl.apiKey": "Web Search Firecrawl API Key", // pragma: allowlist secret
+  "tools.web.search.firecrawl.baseUrl": "Web Search Firecrawl Base URL",
+  "tools.web.search.brave.mode": "Brave Search Mode",
+  "tools.web.search.gemini.apiKey": "Web Search Gemini API Key", // pragma: allowlist secret
+  "tools.web.search.gemini.model": "Web Search Gemini Model",
+  "tools.web.search.grok.apiKey": "Web Search Grok API Key", // pragma: allowlist secret
+  "tools.web.search.grok.model": "Web Search Grok Model",
+  "tools.web.search.kimi.apiKey": "Web Search Kimi API Key", // pragma: allowlist secret
+  "tools.web.search.kimi.baseUrl": "Web Search Kimi Base URL",
+  "tools.web.search.kimi.model": "Web Search Kimi Model",
+  "tools.web.search.perplexity.apiKey": "Web Search Perplexity API Key", // pragma: allowlist secret
+  "tools.web.search.perplexity.baseUrl": "Web Search Perplexity Base URL",
+  "tools.web.search.perplexity.model": "Web Search Perplexity Model",
   "tools.web.fetch.enabled": "Enable Web Fetch Tool",
   "tools.web.fetch.maxChars": "Web Fetch Max Chars",
   "tools.web.fetch.maxCharsCap": "Web Fetch Hard Max Chars",
