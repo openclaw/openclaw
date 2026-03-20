@@ -1,15 +1,12 @@
 import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
-import {
-  clearZaloWebhookSecurityStateForTest,
-  monitorZaloProvider,
-} from "./monitor.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
+import { clearZaloWebhookSecurityStateForTest, monitorZaloProvider } from "./monitor.js";
 
 const setWebhookMock = vi.hoisted(() => vi.fn(async () => ({ ok: true, result: { url: "" } })));
 const deleteWebhookMock = vi.hoisted(() => vi.fn(async () => ({ ok: true, result: { url: "" } })));
@@ -175,9 +172,11 @@ describe("Zalo reply-once lifecycle", () => {
   });
 
   it("routes one accepted webhook event to one visible reply across duplicate replay", async () => {
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "zalo reply once" });
-    });
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
+      async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "zalo reply once" });
+      },
+    );
 
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
@@ -201,25 +200,28 @@ describe("Zalo reply-once lifecycle", () => {
       throw new Error("missing plugin HTTP route");
     }
 
-    await withServer((req, res) => route.handler(req, res), async (baseUrl) => {
-      const payload = createTextUpdate(`zalo-replay-${Date.now()}`);
-      const first = await postWebhookUpdate({
-        baseUrl,
-        path: "/hooks/zalo",
-        secret: "supersecret",
-        payload,
-      });
-      const second = await postWebhookUpdate({
-        baseUrl,
-        path: "/hooks/zalo",
-        secret: "supersecret",
-        payload,
-      });
+    await withServer(
+      (req, res) => route.handler(req, res),
+      async (baseUrl) => {
+        const payload = createTextUpdate(`zalo-replay-${Date.now()}`);
+        const first = await postWebhookUpdate({
+          baseUrl,
+          path: "/hooks/zalo",
+          secret: "supersecret",
+          payload,
+        });
+        const second = await postWebhookUpdate({
+          baseUrl,
+          path: "/hooks/zalo",
+          secret: "supersecret",
+          payload,
+        });
 
-      expect(first.status).toBe(200);
-      expect(second.status).toBe(200);
-      await settleAsyncWork();
-    });
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+        await settleAsyncWork();
+      },
+    );
 
     expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
@@ -253,13 +255,15 @@ describe("Zalo reply-once lifecycle", () => {
 
   it("does not emit a second visible reply when replay arrives after a post-send failure", async () => {
     let dispatchAttempts = 0;
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(async ({ dispatcherOptions }) => {
-      dispatchAttempts += 1;
-      await dispatcherOptions.deliver({ text: "zalo reply after failure" });
-      if (dispatchAttempts === 1) {
-        throw new Error("post-send failure");
-      }
-    });
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
+      async ({ dispatcherOptions }) => {
+        dispatchAttempts += 1;
+        await dispatcherOptions.deliver({ text: "zalo reply after failure" });
+        if (dispatchAttempts === 1) {
+          throw new Error("post-send failure");
+        }
+      },
+    );
 
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
@@ -282,26 +286,29 @@ describe("Zalo reply-once lifecycle", () => {
       throw new Error("missing plugin HTTP route");
     }
 
-    await withServer((req, res) => route.handler(req, res), async (baseUrl) => {
-      const payload = createTextUpdate(`zalo-retry-${Date.now()}`);
-      const first = await postWebhookUpdate({
-        baseUrl,
-        path: "/hooks/zalo",
-        secret: "supersecret",
-        payload,
-      });
-      await settleAsyncWork();
-      const replay = await postWebhookUpdate({
-        baseUrl,
-        path: "/hooks/zalo",
-        secret: "supersecret",
-        payload,
-      });
+    await withServer(
+      (req, res) => route.handler(req, res),
+      async (baseUrl) => {
+        const payload = createTextUpdate(`zalo-retry-${Date.now()}`);
+        const first = await postWebhookUpdate({
+          baseUrl,
+          path: "/hooks/zalo",
+          secret: "supersecret",
+          payload,
+        });
+        await settleAsyncWork();
+        const replay = await postWebhookUpdate({
+          baseUrl,
+          path: "/hooks/zalo",
+          secret: "supersecret",
+          payload,
+        });
 
-      expect(first.status).toBe(200);
-      expect(replay.status).toBe(200);
-      await settleAsyncWork();
-    });
+        expect(first.status).toBe(200);
+        expect(replay.status).toBe(200);
+        await settleAsyncWork();
+      },
+    );
 
     expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
