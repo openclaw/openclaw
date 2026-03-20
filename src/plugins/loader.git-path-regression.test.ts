@@ -88,7 +88,9 @@ export const copiedRuntimeMarker = {
     // and that behavior is orthogonal to the #49806 alias regression this test
     // is protecting.
     const withAlias = createJiti(jitiBaseUrl, jitiOptions);
-    expect(withAlias.resolve("openclaw/plugin-sdk/channel-runtime")).toBe(copiedChannelRuntimeShim);
+    expect(path.normalize(withAlias.resolve("openclaw/plugin-sdk/channel-runtime"))).toBe(
+      path.normalize(copiedChannelRuntimeShim),
+    );
     expect(fs.readFileSync(copiedChannelRuntime, "utf-8")).toContain(
       'from "openclaw/plugin-sdk/channel-runtime"',
     );
