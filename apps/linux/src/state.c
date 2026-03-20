@@ -103,6 +103,7 @@ void state_update_systemd(SystemdState *sys_state) {
     g_free(current_sys_state.active_state);
     g_free(current_sys_state.sub_state);
     g_free(current_sys_state.unit_name);
+    g_free(current_sys_state.working_directory);
     g_strfreev(current_sys_state.exec_start_argv);
     g_strfreev(current_sys_state.environment);
     
@@ -110,6 +111,7 @@ void state_update_systemd(SystemdState *sys_state) {
     current_sys_state.active_state = g_strdup(sys_state->active_state);
     current_sys_state.sub_state = g_strdup(sys_state->sub_state);
     current_sys_state.unit_name = g_strdup(sys_state->unit_name);
+    current_sys_state.working_directory = g_strdup(sys_state->working_directory);
     if (sys_state->exec_start_argv) {
         current_sys_state.exec_start_argv = g_strdupv(sys_state->exec_start_argv);
     } else {
@@ -130,9 +132,15 @@ void state_update_systemd(SystemdState *sys_state) {
     
     AppState new_state = compute_state();
     
-    if (!initial_probe_fired && new_state != STATE_NOT_INSTALLED && new_state != STATE_SYSTEM_UNSUPPORTED) {
+    gboolean is_supported = (new_state != STATE_NOT_INSTALLED && new_state != STATE_SYSTEM_UNSUPPORTED);
+    gboolean should_trigger_probes = is_supported && (!initial_probe_fired || became_active || unit_changed);
+
+    if (should_trigger_probes) {
         initial_probe_fired = TRUE;
-        // Defer initial probes asynchronously to keep state mutation fast and decoupled
+        // Re-run immediate probes on any freshness-boundary transition (first hydration,
+        // activation, or unit retargeting) to avoid leaving the UI in a stale or generic 
+        // "Running" state until the next periodic timer fires.
+        // Defer probes asynchronously to keep state mutation fast and decoupled
         g_idle_add(idle_trigger_health_probe, NULL);
         g_idle_add(idle_trigger_deep_probe, NULL);
     }

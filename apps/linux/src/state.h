@@ -34,6 +34,7 @@ typedef struct {
     gboolean deactivating;
     gboolean failed;
     char *unit_name;
+    char *working_directory;
     char *active_state;
     char *sub_state;
     char **exec_start_argv;

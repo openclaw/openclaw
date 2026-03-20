@@ -185,6 +185,12 @@ static GSubprocess *spawn_gateway_subprocess(const gchar *subcommand, GError **e
     g_subprocess_launcher_set_environ(launcher, envp);
     g_strfreev(envp);
     
+    if (sys && sys->working_directory) {
+        // Preserve WorkingDirectory to respect the execution fidelity of dev-mode
+        // services which may rely on cwd to locate local dependencies or config.
+        g_subprocess_launcher_set_cwd(launcher, sys->working_directory);
+    }
+    
     GSubprocess *subprocess = g_subprocess_launcher_spawnv(launcher, (const gchar *const *)argv, error);
     
     g_object_unref(launcher);

@@ -23,6 +23,7 @@
 static GDBusProxy *manager_proxy = NULL;
 static GDBusProxy *unit_proxy = NULL;
 static gchar *cached_exec_start = NULL;
+static gchar *cached_working_directory = NULL;
 static gchar **cached_environment = NULL;
 static gchar *cached_unit_name = NULL;
 static guint properties_changed_signal_id = 0;
@@ -254,9 +255,10 @@ static const gchar* discover_canonical_unit_name(void) {
     return cached_unit_name;
 }
 
-static void extract_service_config_from_file(gchar **exec_start_out, gchar ***environment_out) {
+static void extract_service_config_from_file(gchar **exec_start_out, gchar ***environment_out, gchar **working_directory_out) {
     *exec_start_out = NULL;
     *environment_out = NULL;
+    *working_directory_out = NULL;
 
     const gchar *home_dir = g_get_home_dir();
     if (!home_dir) return;
@@ -274,6 +276,7 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
     gchar **lines = g_strsplit(contents, "\n", -1);
     gboolean in_service_section = FALSE;
     gchar *exec_start = NULL;
+    gchar *working_directory = NULL;
     gchar **inline_env = g_new0(gchar*, 1);
     gchar **file_env = g_new0(gchar*, 1);
 
@@ -294,6 +297,9 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
             if (g_str_has_prefix(line, "ExecStart=")) {
                 g_free(exec_start);
                 exec_start = g_strdup(line + 10);
+            } else if (g_str_has_prefix(line, "WorkingDirectory=")) {
+                g_free(working_directory);
+                working_directory = g_strdup(line + 17);
             } else if (g_str_has_prefix(line, "Environment=")) {
                 gchar *env_val = line + 12;
                 gint argc = 0;
@@ -381,6 +387,7 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
     g_strfreev(lines);
 
     *exec_start_out = exec_start;
+    *working_directory_out = working_directory;
     
     // Merge: file_env overrides inline_env
     gchar **merged_env = inline_env;
@@ -485,6 +492,10 @@ static void fetch_unit_properties(void) {
         }
     }
 
+    if (cached_working_directory) {
+        sys_state.working_directory = g_strdup(cached_working_directory);
+    }
+
     if (cached_environment) {
         sys_state.environment = g_strdupv(cached_environment);
     }
@@ -494,6 +505,7 @@ static void fetch_unit_properties(void) {
     state_update_systemd(&sys_state);
 
     g_free(sys_state.unit_name);
+    g_free(sys_state.working_directory);
     g_free(sys_state.active_state);
     g_free(sys_state.sub_state);
     g_strfreev(sys_state.exec_start_argv);
@@ -525,7 +537,7 @@ void systemd_init(void) {
     // Systemd docs require us to call Subscribe before getting signals for non-running units
     g_dbus_proxy_call(manager_proxy, "Subscribe", NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
 
-    extract_service_config_from_file(&cached_exec_start, &cached_environment);
+    extract_service_config_from_file(&cached_exec_start, &cached_environment, &cached_working_directory);
 }
 
 static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointer user_data) {
@@ -550,6 +562,10 @@ static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointe
             }
         }
 
+        if (cached_working_directory) {
+            sys_state.working_directory = g_strdup(cached_working_directory);
+        }
+
         if (cached_environment) {
             sys_state.environment = g_strdupv(cached_environment);
         }
@@ -558,6 +574,7 @@ static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointe
         
         state_update_systemd(&sys_state);
         g_free(sys_state.unit_name);
+        g_free(sys_state.working_directory);
         g_free(sys_state.active_state);
         g_free(sys_state.sub_state);
         g_strfreev(sys_state.exec_start_argv);
@@ -582,9 +599,11 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
     // 1. Refresh config unconditionally, so reconfigurations or deletions update the cache
     g_free(cached_exec_start);
     cached_exec_start = NULL;
+    g_free(cached_working_directory);
+    cached_working_directory = NULL;
     g_strfreev(cached_environment);
     cached_environment = NULL;
-    extract_service_config_from_file(&cached_exec_start, &cached_environment);
+    extract_service_config_from_file(&cached_exec_start, &cached_environment, &cached_working_directory);
 
     // 2. If GetUnitFileState fails, treat as not installed
     if (!result) {
