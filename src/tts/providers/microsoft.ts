@@ -96,6 +96,7 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
             outputPath,
             config: {
               ...req.config.edge,
+              voice: req.overrides?.microsoft?.voice ?? req.config.edge.voice,
               outputFormat: format,
             },
             timeoutMs: req.config.timeoutMs,
