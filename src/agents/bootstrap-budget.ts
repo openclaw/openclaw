@@ -293,7 +293,7 @@ export function formatBootstrapTruncationWarningLines(params: {
     );
   }
   lines.push(
-    "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars.",
+    "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars (or per-agent agents.list[].bootstrapMaxChars / bootstrapTotalMaxChars).",
   );
   return lines;
 }

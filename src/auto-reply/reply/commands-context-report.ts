@@ -196,7 +196,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       ? [
           `⚠ Bootstrap context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(bootstrapAnalysis.totals.rawChars)} raw chars -> ${formatInt(bootstrapAnalysis.totals.injectedChars)} injected chars).`,
           ...(truncationCauseParts.length ? [`Causes: ${truncationCauseParts.join("; ")}.`] : []),
-          "Tip: increase `agents.defaults.bootstrapMaxChars` and/or `agents.defaults.bootstrapTotalMaxChars` if this truncation is not intentional.",
+          "Tip: increase `agents.defaults.bootstrapMaxChars` and/or `agents.defaults.bootstrapTotalMaxChars` (or per-agent `agents.list[].bootstrapMaxChars` / `bootstrapTotalMaxChars`) if this truncation is not intentional.",
         ]
       : [];
 
@@ -229,7 +229,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       30,
     );
     const perToolSummary = formatListTop(
-      report.tools.entries.map((t) => ({ name: t.name, value: t.summaryChars })),
+      report.tools.entries.map((t) => ({
+        name: t.name,
+        value: t.summaryChars,
+      })),
       30,
     );
     const toolPropsLines = report.tools.entries

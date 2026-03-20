@@ -11,6 +11,7 @@ import {
 const ENTRIES = __loadRuntimePathMapEntriesFromDocumentForTests({
   container_host_roots: [
     { container: "/shared-workspace", host: "workspace" },
+    { container: "/shared-files", host: "shared-files" },
     { container: "/agent-homes/tony", host: "workspace-tony" },
     { container: "/home/node/.openclaw", host: "." },
   ],
@@ -24,6 +25,9 @@ describe("runtime path map", () => {
     expect(translateContainerPathToHostPath("/agent-homes/tony/memory/active", ENTRIES)).toBe(
       "/Users/test/.openclaw/workspace-tony/memory/active",
     );
+    expect(translateContainerPathToHostPath("/shared-files/inbox", ENTRIES)).toBe(
+      "/Users/test/.openclaw/shared-files/inbox",
+    );
   });
 
   it("leaves unmatched absolute paths untouched", () => {
@@ -32,6 +36,7 @@ describe("runtime path map", () => {
 
   it("reports whether container-native paths are backed by the runtime path map", () => {
     expect(isRuntimePathMapped("/agent-homes/tony/subagents/research", ENTRIES)).toBe(true);
+    expect(isRuntimePathMapped("/shared-files/inbox", ENTRIES)).toBe(true);
     expect(isRuntimePathMapped("/agent-homes/scout/subagents/research", ENTRIES)).toBe(false);
     expect(isRuntimePathMapped("/tmp/local-workspace", ENTRIES)).toBe(true);
   });
@@ -77,12 +82,16 @@ describe("runtime path map", () => {
           network: "none",
           capDrop: ["ALL"],
           env: { LANG: "C.UTF-8" },
-          allowedSourceRoots: ["/shared-workspace", "/tmp/local-only"],
+          allowedSourceRoots: ["/shared-workspace", "/shared-files", "/tmp/local-only"],
         },
         ENTRIES,
       ),
     ).toMatchObject({
-      allowedSourceRoots: ["/Users/test/.openclaw/workspace", "/tmp/local-only"],
+      allowedSourceRoots: [
+        "/Users/test/.openclaw/workspace",
+        "/Users/test/.openclaw/shared-files",
+        "/tmp/local-only",
+      ],
     });
   });
 
@@ -91,11 +100,16 @@ describe("runtime path map", () => {
       collectTranslatedSandboxBindSourceRoots(
         [
           "/shared-workspace:/shared-workspace:ro",
+          "/shared-files:/shared-files:rw",
           "/agent-homes/tony:/agent:ro",
           "/opt/external:/data:rw",
         ],
         ENTRIES,
       ),
-    ).toEqual(["/Users/test/.openclaw/workspace", "/Users/test/.openclaw/workspace-tony"]);
+    ).toEqual([
+      "/Users/test/.openclaw/workspace",
+      "/Users/test/.openclaw/shared-files",
+      "/Users/test/.openclaw/workspace-tony",
+    ]);
   });
 });

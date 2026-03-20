@@ -3,7 +3,12 @@ import path from "node:path";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import type { SandboxDockerConfig } from "./types.js";
 
-const CONTAINER_NATIVE_ROOTS = ["/home/node/.openclaw", "/shared-workspace", "/agent-homes"];
+const CONTAINER_NATIVE_ROOTS = [
+  "/home/node/.openclaw",
+  "/shared-workspace",
+  "/shared-files",
+  "/agent-homes",
+];
 
 type RuntimePathMapEntry = {
   container: string;
