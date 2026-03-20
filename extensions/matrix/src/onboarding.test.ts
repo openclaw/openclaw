@@ -240,6 +240,72 @@ describe("matrix onboarding", () => {
     expect(noteText).toContain("MATRIX_<ACCOUNT_ID>_DEVICE_NAME");
   });
 
+  it("prompts for private-network access when onboarding an internal http homeserver", async () => {
+    setMatrixRuntime({
+      state: {
+        resolveStateDir: (_env: NodeJS.ProcessEnv, homeDir?: () => string) =>
+          (homeDir ?? (() => "/tmp"))(),
+      },
+      config: {
+        loadConfig: () => ({}),
+      },
+    } as never);
+
+    const prompter = {
+      note: vi.fn(async () => {}),
+      select: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Matrix auth method") {
+          return "token";
+        }
+        throw new Error(`unexpected select prompt: ${message}`);
+      }),
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Matrix homeserver URL") {
+          return "http://localhost.localdomain:8008";
+        }
+        if (message === "Matrix access token") {
+          return "ops-token";
+        }
+        if (message === "Matrix device name (optional)") {
+          return "";
+        }
+        throw new Error(`unexpected text prompt: ${message}`);
+      }),
+      confirm: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Allow private/internal Matrix homeserver traffic for this account?") {
+          return true;
+        }
+        if (message === "Enable end-to-end encryption (E2EE)?") {
+          return false;
+        }
+        return false;
+      }),
+    } as unknown as WizardPrompter;
+
+    const result = await matrixOnboardingAdapter.configureInteractive!({
+      cfg: {} as CoreConfig,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
+      prompter,
+      options: undefined,
+      accountOverrides: {},
+      shouldPromptAccountIds: false,
+      forceAllowFrom: false,
+      configured: false,
+      label: "Matrix",
+    });
+
+    expect(result).not.toBe("skip");
+    if (result === "skip") {
+      return;
+    }
+
+    expect(result.cfg.channels?.matrix).toMatchObject({
+      homeserver: "http://localhost.localdomain:8008",
+      allowPrivateNetwork: true,
+      accessToken: "ops-token",
+    });
+  });
+
   it("resolves status using the overridden Matrix account", async () => {
     const status = await matrixOnboardingAdapter.getStatus({
       cfg: {
