@@ -248,6 +248,8 @@ def write_self_criticism(tick_result: dict, beat_n: int) -> str:
         f"- Q-value 更新: {tick_result.get('q_updated', 0)} 次",
         f"- 鐵律攔截: {tick_result.get('iron_blocked', 0)} 個",
         f"- 淘汰（Q<0.2）: {tick_result.get('deprecated', 0)} 條",
+        f"- 自動批准（Q≥0.7）: {tick_result.get('auto_approved', 0)} 個",
+        f"- 自動拒絕（Q<0.3）: {tick_result.get('auto_rejected', 0)} 個",
     ]
 
     # 品質自評
@@ -673,6 +675,74 @@ def _apply_change(target_file: str, change_type: str, diff_preview: str) -> dict
 
 
 # ══════════════════════════════════════════════════════════════════
+# 零件 G：自動審批 — Q≥0.7 通過，Q<0.3 拒絕，中間留給 Cruz
+# ══════════════════════════════════════════════════════════════════
+
+AUTO_APPROVE_THRESHOLD = 0.7
+AUTO_REJECT_THRESHOLD = 0.3
+
+def auto_approve_reject(db_path: str = EVO_DB) -> dict:
+    """
+    自動處理 pending 提案：
+    - Q≥0.7 且不碰 CLAUDE.md 或 CONSTITUTION.md → 自動批准
+    - Q<0.3 → 自動拒絕
+    - 中間的 → 留給 Cruz
+    - 碰核心檔案的 → 永遠留給 Cruz（風險太高）
+    """
+    _ensure_p1_schema(db_path)
+    conn = sqlite3.connect(db_path)
+
+    # 取所有 pending 提案 + 對應規則的 Q-value
+    pending = conn.execute("""
+        SELECT p.id, r.rule, r.q_value, p.target_file, p.change_type, p.description, p.diff_preview
+        FROM proposals p
+        JOIN distilled_rules r ON r.id = p.rule_id
+        WHERE p.status = 'pending'
+    """).fetchall()
+
+    approved = 0
+    rejected = 0
+
+    # 核心檔案：只有 Cruz 能審
+    CORE_FILES = {"CLAUDE.md", "CONSTITUTION.md"}
+
+    for pid, rule, q_val, target, change_type, desc, diff in pending:
+        target_basename = Path(target).name if target else ""
+        is_core = target_basename in CORE_FILES
+
+        if q_val >= AUTO_APPROVE_THRESHOLD and not is_core:
+            # 高 Q + 非核心檔案 → 自動批准
+            result = _apply_change(target, change_type, diff)
+            if result["success"]:
+                conn.execute(
+                    "UPDATE proposals SET status = 'approved', cruz_verdict = 'auto_approved_q>=0.7', applied_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (pid,)
+                )
+                conn.execute(
+                    "INSERT INTO mutations (version, diff_summary, applied, created_at) VALUES (?, ?, 1, CURRENT_TIMESTAMP)",
+                    (pid, f"[auto] {desc}")
+                )
+                approved += 1
+
+        elif q_val < AUTO_REJECT_THRESHOLD:
+            # 低 Q → 自動拒絕
+            conn.execute(
+                "UPDATE proposals SET status = 'rejected', cruz_verdict = 'auto_rejected_q<0.3' WHERE id = ?",
+                (pid,)
+            )
+            rejected += 1
+
+        # 中間的或核心檔案 → 不動，留 pending
+
+    conn.commit()
+
+    remaining = conn.execute("SELECT COUNT(*) FROM proposals WHERE status = 'pending'").fetchone()[0]
+    conn.close()
+
+    return {"approved": approved, "rejected": rejected, "remaining_for_cruz": remaining}
+
+
+# ══════════════════════════════════════════════════════════════════
 # 零件 D：失敗反思（GEPA）— 蒸餾失敗的案例 → 改進 pattern
 # ══════════════════════════════════════════════════════════════════
 
@@ -893,12 +963,17 @@ def phase1_tick(beat_n: int = 0) -> dict:
     # 6. Meta-Guideline 更新（Live-Evo）
     mg = update_meta_guidelines()
 
+    # 7. 自動審批（Q≥0.7 自動通過，Q<0.3 自動拒絕，中間的留給 Cruz）
+    auto = auto_approve_reject()
+
     result = {
         "new_rules": d["new_rules"],
         "total_rules": d["total_rules"],
         "new_proposals": p["new_proposals"],
         "total_pending": p["total_pending"],
         "iron_blocked": p.get("iron_blocked", 0),
+        "auto_approved": auto["approved"],
+        "auto_rejected": auto["rejected"],
         "q_updated": q["updated"],
         "deprecated": q["deprecated"],
         "merged": mem["merged"],
