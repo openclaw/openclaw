@@ -71,7 +71,24 @@ export type PluginLoadOptions = {
    */
   preferSetupRuntimeForChannelPlugins?: boolean;
   activate?: boolean;
+  throwOnLoadError?: boolean;
 };
+
+export class PluginLoadFailureError extends Error {
+  readonly pluginIds: string[];
+  readonly registry: PluginRegistry;
+
+  constructor(registry: PluginRegistry) {
+    const failedPlugins = registry.plugins.filter((entry) => entry.status === "error");
+    const summary = failedPlugins
+      .map((entry) => `${entry.id}: ${entry.error ?? "unknown plugin load error"}`)
+      .join("; ");
+    super(`plugin load failed: ${summary}`);
+    this.name = "PluginLoadFailureError";
+    this.pluginIds = failedPlugins.map((entry) => entry.id);
+    this.registry = registry;
+  }
+}
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
 const registryCache = new Map<string, PluginRegistry>();
@@ -104,8 +121,20 @@ function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string
   return params.modulePath ?? fileURLToPath(params.moduleUrl ?? import.meta.url);
 }
 
-const resolvePluginSdkAlias = (): string | null =>
-  resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
+const resolvePluginSdkAlias = (params: LoaderModuleResolveParams = {}): string | null =>
+  resolvePluginSdkAliasFile({
+    srcFile: "root-alias.cjs",
+    distFile: "root-alias.cjs",
+    ...params,
+  });
+
+function buildPluginLoaderAliasMap(modulePath: string): Record<string, string> {
+  const pluginSdkAlias = resolvePluginSdkAlias({ modulePath });
+  return {
+    ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
+    ...resolvePluginSdkScopedAliasMap({ modulePath }),
+  };
+}
 
 function resolvePluginRuntimeModulePath(params: LoaderModuleResolveParams = {}): string | null {
   try {
@@ -138,6 +167,7 @@ function resolvePluginRuntimeModulePath(params: LoaderModuleResolveParams = {}):
 
 export const __testing = {
   buildPluginLoaderJitiOptions,
+  buildPluginLoaderAliasMap,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
   resolvePluginSdkScopedAliasMap,
@@ -398,6 +428,19 @@ function recordPluginError(params: {
 
 function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]) {
   diagnostics.push(...append);
+}
+
+function maybeThrowOnPluginLoadError(
+  registry: PluginRegistry,
+  throwOnLoadError: boolean | undefined,
+): void {
+  if (!throwOnLoadError) {
+    return;
+  }
+  if (!registry.plugins.some((entry) => entry.status === "error")) {
+    return;
+  }
+  throw new PluginLoadFailureError(registry);
 }
 
 type PathMatcher = {
@@ -704,18 +747,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   }
 
   // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
-  const jitiLoaders = new Map<boolean, ReturnType<typeof createJiti>>();
+  const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
   const getJiti = (modulePath: string) => {
     const tryNative = shouldPreferNativeJiti(modulePath);
-    const cached = jitiLoaders.get(tryNative);
+    const aliasMap = buildPluginLoaderAliasMap(modulePath);
+    const cacheKey = JSON.stringify({
+      tryNative,
+      aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+    });
+    const cached = jitiLoaders.get(cacheKey);
     if (cached) {
       return cached;
     }
-    const pluginSdkAlias = resolvePluginSdkAlias();
-    const aliasMap = {
-      ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-      ...resolvePluginSdkScopedAliasMap(),
-    };
     const loader = createJiti(import.meta.url, {
       ...buildPluginLoaderJitiOptions(aliasMap),
       // Source .ts runtime shims import sibling ".js" specifiers that only exist
@@ -724,7 +767,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       // loading for the canonical built module graph.
       tryNative,
     });
-    jitiLoaders.set(tryNative, loader);
+    jitiLoaders.set(cacheKey, loader);
     return loader;
   };
 
@@ -1239,6 +1282,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     logger,
     env,
   });
+
+  maybeThrowOnPluginLoadError(registry, options.throwOnLoadError);
 
   if (cacheEnabled) {
     setCachedPluginRegistry(cacheKey, registry);

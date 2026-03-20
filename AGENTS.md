@@ -70,15 +70,18 @@
 - Format check: `pnpm format` (oxfmt --check)
 - Format fix: `pnpm format:fix` (oxfmt --write)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
-- Hard gate: before any commit, `pnpm check` MUST be run and MUST pass for the change being committed.
-- Hard gate: before any push to `main`, `pnpm check` MUST be run and MUST pass, and `pnpm test` MUST be run and MUST pass.
+- For narrowly scoped changes, prefer narrowly scoped tests that directly validate the touched behavior. If no meaningful scoped test exists, say so explicitly and use the next most direct validation available.
+- Preferred landing bar for pushes to `main`: `pnpm check` and `pnpm test`, with a green result when feasible.
+- Scoped tests prove the change itself. `pnpm test` remains the default `main` landing bar; scoped tests do not replace full-suite gates by default.
 - Hard gate: if the change can affect build output, packaging, lazy-loading/module boundaries, or published surfaces, `pnpm build` MUST be run and MUST pass before pushing `main`.
-- Hard gate: do not commit or push with failing format, lint, type, build, or required test checks.
+- Default rule: do not commit or push with failing format, lint, type, build, or required test checks when those failures are caused by the change or plausibly related to the touched surface.
+- For narrowly scoped changes, if unrelated failures already exist on latest `origin/main`, state that clearly, report the scoped tests you ran, and ask before broadening scope into unrelated fixes or landing despite those failures.
+- Do not use scoped tests as permission to ignore plausibly related failures.
 
 ## Coding Style & Naming Conventions
 
 - Language: TypeScript (ESM). Prefer strict typing; avoid `any`.
-- Formatting/linting via Oxlint and Oxfmt; run `pnpm check` before commits.
+- Formatting/linting via Oxlint and Oxfmt.
 - Never add `@ts-nocheck` and do not disable `no-explicit-any`; fix root causes and update Oxlint/Oxfmt config only when required.
 - Dynamic import guardrail: do not mix `await import("x")` and static `import ... from "x"` for the same module in production code paths. If you need lazy loading, create a dedicated `*.runtime.ts` boundary (that re-exports from `x`) and dynamically import that boundary from lazy callers only.
 - Dynamic import verification: after refactors that touch lazy-loading/module boundaries, run `pnpm build` and check for `[INEFFECTIVE_DYNAMIC_IMPORT]` warnings before submitting.

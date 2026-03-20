@@ -1,6 +1,5 @@
 ---
 title: "Configuration Reference"
-description: "Complete field-by-field reference for ~/.openclaw/openclaw.json"
 summary: "Complete reference for every OpenClaw config key, defaults, and channel settings"
 read_when:
   - You need exact field-level config semantics or defaults
@@ -1019,7 +1018,7 @@ Periodic heartbeat runs.
         identifierPolicy: "strict", // strict | off | custom
         identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
         postCompactionSections: ["Session Startup", "Red Lines"], // [] disables reinjection
-        model: "openrouter/anthropic/claude-sonnet-4-5", // optional compaction-only model override
+        model: "openrouter/anthropic/claude-sonnet-4-6", // optional compaction-only model override
         memoryFlush: {
           enabled: true,
           softThresholdTokens: 6000,

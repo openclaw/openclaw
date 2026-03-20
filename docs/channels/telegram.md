@@ -346,7 +346,13 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     1. `/pair` generates setup code
     2. paste code in iOS app
-    3. `/pair approve` approves latest pending request
+    3. `/pair pending` lists pending requests (including role/scopes)
+    4. approve the request:
+       - `/pair approve <requestId>` for explicit approval
+       - `/pair approve` when there is only one pending request
+       - `/pair approve latest` for most recent
+
+    If a device retries with changed auth details (for example role/scopes/public key), the previous pending request is superseded and the new request uses a different `requestId`. Re-run `/pair pending` before approving.
 
     More details: [Pairing](/channels/pairing#pair-via-telegram-recommended-for-ios).
 

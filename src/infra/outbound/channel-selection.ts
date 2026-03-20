@@ -188,7 +188,7 @@ export async function resolveMessageChannelSelection(params: {
   if (fallback) {
     return {
       channel: fallback,
-      configured: await listConfiguredMessageChannels(params.cfg),
+      configured: [],
       source: "tool-context-fallback",
     };
   }
