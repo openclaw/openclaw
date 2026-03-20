@@ -57,7 +57,60 @@ function parseModelIds(input: string): string[] {
   return Array.from(new Set(parsed));
 }
 
-function buildModelDefinition(modelId: string) {
+// Model info returned by LiteLLM /v1/model/info endpoint
+type LiteLLMModelInfo = {
+  data?: Array<{
+    model_name?: string;
+    model_info?: {
+      max_input_tokens?: number;
+      max_output_tokens?: number;
+    };
+  }>;
+};
+
+/**
+ * Query the proxy's /v1/model/info endpoint (LiteLLM-compatible) to discover
+ * actual context window and max output tokens for each model. Falls back to
+ * defaults when the endpoint is unavailable or returns incomplete data.
+ */
+async function fetchModelInfoMap(
+  baseUrl: string,
+): Promise<Map<string, { contextWindow: number; maxTokens: number }>> {
+  const result = new Map<string, { contextWindow: number; maxTokens: number }>();
+  try {
+    const url = `${baseUrl}/model/info`;
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      return result;
+    }
+    const data = (await response.json()) as LiteLLMModelInfo;
+    for (const entry of data.data ?? []) {
+      const name = entry.model_name;
+      const info = entry.model_info;
+      if (!name || !info) continue;
+
+      const contextWindow = info.max_input_tokens;
+      const maxTokens = info.max_output_tokens;
+      if (typeof contextWindow === "number" || typeof maxTokens === "number") {
+        result.set(name, {
+          contextWindow: typeof contextWindow === "number" ? contextWindow : DEFAULT_CONTEXT_WINDOW,
+          maxTokens: typeof maxTokens === "number" ? maxTokens : DEFAULT_MAX_TOKENS,
+        });
+      }
+    }
+  } catch {
+    // Proxy might not support /model/info — fall back to defaults silently
+  }
+  return result;
+}
+
+function buildModelDefinition(
+  modelId: string,
+  contextWindow: number = DEFAULT_CONTEXT_WINDOW,
+  maxTokens: number = DEFAULT_MAX_TOKENS,
+) {
   return {
     id: modelId,
     name: modelId,
@@ -65,8 +118,8 @@ function buildModelDefinition(modelId: string) {
     reasoning: false,
     input: ["text", "image"] as Array<"text" | "image">,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    contextWindow,
+    maxTokens,
   };
 }
 
@@ -104,6 +157,10 @@ export default definePluginEntry({
             const defaultModelId = modelIds[0] ?? DEFAULT_MODEL_IDS[0];
             const defaultModelRef = `copilot-proxy/${defaultModelId}`;
 
+            // Query proxy for actual model capabilities (context window, max tokens).
+            // Falls back to defaults if the endpoint is unavailable.
+            const modelInfoMap = await fetchModelInfoMap(baseUrl);
+
             return {
               profiles: [
                 {
@@ -123,7 +180,14 @@ export default definePluginEntry({
                       apiKey: DEFAULT_API_KEY,
                       api: "openai-completions",
                       authHeader: false,
-                      models: modelIds.map((modelId) => buildModelDefinition(modelId)),
+                      models: modelIds.map((modelId) => {
+                        const info = modelInfoMap.get(modelId);
+                        return buildModelDefinition(
+                          modelId,
+                          info?.contextWindow,
+                          info?.maxTokens,
+                        );
+                      }),
                     },
                   },
                 },

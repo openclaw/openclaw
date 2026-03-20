@@ -4,7 +4,13 @@ import { LITELLM_DEFAULT_MODEL_REF, setLitellmApiKey } from "../plugins/provider
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import { ensureApiKeyFromOptionEnvOrPrompt } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
-import { applyLitellmConfig, applyLitellmProviderConfig } from "./onboard-auth.config-litellm.js";
+import {
+  applyLitellmConfig,
+  applyLitellmProviderConfig,
+  fetchLitellmModelInfo,
+  LITELLM_BASE_URL,
+  LITELLM_DEFAULT_MODEL_ID,
+} from "./onboard-auth.config-litellm.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
 type ApiKeyProviderConfigApplier = (
@@ -86,10 +92,23 @@ export async function applyLiteLlmApiKeyProvider({
     });
   }
   setConfig(nextConfig);
+
+  // Fetch actual model capabilities from LiteLLM before applying config.
+  // This ensures contextWindow and maxTokens reflect the real model (e.g. 1M
+  // for claude-opus-4.6-1m) instead of the 128k default.
+  const existingProvider = nextConfig.models?.providers?.litellm as
+    | { baseUrl?: unknown }
+    | undefined;
+  const baseUrl =
+    typeof existingProvider?.baseUrl === "string"
+      ? existingProvider.baseUrl.trim()
+      : LITELLM_BASE_URL;
+  const modelInfo = await fetchLitellmModelInfo(baseUrl, LITELLM_DEFAULT_MODEL_ID);
+
   await applyProviderDefaultModel({
     defaultModel: LITELLM_DEFAULT_MODEL_REF,
-    applyDefaultConfig: applyLitellmConfig,
-    applyProviderConfig: applyLitellmProviderConfig,
+    applyDefaultConfig: (cfg) => applyLitellmConfig(cfg, modelInfo),
+    applyProviderConfig: (cfg) => applyLitellmProviderConfig(cfg, modelInfo),
     noteDefault: LITELLM_DEFAULT_MODEL_REF,
   });
   return { config: getConfig(), agentModelOverride: getAgentModelOverride() };
