@@ -54,6 +54,7 @@ import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -67,12 +68,12 @@ import { clearSessionAuthProfileOverride } from "./auth-profiles/session-overrid
 import { resolveBootstrapWarningSignaturesSeen } from "./bootstrap-budget.js";
 import { runCliAgent } from "./cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "./cli-session.js";
-import { resolveContextTokensForModel } from "./context.js";
 import { deliverAgentCommandResult } from "./command/delivery.js";
 import { resolveAgentRunContext } from "./command/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./command/session-store.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
+import { resolveContextTokensForModel } from "./context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { FailoverError } from "./failover-error.js";
 import { formatAgentInternalEventsForPrompt } from "./internal-events.js";
@@ -98,7 +99,6 @@ import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { hasNonzeroUsage } from "./usage.js";
 import { ensureAgentWorkspace } from "./workspace.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 
 type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
