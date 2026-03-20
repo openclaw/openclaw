@@ -83,6 +83,8 @@ type CreateLaneTextDelivererParams = {
   deletePreviewMessage: (messageId: number) => Promise<void>;
   log: (message: string) => void;
   markDelivered: () => void;
+  /** Called when a preview-finalized or preview-retained path delivers without sendPayload. */
+  onPreviewDelivered?: (content: string) => void;
 };
 
 type DeliverLaneTextParams = {
@@ -427,10 +429,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         previewTextSnapshot: archivedPreview.textSnapshot,
       });
       if (finalized === "edited") {
+        params.onPreviewDelivered?.(text);
         return "preview-finalized";
       }
       if (finalized === "retained") {
         params.retainPreviewOnCleanupByLane.answer = true;
+        params.onPreviewDelivered?.(text);
         return "preview-retained";
       }
     }
@@ -506,6 +510,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           });
           if (materialized) {
             markActivePreviewComplete(laneName);
+            params.onPreviewDelivered?.(text);
             return "preview-finalized";
           }
         }
@@ -520,10 +525,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         });
         if (finalized === "edited") {
           markActivePreviewComplete(laneName);
+          params.onPreviewDelivered?.(text);
           return "preview-finalized";
         }
         if (finalized === "retained") {
           markActivePreviewComplete(laneName);
+          params.onPreviewDelivered?.(text);
           return "preview-retained";
         }
       } else if (!hasMedia && !payload.isError && text.length > params.draftMaxChars) {

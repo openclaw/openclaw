@@ -44,6 +44,7 @@ function createHarness(params?: {
   const deletePreviewMessage = vi.fn().mockResolvedValue(undefined);
   const log = vi.fn();
   const markDelivered = vi.fn();
+  const onPreviewDelivered = vi.fn();
   const activePreviewLifecycleByLane = { answer: "transient", reasoning: "transient" } as const;
   const retainPreviewOnCleanupByLane = { answer: false, reasoning: false } as const;
   const archivedAnswerPreviews: Array<{
@@ -66,6 +67,7 @@ function createHarness(params?: {
     deletePreviewMessage,
     log,
     markDelivered,
+    onPreviewDelivered,
   });
 
   return {
@@ -82,6 +84,7 @@ function createHarness(params?: {
     deletePreviewMessage,
     log,
     markDelivered,
+    onPreviewDelivered,
     archivedAnswerPreviews,
   };
 }
@@ -551,5 +554,66 @@ describe("createLaneTextDeliverer", () => {
       expect.objectContaining({ text: "Final with media", mediaUrl: "file:///tmp/example.png" }),
     );
     expect(harness.deletePreviewMessage).toHaveBeenCalledWith(4444);
+  });
+
+  // ── onPreviewDelivered hook emission tests ───────────────────────────────
+
+  it("calls onPreviewDelivered when preview is finalized via edit", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+
+    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
+
+    expect(result).toBe("preview-finalized");
+    expect(harness.onPreviewDelivered).toHaveBeenCalledWith(HELLO_FINAL);
+  });
+
+  it("calls onPreviewDelivered when preview is retained on ambiguous error", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.editPreview.mockRejectedValue(new Error("500: Internal Server Error"));
+
+    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
+
+    expect(result).toBe("preview-retained");
+    expect(harness.onPreviewDelivered).toHaveBeenCalledWith(HELLO_FINAL);
+  });
+
+  it("calls onPreviewDelivered when DM draft preview is materialized", async () => {
+    const answerStream = createTestDraftStream({ previewMode: "draft", messageId: 321 });
+    answerStream.materialize.mockResolvedValue(321);
+    answerStream.update.mockImplementation(() => {});
+    const harness = createHarness({
+      answerStream: answerStream as DraftLaneState["stream"],
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Hello final",
+    });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Hello final",
+      payload: { text: "Hello final" },
+      infoKind: "final",
+    });
+
+    expect(result).toBe("preview-finalized");
+    expect(harness.onPreviewDelivered).toHaveBeenCalledWith("Hello final");
+  });
+
+  it("calls onPreviewDelivered when archived preview is finalized", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    seedArchivedAnswerPreview(harness);
+
+    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
+
+    expect(result).toBe("preview-finalized");
+    expect(harness.onPreviewDelivered).toHaveBeenCalledWith(HELLO_FINAL);
+  });
+
+  it("does not call onPreviewDelivered when falling back to sendPayload", async () => {
+    const harness = createHarness();
+
+    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
+
+    expect(result).toBe("sent");
+    expect(harness.onPreviewDelivered).not.toHaveBeenCalled();
   });
 });

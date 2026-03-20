@@ -491,7 +491,7 @@ async function maybePinFirstDeliveredMessage(params: {
   }
 }
 
-function emitMessageSentHooks(params: {
+export function emitMessageSentHooks(params: {
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
   enabled: boolean;
   sessionKeyForInternalHooks?: string;
