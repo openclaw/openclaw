@@ -10,7 +10,7 @@ read_when:
 # Plugin SDK Migration
 
 OpenClaw is migrating from a single monolithic `openclaw/plugin-sdk/compat` barrel
-to **focused subpath imports** (`openclaw/plugin-sdk/<subpath>`). This page explains
+to **focused subpath imports** (`openclaw/plugin-sdk/\<subpath\>`). This page explains
 what changed, why, and how to migrate.
 
 ## Why this change
@@ -31,7 +31,7 @@ If your plugin imports from the compat barrel, you will see:
 
 ```
 [OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED] Warning: openclaw/plugin-sdk/compat is
-deprecated for new plugins. Migrate to focused openclaw/plugin-sdk/<subpath> imports.
+deprecated for new plugins. Migrate to focused openclaw/plugin-sdk/\<subpath\> imports.
 ```
 
 The compat barrel still works at runtime. This is a deprecation warning, not an
@@ -133,7 +133,7 @@ export { MyConfig } from "./src/config.js";
 export { MyRuntime } from "./src/runtime.js";
 ```
 
-Never import your own extension back through `openclaw/plugin-sdk/<your-extension>`
+Never import your own extension back through `openclaw/plugin-sdk/\<your-extension\>`
 from production files. That path is for external consumers only. See
 [Building Extensions](/plugins/building-extensions#step-4-use-local-barrels-for-internal-imports).
 
