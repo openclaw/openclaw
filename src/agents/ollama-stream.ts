@@ -42,6 +42,7 @@ interface OllamaChatRequest {
   model: string;
   messages: OllamaChatMessage[];
   stream: boolean;
+  think?: boolean;
   tools?: OllamaTool[];
   options?: Record<string, unknown>;
 }
@@ -459,10 +460,18 @@ export function createOllamaStreamFn(
           ollamaOptions.num_predict = options.maxTokens;
         }
 
+        // Determine whether Ollama should use thinking/reasoning mode.
+        // When reasoning is explicitly set via options, respect that; otherwise
+        // fall back to the model-level reasoning flag.
+        const thinkingLevel = options?.reasoning;
+        const think =
+          thinkingLevel !== undefined ? (thinkingLevel as string) !== "off" : model.reasoning;
+
         const body: OllamaChatRequest = {
           model: model.id,
           messages: ollamaMessages,
           stream: true,
+          think,
           ...(ollamaTools.length > 0 ? { tools: ollamaTools } : {}),
           options: ollamaOptions,
         };
