@@ -417,7 +417,8 @@ export async function handleFeishuMessage(params: {
       isThreadReply:
         groupSession?.threadReply &&
         (groupSession?.groupSessionScope === "group_topic" ||
-          groupSession?.groupSessionScope === "group_topic_sender"),
+          groupSession?.groupSessionScope === "group_topic_sender" ||
+          groupSession?.replyInThread),
       globalConfig: feishuCfg,
       groupConfig,
     }));
