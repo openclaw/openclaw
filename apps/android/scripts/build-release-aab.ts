@@ -7,7 +7,28 @@ import { fileURLToPath } from "node:url";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const androidDir = join(scriptDir, "..");
 const buildGradlePath = join(androidDir, "app", "build.gradle.kts");
-const bundlePath = join(androidDir, "app", "build", "outputs", "bundle", "release", "app-release.aab");
+const releaseOutputDir = join(androidDir, "build", "release-bundles");
+
+const releaseVariants = [
+  {
+    flavorName: "play",
+    gradleTask: ":app:bundlePlayRelease",
+    bundlePath: join(androidDir, "app", "build", "outputs", "bundle", "playRelease", "app-play-release.aab"),
+  },
+  {
+    flavorName: "third-party",
+    gradleTask: ":app:bundleThirdPartyRelease",
+    bundlePath: join(
+      androidDir,
+      "app",
+      "build",
+      "outputs",
+      "bundle",
+      "thirdPartyRelease",
+      "app-thirdParty-release.aab",
+    ),
+  },
+] as const;
 
 type VersionState = {
   versionName: string;
@@ -88,6 +109,15 @@ async function verifyBundleSignature(path: string): Promise<void> {
   await $`jarsigner -verify ${path}`.quiet();
 }
 
+async function copyBundle(sourcePath: string, destinationPath: string): Promise<void> {
+  const sourceFile = Bun.file(sourcePath);
+  if (!(await sourceFile.exists())) {
+    throw new Error(`Signed bundle missing at ${sourcePath}`);
+  }
+
+  await Bun.write(destinationPath, sourceFile);
+}
+
 async function main() {
   const buildGradleFile = Bun.file(buildGradlePath);
   const originalText = await buildGradleFile.text();
@@ -102,24 +132,28 @@ async function main() {
   console.log(`Android versionCode -> ${nextVersion.versionCode}`);
 
   await Bun.write(buildGradlePath, updatedText);
+  await $`mkdir -p ${releaseOutputDir}`;
 
   try {
-    await $`./gradlew :app:bundleRelease`.cwd(androidDir);
+    await $`./gradlew ${releaseVariants[0].gradleTask} ${releaseVariants[1].gradleTask}`.cwd(androidDir);
   } catch (error) {
     await Bun.write(buildGradlePath, originalText);
     throw error;
   }
 
-  const bundleFile = Bun.file(bundlePath);
-  if (!(await bundleFile.exists())) {
-    throw new Error(`Signed bundle missing at ${bundlePath}`);
+  for (const variant of releaseVariants) {
+    const outputPath = join(
+      releaseOutputDir,
+      `openclaw-${nextVersion.versionName}-${variant.flavorName}-release.aab`,
+    );
+
+    await copyBundle(variant.bundlePath, outputPath);
+    await verifyBundleSignature(outputPath);
+    const hash = await sha256Hex(outputPath);
+
+    console.log(`Signed AAB (${variant.flavorName}): ${outputPath}`);
+    console.log(`SHA-256 (${variant.flavorName}): ${hash}`);
   }
-
-  await verifyBundleSignature(bundlePath);
-  const hash = await sha256Hex(bundlePath);
-
-  console.log(`Signed AAB: ${bundlePath}`);
-  console.log(`SHA-256: ${hash}`);
 }
 
 await main();
