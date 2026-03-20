@@ -1,3 +1,15 @@
+/**
+ * @module translator
+ * @security
+ * Translates between the Agentic Control Plane (ACP) protocol and internal
+ * OpenClaw structures. This is a critical trust boundary:
+ *   - MAX_PROMPT_BYTES (2MB) limits prompt size to prevent DoS (CWE-400, GHSA-cxpw-2g23-2vgw)
+ *   - Input validation on all ACP messages before internal dispatch
+ *   - Session lifecycle management with proper cleanup on disconnect
+ *   - Tool call result validation to prevent injection of malformed responses
+ *
+ * Changes here affect the gateway-to-agent communication boundary.
+ */
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import type {
