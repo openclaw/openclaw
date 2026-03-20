@@ -305,6 +305,9 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
           allowFinalSymlinkForUnlink: true,
           allowFinalHardlinkForUnlink: true,
         });
+        if (!sandboxResult.relative) {
+          throw new Error(`Cannot delete root directory itself: ${filePath}`);
+        }
         await fs.rm(sandboxResult.resolved);
         return;
       }

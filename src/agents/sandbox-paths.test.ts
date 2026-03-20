@@ -318,6 +318,17 @@ describe("resolveSandboxPath with additionalRoots", () => {
     ).toThrow(/sandbox/i);
   });
 
+  it("rejects relative additionalRoots entries", () => {
+    expect(() =>
+      resolveSandboxPath({
+        filePath: "/etc/passwd",
+        cwd: "/workspace",
+        root: "/workspace",
+        additionalRoots: ["relative/root"],
+      }),
+    ).toThrow(/allowedRoots entries must be absolute paths/i);
+  });
+
   it("applies tilde expansion for additionalRoots entries", () => {
     const homeDir = os.homedir();
     const result = resolveSandboxPath({

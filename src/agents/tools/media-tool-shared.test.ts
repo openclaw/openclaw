@@ -35,6 +35,15 @@ describe("resolveMediaToolLocalRoots", () => {
     expect(result).toEqual(expect.arrayContaining(["/workspace", "/shared/media"]));
   });
 
+  it("rejects relative allowedRoots when workspaceOnly is true", () => {
+    expect(() =>
+      resolveMediaToolLocalRoots("/workspace", {
+        workspaceOnly: true,
+        allowedRoots: ["relative/media"],
+      }),
+    ).toThrow(/allowedRoots entries must be absolute paths/i);
+  });
+
   it("ignores allowedRoots when workspaceOnly is false", () => {
     const result = resolveMediaToolLocalRoots("/workspace", {
       workspaceOnly: false,

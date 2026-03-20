@@ -217,6 +217,28 @@ describe("applyPatch", () => {
     });
   });
 
+  it("rejects deleting an allowlisted root directory itself", async () => {
+    await withTempDir(async (dir) => {
+      const allowedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-apply-patch-root-"));
+      const patch = `*** Begin Patch
+*** Delete File: ${allowedDir}
+*** End Patch`;
+
+      try {
+        await expect(
+          applyPatch(patch, {
+            cwd: dir,
+            workspaceOnly: true,
+            allowedRoots: [allowedDir],
+          }),
+        ).rejects.toThrow(/Cannot delete root directory itself/);
+        await expect(fs.stat(allowedDir)).resolves.toBeDefined();
+      } finally {
+        await fs.rm(allowedDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("rejects symlink escape attempts by default", async () => {
     // File symlinks require SeCreateSymbolicLinkPrivilege on Windows.
     if (process.platform === "win32") {
@@ -305,7 +327,7 @@ describe("applyPatch", () => {
     });
   });
 
-  it("allows symlinks that resolve within cwd by default", async () => {
+  it("rejects final symlink targets even when they resolve within cwd", async () => {
     // File symlinks require SeCreateSymbolicLinkPrivilege on Windows.
     if (process.platform === "win32") {
       return;
@@ -323,9 +345,11 @@ describe("applyPatch", () => {
 +updated
 *** End Patch`;
 
-      await applyPatch(patch, { cwd: dir });
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+        /symlink|invalid-path|regular file under root/i,
+      );
       const contents = await fs.readFile(target, "utf8");
-      expect(contents).toBe("updated\n");
+      expect(contents).toBe("initial\n");
     });
   });
 

@@ -66,6 +66,9 @@ function normalizeMediaAllowedRoot(root: string): string {
   if (normalized.startsWith("~/") || normalized.startsWith("~\\")) {
     return path.join(os.homedir(), normalized.slice(2));
   }
+  if (!path.isAbsolute(normalized)) {
+    throw new Error(`allowedRoots entries must be absolute paths: ${root}`);
+  }
   return path.resolve(normalized);
 }
 

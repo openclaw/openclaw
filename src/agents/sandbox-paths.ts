@@ -65,6 +65,9 @@ export function resolveSandboxPath(params: {
   if (params.additionalRoots?.length) {
     for (const extraRoot of params.additionalRoots) {
       const expandedExtra = expandPath(extraRoot);
+      if (!path.isAbsolute(expandedExtra)) {
+        throw new Error(`allowedRoots entries must be absolute paths: ${extraRoot}`);
+      }
       const resolvedExtra = path.resolve(expandedExtra);
       const extraRelative = path.relative(resolvedExtra, resolved);
       if (
