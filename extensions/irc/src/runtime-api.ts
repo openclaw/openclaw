@@ -1,1 +1,1 @@
-export * from "../../../src/plugin-sdk/irc.js";
+export * from "openclaw/plugin-sdk/irc";
