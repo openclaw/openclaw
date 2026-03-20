@@ -1,3 +1,15 @@
+/**
+ * @module safe-regex
+ * @security
+ * Prevents ReDoS (Regular Expression Denial of Service) by statically
+ * analyzing regex patterns for nested repetition before compilation.
+ *   - tokenizePattern: converts raw regex source to a token stream
+ *   - analyzeTokensForNestedRepetition: detects patterns like (a+)+ or (a|b)*+
+ *   - compileSafeRegexDetailed: compiles only safe patterns; caches up to 256 entries
+ *   - testRegexWithBoundedInput: limits input window to prevent catastrophic backtracking
+ *
+ * Used by config-regex.ts and redact.ts to safely compile operator-provided patterns.
+ */
 type QuantifierRead = {
   consumed: number;
   minRepeat: number;
