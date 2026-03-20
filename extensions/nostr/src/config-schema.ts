@@ -2,6 +2,32 @@ import { AllowFromListSchema, DmPolicySchema } from "openclaw/plugin-sdk/channel
 import { z } from "zod";
 import { MarkdownConfigSchema, buildChannelConfigSchema } from "../api.js";
 
+function isLocalWebSocketHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+}
+
+/**
+ * Validates Nostr relay WebSocket URLs.
+ * Allows secure remote relays over wss:// and local-development relays over ws://.
+ * Rejects http(s), javascript, data, file, and other non-WebSocket protocols.
+ */
+const safeRelayUrlSchema = z
+  .string()
+  .url()
+  .refine(
+    (url) => {
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol === "wss:") return true;
+        if (parsed.protocol === "ws:") return isLocalWebSocketHost(parsed.hostname);
+        return false;
+      } catch {
+        return false;
+      }
+    },
+    { message: "Relay URL must use wss://, or ws:// for localhost development" },
+  );
+
 /**
  * Validates https:// URLs only (no javascript:, data:, file:, etc.)
  */
@@ -72,7 +98,7 @@ export const NostrConfigSchema = z.object({
   privateKey: z.string().optional(),
 
   /** WebSocket relay URLs to connect to */
-  relays: z.array(z.string()).optional(),
+  relays: z.array(safeRelayUrlSchema).optional(),
 
   /** DM access policy: pairing, allowlist, open, or disabled */
   dmPolicy: DmPolicySchema.optional(),
