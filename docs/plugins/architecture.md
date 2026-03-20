@@ -1,17 +1,23 @@
 ---
-summary: "Plugin architecture internals: capability model, ownership, contracts, load pipeline, runtime helpers"
+summary: "Plugin internals: capability model, ownership, contracts, load pipeline, and runtime helpers"
 read_when:
   - Building or debugging native OpenClaw plugins
   - Understanding the plugin capability model or ownership boundaries
   - Working on the plugin load pipeline or registry
   - Implementing provider runtime hooks or channel plugins
-title: "Plugin Architecture"
+title: "Plugin Internals"
+sidebarTitle: "Internals"
 ---
 
-# Plugin Architecture
+# Plugin Internals
 
-This page covers the internal architecture of the OpenClaw plugin system. For
-user-facing setup, discovery, and configuration, see [Plugins](/tools/plugin).
+<Info>
+  This page is for **plugin developers and contributors**. If you just want to
+  install and use plugins, see [Plugins](/tools/plugin). If you want to build
+  a plugin, see [Building Plugins](/plugins/building-plugins).
+</Info>
+
+This page covers the internal architecture of the OpenClaw plugin system.
 
 ## Public capability model
 
