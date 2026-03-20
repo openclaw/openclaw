@@ -111,6 +111,7 @@ async function runThreadBoundPreflight(params: {
   threadBinding: import("../../../../src/infra/outbound/session-binding-service.js").SessionBindingRecord;
   discordConfig: DiscordConfig;
   registerBindingAdapter?: boolean;
+  guildEntries?: Parameters<typeof preflightDiscordMessage>[0]["guildEntries"];
 }) {
   if (params.registerBindingAdapter) {
     registerSessionBindingAdapter({
@@ -139,6 +140,7 @@ async function runThreadBoundPreflight(params: {
       }),
       client,
     }),
+    guildEntries: params.guildEntries,
     threadBindings: {
       getByThreadId: (id: string) => (id === params.threadId ? params.threadBinding : undefined),
     } as import("./thread-bindings.js").ThreadBindingManager,
@@ -376,6 +378,87 @@ describe("preflightDiscordMessage", () => {
 
     expect(result).not.toBeNull();
     expect(result?.boundSessionKey).toBe(threadBinding.targetSessionKey);
+  });
+
+  it("keeps requireMention enabled for ACP-bound threads", async () => {
+    const threadBinding = createThreadBinding({
+      targetKind: "session",
+      targetSessionKey: "agent:main:acp:discord-thread-mention-1",
+    });
+    const threadId = "thread-mention-1";
+    const parentId = "channel-parent-mention-1";
+    const message = createDiscordMessage({
+      id: "m-thread-mention-1",
+      channelId: threadId,
+      content: "hello there",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "alice",
+      },
+    });
+
+    const result = await runThreadBoundPreflight({
+      threadId,
+      parentId,
+      message,
+      threadBinding,
+      discordConfig: {} as DiscordConfig,
+      registerBindingAdapter: true,
+      guildEntries: {
+        "guild-1": {
+          channels: {
+            [parentId]: {
+              allow: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps mention bypass for subagent-bound threads", async () => {
+    const threadBinding = createThreadBinding({
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:discord-thread-mention-2",
+    });
+    const threadId = "thread-mention-2";
+    const parentId = "channel-parent-mention-2";
+    const message = createDiscordMessage({
+      id: "m-thread-mention-2",
+      channelId: threadId,
+      content: "hello there",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "alice",
+      },
+    });
+
+    const result = await runThreadBoundPreflight({
+      threadId,
+      parentId,
+      message,
+      threadBinding,
+      discordConfig: {} as DiscordConfig,
+      registerBindingAdapter: true,
+      guildEntries: {
+        "guild-1": {
+          channels: {
+            [parentId]: {
+              allow: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.shouldRequireMention).toBe(false);
   });
 
   it("drops hydrated bound-thread webhook echoes after fetching an empty payload", async () => {

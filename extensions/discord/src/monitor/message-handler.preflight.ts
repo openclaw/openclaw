@@ -107,6 +107,19 @@ export function resolvePreflightMentionRequirement(params: {
   return !params.bypassMentionRequirement;
 }
 
+function shouldBypassMentionRequirementForBinding(
+  binding?: SessionBindingRecord | null,
+  isBotAuthor = false,
+): boolean {
+  if (!binding) {
+    return false;
+  }
+  if (binding.targetKind === "subagent") {
+    return true;
+  }
+  return isBotAuthor;
+}
+
 export function shouldIgnoreBoundThreadWebhookMessage(params: {
   accountId?: string;
   threadId?: string;
@@ -499,7 +512,10 @@ export async function preflightDiscordMessage(
   });
   const boundAgentId = boundSessionKey ? effectiveRoute.agentId : undefined;
   const isBoundThreadSession = Boolean(threadBinding && earlyThreadChannel);
-  const bypassMentionRequirement = isBoundThreadSession || Boolean(configuredBinding);
+  const bypassMentionRequirement =
+    (isBoundThreadSession &&
+      shouldBypassMentionRequirementForBinding(threadBinding, Boolean(author.bot))) ||
+    shouldBypassMentionRequirementForBinding(configuredBinding?.record, Boolean(author.bot));
   if (
     isBoundThreadBotSystemMessage({
       isBoundThreadSession,
