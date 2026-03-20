@@ -1,6 +1,6 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-19
+Last updated: 2026-03-20
 Owner: consumer execution team
 Status: Active
 
@@ -119,6 +119,28 @@ Worktree A validation notes (2026-03-19):
   - consumer runtime socket created at `~/Library/Application Support/OpenClaw Consumer/.openclaw/exec-approvals.sock`
   - consumer app held no TCP listener and did not take over the founder gateway launch label
 - Gateway auto-bootstrap on consumer port `19001` was not exercised in Worktree A; that remains Worktree B scope.
+
+Worktree A follow-up notes (2026-03-20):
+
+- Consumer settings were reduced again after live review:
+  - `General` now keeps only active, launch-at-login, dock icon, advanced toggle, and quit.
+  - `Permissions` now defaults to a simple recommended checklist plus an optional disclosure for non-core permissions.
+  - `About` now uses consumer branding/copy instead of the upstream project presentation.
+- Consumer permission UX now reflects current macOS behavior more honestly:
+  - recommended set includes `Screen Recording`, `Accessibility`, `Notifications`, `Automation`, `Microphone`, and `Location`
+  - optional set currently includes `Camera` and `Speech Recognition`
+  - Accessibility and Screen Recording may still require an app restart before status flips to granted
+  - Screen Recording now opens the relevant System Settings pane directly because the native prompt is inconsistent on recent macOS releases
+  - permission requests now fall back to the relevant System Settings panes when prompts do not appear
+- Manual consumer-app check status:
+  - Screen Recording flow now works and opens the expected System Settings path
+  - Accessibility can be granted in System Settings, but the app still sometimes fails to reflect the granted state reliably even after refresh/restart guidance
+- Remaining Worktree A cleanup before considering this surface final:
+  - [ ] fix Accessibility granted-state detection / refresh behavior in the consumer app
+  - [ ] verify the new `Grant recommended permissions` flow manually end to end on a clean machine/profile
+  - [ ] verify Screen Recording fallback opens the correct System Settings pane on a fresh machine/profile
+  - [ ] decide whether consumer onboarding needs an inline accessibility help link/video for MVP
+  - [ ] decide whether `Show Dock icon` belongs in default General or should move behind Advanced
 
 ### Phase A: Branch convergence (blocking)
 

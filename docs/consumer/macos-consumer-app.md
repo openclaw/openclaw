@@ -33,6 +33,33 @@ The consumer app defaults to:
 
 The goal is to reduce cognitive overload without deleting advanced capabilities yet.
 
+Current default consumer settings shape:
+
+- `General`: active, launch at login, dock icon, advanced toggle, quit
+- `Permissions`: a guided recommended-permissions flow plus an optional section for non-core permissions
+- `About`: consumer branding, version, website, documentation
+
+Current recommended permission set:
+
+- Screen Recording
+- Accessibility
+- Notifications
+- Automation (AppleScript)
+- Microphone
+- Location
+
+Optional permission set:
+
+- Camera
+- Speech Recognition
+
+macOS caveat:
+
+- Accessibility and Screen Recording can remain visually pending until the app restarts, even after the user grants them in System Settings.
+- Screen Recording may open System Settings directly instead of showing an in-app prompt.
+- The consumer permissions screen should explain this plainly and offer a restart path instead of showing only a stale pending state.
+- Current known gap: the Screen Recording fallback behaves as expected, but Accessibility granted-state detection is still not fully reliable in the consumer app and needs follow-up.
+
 ## Safe local testing
 
 Package the consumer app with a separate app identity:

@@ -7,8 +7,37 @@ struct PermissionsSettings: View {
     let status: [Capability: Bool]
     let refresh: () async -> Void
     let showOnboarding: () -> Void
+    @AppStorage(showAdvancedSettingsKey) private var showAdvancedSettings = false
+    @State private var requestingRecommended = false
+    @State private var showOptionalPermissions = false
+
+    private static let consumerRecommendedCapabilities: [Capability] = [
+        .screenRecording,
+        .accessibility,
+        .notifications,
+        .appleScript,
+        .microphone,
+        .location,
+    ]
+
+    private static let consumerOptionalCapabilities: [Capability] = [
+        .camera,
+        .speechRecognition,
+    ]
+
+    private var isConsumer: Bool {
+        AppFlavor.current.isConsumer
+    }
 
     var body: some View {
+        if self.isConsumer && !self.showAdvancedSettings {
+            self.consumerBody
+        } else {
+            self.operatorBody
+        }
+    }
+
+    private var operatorBody: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 SystemRunSettingsView()
@@ -31,6 +60,108 @@ struct PermissionsSettings: View {
             .padding(.vertical, 12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var consumerBody: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Grant the permissions OpenClaw needs to help on this Mac.")
+                        .font(.title3.weight(.semibold))
+                    Text("Click once to go through the recommended permissions. Accessibility and Screen Recording may open System Settings instead of showing a prompt.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack(spacing: 10) {
+                    Button {
+                        Task { await self.grantRecommendedPermissions() }
+                    } label: {
+                        if self.requestingRecommended {
+                            Label("Requesting permissions…", systemImage: "hourglass")
+                        } else {
+                            Label("Grant recommended permissions", systemImage: "checkmark.shield")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(self.requestingRecommended)
+
+                    Button {
+                        Task { await self.refreshStatusTransitions() }
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(self.requestingRecommended)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("If Accessibility or Screen Recording still look pending after you enabled them in System Settings, quit and reopen OpenClaw once. macOS can keep those states stale until restart.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Button {
+                        DebugActions.restartApp()
+                    } label: {
+                        Label("Restart OpenClaw", systemImage: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(self.requestingRecommended)
+                }
+
+                PermissionStatusList(
+                    status: self.status,
+                    capabilities: Self.consumerRecommendedCapabilities,
+                    showRefreshButton: false,
+                    refresh: self.refresh)
+                    .padding(.horizontal, 2)
+                    .padding(.vertical, 6)
+
+                DisclosureGroup(isExpanded: self.$showOptionalPermissions) {
+                    PermissionStatusList(
+                        status: self.status,
+                        capabilities: Self.consumerOptionalCapabilities,
+                        showRefreshButton: false,
+                        refresh: self.refresh)
+                        .padding(.top, 8)
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("More permissions (optional)")
+                            .font(.body.weight(.semibold))
+                        Text("Needed only for camera capture or voice transcription features.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 16)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @MainActor
+    private func grantRecommendedPermissions() async {
+        guard !self.requestingRecommended else { return }
+        self.requestingRecommended = true
+        defer { self.requestingRecommended = false }
+
+        _ = await PermissionManager.ensure(Self.consumerRecommendedCapabilities, interactive: true)
+        await self.refreshStatusTransitions()
+    }
+
+    @MainActor
+    private func refreshStatusTransitions() async {
+        await self.refresh()
+
+        // Some macOS permission statuses settle after the prompt closes.
+        for delay in [300_000_000, 900_000_000, 1_800_000_000] {
+            try? await Task.sleep(nanoseconds: UInt64(delay))
+            await self.refresh()
+        }
     }
 }
 
@@ -102,12 +233,26 @@ private struct LocationAccessSettings: View {
 
 struct PermissionStatusList: View {
     let status: [Capability: Bool]
+    let capabilities: [Capability]
+    let showRefreshButton: Bool
     let refresh: () async -> Void
     @State private var pendingCapability: Capability?
 
+    init(
+        status: [Capability: Bool],
+        capabilities: [Capability] = Capability.allCases,
+        showRefreshButton: Bool = true,
+        refresh: @escaping () async -> Void)
+    {
+        self.status = status
+        self.capabilities = capabilities
+        self.showRefreshButton = showRefreshButton
+        self.refresh = refresh
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(Capability.allCases, id: \.self) { cap in
+            ForEach(self.capabilities, id: \.self) { cap in
                 PermissionRow(
                     capability: cap,
                     status: self.status[cap] ?? false,
@@ -116,16 +261,18 @@ struct PermissionStatusList: View {
                     Task { await self.handle(cap) }
                 }
             }
-            Button {
-                Task { await self.refresh() }
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+            if self.showRefreshButton {
+                Button {
+                    Task { await self.refresh() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .font(.footnote)
+                .padding(.top, 2)
+                .help("Refresh status")
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .font(.footnote)
-            .padding(.top, 2)
-            .help("Refresh status")
         }
     }
 
@@ -216,7 +363,7 @@ struct PermissionRow: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Request access")
+                    Text(self.pendingHint)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -269,6 +416,17 @@ struct PermissionRow: View {
         case .speechRecognition: "waveform"
         case .camera: "camera"
         case .location: "location"
+        }
+    }
+
+    private var pendingHint: String {
+        switch self.capability {
+        case .accessibility:
+            "Grant or restart"
+        case .screenRecording:
+            "Open System Settings"
+        default:
+            "Request access"
         }
     }
 }

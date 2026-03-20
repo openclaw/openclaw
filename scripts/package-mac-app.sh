@@ -5,14 +5,14 @@ set -euo pipefail
 # Outputs to dist/OpenClaw.app by default, or a custom bundle name when requested.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="${APP_NAME:-OpenClaw}"
+APP_NAME="${APP_NAME:-OpenClaw Consumer}"
 APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_NAME}.app}"
 APP_ROOT="$ROOT_DIR/dist/${APP_BUNDLE_NAME}"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
-BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac.debug}"
-APP_VARIANT="${APP_VARIANT:-standard}"
-URL_SCHEME="${URL_SCHEME:-openclaw}"
+BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.consumer.mac.debug}"
+APP_VARIANT="${APP_VARIANT:-consumer}"
+URL_SCHEME="${URL_SCHEME:-openclaw-consumer}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")

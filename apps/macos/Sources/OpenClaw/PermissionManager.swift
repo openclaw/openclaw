@@ -90,15 +90,23 @@ enum PermissionManager {
                 _ = AXIsProcessTrustedWithOptions(opts)
             }
         }
-        return await MainActor.run { AXIsProcessTrusted() }
+        let updated = await MainActor.run { AXIsProcessTrusted() }
+        if interactive, !updated {
+            await MainActor.run { AccessibilityPermissionHelper.openSettings() }
+        }
+        return updated
     }
 
     private static func ensureScreenRecording(interactive: Bool) async -> Bool {
         let granted = ScreenRecordingProbe.isAuthorized()
         if interactive, !granted {
+            // On recent macOS releases, the system often skips the in-app prompt and
+            // expects users to toggle Screen Recording in System Settings instead.
+            await MainActor.run { ScreenRecordingPermissionHelper.openSettings() }
             await ScreenRecordingProbe.requestAuthorization()
         }
-        return ScreenRecordingProbe.isAuthorized()
+        let updated = ScreenRecordingProbe.isAuthorized()
+        return updated
     }
 
     private static func ensureMicrophone(interactive: Bool) async -> Bool {
@@ -240,6 +248,24 @@ enum MicrophonePermissionHelper {
     static func openSettings() {
         SystemSettingsURLSupport.openFirst([
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+            "x-apple.systempreferences:com.apple.preference.security",
+        ])
+    }
+}
+
+enum AccessibilityPermissionHelper {
+    static func openSettings() {
+        SystemSettingsURLSupport.openFirst([
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            "x-apple.systempreferences:com.apple.preference.security",
+        ])
+    }
+}
+
+enum ScreenRecordingPermissionHelper {
+    static func openSettings() {
+        SystemSettingsURLSupport.openFirst([
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
             "x-apple.systempreferences:com.apple.preference.security",
         ])
     }

@@ -28,6 +28,14 @@ struct GeneralSettings: View {
     }
 
     var body: some View {
+        if self.isConsumer && !self.state.showAdvancedSettings {
+            self.consumerBody
+        } else {
+            self.operatorBody
+        }
+    }
+
+    private var operatorBody: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 12) {
@@ -104,6 +112,53 @@ struct GeneralSettings: View {
             if !enabled {
                 CanvasManager.shared.hideAll()
             }
+        }
+    }
+
+    private var consumerBody: some View {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("OpenClaw runs quietly in your menu bar.")
+                        .font(.title3.weight(.semibold))
+                    Text("Keep the basics here. Anything technical stays out of the way unless you explicitly ask for it.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    SettingsToggleRow(
+                        title: "\(AppFlavor.current.appName) active",
+                        subtitle: "Pause to stop your AI operator on this Mac.",
+                        binding: self.activeBinding)
+
+                    SettingsToggleRow(
+                        title: "Launch at login",
+                        subtitle: "Automatically start OpenClaw after you sign in.",
+                        binding: self.$state.launchAtLogin)
+
+                    SettingsToggleRow(
+                        title: "Show Dock icon",
+                        subtitle: "Keep \(AppFlavor.current.appName) visible in the Dock instead of menu-bar-only mode.",
+                        binding: self.$state.showDockIcon)
+
+                    SettingsToggleRow(
+                        title: "Show advanced settings",
+                        subtitle: "Reveal the full operator controls only when you need them.",
+                        binding: self.$state.showAdvancedSettings)
+                }
+
+                Spacer(minLength: 12)
+                HStack {
+                    Spacer()
+                    Button("Quit \(AppFlavor.current.appName)") { NSApp.terminate(nil) }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 22)
+            .padding(.bottom, 16)
         }
     }
 
