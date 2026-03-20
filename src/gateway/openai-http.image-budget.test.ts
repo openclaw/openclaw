@@ -65,4 +65,33 @@ describe("openai image budget accounting", () => {
       },
     ]);
   });
+
+  it("honors x-openclaw-sender-is-owner=false", () => {
+    const command = __testOnlyOpenAiHttp.buildAgentCommandInput({
+      req: {
+        headers: {
+          "x-openclaw-sender-is-owner": "false",
+        },
+      } as never,
+      prompt: { message: "hi" },
+      sessionKey: "agent:main:test",
+      runId: "run-1",
+      messageChannel: "webchat",
+    });
+
+    expect(command.senderIsOwner).toBe(false);
+  });
+
+  it("defaults public-mode ingress to non-owner when the header is missing", () => {
+    const command = __testOnlyOpenAiHttp.buildAgentCommandInput({
+      req: { headers: {} } as never,
+      prompt: { message: "hi" },
+      sessionKey: "agent:main:test",
+      runId: "run-1",
+      messageChannel: "webchat",
+      publicMode: true,
+    });
+
+    expect(command.senderIsOwner).toBe(false);
+  });
 });

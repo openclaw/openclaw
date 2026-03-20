@@ -636,6 +636,61 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     );
   });
 
+  it("defaults public-mode agents to non-owner ingress unless explicitly trusted", async () => {
+    testState.agentsConfig = {
+      list: [{ id: "beta", publicMode: true }],
+    };
+
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValue({ payloads: [{ text: "hello" }] } as never);
+
+    const defaultRes = await postChatCompletions(enabledPort, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(defaultRes.status).toBe(200);
+    const defaultOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    expect(defaultOpts?.senderIsOwner).toBe(true);
+    await defaultRes.text();
+
+    agentCommand.mockClear();
+    const publicRes = await postChatCompletions(
+      enabledPort,
+      {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      },
+      { "x-openclaw-agent-id": "beta" },
+    );
+    expect(publicRes.status).toBe(200);
+    const publicOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    expect(publicOpts?.senderIsOwner).toBe(false);
+    await publicRes.text();
+
+    agentCommand.mockClear();
+    const trustedPublicRes = await postChatCompletions(
+      enabledPort,
+      {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      },
+      {
+        "x-openclaw-agent-id": "beta",
+        "x-openclaw-sender-is-owner": "true",
+      },
+    );
+    expect(trustedPublicRes.status).toBe(200);
+    const trustedPublicOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    expect(trustedPublicOpts?.senderIsOwner).toBe(true);
+    await trustedPublicRes.text();
+  });
+
   it("streams SSE chunks when stream=true", async () => {
     const port = enabledPort;
     try {

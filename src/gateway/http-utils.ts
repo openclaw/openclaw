@@ -23,6 +23,20 @@ export function getBearerToken(req: IncomingMessage): string | undefined {
   return token || undefined;
 }
 
+export function resolveIngressSenderIsOwner(params: {
+  req: IncomingMessage;
+  publicMode?: boolean;
+}): boolean {
+  const raw = getHeader(params.req, "x-openclaw-sender-is-owner")?.trim().toLowerCase();
+  if (raw === "true") {
+    return true;
+  }
+  if (raw === "false") {
+    return false;
+  }
+  return params.publicMode !== true;
+}
+
 export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   const raw =
     getHeader(req, "x-openclaw-agent-id")?.trim() ||

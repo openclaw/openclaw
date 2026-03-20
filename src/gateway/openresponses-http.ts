@@ -8,10 +8,12 @@
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveAgentPublicMode } from "../agents/agent-scope.js";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -35,7 +37,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveGatewayRequestContext } from "./http-utils.js";
+import { resolveGatewayRequestContext, resolveIngressSenderIsOwner } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
   CreateResponseBodySchema,
@@ -51,6 +53,7 @@ type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
   config?: GatewayHttpResponsesConfig;
+  runtimeConfig?: OpenClawConfig;
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
@@ -232,7 +235,8 @@ function createAssistantOutputItem(params: {
   };
 }
 
-async function runResponsesAgentCommand(params: {
+function buildResponsesAgentCommandInput(params: {
+  req: IncomingMessage;
   message: string;
   images: ImageContent[];
   clientTools: ClientToolDefinition[];
@@ -241,28 +245,51 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  publicMode?: boolean;
+}) {
+  const senderIsOwner = resolveIngressSenderIsOwner({
+    req: params.req,
+    publicMode: params.publicMode,
+  });
+  return {
+    message: params.message,
+    images: params.images.length > 0 ? params.images : undefined,
+    clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
+    extraSystemPrompt: params.extraSystemPrompt || undefined,
+    streamParams: params.streamParams ?? undefined,
+    sessionKey: params.sessionKey,
+    runId: params.runId,
+    deliver: false,
+    messageChannel: params.messageChannel,
+    bestEffortDeliver: false,
+    senderIsOwner,
+  };
+}
+
+async function runResponsesAgentCommand(params: {
+  req: IncomingMessage;
+  message: string;
+  images: ImageContent[];
+  clientTools: ClientToolDefinition[];
+  extraSystemPrompt: string;
+  streamParams: { maxTokens: number } | undefined;
+  sessionKey: string;
+  runId: string;
+  messageChannel: string;
+  publicMode?: boolean;
   deps: ReturnType<typeof createDefaultDeps>;
 }) {
   return agentCommandFromIngress(
-    {
-      message: params.message,
-      images: params.images.length > 0 ? params.images : undefined,
-      clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
-      extraSystemPrompt: params.extraSystemPrompt || undefined,
-      streamParams: params.streamParams ?? undefined,
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      deliver: false,
-      messageChannel: params.messageChannel,
-      bestEffortDeliver: false,
-      // HTTP API callers are authenticated operator clients for this gateway context.
-      senderIsOwner: true,
-      allowModelOverride: true,
-    },
+    { ...buildResponsesAgentCommandInput(params), allowModelOverride: true },
     defaultRuntime,
     params.deps,
   );
 }
+
+export const __testOnlyOpenResponsesHttp = {
+  buildResponsesAgentCommandInput,
+  resolveResponsesLimits,
+};
 
 export async function handleOpenResponsesHttpRequest(
   req: IncomingMessage,
@@ -437,7 +464,7 @@ export async function handleOpenResponsesHttpRequest(
     });
     return true;
   }
-  const { sessionKey, messageChannel } = resolveGatewayRequestContext({
+  const { agentId, sessionKey, messageChannel } = resolveGatewayRequestContext({
     req,
     model,
     user,
@@ -445,6 +472,7 @@ export async function handleOpenResponsesHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: false,
   });
+  const publicMode = resolveAgentPublicMode(opts.runtimeConfig ?? {}, agentId);
 
   // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);
@@ -483,6 +511,7 @@ export async function handleOpenResponsesHttpRequest(
   if (!stream) {
     try {
       const result = await runResponsesAgentCommand({
+        req,
         message: prompt.message,
         images,
         clientTools: resolvedClientTools,
@@ -491,6 +520,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        publicMode,
         deps,
       });
 
@@ -710,6 +740,7 @@ export async function handleOpenResponsesHttpRequest(
   void (async () => {
     try {
       const result = await runResponsesAgentCommand({
+        req,
         message: prompt.message,
         images,
         clientTools: resolvedClientTools,
@@ -718,6 +749,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        publicMode,
         deps,
       });
 

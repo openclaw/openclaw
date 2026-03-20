@@ -30,13 +30,15 @@ Notes:
 
 ## Security boundary (important)
 
-Treat this endpoint as a **full operator-access** surface for the gateway instance.
+Treat this endpoint as an **operator-access** surface for the gateway instance unless you
+intentionally target a `publicMode` agent through a trusted upstream.
 
 - HTTP bearer auth here is not a narrow per-user scope model.
-- A valid Gateway token/password for this endpoint should be treated like an owner/operator credential.
+- A valid Gateway token/password for this endpoint should still be treated like an owner/operator credential.
 - Requests run through the same control-plane agent path as trusted operator actions.
-- There is no separate non-owner/per-user tool boundary on this endpoint; once a caller passes Gateway auth here, OpenClaw treats that caller as a trusted operator for this gateway.
-- If the target agent policy allows sensitive tools, this endpoint can use them.
+- For normal agents, missing `x-openclaw-sender-is-owner` defaults to owner semantics.
+- For agents with `publicMode: true`, missing `x-openclaw-sender-is-owner` defaults to non-owner semantics; only an explicit `x-openclaw-sender-is-owner: true` restores owner access.
+- `publicMode` is not a full per-user sandbox. It redacts local runtime details in prompts and strips owner-only tools, but any non-owner tools still allowed by the target agent remain callable.
 - Keep this endpoint on loopback/tailnet/private ingress only; do not expose it directly to the public internet.
 
 See [Security](/gateway/security) and [Remote access](/gateway/remote).

@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { isRecord } from "../../utils.js";
+import { resolveAgentPublicMode, resolveDefaultAgentId } from "../agent-scope.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
@@ -51,14 +52,21 @@ export function buildSystemPrompt(params: {
   modelDisplay: string;
   agentId?: string;
 }) {
+  const resolvedAgentId =
+    params.agentId ?? (params.config ? resolveDefaultAgentId(params.config) : undefined);
+  const publicMode =
+    params.config && resolvedAgentId
+      ? resolveAgentPublicMode(params.config, resolvedAgentId)
+      : false;
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
-    agentId: params.agentId,
+    agentId: resolvedAgentId,
   });
   const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: params.config,
-    agentId: params.agentId,
+    agentId: resolvedAgentId,
+    publicMode,
     workspaceDir: params.workspaceDir,
     cwd: process.cwd(),
     runtime: {
@@ -75,6 +83,7 @@ export function buildSystemPrompt(params: {
   const ownerDisplay = resolveOwnerDisplaySetting(params.config);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
+    publicMode,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,

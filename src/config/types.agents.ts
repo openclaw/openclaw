@@ -62,6 +62,8 @@ export type AgentConfig = {
   id: string;
   default?: boolean;
   name?: string;
+  /** Hide environment/runtime details from prompts for public-facing agents. */
+  publicMode?: boolean;
   workspace?: string;
   agentDir?: string;
   model?: AgentModelConfig;
