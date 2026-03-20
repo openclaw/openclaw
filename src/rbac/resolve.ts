@@ -1,3 +1,4 @@
+import { CHANNEL_IDS } from "../channels/registry.js";
 import type { GatewayAccessConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RbacIdentity, RbacRole } from "./types.js";
@@ -6,6 +7,38 @@ import type { RbacIdentity, RbacRole } from "./types.js";
 const IMPLICIT_DEFAULT_ROLE: RbacRole = "user";
 
 const VALID_ROLES = new Set<RbacRole>(["admin", "user", "guest"]);
+
+/**
+ * Set of known channel prefixes used to distinguish channel-qualified config
+ * entries (e.g. "telegram:12345") from IDs that happen to contain colons
+ * (e.g. Signal UUIDs "uuid:abc-def" or Matrix IDs "@user:server").
+ *
+ * Includes core channels plus common extension channel IDs.
+ */
+const KNOWN_CHANNEL_PREFIXES: ReadonlySet<string> = new Set<string>([
+  ...CHANNEL_IDS.map((id) => id.toLowerCase()),
+  // Extension channels not in CHANNEL_IDS
+  "matrix",
+  "msteams",
+  "zalo",
+  "zalouser",
+  "web",
+  "voice-call",
+  "voicecall",
+]);
+
+/**
+ * Check whether a config entry is channel-qualified (e.g. "telegram:12345")
+ * by verifying the prefix before the first colon is a known channel name.
+ */
+function isChannelQualifiedEntry(entry: string): boolean {
+  const colonIdx = entry.indexOf(":");
+  if (colonIdx < 1) {
+    return false;
+  }
+  const prefix = entry.slice(0, colonIdx).trim().toLowerCase();
+  return KNOWN_CHANNEL_PREFIXES.has(prefix);
+}
 
 function parseRole(value: unknown): RbacRole | null {
   if (typeof value !== "string") {
@@ -102,7 +135,7 @@ export function resolveUserRole(params: {
         // Invalid role in config, skip
         continue;
       }
-      const isQualified = entry.includes(":");
+      const isQualified = isChannelQualifiedEntry(entry);
       if (isQualified) {
         // Qualified match wins immediately
         return parsed;

@@ -124,12 +124,21 @@ const SENSITIVE_PATTERNS = [/token$/i, /password/i, /secret/i, /api.?key/i];
 let schemaSensitivePaths: ReadonlySet<string> | null = null;
 
 /**
- * Register the set of config paths that the Zod schema marks as sensitive
- * (via the `sensitive` registry). Called once from `schema.ts` after
- * `mapSensitivePaths` produces the hints map.
+ * Register config paths that the Zod schema marks as sensitive (via the
+ * `sensitive` registry). Additive: subsequent calls merge into the existing
+ * set so that extension/plugin sensitive paths are accumulated alongside
+ * the base schema paths.
  */
 export function registerSchemaSensitivePaths(paths: ReadonlySet<string>): void {
-  schemaSensitivePaths = paths;
+  if (!schemaSensitivePaths) {
+    schemaSensitivePaths = new Set(paths);
+  } else {
+    const merged = new Set(schemaSensitivePaths);
+    for (const p of paths) {
+      merged.add(p);
+    }
+    schemaSensitivePaths = merged;
+  }
 }
 
 /** Guard to prevent re-entrant initialization (mapSensitivePaths calls isSensitiveConfigPath). */

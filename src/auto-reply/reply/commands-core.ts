@@ -189,24 +189,19 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     commandSource: params.ctx.CommandSource,
   });
 
-  // Guest role: "AI only, no commands" — block all slash and bang commands early.
-  if (
-    allowTextCommands &&
-    (params.command.commandBodyNormalized.startsWith("/") ||
-      params.command.commandBodyNormalized.startsWith("!"))
-  ) {
-    const guestBlock = rejectGuestCommand(
-      params,
-      params.command.commandBodyNormalized.split(" ")[0],
-    );
-    if (guestBlock) {
-      return guestBlock;
-    }
-  }
-
   for (const handler of HANDLERS) {
     const result = await handler(params, allowTextCommands);
     if (result) {
+      // Guest role: "AI only, no commands" — block recognized commands but
+      // let non-command messages (e.g. "/usr/bin/env", "!important") fall
+      // through to the AI.
+      const guestBlock = rejectGuestCommand(
+        params,
+        params.command.commandBodyNormalized.split(" ")[0],
+      );
+      if (guestBlock) {
+        return guestBlock;
+      }
       return result;
     }
   }

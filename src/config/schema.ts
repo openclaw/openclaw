@@ -377,6 +377,19 @@ export function buildConfigSchema(params?: {
   const mergedHints = applyDerivedTags(
     applySensitiveHints(mergedWithoutSensitiveHints, extensionHintKeys),
   );
+
+  // Register extension-contributed sensitive paths so that
+  // isSensitiveConfigPath() catches them for RBAC redaction.
+  const extensionSensitivePaths = new Set<string>();
+  for (const key of extensionHintKeys) {
+    if (mergedHints[key]?.sensitive) {
+      extensionSensitivePaths.add(key);
+    }
+  }
+  if (extensionSensitivePaths.size > 0) {
+    registerSchemaSensitivePaths(extensionSensitivePaths);
+  }
+
   const mergedSchema = applyChannelSchemas(applyPluginSchemas(base.schema, plugins), channels);
   return {
     ...base,
