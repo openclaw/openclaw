@@ -280,7 +280,7 @@ export async function uploadImageFeishu(params: {
   // See: https://github.com/larksuite/node-sdk/issues/121
   const imageData = typeof image === "string" ? fs.createReadStream(image) : image;
 
-  // CERA: when image is a file path, createReadStream() opens an FD.
+  // FIX: when image is a file path, createReadStream() opens an FD.
   // If the upload throws (network error, auth failure, rate limit), the
   // stream is never consumed or closed, leaking the descriptor. Ensure
   // cleanup on all exit paths. Only destroy streams we created -- caller-
@@ -347,7 +347,7 @@ export async function uploadFileFeishu(params: {
 
   const safeFileName = sanitizeFileNameForUpload(fileName);
 
-  // CERA: same FD leak pattern as uploadImageFeishu -- createReadStream()
+  // FIX: same FD leak pattern as uploadImageFeishu -- createReadStream()
   // opens a descriptor that must be released if the SDK call throws.
   const needsCleanup = typeof file === "string";
   try {
