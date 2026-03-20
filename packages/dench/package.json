@@ -1,6 +1,6 @@
 {
   "name": "dench",
-  "version": "2.3.12",
+  "version": "2.3.14",
   "description": "Shorthand alias for denchclaw — AI-powered CRM platform CLI",
   "license": "MIT",
   "repository": {
@@ -16,7 +16,7 @@
   ],
   "type": "module",
   "dependencies": {
-    "denchclaw": "^2.3.12"
+    "denchclaw": "^2.3.14"
   },
   "engines": {
     "node": ">=22.12.0"
