@@ -291,6 +291,7 @@ export async function updateNpmInstalledPlugins(params: {
   pluginIds?: string[];
   skipIds?: Set<string>;
   dryRun?: boolean;
+  specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
@@ -329,7 +330,14 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    if (record.source === "npm" && !record.spec) {
+    const effectiveSpec =
+      record.source === "npm" ? (params.specOverrides?.[pluginId] ?? record.spec) : undefined;
+    const expectedIntegrity =
+      record.source === "npm" && effectiveSpec === record.spec
+        ? expectedIntegrityForUpdate(record.spec, record.integrity)
+        : undefined;
+
+    if (record.source === "npm" && !effectiveSpec) {
       outcomes.push({
         pluginId,
         status: "skipped",
@@ -371,11 +379,11 @@ export async function updateNpmInstalledPlugins(params: {
         probe =
           record.source === "npm"
             ? await installPluginFromNpmSpec({
-                spec: record.spec!,
+                spec: effectiveSpec!,
                 mode: "update",
                 dryRun: true,
                 expectedPluginId: pluginId,
-                expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
+                expectedIntegrity,
                 onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
                   pluginId,
                   dryRun: true,
@@ -408,7 +416,7 @@ export async function updateNpmInstalledPlugins(params: {
             record.source === "npm"
               ? formatNpmInstallFailure({
                   pluginId,
-                  spec: record.spec!,
+                  spec: effectiveSpec!,
                   phase: "check",
                   result: probe,
                 })
@@ -452,10 +460,10 @@ export async function updateNpmInstalledPlugins(params: {
       result =
         record.source === "npm"
           ? await installPluginFromNpmSpec({
-              spec: record.spec!,
+              spec: effectiveSpec!,
               mode: "update",
               expectedPluginId: pluginId,
-              expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
+              expectedIntegrity,
               onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
                 pluginId,
                 dryRun: false,
@@ -487,7 +495,7 @@ export async function updateNpmInstalledPlugins(params: {
           record.source === "npm"
             ? formatNpmInstallFailure({
                 pluginId,
-                spec: record.spec!,
+                spec: effectiveSpec!,
                 phase: "update",
                 result: result,
               })
@@ -512,7 +520,7 @@ export async function updateNpmInstalledPlugins(params: {
       next = recordPluginInstall(next, {
         pluginId: resolvedPluginId,
         source: "npm",
-        spec: record.spec,
+        spec: effectiveSpec,
         installPath: result.targetDir,
         version: nextVersion,
         ...buildNpmResolutionInstallFields(result.npmResolution),

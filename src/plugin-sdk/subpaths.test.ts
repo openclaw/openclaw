@@ -1,6 +1,9 @@
 import * as bluebubblesSdk from "openclaw/plugin-sdk/bluebubbles";
+import * as channelPairingSdk from "openclaw/plugin-sdk/channel-pairing";
+import * as channelReplyPipelineSdk from "openclaw/plugin-sdk/channel-reply-pipeline";
 import * as channelRuntimeSdk from "openclaw/plugin-sdk/channel-runtime";
 import * as channelSendResultSdk from "openclaw/plugin-sdk/channel-send-result";
+import * as channelSetupSdk from "openclaw/plugin-sdk/channel-setup";
 import * as coreSdk from "openclaw/plugin-sdk/core";
 import type {
   ChannelMessageActionContext as CoreChannelMessageActionContext,
@@ -10,6 +13,7 @@ import type {
 import * as directoryRuntimeSdk from "openclaw/plugin-sdk/directory-runtime";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
+import * as imessageCoreSdk from "openclaw/plugin-sdk/imessage-core";
 import * as lazyRuntimeSdk from "openclaw/plugin-sdk/lazy-runtime";
 import * as ollamaSetupSdk from "openclaw/plugin-sdk/ollama-setup";
 import * as providerModelsSdk from "openclaw/plugin-sdk/provider-models";
@@ -18,11 +22,13 @@ import * as replyPayloadSdk from "openclaw/plugin-sdk/reply-payload";
 import * as routingSdk from "openclaw/plugin-sdk/routing";
 import * as runtimeSdk from "openclaw/plugin-sdk/runtime";
 import * as sandboxSdk from "openclaw/plugin-sdk/sandbox";
+import * as secretInputSdk from "openclaw/plugin-sdk/secret-input";
 import * as selfHostedProviderSetupSdk from "openclaw/plugin-sdk/self-hosted-provider-setup";
 import * as setupSdk from "openclaw/plugin-sdk/setup";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
 import * as testingSdk from "openclaw/plugin-sdk/testing";
+import * as webhookIngressSdk from "openclaw/plugin-sdk/webhook-ingress";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
 import * as whatsappActionRuntimeSdk from "openclaw/plugin-sdk/whatsapp-action-runtime";
 import * as whatsappLoginQrSdk from "openclaw/plugin-sdk/whatsapp-login-qr";
@@ -49,18 +55,12 @@ const accountHelpersSdk = await import("openclaw/plugin-sdk/account-helpers");
 const allowlistEditSdk = await import("openclaw/plugin-sdk/allowlist-config-edit");
 
 describe("plugin-sdk subpath exports", () => {
-  it("keeps the curated public list free of bundled extension facades", () => {
+  it("keeps the curated public list free of internal implementation subpaths", () => {
     expect(pluginSdkSubpaths).not.toContain("compat");
-    expect(pluginSdkSubpaths).not.toContain("signal");
-    expect(pluginSdkSubpaths).not.toContain("line");
-    expect(pluginSdkSubpaths).not.toContain("msteams");
-    expect(pluginSdkSubpaths).not.toContain("googlechat");
-    expect(pluginSdkSubpaths).not.toContain("mattermost");
-    expect(pluginSdkSubpaths).not.toContain("matrix");
-    expect(pluginSdkSubpaths).not.toContain("nostr");
-    expect(pluginSdkSubpaths).not.toContain("voice-call");
-    expect(pluginSdkSubpaths).not.toContain("zalo");
-    expect(pluginSdkSubpaths).not.toContain("zalouser");
+    expect(pluginSdkSubpaths).not.toContain("pairing-access");
+    expect(pluginSdkSubpaths).not.toContain("reply-prefix");
+    expect(pluginSdkSubpaths).not.toContain("typing");
+    expect(pluginSdkSubpaths).not.toContain("provider-model-definitions");
   });
 
   it("keeps core focused on generic shared exports", () => {
@@ -109,6 +109,24 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof channelRuntimeSdk.createChannelDirectoryAdapter).toBe("function");
     expect(typeof channelRuntimeSdk.createRuntimeOutboundDelegates).toBe("function");
     expect(typeof channelRuntimeSdk.sendPayloadMediaSequenceOrFallback).toBe("function");
+  });
+
+  it("exports channel setup helpers from the dedicated subpath", () => {
+    expect(typeof channelSetupSdk.createOptionalChannelSetupSurface).toBe("function");
+    expect(typeof channelSetupSdk.createTopLevelChannelDmPolicy).toBe("function");
+  });
+
+  it("exports channel pairing helpers from the dedicated subpath", () => {
+    expect(typeof channelPairingSdk.createChannelPairingController).toBe("function");
+    expect(typeof channelPairingSdk.createChannelPairingChallengeIssuer).toBe("function");
+    expect("createScopedPairingAccess" in asExports(channelPairingSdk)).toBe(false);
+  });
+
+  it("exports channel reply pipeline helpers from the dedicated subpath", () => {
+    expect(typeof channelReplyPipelineSdk.createChannelReplyPipeline).toBe("function");
+    expect("createTypingCallbacks" in asExports(channelReplyPipelineSdk)).toBe(false);
+    expect("createReplyPrefixContext" in asExports(channelReplyPipelineSdk)).toBe(false);
+    expect("createReplyPrefixOptions" in asExports(channelReplyPipelineSdk)).toBe(false);
   });
 
   it("exports channel send-result helpers from the dedicated subpath", () => {
@@ -162,6 +180,18 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof sandboxSdk.runPluginCommandWithTimeout).toBe("function");
   });
 
+  it("exports secret input helpers from the dedicated subpath", () => {
+    expect(typeof secretInputSdk.buildSecretInputSchema).toBe("function");
+    expect(typeof secretInputSdk.buildOptionalSecretInputSchema).toBe("function");
+    expect(typeof secretInputSdk.normalizeSecretInputString).toBe("function");
+  });
+
+  it("exports webhook ingress helpers from the dedicated subpath", () => {
+    expect(typeof webhookIngressSdk.resolveWebhookPath).toBe("function");
+    expect(typeof webhookIngressSdk.readJsonWebhookBodyOrReject).toBe("function");
+    expect(typeof webhookIngressSdk.withResolvedWebhookRequestPipeline).toBe("function");
+  });
+
   it("exports shared core types used by bundled channels", () => {
     expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<OpenClawPluginApi>();
     expectTypeOf<CorePluginRuntime>().toMatchTypeOf<PluginRuntime>();
@@ -207,10 +237,19 @@ describe("plugin-sdk subpath exports", () => {
     expect("resolveIMessageAccount" in asExports(imessageSdk)).toBe(false);
   });
 
+  it("exports iMessage core helpers", () => {
+    expect(typeof imessageCoreSdk.buildChannelConfigSchema).toBe("function");
+    expect(typeof imessageCoreSdk.parseChatTargetPrefixesOrThrow).toBe("function");
+    expect(typeof imessageCoreSdk.resolveServicePrefixedTarget).toBe("function");
+    expect(typeof imessageCoreSdk.IMessageConfigSchema).toBe("object");
+  });
+
   it("exports WhatsApp helpers", () => {
     expect(typeof whatsappSdk.WhatsAppConfigSchema).toBe("object");
     expect(typeof whatsappSdk.resolveWhatsAppOutboundTarget).toBe("function");
     expect(typeof whatsappSdk.resolveWhatsAppMentionStripRegexes).toBe("function");
+    expect(typeof whatsappSdk.sendMessageWhatsApp).toBe("function");
+    expect(typeof whatsappSdk.loadWebMedia).toBe("function");
   });
 
   it("exports WhatsApp QR login helpers from the dedicated subpath", () => {

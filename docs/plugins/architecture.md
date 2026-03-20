@@ -925,6 +925,12 @@ authoring plugins:
 
 - `openclaw/plugin-sdk/plugin-entry` for plugin registration primitives.
 - `openclaw/plugin-sdk/core` for the generic shared plugin-facing contract.
+- Stable channel primitives such as `openclaw/plugin-sdk/channel-setup`,
+  `openclaw/plugin-sdk/channel-pairing`,
+  `openclaw/plugin-sdk/channel-reply-pipeline`,
+  `openclaw/plugin-sdk/secret-input`, and
+  `openclaw/plugin-sdk/webhook-ingress` for shared setup/auth/reply/webhook
+  wiring.
 - Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
   `openclaw/plugin-sdk/channel-config-schema`,
   `openclaw/plugin-sdk/channel-policy`,
@@ -961,6 +967,9 @@ authoring plugins:
 Compatibility note:
 
 - Avoid the root `openclaw/plugin-sdk` barrel for new code.
+- Prefer the narrow stable primitives first. The newer setup/pairing/reply/
+  secret-input/webhook subpaths are the intended contract for new bundled and
+  external plugin work.
 - Bundled extension-specific helper barrels are not stable by default. If a
   helper is only needed by a bundled extension, keep it behind the extension's
   local `api.js` or `runtime-api.js` seam instead of promoting it into
@@ -969,6 +978,20 @@ Compatibility note:
   `media-understanding`, and `speech` exist because bundled/native plugins use
   them today. Their presence does not by itself mean every exported helper is a
   long-term frozen external contract.
+
+## Message tool schemas
+
+Plugins should own channel-specific `describeMessageTool(...)` schema
+contributions. Keep provider-specific fields in the plugin, not in shared core.
+
+For shared portable schema fragments, reuse the generic helpers exported through
+`openclaw/plugin-sdk/channel-runtime`:
+
+- `createMessageToolButtonsSchema()` for button-grid style payloads
+- `createMessageToolCardSchema()` for structured card payloads
+
+If a schema shape only makes sense for one provider, define it in that plugin's
+own source instead of promoting it into the shared SDK.
 
 ## Channel target resolution
 
