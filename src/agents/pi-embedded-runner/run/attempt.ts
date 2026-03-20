@@ -1982,6 +1982,9 @@ export async function runEmbeddedAttempt(
         const gigachatMeta = resolveGigachatAuthProfileMetadata(
           gigachatStore,
           params.authProfileId,
+          {
+            allowDefaultProfileFallback: Boolean(params.authProfileId?.trim()),
+          },
         );
         const gigachatApiKey = await params.authStorage.getApiKey(params.provider);
 

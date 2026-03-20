@@ -737,7 +737,11 @@ function resolveImplicitGigachatProvider(ctx: ImplicitProviderContext): Provider
   if (!auth.apiKey) {
     return null;
   }
-  const metadata = resolveGigachatAuthProfileMetadata(ctx.authStore, auth.profileId);
+  const metadata = resolveGigachatAuthProfileMetadata(ctx.authStore, auth.profileId, {
+    // Env-backed GIGACHAT_CREDENTIALS has no profile id, so do not inherit
+    // stale auth-mode metadata from a stored default profile.
+    allowDefaultProfileFallback: Boolean(auth.profileId?.trim()),
+  });
 
   return buildGigachatProvider({
     apiKey: auth.apiKey,

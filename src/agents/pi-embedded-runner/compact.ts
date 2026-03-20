@@ -856,6 +856,9 @@ export async function compactEmbeddedPiSessionDirect(
         const gigachatMeta = resolveGigachatAuthProfileMetadata(
           gigachatStore,
           resolvedGigachatProfileId,
+          {
+            allowDefaultProfileFallback: Boolean(resolvedGigachatProfileId),
+          },
         );
 
         session.agent.streamFn = createGigachatStreamFn({

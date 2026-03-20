@@ -1064,6 +1064,66 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
     expect(result.ok, result.reason).toBe(true);
   });
+
+  it("does not inherit stale GigaChat metadata for env-backed OAuth credentials", async () => {
+    resolveModelMock.mockReturnValue({
+      model: {
+        provider: "gigachat",
+        api: "openai-completions",
+        id: "GigaChat-2-Max",
+        input: ["text"],
+        baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    } as never);
+    vi.mocked(getApiKeyForModel).mockResolvedValueOnce({
+      apiKey: "oauth:credential:with:colon",
+      mode: "api-key",
+      source: "env: GIGACHAT_CREDENTIALS",
+    });
+    ensureAuthProfileStoreMock.mockReturnValue({
+      profiles: {
+        "gigachat:default": {
+          type: "api_key",
+          provider: "gigachat",
+          metadata: {
+            authMode: "basic",
+            insecureTls: "true",
+            scope: "GIGACHAT_API_B2B",
+          },
+        },
+      },
+    });
+    sessionCompactImpl.mockImplementation(async () => {
+      expect(createGigachatStreamFnMock).toHaveBeenCalledWith({
+        baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+        authMode: "oauth",
+        insecureTls: false,
+        scope: undefined,
+      });
+      return {
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 120,
+        details: { ok: true },
+      };
+    });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: gigachatTestConfig(),
+      provider: "gigachat",
+      model: "GigaChat-2-Max",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result.ok, result.reason).toBe(true);
+  });
 });
 
 describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {

@@ -5,10 +5,14 @@ export type GigachatAuthMetadata = Record<string, string> | undefined;
 export function resolveGigachatAuthProfileMetadata(
   store: Pick<AuthProfileStore, "profiles">,
   authProfileId?: string,
+  options?: {
+    allowDefaultProfileFallback?: boolean;
+  },
 ): GigachatAuthMetadata {
-  const profileIds = [authProfileId?.trim(), "gigachat:default"].filter(
-    (profileId): profileId is string => Boolean(profileId),
-  );
+  const profileIds = [
+    authProfileId?.trim(),
+    options?.allowDefaultProfileFallback === false ? undefined : "gigachat:default",
+  ].filter((profileId): profileId is string => Boolean(profileId));
   for (const profileId of profileIds) {
     const credential = store.profiles[profileId];
     if (credential?.type === "api_key" && credential.provider === "gigachat") {
@@ -39,7 +43,7 @@ export function resolveGigachatAuthMode(params: {
     return metadataAuthMode;
   }
 
-  if (!params.authProfileId?.trim() && looksLikeGigachatBasicCredentials(params.apiKey)) {
+  if (looksLikeGigachatBasicCredentials(params.apiKey)) {
     return "basic";
   }
 

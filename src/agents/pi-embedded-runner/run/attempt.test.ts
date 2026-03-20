@@ -204,6 +204,24 @@ describe("resolveGigachatAuthProfileMetadata", () => {
       ),
     ).toEqual({ scope: "GIGACHAT_API_PERS" });
   });
+
+  it("does not inherit the default GigaChat profile when fallback is disabled", () => {
+    expect(
+      resolveGigachatAuthProfileMetadata(
+        {
+          profiles: {
+            "gigachat:default": {
+              type: "api_key",
+              provider: "gigachat",
+              metadata: { scope: "GIGACHAT_API_B2B", insecureTls: "true" },
+            },
+          },
+        },
+        undefined,
+        { allowDefaultProfileFallback: false },
+      ),
+    ).toBeUndefined();
+  });
 });
 
 describe("resolveGigachatAuthMode", () => {
@@ -222,6 +240,15 @@ describe("resolveGigachatAuthMode", () => {
         authProfileId: "gigachat:business",
       }),
     ).toBe("oauth");
+  });
+
+  it("infers basic auth for single-separator stored profile credentials without metadata", () => {
+    expect(
+      resolveGigachatAuthMode({
+        apiKey: "user:password",
+        authProfileId: "gigachat:default",
+      }),
+    ).toBe("basic");
   });
 });
 
