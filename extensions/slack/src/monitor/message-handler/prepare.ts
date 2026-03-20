@@ -466,9 +466,21 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  const shouldRequireMention = isRoom
+  const baseMentionRequired = isRoom
     ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
     : false;
+
+  // When requireMentionInThreads is set, override mention behavior for thread replies:
+  // - true: require explicit @mention in threads (suppresses implicit mentions)
+  // - false: never require mention in threads (bot responds to all thread replies)
+  const threadMentionOverride =
+    isRoom && isThreadReply
+      ? (channelConfig?.requireMentionInThreads ?? ctx.defaultRequireMentionInThreads)
+      : undefined;
+  const shouldRequireMention =
+    threadMentionOverride !== undefined ? threadMentionOverride : baseMentionRequired;
+  const effectiveImplicitMention =
+    threadMentionOverride === true ? false : implicitMention;
 
   // Allow "control commands" to bypass mention gating if sender is authorized.
   const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
@@ -477,7 +489,7 @@ export async function prepareSlackMessage(params: {
     requireMention: Boolean(shouldRequireMention),
     canDetectMention,
     wasMentioned,
-    implicitMention,
+    implicitMention: effectiveImplicitMention,
     hasAnyMention,
     allowTextCommands,
     hasControlCommand: hasControlCommandInMessage,

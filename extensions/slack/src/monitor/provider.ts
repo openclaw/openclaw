@@ -332,6 +332,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     groupDmEnabled,
     groupDmChannels,
     defaultRequireMention: slackCfg.requireMention,
+    defaultRequireMentionInThreads: slackCfg.requireMentionInThreads,
     channelsConfig,
     groupPolicy,
     useAccessGroups,
