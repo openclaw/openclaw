@@ -375,8 +375,13 @@ describe("msteams messenger", () => {
           await logic({ sendActivity: createRecordedSendActivity(attempts, 503) });
         },
         process: async () => {},
+<<<<<<< HEAD
         updateActivity: noopUpdateActivity,
         deleteActivity: noopDeleteActivity,
+=======
+        updateActivity: async () => {},
+        deleteActivity: async () => {},
+>>>>>>> a94afa5baa (test(msteams): align adapter doubles with interfaces)
       };
 
       const ids = await sendMSTeamsMessages({
