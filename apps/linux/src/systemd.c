@@ -557,6 +557,16 @@ static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointe
 
     // 3 (continued). Evaluate runtime state result
     if (!result) {
+        // Drop the previous unit subscription when retargeting to an unloaded unit
+        if (unit_proxy) {
+            if (properties_changed_signal_id > 0) {
+                g_signal_handler_disconnect(unit_proxy, properties_changed_signal_id);
+                properties_changed_signal_id = 0;
+            }
+            g_object_unref(unit_proxy);
+            unit_proxy = NULL;
+        }
+
         // Unit is installed but completely stopped/inactive/unloaded
         SystemdState sys_state = {0};
         sys_state.installed = TRUE;

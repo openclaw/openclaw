@@ -213,13 +213,13 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
     
     g_subprocess_communicate_utf8_finish(subprocess, res, &stdout_buf, &stderr_buf, &error);
     
-    state_set_health_in_flight(FALSE);
-    
     if (launch_gen != state_get_health_generation()) {
         g_free(stdout_buf);
         g_free(stderr_buf);
         return;
     }
+    
+    state_set_health_in_flight(FALSE);
     
     if (error || !g_subprocess_get_if_exited(subprocess) || g_subprocess_get_exit_status(subprocess) != 0) {
         HealthState hs = {0};
@@ -352,13 +352,13 @@ static void on_deep_probe_finished(GObject *source_object, GAsyncResult *res, gp
     
     g_subprocess_communicate_utf8_finish(subprocess, res, &stdout_buf, &stderr_buf, &error);
     
-    state_set_probe_in_flight(FALSE);
-    
     if (launch_gen != state_get_health_generation()) {
         g_free(stdout_buf);
         g_free(stderr_buf);
         return;
     }
+    
+    state_set_probe_in_flight(FALSE);
     
     ProbeState ps = {0};
     ps.ran = TRUE;
