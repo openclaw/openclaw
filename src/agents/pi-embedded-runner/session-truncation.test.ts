@@ -233,7 +233,7 @@ describe("truncateSessionAfterCompaction", () => {
     expect(ctx.thinkingLevel).toBe("high");
   });
 
-  it("drops label and branch_summary entries that reference removed messages", async () => {
+  it("drops label entries whose target message was truncated", async () => {
     const dir = await createTmpDir();
     const sm = SessionManager.create(dir, dir);
 
@@ -243,7 +243,7 @@ describe("truncateSessionAfterCompaction", () => {
     sm.appendMessage({ role: "user", content: "do task", timestamp: 3 });
     sm.appendMessage(makeAssistant("done", 4));
 
-    // Get a pre-compaction message ID to attach label to
+    // Capture a pre-compaction message that will be summarized away.
     const branch = sm.getBranch();
     const preCompactionMsgId = branch[1].id; // "hi" message
 
@@ -253,33 +253,25 @@ describe("truncateSessionAfterCompaction", () => {
 
     // Post-compaction messages
     sm.appendMessage({ role: "user", content: "next", timestamp: 5 });
+    sm.appendLabelChange(preCompactionMsgId, "my-label");
 
     const sessionFile = sm.getSessionFile()!;
+    const labelEntry = sm.getEntries().find((entry) => entry.type === "label");
+    expect(labelEntry?.parentId).not.toBe(preCompactionMsgId);
 
-    // Inject a label entry referencing a pre-compaction message into the
-    // raw JSONL before the compaction line (SessionManager has no appendLabel).
-    const lines = (await fs.readFile(sessionFile, "utf-8")).trimEnd().split("\n");
-    const compactionLineIdx = lines.findIndex((l) => l.includes('"compaction"'));
-    const labelLine = JSON.stringify({
-      type: "label",
-      id: "label-001",
-      parentId: preCompactionMsgId,
-      timestamp: 2500,
-      targetId: preCompactionMsgId,
-      label: "my-label",
-    });
-    lines.splice(compactionLineIdx, 0, labelLine);
-    await fs.writeFile(sessionFile, lines.join("\n") + "\n", "utf-8");
+    const smBefore = SessionManager.open(sessionFile);
+    expect(smBefore.getLabel(preCompactionMsgId)).toBe("my-label");
 
     const result = await truncateSessionAfterCompaction({ sessionFile });
 
     expect(result.truncated).toBe(true);
 
-    // Verify label entry was dropped (its parent message was removed)
+    // Verify label metadata was dropped with the removed target message.
     const smAfter = SessionManager.open(sessionFile);
     const allAfter = smAfter.getEntries();
     const labels = allAfter.filter((e) => e.type === "label");
     expect(labels).toHaveLength(0);
+    expect(smAfter.getLabel(preCompactionMsgId)).toBeUndefined();
   });
 
   it("preserves the firstKeptEntryId unsummarized tail", async () => {

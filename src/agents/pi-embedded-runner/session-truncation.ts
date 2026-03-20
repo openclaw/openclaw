@@ -111,10 +111,16 @@ export async function truncateSessionAfterCompaction(params: {
     }
   }
 
-  // Drop label/branch_summary entries whose parent points to a removed message
+  // Labels bookmark targetId while parentId just records the leaf when the
+  // label was changed, so targetId determines whether the label is still valid.
+  // Branch summaries still hang off the summarized branch via parentId.
   for (const entry of allEntries) {
+    if (entry.type === "label" && removedIds.has(entry.targetId)) {
+      removedIds.add(entry.id);
+      continue;
+    }
     if (
-      (entry.type === "label" || entry.type === "branch_summary") &&
+      entry.type === "branch_summary" &&
       entry.parentId !== null &&
       removedIds.has(entry.parentId)
     ) {
