@@ -6,7 +6,10 @@ import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 
 vi.mock("../../media/web-media.js", async () => {
@@ -78,28 +81,45 @@ async function expectSandboxMediaRewrite(params: {
 
 type MessageActionRunnerModule = typeof import("./message-action-runner.js");
 type WebMediaModule = typeof import("../../media/web-media.js");
-type SlackChannelModule = typeof import("../../../extensions/slack/src/channel.js");
-type RuntimeIndexModule = typeof import("../../plugins/runtime/index.js");
-type SlackRuntimeModule = typeof import("../../../extensions/slack/src/runtime.js");
 
 let runMessageAction: MessageActionRunnerModule["runMessageAction"];
 let loadWebMedia: WebMediaModule["loadWebMedia"];
-let slackPlugin: SlackChannelModule["slackPlugin"];
-let createPluginRuntime: RuntimeIndexModule["createPluginRuntime"];
-let setSlackRuntime: SlackRuntimeModule["setSlackRuntime"];
 
-function installSlackRuntime() {
-  const runtime = createPluginRuntime();
-  setSlackRuntime(runtime);
-}
+const slackPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "slack",
+    label: "Slack",
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: (cfg) => cfg.channels?.slack ?? {},
+      isConfigured: async (account) =>
+        typeof (account as { botToken?: unknown }).botToken === "string" &&
+        (account as { botToken?: string }).botToken!.trim() !== "" &&
+        typeof (account as { appToken?: unknown }).appToken === "string" &&
+        (account as { appToken?: string }).appToken!.trim() !== "",
+    },
+  }),
+  outbound: {
+    deliveryMode: "direct",
+    resolveTarget: ({ to }) => {
+      const trimmed = to?.trim() ?? "";
+      if (!trimmed) {
+        return {
+          ok: false,
+          error: new Error("missing target for slack"),
+        };
+      }
+      return { ok: true, to: trimmed };
+    },
+    sendText: async () => ({ channel: "slack", messageId: "msg-test" }),
+    sendMedia: async () => ({ channel: "slack", messageId: "msg-test" }),
+  },
+};
 
 describe("runMessageAction media behavior", () => {
   beforeAll(async () => {
     ({ runMessageAction } = await import("./message-action-runner.js"));
     ({ loadWebMedia } = await import("../../media/web-media.js"));
-    ({ slackPlugin } = await import("../../../extensions/slack/src/channel.js"));
-    ({ createPluginRuntime } = await import("../../plugins/runtime/index.js"));
-    ({ setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js"));
   });
 
   beforeEach(() => {
@@ -304,7 +324,6 @@ describe("runMessageAction media behavior", () => {
 
   describe("sandboxed media validation", () => {
     beforeEach(() => {
-      installSlackRuntime();
       setActivePluginRegistry(
         createTestRegistry([
           {
