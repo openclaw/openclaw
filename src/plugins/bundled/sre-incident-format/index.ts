@@ -5,6 +5,8 @@ export const SRE_INCIDENT_FORMAT_PLUGIN_ID = "sre-incident-format";
 // Phrases that indicate a progress-only message (no substantive content).
 const PROGRESS_PREFIXES = [
   "now let me",
+  "now i have",
+  "now i understand",
   "let me ",
   "i need to",
   "i'm checking",
@@ -32,7 +34,7 @@ const PROGRESS_PREFIXES = [
 // Quick check: does the text contain any incident section label in bold format?
 // Used to distinguish substantive incident replies from progress noise.
 const INCIDENT_LABEL_BOLD_RE =
-  /\*(?:Incident|Customer impact|Affected services|Status|Evidence|Likely cause|Mitigation|Validate|Next|Also watching|Auto-fix PR|Linear|Suggested PR|Fix PR|Context):\*/;
+  /\*(?:Incident|Customer impact|Affected services|Status|Evidence|Likely cause|Mitigation|Validate|Next|Also watching|Auto-fix PR|Linear|Suggested PR|Fix PR|Context|What the PR does):\*/;
 
 /**
  * Check if a message is progress-only noise (no substantive content).
@@ -43,15 +45,17 @@ export function isProgressOnlyMessage(text: string): boolean {
   if (!trimmed) {
     return true;
   }
-  // Long messages are never progress-only.
-  if (trimmed.length > 200) {
-    return false;
-  }
   // Messages containing incident section labels are substantive, not progress.
-  if (INCIDENT_LABEL_BOLD_RE.test(trimmed)) {
+  if (
+    INCIDENT_LABEL_BOLD_RE.test(trimmed) ||
+    /_(?:Incident|Evidence|Likely cause|Status):_/.test(trimmed)
+  ) {
     return false;
   }
   const lower = trimmed.toLowerCase();
+  // Check if the message starts with a known progress prefix.
+  // These are noise regardless of length — the bot narrates multi-paragraph
+  // thinking-out-loud that starts with "Now I have..." or "Now let me...".
   return PROGRESS_PREFIXES.some((prefix) => lower.startsWith(prefix));
 }
 

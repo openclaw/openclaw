@@ -28,9 +28,17 @@ describe("isProgressOnlyMessage", () => {
     expect(isProgressOnlyMessage(substantive)).toBe(false);
   });
 
-  it("allows long messages even if they start with a prefix", () => {
-    const longMessage = "Now let me " + "x".repeat(200);
-    expect(isProgressOnlyMessage(longMessage)).toBe(false);
+  it("blocks long progress messages that start with a prefix", () => {
+    const longProgress =
+      "Now let me look at the key code path for the NaN scenario — when totalAssets is 0n " +
+      "x".repeat(200);
+    expect(isProgressOnlyMessage(longProgress)).toBe(true);
+  });
+
+  it("allows long messages containing incident labels even if starting with prefix", () => {
+    const withLabel =
+      "Now let me summarize:\n\n*Incident:* server crash\n*Evidence:* pod restarted";
+    expect(isProgressOnlyMessage(withLabel)).toBe(false);
   });
 
   it("allows short messages containing incident labels (false positive protection)", () => {

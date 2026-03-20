@@ -176,5 +176,7 @@ export function markdownToSlackMrkdwnChunks(
   });
   const chunks = chunkMarkdownIR(ir, limit);
   const renderOptions = buildSlackRenderOptions();
-  return chunks.map((chunk) => renderMarkdownWithMarkers(chunk, renderOptions));
+  return chunks.map((chunk) =>
+    enforceIncidentLabelFormat(renderMarkdownWithMarkers(chunk, renderOptions)),
+  );
 }
