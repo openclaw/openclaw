@@ -41,9 +41,9 @@ function buildNotificationText(params: {
 /** Truncate and strip control characters from untrusted input. */
 function sanitizeField(value: string, maxLength: number): string {
   // Strip C0/C1 control chars and zero-width/bidi chars that could be used for injection.
-  // oxlint-disable-next-line eslint/no-control-regex -- intentional: sanitizing untrusted input
   // eslint-disable-next-line no-control-regex -- intentional: sanitizing untrusted input
   const cleaned = value.replace(
+    // oxlint-disable-next-line eslint/no-control-regex -- intentional: sanitizing untrusted input
     /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202F\u2066-\u2069\uFEFF]/g,
     "",
   );
