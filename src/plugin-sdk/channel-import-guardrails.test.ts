@@ -121,6 +121,10 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
     path: "extensions/whatsapp/src/setup-surface.ts",
     forbiddenPatterns: [/\bformatCliCommand\b/, /\bformatDocsLink\b/],
   },
+  {
+    path: "extensions/line/src/setup-surface.ts",
+    forbiddenPatterns: [/\bformatDocsLink\b/],
+  },
 ];
 
 const LOCAL_EXTENSION_API_BARREL_GUARDS = [

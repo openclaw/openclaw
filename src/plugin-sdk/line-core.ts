@@ -3,7 +3,6 @@ export type { LineConfig } from "../line/types.js";
 export {
   createTopLevelChannelDmPolicy,
   DEFAULT_ACCOUNT_ID,
-  formatDocsLink,
   setSetupChannelEnabled,
   setTopLevelChannelDmPolicyWithAllowFrom,
   splitSetupEntries,

@@ -324,7 +324,9 @@ function buildAgentCortexConversationKey(params: {
   sessionId?: string;
   channelId?: string;
 }): string {
-  return [params.agentId, params.sessionId ?? "", params.channelId ?? ""].join(":");
+  // Use NUL as separator to avoid collisions when IDs contain colons
+  // (e.g. "session:test" vs separate "session" + "test" tokens).
+  return [params.agentId, params.sessionId ?? "", params.channelId ?? ""].join("\0");
 }
 
 export function getAgentCortexMemoryCaptureStatus(params: {

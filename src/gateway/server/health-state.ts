@@ -1,5 +1,8 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { getLatestCortexCaptureHistoryEntry } from "../../agents/cortex-history.js";
+import {
+  getCachedLatestCortexCaptureHistoryEntry,
+  getLatestCortexCaptureHistoryEntry,
+} from "../../agents/cortex-history.js";
 import { resolveAgentCortexModeStatus, resolveCortexChannelTarget } from "../../agents/cortex.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
 import { STATE_DIR, createConfigIO, loadConfig } from "../../config/config.js";
@@ -41,12 +44,17 @@ export async function buildGatewaySnapshot(): Promise<Snapshot> {
     sessionId: mainSessionEntry?.sessionId,
     channelId,
   });
+  // Prefer the in-memory cache to avoid reading the full JSONL during
+  // WebSocket connect handshakes.  Fall back to async read only when
+  // the cache is cold (first snapshot after restart).
+  const cortexHistoryParams = {
+    agentId: defaultAgentId,
+    sessionId: mainSessionEntry?.sessionId,
+    channelId,
+  };
   const latestCortexCapture = cortex
-    ? await getLatestCortexCaptureHistoryEntry({
-        agentId: defaultAgentId,
-        sessionId: mainSessionEntry?.sessionId,
-        channelId,
-      }).catch(() => null)
+    ? (getCachedLatestCortexCaptureHistoryEntry(cortexHistoryParams) ??
+      (await getLatestCortexCaptureHistoryEntry(cortexHistoryParams).catch(() => null)))
     : null;
   const scope = cfg.session?.scope ?? "per-sender";
   const presence = listSystemPresence();

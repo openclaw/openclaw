@@ -405,13 +405,23 @@ export async function ingestCortexMemoryFromText(params: {
   if (!text) {
     throw new Error("Cortex memory ingest requires non-empty text");
   }
-  const status = requireCortexStatus(
-    await resolveCortexStatus({
+  const status = await resolveCortexStatus({
+    workspaceDir: params.workspaceDir,
+    graphPath: params.graphPath,
+    status: params.status,
+  });
+  if (!status.available) {
+    throw new Error("Cortex CLI unavailable: " + (status.error ?? "unknown error"));
+  }
+  // Allow ingesting even if the graph does not exist yet - cortex extract
+  // creates the output file when -o is provided, and ensureCortexGraphInitialized
+  // seeds the directory below. This fixes first-time ingest failures.
+  if (!status.graphExists) {
+    await ensureCortexGraphInitialized({
       workspaceDir: params.workspaceDir,
       graphPath: params.graphPath,
-      status: params.status,
-    }),
-  );
+    });
+  }
   await fs.mkdir(path.dirname(status.graphPath), { recursive: true });
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cortex-ingest-"));
   const inputPath = path.join(tmpDir, "memory.txt");

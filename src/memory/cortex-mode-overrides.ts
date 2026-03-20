@@ -19,7 +19,8 @@ type CortexModeOverrideStore = {
 };
 
 function buildKey(agentId: string, targetId: string): string {
-  return `${agentId}:${targetId}`;
+  // Use NUL separator to avoid collisions when IDs contain colons.
+  return `${agentId}\0${targetId}`;
 }
 
 export function resolveCortexModeOverridesPath(env: NodeJS.ProcessEnv = process.env): string {
