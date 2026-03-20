@@ -1248,14 +1248,24 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Persist webchat inbound images to disk (parity with WhatsApp/Telegram handlers).
     // Runs after sendPolicy/stop/dedupe checks so only accepted requests write files.
-    // Fire-and-forget: don't block chat.send on disk I/O; log failures but proceed.
+    // Gated to non-ACP callers: ACP/IDE screenshots are transient and handled upstream.
+    // Fire-and-forget: deferred to avoid blocking the "started" ack with synchronous
+    // base64 decoding of potentially large attachments.
     // NOTE: saved file paths are intentionally not captured here — wiring persisted paths
     // into the session transcript (for compaction survival) is a follow-up task.
-    for (const img of parsedImages) {
-      saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound").catch((err) => {
-        context.logGateway.warn(
-          `webchat: failed to persist inbound image (${img.mimeType}): ${formatForLog(err)}`,
-        );
+    if (parsedImages.length > 0 && !isAcpBridgeClient(client)) {
+      const imagesToPersist = parsedImages.map((img) => ({
+        data: img.data,
+        mimeType: img.mimeType,
+      }));
+      setImmediate(() => {
+        for (const img of imagesToPersist) {
+          saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound").catch((err) => {
+            context.logGateway.warn(
+              `webchat: failed to persist inbound image (${img.mimeType}): ${formatForLog(err)}`,
+            );
+          });
+        }
       });
     }
 
