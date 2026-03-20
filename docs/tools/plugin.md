@@ -246,6 +246,6 @@ Common registration methods:
 - [Building Plugins](/plugins/building-plugins) — create your own plugin
 - [Plugin Bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
 - [Plugin Manifest](/plugins/manifest) — manifest schema
-- [Registering Tools](/plugins/agent-tools) — add agent tools in a plugin
+- [Registering Tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
 - [Plugin Internals](/plugins/architecture) — capability model and load pipeline
 - [Community Plugins](/plugins/community) — third-party listings

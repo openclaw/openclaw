@@ -26,6 +26,36 @@ export {
   ensureConfiguredBindingTargetSession,
   resetConfiguredBindingTargetInPlace,
 } from "../channels/plugins/binding-targets.js";
+export { resolveConversationLabel } from "../channels/conversation-label.js";
+export { recordInboundSession } from "../channels/session.js";
+export { recordInboundSessionMetaSafe } from "../channels/session-meta.js";
+export { resolveThreadBindingConversationIdFromBindingId } from "../channels/thread-binding-id.js";
+export {
+  createScopedAccountReplyToModeResolver,
+  createStaticReplyToModeResolver,
+  createTopLevelChannelReplyToModeResolver,
+} from "../channels/plugins/threading-helpers.js";
+export {
+  formatThreadBindingDurationLabel,
+  resolveThreadBindingFarewellText,
+  resolveThreadBindingIntroText,
+  resolveThreadBindingThreadName,
+} from "../channels/thread-bindings-messages.js";
+export {
+  DISCORD_THREAD_BINDING_CHANNEL,
+  MATRIX_THREAD_BINDING_CHANNEL,
+  formatThreadBindingDisabledError,
+  resolveThreadBindingEffectiveExpiresAt,
+  resolveThreadBindingIdleTimeoutMs,
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingLifecycle,
+  resolveThreadBindingMaxAgeMs,
+  resolveThreadBindingMaxAgeMsForChannel,
+  resolveThreadBindingsEnabled,
+  resolveThreadBindingSpawnPolicy,
+  type ThreadBindingSpawnKind,
+  type ThreadBindingSpawnPolicy,
+} from "../channels/thread-bindings-policy.js";
 export type {
   ConfiguredBindingConversation,
   ConfiguredBindingResolution,
