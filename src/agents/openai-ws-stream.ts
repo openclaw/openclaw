@@ -790,7 +790,7 @@ export function createOpenAIWebSocketStreamFn(
       const payload: Record<string, unknown> = {
         type: "response.create",
         model: model.id,
-        ...(supportsStore !== false ? { store: false } : {}),
+        ...(supportsStore === true ? { store: false } : {}),
         input: inputItems,
         instructions: context.systemPrompt ?? undefined,
         tools: tools.length > 0 ? tools : undefined,
