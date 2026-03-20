@@ -353,6 +353,7 @@ static void on_deep_probe_finished(GObject *source_object, GAsyncResult *res, gp
     g_subprocess_communicate_utf8_finish(subprocess, res, &stdout_buf, &stderr_buf, &error);
     
     if (launch_gen != state_get_health_generation()) {
+        state_set_probe_in_flight(FALSE);
         g_free(stdout_buf);
         g_free(stderr_buf);
         return;

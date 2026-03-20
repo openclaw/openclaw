@@ -551,9 +551,18 @@ void systemd_init(void) {
 }
 
 static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointer user_data) {
-    (void)user_data;
+    gchar *requested_unit_name = (gchar *)user_data;
     g_autoptr(GError) error = NULL;
     g_autoptr(GVariant) result = g_dbus_proxy_call_finish(G_DBUS_PROXY(source_object), res, &error);
+
+    // If the canonical unit has changed since we requested this unit, discard the stale reply
+    if (requested_unit_name) {
+        if (g_strcmp0(requested_unit_name, systemd_get_canonical_unit_name()) != 0) {
+            g_free(requested_unit_name);
+            return;
+        }
+        g_free(requested_unit_name);
+    }
 
     // 3 (continued). Evaluate runtime state result
     if (!result) {
@@ -639,11 +648,12 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
     }
 
     // 3. Fetch runtime unit path asynchronously
+    const gchar *current_unit = discover_canonical_unit_name();
     g_dbus_proxy_call(
         manager_proxy, "GetUnit",
-        g_variant_new("(s)", discover_canonical_unit_name()),
+        g_variant_new("(s)", current_unit),
         G_DBUS_CALL_FLAGS_NONE, -1, NULL,
-        on_get_unit_ready, NULL);
+        on_get_unit_ready, g_strdup(current_unit));
 }
 
 void systemd_refresh(void) {
