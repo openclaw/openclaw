@@ -43,6 +43,11 @@
       "help": "Maximum message length eligible for auto-capture",
       "advanced": true,
       "placeholder": "500"
+    },
+    "agentScoping": {
+      "label": "Agent Scoping",
+      "help": "Isolate memories per agent. When enabled, auto-capture tags memories with the originating agent id and auto-recall only returns memories belonging to the current agent. Backward-compatible: existing shared memories (agentId empty) remain visible to all agents.",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -81,6 +86,9 @@
         "type": "number",
         "minimum": 100,
         "maximum": 10000
+      },
+      "agentScoping": {
+        "type": "boolean"
       }
     },
     "required": ["embedding"]

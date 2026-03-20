@@ -43,6 +43,8 @@ type MemoryEntry = {
   importance: number;
   category: MemoryCategory;
   createdAt: number;
+  // ID of agent that owns this memory. Empty string means memory is globally shared
+  agentId: string;
 };
 
 type MemorySearchResult = {
@@ -85,6 +87,7 @@ class MemoryDB {
 
     if (tables.includes(TABLE_NAME)) {
       this.table = await this.db.openTable(TABLE_NAME);
+      await this.migrateAgentIdColumn();
     } else {
       this.table = await this.db.createTable(TABLE_NAME, [
         {
@@ -94,9 +97,28 @@ class MemoryDB {
           importance: 0,
           category: "other",
           createdAt: 0,
+          agentId: "",
         },
       ]);
       await this.table.delete('id = "__schema__"');
+    }
+  }
+
+  private async migrateAgentIdColumn(): Promise<void> {
+    try {
+      const schema = await this.table!.schema();
+      const hasAgentId = schema.fields.some((f: { name: string }) => f.name === "agentId");
+      if (!hasAgentId) {
+        // Add column where existing rows default to empty string, for global memory
+        await (
+          this.table as unknown as {
+            addColumns(cols: Array<{ name: string; valueSql: string }>): Promise<void>;
+          }
+        ).addColumns([{ name: "agentId", valueSql: "''" }]);
+      }
+    } catch {
+      // Best-effort: if migration fails the plugin continues to work,
+      // but we skip agent-scoped filtering for this table.
     }
   }
 
@@ -113,10 +135,21 @@ class MemoryDB {
     return fullEntry;
   }
 
-  async search(vector: number[], limit = 5, minScore = 0.5): Promise<MemorySearchResult[]> {
+  async search(
+    vector: number[],
+    limit = 5,
+    minScore = 0.5,
+    agentId?: string,
+  ): Promise<MemorySearchResult[]> {
     await this.ensureInitialized();
 
-    const results = await this.table!.vectorSearch(vector).limit(limit).toArray();
+    let query = this.table!.vectorSearch(vector).limit(limit);
+    if (agentId !== undefined) {
+      // safe chars to prevent SQL injection
+      const safe = agentId.replace(/[^a-zA-Z0-9_\-.:@]/g, "");
+      query = query.where(`agentId = '${safe}' OR agentId = ''`);
+    }
+    const results = await query.toArray();
 
     // LanceDB uses L2 distance by default; convert to similarity score
     const mapped = results.map((row) => {
@@ -131,6 +164,7 @@ class MemoryDB {
           importance: row.importance as number,
           category: row.category as MemoryEntry["category"],
           createdAt: row.createdAt as number,
+          agentId: (row.agentId as string) ?? "",
         },
         score,
       };
@@ -139,14 +173,19 @@ class MemoryDB {
     return mapped.filter((r) => r.score >= minScore);
   }
 
-  async delete(id: string): Promise<boolean> {
+  async delete(id: string, agentId?: string): Promise<boolean> {
     await this.ensureInitialized();
     // Validate UUID format to prevent injection
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(id)) {
       throw new Error(`Invalid memory ID format: ${id}`);
     }
-    await this.table!.delete(`id = '${id}'`);
+    if (agentId !== undefined) {
+      const safe = agentId.replace(/[^a-zA-Z0-9_\-.:@]/g, "");
+      await this.table!.delete(`id = '${id}' AND (agentId = '${safe}' OR agentId = '')`);
+    } else {
+      await this.table!.delete(`id = '${id}'`);
+    }
     return true;
   }
 
@@ -312,7 +351,7 @@ export default definePluginEntry({
     // ========================================================================
 
     api.registerTool(
-      {
+      (ctx) => ({
         name: "memory_recall",
         label: "Memory Recall",
         description:
@@ -323,9 +362,10 @@ export default definePluginEntry({
         }),
         async execute(_toolCallId, params) {
           const { query, limit = 5 } = params as { query: string; limit?: number };
+          const agentId = cfg.agentScoping ? (ctx.agentId ?? "") : undefined;
 
           const vector = await embeddings.embed(query);
-          const results = await db.search(vector, limit, 0.1);
+          const results = await db.search(vector, limit, 0.1, agentId);
 
           if (results.length === 0) {
             return {
@@ -355,12 +395,12 @@ export default definePluginEntry({
             details: { count: results.length, memories: sanitizedResults },
           };
         },
-      },
+      }),
       { name: "memory_recall" },
     );
 
     api.registerTool(
-      {
+      (ctx) => ({
         name: "memory_store",
         label: "Memory Store",
         description:
@@ -385,11 +425,12 @@ export default definePluginEntry({
             importance?: number;
             category?: MemoryEntry["category"];
           };
+          const agentId = cfg.agentScoping ? (ctx.agentId ?? "") : "";
 
           const vector = await embeddings.embed(text);
 
-          // Check for duplicates
-          const existing = await db.search(vector, 1, 0.95);
+          // Check for duplicates within this agent's scope
+          const existing = await db.search(vector, 1, 0.95, cfg.agentScoping ? agentId : undefined);
           if (existing.length > 0) {
             return {
               content: [
@@ -411,6 +452,7 @@ export default definePluginEntry({
             vector,
             importance,
             category,
+            agentId,
           });
 
           return {
@@ -418,12 +460,12 @@ export default definePluginEntry({
             details: { action: "created", id: entry.id },
           };
         },
-      },
+      }),
       { name: "memory_store" },
     );
 
     api.registerTool(
-      {
+      (ctx) => ({
         name: "memory_forget",
         label: "Memory Forget",
         description: "Delete specific memories. GDPR-compliant.",
@@ -433,9 +475,10 @@ export default definePluginEntry({
         }),
         async execute(_toolCallId, params) {
           const { query, memoryId } = params as { query?: string; memoryId?: string };
+          const agentId = cfg.agentScoping ? (ctx.agentId ?? "") : undefined;
 
           if (memoryId) {
-            await db.delete(memoryId);
+            await db.delete(memoryId, agentId);
             return {
               content: [{ type: "text", text: `Memory ${memoryId} forgotten.` }],
               details: { action: "deleted", id: memoryId },
@@ -444,7 +487,7 @@ export default definePluginEntry({
 
           if (query) {
             const vector = await embeddings.embed(query);
-            const results = await db.search(vector, 5, 0.7);
+            const results = await db.search(vector, 5, 0.7, agentId);
 
             if (results.length === 0) {
               return {
@@ -454,7 +497,7 @@ export default definePluginEntry({
             }
 
             if (results.length === 1 && results[0].score > 0.9) {
-              await db.delete(results[0].entry.id);
+              await db.delete(results[0].entry.id, agentId);
               return {
                 content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}"` }],
                 details: { action: "deleted", id: results[0].entry.id },
@@ -489,7 +532,7 @@ export default definePluginEntry({
             details: { error: "missing_param" },
           };
         },
-      },
+      }),
       { name: "memory_forget" },
     );
 
@@ -545,14 +588,17 @@ export default definePluginEntry({
 
     // Auto-recall: inject relevant memories before agent starts
     if (cfg.autoRecall) {
-      api.on("before_agent_start", async (event) => {
+      api.on("before_agent_start", async (event, ctx) => {
         if (!event.prompt || event.prompt.length < 5) {
           return;
         }
 
         try {
+          // When agentScoping true, restrict recall to this agent's
+          // scoped memories and the global scoped memories
+          const agentId = cfg.agentScoping ? (ctx.agentId ?? "") : undefined;
           const vector = await embeddings.embed(event.prompt);
-          const results = await db.search(vector, 3, 0.3);
+          const results = await db.search(vector, 3, 0.3, agentId);
 
           if (results.length === 0) {
             return;
@@ -573,10 +619,14 @@ export default definePluginEntry({
 
     // Auto-capture: analyze and store important information after agent ends
     if (cfg.autoCapture) {
-      api.on("agent_end", async (event) => {
+      api.on("agent_end", async (event, ctx) => {
         if (!event.success || !event.messages || event.messages.length === 0) {
           return;
         }
+
+        // When agentScoping true, tag memories with agentId so they are
+        // not visible to other agents.
+        const agentId = cfg.agentScoping ? (ctx.agentId ?? "") : "";
 
         try {
           // Extract text content from messages (handling unknown[] type)
@@ -633,8 +683,13 @@ export default definePluginEntry({
             const category = detectCategory(text);
             const vector = await embeddings.embed(text);
 
-            // Check for duplicates (high similarity threshold)
-            const existing = await db.search(vector, 1, 0.95);
+            // Check for duplicates within this agent's scope
+            const existing = await db.search(
+              vector,
+              1,
+              0.95,
+              cfg.agentScoping ? agentId : undefined,
+            );
             if (existing.length > 0) {
               continue;
             }
@@ -644,6 +699,7 @@ export default definePluginEntry({
               vector,
               importance: 0.7,
               category,
+              agentId,
             });
             stored++;
           }
