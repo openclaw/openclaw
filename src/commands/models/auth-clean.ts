@@ -74,10 +74,17 @@ function collectMediaProfileIds(cfg: Awaited<ReturnType<typeof loadModelsConfig>
 function sanitizeProfileId(id: string): string {
   return id
     .replace(
+      // Strip 7-bit ESC-prefixed ANSI/VT control sequences (CSI, OSC, DCS, APC, PM, SOS,
+      // private-use, and bare ESC + any char) to prevent terminal injection via profile IDs.
       // eslint-disable-next-line no-control-regex
       /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[\s\S]?)/g,
       "",
     )
+    // Strip C1 8-bit control codes (U+0080–U+009F), including \x9b (C1 CSI), which can
+    // construct terminal colour/cursor sequences on xterm-compatible terminals without
+    // a leading ESC byte, bypassing the 7-bit escape strip above (Greptile concern).
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x80-\x9f]/g, "")
     .replace(/[\r\n]/g, "");
 }
 
@@ -363,7 +370,13 @@ export async function modelsAuthCleanCommand(
   });
 
   if (!updated) {
-    throw new Error("Failed to update auth-profiles.json (lock busy).");
+    // updateAuthProfileStoreWithLock returns null for any internal failure (lock
+    // contention, I/O error, permission denied, disk full, etc.) — not just
+    // lock contention. The original message was misleading; use a generic message
+    // so the error accurately reflects that any write failure is possible.
+    throw new Error(
+      "Failed to update auth-profiles.json (write failed — check for lock contention, I/O errors, or permission issues).",
+    );
   }
 
   if (opts.json) {
