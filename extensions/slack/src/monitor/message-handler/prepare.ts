@@ -479,8 +479,7 @@ export async function prepareSlackMessage(params: {
       : undefined;
   const shouldRequireMention =
     threadMentionOverride !== undefined ? threadMentionOverride : baseMentionRequired;
-  const effectiveImplicitMention =
-    threadMentionOverride === true ? false : implicitMention;
+  const effectiveImplicitMention = threadMentionOverride === true ? false : implicitMention;
 
   // Allow "control commands" to bypass mention gating if sender is authorized.
   const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
