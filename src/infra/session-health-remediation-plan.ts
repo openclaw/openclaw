@@ -28,23 +28,7 @@ import {
   REMEDIATION_TIER_LABELS,
 } from "./session-health-remediation-types.js";
 import type { SessionHealthClass, SessionHealthRawSnapshot } from "./session-health-types.js";
-
-// ---------------------------------------------------------------------------
-// Retention defaults (from Phase 1 taxonomy)
-// ---------------------------------------------------------------------------
-
-const DEFAULT_RETENTION_MS: Record<SessionHealthClass, number | null> = {
-  main: null, // permanent — never auto-pruned
-  channel: null, // permanent
-  direct: null, // permanent
-  "cron-definition": null, // retain while cron job exists
-  "cron-run": 7 * 24 * 60 * 60 * 1000, // 7 days
-  subagent: 7 * 24 * 60 * 60 * 1000, // 7 days
-  acp: 14 * 24 * 60 * 60 * 1000, // 14 days
-  heartbeat: 3 * 24 * 60 * 60 * 1000, // 3 days
-  thread: null, // inherits parent
-  unknown: 30 * 24 * 60 * 60 * 1000, // 30 days (existing pruneAfterMs default)
-};
+import { DEFAULT_CLASS_RETENTION_MS } from "./session-health-types.js";
 
 // ---------------------------------------------------------------------------
 // Action builders (one per action kind)
@@ -131,14 +115,14 @@ function buildArchiveStaleDeletedTranscripts(
     kind: "archive-stale-deleted-transcripts",
     tier: 1,
     label: "Purge aged .deleted transcript archives",
-    description: `Remove ${sessions.byDiskState.deleted} soft-deleted transcript file(s) that have exceeded their archive retention window (${formatMs(snapshot.maintenance.pruneAfterMs)}). These are already-deleted session transcripts that were retained as safety backups.`,
-    reason: "Stale .deleted transcript archives consuming storage",
+    description: `Permanently remove ${sessions.byDiskState.deleted} .deleted transcript file(s) (${formatBytes(storage.deletedTranscriptBytes)}) that have exceeded the archive retention window (${formatMs(snapshot.maintenance.pruneAfterMs)}). These are already soft-deleted session transcripts kept as safety backups; the original sessions were previously removed from the index.`,
+    reason: "Stale .deleted transcript archives consuming storage beyond retention window",
     estimatedImpact: {
       affectedCount: sessions.byDiskState.deleted,
       estimatedBytes: storage.deletedTranscriptBytes,
       affectedClasses: [],
     },
-    reversible: false, // These are already the archived version
+    reversible: false, // These are already the archived version — no further backup exists
     prerequisites: [],
   };
 }
@@ -160,14 +144,14 @@ function buildArchiveStaleResetTranscripts(
     kind: "archive-stale-reset-transcripts",
     tier: 1,
     label: "Purge aged .reset transcript archives",
-    description: `Remove ${sessions.byDiskState.reset} reset transcript file(s) consuming ${formatBytes(storage.resetTranscriptBytes)} (${resetPct}% of total managed storage). These are session-reset snapshots retained for recovery.`,
-    reason: "Reset transcript archives are the dominant storage consumer",
+    description: `Permanently remove ${sessions.byDiskState.reset} .reset transcript archive(s) consuming ${formatBytes(storage.resetTranscriptBytes)} (${resetPct}% of total managed storage). These are already archived session-reset snapshots retained for recovery and now recommended for final purge.`,
+    reason: "Aged .reset transcript archives are the dominant storage consumer",
     estimatedImpact: {
       affectedCount: sessions.byDiskState.reset,
       estimatedBytes: storage.resetTranscriptBytes,
       affectedClasses: [],
     },
-    reversible: false, // These are already the archived version
+    reversible: false, // These are already the archived version — no further backup exists
     prerequisites: [],
   };
 }
@@ -187,7 +171,7 @@ function buildReconcileIndexPhantoms(snapshot: SessionHealthRawSnapshot): Remedi
     reason: "Index entries found without matching disk file (index drift)",
     estimatedImpact: {
       affectedCount: drift.indexedWithoutDiskFile,
-      estimatedBytes: 0, // Index compaction savings are minimal
+      estimatedBytes: null, // Honest estimate unavailable from current snapshot
       affectedClasses: [],
     },
     reversible: false, // Index entry removal is not reversible, but the transcript is already gone
@@ -200,8 +184,13 @@ function buildPruneStaleSessionsByClass(
   sessionClass: SessionHealthClass,
   retentionMs: number,
 ): RemediationAction | null {
-  const count = snapshot.sessions.byClass[sessionClass];
-  if (count === 0) {
+  const totalCount = snapshot.sessions.byClass[sessionClass];
+  // Use age-filtered stale counts from the collector when available.
+  // Fall back to 0 if staleByClass is absent or has no entry for this class —
+  // never fall back to totalCount, which would overstate stale sessions.
+  const staleCount = snapshot.sessions.staleByClass?.[sessionClass] ?? 0;
+
+  if (staleCount === 0) {
     return null;
   }
 
@@ -224,16 +213,22 @@ function buildPruneStaleSessionsByClass(
     acp: "ACP",
   };
 
+  const humanLabel = labelMap[sessionClass] ?? sessionClass;
+  const contextNote =
+    totalCount > staleCount
+      ? ` (${totalCount - staleCount} of ${totalCount} total are within retention)`
+      : "";
+
   return {
     id: nextActionId(kind),
     kind,
     tier: 2,
-    label: `Prune stale ${labelMap[sessionClass] ?? sessionClass} sessions`,
-    description: `Remove session index entries for ${count} ${labelMap[sessionClass] ?? sessionClass} session(s) older than ${formatMs(retentionMs)} and their associated transcript files. This reduces index bloat from ephemeral session types.`,
-    reason: `${count} ${labelMap[sessionClass] ?? sessionClass} session(s) in index (retention policy: ${formatMs(retentionMs)})`,
+    label: `Prune stale ${humanLabel} sessions`,
+    description: `Remove session index entries for ${staleCount} ${humanLabel} session(s) older than ${formatMs(retentionMs)} and their associated transcript files${contextNote}. This reduces index bloat from ephemeral session types.`,
+    reason: `${staleCount} of ${totalCount} ${humanLabel} session(s) exceed retention policy (${formatMs(retentionMs)})`,
     estimatedImpact: {
-      affectedCount: count,
-      estimatedBytes: 0, // Would need per-class byte accounting to estimate
+      affectedCount: staleCount,
+      estimatedBytes: null, // Honest estimate unavailable without per-class byte accounting
       affectedClasses: [sessionClass],
     },
     reversible: false,
@@ -292,7 +287,7 @@ export function buildRemediationPlan(options: BuildRemediationPlanOptions): Reme
   const { snapshot, retentionOverrides, includeNoOpActions } = options;
 
   // Resolve retention per class (merge overrides with defaults)
-  const retention: Record<SessionHealthClass, number | null> = { ...DEFAULT_RETENTION_MS };
+  const retention: Record<SessionHealthClass, number | null> = { ...DEFAULT_CLASS_RETENTION_MS };
   if (retentionOverrides) {
     for (const [cls, ms] of Object.entries(retentionOverrides)) {
       if (ms != null) {
@@ -327,7 +322,7 @@ export function buildRemediationPlan(options: BuildRemediationPlanOptions): Reme
     if (
       !includeNoOpActions &&
       a.estimatedImpact.affectedCount === 0 &&
-      a.estimatedImpact.estimatedBytes === 0
+      (a.estimatedImpact.estimatedBytes ?? 0) === 0
     ) {
       return false;
     }
@@ -340,8 +335,9 @@ export function buildRemediationPlan(options: BuildRemediationPlanOptions): Reme
   // Compute summary
   const summary = buildPlanSummary(actions);
 
-  // Build approval model
-  const approvalModel = buildApprovalModel();
+  // Build approval model — only include action kinds that are active in this plan
+  const activeKinds = new Set(actions.map((a) => a.kind));
+  const approvalModel = buildApprovalModel(activeKinds);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -400,7 +396,7 @@ function buildPlanSummary(actions: RemediationAction[]): RemediationPlanSummary 
 
   for (const action of actions) {
     countByTier[action.tier]++;
-    estimatedRecoverableBytes += action.estimatedImpact.estimatedBytes;
+    estimatedRecoverableBytes += action.estimatedImpact.estimatedBytes ?? 0;
     if (action.tier > highestTier) {
       highestTier = action.tier;
     }
@@ -432,7 +428,9 @@ function buildRecommendation(
     parts.push(`${countByTier[0]} auto-safe action(s) can run immediately`);
   }
   if (countByTier[1] > 0) {
-    parts.push(`${countByTier[1]} reversible action(s) should be previewed before enabling`);
+    parts.push(
+      `${countByTier[1]} Tier 1 archive/retention action(s) should be previewed before enabling`,
+    );
   }
   if (countByTier[2] > 0) {
     parts.push(`${countByTier[2]} index-mutating action(s) require explicit approval`);
@@ -448,7 +446,13 @@ function buildRecommendation(
   return parts.join(". ") + ".";
 }
 
-function buildApprovalModel(): ApprovalModel {
+/**
+ * Build the approval model. When `activeKinds` is provided, only include
+ * action kinds that appear in the current plan — this avoids listing
+ * inactive/irrelevant action kinds in the dry-run output, reducing noise
+ * and improving operator trust.
+ */
+function buildApprovalModel(activeKinds?: Set<RemediationActionKind>): ApprovalModel {
   const autoApprovable: RemediationActionKind[] = [];
   const previewThenAutomate: RemediationActionKind[] = [];
   const explicitApprovalRequired: RemediationActionKind[] = [];
@@ -458,6 +462,10 @@ function buildApprovalModel(): ApprovalModel {
     RemediationActionKind,
     RemediationRiskTier,
   ][]) {
+    // When filtering to active kinds, skip kinds not in the plan
+    if (activeKinds && !activeKinds.has(kind)) {
+      continue;
+    }
     switch (tier) {
       case 0:
         autoApprovable.push(kind);
@@ -552,13 +560,19 @@ export function renderRemediationPlanText(plan: RemediationPlan): string {
       lines.push(`  ▸ ${action.label}${reversibleTag}`);
       lines.push(`    ${action.description}`);
       lines.push(`    Reason: ${action.reason}`);
-      if (action.estimatedImpact.affectedCount > 0 || action.estimatedImpact.estimatedBytes > 0) {
+      if (
+        action.estimatedImpact.affectedCount > 0 ||
+        (action.estimatedImpact.estimatedBytes ?? 0) > 0 ||
+        action.estimatedImpact.estimatedBytes == null
+      ) {
         const parts: string[] = [];
         if (action.estimatedImpact.affectedCount > 0) {
           parts.push(`${action.estimatedImpact.affectedCount} artifact(s)`);
         }
-        if (action.estimatedImpact.estimatedBytes > 0) {
-          parts.push(formatBytes(action.estimatedImpact.estimatedBytes));
+        if ((action.estimatedImpact.estimatedBytes ?? 0) > 0) {
+          parts.push(formatBytes(action.estimatedImpact.estimatedBytes ?? 0));
+        } else if (action.estimatedImpact.estimatedBytes == null) {
+          parts.push("byte estimate unavailable");
         }
         lines.push(`    Impact: ${parts.join(", ")}`);
       }

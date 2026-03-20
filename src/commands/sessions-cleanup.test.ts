@@ -122,6 +122,10 @@ function snapshotWithIssues(): SessionHealthRawSnapshot {
         "cron-run": 15,
         subagent: 8,
       },
+      staleByClass: {
+        "cron-run": 6,
+        subagent: 3,
+      },
       byDiskState: {
         active: 30,
         deleted: 3,

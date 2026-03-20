@@ -30,6 +30,7 @@ import { classifyDiskArtifact, classifySessionKeyForHealth } from "./session-hea
 import type {
   DiskStateCounts,
   SessionHealthAgentBreakdown,
+  SessionHealthClass,
   SessionHealthClassCounts,
   SessionHealthDrift,
   SessionHealthGrowth,
@@ -37,6 +38,7 @@ import type {
   SessionHealthStorageBreakdown,
   SessionHealthSurface,
 } from "./session-health-types.js";
+import { DEFAULT_CLASS_RETENTION_MS } from "./session-health-types.js";
 
 const log = createSubsystemLogger("session-health");
 
@@ -160,6 +162,7 @@ type AgentCollectionResult = {
   byDiskState: DiskStateCounts;
   storage: SessionHealthStorageBreakdown;
   drift: SessionHealthDrift;
+  staleByClass: Partial<SessionHealthClassCounts>;
   parseTimeMs: number | null;
 };
 
@@ -181,12 +184,24 @@ async function collectForAgent(params: {
     log.warn("failed to load session store for agent", { agentId, error: String(err) });
   }
 
-  // 2. Classify session keys
+  // 2. Classify session keys and compute stale-per-class counts
   const byClass = emptyClassCounts();
+  const staleByClass: Partial<SessionHealthClassCounts> = {};
   const storeKeys = Object.keys(store);
+  const now = Date.now();
   for (const key of storeKeys) {
     const cls = classifySessionKeyForHealth(key);
     byClass[cls]++;
+
+    // Compute stale count for prunable classes
+    const retentionMs = DEFAULT_CLASS_RETENTION_MS[cls];
+    if (retentionMs != null) {
+      const entry = store[key] as Record<string, unknown> | undefined;
+      const updatedAt = typeof entry?.updatedAt === "number" ? entry.updatedAt : 0;
+      if (updatedAt > 0 && now - updatedAt > retentionMs) {
+        staleByClass[cls] = (staleByClass[cls] ?? 0) + 1;
+      }
+    }
   }
 
   // 3. Read directory files
@@ -303,6 +318,7 @@ async function collectForAgent(params: {
     byDiskState,
     storage,
     drift,
+    staleByClass,
     parseTimeMs,
   };
 }
@@ -352,18 +368,27 @@ export async function collectSessionHealth(
     oldestOrphanedTempAt: null,
     reconciliationRecommended: false,
   };
+  const mergedStaleByClass: Partial<SessionHealthClassCounts> = {};
   let totalIndexed = 0;
   let totalSessionsJsonBytes = 0;
   let bestParseTimeMs: number | null = null;
 
   for (const result of agentResults) {
-    const { breakdown, byDiskState, storage, drift, parseTimeMs } = result;
+    const { breakdown, byDiskState, storage, drift, staleByClass, parseTimeMs } = result;
     totalIndexed += breakdown.indexedCount;
     totalSessionsJsonBytes += storage.sessionsJsonBytes;
 
     // Merge class counts
     for (const [cls, count] of Object.entries(breakdown.byClass)) {
       mergedClass[cls as keyof SessionHealthClassCounts] += count;
+    }
+
+    // Merge stale-per-class counts
+    for (const [cls, count] of Object.entries(staleByClass)) {
+      if (count != null && count > 0) {
+        mergedStaleByClass[cls as SessionHealthClass] =
+          (mergedStaleByClass[cls as SessionHealthClass] ?? 0) + count;
+      }
     }
 
     // Merge disk state counts
@@ -427,6 +452,7 @@ export async function collectSessionHealth(
       sessionsJsonBytes: totalSessionsJsonBytes,
       sessionsJsonParseTimeMs: bestParseTimeMs,
       byClass: mergedClass,
+      staleByClass: Object.keys(mergedStaleByClass).length > 0 ? mergedStaleByClass : undefined,
       byDiskState: mergedDiskState,
     },
     storage: mergedStorage,

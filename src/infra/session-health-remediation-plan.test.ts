@@ -41,6 +41,13 @@ function baseSnapshot(overrides?: Partial<SessionHealthRawSnapshot>): SessionHea
         thread: 2,
         unknown: 0,
       },
+      // staleByClass reflects age-filtered counts (sessions past retention threshold)
+      staleByClass: {
+        "cron-run": 12,
+        subagent: 4,
+        acp: 2,
+        heartbeat: 1,
+      },
       byDiskState: {
         active: 40,
         deleted: 5,
@@ -105,6 +112,7 @@ describe("buildRemediationPlan", () => {
           thread: 2,
           unknown: 0,
         },
+        staleByClass: undefined,
         byDiskState: {
           active: 14,
           deleted: 0,
@@ -245,7 +253,7 @@ describe("Tier 2: index-mutating actions", () => {
     expect(action?.prerequisites).toContain("archive-orphan-transcripts");
   });
 
-  it("proposes pruning stale cron-run sessions", () => {
+  it("proposes pruning stale cron-run sessions using stale count, not total", () => {
     const snapshot = baseSnapshot();
     const plan = buildRemediationPlan({ snapshot });
     const action = plan.tiers
@@ -254,34 +262,41 @@ describe("Tier 2: index-mutating actions", () => {
     expect(action).toBeDefined();
     expect(action?.tier).toBe(2);
     expect(action?.estimatedImpact.affectedClasses).toContain("cron-run");
-    expect(action?.estimatedImpact.affectedCount).toBe(20); // 20 cron-run sessions
+    // Uses staleByClass count (12), NOT total byClass count (20)
+    expect(action?.estimatedImpact.affectedCount).toBe(12);
   });
 
-  it("proposes pruning stale subagent sessions", () => {
+  it("proposes pruning stale subagent sessions using stale count", () => {
     const snapshot = baseSnapshot();
     const plan = buildRemediationPlan({ snapshot });
     const action = plan.tiers
       .flatMap((t) => t.actions)
       .find((a) => a.kind === "prune-stale-subagents");
     expect(action).toBeDefined();
-    expect(action?.estimatedImpact.affectedCount).toBe(10); // 10 subagent sessions
+    // Uses staleByClass count (4), NOT total byClass count (10)
+    expect(action?.estimatedImpact.affectedCount).toBe(4);
   });
 
-  it("proposes pruning stale ACP sessions", () => {
+  it("proposes pruning stale ACP sessions using stale count", () => {
     const snapshot = baseSnapshot();
     const plan = buildRemediationPlan({ snapshot });
     const action = plan.tiers.flatMap((t) => t.actions).find((a) => a.kind === "prune-stale-acp");
     expect(action).toBeDefined();
-    expect(action?.estimatedImpact.affectedCount).toBe(5); // 5 ACP sessions
+    // Uses staleByClass count (2), NOT total byClass count (5)
+    expect(action?.estimatedImpact.affectedCount).toBe(2);
   });
 
-  it("does not propose pruning when class count is zero", () => {
+  it("does not propose pruning when stale count is zero even if total is nonzero", () => {
     const snapshot = baseSnapshot({
       sessions: {
         ...baseSnapshot().sessions,
         byClass: {
           ...baseSnapshot().sessions.byClass,
-          heartbeat: 0,
+          heartbeat: 5, // 5 total heartbeat sessions...
+        },
+        staleByClass: {
+          ...baseSnapshot().sessions.staleByClass,
+          heartbeat: 0, // ...but none are stale
         },
       },
     });
@@ -290,6 +305,20 @@ describe("Tier 2: index-mutating actions", () => {
       .flatMap((t) => t.actions)
       .find((a) => a.kind === "prune-stale-heartbeats");
     expect(action).toBeUndefined();
+  });
+
+  it("does not propose pruning when staleByClass is missing", () => {
+    const snapshot = baseSnapshot({
+      sessions: {
+        ...baseSnapshot().sessions,
+        staleByClass: undefined,
+      },
+    });
+    const plan = buildRemediationPlan({ snapshot });
+    const pruneActions = plan.tiers
+      .flatMap((t) => t.actions)
+      .filter((a) => a.kind.startsWith("prune-stale-"));
+    expect(pruneActions).toHaveLength(0);
   });
 });
 
@@ -361,7 +390,7 @@ describe("plan summary", () => {
 // ---------------------------------------------------------------------------
 
 describe("approval model", () => {
-  it("correctly partitions all action kinds across approval categories", () => {
+  it("only includes action kinds active in the current plan", () => {
     const plan = buildRemediationPlan({ snapshot: baseSnapshot() });
     const allKinds = new Set([
       ...plan.approvalModel.autoApprovable,
@@ -370,35 +399,64 @@ describe("approval model", () => {
       ...plan.approvalModel.neverAutomate,
     ]);
 
-    // Every defined action kind should be in exactly one category
-    for (const kind of Object.keys(ACTION_KIND_TIERS) as (keyof typeof ACTION_KIND_TIERS)[]) {
-      expect(allKinds.has(kind)).toBe(true);
+    // Every kind in the approval model should correspond to an action in the plan
+    const planActionKinds = new Set(plan.tiers.flatMap((t) => t.actions.map((a) => a.kind)));
+    for (const kind of allKinds) {
+      expect(planActionKinds.has(kind)).toBe(true);
     }
+
+    // Inactive kinds (e.g., cleanup-orphaned-tmp when orphanedTempCount=0) should not appear
+    expect(allKinds.has("cleanup-orphaned-tmp")).toBe(false); // No orphaned tmp in base snapshot
   });
 
-  it("cleanup-orphaned-tmp is auto-approvable", () => {
-    const plan = buildRemediationPlan({ snapshot: baseSnapshot() });
+  it("includes cleanup-orphaned-tmp when orphaned temps exist", () => {
+    const snapshot = baseSnapshot({
+      drift: {
+        ...baseSnapshot().drift,
+        orphanedTempCount: 1,
+        oldestOrphanedTempAt: "2026-03-19T00:00:00.000Z",
+      },
+      storage: {
+        ...baseSnapshot().storage,
+        orphanedTempBytes: 512,
+      },
+    });
+    const plan = buildRemediationPlan({ snapshot });
     expect(plan.approvalModel.autoApprovable).toContain("cleanup-orphaned-tmp");
   });
 
-  it("archive actions are preview-then-automate", () => {
+  it("archive actions are preview-then-automate when present", () => {
     const plan = buildRemediationPlan({ snapshot: baseSnapshot() });
-    expect(plan.approvalModel.previewThenAutomate).toContain("archive-orphan-transcripts");
+    // baseSnapshot has deleted and reset transcripts, so these should be present
     expect(plan.approvalModel.previewThenAutomate).toContain("archive-stale-deleted-transcripts");
     expect(plan.approvalModel.previewThenAutomate).toContain("archive-stale-reset-transcripts");
   });
 
-  it("prune actions require explicit approval", () => {
+  it("prune actions require explicit approval when present", () => {
     const plan = buildRemediationPlan({ snapshot: baseSnapshot() });
+    // baseSnapshot has staleByClass entries for cron-run
     expect(plan.approvalModel.explicitApprovalRequired).toContain("prune-stale-cron-runs");
-    expect(plan.approvalModel.explicitApprovalRequired).toContain("reconcile-index-phantoms");
   });
 
-  it("destructive actions are never-automate", () => {
-    const plan = buildRemediationPlan({ snapshot: baseSnapshot() });
+  it("destructive actions are never-automate when present", () => {
+    const snapshot = baseSnapshot({
+      maintenance: {
+        ...baseSnapshot().maintenance,
+        maxDiskBytes: 30 * 1024 * 1024, // 30 MB budget
+        usagePercent: {
+          entries: 10,
+          diskBytes: 167, // way over
+        },
+      },
+    });
+    const plan = buildRemediationPlan({ snapshot });
     expect(plan.approvalModel.neverAutomate).toContain("enforce-disk-budget");
-    expect(plan.approvalModel.neverAutomate).toContain("purge-archived-artifacts");
-    expect(plan.approvalModel.neverAutomate).toContain("bulk-class-prune");
+  });
+
+  it("does not include inactive kinds like purge-archived-artifacts or bulk-class-prune when no action uses them", () => {
+    const plan = buildRemediationPlan({ snapshot: baseSnapshot() });
+    expect(plan.approvalModel.neverAutomate).not.toContain("purge-archived-artifacts");
+    expect(plan.approvalModel.neverAutomate).not.toContain("bulk-class-prune");
   });
 });
 
@@ -463,6 +521,10 @@ describe("includeNoOpActions", () => {
           ...baseSnapshot().sessions.byClass,
           heartbeat: 0,
         },
+        staleByClass: {
+          ...baseSnapshot().sessions.staleByClass,
+          heartbeat: 0,
+        },
       },
     });
     const plan = buildRemediationPlan({ snapshot });
@@ -494,6 +556,7 @@ describe("renderRemediationPlanText", () => {
           thread: 0,
           unknown: 0,
         },
+        staleByClass: undefined,
         byDiskState: {
           active: 2,
           deleted: 0,

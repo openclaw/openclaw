@@ -26,9 +26,9 @@ import type { SessionHealthClass, SessionHealthRawSnapshot } from "./session-hea
  * - **0 — Auto-Safe:** Only affects definitional garbage (crashed temp files).
  *   Can be automated without data loss risk. Operator may approve bulk automation.
  *
- * - **1 — Reversible:** Renames/archives artifacts instead of deleting them.
- *   Original data survives for a configurable retention window. Requires a
- *   dry-run preview before first execution. Safe to automate after initial review.
+ * - **1 — Archive / Retention Cleanup:** Either archives orphaned artifacts or
+ *   removes artifacts that are already archived and past their retention window.
+ *   Requires a dry-run preview before first execution.
  *
  * - **2 — Index-Mutating:** Modifies the session index (sessions.json).
  *   Changes which sessions are visible/loadable. Transcript files may or may
@@ -41,14 +41,14 @@ export type RemediationRiskTier = 0 | 1 | 2 | 3;
 
 export const REMEDIATION_TIER_LABELS: Record<RemediationRiskTier, string> = {
   0: "Auto-Safe",
-  1: "Reversible",
+  1: "Archive / Retention Cleanup",
   2: "Index-Mutating",
   3: "Destructive",
 };
 
 export const REMEDIATION_TIER_DESCRIPTIONS: Record<RemediationRiskTier, string> = {
   0: "Only affects definitional garbage. Safe to automate without data loss risk.",
-  1: "Archives/renames artifacts instead of deleting. Original data survives for a retention window.",
+  1: "Archives orphaned artifacts or removes artifacts that are already archived and past retention.",
   2: "Modifies the session index. Changes which sessions are visible/loadable.",
   3: "Permanently removes data. Cannot be undone. Always requires explicit confirmation.",
 };
@@ -153,8 +153,11 @@ export type RemediationImpact = {
   /** Number of artifacts (files or index entries) affected. */
   affectedCount: number;
 
-  /** Estimated bytes that would be freed or archived. */
-  estimatedBytes: number;
+  /**
+   * Estimated bytes that would be freed or archived.
+   * Null means no honest estimate is available from the current snapshot.
+   */
+  estimatedBytes: number | null;
 
   /** Session classes affected by this action (if applicable). */
   affectedClasses: SessionHealthClass[];

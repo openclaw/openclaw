@@ -103,6 +103,16 @@ export type SessionHealthRawSnapshot = {
     sessionsJsonBytes: number;
     sessionsJsonParseTimeMs: number | null;
     byClass: SessionHealthClassCounts;
+    /**
+     * Per-class counts of sessions whose `updatedAt` exceeds the class
+     * retention threshold. Only populated for prunable classes (cron-run,
+     * subagent, acp, heartbeat). Null/missing values mean the class has
+     * no retention policy (permanent) or no stale sessions.
+     *
+     * Added in the trust-fix pass to avoid overstating stale counts in
+     * the remediation plan.
+     */
+    staleByClass?: Partial<SessionHealthClassCounts>;
     byDiskState: DiskStateCounts;
   };
 
@@ -115,6 +125,30 @@ export type SessionHealthRawSnapshot = {
   growth: SessionHealthGrowth;
 
   agents: SessionHealthAgentBreakdown[];
+};
+
+// ---------------------------------------------------------------------------
+// Per-Class Retention Defaults (Phase 1 taxonomy)
+// ---------------------------------------------------------------------------
+
+/**
+ * Default retention thresholds per session class.
+ *
+ * `null` means permanent (never auto-pruned by retention policy).
+ * Used by both the collector (to compute stale-per-class counts) and
+ * the remediation plan builder (to determine pruning targets).
+ */
+export const DEFAULT_CLASS_RETENTION_MS: Record<SessionHealthClass, number | null> = {
+  main: null, // permanent — never auto-pruned
+  channel: null, // permanent
+  direct: null, // permanent
+  "cron-definition": null, // retain while cron job exists
+  "cron-run": 7 * 24 * 60 * 60 * 1000, // 7 days
+  subagent: 7 * 24 * 60 * 60 * 1000, // 7 days
+  acp: 14 * 24 * 60 * 60 * 1000, // 14 days
+  heartbeat: 3 * 24 * 60 * 60 * 1000, // 3 days
+  thread: null, // inherits parent
+  unknown: 30 * 24 * 60 * 60 * 1000, // 30 days (existing pruneAfterMs default)
 };
 
 // ---------------------------------------------------------------------------
