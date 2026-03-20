@@ -39,8 +39,7 @@ export class VoicePlugin {}
       "./plugin-sdk/agent-runtime": "./plugin-sdk/agent-runtime.js",
       "./plugin-sdk/config-runtime": "./plugin-sdk/config-runtime.js",
       "./plugin-sdk/infra-runtime": "./plugin-sdk/infra-runtime.js",
-      "./plugin-sdk/media-understanding-runtime":
-        "./plugin-sdk/media-understanding-runtime.js",
+      "./plugin-sdk/media-understanding-runtime": "./plugin-sdk/media-understanding-runtime.js",
       "./plugin-sdk/routing": "./plugin-sdk/routing.js",
       "./plugin-sdk/runtime-env": "./plugin-sdk/runtime-env.js",
       "./plugin-sdk/security-runtime": "./plugin-sdk/security-runtime.js",

@@ -120,11 +120,7 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
   private readonly accountId: string;
   private readonly logger?: Logger;
 
-  constructor(
-    cfg: OpenClawConfig,
-    accountId: string,
-    logger?: Logger,
-  ) {
+  constructor(cfg: OpenClawConfig, accountId: string, logger?: Logger) {
     super();
     this.cfg = cfg;
     this.accountId = accountId;
