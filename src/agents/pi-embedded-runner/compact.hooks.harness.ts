@@ -252,6 +252,10 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveContextEngine: resolveContextEngineMock,
   }));
 
+  vi.doMock("../../plugins/provider-runtime.js", () => ({
+    prepareProviderRuntimeAuth: vi.fn(async () => undefined),
+  }));
+
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: vi.fn((_lane: unknown, task: () => unknown) => task()),
   }));
@@ -373,6 +377,14 @@ export async function loadCompactHooksHarness(): Promise<{
     createPreparedEmbeddedPiSettingsManager: vi.fn(() => ({
       getGlobalSettings: vi.fn(() => ({})),
     })),
+  }));
+
+  vi.doMock("../pi-bundle-mcp-tools.js", () => ({
+    createBundleMcpToolRuntime: vi.fn(async () => undefined),
+  }));
+
+  vi.doMock("../pi-bundle-lsp-runtime.js", () => ({
+    createBundleLspToolRuntime: vi.fn(async () => undefined),
   }));
 
   vi.doMock("./sandbox-info.js", () => ({
