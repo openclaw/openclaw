@@ -279,6 +279,69 @@ export async function handleTelegramAction(
       throw new Error("Telegram sendMessage is disabled.");
     }
     const to = readStringParam(params, "to", { required: true });
+
+    // If poll fields are present in a sendMessage call, route to poll action instead.
+    const inlinePollQuestion =
+      readStringParam(params, "question") ?? readStringParam(params, "pollQuestion");
+    const inlinePollOptions =
+      readStringArrayParam(params, "answers") ?? readStringArrayParam(params, "pollOption");
+    if (inlinePollQuestion && inlinePollOptions && inlinePollOptions.length > 0) {
+      const pollActionState = resolveTelegramPollActionGateState(isActionEnabled);
+      if (!pollActionState.pollEnabled) {
+        throw new Error("Telegram polls are disabled.");
+      }
+      const allowMultiselect =
+        readBooleanParam(params, "allowMultiselect") ?? readBooleanParam(params, "pollMulti");
+      const durationSeconds =
+        readNumberParam(params, "durationSeconds", { integer: true }) ??
+        readNumberParam(params, "pollDurationSeconds", { integer: true, strict: true });
+      const durationHours =
+        readNumberParam(params, "durationHours", { integer: true }) ??
+        readNumberParam(params, "pollDurationHours", { integer: true, strict: true });
+      const replyToMessageId = readTelegramReplyToMessageId(params);
+      const messageThreadId = readTelegramThreadId(params);
+      const isAnonymous =
+        readBooleanParam(params, "isAnonymous") ??
+        resolveTelegramPollVisibility({
+          pollAnonymous: readBooleanParam(params, "pollAnonymous"),
+          pollPublic: readBooleanParam(params, "pollPublic"),
+        });
+      const silent = readBooleanParam(params, "silent");
+      const token = resolveTelegramToken(cfg, { accountId }).token;
+      if (!token) {
+        throw new Error(
+          "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+        );
+      }
+      const result = await telegramActionRuntime.sendPollTelegram(
+        to,
+        {
+          question: inlinePollQuestion,
+          options: inlinePollOptions,
+          maxSelections: resolvePollMaxSelections(
+            inlinePollOptions.length,
+            allowMultiselect ?? false,
+          ),
+          durationSeconds: durationSeconds ?? undefined,
+          durationHours: durationHours ?? undefined,
+        },
+        {
+          cfg,
+          token,
+          accountId: accountId ?? undefined,
+          replyToMessageId: replyToMessageId ?? undefined,
+          messageThreadId: messageThreadId ?? undefined,
+          isAnonymous: isAnonymous ?? undefined,
+          silent: silent ?? undefined,
+        },
+      );
+      return jsonResult({
+        ok: true,
+        messageId: result.messageId,
+        chatId: result.chatId,
+        pollId: result.pollId,
+      });
+    }
     const mediaUrl =
       readStringParam(params, "mediaUrl") ??
       readStringParam(params, "media", {
