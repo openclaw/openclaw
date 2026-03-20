@@ -54,6 +54,23 @@ describe("chat-model-ref helpers", () => {
     ).toBe("openrouter/moonshotai/kimi-k2.5");
   });
 
+  it("preserves canonical OpenRouter-native ids without duplicating the provider", () => {
+    const openRouterCatalog: ModelCatalogEntry[] = [
+      {
+        id: "openrouter/hunter-alpha",
+        name: "Hunter Alpha",
+        provider: "openrouter",
+      },
+    ];
+
+    expect(
+      normalizeChatModelOverrideValue(
+        createChatModelOverride("openrouter/hunter-alpha"),
+        openRouterCatalog,
+      ),
+    ).toBe("openrouter/hunter-alpha");
+  });
+
   it("formats qualified model refs consistently for default labels", () => {
     expect(formatChatModelDisplay("openai/gpt-5-mini")).toBe("gpt-5-mini · openai");
     expect(formatChatModelDisplay("alias-only")).toBe("alias-only");
