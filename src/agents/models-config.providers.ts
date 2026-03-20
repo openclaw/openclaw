@@ -3,11 +3,21 @@ import {
   QIANFAN_DEFAULT_MODEL_ID,
 } from "../../extensions/qianfan/provider-catalog.js";
 import { XIAOMI_DEFAULT_MODEL_ID } from "../../extensions/xiaomi/provider-catalog.js";
+import {
+  DEFAULT_COPILOT_API_BASE_URL,
+  resolveCopilotApiToken,
+} from "../../extensions/github-copilot/token.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+  resolveAuthProfileEligibility,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
+import { findNormalizedProviderValue } from "./model-selection.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import { normalizeGoogleModelId } from "./model-id-normalization.js";
 import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
@@ -793,6 +803,16 @@ export async function resolveImplicitProviders(
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "paired"));
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "late"));
 
+  if (!providers["github-copilot"]) {
+    const implicitCopilot = await resolveImplicitCopilotProvider({
+      agentDir: params.agentDir,
+      config: params.config,
+      env,
+    });
+    if (implicitCopilot) {
+      providers["github-copilot"] = implicitCopilot;
+    }
+  }
   const implicitBedrock = await resolveImplicitBedrockProvider({
     agentDir: params.agentDir,
     config: params.config,
@@ -815,6 +835,127 @@ export async function resolveImplicitProviders(
   return providers;
 }
 
+export async function resolveImplicitCopilotProvider(params: {
+  agentDir: string;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ProviderConfig | null> {
+  const env = params.env ?? process.env;
+  const authStore = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  const profileIds = listProfilesForProvider(authStore, "github-copilot");
+  const hasProfile = profileIds.length > 0;
+  const envToken = env.COPILOT_GITHUB_TOKEN ?? env.GH_TOKEN ?? env.GITHUB_TOKEN;
+  const githubToken = (envToken ?? "").trim();
+
+  if (!hasProfile && !githubToken) {
+    return null;
+  }
+
+  const isEligibleProfileId = (profileId: string): boolean =>
+    resolveAuthProfileEligibility({
+      cfg: params.config,
+      store: authStore,
+      provider: "github-copilot",
+      profileId,
+    }).eligible;
+
+  const resolveCopilotTokenFromProfileId = (profileId: string): string => {
+    const profile = authStore.profiles[profileId];
+    if (!profile || profile.type !== "token") {
+      return "";
+    }
+    const inlineToken = profile.token?.trim() ?? "";
+    if (inlineToken) {
+      return inlineToken;
+    }
+    const tokenRef = coerceSecretRef(profile.tokenRef);
+    if (tokenRef?.source === "env" && tokenRef.id.trim()) {
+      return (env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim();
+    }
+    return "";
+  };
+
+  const takeResolvableCopilotToken = (
+    candidateProfileIds: string[],
+    options?: { skipEligibilityCheck?: boolean; seenProfileIds?: Set<string> },
+  ): string => {
+    const seenProfileIds = options?.seenProfileIds;
+    for (const profileId of candidateProfileIds) {
+      if (seenProfileIds?.has(profileId)) {
+        continue;
+      }
+      seenProfileIds?.add(profileId);
+      if (!options?.skipEligibilityCheck && !isEligibleProfileId(profileId)) {
+        continue;
+      }
+      const resolvedToken = resolveCopilotTokenFromProfileId(profileId);
+      if (resolvedToken) {
+        return resolvedToken;
+      }
+    }
+    return "";
+  };
+  let selectedGithubToken = githubToken;
+  if (!selectedGithubToken && hasProfile) {
+    // Respect auth.order when picking a discovery profile, but continue to
+    // other eligible candidates if the preferred token cannot be resolved.
+    const orderedProfileIds = resolveAuthProfileOrder({
+      cfg: params.config,
+      store: authStore,
+      provider: "github-copilot",
+    });
+    const configuredOrder =
+      orderedProfileIds.length === 0
+        ? (findNormalizedProviderValue(params.config?.auth?.order, "github-copilot") ?? []).filter(
+            isEligibleProfileId,
+          )
+        : [];
+    const orderedCandidates =
+      orderedProfileIds.length > 0
+        ? orderedProfileIds
+        : configuredOrder.length > 0
+          ? configuredOrder
+          : profileIds;
+    const seenProfileIds = new Set<string>();
+    const orderedCandidatesAlreadyEligible =
+      orderedProfileIds.length > 0 || configuredOrder.length > 0;
+
+    selectedGithubToken = takeResolvableCopilotToken(orderedCandidates, {
+      skipEligibilityCheck: orderedCandidatesAlreadyEligible,
+      seenProfileIds,
+    });
+
+    if (!selectedGithubToken && orderedCandidatesAlreadyEligible) {
+      selectedGithubToken = takeResolvableCopilotToken(profileIds, { seenProfileIds });
+    }
+  }
+
+  let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+  if (selectedGithubToken) {
+    try {
+      const token = await resolveCopilotApiToken({
+        githubToken: selectedGithubToken,
+        env,
+      });
+      baseUrl = token.baseUrl;
+    } catch {
+      baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+    }
+  }
+
+  // We deliberately do not write pi-coding-agent auth.json here.
+  // OpenClaw keeps auth in auth-profiles and resolves runtime availability from that store.
+
+  // We intentionally do NOT define custom models for Copilot in models.json.
+  // pi-coding-agent treats providers with models as replacements requiring apiKey.
+  // We only override baseUrl; the model list comes from pi-ai built-ins.
+  return {
+    baseUrl,
+    models: [],
+  } satisfies ProviderConfig;
+}
 export async function resolveImplicitBedrockProvider(params: {
   agentDir: string;
   config?: OpenClawConfig;
