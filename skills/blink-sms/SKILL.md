@@ -101,6 +101,14 @@ Common errors:
 - `to must be in E.164 format` → add `+` country code prefix (e.g. `+14155551234`)
 - `You're out of Blink credits` → add credits at blink.new/settings?tab=usage
 
+### SMS never arrives on US phones (CLI says success, but no text)
+
+The API returns `status: "queued"` when Twilio **accepts** the message. **Delivery** is separate.
+
+If recipients on **US mobile** never get the text, check **Twilio → Monitor → Logs → Messaging** for **Undelivered** and error **30034** (*US A2P 10DLC – Message from an Unregistered Number*).
+
+**Fix (Twilio account, not the agent):** Complete **A2P 10DLC** (Trust Hub: Brand + Campaign + link your US long code), **or** use **toll-free SMS** with **toll-free verification**. Until then, US carrier SMS from a normal long code is often blocked even though the CLI/API succeeded.
+
 ## Command signature
 
 ```
