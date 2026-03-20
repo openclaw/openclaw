@@ -12,7 +12,6 @@ export {
   type LookupFn,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/infra-runtime";
-export { formatZonedTimestamp } from "../../src/infra/format-time/format-datetime.js";
 export {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
@@ -24,6 +23,7 @@ export type {
   OpenClawConfig,
   PluginRuntime,
   RuntimeLogger,
+  RuntimeEnv,
+  WizardPrompter,
 } from "../../src/plugin-sdk/matrix.js";
-export type { RuntimeEnv } from "../../src/runtime.js";
-export type { WizardPrompter } from "../../src/wizard/prompts.js";
+export { formatZonedTimestamp } from "../../src/plugin-sdk/matrix.js";
