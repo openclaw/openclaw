@@ -20,6 +20,10 @@
       {
         "file": "extensions/imessage/src/monitor.shutdown.unhandled-rejection.test.ts",
         "reason": "Touches process-level unhandledRejection listeners."
+      },
+      {
+        "file": "src/plugins/loader.git-path-regression.test.ts",
+        "reason": "Constructs a real Jiti boundary; vmForks on Node 24 makes require a getter-only property, so force process forks."
       }
     ],
     "singletonIsolated": [
@@ -198,10 +202,6 @@
       {
         "file": "src/infra/heartbeat-runner.model-override.test.ts",
         "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
-      },
-      {
-        "file": "src/plugins/loader.git-path-regression.test.ts",
-        "reason": "Constructs a real Jiti boundary and is safer outside shared workers that may have mocked jiti earlier."
       },
       {
         "file": "src/infra/outbound/outbound-session.test.ts",
