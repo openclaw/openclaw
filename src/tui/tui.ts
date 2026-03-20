@@ -230,6 +230,10 @@ export function resolveInitialTuiAgentId(params: {
   return normalizeAgentId(params.fallbackAgentId);
 }
 
+function isMouseSgrSequence(data: string): boolean {
+  return /^\x1b\[<\d+;\d+;\d+[Mm]$/.test(data);
+}
+
 export function parseMouseWheelEvent(data: string): { direction: "up" | "down"; row: number; col: number } | null {
   const match = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
   if (!match) {
@@ -552,12 +556,15 @@ export async function runTui(opts: TuiOptions) {
   const tui = new TUI(new ProcessTerminal());
   const dedupeBackspace = createBackspaceDeduper();
   tui.addInputListener((data) => {
-    const mouse = parseMouseWheelEvent(data);
-    if (!mouse || tui.hasOverlay()) {
+    if (!isMouseSgrSequence(data)) {
       return undefined;
     }
+    const mouse = parseMouseWheelEvent(data);
+    if (!mouse || tui.hasOverlay()) {
+      return { consume: true };
+    }
     if (mouse.row < chatViewportTop || mouse.row > chatViewportBottom) {
-      return undefined;
+      return { consume: true };
     }
     if (mouse.direction === "up") {
       chatLog.scrollLines(3);

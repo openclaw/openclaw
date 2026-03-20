@@ -50,11 +50,16 @@ export class ChatLog extends Container {
 
   private append(component: Component) {
     const wasAtLatest = this.scrollOffset === 0;
+    const previousLineCount = wasAtLatest ? 0 : this.getRenderedLineCount(this.lastRenderWidth);
     this.addChild(component);
     this.pruneOverflow();
     if (wasAtLatest) {
       this.scrollToLatest();
+      return;
     }
+    const nextLineCount = this.getRenderedLineCount(this.lastRenderWidth);
+    this.scrollOffset += Math.max(0, nextLineCount - previousLineCount);
+    this.clampScrollOffset();
   }
 
   setViewportHeight(height: number | null) {
@@ -109,6 +114,7 @@ export class ChatLog extends Container {
     this.toolById.clear();
     this.streamingRuns.clear();
     this.btwMessage = null;
+    this.scrollToLatest();
   }
 
   addSystem(text: string) {
