@@ -41,7 +41,7 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
   return false;
 }
 
-function parseApiErrorPayload(raw: string): ErrorPayload | null {
+export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
   if (!raw) {
     return null;
   }

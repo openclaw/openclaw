@@ -141,7 +141,7 @@ describe("resolveGraphChatId", () => {
       }),
     );
     // Should filter by user AAD object ID
-    const callUrl = (fetchFn.mock.calls[0] as [string, unknown])[0];
+    const callUrl = (fetchFn.mock.calls[0] as unknown[])[0];
     expect(callUrl).toContain("user-aad-object-id-123");
     expect(result).toBe("19:dm-chat-id@unq.gbl.spaces");
   });

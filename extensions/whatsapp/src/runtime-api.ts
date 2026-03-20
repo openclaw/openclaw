@@ -9,16 +9,21 @@ export {
   readReactionParams,
   readStringParam,
   resolveWhatsAppGroupIntroHint,
+  resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupToolPolicy,
   resolveWhatsAppOutboundTarget,
   ToolAuthorizationError,
   WhatsAppConfigSchema,
   type ChannelPlugin,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/whatsapp-core";
+} from "../../../src/plugin-sdk/whatsapp-core.js";
 
 export {
   createWhatsAppOutboundBase,
   isWhatsAppGroupJid,
+  looksLikeWhatsAppTargetId,
+  normalizeWhatsAppAllowFromEntries,
+  normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
   resolveWhatsAppHeartbeatRecipients,
   resolveWhatsAppMentionStripRegexes,
@@ -26,6 +31,6 @@ export {
   type DmPolicy,
   type GroupPolicy,
   type WhatsAppAccountConfig,
-} from "openclaw/plugin-sdk/whatsapp-shared";
+} from "../../../src/plugin-sdk/whatsapp-shared.js";
 
 export { monitorWebChannel } from "./channel.runtime.js";

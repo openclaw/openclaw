@@ -2,9 +2,10 @@
 // Keep this barrel thin and aligned with the local extension surface.
 
 export * from "../../src/plugin-sdk/line.js";
-export { resolveExactLineGroupConfigKey } from "../../src/plugin-sdk/line-core.js";
 export {
+  DEFAULT_ACCOUNT_ID,
   formatDocsLink,
+  resolveExactLineGroupConfigKey,
   setSetupChannelEnabled,
   splitSetupEntries,
   type ChannelSetupDmPolicy,
