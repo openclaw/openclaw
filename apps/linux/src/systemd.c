@@ -488,9 +488,12 @@ static void fetch_unit_properties(void) {
     if (cached_environment) {
         sys_state.environment = g_strdupv(cached_environment);
     }
+    
+    sys_state.unit_name = g_strdup(discover_canonical_unit_name());
 
     state_update_systemd(&sys_state);
 
+    g_free(sys_state.unit_name);
     g_free(sys_state.active_state);
     g_free(sys_state.sub_state);
     g_strfreev(sys_state.exec_start_argv);
@@ -551,7 +554,10 @@ static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointe
             sys_state.environment = g_strdupv(cached_environment);
         }
         
+        sys_state.unit_name = g_strdup(discover_canonical_unit_name());
+        
         state_update_systemd(&sys_state);
+        g_free(sys_state.unit_name);
         g_free(sys_state.active_state);
         g_free(sys_state.sub_state);
         g_strfreev(sys_state.exec_start_argv);
@@ -587,7 +593,9 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
         if (check_system_scope_units()) {
             sys_state.system_installed_unsupported = TRUE;
         }
+        sys_state.unit_name = g_strdup(discover_canonical_unit_name());
         state_update_systemd(&sys_state);
+        g_free(sys_state.unit_name);
         return;
     }
 

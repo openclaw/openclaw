@@ -66,12 +66,8 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
 
     // 5. Initialize health subsystem
     health_init();
-    
-    // 6. Trigger initial async fetches for CLI lanes
-    health_probe_gateway();
-    health_run_deep_probe();
 
-    // 7. Start the disjoint lane timers
+    // 6. Start the disjoint lane timers
     // Lane 2: Primary JSON Status (every 5 seconds)
     g_timeout_add_seconds(5, on_status_poll, NULL);
     

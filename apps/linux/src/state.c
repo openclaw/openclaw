@@ -14,12 +14,16 @@
 #include <glib.h>
 #include "state.h"
 
+extern void health_probe_gateway(void);
+extern void health_run_deep_probe(void);
+
 static AppState current_state = STATE_NOT_INSTALLED;
 static SystemdState current_sys_state = {0};
 static HealthState current_health_state = {0};
 static ProbeState current_probe_state = {0};
 static guint64 current_health_generation = 0;
 static gboolean initial_hydration_done = FALSE;
+static gboolean initial_probe_fired = FALSE;
 
 static AppState compute_state(void) {
     // Note: The primary normalized state is computed strictly from:
@@ -63,6 +67,7 @@ static AppState compute_state(void) {
 void state_init(void) {
     current_state = STATE_NOT_INSTALLED;
     initial_hydration_done = FALSE;
+    initial_probe_fired = FALSE;
 }
 
 static void trigger_updates(AppState new_state) {
@@ -79,17 +84,32 @@ static void trigger_updates(AppState new_state) {
     tray_update_from_state(current_state);
 }
 
+static gboolean idle_trigger_health_probe(gpointer user_data) {
+    (void)user_data;
+    health_probe_gateway();
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean idle_trigger_deep_probe(gpointer user_data) {
+    (void)user_data;
+    health_run_deep_probe();
+    return G_SOURCE_REMOVE;
+}
+
 void state_update_systemd(SystemdState *sys_state) {
     gboolean became_active = (!current_sys_state.active && sys_state->active);
+    gboolean unit_changed = (g_strcmp0(current_sys_state.unit_name, sys_state->unit_name) != 0);
 
     g_free(current_sys_state.active_state);
     g_free(current_sys_state.sub_state);
+    g_free(current_sys_state.unit_name);
     g_strfreev(current_sys_state.exec_start_argv);
     g_strfreev(current_sys_state.environment);
     
     current_sys_state = *sys_state;
     current_sys_state.active_state = g_strdup(sys_state->active_state);
     current_sys_state.sub_state = g_strdup(sys_state->sub_state);
+    current_sys_state.unit_name = g_strdup(sys_state->unit_name);
     if (sys_state->exec_start_argv) {
         current_sys_state.exec_start_argv = g_strdupv(sys_state->exec_start_argv);
     } else {
@@ -101,14 +121,23 @@ void state_update_systemd(SystemdState *sys_state) {
         current_sys_state.environment = NULL;
     }
     
-    if (became_active) {
+    if (became_active || unit_changed) {
         // Reset the health snapshot explicitly on the relevant systemd transition
-        // so the state model has a clear freshness boundary.
+        // or unit retargeting so the state model has a clear freshness boundary.
         current_health_state.last_updated = 0;
         current_health_generation++;
     }
     
-    trigger_updates(compute_state());
+    AppState new_state = compute_state();
+    
+    if (!initial_probe_fired && new_state != STATE_NOT_INSTALLED && new_state != STATE_SYSTEM_UNSUPPORTED) {
+        initial_probe_fired = TRUE;
+        // Defer initial probes asynchronously to keep state mutation fast and decoupled
+        g_idle_add(idle_trigger_health_probe, NULL);
+        g_idle_add(idle_trigger_deep_probe, NULL);
+    }
+    
+    trigger_updates(new_state);
     initial_hydration_done = TRUE;
 }
 
