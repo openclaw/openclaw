@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import {
   buildSearchCacheKey,
+  buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
   readCachedSearchPayload,
@@ -246,22 +247,9 @@ function createKimiToolDefinition(
     parameters: createKimiSchema(),
     execute: async (args) => {
       const params = args as Record<string, unknown>;
-      for (const name of ["country", "language", "freshness", "date_after", "date_before"]) {
-        if (readStringParam(params, name)) {
-          const label =
-            name === "country"
-              ? "country filtering"
-              : name === "language"
-                ? "language filtering"
-                : name === "freshness"
-                  ? "freshness filtering"
-                  : "date_after/date_before filtering";
-          return {
-            error: name.startsWith("date_") ? "unsupported_date_filter" : `unsupported_${name}`,
-            message: `${label} is not supported by the kimi provider. Only Brave and Perplexity support ${name === "country" ? "country filtering" : name === "language" ? "language filtering" : name === "freshness" ? "freshness" : "date filtering"}.`,
-            docs: "https://docs.openclaw.ai/tools/web",
-          };
-        }
+      const unsupportedResponse = buildUnsupportedSearchFilterResponse(params, "kimi");
+      if (unsupportedResponse) {
+        return unsupportedResponse;
       }
 
       const kimiConfig = resolveKimiConfig(searchConfig);
