@@ -383,10 +383,8 @@ describe("monitorSignalProvider tool results", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      const events = getDirectSignalEventsFor("+15550001111");
-      expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
-    });
+    const events = getDirectSignalEventsFor("+15550001111");
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
   });
 
   it.each([
@@ -426,15 +424,8 @@ describe("monitorSignalProvider tool results", () => {
       },
     });
 
-    if (shouldEnqueue) {
-      await vi.waitFor(() => {
-        const events = getDirectSignalEventsFor("+15550001111");
-        expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
-      });
-    } else {
-      const events = getDirectSignalEventsFor("+15550001111");
-      expect(events.some((text) => text.includes("Signal reaction added"))).toBe(false);
-    }
+    const events = getDirectSignalEventsFor("+15550001111");
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(shouldEnqueue);
     expect(sendMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
   });
@@ -451,10 +442,8 @@ describe("monitorSignalProvider tool results", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      const events = getDirectSignalEventsFor("+15550001111");
-      expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
-    });
+    const events = getDirectSignalEventsFor("+15550001111");
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
   });
 
   it("processes messages when reaction metadata is present", async () => {
