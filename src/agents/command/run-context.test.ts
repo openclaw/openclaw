@@ -1,7 +1,26 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const extractDeliveryInfoMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../config/sessions/delivery-info.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/delivery-info.js")>();
+  return {
+    ...actual,
+    extractDeliveryInfo: (...args: Parameters<typeof actual.extractDeliveryInfo>) =>
+      extractDeliveryInfoMock(...args),
+  };
+});
+
 import { resolveAgentRunContext } from "./run-context.js";
 
 describe("resolveAgentRunContext", () => {
+  beforeEach(() => {
+    extractDeliveryInfoMock.mockReset().mockReturnValue({
+      deliveryContext: undefined,
+      threadId: undefined,
+    });
+  });
+
   it("falls back to topic id encoded in the session key", () => {
     const context = resolveAgentRunContext({
       message: "status update",
@@ -43,5 +62,24 @@ describe("resolveAgentRunContext", () => {
 
     expect(context.currentThreadTs).toBeUndefined();
     expect(context.currentChannelId).toBe("dm:user:thread:abc");
+  });
+
+  it("restores currentChannelId from session deliveryContext when only sessionKey is provided", () => {
+    extractDeliveryInfoMock.mockReturnValue({
+      deliveryContext: {
+        channel: "slack",
+        to: "slack:C1",
+        accountId: "default",
+      },
+      threadId: "123.456",
+    });
+
+    const context = resolveAgentRunContext({
+      message: "status update",
+      sessionKey: "agent:main:slack:channel:C1:thread:123.456",
+    });
+
+    expect(context.currentThreadTs).toBe("123.456");
+    expect(context.currentChannelId).toBe("slack:C1");
   });
 });

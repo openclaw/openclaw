@@ -231,11 +231,24 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
-function resolveRequesterSessionThreadId(
-  sessionKey: string | undefined,
-  explicitThreadId: string | number | undefined,
-): string | number | undefined {
-  return explicitThreadId ?? resolveSessionThreadIdForRouting(sessionKey);
+function resolveRequesterSessionThreadId(params: {
+  sessionKey: string | undefined;
+  explicitThreadId: string | number | undefined;
+  channel: string | undefined;
+}): string | number | undefined {
+  if (params.explicitThreadId != null) {
+    return params.explicitThreadId;
+  }
+  const normalizedChannel = params.channel?.trim().toLowerCase();
+  const sessionKey = params.sessionKey?.trim();
+  const isFeishuSenderScopedTopicSession =
+    normalizedChannel === "feishu" &&
+    sessionKey?.includes(":topic:") &&
+    sessionKey?.includes(":sender:");
+  if (isFeishuSenderScopedTopicSession) {
+    return undefined;
+  }
+  return resolveSessionThreadIdForRouting(sessionKey);
 }
 
 async function ensureThreadBindingForSubagentSpawn(params: {
@@ -342,7 +355,11 @@ export async function spawnSubagentDirect(
     channel: ctx.agentChannel,
     accountId: ctx.agentAccountId,
     to: ctx.agentTo,
-    threadId: resolveRequesterSessionThreadId(ctx.agentSessionKey, ctx.agentThreadId),
+    threadId: resolveRequesterSessionThreadId({
+      sessionKey: ctx.agentSessionKey,
+      explicitThreadId: ctx.agentThreadId,
+      channel: ctx.agentChannel,
+    }),
   });
   const hookRunner = getGlobalHookRunner();
   const cfg = loadConfig();

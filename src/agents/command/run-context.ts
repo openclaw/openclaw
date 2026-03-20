@@ -1,10 +1,17 @@
-import { resolveSessionThreadIdForRouting } from "../../config/sessions/delivery-info.js";
+import {
+  extractDeliveryInfo,
+  resolveSessionThreadIdForRouting,
+} from "../../config/sessions/delivery-info.js";
 import { normalizeAccountId } from "../../utils/account-id.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext {
   const merged: AgentRunContext = opts.runContext ? { ...opts.runContext } : {};
+  const trimmedSessionKey = opts.sessionKey?.trim();
+  const inferredSessionThreadId = resolveSessionThreadIdForRouting(trimmedSessionKey);
+  const inferredDeliveryInfo =
+    !opts.to && trimmedSessionKey ? extractDeliveryInfo(trimmedSessionKey) : undefined;
 
   const normalizedChannel = resolveMessageChannel(
     merged.messageChannel ?? opts.messageChannel,
@@ -34,8 +41,6 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     merged.groupSpace = groupSpace;
   }
 
-  const inferredSessionThreadId = resolveSessionThreadIdForRouting(opts.sessionKey?.trim());
-
   if (merged.currentThreadTs == null) {
     if (opts.threadId != null && opts.threadId !== "" && opts.threadId !== null) {
       merged.currentThreadTs = String(opts.threadId);
@@ -50,6 +55,11 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     const trimmedTo = opts.to.trim();
     if (trimmedTo) {
       merged.currentChannelId = trimmedTo;
+    }
+  } else if (!merged.currentChannelId) {
+    const inferredTo = inferredDeliveryInfo?.deliveryContext?.to?.trim();
+    if (inferredTo) {
+      merged.currentChannelId = inferredTo;
     }
   }
 

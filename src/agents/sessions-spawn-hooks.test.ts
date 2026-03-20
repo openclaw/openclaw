@@ -228,6 +228,34 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     });
   });
 
+  it("does not recover a root topic thread id for Feishu sender-scoped requester sessions", async () => {
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:main:feishu:group:oc_chat_123:topic:om_x100abc123:sender:ou_user_1",
+      agentChannel: "feishu",
+      agentAccountId: "work",
+      agentTo: "chat:oc_chat_123",
+    });
+
+    const result = await tool.execute("call", {
+      task: "do thing",
+      label: "research",
+      thread: true,
+    });
+
+    expect(result.details).toMatchObject({ status: "error" });
+    expect(hookRunnerMocks.runSubagentSpawning).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requester: expect.objectContaining({
+          channel: "feishu",
+          accountId: "work",
+          to: "chat:oc_chat_123",
+          threadId: undefined,
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("emits subagent_spawned with threadRequested=false when not requested", async () => {
     const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
