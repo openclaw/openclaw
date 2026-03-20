@@ -9,7 +9,7 @@ import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
-import { normalizeGoogleModelId } from "./model-id-normalization.js";
+import { normalizeGoogleModelId, normalizeXaiModelId } from "./model-id-normalization.js";
 import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
 export { buildKimiCodingProvider } from "../../extensions/kimi-coding/provider-catalog.js";
 export { buildKilocodeProvider } from "../../extensions/kilocode/provider-catalog.js";
@@ -42,7 +42,7 @@ import {
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 export { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
-export { normalizeGoogleModelId };
+export { normalizeGoogleModelId, normalizeXaiModelId };
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];

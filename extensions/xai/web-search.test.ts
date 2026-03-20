@@ -44,6 +44,19 @@ describe("xai web search config resolution", () => {
     );
   });
 
+  it("normalizes deprecated grok 4.20 beta model ids to GA ids", () => {
+    expect(
+      resolveXaiWebSearchModel({
+        grok: { model: "grok-4.20-experimental-beta-0304-reasoning" },
+      }),
+    ).toBe("grok-4.20-reasoning");
+    expect(
+      resolveXaiWebSearchModel({
+        grok: { model: "grok-4.20-experimental-beta-0304-non-reasoning" },
+      }),
+    ).toBe("grok-4.20-non-reasoning");
+  });
+
   it("defaults inlineCitations to false", () => {
     expect(resolveXaiInlineCitations({})).toBe(false);
     expect(resolveXaiInlineCitations(undefined)).toBe(false);

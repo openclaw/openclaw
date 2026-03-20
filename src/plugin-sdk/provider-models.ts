@@ -24,6 +24,7 @@ export {
   XAI_TOOL_SCHEMA_PROFILE,
 } from "../agents/model-compat.js";
 export { normalizeProviderId } from "../agents/provider-id.js";
+export { normalizeXaiModelId } from "../agents/model-id-normalization.js";
 export { cloneFirstTemplateModel } from "../plugins/provider-model-helpers.js";
 
 export {

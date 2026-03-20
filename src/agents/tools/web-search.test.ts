@@ -341,6 +341,15 @@ describe("web_search grok config resolution", () => {
     expect(resolveGrokModel({ model: "grok-4-fast" })).toBe("grok-4-fast");
   });
 
+  it("normalizes deprecated grok 4.20 beta ids to GA ids", () => {
+    expect(resolveGrokModel({ model: "grok-4.20-experimental-beta-0304-reasoning" })).toBe(
+      "grok-4.20-reasoning",
+    );
+    expect(resolveGrokModel({ model: "grok-4.20-experimental-beta-0304-non-reasoning" })).toBe(
+      "grok-4.20-non-reasoning",
+    );
+  });
+
   it("falls back to default model", () => {
     expect(resolveGrokModel({})).toBe("grok-4-1-fast");
   });
