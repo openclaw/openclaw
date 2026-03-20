@@ -510,5 +510,10 @@ describe("web processMessage inbound context", () => {
     await processMessage(args);
 
     expect(updateLastRouteMock).toHaveBeenCalledTimes(1);
+    expect(updateLastRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "+553598627740",
+      }),
+    );
   });
 });

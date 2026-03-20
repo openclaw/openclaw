@@ -3,6 +3,7 @@ import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { normalizeE164 } from "../../utils.js";
+import { areEquivalentWhatsAppDirectTargets } from "../../whatsapp/normalize.js";
 import { normalizeChatChannelId } from "../registry.js";
 
 type HeartbeatRecipientsResult = { recipients: string[]; source: string };
@@ -72,10 +73,13 @@ export function resolveWhatsAppHeartbeatRecipients(
   }
 
   if (allowFrom.length > 0) {
-    const allowSet = new Set(allowFrom);
     const authorizedSessionRecipients = sessionRecipients
       .map((entry) => entry.to)
-      .filter((recipient) => allowSet.has(recipient));
+      .filter((recipient) =>
+        allowFrom.some((allowedRecipient) =>
+          areEquivalentWhatsAppDirectTargets(allowedRecipient, recipient),
+        ),
+      );
     if (authorizedSessionRecipients.length === 1) {
       return { recipients: [authorizedSessionRecipients[0]], source: "session-single" };
     }

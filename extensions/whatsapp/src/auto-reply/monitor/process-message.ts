@@ -344,17 +344,18 @@ export async function processMessage(params: {
     cfg: params.cfg,
     msg: params.msg,
   });
-  const shouldUpdateMainLastRoute =
-    !pinnedMainDmRecipient ||
-    (dmRouteTarget
-      ? areEquivalentWhatsAppDirectTargets(pinnedMainDmRecipient, dmRouteTarget)
-      : false);
+  const canonicalMainLastRouteTarget = pinnedMainDmRecipient
+    ? dmRouteTarget && areEquivalentWhatsAppDirectTargets(pinnedMainDmRecipient, dmRouteTarget)
+      ? pinnedMainDmRecipient
+      : null
+    : dmRouteTarget;
+  const shouldUpdateMainLastRoute = Boolean(canonicalMainLastRouteTarget);
   const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
     route: params.route,
     sessionKey: params.route.sessionKey,
   });
   if (
-    dmRouteTarget &&
+    canonicalMainLastRouteTarget &&
     inboundLastRouteSessionKey === params.route.mainSessionKey &&
     shouldUpdateMainLastRoute
   ) {
@@ -364,7 +365,7 @@ export async function processMessage(params: {
       storeAgentId: params.route.agentId,
       sessionKey: params.route.mainSessionKey,
       channel: "whatsapp",
-      to: dmRouteTarget,
+      to: canonicalMainLastRouteTarget,
       accountId: params.route.accountId,
       ctx: ctxPayload,
       warn: params.replyLogger.warn.bind(params.replyLogger),
