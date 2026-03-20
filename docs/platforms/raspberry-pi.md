@@ -33,7 +33,7 @@ Perfect for:
 **Minimum specs:** 1GB RAM, 1 core, 500MB disk  
 **Recommended:** 2GB+ RAM, 64-bit OS, 16GB+ SD card (or USB SSD)
 
-## What You'll Need
+## What you need
 
 - Raspberry Pi 4 or 5 (2GB+ recommended)
 - MicroSD card (16GB+) or USB SSD (better performance)
@@ -76,15 +76,15 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Install Node.js 22 (ARM64)
+## 4) Install Node.js 24 (ARM64)
 
 ```bash
 # Install Node.js via NodeSource
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt install -y nodejs
 
 # Verify
-node --version  # Should show v22.x.x
+node --version  # Should show v24.x.x
 npm --version
 ```
 
@@ -321,7 +321,7 @@ Since the Pi is just the Gateway (models run in the cloud), use API-based models
 
 ## Auto-Start on Boot
 
-The onboarding wizard sets this up, but to verify:
+Onboarding sets this up, but to verify:
 
 ```bash
 # Check service is enabled
@@ -354,7 +354,7 @@ free -h
 - Disable unused services: `sudo systemctl disable cups bluetooth avahi-daemon`
 - Check CPU throttling: `vcgencmd get_throttled` (should return `0x0`)
 
-### Service Won't Start
+### Service will not start
 
 ```bash
 # Check logs

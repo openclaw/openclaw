@@ -4,6 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { generateSecureUuid } from "../secure-random.js";
+import type { OutboundMirror } from "./mirror.js";
 import type { OutboundChannel } from "./targets.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
@@ -17,13 +18,6 @@ const BACKOFF_MS: readonly number[] = [
   120_000, // retry 3: 2m
   600_000, // retry 4: 10m
 ];
-
-type DeliveryMirrorPayload = {
-  sessionKey: string;
-  agentId?: string;
-  text?: string;
-  mediaUrls?: string[];
-};
 
 type QueuedDeliveryPayload = {
   channel: Exclude<OutboundChannel, "none">;
@@ -39,8 +33,9 @@ type QueuedDeliveryPayload = {
   replyToId?: string | null;
   bestEffort?: boolean;
   gifPlayback?: boolean;
+  forceDocument?: boolean;
   silent?: boolean;
-  mirror?: DeliveryMirrorPayload;
+  mirror?: OutboundMirror;
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
@@ -123,6 +118,7 @@ export async function enqueueDelivery(
     replyToId: params.replyToId,
     bestEffort: params.bestEffort,
     gifPlayback: params.gifPlayback,
+    forceDocument: params.forceDocument,
     silent: params.silent,
     mirror: params.mirror,
     retryCount: 0,
@@ -385,6 +381,7 @@ export async function recoverPendingDeliveries(opts: {
         replyToId: entry.replyToId,
         bestEffort: entry.bestEffort,
         gifPlayback: entry.gifPlayback,
+        forceDocument: entry.forceDocument,
         silent: entry.silent,
         mirror: entry.mirror,
         skipQueue: true, // Prevent re-enqueueing during recovery

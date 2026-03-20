@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
   logLaneEnqueue: vi.fn(),
@@ -16,19 +17,19 @@ vi.mock("../logging/diagnostic.js", () => ({
   diagnosticLogger: diagnosticMocks.diag,
 }));
 
-import {
-  clearCommandLane,
-  CommandLaneClearedError,
-  enqueueCommand,
-  enqueueCommandInLane,
-  GatewayDrainingError,
-  getActiveTaskCount,
-  getQueueSize,
-  markGatewayDraining,
-  resetAllLanes,
-  setCommandLaneConcurrency,
-  waitForActiveTasks,
-} from "./command-queue.js";
+type CommandQueueModule = typeof import("./command-queue.js");
+
+let clearCommandLane: CommandQueueModule["clearCommandLane"];
+let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
+let enqueueCommand: CommandQueueModule["enqueueCommand"];
+let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
+let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
+let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
+let getQueueSize: CommandQueueModule["getQueueSize"];
+let markGatewayDraining: CommandQueueModule["markGatewayDraining"];
+let resetAllLanes: CommandQueueModule["resetAllLanes"];
+let setCommandLaneConcurrency: CommandQueueModule["setCommandLaneConcurrency"];
+let waitForActiveTasks: CommandQueueModule["waitForActiveTasks"];
 
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -53,7 +54,21 @@ function enqueueBlockedMainTask<T = void>(
 }
 
 describe("command queue", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      clearCommandLane,
+      CommandLaneClearedError,
+      enqueueCommand,
+      enqueueCommandInLane,
+      GatewayDrainingError,
+      getActiveTaskCount,
+      getQueueSize,
+      markGatewayDraining,
+      resetAllLanes,
+      setCommandLaneConcurrency,
+      waitForActiveTasks,
+    } = await import("./command-queue.js"));
     resetAllLanes();
     diagnosticMocks.logLaneEnqueue.mockClear();
     diagnosticMocks.logLaneDequeue.mockClear();
@@ -333,5 +348,43 @@ describe("command queue", () => {
     markGatewayDraining();
     resetAllLanes();
     await expect(enqueueCommand(async () => "ok")).resolves.toBe("ok");
+  });
+
+  it("shares lane state across distinct module instances", async () => {
+    const commandQueueA = await importFreshModule<typeof import("./command-queue.js")>(
+      import.meta.url,
+      "./command-queue.js?scope=shared-a",
+    );
+    const commandQueueB = await importFreshModule<typeof import("./command-queue.js")>(
+      import.meta.url,
+      "./command-queue.js?scope=shared-b",
+    );
+    const lane = `shared-state-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    let release!: () => void;
+    const blocker = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    commandQueueA.resetAllLanes();
+
+    try {
+      const task = commandQueueA.enqueueCommandInLane(lane, async () => {
+        await blocker;
+        return "done";
+      });
+
+      await vi.waitFor(() => {
+        expect(commandQueueB.getQueueSize(lane)).toBe(1);
+        expect(commandQueueB.getActiveTaskCount()).toBe(1);
+      });
+
+      release();
+      await expect(task).resolves.toBe("done");
+      expect(commandQueueB.getQueueSize(lane)).toBe(0);
+    } finally {
+      release();
+      commandQueueA.resetAllLanes();
+    }
   });
 });

@@ -25,7 +25,7 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./extensions/nextcloud-talk
 ```
 
-If you choose Nextcloud Talk during configure/onboarding and a git checkout is detected,
+If you choose Nextcloud Talk during setup and a git checkout is detected,
 OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
@@ -43,7 +43,7 @@ Details: [Plugins](/tools/plugin)
 4. Configure OpenClaw:
    - Config: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - Or env: `NEXTCLOUD_TALK_BOT_SECRET` (default account only)
-5. Restart the gateway (or finish onboarding).
+5. Restart the gateway (or finish setup).
 
 Minimal config:
 

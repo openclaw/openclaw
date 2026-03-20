@@ -235,7 +235,7 @@ describe("executeSlashCommand directives", () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return {
-          defaults: { model: "default-model" },
+          defaults: { modelProvider: "openai", model: "default-model" },
           sessions: [
             row("agent:main:main", {
               model: "gpt-4.1-mini",
@@ -263,6 +263,38 @@ describe("executeSlashCommand directives", () => {
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
+  });
+
+  it("mirrors resolved provider-qualified model refs after /model changes", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return {
+          ok: true,
+          key: "main",
+          resolved: {
+            modelProvider: "openai",
+            model: "gpt-5-mini",
+          },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "gpt-5-mini",
+    );
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "gpt-5-mini",
+    });
+    expect(result.sessionPatch?.modelOverride).toEqual({
+      kind: "qualified",
+      value: "openai/gpt-5-mini",
+    });
   });
 
   it("resolves the legacy main alias for /usage", async () => {
@@ -377,5 +409,43 @@ describe("executeSlashCommand directives", () => {
 
     expect(result.content).toBe("Current verbose level: full.\nOptions: on, full, off.");
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+  });
+
+  it("reports the current fast mode for bare /fast", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [row("agent:main:main", { fastMode: true })],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "fast",
+      "",
+    );
+
+    expect(result.content).toBe("Current fast mode: on.\nOptions: status, on, off.");
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+  });
+
+  it("patches fast mode for /fast on", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "fast",
+      "on",
+    );
+
+    expect(result.content).toBe("Fast mode enabled.");
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      fastMode: true,
+    });
   });
 });

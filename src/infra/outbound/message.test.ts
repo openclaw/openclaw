@@ -15,6 +15,16 @@ vi.mock("../../channels/plugins/index.js", () => ({
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
+  resolveSessionAgentId: ({
+    sessionKey,
+  }: {
+    sessionKey?: string;
+    config?: unknown;
+    agentId?: string;
+  }) => {
+    const match = sessionKey?.match(/^agent:([^:]+)/i);
+    return match?.[1] ?? "main";
+  },
   resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
 }));
 
@@ -36,10 +46,13 @@ vi.mock("./deliver.js", () => ({
 
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { sendMessage } from "./message.js";
+
+let sendMessage: typeof import("./message.js").sendMessage;
 
 describe("sendMessage", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ sendMessage } = await import("./message.js"));
     setActivePluginRegistry(createTestRegistry([]));
     mocks.getChannelPlugin.mockClear();
     mocks.resolveOutboundTarget.mockClear();
@@ -67,6 +80,29 @@ describe("sendMessage", () => {
         session: expect.objectContaining({ agentId: "work" }),
         channel: "telegram",
         to: "123456",
+      }),
+    );
+  });
+
+  it("propagates the send idempotency key into mirrored transcript delivery", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "telegram",
+      to: "123456",
+      content: "hi",
+      idempotencyKey: "idem-send-1",
+      mirror: {
+        sessionKey: "agent:main:telegram:dm:123456",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:telegram:dm:123456",
+          text: "hi",
+          idempotencyKey: "idem-send-1",
+        }),
       }),
     );
   });

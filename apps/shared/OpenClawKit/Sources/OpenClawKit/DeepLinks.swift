@@ -9,13 +9,15 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     public let host: String
     public let port: Int
     public let tls: Bool
+    public let bootstrapToken: String?
     public let token: String?
     public let password: String?
 
-    public init(host: String, port: Int, tls: Bool, token: String?, password: String?) {
+    public init(host: String, port: Int, tls: Bool, bootstrapToken: String?, token: String?, password: String?) {
         self.host = host
         self.port = port
         self.tls = tls
+        self.bootstrapToken = bootstrapToken
         self.token = token
         self.password = password
     }
@@ -25,7 +27,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         return URL(string: "\(scheme)://\(self.host):\(self.port)")
     }
 
-    /// Parse a device-pair setup code (base64url-encoded JSON: `{url, token?, password?}`).
+    /// Parse a device-pair setup code (base64url-encoded JSON: `{url, bootstrapToken?, token?, password?}`).
     public static func fromSetupCode(_ code: String) -> GatewayConnectDeepLink? {
         guard let data = Self.decodeBase64Url(code) else { return nil }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
@@ -41,9 +43,16 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             return nil
         }
         let port = parsed.port ?? (tls ? 443 : 18789)
+        let bootstrapToken = json["bootstrapToken"] as? String
         let token = json["token"] as? String
         let password = json["password"] as? String
-        return GatewayConnectDeepLink(host: hostname, port: port, tls: tls, token: token, password: password)
+        return GatewayConnectDeepLink(
+            host: hostname,
+            port: port,
+            tls: tls,
+            bootstrapToken: bootstrapToken,
+            token: token,
+            password: password)
     }
 
     private static func decodeBase64Url(_ input: String) -> Data? {
@@ -140,6 +149,7 @@ public enum DeepLinkParser {
                     host: hostParam,
                     port: port,
                     tls: tls,
+                    bootstrapToken: nil,
                     token: query["token"],
                     password: query["password"]))
 

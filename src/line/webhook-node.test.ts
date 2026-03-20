@@ -86,12 +86,25 @@ describe("createLineNodeWebhookHandler", () => {
     expect(res.body).toBeUndefined();
   });
 
-  it("returns 200 for verification request (empty events, no signature)", async () => {
+  it("rejects verification-shaped requests without a signature", async () => {
     const rawBody = JSON.stringify({ events: [] });
     const { bot, handler } = createPostWebhookTestHarness(rawBody);
 
     const { res, headers } = createRes();
     await handler({ method: "POST", headers: {} } as unknown as IncomingMessage, res);
+
+    expect(res.statusCode).toBe(400);
+    expect(headers["content-type"]).toBe("application/json");
+    expect(res.body).toBe(JSON.stringify({ error: "Missing X-Line-Signature header" }));
+    expect(bot.handleWebhook).not.toHaveBeenCalled();
+  });
+
+  it("accepts signed verification-shaped requests without dispatching events", async () => {
+    const rawBody = JSON.stringify({ events: [] });
+    const { bot, handler, secret } = createPostWebhookTestHarness(rawBody);
+
+    const { res, headers } = createRes();
+    await runSignedPost({ handler, rawBody, secret, res });
 
     expect(res.statusCode).toBe(200);
     expect(headers["content-type"]).toBe("application/json");
@@ -121,13 +134,10 @@ describe("createLineNodeWebhookHandler", () => {
     expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 
-  it("uses a tight body-read limit for unsigned POST requests", async () => {
+  it("rejects unsigned POST requests before reading the body", async () => {
     const bot = { handleWebhook: vi.fn(async () => {}) };
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const readBody = vi.fn(async (_req: IncomingMessage, maxBytes: number) => {
-      expect(maxBytes).toBe(4096);
-      return JSON.stringify({ events: [{ type: "message" }] });
-    });
+    const readBody = vi.fn(async () => JSON.stringify({ events: [{ type: "message" }] }));
     const handler = createLineNodeWebhookHandler({
       channelSecret: "secret",
       bot,
@@ -139,7 +149,7 @@ describe("createLineNodeWebhookHandler", () => {
     await handler({ method: "POST", headers: {} } as unknown as IncomingMessage, res);
 
     expect(res.statusCode).toBe(400);
-    expect(readBody).toHaveBeenCalledTimes(1);
+    expect(readBody).not.toHaveBeenCalled();
     expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 
