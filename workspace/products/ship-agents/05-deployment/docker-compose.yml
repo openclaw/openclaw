@@ -1,0 +1,360 @@
+# =============================================================================
+# Production Docker Compose — AI Agent Stack
+# =============================================================================
+#
+# This compose file sets up a complete agent runtime environment:
+#
+#   1. agent-runner    — Python service that hosts your agents
+#   2. sentinel        — Monitoring daemon that watches over everything
+#   3. redis           — Shared state store (agent memory, locks, queues)
+#   4. api-gateway     — HTTP/WebSocket entry point for external integrations
+#
+# Usage:
+#   cp .env.template .env        # Fill in your API keys
+#   docker compose up -d         # Start everything
+#   docker compose logs -f       # Watch logs
+#   docker compose ps            # Check health
+#
+# =============================================================================
+
+version: "3.8"
+
+# ---------------------------------------------------------------------------
+# Shared network — all services communicate on this internal network.
+# External traffic only enters through the api-gateway.
+# ---------------------------------------------------------------------------
+networks:
+  agent-net:
+    driver: bridge
+
+# ---------------------------------------------------------------------------
+# Named volumes — persist data across container restarts.
+# ---------------------------------------------------------------------------
+volumes:
+  # Redis data — so agent state survives restarts
+  redis-data:
+
+  # Agent logs — mount to host for easy access
+  agent-logs:
+
+  # Sentinel state — flap detection counters, last-check timestamps
+  sentinel-state:
+
+services:
+  # =========================================================================
+  # 1. AGENT RUNNER
+  # =========================================================================
+  #
+  # The core service. Loads agent definitions from ./agents/ directory,
+  # connects to configured channels (Telegram, Discord, Slack, etc.),
+  # and processes messages through the agent pipeline.
+  #
+  # Architecture:
+  #   - Each agent runs as an async task within a single Python process
+  #   - Agents share the Redis instance for state coordination
+  #   - The runner exposes a health endpoint on port 8080
+  #
+  agent-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent-runner
+    container_name: agent-runner
+    restart: unless-stopped
+
+    # --- Environment ---
+    # Required variables are marked with REQUIRED.
+    # Copy .env.template to .env and fill them in.
+    environment:
+      # REQUIRED: Your LLM API key (Anthropic, OpenAI, etc.)
+      - LLM_API_KEY=${LLM_API_KEY:?Set LLM_API_KEY in .env}
+      - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
+      - LLM_MODEL=${LLM_MODEL:-claude-sonnet-4-20250514}
+
+      # REQUIRED: At least one channel must be configured
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+
+      # Redis connection (uses the internal Docker network hostname)
+      - REDIS_URL=redis://redis:6379/0
+
+      # Agent configuration
+      - AGENTS_DIR=/app/agents
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MAX_CONCURRENT_AGENTS=${MAX_CONCURRENT_AGENTS:-10}
+
+      # Safety: maximum tokens per response, max cost per hour
+      - MAX_TOKENS_PER_RESPONSE=${MAX_TOKENS_PER_RESPONSE:-4096}
+      - MAX_COST_PER_HOUR_USD=${MAX_COST_PER_HOUR_USD:-1.00}
+
+    # --- Volumes ---
+    volumes:
+      # Mount your agent definitions (SOUL.md, CONSTITUTION.md, etc.)
+      - ./agents:/app/agents:ro
+
+      # Mount shared config
+      - ./config:/app/config:ro
+
+      # Persist logs to host filesystem
+      - ./logs/agent-runner:/app/logs
+
+    # --- Health Check ---
+    # The runner exposes GET /health on port 8080.
+    # Returns 200 if the event loop is alive and agents are loaded.
+    # Returns 503 if any agent has been unresponsive for >60 seconds.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+    # --- Resource Limits ---
+    # Adjust based on number of agents. Each agent uses ~50MB base.
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+        reservations:
+          memory: 256M
+          cpus: "0.25"
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    networks:
+      - agent-net
+
+  # =========================================================================
+  # 2. SENTINEL — Monitoring Daemon
+  # =========================================================================
+  #
+  # Watches over the entire stack. Responsibilities:
+  #   - Periodic health checks on all services
+  #   - Restart failed services with exponential backoff
+  #   - Flap detection (stops restarting if a service keeps crashing)
+  #   - Scheduled tasks (nightly cleanup, daily reports)
+  #   - Optional: uses a cheap LLM to diagnose repeated failures
+  #
+  # The sentinel does NOT handle user traffic. It is purely operational.
+  #
+  sentinel:
+    build:
+      context: .
+      dockerfile: Dockerfile.sentinel
+    container_name: sentinel
+    restart: unless-stopped
+
+    environment:
+      # Sentinel config file location
+      - CONFIG_PATH=/app/config/sentinel.yaml
+
+      # Optional: LLM for failure diagnosis (uses cheap model)
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - DIAGNOSIS_MODEL=${DIAGNOSIS_MODEL:-claude-haiku-4-20250514}
+
+      # Notification channel for alerts
+      - ALERT_TELEGRAM_TOKEN=${ALERT_TELEGRAM_TOKEN:-}
+      - ALERT_TELEGRAM_CHAT_ID=${ALERT_TELEGRAM_CHAT_ID:-}
+
+      # Redis for shared state with agent-runner
+      - REDIS_URL=redis://redis:6379/0
+
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+    volumes:
+      # Sentinel configuration (check intervals, thresholds, tasks)
+      - ./config:/app/config:ro
+
+      # Persistent state (restart counters, flap detection data)
+      - sentinel-state:/app/state
+
+      # Logs
+      - ./logs/sentinel:/app/logs
+
+      # Docker socket — allows sentinel to inspect/restart containers
+      # SECURITY NOTE: This gives sentinel control over Docker.
+      # In production, consider using a socket proxy with limited permissions.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+        reservations:
+          memory: 64M
+          cpus: "0.05"
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    networks:
+      - agent-net
+
+  # =========================================================================
+  # 3. REDIS — Shared State Store
+  # =========================================================================
+  #
+  # Used for:
+  #   - Agent conversation state (short-term memory)
+  #   - Rate limiting counters
+  #   - Inter-agent message passing (pub/sub)
+  #   - Distributed locks (prevent duplicate processing)
+  #   - Task queues for async operations
+  #
+  # Data persistence: RDB snapshots every 60s if >=100 keys changed.
+  # For critical state, consider adding AOF persistence.
+  #
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+
+    # Custom Redis config for production use
+    command: >
+      redis-server
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+      --save 60 100
+      --loglevel warning
+      --appendonly no
+
+    volumes:
+      # Persist Redis data across restarts
+      - redis-data:/data
+
+    # --- Health Check ---
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+    deploy:
+      resources:
+        limits:
+          memory: 192M
+          cpus: "0.25"
+        reservations:
+          memory: 64M
+          cpus: "0.05"
+
+    # Redis is internal-only. No port mapping to host.
+    # Services access it via redis:6379 on the agent-net network.
+    # Uncomment the following to expose Redis for local debugging:
+    # ports:
+    #   - "127.0.0.1:6379:6379"
+
+    networks:
+      - agent-net
+
+  # =========================================================================
+  # 4. API GATEWAY
+  # =========================================================================
+  #
+  # Lightweight HTTP/WebSocket gateway that:
+  #   - Receives webhook callbacks (Telegram, Slack, etc.)
+  #   - Provides a REST API for external systems to send messages to agents
+  #   - Serves a simple status dashboard
+  #   - Handles authentication (API key or JWT)
+  #   - Rate limits incoming requests
+  #
+  # In production, put this behind Cloudflare or nginx for TLS termination.
+  #
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    container_name: api-gateway
+    restart: unless-stopped
+
+    environment:
+      # REQUIRED: API key for authenticating incoming requests
+      - API_SECRET_KEY=${API_SECRET_KEY:?Set API_SECRET_KEY in .env}
+
+      # Upstream agent-runner connection
+      - AGENT_RUNNER_URL=http://agent-runner:8080
+
+      # Redis for rate limiting and session storage
+      - REDIS_URL=redis://redis:6379/1
+
+      # Gateway settings
+      - PORT=3000
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-60}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      # Webhook verification secrets
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET:-}
+      - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET:-}
+
+    ports:
+      # Expose on host port 3000. In production, proxy through nginx/Cloudflare.
+      - "${GATEWAY_PORT:-3000}:3000"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
+          memory: 64M
+          cpus: "0.1"
+
+    depends_on:
+      agent-runner:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    networks:
+      - agent-net
+
+# =============================================================================
+# .env.template (copy to .env and fill in)
+# =============================================================================
+#
+# # --- Required ---
+# LLM_API_KEY=sk-ant-xxxxx
+# API_SECRET_KEY=your-random-secret-here
+#
+# # --- LLM Settings ---
+# LLM_PROVIDER=anthropic
+# LLM_MODEL=claude-sonnet-4-20250514
+# DIAGNOSIS_MODEL=claude-haiku-4-20250514
+#
+# # --- Channels (at least one required) ---
+# TELEGRAM_BOT_TOKEN=
+# DISCORD_BOT_TOKEN=
+# SLACK_BOT_TOKEN=
+#
+# # --- Alerts ---
+# ALERT_TELEGRAM_TOKEN=
+# ALERT_TELEGRAM_CHAT_ID=
+#
+# # --- Tuning ---
+# LOG_LEVEL=INFO
+# MAX_CONCURRENT_AGENTS=10
+# MAX_TOKENS_PER_RESPONSE=4096
+# MAX_COST_PER_HOUR_USD=1.00
+# RATE_LIMIT_PER_MINUTE=60
+# GATEWAY_PORT=3000
