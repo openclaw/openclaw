@@ -156,6 +156,30 @@
         "reason": "Cron store coverage retained a large shared unit-fast heap spike on Linux Node 24 CI."
       },
       {
+        "file": "src/cron/isolated-agent.uses-last-non-empty-agent-text-as.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 PR #50819 shard 1 OOM lane."
+      },
+      {
+        "file": "src/cron/isolated-agent.delivers-response-has-heartbeat-ok-but-includes.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 PR #50819 shard 1 OOM lane."
+      },
+      {
+        "file": "src/cron/isolated-agent.skips-delivery-without-whatsapp-recipient-besteffortdeliver-true.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 PR #50819 shard 1 OOM lane."
+      },
+      {
+        "file": "src/cron/isolated-agent/run.cron-model-override.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 PR #50819 shard 2 OOM lane."
+      },
+      {
+        "file": "src/cron/service.skips-main-jobs-empty-systemevent-text.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 PR #50819 shard 2 OOM lane."
+      },
+      {
+        "file": "src/cron/service.store-migration.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 PR #50819 shard 2 OOM lane."
+      },
+      {
         "file": "src/context-engine/context-engine.test.ts",
         "reason": "Context-engine coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
       },
@@ -178,6 +202,18 @@
       {
         "file": "src/infra/restart-stale-pids.test.ts",
         "reason": "Restart-stale-pids coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/infra/update-runner.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 PR #50819 shard 1 OOM lane."
+      },
+      {
+        "file": "src/infra/restart.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 PR #50819 shard 1 OOM lane."
+      },
+      {
+        "file": "src/infra/run-node.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 PR #50819 shard 2 OOM lane."
       },
       {
         "file": "src/infra/heartbeat-runner.respects-ackmaxchars-heartbeat-acks.test.ts",
@@ -232,8 +268,20 @@
         "reason": "Secrets apply coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
       },
       {
+        "file": "src/infra/outbound/outbound-policy.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 PR #50819 shard 2 OOM lane."
+      },
+      {
         "file": "src/channels/plugins/outbound/slack.sendpayload.test.ts",
         "reason": "Slack outbound payload coverage retained a top shared unit-fast heap spike in the March 19, 2026 Linux Node 24 OOM lane."
+      },
+      {
+        "file": "src/config/schema.help.quality.test.ts",
+        "reason": "Missing from unit timings and retained the largest shared unit-fast heap spike in the March 20, 2026 PR #50819 shard 2 OOM lane."
+      },
+      {
+        "file": "src/tui/tui.submit-handler.test.ts",
+        "reason": "Missing from unit timings and retained the largest shared unit-fast heap spike in the March 20, 2026 PR #50819 shard 1 OOM lane."
       },
       {
         "file": "src/tui/tui-command-handlers.test.ts",
