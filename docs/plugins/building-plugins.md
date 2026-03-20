@@ -285,6 +285,58 @@ my-plugin/
   </Step>
 </Steps>
 
+## Registering agent tools
+
+Plugins can register **agent tools** — typed functions the LLM can call. Tools
+can be required (always available) or optional (users opt in via allowlists).
+
+```typescript
+import { Type } from "@sinclair/typebox";
+
+export default definePluginEntry({
+  id: "my-plugin",
+  name: "My Plugin",
+  register(api) {
+    // Required tool (always available)
+    api.registerTool({
+      name: "my_tool",
+      description: "Do a thing",
+      parameters: Type.Object({ input: Type.String() }),
+      async execute(_id, params) {
+        return { content: [{ type: "text", text: params.input }] };
+      },
+    });
+
+    // Optional tool (user must add to allowlist)
+    api.registerTool(
+      {
+        name: "workflow_tool",
+        description: "Run a workflow",
+        parameters: Type.Object({ pipeline: Type.String() }),
+        async execute(_id, params) {
+          return { content: [{ type: "text", text: params.pipeline }] };
+        },
+      },
+      { optional: true },
+    );
+  },
+});
+```
+
+Enable optional tools in config:
+
+```json5
+{
+  tools: { allow: ["workflow_tool"] },
+}
+```
+
+Tips:
+
+- Tool names must not clash with core tool names (conflicts are skipped)
+- Use `optional: true` for tools that trigger side effects or require extra binaries
+- Users can enable all tools from a plugin by adding the plugin id to `tools.allow`
+
 ## Lint enforcement (in-repo plugins)
 
 Three scripts enforce SDK boundaries for plugins in the OpenClaw repository:
