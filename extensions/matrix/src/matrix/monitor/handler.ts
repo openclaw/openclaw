@@ -494,20 +494,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
-      const _messageId = event.event_id ?? "";
-      const _threadRootId = resolveMatrixThreadRootId({ event, content });
-      const { route: _route, configuredBinding: _configuredBinding } = resolveMatrixInboundRoute({
+      const messageId = event.event_id ?? "";
+      const threadRootId = resolveMatrixThreadRootId({ event, content });
+      const { route: route, configuredBinding: configuredBinding } = resolveMatrixInboundRoute({
         cfg,
         accountId,
         roomId,
         senderId,
         isDirectMessage,
-        messageId: _messageId,
-        threadRootId: _threadRootId,
+        messageId: messageId,
+        threadRootId: threadRootId,
         eventTs: eventTs ?? undefined,
         resolveAgentRoute: core.channel.routing.resolveAgentRoute,
       });
-      const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, _route.agentId);
+      const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
       const { wasMentioned, hasExplicitMention } = resolveMentions({
         content,
         userId: selfUserId,
@@ -654,38 +654,38 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const replyToEventId = content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
       const threadTarget = resolveMatrixThreadTarget({
         threadReplies,
-        messageId: _messageId,
-        threadRootId: _threadRootId,
+        messageId: messageId,
+        threadRootId: threadRootId,
         isThreadRoot: false, // Raw event payload does not carry explicit thread-root metadata.
       });
-      const threadContext = _threadRootId
-        ? await resolveThreadContext({ roomId, threadRootId: _threadRootId })
+      const threadContext = threadRootId
+        ? await resolveThreadContext({ roomId, threadRootId: threadRootId })
         : undefined;
 
-      if (_configuredBinding) {
+      if (configuredBinding) {
         const ensured = await ensureConfiguredAcpBindingReady({
           cfg,
-          configuredBinding: _configuredBinding,
+          configuredBinding: configuredBinding,
         });
         if (!ensured.ok) {
           logInboundDrop({
             log: logVerboseMessage,
             channel: "matrix",
             reason: "configured ACP binding unavailable",
-            target: _configuredBinding.spec.conversationId,
+            target: configuredBinding.spec.conversationId,
           });
           return;
         }
       }
       const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
-      const textWithId = `${bodyText}\n[matrix event id: ${_messageId} room: ${roomId}]`;
+      const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;
       const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-        agentId: _route.agentId,
+        agentId: route.agentId,
       });
       const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
       const previousTimestamp = core.channel.session.readSessionUpdatedAt({
         storePath,
-        sessionKey: _route.sessionKey,
+        sessionKey: route.sessionKey,
       });
       const body = core.channel.reply.formatAgentEnvelope({
         channel: "Matrix",
@@ -703,8 +703,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         CommandBody: bodyText,
         From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
         To: `room:${roomId}`,
-        SessionKey: _route.sessionKey,
-        AccountId: _route.accountId,
+        SessionKey: route.sessionKey,
+        AccountId: route.accountId,
         ChatType: isDirectMessage ? "direct" : "channel",
         ConversationLabel: envelopeFrom,
         SenderName: senderName,
@@ -716,7 +716,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         Provider: "matrix" as const,
         Surface: "matrix" as const,
         WasMentioned: isRoom ? wasMentioned : undefined,
-        MessageSid: _messageId,
+        MessageSid: messageId,
         ReplyToId: threadTarget ? undefined : (replyToEventId ?? undefined),
         MessageThreadId: threadTarget,
         ThreadStarterBody: threadContext?.threadStarterBody,
@@ -733,21 +733,21 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       await core.channel.session.recordInboundSession({
         storePath,
-        sessionKey: ctxPayload.SessionKey ?? _route.sessionKey,
+        sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
         ctx: ctxPayload,
         updateLastRoute: isDirectMessage
           ? {
-              sessionKey: _route.mainSessionKey,
+              sessionKey: route.mainSessionKey,
               channel: "matrix",
               to: `room:${roomId}`,
-              accountId: _route.accountId,
+              accountId: route.accountId,
             }
           : undefined,
         onRecordError: (err) => {
           logger.warn("failed updating session meta", {
             error: String(err),
             storePath,
-            sessionKey: ctxPayload.SessionKey ?? _route.sessionKey,
+            sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
           });
         },
       });
@@ -757,7 +757,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       const { ackReaction, ackReactionScope: ackScope } = resolveMatrixAckReactionConfig({
         cfg,
-        agentId: _route.agentId,
+        agentId: route.agentId,
         accountId,
       });
       const shouldAckReaction = () =>
@@ -774,8 +774,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             shouldBypassMention,
           }),
         );
-      if (shouldAckReaction() && _messageId) {
-        reactMatrixMessage(roomId, _messageId, ackReaction, client).catch((err) => {
+      if (shouldAckReaction() && messageId) {
+        reactMatrixMessage(roomId, messageId, ackReaction, client).catch((err) => {
           logVerboseMessage(`matrix react failed for room ${roomId}: ${String(err)}`);
         });
       }
@@ -786,10 +786,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
-      if (_messageId) {
-        sendReadReceiptMatrix(roomId, _messageId, client).catch((err) => {
+      if (messageId) {
+        sendReadReceiptMatrix(roomId, messageId, client).catch((err) => {
           logVerboseMessage(
-            `matrix: read receipt failed room=${roomId} id=${_messageId}: ${String(err)}`,
+            `matrix: read receipt failed room=${roomId} id=${messageId}: ${String(err)}`,
           );
         });
       }
@@ -797,14 +797,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const tableMode = core.channel.text.resolveMarkdownTableMode({
         cfg,
         channel: "matrix",
-        accountId: _route.accountId,
+        accountId: route.accountId,
       });
-      const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, _route.agentId);
+      const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
-        agentId: _route.agentId,
+        agentId: route.agentId,
         channel: "matrix",
-        accountId: _route.accountId,
+        accountId: route.accountId,
       });
       const typingCallbacks = createTypingCallbacks({
         start: () => sendTypingMatrix(roomId, true, undefined, client),
@@ -831,7 +831,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const { dispatcher, replyOptions, markDispatchIdle } =
         core.channel.reply.createReplyDispatcherWithTyping({
           ...prefixOptions,
-          humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, _route.agentId),
+          humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
           deliver: async (payload: ReplyPayload) => {
             await deliverMatrixReplies({
               cfg,
@@ -842,7 +842,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               textLimit,
               replyToMode,
               threadId: threadTarget,
-              accountId: _route.accountId,
+              accountId: route.accountId,
               mediaLocalRoots,
               tableMode,
             });
