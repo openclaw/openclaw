@@ -32,6 +32,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Tlon](/channels/tlon) — Urbit-based messenger (plugin, installed separately).
 - [Twitch](/channels/twitch) — Twitch chat via IRC connection (plugin, installed separately).
 - [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
+- [WeChat Linux Desktop](/channels/wechat-linux) — Official Linux desktop WeChat via PyWxDump bridge; supports DMs, groups, images, and files.
 - [WhatsApp](/channels/whatsapp) — Most popular; uses Baileys and requires QR pairing.
 - [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (plugin, installed separately).
 - [Zalo Personal](/channels/zalouser) — Zalo personal account via QR login (plugin, installed separately).

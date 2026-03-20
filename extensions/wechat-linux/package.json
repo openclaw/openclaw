@@ -1,0 +1,25 @@
+{
+  "name": "@openclaw/wechat-linux",
+  "version": "2026.3.14",
+  "description": "OpenClaw WeChat Linux desktop channel plugin",
+  "type": "module",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "wechat-linux",
+      "label": "WeChat",
+      "selectionLabel": "WeChat (Linux Desktop)",
+      "detailLabel": "WeChat",
+      "docsPath": "/channels/wechat-linux",
+      "docsLabel": "wechat-linux",
+      "blurb": "Linux desktop WeChat via PyWxDump with DM/group routing and media support.",
+      "systemImage": "message"
+    }
+  }
+}

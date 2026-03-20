@@ -8,6 +8,7 @@ import {
 } from "./runtime-postbuild-shared.mjs";
 
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
+const RUNTIME_ASSET_DIRS = ["bridge"];
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
 const COPY_RETRY_DELAYS_MS = [10, 25, 50];
 
@@ -163,6 +164,26 @@ function copyDeclaredPluginSkillPaths(params) {
   return copiedSkills;
 }
 
+function copyRuntimeAssetDirs(params) {
+  for (const dirName of RUNTIME_ASSET_DIRS) {
+    const sourcePath = path.join(params.pluginDir, dirName);
+    const targetPath = path.join(params.distPluginDir, dirName);
+    if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isDirectory()) {
+      removePathIfExists(targetPath);
+      continue;
+    }
+    copySkillPathWithRetry({
+      sourcePath,
+      targetPath,
+      copyOptions: {
+        dereference: true,
+        force: true,
+        recursive: true,
+      },
+    });
+  }
+}
+
 export function copyBundledPluginMetadata(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const extensionsRoot = path.join(repoRoot, "extensions");
@@ -203,6 +224,10 @@ export function copyBundledPluginMetadata(params = {}) {
       ? { ...manifest, skills: copiedSkills }
       : manifest;
     writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
+    copyRuntimeAssetDirs({
+      pluginDir,
+      distPluginDir,
+    });
 
     const packageJsonPath = path.join(pluginDir, "package.json");
     if (!fs.existsSync(packageJsonPath)) {

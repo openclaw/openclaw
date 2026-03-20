@@ -58,3 +58,5 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+Bundled note: OpenClaw also includes a separate `wechat-linux` channel for the official Linux desktop client via PyWxDump. That bundled path is distinct from this community WeChatPadPro plugin.

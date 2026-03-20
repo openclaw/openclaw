@@ -67,6 +67,7 @@
   "allow-from",
   "allowlist-resolution",
   "allowlist-config-edit",
+  "outbound-media",
   "boolean-param",
   "device-pair",
   "diagnostics-otel",

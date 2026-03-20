@@ -952,6 +952,7 @@
                   "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
+                  "channels/wechat-linux",
                   "channels/whatsapp",
                   "channels/zalo",
                   "channels/zalouser"

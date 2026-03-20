@@ -1,0 +1,9 @@
+{
+  "id": "wechat-linux",
+  "channels": ["wechat-linux"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

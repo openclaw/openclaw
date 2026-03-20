@@ -309,6 +309,10 @@
       "types": "./dist/plugin-sdk/allowlist-config-edit.d.ts",
       "default": "./dist/plugin-sdk/allowlist-config-edit.js"
     },
+    "./plugin-sdk/outbound-media": {
+      "types": "./dist/plugin-sdk/outbound-media.d.ts",
+      "default": "./dist/plugin-sdk/outbound-media.js"
+    },
     "./plugin-sdk/boolean-param": {
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
       "default": "./dist/plugin-sdk/boolean-param.js"
