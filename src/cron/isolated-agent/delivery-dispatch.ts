@@ -347,7 +347,6 @@ export async function dispatchCronDelivery(
         sessionKey: params.agentSessionKey,
       });
       const runDelivery = async () => {
-        sendOccurred = true;
         return await deliverOutboundPayloads({
           cfg: params.cfgWithAgentDefaults,
           channel: delivery.channel,
@@ -376,6 +375,7 @@ export async function dispatchCronDelivery(
           })
         : await runDelivery();
       delivered = deliveryResults.length > 0;
+      sendOccurred = deliveryResults.length > 0;
       if (delivered) {
         rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryResults);
       }

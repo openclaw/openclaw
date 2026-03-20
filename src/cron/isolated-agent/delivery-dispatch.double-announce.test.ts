@@ -488,9 +488,23 @@ describe("dispatchCronDelivery — delivered=false prevents additional-targets f
     const state = await dispatchCronDelivery(params);
 
     expect(state.delivered).toBe(false);
+    expect(state.sendOccurred).toBe(false);
     expect(state.result).toBeDefined();
     expect(state.result!.status).toBe("error");
     expect(state.result!.delivered).toBeUndefined();
+  });
+
+  it("transient error (bestEffort) exhausts retries, delivered=false sendOccurred=false", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("gateway timeout"));
+
+    const params = makeBaseParams({ synthesizedText: "Report." });
+    (params as Record<string, unknown>).deliveryBestEffort = true;
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(false);
+    expect(state.sendOccurred).toBe(false);
+    expect(state.result).toBeUndefined();
   });
 
   it("successful delivery returns delivered=true", async () => {
