@@ -8,7 +8,7 @@ import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
-import type { NodeListNode, NodesRpcOpts } from "./types.js";
+import type { NodeListNode, NodesRpcOpts, PairedNode } from "./types.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -118,6 +118,14 @@ function messageFromError(error: unknown): string {
 function shouldFallbackToPairList(error: unknown): boolean {
   const message = messageFromError(error).toLowerCase();
   if (!message.includes("node.list")) {
+    return false;
+  }
+  // Auth/scope failures should surface to callers instead of silently degrading.
+  if (
+    message.includes("unauthorized") ||
+    message.includes("forbidden") ||
+    message.includes("missing scope")
+  ) {
     return false;
   }
   return (
@@ -403,19 +411,25 @@ export function registerNodesStatusCommands(nodes: Command) {
           if (opts.json) {
             const filteredPaired = filteredNodes
               .filter((node) => isPairedNode(node.nodeId, node.paired))
-              .map((node) => {
+              .map((node): PairedNode => {
                 const pairedEntry = pairedById.get(node.nodeId);
                 if (pairedEntry) {
                   return pairedEntry;
                 }
                 return {
                   nodeId: node.nodeId,
+                  token: undefined,
                   displayName: node.displayName,
                   platform: node.platform,
                   version: node.version,
                   coreVersion: node.coreVersion,
                   uiVersion: node.uiVersion,
                   remoteIp: node.remoteIp,
+                  permissions: node.permissions,
+                  createdAtMs: undefined,
+                  approvedAtMs: undefined,
+                  lastConnectedAtMs:
+                    typeof node.connectedAtMs === "number" ? node.connectedAtMs : undefined,
                 };
               });
             const filteredConnected = filteredNodes.filter(

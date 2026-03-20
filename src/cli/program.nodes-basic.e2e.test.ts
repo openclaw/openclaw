@@ -226,6 +226,7 @@ describe("cli program (nodes basics)", () => {
               paired: true,
               connected: true,
               connectedAtMs: now - 1_000,
+              permissions: { camera: true },
             },
           ],
         };
@@ -238,6 +239,29 @@ describe("cli program (nodes basics)", () => {
     const output = getRuntimeOutput();
     expect(output).toContain('"paired"');
     expect(output).toContain('"n-skew"');
+    expect(output).toContain('"lastConnectedAtMs"');
+    expect(output).toContain('"permissions"');
+  });
+
+  it("surfaces node.list auth errors instead of silently falling back", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [],
+        };
+      }
+      if (opts.method === "node.list") {
+        throw new Error("missing scope: operator.read (node.list)");
+      }
+      return { ok: true };
+    });
+
+    await expect(runProgram(["nodes", "list"])).rejects.toThrow("exit");
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("missing scope: operator.read"),
+    );
   });
 
   it("runs nodes status --last-connected and filters by age", async () => {
