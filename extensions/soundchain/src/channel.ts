@@ -271,10 +271,14 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
           }
 
           // Poll for new inbound messages (starts AFTER seed completes)
+          // Single-flight guard prevents overlapping iterations
+          let polling = false;
           interval = setInterval(async () => {
+            if (polling || aborted) return;
+            polling = true;
             try {
               const chats = await client.getChats();
-              if (aborted) return; // Stop processing if shutdown during fetch
+              if (aborted) { polling = false; return; }
 
               for (const chat of chats) {
                 if (!chat.id || aborted) continue;
@@ -323,6 +327,8 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
               }
             } catch (err) {
               ctx.log?.warn?.(`[${account.accountId}] Poll error: ${err}`);
+            } finally {
+              polling = false;
             }
           }, POLL_INTERVAL_MS);
 

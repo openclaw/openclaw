@@ -78,7 +78,7 @@ async function graphql(
 
 const CHATS_QUERY = `
   query Chats {
-    chats(page: { first: 25 }) {
+    chats(page: { first: 50 }) {
       nodes {
         id
         message
@@ -254,8 +254,15 @@ export function createMessagingClient(apiUrl: string, token: string): MessagingC
 
     async getAllUsers(): Promise<UserProfile[]> {
       try {
-        const data = await restGet("/api/pulse/users?limit=100");
-        return (data.users as UserProfile[]) ?? [];
+        // Paginate REST users (100 per page, max 1000)
+        const allUsers: UserProfile[] = [];
+        for (let skip = 0; skip < 1000; skip += 100) {
+          const data = await restGet(`/api/pulse/users?limit=100&skip=${skip}`);
+          const users = (data.users as UserProfile[]) ?? [];
+          allUsers.push(...users);
+          if (users.length < 100) break; // Last page
+        }
+        return allUsers;
       } catch {
         // Fallback to GraphQL pagination
         const allUsers: UserProfile[] = [];
