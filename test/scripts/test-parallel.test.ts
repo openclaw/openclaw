@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseCompletedTestFileLines } from "../../scripts/test-parallel-memory.mjs";
+import {
+  parseCompletedTestFileLines,
+  parseMemoryTraceSummaryLines,
+  parseMemoryValueKb,
+} from "../../scripts/test-parallel-memory.mjs";
 import {
   appendCapturedOutput,
   hasFatalTestRunOutput,
@@ -75,5 +79,32 @@ describe("scripts/test-parallel memory trace parsing", () => {
         ].join("\n"),
       ),
     ).toEqual([]);
+  });
+
+  it("parses memory trace summary lines and hotspot deltas", () => {
+    const summaries = parseMemoryTraceSummaryLines(
+      [
+        "[test-parallel][mem] summary unit-fast files=360 peak=13.22GiB totalDelta=+6.69GiB peakAt=poll top=src/config/schema.help.quality.test.ts:+1.06GiB, src/infra/update-runner.test.ts:+463.6MiB",
+      ].join("\n"),
+    );
+
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toEqual({
+      lane: "unit-fast",
+      files: 360,
+      peakRssKb: parseMemoryValueKb("13.22GiB"),
+      totalDeltaKb: parseMemoryValueKb("+6.69GiB"),
+      peakAt: "poll",
+      top: [
+        {
+          file: "src/config/schema.help.quality.test.ts",
+          deltaKb: parseMemoryValueKb("+1.06GiB"),
+        },
+        {
+          file: "src/infra/update-runner.test.ts",
+          deltaKb: parseMemoryValueKb("+463.6MiB"),
+        },
+      ],
+    });
   });
 });
