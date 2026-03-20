@@ -115,6 +115,8 @@
   "secret-input",
   "thread-ownership",
   "web-media",
+  "zalo",
+  "zalouser",
   "speech",
   "state-paths",
   "tool-send"
