@@ -145,6 +145,7 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
     sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
+    prompt?: string;
   }): Promise<AssembleResult> {
     this.assembleCalls.push({ ...params });
     this.rejectSessionKey(params);
@@ -637,6 +638,101 @@ describe("LegacyContextEngine parity", () => {
   it("dispose() completes without error", async () => {
     const engine = new LegacyContextEngine();
     await expect(engine.dispose()).resolves.toBeUndefined();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5b. assemble() prompt forwarding
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("assemble() prompt forwarding", () => {
+  it("forwards prompt to the underlying engine", async () => {
+    const engineId = `prompt-fwd-${Date.now().toString(36)}`;
+    const calls: Array<Record<string, unknown>> = [];
+    registerContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
+      async ingest() {
+        return { ingested: false };
+      },
+      async assemble(params) {
+        calls.push({ ...params });
+        return { messages: params.messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+    }));
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    await engine.assemble({
+      sessionId: "s1",
+      messages: [makeMockMessage("user", "hello")],
+      prompt: "hello",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toHaveProperty("prompt", "hello");
+  });
+
+  it("omits prompt when not provided", async () => {
+    const engineId = `prompt-omit-${Date.now().toString(36)}`;
+    const calls: Array<Record<string, unknown>> = [];
+    registerContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
+      async ingest() {
+        return { ingested: false };
+      },
+      async assemble(params) {
+        calls.push({ ...params });
+        return { messages: params.messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+    }));
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    await engine.assemble({
+      sessionId: "s1",
+      messages: [makeMockMessage("user", "hello")],
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).not.toHaveProperty("prompt");
+  });
+
+  it("does not leak prompt key when caller spreads undefined", async () => {
+    // Guards against the pattern `{ prompt: params.prompt }` when params.prompt
+    // is undefined — JavaScript keeps the key present with value undefined,
+    // which breaks engines that guard with `'prompt' in params`.
+    const engineId = `prompt-undef-${Date.now().toString(36)}`;
+    const calls: Array<Record<string, unknown>> = [];
+    registerContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
+      async ingest() {
+        return { ingested: false };
+      },
+      async assemble(params) {
+        calls.push({ ...params });
+        return { messages: params.messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+    }));
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    // Simulate the attempt.ts call-site pattern: conditional spread
+    const callerPrompt: string | undefined = undefined;
+    await engine.assemble({
+      sessionId: "s1",
+      messages: [makeMockMessage("user", "hello")],
+      ...(callerPrompt !== undefined ? { prompt: callerPrompt } : {}),
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).not.toHaveProperty("prompt");
+    expect(Object.keys(calls[0] as object)).not.toContain("prompt");
   });
 });
 
