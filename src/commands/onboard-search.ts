@@ -70,18 +70,14 @@ export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
 
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
   const search = config.tools?.web?.search;
-  switch (provider) {
-    case "brave":
-      return search?.apiKey;
-    case "gemini":
-      return search?.gemini?.apiKey;
-    case "grok":
-      return search?.grok?.apiKey;
-    case "kimi":
-      return search?.kimi?.apiKey;
-    case "perplexity":
-      return search?.perplexity?.apiKey;
-  }
+  const entry = resolvePluginWebSearchProviders({
+    config,
+    bundledAllowlistCompat: true,
+  }).find((candidate) => candidate.id === provider);
+  return (
+    entry?.getConfiguredCredentialValue?.(config) ??
+    entry?.getCredentialValue(search as Record<string, unknown> | undefined)
+  );
 }
 
 /** Returns the plaintext key string, or undefined for SecretRefs/missing. */
@@ -127,23 +123,13 @@ export function applySearchKey(
   provider: SearchProvider,
   key: SecretInput,
 ): OpenClawConfig {
-  const search = { ...config.tools?.web?.search, provider, enabled: true };
-  switch (provider) {
-    case "brave":
-      search.apiKey = key;
-      break;
-    case "gemini":
-      search.gemini = { ...search.gemini, apiKey: key };
-      break;
-    case "grok":
-      search.grok = { ...search.grok, apiKey: key };
-      break;
-    case "kimi":
-      search.kimi = { ...search.kimi, apiKey: key };
-      break;
-    case "perplexity":
-      search.perplexity = { ...search.perplexity, apiKey: key };
-      break;
+  const providerEntry = resolvePluginWebSearchProviders({
+    config,
+    bundledAllowlistCompat: true,
+  }).find((candidate) => candidate.id === provider);
+  const search: MutableSearchConfig = { ...config.tools?.web?.search, provider, enabled: true };
+  if (providerEntry && !providerEntry.setConfiguredCredentialValue) {
+    providerEntry.setCredentialValue(search, key);
   }
   return {
     ...config,
@@ -152,6 +138,9 @@ export function applySearchKey(
       web: { ...config.tools?.web, search },
     },
   };
+  const next = providerEntry?.applySelectionConfig?.(nextBase) ?? nextBase;
+  providerEntry?.setConfiguredCredentialValue?.(next, key);
+  return next;
 }
 
 function applyProviderOnly(config: OpenClawConfig, provider: SearchProvider): OpenClawConfig {
