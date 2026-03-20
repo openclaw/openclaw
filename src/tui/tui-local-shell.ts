@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import type { Component, SelectItem } from "@mariozechner/pi-tui";
 import { createSearchableSelectList } from "./components/selectors.js";
 
@@ -116,11 +117,15 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
 
       let stdout = "";
       let stderr = "";
+      // StringDecoder buffers incomplete multi-byte UTF-8 sequences across
+      // pipe chunks, preventing U+FFFD replacement at chunk boundaries.
+      const stdoutDecoder = new StringDecoder("utf8");
+      const stderrDecoder = new StringDecoder("utf8");
       child.stdout.on("data", (buf) => {
-        stdout = appendWithCap(stdout, buf.toString("utf8"));
+        stdout = appendWithCap(stdout, stdoutDecoder.write(buf));
       });
       child.stderr.on("data", (buf) => {
-        stderr = appendWithCap(stderr, buf.toString("utf8"));
+        stderr = appendWithCap(stderr, stderrDecoder.write(buf));
       });
 
       child.on("close", (code, signal) => {

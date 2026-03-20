@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -55,16 +56,20 @@ export async function runCliCommand(params: {
           reject(new Error(`${params.commandSummary} timed out after ${params.timeoutMs}ms`));
         }, params.timeoutMs)
       : null;
+    // StringDecoder buffers incomplete multi-byte UTF-8 sequences across
+    // TCP/pipe chunks, preventing U+FFFD replacement at chunk boundaries.
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     child.stdout.on("data", (data) => {
       if (discardStdout) {
         return;
       }
-      const next = appendOutputWithCap(stdout, data.toString("utf8"), params.maxOutputChars);
+      const next = appendOutputWithCap(stdout, stdoutDecoder.write(data), params.maxOutputChars);
       stdout = next.text;
       stdoutTruncated = stdoutTruncated || next.truncated;
     });
     child.stderr.on("data", (data) => {
-      const next = appendOutputWithCap(stderr, data.toString("utf8"), params.maxOutputChars);
+      const next = appendOutputWithCap(stderr, stderrDecoder.write(data), params.maxOutputChars);
       stderr = next.text;
       stderrTruncated = stderrTruncated || next.truncated;
     });

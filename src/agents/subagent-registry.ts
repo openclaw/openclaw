@@ -112,7 +112,14 @@ function capFrozenResultText(resultText: string): string {
     0,
     FROZEN_RESULT_TEXT_MAX_BYTES - Buffer.byteLength(notice, "utf8"),
   );
-  const payload = Buffer.from(trimmed, "utf8").subarray(0, maxPayloadBytes).toString("utf8");
+  const buf = Buffer.from(trimmed, "utf8");
+  let end = maxPayloadBytes;
+  // Walk back if we landed in the middle of a multi-byte UTF-8 sequence
+  // (continuation bytes have the bit pattern 10xxxxxx, i.e. 0x80..0xBF).
+  while (end > 0 && buf[end] !== undefined && (buf[end] & 0xc0) === 0x80) {
+    end--;
+  }
+  const payload = buf.subarray(0, end).toString("utf8");
   return `${payload}${notice}`;
 }
 
