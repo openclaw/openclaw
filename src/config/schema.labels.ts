@@ -846,6 +846,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.slack.thread.historyScope": "Slack Thread History Scope",
   "channels.slack.thread.inheritParent": "Slack Thread Parent Inheritance",
   "channels.slack.thread.initialHistoryLimit": "Slack Thread Initial History Limit",
+  "channels.slack.thread.existingSessionRefreshLimit":
+    "Slack Thread Existing Session Refresh Limit",
   "channels.mattermost.botToken": "Mattermost Bot Token",
   "channels.mattermost.baseUrl": "Mattermost Base URL",
   "channels.mattermost.configWrites": "Mattermost Config Writes",

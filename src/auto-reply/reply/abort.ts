@@ -32,7 +32,21 @@ import { clearSessionQueues } from "./queue.js";
 
 export { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 
-const ABORT_TRIGGERS = new Set([
+// GENERAL_ABORT_PHRASES apply to the broad natural-language abort detector.
+// THREAD_ABORT_PHRASES are the exact thread-scoped phrases that can be prefixed
+// by "stop, ..." and reused by the incident-thread bypass logic.
+// INCIDENT_THREAD_STOP_PHRASES are the plain stop variants allowed for that
+// narrower incident-thread bypass path, without enabling the whole abort lexicon.
+const THREAD_ABORT_PHRASES = [
+  "ignore this thread",
+  "ignore thread",
+  "don't answer this thread",
+  "dont answer this thread",
+  "do not answer this thread",
+] as const;
+const INCIDENT_THREAD_STOP_PHRASES = ["stop", "please stop", "stop please"] as const;
+
+const GENERAL_ABORT_PHRASES = [
   "stop",
   "esc",
   "abort",
@@ -73,12 +87,23 @@ const ABORT_TRIGGERS = new Set([
   "stop do not do anything",
   "stop doing anything",
   "do not do that",
+  "please do not do that",
   "please stop",
   "stop please",
-]);
+] as const;
+
+const ABORT_TRIGGERS = new Set<string>([...GENERAL_ABORT_PHRASES, ...THREAD_ABORT_PHRASES]);
+const THREAD_ABORT_TRIGGERS = new Set<string>(THREAD_ABORT_PHRASES);
+const INCIDENT_THREAD_STOP_TRIGGER_SET = new Set<string>(INCIDENT_THREAD_STOP_PHRASES);
+// String-keyed bounded map: enough for this path, and avoids keeping per-session
+// timers alive. pruneAbortMemory enforces the hard cap.
 const ABORT_MEMORY = new Map<string, boolean>();
 const ABORT_MEMORY_MAX = 2000;
+const MAX_ABORT_CONTROL_TEXT_LENGTH = 2048;
 const TRAILING_ABORT_PUNCTUATION_RE = /[.!?…,，。;；:：'"’”)\]}]+$/u;
+// Matches whole-message thread-control prefixes like "stop, ...", "stop: ...",
+// "stop ...", and "please stop, ..." before the exact thread phrase check.
+const STOP_ABORT_PREFIX_RE = /^(?:please\s+)?stop(?:\s*[,;:]\s*|\s+)(?:please\s+)?/u;
 
 function normalizeAbortTriggerText(text: string): string {
   return text
@@ -90,16 +115,51 @@ function normalizeAbortTriggerText(text: string): string {
     .trim();
 }
 
+function matchesThreadAbortTrigger(normalized: string): boolean {
+  if (THREAD_ABORT_TRIGGERS.has(normalized)) {
+    return true;
+  }
+
+  // Only allow "stop, ..." prefix stripping for the thread-scoped follow-up phrases.
+  const withoutStopPrefix = normalized.replace(STOP_ABORT_PREFIX_RE, "");
+  return THREAD_ABORT_TRIGGERS.has(withoutStopPrefix);
+}
+
 export function isAbortTrigger(text?: string): boolean {
   if (!text) {
     return false;
   }
   const normalized = normalizeAbortTriggerText(text);
-  return ABORT_TRIGGERS.has(normalized);
+  if (ABORT_TRIGGERS.has(normalized)) {
+    return true;
+  }
+  return matchesThreadAbortTrigger(normalized);
+}
+
+export function isIncidentThreadAbortControlText(
+  text?: string,
+  options?: CommandNormalizeOptions,
+): boolean {
+  if (!text || text.length > MAX_ABORT_CONTROL_TEXT_LENGTH) {
+    return false;
+  }
+  const normalized = normalizeCommandBody(text, options).trim();
+  if (!normalized) {
+    return false;
+  }
+  const normalizedLower = normalized.toLowerCase();
+  const normalizedAbortText = normalizeAbortTriggerText(normalizedLower);
+  if (normalizedLower === "/stop" || normalizedAbortText === "/stop") {
+    return true;
+  }
+  if (INCIDENT_THREAD_STOP_TRIGGER_SET.has(normalizedAbortText)) {
+    return true;
+  }
+  return matchesThreadAbortTrigger(normalizedAbortText);
 }
 
 export function isAbortRequestText(text?: string, options?: CommandNormalizeOptions): boolean {
-  if (!text) {
+  if (!text || text.length > MAX_ABORT_CONTROL_TEXT_LENGTH) {
     return false;
   }
   const normalized = normalizeCommandBody(text, options).trim();

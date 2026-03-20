@@ -40,6 +40,10 @@ export type SlackChannelConfig = {
    * in channels that already use `incidentRootOnly`.
    * The bypass requires an explicit @mention of the bot in the thread reply;
    * prior bot participation or bot-authored roots alone are not sufficient.
+   * Authorized stop/ignore-thread abort controls are the only non-mention
+   * exception for these follow-ups.
+   * Enable only in incident/bug-report style channels where this narrower
+   * control surface is acceptable.
    * Useful for monitoring channels where operators may ask follow-ups like
    * "is it resolved now?" by tagging the bot after the initial analysis.
    */
@@ -96,6 +100,8 @@ export type SlackThreadConfig = {
   inheritParent?: boolean;
   /** Maximum number of thread messages to fetch as context when starting a new thread session (default: 20). Set to 0 to disable thread history fetching. */
   initialHistoryLimit?: number;
+  /** Maximum number of thread messages to refresh for existing thread sessions (default: 8). Set to 0 to disable refreshes for existing sessions. Runtime clamps this to initialHistoryLimit. */
+  existingSessionRefreshLimit?: number;
 };
 
 export type SlackAccountConfig = {

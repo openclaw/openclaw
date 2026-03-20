@@ -135,6 +135,8 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   );
   await triggerInternalHook(hookEvent);
 
+  // Native-targeted stop commands should also stop descendants owned by the
+  // targeted session, not just descendants of the command/session wrapper.
   const { stopped } = stopSubagentsForRequester({
     cfg: params.cfg,
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
@@ -160,6 +162,12 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
   });
+  const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
+  if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+    logVerbose(
+      `abort-trigger: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
+    );
+  }
   await applyAbortTarget({
     abortTarget,
     sessionStore: params.sessionStore,
@@ -171,5 +179,11 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
       targetSessionKey: abortTarget.key,
     }),
   });
-  return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
+  // Natural-language abort triggers follow the same target-session semantics
+  // as /stop when CommandTargetSessionKey is present.
+  const { stopped } = stopSubagentsForRequester({
+    cfg: params.cfg,
+    requesterSessionKey: abortTarget.key ?? params.sessionKey,
+  });
+  return { shouldContinue: false, reply: { text: formatAbortReplyText(stopped) } };
 };

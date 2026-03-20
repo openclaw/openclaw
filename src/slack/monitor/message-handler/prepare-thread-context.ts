@@ -23,6 +23,42 @@ function normalizeForRetryCheck(value: string | undefined): string {
   return (value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+// Existing thread sessions only need a compact refresh window to pick up new human replies
+// without replaying the full thread on every turn.
+const DEFAULT_EXISTING_THREAD_REFRESH_LIMIT = 8;
+
+function resolveThreadHistoryLimit(params: {
+  initialHistoryLimit: number;
+  existingSessionRefreshLimit: number;
+  hasExistingThreadSession: boolean;
+}): number {
+  if (params.initialHistoryLimit <= 0) {
+    return 0;
+  }
+  if (!params.hasExistingThreadSession) {
+    return params.initialHistoryLimit;
+  }
+  if (params.existingSessionRefreshLimit === 0) {
+    return 0;
+  }
+  const refreshLimit = Math.max(params.existingSessionRefreshLimit, 1);
+  return Math.min(params.initialHistoryLimit, refreshLimit);
+}
+
+function resolveReporterUserId(params: {
+  starter: SlackThreadStarter | null;
+  parentUserId?: string;
+}): string | undefined {
+  const starterUserId = params.starter?.userId?.trim();
+  if (starterUserId) {
+    return starterUserId;
+  }
+  // Slack thread replies expose parent_user_id as the thread-root author when
+  // the root fetch omitted a user id, so this is the closest reporter fallback.
+  const parentUserId = params.parentUserId?.trim();
+  return parentUserId || undefined;
+}
+
 export async function resolveSlackThreadContextData(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -75,18 +111,28 @@ export async function resolveSlackThreadContextData(params: {
   }
 
   const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
+  const existingSessionRefreshLimit =
+    params.account.config?.thread?.existingSessionRefreshLimit ??
+    DEFAULT_EXISTING_THREAD_REFRESH_LIMIT;
   threadSessionPreviousTimestamp = readSessionUpdatedAt({
     storePath: params.storePath,
     sessionKey: params.sessionKey,
   });
 
-  if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+  const hasExistingThreadSession = threadSessionPreviousTimestamp !== undefined;
+  const threadHistoryLimit = resolveThreadHistoryLimit({
+    initialHistoryLimit: threadInitialHistoryLimit,
+    existingSessionRefreshLimit,
+    hasExistingThreadSession,
+  });
+
+  if (threadHistoryLimit > 0) {
     const threadHistory = await resolveSlackThreadHistory({
       channelId: params.message.channel,
       threadTs: params.threadTs,
       client: params.ctx.app.client,
       currentMessageTs: params.message.ts,
-      limit: threadInitialHistoryLimit,
+      limit: threadHistoryLimit,
     });
 
     if (threadHistory.length > 0) {
@@ -106,6 +152,16 @@ export async function resolveSlackThreadContextData(params: {
       );
 
       const historyParts: string[] = [];
+      const reporterUserId = resolveReporterUserId({
+        starter,
+        parentUserId: params.message.parent_user_id,
+      });
+      if (!starter?.userId && reporterUserId) {
+        logVerbose(
+          `slack: thread history reporter fallback using parent_user_id for ${params.message.channel} ` +
+            `thread=${params.threadTs}`,
+        );
+      }
       for (const historyMsg of threadHistory) {
         // Avoid self-conditioning on stale assistant status/tool-capability claims
         // when bootstrapping a new thread session from old thread history.
@@ -113,10 +169,15 @@ export async function resolveSlackThreadContextData(params: {
           continue;
         }
         const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
-        const msgSenderName =
-          msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown");
+        const msgSenderName = msgUser?.name ?? "Unknown";
         const role = "user";
-        const msgWithId = `${historyMsg.text}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${params.message.channel}]`;
+        const participantRole =
+          historyMsg.userId && historyMsg.userId === reporterUserId ? "reporter" : "participant";
+        const msgWithId =
+          `${historyMsg.text}\n[slack message id: ${historyMsg.ts ?? "unknown"} ` +
+          `channel: ${params.message.channel}${
+            historyMsg.userId ? ` slack user id: ${historyMsg.userId} role: ${participantRole}` : ""
+          }]`;
         historyParts.push(
           formatInboundEnvelope({
             channel: "Slack",
@@ -145,7 +206,8 @@ export async function resolveSlackThreadContextData(params: {
       }
 
       logVerbose(
-        `slack: populated thread history with ${historyParts.length}/${threadHistory.length} messages for new session`,
+        `slack: populated thread history with ${historyParts.length}/${threadHistory.length} ` +
+          `messages for ${hasExistingThreadSession ? "existing" : "new"} session`,
       );
     }
   }

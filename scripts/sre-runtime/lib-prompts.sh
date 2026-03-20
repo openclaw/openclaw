@@ -14,6 +14,7 @@ Monitoring incident intake mode:
 - Auto-respond only to new incident root posts in these channels.
 - Ignore resolved/recovered updates and duplicate incident roots.
 - Always reply in the incident thread under the alert/report root; never post RCA in channel root.
+- If thread context looks stale or a required artifact is missing, re-read the latest thread messages before asking again. If still blocked after refresh, mention the reporter or relevant human and ask one short clarifying question.
 - Start every reply with <@U07KE3NALTX>.
 - First four lines must be: Incident, Customer impact, Affected services, Status.
 - Use plain language. If only monitoring/internal tooling is affected, say exactly: No confirmed customer impact. Internal observability degraded.

@@ -75,6 +75,8 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 
 - Reply in the same incident thread (never channel root).
 - Continue answering operator follow-ups in that incident thread after the first reply; rerun live checks instead of going silent.
+- If thread context looks stale or a required artifact is missing, re-read the latest thread messages before asking again. If still blocked after refresh, mention the reporter or relevant human and ask one short clarifying question.
+- If a human explicitly says stop, ignore this thread, or don't answer this thread, abort immediately, clear queued follow-ups, and do not send a substantive reply.
 - Keep response tight (8-12 lines). Prioritize direct evidence + next action.
 - In `#bug-report` and incident threads, the first visible token of every substantive reply must be `*Incident:*`; never emit preambles such as `Found the root cause` or `Let me compose the response`.
 - Use Slack mrkdwn only:

@@ -123,6 +123,86 @@ function mockEmbeddedOk() {
   return mockRunEmbeddedPiAgentOk("ok");
 }
 
+async function expectNativeStopAbortsTargetSession(params: {
+  home: string;
+  stopBody: "/stop" | "stop, don't answer this thread";
+}) {
+  const cfg = makeCfg(params.home);
+  cfg.session = {
+    ...cfg.session,
+    store: join(
+      params.home,
+      `native-stop-${params.stopBody.startsWith("/") ? "slash" : "plain"}.sessions.json`,
+    ),
+  };
+  getAbortEmbeddedPiRunMock().mockClear();
+  const storePath = cfg.session?.store;
+  if (!storePath) {
+    throw new Error("missing session store path");
+  }
+  const targetSessionKey = "agent:main:telegram:group:123";
+  const targetSessionId = "session-target";
+  await fs.writeFile(
+    storePath,
+    JSON.stringify({
+      [targetSessionKey]: {
+        sessionId: targetSessionId,
+        updatedAt: Date.now(),
+      },
+    }),
+  );
+  const followupRun: FollowupRun = {
+    prompt: "queued",
+    enqueuedAt: Date.now(),
+    run: {
+      agentId: "main",
+      agentDir: join(params.home, "agent"),
+      sessionId: targetSessionId,
+      sessionKey: targetSessionKey,
+      messageProvider: "telegram",
+      agentAccountId: "acct",
+      sessionFile: join(params.home, "session.jsonl"),
+      workspaceDir: join(params.home, "workspace"),
+      config: cfg,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      timeoutMs: 10,
+      blockReplyBreak: "text_end",
+    },
+  };
+  enqueueFollowupRun(
+    targetSessionKey,
+    followupRun,
+    { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
+    "none",
+  );
+  expect(getFollowupQueueDepth(targetSessionKey)).toBe(1);
+
+  const res = await getReplyFromConfig(
+    {
+      Body: params.stopBody,
+      From: "telegram:111",
+      To: "telegram:111",
+      ChatType: "direct",
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "telegram:slash:111",
+      CommandSource: "native",
+      CommandTargetSessionKey: targetSessionKey,
+      CommandAuthorized: true,
+    },
+    {},
+    cfg,
+  );
+
+  const text = Array.isArray(res) ? res[0]?.text : res?.text;
+  expect(text).toBe("⚙️ Agent was aborted.");
+  const store = loadSessionStore(storePath);
+  expect(store[targetSessionKey]?.abortedLastRun).toBe(true);
+  expect(getFollowupQueueDepth(targetSessionKey)).toBe(0);
+  expect(getAbortEmbeddedPiRunMock()).toHaveBeenCalledWith(targetSessionId);
+}
+
 async function runInlineUnauthorizedCommand(params: { home: string; command: "/status" }) {
   const cfg = makeUnauthorizedWhatsAppCfg(params.home);
   const res = await getReplyFromConfig(
@@ -323,77 +403,6 @@ describe("trigger handling", () => {
 
       {
         const cfg = makeCfg(home);
-        cfg.session = { ...cfg.session, store: join(home, "native-stop.sessions.json") };
-        getAbortEmbeddedPiRunMock().mockClear();
-        const storePath = cfg.session?.store;
-        if (!storePath) {
-          throw new Error("missing session store path");
-        }
-        const targetSessionKey = "agent:main:telegram:group:123";
-        const targetSessionId = "session-target";
-        await fs.writeFile(
-          storePath,
-          JSON.stringify({
-            [targetSessionKey]: {
-              sessionId: targetSessionId,
-              updatedAt: Date.now(),
-            },
-          }),
-        );
-        const followupRun: FollowupRun = {
-          prompt: "queued",
-          enqueuedAt: Date.now(),
-          run: {
-            agentId: "main",
-            agentDir: join(home, "agent"),
-            sessionId: targetSessionId,
-            sessionKey: targetSessionKey,
-            messageProvider: "telegram",
-            agentAccountId: "acct",
-            sessionFile: join(home, "session.jsonl"),
-            workspaceDir: join(home, "workspace"),
-            config: cfg,
-            provider: "anthropic",
-            model: "claude-opus-4-5",
-            timeoutMs: 10,
-            blockReplyBreak: "text_end",
-          },
-        };
-        enqueueFollowupRun(
-          targetSessionKey,
-          followupRun,
-          { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
-          "none",
-        );
-        expect(getFollowupQueueDepth(targetSessionKey)).toBe(1);
-
-        const res = await getReplyFromConfig(
-          {
-            Body: "/stop",
-            From: "telegram:111",
-            To: "telegram:111",
-            ChatType: "direct",
-            Provider: "telegram",
-            Surface: "telegram",
-            SessionKey: "telegram:slash:111",
-            CommandSource: "native",
-            CommandTargetSessionKey: targetSessionKey,
-            CommandAuthorized: true,
-          },
-          {},
-          cfg,
-        );
-
-        const text = Array.isArray(res) ? res[0]?.text : res?.text;
-        expect(text).toBe("⚙️ Agent was aborted.");
-        expect(getAbortEmbeddedPiRunMock()).toHaveBeenCalledWith(targetSessionId);
-        const store = loadSessionStore(storePath);
-        expect(store[targetSessionKey]?.abortedLastRun).toBe(true);
-        expect(getFollowupQueueDepth(targetSessionKey)).toBe(0);
-      }
-
-      {
-        const cfg = makeCfg(home);
         cfg.session = { ...cfg.session, store: join(home, "native-model.sessions.json") };
         getRunEmbeddedPiAgentMock().mockClear();
         const storePath = cfg.session?.store;
@@ -491,4 +500,13 @@ describe("trigger handling", () => {
       expect(prompt).toContain("/status");
     });
   });
+
+  it.each(["/stop", "stop, don't answer this thread"] as const)(
+    "handles native stop body %s",
+    async (stopBody) => {
+      await withTempHome(async (home) => {
+        await expectNativeStopAbortsTargetSession({ home, stopBody });
+      });
+    },
+  );
 });

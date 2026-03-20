@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   getAbortMemory,
   getAbortMemorySizeForTest,
+  isIncidentThreadAbortControlText,
   isAbortRequestText,
   isAbortTrigger,
   resetAbortMemoryForTest,
@@ -20,8 +21,12 @@ import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./q
 import { initSessionState } from "./session.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-vi.mock("../../agents/pi-embedded.js", () => ({
+const piEmbeddedMocks = vi.hoisted(() => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(true),
+}));
+
+vi.mock("../../agents/pi-embedded.js", () => ({
+  abortEmbeddedPiRun: piEmbeddedMocks.abortEmbeddedPiRun,
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
@@ -35,11 +40,15 @@ const subagentRegistryMocks = vi.hoisted(() => ({
   listSubagentRunsForRequester: vi.fn<(requesterSessionKey: string) => SubagentRunRecord[]>(
     () => [],
   ),
+  listSubagentRunsForController: vi.fn<(controllerSessionKey: string) => SubagentRunRecord[]>(
+    () => [],
+  ),
   markSubagentRunTerminated: vi.fn(() => 1),
 }));
 
 vi.mock("../../agents/subagent-registry.js", () => ({
   listSubagentRunsForRequester: subagentRegistryMocks.listSubagentRunsForRequester,
+  listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForController,
   markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
 }));
 
@@ -163,6 +172,7 @@ describe("abort detection", () => {
 
   afterEach(() => {
     resetAbortMemoryForTest();
+    piEmbeddedMocks.abortEmbeddedPiRun.mockReset().mockReturnValue(true);
     acpManagerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
     acpManagerMocks.cancelSession.mockReset().mockResolvedValue(undefined);
   });
@@ -210,6 +220,7 @@ describe("abort detection", () => {
       "stop do not do anything",
       "stop doing anything",
       "do not do that",
+      "please do not do that",
       "please stop",
       "stop please",
       "STOP OPENCLAW",
@@ -240,7 +251,6 @@ describe("abort detection", () => {
     }
 
     expect(isAbortTrigger("hello")).toBe(false);
-    expect(isAbortTrigger("please do not do that")).toBe(false);
     // /stop is NOT matched by isAbortTrigger - it's handled separately.
     expect(isAbortTrigger("/stop")).toBe(false);
   });
@@ -261,13 +271,45 @@ describe("abort detection", () => {
     expect(isAbortRequestText("stopp")).toBe(true);
     expect(isAbortRequestText("pare")).toBe(true);
     expect(isAbortRequestText(" توقف ")).toBe(true);
+    expect(isAbortRequestText("ignore this thread")).toBe(true);
+    expect(isAbortRequestText("don't answer this thread")).toBe(true);
+    expect(isAbortRequestText("stop, don't answer this thread")).toBe(true);
+    expect(isAbortRequestText("stop: ignore this thread")).toBe(true);
+    expect(isAbortRequestText("stop, please ignore this thread")).toBe(true);
+    expect(isAbortRequestText("please stop, ignore this thread")).toBe(true);
     expect(isAbortRequestText("/stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
     expect(isAbortRequestText("/Stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
 
     expect(isAbortRequestText("/status")).toBe(false);
     expect(isAbortRequestText("do not do that")).toBe(true);
-    expect(isAbortRequestText("please do not do that")).toBe(false);
+    expect(isAbortRequestText("please do not do that")).toBe(true);
+    expect(isAbortRequestText("ignore")).toBe(false);
+    expect(isAbortRequestText("ignore this")).toBe(false);
+    expect(isAbortRequestText("don't answer")).toBe(false);
+    expect(isAbortRequestText("please ignore that")).toBe(false);
+    expect(isAbortRequestText("ignore this warning")).toBe(false);
+    expect(isAbortRequestText("don't answer with just yes")).toBe(false);
+    expect(isAbortRequestText("stop, please ignore this warning")).toBe(false);
     expect(isAbortRequestText("/abort")).toBe(false);
+  });
+
+  it("narrows incident-thread abort control detection to thread-scoped phrases", () => {
+    expect(isIncidentThreadAbortControlText("/stop")).toBe(true);
+    expect(isIncidentThreadAbortControlText("stop")).toBe(true);
+    expect(isIncidentThreadAbortControlText("please stop")).toBe(true);
+    expect(isIncidentThreadAbortControlText("ignore this thread")).toBe(true);
+    expect(isIncidentThreadAbortControlText("stop, don't answer this thread")).toBe(true);
+    expect(isIncidentThreadAbortControlText("STOP, DON'T ANSWER THIS THREAD")).toBe(true);
+    expect(isIncidentThreadAbortControlText("please stop, ignore this thread")).toBe(true);
+    expect(isIncidentThreadAbortControlText("stop; please ignore this warning")).toBe(false);
+    expect(isIncidentThreadAbortControlText("wait")).toBe(false);
+    expect(isIncidentThreadAbortControlText("please do not do that")).toBe(false);
+  });
+
+  it("rejects oversized abort-control text before normalization", () => {
+    const oversized = `${"x".repeat(2050)} please stop`;
+    expect(isIncidentThreadAbortControlText(oversized)).toBe(false);
+    expect(isAbortRequestText(oversized)).toBe(false);
   });
 
   it("removes abort memory entry when flag is reset", () => {
@@ -430,6 +472,35 @@ describe("abort detection", () => {
       sessionKey,
       reason: "fast-abort",
     });
+    expect(piEmbeddedMocks.abortEmbeddedPiRun).toHaveBeenCalledWith(sessionId);
+  });
+
+  it("plain-language stop, don't answer this thread aborts the target session", async () => {
+    const sessionKey = "agent:main:telegram:group:123";
+    const sessionId = "session-target";
+    const { cfg } = await createAbortConfig({
+      sessionIdsByKey: { [sessionKey]: sessionId },
+    });
+
+    const result = await tryFastAbortFromMessage({
+      ctx: buildTestCtx({
+        Body: "stop, don't answer this thread",
+        RawBody: "stop, don't answer this thread",
+        CommandBody: "stop, don't answer this thread",
+        CommandAuthorized: true,
+        CommandSource: "native",
+        CommandTargetSessionKey: sessionKey,
+        SessionKey: "telegram:slash:123",
+        Provider: "telegram",
+        Surface: "telegram",
+        From: "telegram:123",
+        To: "telegram:123",
+      }),
+      cfg,
+    });
+
+    expect(result.handled).toBe(true);
+    expect(piEmbeddedMocks.abortEmbeddedPiRun).toHaveBeenCalledWith(sessionId);
   });
 
   it("ACP cancel failures do not skip queue and lane cleanup", async () => {
@@ -529,7 +600,7 @@ describe("abort detection", () => {
       },
     });
 
-    subagentRegistryMocks.listSubagentRunsForRequester.mockReturnValueOnce([
+    subagentRegistryMocks.listSubagentRunsForController.mockReturnValueOnce([
       {
         runId: "run-1",
         childSessionKey: childKey,
@@ -570,7 +641,7 @@ describe("abort detection", () => {
     // First call: main session lists depth-1 children
     // Second call (cascade): depth-1 session lists depth-2 children
     // Third call (cascade from depth-2): no further children
-    subagentRegistryMocks.listSubagentRunsForRequester
+    subagentRegistryMocks.listSubagentRunsForController
       .mockReturnValueOnce([
         {
           runId: "run-1",
@@ -609,7 +680,7 @@ describe("abort detection", () => {
   });
 
   it("cascade stop traverses ended depth-1 parents to stop active depth-2 children", async () => {
-    subagentRegistryMocks.listSubagentRunsForRequester.mockClear();
+    subagentRegistryMocks.listSubagentRunsForController.mockClear();
     subagentRegistryMocks.markSubagentRunTerminated.mockClear();
     const sessionKey = "telegram:parent";
     const depth1Key = "agent:main:subagent:child-ended";
@@ -627,7 +698,7 @@ describe("abort detection", () => {
     // main -> ended depth-1 parent
     // depth-1 parent -> active depth-2 child
     // depth-2 child -> none
-    subagentRegistryMocks.listSubagentRunsForRequester
+    subagentRegistryMocks.listSubagentRunsForController
       .mockReturnValueOnce([
         {
           runId: "run-1",

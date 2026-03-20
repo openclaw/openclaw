@@ -1,10 +1,14 @@
 import { resolveAckReaction } from "../../../agents/identity.js";
-import { hasControlCommand } from "../../../auto-reply/command-detection.js";
+import {
+  hasControlCommand,
+  isControlCommandMessage,
+} from "../../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../../auto-reply/commands-registry.js";
 import {
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
 } from "../../../auto-reply/envelope.js";
+import { isIncidentThreadAbortControlText } from "../../../auto-reply/reply/abort.js";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
@@ -111,6 +115,22 @@ type SlackRoutingContext = {
   sessionKey: string;
   historyKey: string;
 };
+
+function hasIncidentThreadAbortControlIntent(params: {
+  incidentRootOnly: boolean;
+  isThreadReply: boolean;
+  isBotMessage: boolean;
+  allowHumanThreadFollowups: boolean;
+  textForCommandDetection: string;
+}): boolean {
+  return Boolean(
+    params.incidentRootOnly &&
+    params.isThreadReply &&
+    !params.isBotMessage &&
+    params.allowHumanThreadFollowups &&
+    isIncidentThreadAbortControlText(params.textForCommandDetection),
+  );
+}
 
 async function resolveSlackConversationContext(params: {
   ctx: SlackMonitorContext;
@@ -394,6 +414,15 @@ export async function prepareSlackMessage(params: {
       }));
   const allowImplicitMention =
     channelConfig?.allowImplicitMention ?? ctx.defaultAllowImplicitMention;
+  // Strip Slack mentions (<@U123>) before command detection so "@Labrador /new" is recognized
+  const textForCommandDetection = stripSlackMentionsForCommandDetection(message.text ?? "");
+  const hasAbortControlIntentInIncidentThread = hasIncidentThreadAbortControlIntent({
+    incidentRootOnly: Boolean(channelConfig?.incidentRootOnly),
+    isThreadReply,
+    isBotMessage,
+    allowHumanThreadFollowups: Boolean(channelConfig?.allowHumanThreadFollowups),
+    textForCommandDetection,
+  });
   const hasThreadParticipation =
     !isDirectMessage && message.thread_ts
       ? hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts)
@@ -401,24 +430,12 @@ export async function prepareSlackMessage(params: {
   const botOwnsThreadRoot = Boolean(
     ctx.botUserId && message.thread_ts && message.parent_user_id === ctx.botUserId,
   );
-  // Authorize incident-thread follow-ups only after an explicit @mention.
-  // Bot-authored roots and prior participation are intentionally excluded so
-  // the bot stays quiet in threads unless a human directly tags it.
-  const hasApprovedIncidentThreadFollowupAuthorization = explicitlyMentioned;
   const implicitMention = Boolean(
     allowImplicitMention &&
     !isDirectMessage &&
     ctx.botUserId &&
     message.thread_ts &&
     (botOwnsThreadRoot || hasThreadParticipation),
-  );
-  const allowApprovedHumanThreadFollowups = Boolean(
-    channelConfig?.allowHumanThreadFollowups &&
-    isThreadReply &&
-    !isBotMessage &&
-    // Security gate: the channel must opt in, the message must be a human
-    // thread reply, and only an explicit @mention authorizes the bypass.
-    hasApprovedIncidentThreadFollowupAuthorization,
   );
 
   let resolvedSenderName = message.username?.trim() || undefined;
@@ -456,9 +473,8 @@ export async function prepareSlackMessage(params: {
     cfg,
     surface: "slack",
   });
-  // Strip Slack mentions (<@U123>) before command detection so "@Labrador /new" is recognized
-  const textForCommandDetection = stripSlackMentionsForCommandDetection(message.text ?? "");
-  const hasControlCommandInMessage = hasControlCommand(textForCommandDetection, cfg);
+  const hasControlCommandInMessage = isControlCommandMessage(textForCommandDetection, cfg);
+  const hasMentionBypassControlCommandBase = hasControlCommand(textForCommandDetection, cfg);
 
   const ownerAuthorized = resolveSlackAllowListMatch({
     allowList: allowFromLower,
@@ -490,6 +506,29 @@ export async function prepareSlackMessage(params: {
     hasControlCommand: hasControlCommandInMessage,
   });
   const commandAuthorized = commandGate.commandAuthorized;
+  const hasAbortControlInIncidentThread =
+    hasAbortControlIntentInIncidentThread && commandAuthorized;
+  const hasMentionBypassControlCommand =
+    hasMentionBypassControlCommandBase || hasAbortControlInIncidentThread;
+  // Incident-thread follow-ups still require an explicit @mention, except for
+  // opted-in stop/ignore controls on active human thread replies.
+  const hasExplicitMentionOrAuthorizedAbortControl =
+    explicitlyMentioned || hasAbortControlInIncidentThread;
+  if (hasAbortControlInIncidentThread && !explicitlyMentioned) {
+    logVerbose(
+      `slack: allowing abort follow-up without explicit mention channel=${message.channel} ` +
+        `thread=${message.thread_ts ?? "unknown"} sender=${senderId ?? "unknown"}`,
+    );
+  }
+  const allowApprovedHumanThreadFollowups = Boolean(
+    channelConfig?.allowHumanThreadFollowups &&
+    isThreadReply &&
+    !isBotMessage &&
+    // Security gate: the channel must opt in, the message must be a human
+    // thread reply, and authorization comes from an explicit @mention or a
+    // scoped abort control phrase that also passed the normal command auth path.
+    hasExplicitMentionOrAuthorizedAbortControl,
+  );
 
   if (isRoomish && commandGate.shouldBlock) {
     logInboundDrop({
@@ -515,7 +554,7 @@ export async function prepareSlackMessage(params: {
     implicitMention,
     hasAnyMention,
     allowTextCommands,
-    hasControlCommand: hasControlCommandInMessage,
+    hasControlCommand: hasMentionBypassControlCommand,
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;

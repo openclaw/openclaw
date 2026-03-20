@@ -23,6 +23,12 @@ import { buildCommandTestParams } from "./commands.test-harness.js";
 import { parseConfigCommand } from "./config-commands.js";
 import { parseDebugCommand } from "./debug-commands.js";
 import { parseInlineDirectives } from "./directive-handling.js";
+import {
+  clearFollowupQueue,
+  enqueueFollowupRun,
+  getFollowupQueueDepth,
+  type FollowupRun,
+} from "./queue.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
@@ -588,6 +594,7 @@ describe("/compact command", () => {
 describe("abort trigger command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetSubagentRegistryForTests();
   });
 
   it("rejects unauthorized natural-language abort triggers", async () => {
@@ -619,6 +626,133 @@ describe("abort trigger command", () => {
     expect(result).toEqual({ shouldContinue: false });
     expect(sessionStore[params.sessionKey]?.abortedLastRun).toBe(false);
     expect(vi.mocked(abortEmbeddedPiRun)).not.toHaveBeenCalled();
+  });
+
+  it("clears the target follow-up queue for native plain-language abort triggers", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const slashSessionKey = "telegram:slash:111";
+    const targetSessionKey = "agent:main:telegram:group:123";
+    const targetSessionId = "session-target";
+    const params = buildParams("stop, don't answer this thread", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: slashSessionKey,
+      CommandSource: "native",
+      CommandTargetSessionKey: targetSessionKey,
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: targetSessionId,
+      updatedAt: Date.now(),
+      abortedLastRun: false,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [targetSessionKey]: sessionEntry,
+    };
+    const followupRun: FollowupRun = {
+      prompt: "queued",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: path.join(testWorkspaceDir, "agent"),
+        sessionId: targetSessionId,
+        sessionKey: targetSessionKey,
+        messageProvider: "telegram",
+        agentAccountId: "acct",
+        sessionFile: path.join(testWorkspaceDir, "session.jsonl"),
+        workspaceDir: path.join(testWorkspaceDir, "workspace"),
+        config: cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        timeoutMs: 10,
+        blockReplyBreak: "text_end",
+      },
+    };
+    enqueueFollowupRun(
+      targetSessionKey,
+      followupRun,
+      { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
+      "none",
+    );
+
+    try {
+      expect(getFollowupQueueDepth(targetSessionKey)).toBe(1);
+
+      const result = await handleCommands({
+        ...params,
+        sessionKey: slashSessionKey,
+        sessionEntry,
+        sessionStore,
+      });
+
+      expect(result).toEqual({
+        shouldContinue: false,
+        reply: { text: "⚙️ Agent was aborted." },
+      });
+      expect(getFollowupQueueDepth(targetSessionKey)).toBe(0);
+      expect(sessionStore[targetSessionKey]?.abortedLastRun).toBe(true);
+      expect(vi.mocked(abortEmbeddedPiRun)).toHaveBeenCalledWith(targetSessionId);
+    } finally {
+      clearFollowupQueue(targetSessionKey);
+    }
+  });
+
+  it("stops descendants owned by the native command target session", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const slashSessionKey = "telegram:slash:111";
+    const targetSessionKey = "agent:main:telegram:group:123";
+    const targetSessionId = "session-target";
+    const childSessionKey = "agent:main:subagent:target-child";
+    const childSessionId = "session-child";
+    const params = buildParams("stop, don't answer this thread", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: slashSessionKey,
+      CommandSource: "native",
+      CommandTargetSessionKey: targetSessionKey,
+    });
+    const sessionStore: Record<string, SessionEntry> = {
+      [targetSessionKey]: {
+        sessionId: targetSessionId,
+        updatedAt: Date.now(),
+        abortedLastRun: false,
+      },
+      [childSessionKey]: {
+        sessionId: childSessionId,
+        updatedAt: Date.now(),
+        abortedLastRun: false,
+      },
+    };
+    addSubagentRunForTests({
+      runId: "run-target-child",
+      childSessionKey,
+      requesterSessionKey: targetSessionKey,
+      requesterDisplayKey: targetSessionKey,
+      task: "target child",
+      cleanup: "keep",
+      createdAt: Date.now(),
+      startedAt: Date.now(),
+    });
+
+    const result = await handleCommands({
+      ...params,
+      sessionKey: slashSessionKey,
+      sessionEntry: sessionStore[targetSessionKey],
+      sessionStore,
+    });
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "⚙️ Agent was aborted. Stopped 1 sub-agent." },
+    });
+    expect(vi.mocked(abortEmbeddedPiRun)).toHaveBeenCalledWith(targetSessionId);
+    expect(listSubagentRunsForRequester(targetSessionKey)[0]?.endedAt).toBeTruthy();
+    expect(listSubagentRunsForRequester(slashSessionKey)).toHaveLength(0);
   });
 });
 
