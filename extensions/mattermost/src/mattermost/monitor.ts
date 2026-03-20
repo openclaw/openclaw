@@ -1622,13 +1622,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             );
             // Even though the text was already delivered via streaming, the final
             // payload may carry media attachments (e.g. TTS audio) that onPartialReply
-            // never receives. Deliver any media now via the normal path (ID=2965091869).
+            // never receives. Deliver the full payload (including text as caption) via
+            // the normal path (ID=2965091869, ID=2966838451).
             const hasMedia = payload.mediaUrls?.length || payload.mediaUrl;
             if (hasMedia) {
               await deliverMattermostReplyPayload({
                 core,
                 cfg,
-                payload: { ...payload, text: undefined },
+                payload,
                 to,
                 accountId: account.accountId,
                 agentId: route.agentId,
@@ -1966,6 +1967,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                       logVerboseMessage(
                         `mattermost stream-patch turn finalize failed: ${String(err)}`,
                       );
+                      // Patch failed: queue the preview for cleanup after the
+                      // authoritative re-delivery in deliver() (ID=2966838455).
+                      // Without this, the stale preview stays in-channel alongside
+                      // the re-delivered reply since streamedTurnCount was not
+                      // incremented and deliver() won't know to clean up.
+                      pendingOrphanDeletes.push(finalizeId);
                     }
                   }
                 }
