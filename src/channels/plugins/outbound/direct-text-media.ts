@@ -1,9 +1,9 @@
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
-import { chunkText } from "../../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
-import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 import type { ChannelOutboundAdapter } from "../types.js";
+import { chunkText } from "../../../auto-reply/chunk.js";
+import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 
 type DirectSendOptions = {
   cfg: OpenClawConfig;
@@ -138,7 +138,7 @@ export function resolveScopedChannelMediaMaxBytes(params: {
   });
 }
 
-export function createScopedChannelMediaMaxBytesResolver(channel: "imessage" | "signal") {
+export function createScopedChannelMediaMaxBytesResolver(channel: string) {
   return (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     resolveScopedChannelMediaMaxBytes({
       cfg: params.cfg,
@@ -153,7 +153,7 @@ export function createDirectTextMediaOutbound<
   TOpts extends Record<string, unknown>,
   TResult extends DirectSendResult,
 >(params: {
-  channel: "imessage" | "signal";
+  channel: string;
   resolveSender: (deps: OutboundSendDeps | undefined) => DirectSendFn<TOpts, TResult>;
   resolveMaxBytes: (params: {
     cfg: OpenClawConfig;
@@ -161,6 +161,8 @@ export function createDirectTextMediaOutbound<
   }) => number | undefined;
   buildTextOptions: (params: DirectSendOptions) => TOpts;
   buildMediaOptions: (params: DirectSendOptions) => TOpts;
+  chunker?: ChannelOutboundAdapter["chunker"];
+  chunkerMode?: ChannelOutboundAdapter["chunkerMode"];
 }): ChannelOutboundAdapter {
   const sendDirect = async (sendParams: {
     cfg: OpenClawConfig;
@@ -195,8 +197,8 @@ export function createDirectTextMediaOutbound<
 
   const outbound: ChannelOutboundAdapter = {
     deliveryMode: "direct",
-    chunker: chunkText,
-    chunkerMode: "text",
+    chunker: params.chunker ?? chunkText,
+    chunkerMode: params.chunkerMode ?? "text",
     textChunkLimit: 4000,
     sendPayload: async (ctx) =>
       await sendTextMediaPayload({ channel: params.channel, ctx, adapter: outbound }),

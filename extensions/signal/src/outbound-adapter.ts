@@ -1,10 +1,12 @@
-import { createScopedChannelMediaMaxBytesResolver } from "openclaw/plugin-sdk/channel-runtime";
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveOutboundSendDep, type OutboundSendDeps } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelOutboundAdapter, OutboundSendDeps } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  createDirectTextMediaOutbound,
+  createScopedChannelMediaMaxBytesResolver,
+  resolveOutboundSendDep,
+} from "openclaw/plugin-sdk/channel-runtime";
 import {
   attachChannelToResult,
   attachChannelToResults,
-  createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
@@ -26,11 +28,28 @@ function inferSignalTableMode(params: { cfg: SignalSendOpts["cfg"]; accountId?: 
   });
 }
 
+const signalBase = createDirectTextMediaOutbound({
+  channel: "signal",
+  resolveSender: resolveSignalSender,
+  resolveMaxBytes: resolveSignalMaxBytes,
+  chunker: (text: string, _limit: number) =>
+    text.split(/\n{2,}/).flatMap((chunk) => (chunk ? [chunk] : [])),
+  buildTextOptions: ({ cfg, maxBytes, accountId }) => ({
+    cfg,
+    maxBytes,
+    accountId: accountId ?? undefined,
+  }),
+  buildMediaOptions: ({ cfg, mediaUrl, maxBytes, accountId, mediaLocalRoots }) => ({
+    cfg,
+    mediaUrl,
+    maxBytes,
+    accountId: accountId ?? undefined,
+    mediaLocalRoots,
+  }),
+});
+
 export const signalOutbound: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  chunker: (text, _limit) => text.split(/\n{2,}/).flatMap((chunk) => (chunk ? [chunk] : [])),
-  chunkerMode: "text",
-  textChunkLimit: 4000,
+  ...signalBase,
   sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) => {
     const send = resolveSignalSender(deps);
     const maxBytes = resolveSignalMaxBytes({
@@ -96,33 +115,4 @@ export const signalOutbound: ChannelOutboundAdapter = {
     });
     return attachChannelToResult("signal", result);
   },
-  ...createAttachedChannelResultAdapter({
-    channel: "signal",
-    sendText: async ({ cfg, to, text, accountId, deps }) => {
-      const send = resolveSignalSender(deps);
-      const maxBytes = resolveSignalMaxBytes({
-        cfg,
-        accountId: accountId ?? undefined,
-      });
-      return await send(to, text, {
-        cfg,
-        maxBytes,
-        accountId: accountId ?? undefined,
-      });
-    },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps }) => {
-      const send = resolveSignalSender(deps);
-      const maxBytes = resolveSignalMaxBytes({
-        cfg,
-        accountId: accountId ?? undefined,
-      });
-      return await send(to, text, {
-        cfg,
-        mediaUrl,
-        maxBytes,
-        accountId: accountId ?? undefined,
-        mediaLocalRoots,
-      });
-    },
-  }),
 };
