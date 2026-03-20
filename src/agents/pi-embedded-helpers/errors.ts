@@ -569,7 +569,9 @@ export function formatAssistantErrorText(
 
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
-    raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
+    raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i) ??
+    // Groq: "attempted to call tool 'xxx' which was not in request.tools"
+    raw.match(/attempted to call tool\s+["']?([a-z0-9_-]+)["']?\s+which was not in/i);
   if (unknownTool?.[1]) {
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,

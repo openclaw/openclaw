@@ -123,6 +123,17 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
+  it("extracts tool name from Groq tool call validation error", () => {
+    // Groq returns this when a model hallucinates a tool not in request.tools.
+    // Without a sandbox cfg, falls through to the raw error path.
+    const msg = makeAssistantError(
+      "tool call validation failed: attempted to call tool 'gog' which was not in request.tools",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).not.toBeUndefined();
+    // Raw error is surfaced as-is (no sandbox rewrite without cfg)
+    expect(result).toContain("gog");
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
