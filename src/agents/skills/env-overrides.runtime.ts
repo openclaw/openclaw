@@ -1,6 +1,6 @@
-import { getActiveSkillEnvKeys as getActiveSkillEnvKeysImpl } from "./env-overrides.js";
+import { getActiveSkillEnvKeys as getActiveSkillEnvKeysImpl } from "./active-skill-env-state.js";
 
-type GetActiveSkillEnvKeys = typeof import("./env-overrides.js").getActiveSkillEnvKeys;
+type GetActiveSkillEnvKeys = typeof import("./active-skill-env-state.js").getActiveSkillEnvKeys;
 
 export function getActiveSkillEnvKeys(
   ...args: Parameters<GetActiveSkillEnvKeys>

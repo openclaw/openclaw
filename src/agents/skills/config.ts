@@ -7,7 +7,7 @@ import {
   resolveRuntimePlatform,
 } from "../../shared/config-eval.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
-import { getActiveSkillEnvKeys } from "./env-overrides.js";
+import { getActiveSkillEnvKeys } from "./active-skill-env-state.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 
