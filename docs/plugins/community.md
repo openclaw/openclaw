@@ -80,8 +80,6 @@ and session state into a connected graph the agent can search and traverse.
 
 ```bash
 openclaw plugins install qmemory
-openclaw config set plugins.slots.contextEngine "qmemory"
-openclaw config set tools.alsoAllow '["qmemory"]'
 ```
 
 ### QQbot
