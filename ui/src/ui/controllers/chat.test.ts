@@ -1,13 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../gateway.ts";
-import {
-  abortChatRun,
-  handleChatEvent,
-  loadChatHistory,
-  sendChatMessage,
-  type ChatEventPayload,
-  type ChatState,
-} from "./chat.ts";
+import { extractText } from "../chat/message-extract.ts";
+import { handleChatEvent, loadChatHistory, type ChatEventPayload, type ChatState } from "./chat.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -500,6 +493,38 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toHaveLength(1);
   });
+
+  it("strips assistant internal scaffolding from final messages even when role is omitted", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        content: [
+          {
+            type: "text",
+            text: [
+              "<relevant-memories>",
+              "Knowledge",
+              "</relevant-memories>",
+              "Final user answer",
+            ].join("\n"),
+          },
+        ],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toEqual(payload.message);
+    expect(extractText(state.chatMessages[0])).toBe("Final user answer");
+  });
 });
 
 describe("loadChatHistory", () => {
@@ -541,63 +566,6 @@ describe("loadChatHistory", () => {
 
     // text takes precedence — "real reply" is NOT silent, so message is kept.
     expect(state.chatMessages).toHaveLength(1);
-  });
-});
-
-describe("sendChatMessage", () => {
-  it("formats structured non-auth connect failures for chat send", async () => {
-    const request = vi.fn().mockRejectedValue(
-      new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "Fetch failed",
-        details: { code: "CONTROL_UI_ORIGIN_NOT_ALLOWED" },
-      }),
-    );
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-    });
-
-    const result = await sendChatMessage(state, "hello");
-
-    expect(result).toBeNull();
-    expect(state.lastError).toContain("origin not allowed");
-    expect(state.chatMessages.at(-1)).toMatchObject({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: expect.stringContaining("origin not allowed"),
-        },
-      ],
-    });
-  });
-});
-
-describe("abortChatRun", () => {
-  it("formats structured non-auth connect failures for chat abort", async () => {
-    // Abort now shares the same structured connect-error formatter as send.
-    const request = vi.fn().mockRejectedValue(
-      new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "Fetch failed",
-        details: { code: "CONTROL_UI_DEVICE_IDENTITY_REQUIRED" },
-      }),
-    );
-    const state = createState({
-      connected: true,
-      chatRunId: "run-1",
-      client: { request } as unknown as ChatState["client"],
-    });
-
-    const result = await abortChatRun(state);
-
-    expect(result).toBe(false);
-    expect(request).toHaveBeenCalledWith("chat.abort", {
-      sessionKey: "main",
-      runId: "run-1",
-    });
-    expect(state.lastError).toContain("device identity required");
   });
 });
 

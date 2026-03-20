@@ -42,6 +42,24 @@ describe("extractTextCached", () => {
     expect(extractText(message)).toBe("Final user answer");
     expect(extractTextCached(message)).toBe("Final user answer");
   });
+
+  it("strips assistant relevant-memories scaffolding when role is missing", () => {
+    const message = {
+      content: [
+        {
+          type: "text",
+          text: [
+            "<relevant-memories>",
+            "Knowledge",
+            "</relevant-memories>",
+            "Final user answer",
+          ].join("\n"),
+        },
+      ],
+    };
+    expect(extractText(message)).toBe("Final user answer");
+    expect(extractTextCached(message)).toBe("Final user answer");
+  });
 });
 
 describe("extractThinkingCached", () => {
