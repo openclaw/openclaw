@@ -75,9 +75,9 @@ function inferXaiExtension(format: XaiTtsOutputFormat): string {
     case "pcm":
       return ".pcm";
     case "g711_alaw":
-      return ".alaw";
+      return ".wav";
     case "g711_ulaw":
-      return ".ulaw";
+      return ".wav";
   }
 }
 

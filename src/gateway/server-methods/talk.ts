@@ -171,6 +171,23 @@ function buildTalkTtsConfig(
       ...(proxy == null ? {} : { proxy }),
       ...(timeoutMs == null ? {} : { timeoutMs }),
     };
+  } else if (provider === "xai") {
+    const speed = finiteNumber(providerConfig.speed);
+    const outputFormat = trimString(providerConfig.outputFormat);
+    const sampleRate = finiteNumber(providerConfig.sampleRate);
+    talkTts.xai = {
+      ...baseTts.xai,
+      ...(providerConfig.apiKey === undefined ? {} : { apiKey: providerConfig.apiKey }),
+      ...(baseUrl == null ? {} : { baseUrl }),
+      ...(modelId == null ? {} : { model: modelId }),
+      ...(voiceId == null ? {} : { voice: voiceId }),
+      ...(speed == null ? {} : { speed }),
+      ...(languageCode == null ? {} : { language: languageCode }),
+      ...(outputFormat == null
+        ? {}
+        : { outputFormat: outputFormat as "mp3" | "wav" | "pcm" | "g711_alaw" | "g711_ulaw" }),
+      ...(sampleRate == null ? {} : { sampleRate }),
+    };
   }
 
   return {
@@ -239,6 +256,13 @@ function buildTalkSpeakOverrides(
     overrides.microsoft = {
       ...(voiceId == null ? {} : { voice: voiceId }),
       ...(outputFormat == null ? {} : { outputFormat }),
+    };
+  }
+
+  if (provider === "xai") {
+    overrides.xai = {
+      ...(voiceId == null ? {} : { voice: voiceId }),
+      ...(modelId == null ? {} : { model: modelId }),
     };
   }
 
