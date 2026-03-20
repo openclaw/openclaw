@@ -342,6 +342,7 @@ const SINGLE_ACCOUNT_KEYS_TO_MOVE_BY_CHANNEL: Record<string, ReadonlySet<string>
     "initialSyncLimit",
     "encryption",
     "allowlistOnly",
+    "allowBots",
     "replyToMode",
     "threadReplies",
     "textChunkLimit",

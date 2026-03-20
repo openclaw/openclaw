@@ -46,6 +46,7 @@ import { isMatrixVerificationRoomMessage } from "./verification-utils.js";
 const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
 const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
 const MAX_TRACKED_PAIRING_REPLY_SENDERS = 512;
+type MatrixAllowBotsMode = "off" | "mentions" | "all";
 
 export type MatrixMonitorHandlerParams = {
   client: MatrixClient;
@@ -58,6 +59,8 @@ export type MatrixMonitorHandlerParams = {
   allowFrom: string[];
   groupAllowFrom?: string[];
   roomsConfig?: Record<string, MatrixRoomConfig>;
+  accountAllowBots?: boolean | "mentions";
+  configuredBotUserIds?: ReadonlySet<string>;
   mentionRegexes: ReturnType<PluginRuntime["channel"]["mentions"]["buildMentionRegexes"]>;
   groupPolicy: "open" | "allowlist" | "disabled";
   replyToMode: ReplyToMode;
@@ -125,6 +128,16 @@ function resolveMatrixInboundBodyText(params: {
   });
 }
 
+function resolveMatrixAllowBotsMode(value?: boolean | "mentions"): MatrixAllowBotsMode {
+  if (value === true) {
+    return "all";
+  }
+  if (value === "mentions") {
+    return "mentions";
+  }
+  return "off";
+}
+
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
   const {
     client,
@@ -137,6 +150,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     allowFrom,
     groupAllowFrom = [],
     roomsConfig,
+    accountAllowBots,
+    configuredBotUserIds = new Set<string>(),
     mentionRegexes,
     groupPolicy,
     replyToMode,
@@ -305,11 +320,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           })
         : undefined;
       const roomConfig = roomConfigInfo?.config;
+      const allowBotsMode = resolveMatrixAllowBotsMode(roomConfig?.allowBots ?? accountAllowBots);
+      const isConfiguredBotSender = configuredBotUserIds.has(senderId);
       const roomMatchMeta = roomConfigInfo
         ? `matchKey=${roomConfigInfo.matchKey ?? "none"} matchSource=${
             roomConfigInfo.matchSource ?? "none"
           }`
         : "matchKey=none matchSource=none";
+
+      if (isConfiguredBotSender && allowBotsMode === "off") {
+        logVerboseMessage(
+          `matrix: drop configured bot sender=${senderId} (allowBots=false${isDirectMessage ? "" : `, ${roomMatchMeta}`})`,
+        );
+        return;
+      }
 
       if (isRoom && roomConfig && !roomConfigInfo?.allowed) {
         logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
@@ -476,6 +500,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         text: mentionPrecheckText,
         mentionRegexes,
       });
+      if (
+        isConfiguredBotSender &&
+        allowBotsMode === "mentions" &&
+        !isDirectMessage &&
+        !wasMentioned
+      ) {
+        logVerboseMessage(
+          `matrix: drop configured bot sender=${senderId} (allowBots=mentions, missing mention, ${roomMatchMeta})`,
+        );
+        return;
+      }
       const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
         cfg,
         surface: "matrix",
