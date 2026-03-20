@@ -44,22 +44,9 @@ function loadBundledWebSearchPluginIds(): string[] {
   return bundledWebSearchPluginIdsCache;
 }
 
-export const BUNDLED_WEB_SEARCH_PLUGIN_IDS = new Proxy([] as string[], {
-  get(_target, prop) {
-    const actual = loadBundledWebSearchPluginIds();
-    const value = Reflect.get(actual, prop, actual);
-    return typeof value === "function" ? value.bind(actual) : value;
-  },
-  has(_target, prop) {
-    return Reflect.has(loadBundledWebSearchPluginIds(), prop);
-  },
-  ownKeys() {
-    return Reflect.ownKeys(loadBundledWebSearchPluginIds());
-  },
-  getOwnPropertyDescriptor(_target, prop) {
-    return Reflect.getOwnPropertyDescriptor(loadBundledWebSearchPluginIds(), prop);
-  },
-});
+export function listBundledWebSearchPluginIds(): string[] {
+  return loadBundledWebSearchPluginIds();
+}
 
 function loadBundledWebSearchProviders(): BundledWebSearchProviderEntry[] {
   if (!bundledWebSearchProvidersCache) {
