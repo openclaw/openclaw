@@ -921,3 +921,14 @@ export function isFailoverAssistantError(msg: AssistantMessage | undefined): boo
   }
   return isFailoverErrorMessage(msg.errorMessage ?? "");
 }
+
+/**
+ * Detects sandbox security errors that contain sensitive filesystem paths
+ * and configuration details that must not be exposed to external channels.
+ */
+export function isSandboxSecurityError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  return raw.includes("Sandbox security:");
+}
