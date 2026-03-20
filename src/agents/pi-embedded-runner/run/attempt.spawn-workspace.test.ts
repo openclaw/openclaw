@@ -160,6 +160,7 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
 
 vi.mock("../runs.js", () => ({
   setActiveEmbeddedRun: () => {},
+  updateActiveEmbeddedRunSnapshot: () => {},
   clearActiveEmbeddedRun: () => {},
 }));
 
@@ -432,6 +433,12 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
     });
 
     expect(result.promptError).toBeNull();
+    expect(hoisted.acquireSessionWriteLockMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: path.join(realWorkspace, "session.jsonl"),
+        timeoutMs: 10_000,
+      }),
+    );
     expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
     expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({

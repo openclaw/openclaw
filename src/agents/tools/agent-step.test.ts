@@ -5,7 +5,7 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-import { readLatestAssistantReply } from "./agent-step.js";
+import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 
 describe("readLatestAssistantReply", () => {
   beforeEach(() => {
@@ -45,5 +45,62 @@ describe("readLatestAssistantReply", () => {
     const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
 
     expect(result).toBe("older output");
+  });
+});
+
+describe("runAgentStep", () => {
+  beforeEach(() => {
+    callGatewayMock.mockClear();
+  });
+
+  it("propagates timeout to target agent runs while preserving wait timing", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-1" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "ready" }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const result = await runAgentStep({
+      sessionKey: "agent:main:child",
+      message: "hello",
+      extraSystemPrompt: "context",
+      timeoutMs: 45_000,
+      sourceSessionKey: "agent:main:parent",
+      sourceChannel: "discord",
+    });
+
+    expect(result).toBe("ready");
+    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({
+      method: "agent",
+      params: {
+        sessionKey: "agent:main:child",
+        message: "hello",
+        timeout: "45",
+      },
+      timeoutMs: 10_000,
+    });
+    expect(callGatewayMock.mock.calls[1]?.[0]).toMatchObject({
+      method: "agent.wait",
+      params: {
+        runId: "run-1",
+        timeoutMs: 45_000,
+      },
+      timeoutMs: 47_000,
+    });
   });
 });

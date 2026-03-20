@@ -24,6 +24,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
       tools: {
         // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
         sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["*"] },
       },
     }),
     resolveGatewayPort: () => 18789,
@@ -32,6 +33,18 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+
+const permissiveSessionsConfig = {
+  session: {
+    mainKey: "main",
+    scope: "per-sender" as const,
+    agentToAgent: { maxPingPongTurns: 2 },
+  },
+  tools: {
+    sessions: { visibility: "all" as const },
+    agentToAgent: { enabled: true, allow: ["*"] },
+  },
+};
 
 const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2000) => {
   await vi.waitFor(
@@ -228,7 +241,9 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    const tool = createOpenClawTools({
+      config: permissiveSessionsConfig,
+    }).find((candidate) => candidate.name === "sessions_history");
     expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
@@ -277,7 +292,9 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    const tool = createOpenClawTools({
+      config: permissiveSessionsConfig,
+    }).find((candidate) => candidate.name === "sessions_history");
     expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
@@ -469,7 +486,9 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    const tool = createOpenClawTools({
+      config: permissiveSessionsConfig,
+    }).find((candidate) => candidate.name === "sessions_history");
     expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
@@ -573,6 +592,7 @@ describe("sessions tools", () => {
     const tool = createOpenClawTools({
       agentSessionKey: requesterKey,
       agentChannel: "discord",
+      config: permissiveSessionsConfig,
     }).find((candidate) => candidate.name === "sessions_send");
     expect(tool).toBeDefined();
     if (!tool) {
@@ -596,7 +616,7 @@ describe("sessions tools", () => {
     const waitPromise = tool.execute("call6", {
       sessionKey: "main",
       message: "wait",
-      timeoutSeconds: 1,
+      timeoutSeconds: 60,
     });
     const waited = await waitPromise;
     expect(waited.details).toMatchObject({
@@ -613,6 +633,14 @@ describe("sessions tools", () => {
     const waitCalls = calls.filter((call) => call.method === "agent.wait");
     const historyOnlyCalls = calls.filter((call) => call.method === "chat.history");
     expect(agentCalls).toHaveLength(8);
+    expect(
+      agentCalls
+        .slice(0, 4)
+        .every((call) => (call.params as { timeout?: string }).timeout === "30"),
+    ).toBe(true);
+    expect(
+      agentCalls.slice(4).every((call) => (call.params as { timeout?: string }).timeout === "60"),
+    ).toBe(true);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
@@ -678,6 +706,7 @@ describe("sessions tools", () => {
     const tool = createOpenClawTools({
       agentSessionKey: "main",
       agentChannel: "discord",
+      config: permissiveSessionsConfig,
     }).find((candidate) => candidate.name === "sessions_send");
     expect(tool).toBeDefined();
     if (!tool) {
@@ -696,7 +725,7 @@ describe("sessions tools", () => {
     );
     expect(agentCall?.[0]).toMatchObject({
       method: "agent",
-      params: { sessionKey: targetKey },
+      params: { sessionKey: targetKey, timeout: "30" },
     });
   });
 
@@ -769,6 +798,7 @@ describe("sessions tools", () => {
     const tool = createOpenClawTools({
       agentSessionKey: requesterKey,
       agentChannel: "discord",
+      config: permissiveSessionsConfig,
     }).find((candidate) => candidate.name === "sessions_send");
     expect(tool).toBeDefined();
     if (!tool) {
