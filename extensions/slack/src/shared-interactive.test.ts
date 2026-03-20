@@ -77,9 +77,49 @@ describe("buildSlackInteractiveBlocks", () => {
       }>;
     };
 
-    expect(buttonBlock.elements?.[0]?.action_id).toBe("openclaw:reply_button");
+    expect(buttonBlock.elements?.[0]?.action_id).toBe("openclaw:reply_button:1_0");
     expect(buttonBlock.elements?.[0]?.value).toBe("pluginbind:approval-123:o");
     expect(selectBlock.elements?.[0]?.action_id).toBe("openclaw:reply_select");
     expect(selectBlock.elements?.[0]?.options?.[0]?.value).toBe("codex:approve:thread-1");
+  });
+
+  it("assigns unique action_ids to multiple buttons in the same block", () => {
+    const blocks = buildSlackInteractiveBlocks({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "A", value: "a" },
+            { label: "B", value: "b" },
+            { label: "C", value: "c" },
+          ],
+        },
+      ],
+    });
+
+    const buttonBlock = blocks[0] as {
+      elements?: Array<{ action_id?: string }>;
+    };
+    expect(buttonBlock.elements?.[0]?.action_id).toBe("openclaw:reply_button:1_0");
+    expect(buttonBlock.elements?.[1]?.action_id).toBe("openclaw:reply_button:1_1");
+    expect(buttonBlock.elements?.[2]?.action_id).toBe("openclaw:reply_button:1_2");
+  });
+
+  it("assigns unique action_ids across multiple button blocks", () => {
+    const blocks = buildSlackInteractiveBlocks({
+      blocks: [
+        { type: "buttons", buttons: [{ label: "First", value: "first" }] },
+        { type: "buttons", buttons: [{ label: "Second", value: "second" }] },
+      ],
+    });
+
+    const block1 = blocks[0] as {
+      elements?: Array<{ action_id?: string }>;
+    };
+    const block2 = blocks[1] as {
+      elements?: Array<{ action_id?: string }>;
+    };
+    expect(block1.elements?.[0]?.action_id).toBe("openclaw:reply_button:1_0");
+    expect(block2.elements?.[0]?.action_id).toBe("openclaw:reply_button:2_0");
   });
 });

@@ -503,6 +503,50 @@ describe("registerSlackInteractionEvents", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
+  it("routes suffixed reply_button action_id as system event", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "Pick an option",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "openclaw_reply_buttons_1",
+              elements: [
+                { type: "button", action_id: "openclaw:reply_button:1_0" },
+                { type: "button", action_id: "openclaw:reply_button:1_1" },
+              ],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button:1_0",
+        block_id: "openclaw_reply_buttons_1",
+        value: "approve",
+        text: { type: "plain_text", text: "Approve" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    expect(eventText).toContain("approve");
+  });
+
   it("drops block actions when mismatch guard triggers", async () => {
     enqueueSystemEventMock.mockClear();
     const { ctx, app, getHandler } = createContext({

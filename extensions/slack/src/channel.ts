@@ -414,6 +414,9 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     enableInteractiveReplies: ({ cfg, accountId }) =>
       isSlackInteractiveRepliesEnabled({ cfg, accountId }),
     hasStructuredReplyPayload: ({ payload }) => {
+      if (payload.interactive?.blocks?.length) {
+        return true;
+      }
       const slackData = payload.channelData?.slack;
       if (!slackData || typeof slackData !== "object" || Array.isArray(slackData)) {
         return false;

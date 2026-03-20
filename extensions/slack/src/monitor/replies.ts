@@ -10,19 +10,30 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseSlackBlocksInput } from "../blocks-input.js";
+import { buildSlackInteractiveBlocks, type SlackBlock } from "../blocks-render.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
 
-export function readSlackReplyBlocks(payload: ReplyPayload) {
+export function readSlackReplyBlocks(payload: ReplyPayload): SlackBlock[] | undefined {
   const slackData = payload.channelData?.slack;
-  if (!slackData || typeof slackData !== "object" || Array.isArray(slackData)) {
-    return undefined;
+  let existingBlocks: SlackBlock[] | undefined;
+  if (slackData && typeof slackData === "object" && !Array.isArray(slackData)) {
+    try {
+      existingBlocks = parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks) as
+        | SlackBlock[]
+        | undefined;
+    } catch {
+      // ignore malformed blocks
+    }
   }
-  try {
-    return parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks);
-  } catch {
-    return undefined;
-  }
+  const interactiveBlocks = payload.interactive
+    ? buildSlackInteractiveBlocks(payload.interactive)
+    : undefined;
+  const merged = [
+    ...(existingBlocks ?? []),
+    ...(interactiveBlocks?.length ? interactiveBlocks : []),
+  ];
+  return merged.length > 0 ? merged : undefined;
 }
 
 export async function deliverReplies(params: {

@@ -40,7 +40,7 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
         block_id: `openclaw_reply_buttons_${++state.buttonIndex}`,
         elements: block.buttons.map((button, choiceIndex) => ({
           type: "button",
-          action_id: SLACK_REPLY_BUTTON_ACTION_ID,
+          action_id: `${SLACK_REPLY_BUTTON_ACTION_ID}:${state.buttonIndex}_${choiceIndex}`,
           text: {
             type: "plain_text",
             text: truncateSlackText(button.label, SLACK_PLAIN_TEXT_MAX),
