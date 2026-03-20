@@ -23,10 +23,7 @@ function readRawBody(req: Request): string | null {
   return Buffer.isBuffer(rawBody) ? rawBody.toString("utf-8") : rawBody;
 }
 
-function parseWebhookBody(req: Request, rawBody?: string | null): WebhookRequestBody | null {
-  if (req.body && typeof req.body === "object" && !Buffer.isBuffer(req.body)) {
-    return req.body as WebhookRequestBody;
-  }
+function parseWebhookBody(rawBody?: string | null): WebhookRequestBody | null {
   if (!rawBody) {
     return null;
   }
@@ -64,7 +61,8 @@ export function createLineWebhookMiddleware(
         return;
       }
 
-      const body = parseWebhookBody(req, rawBody);
+      // Keep processing tied to the exact bytes that passed signature verification.
+      const body = parseWebhookBody(rawBody);
 
       if (!body) {
         res.status(400).json({ error: "Invalid webhook payload" });
