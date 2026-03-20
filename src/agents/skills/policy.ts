@@ -76,6 +76,7 @@ function normalizePolicyComparisonList(input?: string[]): string[] {
 
 export type EffectiveSkillPolicy = NonNullable<SkillSnapshot["policy"]> & {
   effectiveSet: ReadonlySet<string>;
+  effectiveCanonicalSet: ReadonlySet<string>;
 };
 
 export function resolveEffectiveSkillPolicy(
@@ -95,6 +96,9 @@ export function resolveEffectiveSkillPolicy(
     enabled: override.enabled,
     disabled: override.disabled,
   });
+  const effectiveCanonicalSet = new Set(
+    effective.map((name) => canonicalizeSkillAlias(name)).filter((name) => name.length > 0),
+  );
 
   return {
     agentId: resolvedAgentId,
@@ -103,7 +107,26 @@ export function resolveEffectiveSkillPolicy(
     agentDisabled: override.disabled,
     effective,
     effectiveSet: new Set(effective),
+    effectiveCanonicalSet,
   };
+}
+
+function toPolicySnapshot(policy: EffectiveSkillPolicy): NonNullable<SkillSnapshot["policy"]> {
+  return {
+    agentId: policy.agentId,
+    globalEnabled: policy.globalEnabled,
+    agentEnabled: policy.agentEnabled,
+    agentDisabled: policy.agentDisabled,
+    effective: policy.effective,
+  };
+}
+
+export function resolveSkillPolicySnapshot(
+  config: OpenClawConfig | undefined,
+  agentId: string | undefined,
+): SkillSnapshot["policy"] | undefined {
+  const policy = resolveEffectiveSkillPolicy(config, agentId);
+  return policy ? toPolicySnapshot(policy) : undefined;
 }
 
 export function matchesSkillPolicySnapshot(
@@ -143,5 +166,16 @@ export function isSkillAllowedByPolicy(
   if (policy.effectiveSet.has(skillKey)) {
     return true;
   }
-  return policy.effectiveSet.has(entry.skill.name);
+  if (policy.effectiveSet.has(entry.skill.name)) {
+    return true;
+  }
+  const skillKeyAlias = canonicalizeSkillAlias(skillKey);
+  if (skillKeyAlias && policy.effectiveCanonicalSet.has(skillKeyAlias)) {
+    return true;
+  }
+  const skillNameAlias = canonicalizeSkillAlias(entry.skill.name);
+  if (skillNameAlias && policy.effectiveCanonicalSet.has(skillNameAlias)) {
+    return true;
+  }
+  return false;
 }

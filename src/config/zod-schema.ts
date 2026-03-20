@@ -966,6 +966,7 @@ export const OpenClawSchema = z
   .superRefine((cfg, ctx) => {
     const agents = cfg.agents?.list ?? [];
     const agentIds = new Set(agents.map((agent) => agent.id));
+    const normalizedAgentIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
     const agentOverrides = cfg.skills?.policy?.agentOverrides;
     const isTestAgentOverrideKey = (agentId: string) => /^test-agent(?:[-_:].*)?$/i.test(agentId);
     if (agentOverrides && typeof agentOverrides === "object") {
@@ -984,7 +985,10 @@ export const OpenClawSchema = z
         } else {
           normalizedOverrideKeys.set(normalizedOverrideKey, overrideAgentId);
         }
-        if (!agentIds.has(overrideAgentId) && !isTestAgentOverrideKey(overrideAgentId)) {
+        if (
+          !normalizedAgentIds.has(normalizedOverrideKey) &&
+          !isTestAgentOverrideKey(overrideAgentId)
+        ) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["skills", "policy", "agentOverrides", overrideAgentId],

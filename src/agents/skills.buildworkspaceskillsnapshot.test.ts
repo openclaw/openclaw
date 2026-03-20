@@ -110,6 +110,29 @@ describe("buildWorkspaceSkillSnapshot", () => {
     ]);
   });
 
+  it("allows policy matches across canonical aliases (underscore vs hyphen)", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "my-skill"),
+      name: "my-skill",
+      description: "Hyphen skill",
+    });
+
+    const snapshot = buildSnapshot(workspaceDir, {
+      config: {
+        skills: {
+          policy: {
+            globalEnabled: ["my_skill"],
+          },
+        },
+      },
+      agentId: "ops",
+    });
+
+    expect(snapshot.skills.map((skill) => skill.name)).toContain("my-skill");
+    expect(snapshot.policy?.effective).toEqual(["my_skill"]);
+  });
+
   it("keeps prompt output aligned with buildWorkspaceSkillsPrompt", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     await writeSkill({
