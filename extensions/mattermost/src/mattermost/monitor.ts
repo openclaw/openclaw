@@ -1544,6 +1544,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 runtime.log?.(`stream-patch edited ${streamMessageId}`);
               } catch (err) {
                 logVerboseMessage(`mattermost stream-patch edit failed: ${String(err)}`);
+                // Stop retrying on patch failure — the post may not be editable
+                // (missing edit_post permission, deleted, etc.). The preview stays
+                // frozen; final delivery will patch or replace it via deliver().
+                stopPatchInterval();
               }
             }
           } finally {
@@ -1571,10 +1575,22 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           const replyTargetDiverged =
             finalReplyToId !== effectiveReplyToId && payload.replyToId != null;
 
-          // Flush any pending partial-reply patch before final delivery —
-          // but only when the reply stays in the same thread as the preview post.
-          if (isFinal && blockStreamingClient && !replyTargetDiverged) {
-            await flushPendingPatch();
+          if (isFinal && blockStreamingClient) {
+            if (replyTargetDiverged) {
+              // Divergent target: don't flush (we don't want to create a preview in
+              // the wrong thread), but do stop the interval and wait for any in-flight
+              // tick/send to settle. This ensures streamMessageId is populated if the
+              // first sendMessageMattermost resolves during this window, so the orphan
+              // cleanup below can capture and delete it.
+              stopPatchInterval();
+              const deadline = Date.now() + 2000;
+              while (patchSending && Date.now() < deadline) {
+                await new Promise<void>((r) => setTimeout(r, 20));
+              }
+            } else {
+              // Same thread: flush pending patches normally.
+              await flushPendingPatch();
+            }
           }
 
           // Final + streaming active: patch the streamed message with authoritative
