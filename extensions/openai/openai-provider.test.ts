@@ -1,5 +1,10 @@
+import OpenAI from "openai";
 import { describe, expect, it } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
+const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
+const describeLive = liveEnabled ? describe : describe.skip;
 
 describe("buildOpenAIProvider", () => {
   it("resolves gpt-5.4 mini and nano from GPT-5 small-model templates", () => {
@@ -105,4 +110,66 @@ describe("buildOpenAIProvider", () => {
       name: "gpt-5.4-nano",
     });
   });
+});
+
+describeLive("buildOpenAIProvider live", () => {
+  it("resolves a live model and completes through the OpenAI responses API", async () => {
+    const provider = buildOpenAIProvider();
+    const registry = {
+      find(providerId: string, id: string) {
+        if (providerId !== "openai") {
+          return null;
+        }
+        if (id === "gpt-5-nano") {
+          return {
+            id,
+            name: "GPT-5 nano",
+            provider: "openai",
+            api: "openai-completions",
+            baseUrl: "https://api.openai.com/v1",
+            reasoning: true,
+            input: ["text", "image"],
+            cost: { input: 0.5, output: 1, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 200_000,
+            maxTokens: 64_000,
+          };
+        }
+        return null;
+      },
+    };
+
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.4-nano",
+      modelRegistry: registry as never,
+    });
+
+    expect(resolved).toBeDefined();
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "openai",
+      modelId: resolved!.id,
+      model: resolved!,
+    });
+
+    expect(normalized).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4-nano",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+
+    const client = new OpenAI({
+      apiKey: OPENAI_API_KEY,
+      baseURL: normalized?.baseUrl,
+    });
+
+    const response = await client.responses.create({
+      model: normalized?.id ?? "gpt-5.4-nano",
+      input: "Reply with exactly OK.",
+      max_output_tokens: 16,
+    });
+
+    expect(response.output_text.trim()).toBe("OK");
+  }, 30_000);
 });
