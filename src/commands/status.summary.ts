@@ -292,6 +292,8 @@ export async function getStatusSummary(
           model,
           contextTokens,
           flags: buildFlags(entry),
+          label: entry?.label,
+          displayName: entry?.displayName,
         } satisfies SessionStatus;
       })
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));

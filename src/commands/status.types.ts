@@ -25,6 +25,8 @@ export type SessionStatus = {
   model: string | null;
   contextTokens: number | null;
   flags: string[];
+  label?: string;
+  displayName?: string;
 };
 
 export type HeartbeatStatus = {
