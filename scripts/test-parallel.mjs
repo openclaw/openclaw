@@ -15,10 +15,11 @@ import {
   resolveTestRunExitCode,
 } from "./test-parallel-utils.mjs";
 import {
+  loadUnitMemoryHotspotManifest,
   loadTestRunnerBehavior,
   loadUnitTimingManifest,
+  selectUnitHeavyFileGroups,
   packFilesByDuration,
-  selectTimedHeavyFiles,
 } from "./test-runner-manifest.mjs";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
@@ -27,6 +28,25 @@ const pnpm = "pnpm";
 const behaviorManifest = loadTestRunnerBehavior();
 const existingFiles = (entries) =>
   entries.map((entry) => entry.file).filter((file) => fs.existsSync(file));
+let tempArtifactDir = null;
+const ensureTempArtifactDir = () => {
+  if (tempArtifactDir === null) {
+    tempArtifactDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-parallel-"));
+  }
+  return tempArtifactDir;
+};
+const writeTempJsonArtifact = (name, value) => {
+  const filePath = path.join(ensureTempArtifactDir(), `${name}.json`);
+  fs.writeFileSync(filePath, `${JSON.stringify(value)}\n`, "utf8");
+  return filePath;
+};
+const cleanupTempArtifacts = () => {
+  if (tempArtifactDir === null) {
+    return;
+  }
+  fs.rmSync(tempArtifactDir, { recursive: true, force: true });
+  tempArtifactDir = null;
+};
 const existingUnitConfigFiles = (entries) => existingFiles(entries).filter(isUnitConfigTestFile);
 const unitBehaviorIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.isolated);
 const unitSingletonIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.singletonIsolated);
@@ -262,6 +282,7 @@ const inferTarget = (fileFilter) => {
   return { owner: "base", isolated };
 };
 const unitTimingManifest = loadUnitTimingManifest();
+const unitMemoryHotspotManifest = loadUnitMemoryHotspotManifest();
 const parseEnvNumber = (name, fallback) => {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
@@ -298,21 +319,73 @@ const heavyUnitLaneCount = parseEnvNumber(
   defaultHeavyUnitLaneCount,
 );
 const heavyUnitMinDurationMs = parseEnvNumber("OPENCLAW_TEST_HEAVY_UNIT_MIN_MS", 1200);
-const timedHeavyUnitFiles =
-  shouldSplitUnitRuns && heavyUnitFileLimit > 0
-    ? selectTimedHeavyFiles({
+const defaultMemoryHeavyUnitFileLimit =
+  testProfile === "serial" ? 0 : isCI ? 64 : testProfile === "low" ? 8 : 16;
+const memoryHeavyUnitFileLimit = parseEnvNumber(
+  "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_FILE_LIMIT",
+  defaultMemoryHeavyUnitFileLimit,
+);
+const memoryHeavyUnitMinDeltaKb = parseEnvNumber(
+  "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_MIN_KB",
+  unitMemoryHotspotManifest.defaultMinDeltaKb,
+);
+const { memoryHeavyFiles: memoryHeavyUnitFiles, timedHeavyFiles: timedHeavyUnitFiles } =
+  shouldSplitUnitRuns
+    ? selectUnitHeavyFileGroups({
         candidates: allKnownUnitFiles,
-        limit: heavyUnitFileLimit,
-        minDurationMs: heavyUnitMinDurationMs,
-        exclude: unitBehaviorOverrideSet,
+        behaviorOverrides: unitBehaviorOverrideSet,
+        timedLimit: heavyUnitFileLimit,
+        timedMinDurationMs: heavyUnitMinDurationMs,
+        memoryLimit: memoryHeavyUnitFileLimit,
+        memoryMinDeltaKb: memoryHeavyUnitMinDeltaKb,
         timings: unitTimingManifest,
+        hotspots: unitMemoryHotspotManifest,
       })
-    : [];
+    : {
+        memoryHeavyFiles: [],
+        timedHeavyFiles: [],
+      };
+const unitSchedulingOverrideSet = new Set([...unitBehaviorOverrideSet, ...memoryHeavyUnitFiles]);
 const unitFastExcludedFiles = [
-  ...new Set([...unitBehaviorOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
+  ...new Set([...unitSchedulingOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
+];
+const unitAutoSingletonFiles = [
+  ...new Set([...unitSingletonIsolatedFiles, ...memoryHeavyUnitFiles]),
 ];
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
+const unitFastExcludedFileSet = new Set(unitFastExcludedFiles);
+const unitFastCandidateFiles = allKnownUnitFiles.filter(
+  (file) => !unitFastExcludedFileSet.has(file),
+);
+const defaultUnitFastLaneCount = isCI && !isWindows ? 2 : 1;
+const unitFastLaneCount = Math.max(
+  1,
+  parseEnvNumber("OPENCLAW_TEST_UNIT_FAST_LANES", defaultUnitFastLaneCount),
+);
+const unitFastBuckets =
+  unitFastLaneCount > 1
+    ? packFilesByDuration(unitFastCandidateFiles, unitFastLaneCount, estimateUnitDurationMs)
+    : [unitFastCandidateFiles];
+const unitFastEntries = unitFastBuckets
+  .filter((files) => files.length > 0)
+  .map((files, index) => ({
+    name: unitFastBuckets.length === 1 ? "unit-fast" : `unit-fast-${String(index + 1)}`,
+    env: {
+      OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+        `vitest-unit-fast-include-${String(index + 1)}`,
+        files,
+      ),
+    },
+    args: [
+      "vitest",
+      "run",
+      "--config",
+      "vitest.unit.config.ts",
+      `--pool=${useVmForks ? "vmForks" : "forks"}`,
+      ...(disableIsolation ? ["--isolate=false"] : []),
+    ],
+  }));
 const heavyUnitBuckets = packFilesByDuration(
   timedHeavyUnitFiles,
   heavyUnitLaneCount,
@@ -325,18 +398,7 @@ const unitHeavyEntries = heavyUnitBuckets.map((files, index) => ({
 const baseRuns = [
   ...(shouldSplitUnitRuns
     ? [
-        {
-          name: "unit-fast",
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.unit.config.ts",
-            `--pool=${useVmForks ? "vmForks" : "forks"}`,
-            ...(disableIsolation ? ["--isolate=false"] : []),
-            ...unitFastExcludedFiles.flatMap((file) => ["--exclude", file]),
-          ],
-        },
+        ...unitFastEntries,
         ...(unitBehaviorIsolatedFiles.length > 0
           ? [
               {
@@ -353,7 +415,7 @@ const baseRuns = [
             ]
           : []),
         ...unitHeavyEntries,
-        ...unitSingletonIsolatedFiles.map((file) => ({
+        ...unitAutoSingletonFiles.map((file) => ({
           name: `${path.basename(file, ".test.ts")}-isolated`,
           args: [
             "vitest",
@@ -960,7 +1022,12 @@ const runOnce = (entry, extraArgs = []) =>
     try {
       child = spawn(pnpm, args, {
         stdio: ["inherit", "pipe", "pipe"],
-        env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: resolvedNodeOptions },
+        env: {
+          ...process.env,
+          ...entry.env,
+          VITEST_GROUP: entry.name,
+          NODE_OPTIONS: resolvedNodeOptions,
+        },
         shell: isWindows,
       });
       captureTreeSample("spawn");
@@ -1112,6 +1179,7 @@ const shutdown = (signal) => {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("exit", cleanupTempArtifacts);
 
 if (process.env.OPENCLAW_TEST_LIST_LANES === "1") {
   const entriesToPrint = targetedEntries.length > 0 ? targetedEntries : runs;
@@ -1167,14 +1235,17 @@ if (passthroughRequiresSingleRun && passthroughOptionArgs.length > 0) {
 }
 
 if (isMacMiniProfile && targetedEntries.length === 0) {
-  const unitFastEntry = parallelRuns.find((entry) => entry.name === "unit-fast");
-  if (unitFastEntry) {
-    const unitFastCode = await run(unitFastEntry, passthroughOptionArgs);
+  const unitFastEntriesForMacMini = parallelRuns.filter((entry) =>
+    entry.name.startsWith("unit-fast"),
+  );
+  for (const entry of unitFastEntriesForMacMini) {
+    // eslint-disable-next-line no-await-in-loop
+    const unitFastCode = await run(entry, passthroughOptionArgs);
     if (unitFastCode !== 0) {
       process.exit(unitFastCode);
     }
   }
-  const deferredEntries = parallelRuns.filter((entry) => entry.name !== "unit-fast");
+  const deferredEntries = parallelRuns.filter((entry) => !entry.name.startsWith("unit-fast"));
   const failedMacMiniParallel = await runEntriesWithLimit(
     deferredEntries,
     passthroughOptionArgs,
