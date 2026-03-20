@@ -8,6 +8,8 @@ import {
   resolveSlackStreamingMode,
   resolveTelegramPreviewStreamMode,
 } from "../config/discord-preview-streaming.js";
+import { migrateLegacyWebSearchConfig } from "../config/legacy-web-search.js";
+import { DEFAULT_TALK_PROVIDER, normalizeTalkSection } from "../config/talk.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
@@ -429,6 +431,11 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   normalizeProvider("discord");
   seedMissingDefaultAccountsFromSingleAccountBase();
   normalizeLegacyBrowserProfiles();
+  const webSearchMigration = migrateLegacyWebSearchConfig(next);
+  if (webSearchMigration.changes.length > 0) {
+    next = webSearchMigration.config;
+    changes.push(...webSearchMigration.changes);
+  }
 
   const normalizeBrowserSsrFPolicyAlias = () => {
     const rawBrowser = next.browser;
@@ -597,8 +604,43 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     }
   };
 
+  const normalizeLegacyTalkConfig = () => {
+    const rawTalk = next.talk;
+    if (!isRecord(rawTalk)) {
+      return;
+    }
+
+    const normalizedTalk = normalizeTalkSection(rawTalk as OpenClawConfig["talk"]);
+    if (!normalizedTalk) {
+      return;
+    }
+
+    const sameShape = JSON.stringify(normalizedTalk) === JSON.stringify(rawTalk);
+    if (sameShape) {
+      return;
+    }
+
+    const hasProviderShape = typeof rawTalk.provider === "string" || isRecord(rawTalk.providers);
+    next = {
+      ...next,
+      talk: normalizedTalk,
+    };
+
+    if (hasProviderShape) {
+      changes.push(
+        "Normalized talk.provider/providers shape (trimmed provider ids and merged missing compatibility fields).",
+      );
+      return;
+    }
+
+    changes.push(
+      `Moved legacy talk flat fields → talk.provider/talk.providers.${DEFAULT_TALK_PROVIDER}.`,
+    );
+  };
+
   normalizeBrowserSsrFPolicyAlias();
   normalizeLegacyNanoBananaSkill();
+  normalizeLegacyTalkConfig();
 
   const legacyAckReaction = cfg.messages?.ackReaction?.trim();
   const hasWhatsAppConfig = cfg.channels?.whatsapp !== undefined;
