@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
@@ -58,12 +58,31 @@ const createMSTeamsPlugin = (params?: { aliases?: string[] }): ChannelPlugin => 
   },
 });
 
+const createStubChannelPlugin = (params: {
+  id: ChannelPlugin["id"];
+  label: string;
+}): ChannelPlugin => ({
+  ...createChannelTestPluginBase({
+    id: params.id,
+    label: params.label,
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({}),
+    },
+  }),
+  outbound: {
+    deliveryMode: "direct",
+    sendText: async () => ({ channel: params.id, messageId: "msg-test" }),
+    sendMedia: async () => ({ channel: params.id, messageId: "msg-test" }),
+  },
+});
+
 const emptyRegistry = createRegistry([]);
 const defaultRegistry = createRegistry([
   {
     pluginId: "whatsapp",
     source: "test",
-    plugin: whatsappPlugin,
+    plugin: createStubChannelPlugin({ id: "whatsapp", label: "WhatsApp" }),
   },
 ]);
 
@@ -181,7 +200,7 @@ describe("gateway server agent", () => {
     expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
   });
 
-  test("agent accepts channel aliases (imsg/teams)", async () => {
+  test("agent accepts built-in channel alias (imsg)", async () => {
     const registry = createRegistry([
       {
         pluginId: "msteams",
@@ -204,6 +223,19 @@ describe("gateway server agent", () => {
     });
     expect(resIMessage.ok).toBe(true);
 
+    expectAgentRoutingCall({ channel: "imessage", deliver: true, fromEnd: 1 });
+  });
+
+  test("agent accepts plugin channel alias (teams)", async () => {
+    const registry = createRegistry([
+      {
+        pluginId: "msteams",
+        source: "test",
+        plugin: createMSTeamsPlugin({ aliases: ["teams"] }),
+      },
+    ]);
+    setRegistry(registry);
+
     const resTeams = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
@@ -213,8 +245,6 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-teams",
     });
     expect(resTeams.ok).toBe(true);
-
-    expectAgentRoutingCall({ channel: "imessage", deliver: true, fromEnd: 2 });
     expectAgentRoutingCall({
       channel: "msteams",
       deliver: false,
