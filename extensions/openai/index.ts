@@ -1,5 +1,5 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { buildOpenAIImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildOpenAISpeechProvider } from "openclaw/plugin-sdk/speech";
 import { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";

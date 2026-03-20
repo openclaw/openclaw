@@ -1,19 +1,22 @@
 import { Type } from "@sinclair/typebox";
 import {
   buildSearchCacheKey,
+  buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  getScopedCredentialValue,
   MAX_SEARCH_COUNT,
+  mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readNumberParam,
   readProviderEnvValue,
   readStringParam,
+  resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
-  resolveProviderWebSearchPluginConfig,
+  setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,
-  type OpenClawConfig,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
@@ -62,18 +65,14 @@ type GrokSearchResponse = {
   }>;
 };
 
-function resolveGrokConfig(config?: OpenClawConfig, searchConfig?: SearchConfigRecord): GrokConfig {
-  const pluginConfig = resolveProviderWebSearchPluginConfig(config, "xai");
-  if (pluginConfig) {
-    return pluginConfig as GrokConfig;
-  }
-  const grok = (searchConfig as Record<string, unknown> | undefined)?.grok;
+function resolveGrokConfig(searchConfig?: SearchConfigRecord): GrokConfig {
+  const grok = searchConfig?.grok;
   return grok && typeof grok === "object" && !Array.isArray(grok) ? (grok as GrokConfig) : {};
 }
 
 function resolveGrokApiKey(grok?: GrokConfig): string | undefined {
   return (
-    readConfiguredSecretString(grok?.apiKey, "plugins.entries.xai.config.webSearch.apiKey") ??
+    readConfiguredSecretString(grok?.apiKey, "tools.web.search.grok.apiKey") ??
     readProviderEnvValue(["XAI_API_KEY"])
   );
 }
@@ -185,7 +184,6 @@ function createGrokSchema() {
 }
 
 function createGrokToolDefinition(
-  config?: OpenClawConfig,
   searchConfig?: SearchConfigRecord,
 ): WebSearchProviderToolDefinition {
   return {
@@ -194,31 +192,18 @@ function createGrokToolDefinition(
     parameters: createGrokSchema(),
     execute: async (args) => {
       const params = args as Record<string, unknown>;
-      for (const name of ["country", "language", "freshness", "date_after", "date_before"]) {
-        if (readStringParam(params, name)) {
-          const label =
-            name === "country"
-              ? "country filtering"
-              : name === "language"
-                ? "language filtering"
-                : name === "freshness"
-                  ? "freshness filtering"
-                  : "date_after/date_before filtering";
-          return {
-            error: name.startsWith("date_") ? "unsupported_date_filter" : `unsupported_${name}`,
-            message: `${label} is not supported by the grok provider. Only Brave and Perplexity support ${name === "country" ? "country filtering" : name === "language" ? "language filtering" : name === "freshness" ? "freshness" : "date filtering"}.`,
-            docs: "https://docs.openclaw.ai/tools/web",
-          };
-        }
+      const unsupportedResponse = buildUnsupportedSearchFilterResponse(params, "grok");
+      if (unsupportedResponse) {
+        return unsupportedResponse;
       }
 
-      const grokConfig = resolveGrokConfig(config, searchConfig);
+      const grokConfig = resolveGrokConfig(searchConfig);
       const apiKey = resolveGrokApiKey(grokConfig);
       if (!apiKey) {
         return {
           error: "missing_xai_api_key",
           message:
-            "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
+            "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure tools.web.search.grok.apiKey.",
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
@@ -283,27 +268,22 @@ export function createGrokWebSearchProvider(): WebSearchProviderPlugin {
     autoDetectOrder: 30,
     credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.xai.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => {
-      const grok = searchConfig?.grok;
-      return grok && typeof grok === "object" && !Array.isArray(grok)
-        ? (grok as Record<string, unknown>).apiKey
-        : undefined;
-    },
-    setCredentialValue: (searchConfigTarget, value) => {
-      const scoped = searchConfigTarget.grok;
-      if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
-        searchConfigTarget.grok = { apiKey: value };
-        return;
-      }
-      (scoped as Record<string, unknown>).apiKey = value;
-    },
+    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "grok"),
+    setCredentialValue: (searchConfigTarget, value) =>
+      setScopedCredentialValue(searchConfigTarget, "grok", value),
     getConfiguredCredentialValue: (config) =>
       resolveProviderWebSearchPluginConfig(config, "xai")?.apiKey,
     setConfiguredCredentialValue: (configTarget, value) => {
       setProviderWebSearchPluginConfigValue(configTarget, "xai", "apiKey", value);
     },
     createTool: (ctx) =>
-      createGrokToolDefinition(ctx.config, ctx.searchConfig as SearchConfigRecord | undefined),
+      createGrokToolDefinition(
+        mergeScopedSearchConfig(
+          ctx.searchConfig as SearchConfigRecord | undefined,
+          "grok",
+          resolveProviderWebSearchPluginConfig(ctx.config, "xai"),
+        ) as SearchConfigRecord | undefined,
+      ),
   };
 }
 

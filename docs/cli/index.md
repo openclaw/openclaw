@@ -88,7 +88,7 @@ OpenClaw uses a lobster palette for CLI output.
 - `error` (#E23D2D): errors, failures.
 - `muted` (#8B7F77): de-emphasis, metadata.
 
-Palette source of truth: `src/terminal/palette.ts` (aka “lobster seam”).
+Palette source of truth: `src/terminal/palette.ts` (the “lobster palette”).
 
 ## Command tree
 
@@ -424,7 +424,7 @@ Options:
 
 ### `channels`
 
-Manage chat channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/MS Teams).
+Manage chat channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/Microsoft Teams).
 
 Subcommands:
 

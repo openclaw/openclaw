@@ -14,7 +14,6 @@ import {
   resolveDefaultBlueBubblesAccountId,
 } from "./accounts.js";
 import { applyBlueBubblesConnectionConfig } from "./config-apply.js";
-import { DEFAULT_WEBHOOK_PATH } from "./monitor-shared.js";
 import { hasConfiguredSecretInput, normalizeSecretInputString } from "./secret-input.js";
 import {
   blueBubblesSetupAdapter,
@@ -23,6 +22,7 @@ import {
 } from "./setup-core.js";
 import { parseBlueBubblesAllowTarget } from "./targets.js";
 import { normalizeBlueBubblesServerUrl } from "./types.js";
+import { DEFAULT_WEBHOOK_PATH } from "./webhook-shared.js";
 
 const channel = "bluebubbles" as const;
 const CONFIGURE_CUSTOM_WEBHOOK_FLAG = "__bluebubblesConfigureCustomWebhookPath";

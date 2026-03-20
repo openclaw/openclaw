@@ -3,6 +3,10 @@ import { __testing as braveTesting } from "../../../extensions/brave/src/brave-w
 import { __testing as moonshotTesting } from "../../../extensions/moonshot/src/kimi-web-search-provider.js";
 import { __testing as perplexityTesting } from "../../../extensions/perplexity/web-search-provider.js";
 import { __testing as xaiTesting } from "../../../extensions/xai/src/grok-web-search-provider.js";
+import {
+  buildUnsupportedSearchFilterResponse,
+  mergeScopedSearchConfig,
+} from "../../plugin-sdk/provider-web-search.js";
 import { withEnv } from "../../test-utils/env.js";
 const {
   inferPerplexityBaseUrlFromApiKey,
@@ -198,6 +202,64 @@ describe("web_search date normalization", () => {
   });
 });
 
+describe("web_search unsupported filter response", () => {
+  it("returns undefined when no unsupported filter is set", () => {
+    expect(buildUnsupportedSearchFilterResponse({ query: "openclaw" }, "gemini")).toBeUndefined();
+  });
+
+  it("maps non-date filters to provider-specific unsupported errors", () => {
+    expect(buildUnsupportedSearchFilterResponse({ country: "us" }, "grok")).toEqual({
+      error: "unsupported_country",
+      message:
+        "country filtering is not supported by the grok provider. Only Brave and Perplexity support country filtering.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    });
+  });
+
+  it("collapses date filters to unsupported_date_filter", () => {
+    expect(buildUnsupportedSearchFilterResponse({ date_before: "2026-03-19" }, "kimi")).toEqual({
+      error: "unsupported_date_filter",
+      message:
+        "date_after/date_before filtering is not supported by the kimi provider. Only Brave and Perplexity support date filtering.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    });
+  });
+});
+
+describe("web_search scoped config merge", () => {
+  it("returns the original config when no plugin config exists", () => {
+    const searchConfig = { provider: "grok", grok: { model: "grok-4-1-fast" } };
+    expect(mergeScopedSearchConfig(searchConfig, "grok", undefined)).toBe(searchConfig);
+  });
+
+  it("merges plugin config into the scoped provider object", () => {
+    expect(
+      mergeScopedSearchConfig({ provider: "grok", grok: { model: "old-model" } }, "grok", {
+        model: "new-model",
+        apiKey: "xai-test-key",
+      }),
+    ).toEqual({
+      provider: "grok",
+      grok: { model: "new-model", apiKey: "xai-test-key" },
+    });
+  });
+
+  it("can mirror the plugin apiKey to the top level config", () => {
+    expect(
+      mergeScopedSearchConfig(
+        { provider: "brave", brave: { count: 5 } },
+        "brave",
+        { apiKey: "brave-test-key" },
+        { mirrorApiKeyToTopLevel: true },
+      ),
+    ).toEqual({
+      provider: "brave",
+      apiKey: "brave-test-key",
+      brave: { count: 5, apiKey: "brave-test-key" },
+    });
+  });
+});
+
 describe("web_search kimi config resolution", () => {
   it("uses config apiKey when provided", () => {
     expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key");
@@ -238,7 +300,7 @@ describe("web_search kimi config resolution", () => {
 
 describe("web_search brave mode resolution", () => {
   it("defaults to web mode", () => {
-    expect(resolveBraveMode(undefined)).toBe("web");
+    expect(resolveBraveMode({})).toBe("web");
   });
 
   it("honors explicit llm-context mode", () => {

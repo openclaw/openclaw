@@ -13,6 +13,7 @@ import type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
+  PluginCommandContext,
   PluginInteractiveTelegramHandlerContext,
 } from "../plugins/types.js";
 
@@ -44,6 +45,7 @@ export type {
   ProviderThinkingPolicyContext,
   ProviderWrapStreamFnContext,
   OpenClawPluginService,
+  OpenClawPluginServiceContext,
   ProviderAuthContext,
   ProviderAuthDoctorHintContext,
   ProviderAuthMethodNonInteractiveContext,
@@ -51,6 +53,8 @@ export type {
   ProviderAuthResult,
   OpenClawPluginCommandDefinition,
   OpenClawPluginDefinition,
+  PluginCommandContext,
+  PluginLogger,
   PluginInteractiveTelegramHandlerContext,
 } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
@@ -82,7 +86,10 @@ export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
-export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export {
+  formatPairingApproveHint,
+  parseOptionalDelimitedEntries,
+} from "../channels/plugins/helpers.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {

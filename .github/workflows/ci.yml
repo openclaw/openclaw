@@ -215,26 +215,37 @@ jobs:
           - runtime: bun
             task: test
             command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
+          - runtime: node
+            task: compat-node22
+            node_version: "22.x"
+            cache_key_suffix: "node22"
+            command: |
+              pnpm build
+              pnpm test
+              node scripts/stage-bundled-plugin-runtime-deps.mjs
+              node --import tsx scripts/release-check.ts
     steps:
-      - name: Skip bun lane on pull requests
-        if: github.event_name == 'pull_request' && matrix.runtime == 'bun'
-        run: echo "Skipping Bun compatibility lane on pull requests."
+      - name: Skip compatibility lanes on pull requests
+        if: github.event_name == 'pull_request' && (matrix.runtime == 'bun' || matrix.task == 'compat-node22')
+        run: echo "Skipping push-only lane on pull requests."
 
       - name: Checkout
-        if: github.event_name != 'pull_request' || matrix.runtime != 'bun'
+        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
         uses: actions/checkout@v6
         with:
           submodules: false
 
       - name: Setup Node environment
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
         uses: ./.github/actions/setup-node-env
         with:
+          node-version: "${{ matrix.node_version || '24.x' }}"
+          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
           install-bun: "${{ matrix.runtime == 'bun' }}"
           use-sticky-disk: "false"
 
       - name: Configure Node test resources
-        if: (github.event_name != 'pull_request' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
+        if: (github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')) && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'compat-node22')
         env:
           SHARD_COUNT: ${{ matrix.shard_count || '' }}
           SHARD_INDEX: ${{ matrix.shard_index || '' }}
@@ -249,11 +260,11 @@ jobs:
           fi
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
         run: ${{ matrix.command }}
 
   extension-fast:
-    name: "extension-fast (${{ matrix.extension }})"
+    name: "extension-fast"
     needs: [docs-scope, changed-scope, changed-extensions]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true' && needs.changed-extensions.outputs.has_changed_extensions == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
@@ -301,196 +312,88 @@ jobs:
       - name: Strict TS build smoke
         run: pnpm build:strict-smoke
 
+  check-additional:
+    name: "check-additional"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run plugin extension boundary guard
+        id: plugin_extension_boundary
+        continue-on-error: true
+        run: pnpm run lint:plugins:no-extension-imports
+
+      - name: Run web search provider boundary guard
+        id: web_search_provider_boundary
+        continue-on-error: true
+        run: pnpm run lint:web-search-provider-boundaries
+
+      - name: Run extension src boundary guard
+        id: extension_src_outside_plugin_sdk_boundary
+        continue-on-error: true
+        run: pnpm run lint:extensions:no-src-outside-plugin-sdk
+
+      - name: Run extension plugin-sdk-internal guard
+        id: extension_plugin_sdk_internal_boundary
+        continue-on-error: true
+        run: pnpm run lint:extensions:no-plugin-sdk-internal
+
       - name: Enforce safe external URL opening policy
+        id: no_raw_window_open
+        continue-on-error: true
         run: pnpm lint:ui:no-raw-window-open
 
-  plugin-extension-boundary:
-    name: "plugin-extension-boundary"
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    env:
-      PLUGIN_EXTENSION_BOUNDARY_ENFORCE_AFTER: "2026-03-24T05:00:00Z"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
+      - name: Run gateway watch regression harness
+        id: gateway_watch_regression
+        continue-on-error: true
+        run: pnpm test:gateway:watch-regression
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+      - name: Upload gateway watch regression artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
-          install-bun: "false"
-          use-sticky-disk: "false"
+          name: gateway-watch-regression
+          path: .local/gateway-watch-regression/
+          retention-days: 7
 
-      - name: Run plugin extension boundary guard with grace period
-        shell: bash
+      - name: Fail if any additional check failed
+        if: always()
+        env:
+          PLUGIN_EXTENSION_BOUNDARY_OUTCOME: ${{ steps.plugin_extension_boundary.outcome }}
+          WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME: ${{ steps.web_search_provider_boundary.outcome }}
+          EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME: ${{ steps.extension_src_outside_plugin_sdk_boundary.outcome }}
+          EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME: ${{ steps.extension_plugin_sdk_internal_boundary.outcome }}
+          NO_RAW_WINDOW_OPEN_OUTCOME: ${{ steps.no_raw_window_open.outcome }}
+          GATEWAY_WATCH_REGRESSION_OUTCOME: ${{ steps.gateway_watch_regression.outcome }}
         run: |
-          set -euo pipefail
+          failures=0
+          for result in \
+            "plugin-extension-boundary|$PLUGIN_EXTENSION_BOUNDARY_OUTCOME" \
+            "web-search-provider-boundary|$WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME" \
+            "extension-src-outside-plugin-sdk-boundary|$EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME" \
+            "extension-plugin-sdk-internal-boundary|$EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME" \
+            "lint:ui:no-raw-window-open|$NO_RAW_WINDOW_OPEN_OUTCOME" \
+            "gateway-watch-regression|$GATEWAY_WATCH_REGRESSION_OUTCOME"; do
+            name="${result%%|*}"
+            outcome="${result#*|}"
+            if [ "$outcome" != "success" ]; then
+              echo "::error title=${name} failed::${name} outcome: ${outcome}"
+              failures=1
+            fi
+          done
 
-          tmp_output="$(mktemp)"
-          if pnpm run lint:plugins:no-extension-imports >"$tmp_output" 2>&1; then
-            cat "$tmp_output"
-            rm -f "$tmp_output"
-            exit 0
-          fi
-
-          status=$?
-          cat "$tmp_output"
-          rm -f "$tmp_output"
-
-          now_epoch="$(date -u +%s)"
-          enforce_epoch="$(date -u -d "$PLUGIN_EXTENSION_BOUNDARY_ENFORCE_AFTER" +%s)"
-          fix_instructions="If you are an LLM agent fixing this: run 'pnpm run lint:plugins:no-extension-imports', remove src/plugins/** -> extensions/** imports where possible, and if the remaining inventory is intentional for now update test/fixtures/plugin-extension-import-boundary-inventory.json in the same PR."
-
-          if [ "$now_epoch" -lt "$enforce_epoch" ]; then
-            echo "::warning::Plugin extension import boundary violations are temporarily allowed until ${PLUGIN_EXTENSION_BOUNDARY_ENFORCE_AFTER}. This grace period ends in one week from the rollout date. After that timestamp this job will fail unless the inventory is reduced or the baseline is intentionally updated. ${fix_instructions}"
-            exit 0
-          fi
-
-          echo "::error::Plugin extension import boundary grace period ended at ${PLUGIN_EXTENSION_BOUNDARY_ENFORCE_AFTER}. ${fix_instructions}"
-          exit "$status"
-
-  web-search-provider-boundary:
-    name: "web-search-provider-boundary"
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    env:
-      WEB_SEARCH_PROVIDER_BOUNDARY_ENFORCE_AFTER: "2026-03-24T05:00:00Z"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-
-      - name: Run web search provider boundary guard with grace period
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          tmp_output="$(mktemp)"
-          if pnpm run lint:web-search-provider-boundaries >"$tmp_output" 2>&1; then
-            cat "$tmp_output"
-            rm -f "$tmp_output"
-            exit 0
-          fi
-
-          status=$?
-          cat "$tmp_output"
-          rm -f "$tmp_output"
-
-          now_epoch="$(date -u +%s)"
-          enforce_epoch="$(date -u -d "$WEB_SEARCH_PROVIDER_BOUNDARY_ENFORCE_AFTER" +%s)"
-          fix_instructions="If you are an LLM agent fixing this: run 'pnpm run lint:web-search-provider-boundaries', move provider-specific web-search logic out of core, and if the remaining inventory is intentional for now update test/fixtures/web-search-provider-boundary-inventory.json in the same PR."
-
-          if [ "$now_epoch" -lt "$enforce_epoch" ]; then
-            echo "::warning::Web search provider boundary violations are temporarily allowed until ${WEB_SEARCH_PROVIDER_BOUNDARY_ENFORCE_AFTER}. This grace period ends in one week from the rollout date. After that timestamp this job will fail unless the inventory is reduced or the baseline is intentionally updated. ${fix_instructions}"
-            exit 0
-          fi
-
-          echo "::error::Web search provider boundary grace period ended at ${WEB_SEARCH_PROVIDER_BOUNDARY_ENFORCE_AFTER}. ${fix_instructions}"
-          exit "$status"
-
-  extension-src-outside-plugin-sdk-boundary:
-    name: "extension-src-outside-plugin-sdk-boundary"
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    env:
-      EXTENSION_PLUGIN_SDK_BOUNDARY_ENFORCE_AFTER: "2026-03-24T05:00:00Z"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-
-      - name: Run extension src boundary guard with grace period
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          tmp_output="$(mktemp)"
-          if pnpm run lint:extensions:no-src-outside-plugin-sdk >"$tmp_output" 2>&1; then
-            cat "$tmp_output"
-            rm -f "$tmp_output"
-            exit 0
-          fi
-
-          status=$?
-          cat "$tmp_output"
-          rm -f "$tmp_output"
-
-          now_epoch="$(date -u +%s)"
-          enforce_epoch="$(date -u -d "$EXTENSION_PLUGIN_SDK_BOUNDARY_ENFORCE_AFTER" +%s)"
-          fix_instructions="If you are an LLM agent fixing this: run 'pnpm run lint:extensions:no-src-outside-plugin-sdk', move extension imports off core src paths and onto src/plugin-sdk/**, and if the remaining inventory is intentional for now update test/fixtures/extension-src-outside-plugin-sdk-inventory.json in the same PR."
-
-          if [ "$now_epoch" -lt "$enforce_epoch" ]; then
-            echo "::warning::Extension src boundary violations are temporarily allowed until ${EXTENSION_PLUGIN_SDK_BOUNDARY_ENFORCE_AFTER}. This grace period ends in one week from the rollout date. After that timestamp this job will fail unless the inventory is reduced or the baseline is intentionally updated. ${fix_instructions}"
-            exit 0
-          fi
-
-          echo "::error::Extension src boundary grace period ended at ${EXTENSION_PLUGIN_SDK_BOUNDARY_ENFORCE_AFTER}. ${fix_instructions}"
-          exit "$status"
-
-  extension-plugin-sdk-internal-boundary:
-    name: "extension-plugin-sdk-internal-boundary"
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    env:
-      EXTENSION_PLUGIN_SDK_INTERNAL_ENFORCE_AFTER: "2026-03-24T05:00:00Z"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-
-      - name: Run extension plugin-sdk-internal guard with grace period
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          tmp_output="$(mktemp)"
-          if pnpm run lint:extensions:no-plugin-sdk-internal >"$tmp_output" 2>&1; then
-            cat "$tmp_output"
-            rm -f "$tmp_output"
-            exit 0
-          fi
-
-          status=$?
-          cat "$tmp_output"
-          rm -f "$tmp_output"
-
-          now_epoch="$(date -u +%s)"
-          enforce_epoch="$(date -u -d "$EXTENSION_PLUGIN_SDK_INTERNAL_ENFORCE_AFTER" +%s)"
-          fix_instructions="If you are an LLM agent fixing this: run 'pnpm run lint:extensions:no-plugin-sdk-internal', remove extension imports of src/plugin-sdk-internal/** in favor of src/plugin-sdk/**, and if the remaining inventory is intentional for now update test/fixtures/extension-plugin-sdk-internal-inventory.json in the same PR."
-
-          if [ "$now_epoch" -lt "$enforce_epoch" ]; then
-            echo "::warning::Extension plugin-sdk-internal boundary violations are temporarily allowed until ${EXTENSION_PLUGIN_SDK_INTERNAL_ENFORCE_AFTER}. This grace period ends in one week from the rollout date. After that timestamp this job will fail unless the inventory is reduced or the baseline is intentionally updated. ${fix_instructions}"
-            exit 0
-          fi
-
-          echo "::error::Extension plugin-sdk-internal boundary grace period ended at ${EXTENSION_PLUGIN_SDK_INTERNAL_ENFORCE_AFTER}. ${fix_instructions}"
-          exit "$status"
+          exit "$failures"
 
   build-smoke:
     name: "build-smoke"
@@ -524,34 +427,6 @@ jobs:
       - name: Check CLI startup memory
         run: pnpm test:startup:memory
 
-  gateway-watch-regression:
-    name: "gateway-watch-regression"
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-
-      - name: Run gateway watch regression harness
-        run: pnpm test:gateway:watch-regression
-
-      - name: Upload gateway watch regression artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: gateway-watch-regression
-          path: .local/gateway-watch-regression/
-          retention-days: 7
-
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
     needs: [docs-scope]
@@ -572,43 +447,9 @@ jobs:
       - name: Check docs
         run: pnpm check:docs
 
-  compat-node22:
-    name: "compat-node22"
-    needs: [docs-scope, changed-scope]
-    if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Setup Node 22 compatibility environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: "22.x"
-          cache-key-suffix: "node22"
-          install-bun: "false"
-          use-sticky-disk: "false"
-
-      - name: Configure Node 22 test resources
-        run: |
-          # Keep the compatibility lane aligned with the default Node test lane.
-          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
-
-      - name: Build under Node 22
-        run: pnpm build
-
-      - name: Run tests under Node 22
-        run: pnpm test
-
-      - name: Verify npm pack under Node 22
-        run: pnpm release:check
-
   skills-python:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_skills_python == 'true'
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_skills_python == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -1078,10 +919,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - task: test
-            command: ./gradlew --no-daemon :app:testDebugUnitTest
-          - task: build
-            command: ./gradlew --no-daemon :app:assembleDebug
+          - task: test-play
+            command: ./gradlew --no-daemon :app:testPlayDebugUnitTest
+          - task: test-third-party
+            command: ./gradlew --no-daemon :app:testThirdPartyDebugUnitTest
+          - task: build-play
+            command: ./gradlew --no-daemon :app:assemblePlayDebug
+          - task: build-third-party
+            command: ./gradlew --no-daemon :app:assembleThirdPartyDebug
     steps:
       - name: Checkout
         uses: actions/checkout@v6

@@ -216,6 +216,8 @@ function resolveClaudeSkillDirs(raw: Record<string, unknown>, rootDir: string): 
   return mergeBundlePathLists(
     resolveClaudeSkillsRootDirs(raw, rootDir),
     resolveClaudeCommandRootDirs(raw, rootDir),
+    resolveClaudeAgentDirs(raw, rootDir),
+    resolveClaudeOutputStylePaths(raw, rootDir),
   );
 }
 

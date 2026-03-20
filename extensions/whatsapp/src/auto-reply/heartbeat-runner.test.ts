@@ -41,9 +41,13 @@ vi.mock("../../../../src/config/config.js", () => ({
   loadConfig: () => ({ agents: { defaults: {} }, session: {} }),
 }));
 
-vi.mock("../../../../src/routing/session-key.js", () => ({
-  normalizeMainKey: () => null,
-}));
+vi.mock("../../../../src/routing/session-key.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/routing/session-key.js")>();
+  return {
+    ...actual,
+    normalizeMainKey: () => null,
+  };
+});
 
 vi.mock("../../../../src/infra/heartbeat-visibility.js", () => ({
   resolveHeartbeatVisibility: () => state.visibility,
@@ -67,11 +71,58 @@ vi.mock("../../../../src/infra/heartbeat-events.js", () => ({
   resolveIndicatorType: (status: string) => `indicator:${status}`,
 }));
 
-vi.mock("../../../../src/logging.js", () => ({
-  getChildLogger: () => ({
-    info: (...args: unknown[]) => state.loggerInfoCalls.push(args),
-    warn: (...args: unknown[]) => state.loggerWarnCalls.push(args),
-  }),
+vi.mock("../../../../src/logging.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/logging.js")>();
+  const createStubLogger = () => ({
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+    child: createStubLogger,
+  });
+  return {
+    ...actual,
+    getChildLogger: () => ({
+      info: (...args: unknown[]) => state.loggerInfoCalls.push(args),
+      warn: (...args: unknown[]) => state.loggerWarnCalls.push(args),
+    }),
+    createSubsystemLogger: () => createStubLogger(),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/state-paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/state-paths")>();
+  return {
+    ...actual,
+    resolveOAuthDir: () => "/tmp/openclaw-oauth",
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  const logger = {
+    child: () => logger,
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
+  return {
+    ...actual,
+    createSubsystemLogger: () => logger,
+  };
+});
+
+vi.mock("../auth-store.js", () => ({
+  WA_WEB_AUTH_DIR: "/tmp/openclaw-oauth/whatsapp/default",
+  resolveDefaultWebAuthDir: () => "/tmp/openclaw-oauth/whatsapp/default",
+  hasWebCredsSync: () => false,
+  maybeRestoreCredsFromBackup: () => undefined,
+  webAuthExists: async () => false,
+  logoutWeb: async () => undefined,
+  readWebSelfId: () => null,
+  getWebAuthAgeMs: () => null,
+  logWebSelfId: () => undefined,
+  pickWebChannel: async () => undefined,
 }));
 
 vi.mock("./loggers.js", () => ({
@@ -85,9 +136,14 @@ vi.mock("../reconnect.js", () => ({
   newConnectionId: () => "run-1",
 }));
 
-vi.mock("../send.js", () => ({
-  sendMessageWhatsApp: vi.fn(async () => ({ messageId: "m1" })),
-}));
+vi.mock("../send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.js")>();
+  return {
+    ...actual,
+    sendMessageWhatsApp: vi.fn(async () => ({ messageId: "m1" })),
+    sendReactionWhatsApp: vi.fn(async () => undefined),
+  };
+});
 
 vi.mock("../session.js", () => ({
   formatError: (err: unknown) => `ERR:${String(err)}`,
