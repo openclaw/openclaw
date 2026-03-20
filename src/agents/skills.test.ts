@@ -154,6 +154,33 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
   });
+
+  it("does not apply agent policy when command specs are built without agentId", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "alpha"),
+      name: "alpha",
+      description: "Alpha",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "beta"),
+      name: "beta",
+      description: "Beta",
+    });
+
+    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      config: {
+        skills: {
+          policy: {
+            globalEnabled: ["alpha"],
+          },
+        },
+      },
+    });
+
+    expect(commands.map((entry) => entry.skillName).toSorted()).toEqual(["alpha", "beta"]);
+  });
 });
 
 describe("buildWorkspaceSkillsPrompt", () => {
@@ -244,6 +271,75 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain("demo-skill");
     expect(prompt).toContain("Does demo things");
     expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
+  });
+
+  it("applies global+agent skills policy when agentId is provided", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "alpha"),
+      name: "alpha",
+      description: "Alpha",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "beta"),
+      name: "beta",
+      description: "Beta",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "gamma"),
+      name: "gamma",
+      description: "Gamma",
+    });
+
+    const opsSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      agentId: "ops",
+      config: {
+        skills: {
+          policy: {
+            globalEnabled: ["alpha", "beta"],
+            agentOverrides: {
+              ops: {
+                enabled: ["gamma"],
+                disabled: ["beta"],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(opsSnapshot.skills.map((entry) => entry.name).toSorted()).toEqual(["alpha", "gamma"]);
+    expect(opsSnapshot.policy).toMatchObject({
+      agentId: "ops",
+      globalEnabled: ["alpha", "beta"],
+      agentEnabled: ["gamma"],
+      agentDisabled: ["beta"],
+      effective: ["alpha", "gamma"],
+    });
+  });
+
+  it("keeps legacy behavior when no skills policy is configured", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "alpha"),
+      name: "alpha",
+      description: "Alpha",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "beta"),
+      name: "beta",
+      description: "Beta",
+    });
+
+    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      agentId: "ops",
+      config: {},
+    });
+
+    expect(snapshot.skills.map((entry) => entry.name).toSorted()).toEqual(["alpha", "beta"]);
+    expect(snapshot.policy).toBeUndefined();
   });
 });
 

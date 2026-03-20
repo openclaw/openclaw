@@ -14,6 +14,15 @@ All skills-related configuration lives under `skills` in `~/.openclaw/openclaw.j
 {
   skills: {
     allowBundled: ["gemini", "peekaboo"],
+    policy: {
+      globalEnabled: ["web-search", "weather"],
+      agentOverrides: {
+        ops: {
+          enabled: ["jira"],
+          disabled: ["weather"],
+        },
+      },
+    },
     load: {
       extraDirs: ["~/Projects/agent-scripts/skills", "~/Projects/oss/some-skill-pack/skills"],
       watch: true,
@@ -51,6 +60,9 @@ Examples:
 
 - `allowBundled`: optional allowlist for **bundled** skills only. When set, only
   bundled skills in the list are eligible (managed/workspace skills unaffected).
+- `policy.globalEnabled`: global runtime baseline of enabled skills.
+- `policy.agentOverrides.<agentId>.enabled`: per-agent additive enable list.
+- `policy.agentOverrides.<agentId>.disabled`: per-agent subtractive disable list.
 - `load.extraDirs`: additional skill directories to scan (lowest precedence).
 - `load.watch`: watch skill folders and refresh the skills snapshot (default: true).
 - `load.watchDebounceMs`: debounce for skill watcher events in milliseconds (default: 250).
@@ -72,6 +84,9 @@ Per-skill fields:
 - Keys under `entries` map to the skill name by default. If a skill defines
   `metadata.openclaw.skillKey`, use that key instead.
 - Changes to skills are picked up on the next agent turn when the watcher is enabled.
+- Effective runtime set per agent is resolved as:
+  `(globalEnabled - agentOverrides[agentId].disabled) U agentOverrides[agentId].enabled`.
+- Backward compatibility: if `skills.policy` is not configured, existing behavior is unchanged.
 
 ### Sandboxed skills + env vars
 

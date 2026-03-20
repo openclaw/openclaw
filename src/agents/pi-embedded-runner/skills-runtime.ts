@@ -5,6 +5,7 @@ export function resolveEmbeddedRunSkillEntries(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
+  agentId?: string;
 }): {
   shouldLoadSkillEntries: boolean;
   skillEntries: SkillEntry[];
@@ -13,7 +14,10 @@ export function resolveEmbeddedRunSkillEntries(params: {
   return {
     shouldLoadSkillEntries,
     skillEntries: shouldLoadSkillEntries
-      ? loadWorkspaceSkillEntries(params.workspaceDir, { config: params.config })
+      ? loadWorkspaceSkillEntries(params.workspaceDir, {
+          config: params.config,
+          agentId: params.agentId,
+        })
       : [],
   };
 }

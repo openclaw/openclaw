@@ -4,7 +4,7 @@ import type { SkillSnapshot } from "../skills.js";
 
 const hoisted = vi.hoisted(() => ({
   loadWorkspaceSkillEntries: vi.fn(
-    (_workspaceDir: string, _options?: { config?: OpenClawConfig }) => [],
+    (_workspaceDir: string, _options?: { config?: OpenClawConfig; agentId?: string }) => [],
   ),
 }));
 
@@ -12,8 +12,10 @@ vi.mock("../skills.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../skills.js")>();
   return {
     ...actual,
-    loadWorkspaceSkillEntries: (workspaceDir: string, options?: { config?: OpenClawConfig }) =>
-      hoisted.loadWorkspaceSkillEntries(workspaceDir, options),
+    loadWorkspaceSkillEntries: (
+      workspaceDir: string,
+      options?: { config?: OpenClawConfig; agentId?: string },
+    ) => hoisted.loadWorkspaceSkillEntries(workspaceDir, options),
   };
 });
 
@@ -45,7 +47,10 @@ describe("resolveEmbeddedRunSkillEntries", () => {
 
     expect(result.shouldLoadSkillEntries).toBe(true);
     expect(hoisted.loadWorkspaceSkillEntries).toHaveBeenCalledTimes(1);
-    expect(hoisted.loadWorkspaceSkillEntries).toHaveBeenCalledWith("/tmp/workspace", { config });
+    expect(hoisted.loadWorkspaceSkillEntries).toHaveBeenCalledWith("/tmp/workspace", {
+      config,
+      agentId: undefined,
+    });
   });
 
   it("skips skill entry loading when resolved snapshot skills are present", () => {
