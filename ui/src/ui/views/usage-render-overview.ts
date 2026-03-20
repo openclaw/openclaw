@@ -403,10 +403,9 @@ function renderUsageInsights(
       : "—";
   const cacheHint = "Cache hit rate = cache read / (input + cache read). Higher is better.";
   const errorHint = "Error rate = errors / total messages. Lower is better.";
-  const throughputHint =
-    stats.throughputTotalsAligned
-      ? "Throughput shows total tokens per minute over active time for the current selection."
-      : "Throughput is unavailable for hour slices or combined day/session filters because tokens and cost cannot be sliced to the same window yet.";
+  const throughputHint = stats.throughputTotalsAligned
+    ? "Throughput shows total tokens per minute over active time for the current selection."
+    : "Throughput is unavailable for hour slices or combined day/session filters because tokens and cost cannot be sliced to the same window yet.";
   const tokensHint = "Average tokens per message in this range.";
   const durationHint =
     "Active time sums, and average session duration averages, only the portions of each session span that fall inside the current date/hour filters.";

@@ -147,9 +147,7 @@ describe("session cost usage", () => {
   it("formats day keys with explicit UTC offsets for summaries", async () => {
     const ts = new Date("2026-02-01T23:30:00.000Z");
     expect(__test.formatDayKey(ts, { mode: "utc" })).toBe("2026-02-01");
-    expect(__test.formatDayKey(ts, { mode: "specific", utcOffsetMinutes: 120 })).toBe(
-      "2026-02-02",
-    );
+    expect(__test.formatDayKey(ts, { mode: "specific", utcOffsetMinutes: 120 })).toBe("2026-02-02");
     expect(__test.formatDayKey(ts, { mode: "specific", utcOffsetMinutes: -300 })).toBe(
       "2026-02-01",
     );
@@ -157,16 +155,16 @@ describe("session cost usage", () => {
 
   it("formats day keys with IANA time zones across DST boundaries", async () => {
     expect(
-      __test.formatDayKey(
-        new Date("2026-03-08T04:30:00.000Z"),
-        { mode: "specific", timeZone: "America/New_York" },
-      ),
+      __test.formatDayKey(new Date("2026-03-08T04:30:00.000Z"), {
+        mode: "specific",
+        timeZone: "America/New_York",
+      }),
     ).toBe("2026-03-07");
     expect(
-      __test.formatDayKey(
-        new Date("2026-03-09T03:30:00.000Z"),
-        { mode: "specific", timeZone: "America/New_York" },
-      ),
+      __test.formatDayKey(new Date("2026-03-09T03:30:00.000Z"), {
+        mode: "specific",
+        timeZone: "America/New_York",
+      }),
     ).toBe("2026-03-08");
   });
 
