@@ -682,6 +682,7 @@ describe("agent request events", () => {
       channel: "telegram",
       to: "123",
     });
-    expect(opts.runId).toBe(opts.sessionId);
+    expect(typeof opts.runId).toBe("string");
+    expect(opts.runId).not.toBe(opts.sessionId);
   });
 });

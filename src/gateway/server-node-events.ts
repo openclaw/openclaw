@@ -431,7 +431,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       void agentCommandFromIngress(
         {
-          runId: sessionId,
+          // Each ingress request must get its own run id. Reusing sessionId
+          // collapses per-run gateway state (seq tracking, aborts, tool streams).
+          runId: randomUUID(),
           message,
           images,
           sessionId,
