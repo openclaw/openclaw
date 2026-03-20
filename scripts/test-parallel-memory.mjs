@@ -10,6 +10,10 @@ const ANSI_ESCAPE_PATTERN = new RegExp(
 
 const COMPLETED_TEST_FILE_LINE_PATTERN =
   /(?<file>(?:src|extensions|test|ui)\/\S+?\.(?:live\.test|e2e\.test|test)\.ts)\s+\(.*\)\s+(?<duration>\d+(?:\.\d+)?)(?<unit>ms|s)\s*$/;
+const MEMORY_TRACE_SUMMARY_PATTERN =
+  /^\[test-parallel\]\[mem\] summary (?<lane>\S+) files=(?<files>\d+) peak=(?<peak>[0-9]+(?:\.[0-9]+)?(?:GiB|MiB|KiB)) totalDelta=(?<totalDelta>[+-][0-9]+(?:\.[0-9]+)?(?:GiB|MiB|KiB)) peakAt=(?<peakAt>\S+) top=(?<top>.*)$/u;
+const MEMORY_TRACE_TOP_ENTRY_PATTERN =
+  /^(?<file>(?:src|extensions|test|ui)\/\S+?\.(?:live\.test|e2e\.test|test)\.ts):(?<delta>[+-][0-9]+(?:\.[0-9]+)?(?:GiB|MiB|KiB))$/u;
 
 const PS_COLUMNS = ["pid=", "ppid=", "rss=", "comm="];
 
@@ -19,6 +23,21 @@ function parseDurationMs(rawValue, unit) {
     return null;
   }
   return unit === "s" ? Math.round(parsed * 1000) : Math.round(parsed);
+}
+
+export function parseMemoryValueKb(rawValue) {
+  const match = rawValue.match(/^(?<sign>[+-]?)(?<value>\d+(?:\.\d+)?)(?<unit>GiB|MiB|KiB)$/u);
+  if (!match?.groups) {
+    return null;
+  }
+  const value = Number.parseFloat(match.groups.value);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  const multiplier =
+    match.groups.unit === "GiB" ? 1024 ** 2 : match.groups.unit === "MiB" ? 1024 : 1;
+  const signed = Math.round(value * multiplier);
+  return match.groups.sign === "-" ? -signed : signed;
 }
 
 function stripAnsi(text) {
@@ -36,6 +55,52 @@ export function parseCompletedTestFileLines(text) {
       return {
         file: match.groups.file,
         durationMs: parseDurationMs(match.groups.duration, match.groups.unit),
+      };
+    })
+    .filter((entry) => entry !== null);
+}
+
+export function parseMemoryTraceSummaryLines(text) {
+  return stripAnsi(text)
+    .split(/\r?\n/u)
+    .map((line) => {
+      const match = line.match(MEMORY_TRACE_SUMMARY_PATTERN);
+      if (!match?.groups) {
+        return null;
+      }
+      const peakRssKb = parseMemoryValueKb(match.groups.peak);
+      const totalDeltaKb = parseMemoryValueKb(match.groups.totalDelta);
+      const fileCount = Number.parseInt(match.groups.files, 10);
+      if (!Number.isInteger(fileCount) || peakRssKb === null || totalDeltaKb === null) {
+        return null;
+      }
+      const top =
+        match.groups.top === "none"
+          ? []
+          : match.groups.top
+              .split(/,\s+/u)
+              .map((entry) => {
+                const topMatch = entry.match(MEMORY_TRACE_TOP_ENTRY_PATTERN);
+                if (!topMatch?.groups) {
+                  return null;
+                }
+                const deltaKb = parseMemoryValueKb(topMatch.groups.delta);
+                if (deltaKb === null) {
+                  return null;
+                }
+                return {
+                  file: topMatch.groups.file,
+                  deltaKb,
+                };
+              })
+              .filter((entry) => entry !== null);
+      return {
+        lane: match.groups.lane,
+        files: fileCount,
+        peakRssKb,
+        totalDeltaKb,
+        peakAt: match.groups.peakAt,
+        top,
       };
     })
     .filter((entry) => entry !== null);

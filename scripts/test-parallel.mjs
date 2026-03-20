@@ -15,8 +15,10 @@ import {
   resolveTestRunExitCode,
 } from "./test-parallel-utils.mjs";
 import {
+  loadUnitMemoryHotspotManifest,
   loadTestRunnerBehavior,
   loadUnitTimingManifest,
+  selectMemoryHeavyFiles,
   packFilesByDuration,
   selectTimedHeavyFiles,
 } from "./test-runner-manifest.mjs";
@@ -262,6 +264,7 @@ const inferTarget = (fileFilter) => {
   return { owner: "base", isolated };
 };
 const unitTimingManifest = loadUnitTimingManifest();
+const unitMemoryHotspotManifest = loadUnitMemoryHotspotManifest();
 const parseEnvNumber = (name, fallback) => {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
@@ -298,6 +301,16 @@ const heavyUnitLaneCount = parseEnvNumber(
   defaultHeavyUnitLaneCount,
 );
 const heavyUnitMinDurationMs = parseEnvNumber("OPENCLAW_TEST_HEAVY_UNIT_MIN_MS", 1200);
+const defaultMemoryHeavyUnitFileLimit =
+  testProfile === "serial" ? 0 : isCI ? 32 : testProfile === "low" ? 8 : 16;
+const memoryHeavyUnitFileLimit = parseEnvNumber(
+  "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_FILE_LIMIT",
+  defaultMemoryHeavyUnitFileLimit,
+);
+const memoryHeavyUnitMinDeltaKb = parseEnvNumber(
+  "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_MIN_KB",
+  unitMemoryHotspotManifest.defaultMinDeltaKb,
+);
 const timedHeavyUnitFiles =
   shouldSplitUnitRuns && heavyUnitFileLimit > 0
     ? selectTimedHeavyFiles({
@@ -308,8 +321,26 @@ const timedHeavyUnitFiles =
         timings: unitTimingManifest,
       })
     : [];
+const memoryHeavyUnitFiles =
+  shouldSplitUnitRuns && memoryHeavyUnitFileLimit > 0
+    ? selectMemoryHeavyFiles({
+        candidates: allKnownUnitFiles,
+        limit: memoryHeavyUnitFileLimit,
+        minDeltaKb: memoryHeavyUnitMinDeltaKb,
+        exclude: unitBehaviorOverrideSet,
+        hotspots: unitMemoryHotspotManifest,
+      })
+    : [];
 const unitFastExcludedFiles = [
-  ...new Set([...unitBehaviorOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
+  ...new Set([
+    ...unitBehaviorOverrideSet,
+    ...timedHeavyUnitFiles,
+    ...memoryHeavyUnitFiles,
+    ...channelSingletonFiles,
+  ]),
+];
+const unitAutoSingletonFiles = [
+  ...new Set([...unitSingletonIsolatedFiles, ...memoryHeavyUnitFiles]),
 ];
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
@@ -353,7 +384,7 @@ const baseRuns = [
             ]
           : []),
         ...unitHeavyEntries,
-        ...unitSingletonIsolatedFiles.map((file) => ({
+        ...unitAutoSingletonFiles.map((file) => ({
           name: `${path.basename(file, ".test.ts")}-isolated`,
           args: [
             "vitest",
