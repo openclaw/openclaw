@@ -10,6 +10,14 @@ export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
 export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
 const serializedStoreCache = new Map<string, string>();
 
+function parseCronStoreRaw(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return JSON5.parse(raw);
+  }
+}
+
 export function resolveCronStorePath(storePath?: string) {
   if (storePath?.trim()) {
     const raw = storePath.trim();
@@ -26,7 +34,7 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
     const raw = await fs.promises.readFile(storePath, "utf-8");
     let parsed: unknown;
     try {
-      parsed = JSON5.parse(raw);
+      parsed = parseCronStoreRaw(raw);
     } catch (err) {
       throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
         cause: err,

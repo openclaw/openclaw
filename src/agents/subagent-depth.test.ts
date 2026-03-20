@@ -76,6 +76,33 @@ describe("getSubagentDepthFromSessionStore", () => {
     expect(depth).toBe(2);
   });
 
+  it("accepts JSON5 syntax in the on-disk depth store for backward compatibility", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-json5-"));
+    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+    const storePath = storeTemplate.replaceAll("{agentId}", "main");
+    fs.writeFileSync(
+      storePath,
+      `{
+        // hand-edited legacy store
+        "agent:main:subagent:flat": {
+          sessionId: "subagent-flat",
+          spawnDepth: 2,
+        },
+      }`,
+      "utf-8",
+    );
+
+    const depth = getSubagentDepthFromSessionStore("subagent:flat", {
+      cfg: {
+        session: {
+          store: storeTemplate,
+        },
+      },
+    });
+
+    expect(depth).toBe(2);
+  });
+
   it("falls back to session-key segment counting when metadata is missing", () => {
     const key = "agent:main:subagent:flat";
     const depth = getSubagentDepthFromSessionStore(key, {
