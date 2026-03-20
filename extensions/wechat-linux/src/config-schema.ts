@@ -26,6 +26,21 @@ export const WechatLinuxAccountSchemaBase = z
     textChunkLimit: z.number().int().min(1).max(20000).optional(),
     blockStreaming: z.boolean().optional(),
     mediaMaxMb: z.number().positive().max(1024).optional(),
+    imageAnalysis: z.boolean().optional(),
+    videoAnalysis: z.boolean().optional(),
+    voiceAsr: z.boolean().optional(),
+    linkDocs: z.boolean().optional(),
+    visionBaseUrl: z.string().optional(),
+    visionModel: z.string().optional(),
+    visionApiKeyEnv: z.string().optional(),
+    summaryBaseUrl: z.string().optional(),
+    summaryModel: z.string().optional(),
+    summaryApiKeyEnv: z.string().optional(),
+    asrUrl: z.string().optional(),
+    linkHookCmd: z.string().optional(),
+    linkDocRoot: z.string().optional(),
+    linkDomains: z.array(z.string()).optional(),
+    linkHookTimeoutSec: z.number().int().min(1).max(600).optional(),
   })
   .strict();
 

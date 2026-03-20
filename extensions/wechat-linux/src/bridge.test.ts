@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseWechatLinuxBridgeEnvelope } from "./bridge.js";
+import { parseWechatLinuxBridgeEnvelope, parseWechatLinuxBridgeJsonFromStdout } from "./bridge.js";
 
 describe("wechat-linux bridge envelope parsing", () => {
   it("accepts ready events", () => {
@@ -51,5 +51,11 @@ describe("wechat-linux bridge envelope parsing", () => {
     expect(parseWechatLinuxBridgeEnvelope("")).toBeNull();
     expect(parseWechatLinuxBridgeEnvelope("not json")).toBeNull();
     expect(parseWechatLinuxBridgeEnvelope('{"type":"log","message":"hello"}')).toBeNull();
+  });
+
+  it("parses the last JSON line from noisy stdout", () => {
+    expect(
+      parseWechatLinuxBridgeJsonFromStdout<{ ok: boolean }>('warming up\n{"ok":true}\n', "probe"),
+    ).toEqual({ ok: true });
   });
 });

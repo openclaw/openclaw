@@ -104,7 +104,7 @@ describe("wechat-linux inbound body shaping", () => {
         details: {},
         artifacts: {},
       }),
-    ).toBe("See attachment\n\nImage OCR: project plan");
+    ).toBe("See attachment\n\n消息类型: image\n\n分析: Image OCR: project plan");
   });
 
   it("avoids duplicating identical analysis text", () => {
@@ -124,5 +124,39 @@ describe("wechat-linux inbound body shaping", () => {
         artifacts: {},
       }),
     ).toBe("hello");
+  });
+
+  it("adds rich media context for voice and link documents", () => {
+    expect(
+      buildWechatLinuxBodyForAgent({
+        local_id: 3,
+        timestamp: 1_700_000_000,
+        time: "19:36:48",
+        base_type: 34,
+        chat_id: "wxid_alice",
+        chat_name: "Alice",
+        chat_type: "direct",
+        sender_id: "wxid_alice",
+        sender_display: "Alice",
+        content: "语音 12s",
+        analysis_text: "",
+        normalized_kind: "media_asset",
+        type_label: "语音",
+        details: {
+          wechat_transcript: "明天下午三点开会",
+          url: "https://mp.weixin.qq.com/s/example",
+          title: "会议安排",
+        },
+        artifacts: {},
+        document: {
+          status: "ok",
+          title: "会议安排",
+          summary: "一篇说明明天下午三点开会的文章。",
+          doc_path: "/tmp/wechat-doc/document.md",
+        },
+        url_list: ["https://mp.weixin.qq.com/s/example"],
+        media_paths: ["/tmp/audio.wav"],
+      }),
+    ).toContain("语音转写: 明天下午三点开会");
   });
 });

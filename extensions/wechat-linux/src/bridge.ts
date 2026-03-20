@@ -5,6 +5,8 @@ import type {
   BridgeEnvelope,
   BridgeProbe,
   BridgeResolveTargetResult,
+  BridgeSearchKind,
+  BridgeSearchResult,
   BridgeSendResult,
   ResolvedWechatLinuxAccount,
 } from "./types.js";
@@ -24,6 +26,7 @@ function buildBridgeEnv(account: ResolvedWechatLinuxAccount): NodeJS.ProcessEnv 
 }
 
 function buildCommonArgs(account: ResolvedWechatLinuxAccount): string[] {
+  const config = account.config;
   return [
     "--pywxdump-root",
     account.pyWxDumpRoot,
@@ -38,6 +41,39 @@ function buildCommonArgs(account: ResolvedWechatLinuxAccount): string[] {
     ...(account.dbDir ? ["--db-dir", account.dbDir] : []),
     ...(account.display ? ["--display", account.display] : []),
     ...(account.xauthority ? ["--xauthority", account.xauthority] : []),
+    ...(config.imageAnalysis === true
+      ? ["--image-analysis"]
+      : config.imageAnalysis === false
+        ? ["--no-image-analysis"]
+        : []),
+    ...(config.videoAnalysis === true
+      ? ["--video-analysis"]
+      : config.videoAnalysis === false
+        ? ["--no-video-analysis"]
+        : []),
+    ...(config.voiceAsr === true
+      ? ["--voice-asr"]
+      : config.voiceAsr === false
+        ? ["--no-voice-asr"]
+        : []),
+    ...(config.linkDocs === true
+      ? ["--link-docs"]
+      : config.linkDocs === false
+        ? ["--no-link-docs"]
+        : []),
+    ...(config.visionBaseUrl ? ["--vision-base-url", config.visionBaseUrl] : []),
+    ...(config.visionModel ? ["--vision-model", config.visionModel] : []),
+    ...(config.visionApiKeyEnv ? ["--vision-api-key-env", config.visionApiKeyEnv] : []),
+    ...(config.summaryBaseUrl ? ["--summary-base-url", config.summaryBaseUrl] : []),
+    ...(config.summaryModel ? ["--summary-model", config.summaryModel] : []),
+    ...(config.summaryApiKeyEnv ? ["--summary-api-key-env", config.summaryApiKeyEnv] : []),
+    ...(config.asrUrl ? ["--asr-url", config.asrUrl] : []),
+    ...(config.linkHookCmd ? ["--link-hook-cmd", config.linkHookCmd] : []),
+    ...(config.linkDocRoot ? ["--link-doc-root", config.linkDocRoot] : []),
+    ...(config.linkDomains?.length ? ["--link-domains", config.linkDomains.join(",")] : []),
+    ...(config.linkHookTimeoutSec
+      ? ["--link-hook-timeout-sec", String(config.linkHookTimeoutSec)]
+      : []),
   ];
 }
 
@@ -70,6 +106,21 @@ export function parseWechatLinuxBridgeEnvelope(line: string): BridgeEnvelope | n
   } catch {
     return null;
   }
+}
+
+export function parseWechatLinuxBridgeJsonFromStdout<T>(stdout: string, command: string): T {
+  const lines = stdout
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      return JSON.parse(lines[index]) as T;
+    } catch {
+      // Ignore noisy stdout lines and keep looking for the last JSON object.
+    }
+  }
+  throw new Error(`wechat-linux bridge returned invalid JSON for ${command}:\n${stdout.trim()}`);
 }
 
 export async function runWechatLinuxBridgeJson<T>(
@@ -118,13 +169,9 @@ export async function runWechatLinuxBridgeJson<T>(
         return;
       }
       try {
-        resolve(JSON.parse(stdout.trim()) as T);
+        resolve(parseWechatLinuxBridgeJsonFromStdout<T>(stdout, command));
       } catch (error) {
-        reject(
-          new Error(
-            `wechat-linux bridge returned invalid JSON for ${command}: ${String(error)}\n${stdout.trim()}`,
-          ),
-        );
+        reject(error);
       }
     });
   });
@@ -177,5 +224,29 @@ export async function sendWechatLinuxBridgeFile(params: {
     params.image ? "send-image" : "send-file",
     ["--chat-id", params.chatId, "--path", params.path],
     { timeoutMs: params.timeoutMs },
+  );
+}
+
+export async function searchWechatLinuxBridgeHistory(params: {
+  account: ResolvedWechatLinuxAccount;
+  searchKind: BridgeSearchKind;
+  query?: string;
+  chatId?: string;
+  limit?: number;
+  scanLimit?: number;
+  timeoutMs?: number;
+}): Promise<BridgeSearchResult> {
+  return await runWechatLinuxBridgeJson<BridgeSearchResult>(
+    params.account,
+    "search-history",
+    [
+      "--search-kind",
+      params.searchKind,
+      ...(params.query ? ["--query", params.query] : []),
+      ...(params.chatId ? ["--chat-id", params.chatId] : []),
+      ...(params.limit ? ["--limit", String(params.limit)] : []),
+      ...(params.scanLimit ? ["--scan-limit", String(params.scanLimit)] : []),
+    ],
+    { timeoutMs: params.timeoutMs ?? 120_000 },
   );
 }

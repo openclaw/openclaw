@@ -85,6 +85,7 @@ export function resolveWechatLinuxAccount(params: {
         allowFrom: normalizeList(merged.allowFrom),
         groupAllowFrom: normalizeList(merged.groupAllowFrom),
         mentionPatterns: normalizeList(merged.mentionPatterns),
+        linkDomains: normalizeList(merged.linkDomains),
       },
     };
   };

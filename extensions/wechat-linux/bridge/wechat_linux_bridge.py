@@ -5,6 +5,7 @@ import argparse
 import json
 import mimetypes
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,13 @@ def emit_json(payload: dict[str, Any]) -> None:
 
 def normalize_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def resolve_bool_arg(args: argparse.Namespace, name: str, default: bool) -> bool:
+    value = getattr(args, name, None)
+    if value is None:
+        return default
+    return bool(value)
 
 
 def ensure_pywxdump_importable(root: str):
@@ -395,6 +403,27 @@ def normalize_bridge_message(
     self_sender_ids: set[str],
     monitor_module: Any,
 ) -> dict[str, Any] | None:
+    parsed = wx_monitor.parse_message_with_context(row, context)
+    return normalize_bridge_message_from_parsed(
+        wx_monitor,
+        row,
+        context,
+        parsed,
+        file_locator,
+        self_sender_ids,
+        monitor_module,
+    )
+
+
+def normalize_bridge_message_from_parsed(
+    wx_monitor: Any,
+    row: tuple[Any, ...],
+    context: dict[str, Any],
+    parsed: dict[str, Any],
+    file_locator: PlainFileLocator,
+    self_sender_ids: set[str],
+    monitor_module: Any,
+) -> dict[str, Any] | None:
     (
         local_id,
         server_id,
@@ -414,8 +443,17 @@ def normalize_bridge_message(
         wx_monitor.contact_cache,
         context["target_username"],
     )
-    parsed = wx_monitor.parse_message_with_context(row, context)
-    parsed["content"] = stripped_body or parsed.get("content") or ""
+    parsed_content = normalize_text(parsed.get("content"))
+    if stripped_body:
+        # Preserve PyWxDump's parsed summaries/transcripts for XML-backed media and app messages.
+        if not (parsed_content and stripped_body.lstrip().startswith("<")):
+            parsed["content"] = stripped_body
+        elif parsed_content:
+            parsed["content"] = parsed_content
+    elif parsed_content:
+        parsed["content"] = parsed_content
+    else:
+        parsed["content"] = ""
     media_paths, media_types = collect_media_artifacts(parsed, file_locator)
 
     chat_type = "group" if context["is_chatroom"] else "direct"
@@ -432,6 +470,8 @@ def normalize_bridge_message(
         "server_id": normalize_text(server_id),
         "timestamp": int(parsed.get("timestamp") or 0),
         "time": parsed.get("time") or "",
+        "base_type": parsed.get("base_type"),
+        "sub_type": parsed.get("sub_type"),
         "chat_id": context["target_username"],
         "chat_name": context["target_display"],
         "chat_type": chat_type,
@@ -453,6 +493,15 @@ def normalize_bridge_message(
     }
 
 
+def default_doc_domains_csv(monitor_module: Any) -> str:
+    return ",".join(getattr(monitor_module, "DEFAULT_DOC_DOMAINS", ("mp.weixin.qq.com",)))
+
+
+def build_default_link_hook_command(modules: dict[str, Any]) -> str:
+    hook_path = os.path.join(modules["root"], "tools", "link_doc_hook.py")
+    return f"{shlex.quote(sys.executable)} {shlex.quote(hook_path)}"
+
+
 def build_daemon_args(
     modules: dict[str, Any],
     args: argparse.Namespace,
@@ -462,6 +511,10 @@ def build_daemon_args(
 ) -> argparse.Namespace:
     daemon = modules["daemon"]
     monitor = modules["monitor"]
+    image_analysis = resolve_bool_arg(args, "image_analysis", True)
+    video_analysis = resolve_bool_arg(args, "video_analysis", True)
+    voice_asr = resolve_bool_arg(args, "voice_asr", True)
+    link_docs = resolve_bool_arg(args, "link_docs", True)
     return argparse.Namespace(
         command="watch" if all_chats else "send",
         target=target,
@@ -472,22 +525,29 @@ def build_daemon_args(
         interval=30,
         format="json",
         webhook=None,
-        ollama_url=daemon.DEFAULT_LOCAL_VISION_BASE_URL,
-        vision_model=monitor.DEFAULT_OPENAI_MODEL,
-        vision_api_key_env=monitor.DEFAULT_OPENAI_API_KEY_ENV,
-        summary_base_url=monitor.DEFAULT_OPENAI_BASE_URL,
-        summary_model=monitor.DEFAULT_OPENAI_MODEL,
-        summary_api_key_env=monitor.DEFAULT_OPENAI_API_KEY_ENV,
-        asr_url="http://localhost:8001/api/asr/transcribe",
-        no_image_analysis=True,
-        no_video_analysis=True,
+        ollama_url=normalize_text(args.vision_base_url) or monitor.DEFAULT_OPENAI_BASE_URL,
+        vision_model=normalize_text(args.vision_model) or monitor.DEFAULT_OPENAI_MODEL,
+        vision_api_key_env=normalize_text(args.vision_api_key_env)
+        or monitor.DEFAULT_OPENAI_API_KEY_ENV,
+        summary_base_url=normalize_text(args.summary_base_url)
+        or normalize_text(args.vision_base_url)
+        or monitor.DEFAULT_OPENAI_BASE_URL,
+        summary_model=normalize_text(args.summary_model)
+        or normalize_text(args.vision_model)
+        or monitor.DEFAULT_OPENAI_MODEL,
+        summary_api_key_env=normalize_text(args.summary_api_key_env)
+        or normalize_text(args.vision_api_key_env)
+        or monitor.DEFAULT_OPENAI_API_KEY_ENV,
+        asr_url=normalize_text(args.asr_url) or "http://localhost:8001/api/asr/transcribe",
+        no_image_analysis=not image_analysis,
+        no_video_analysis=not video_analysis,
         video_frame_count=1,
-        no_voice_asr=True,
-        link_hook_cmd="python3 tools/link_doc_hook.py",
-        link_doc_root="",
-        link_domains=",".join(getattr(monitor, "DEFAULT_DOC_DOMAINS", ("mp.weixin.qq.com",))),
-        link_hook_timeout=30,
-        no_link_docs=True,
+        no_voice_asr=not voice_asr,
+        link_hook_cmd=normalize_text(args.link_hook_cmd) or build_default_link_hook_command(modules),
+        link_doc_root=normalize_text(args.link_doc_root),
+        link_domains=normalize_text(args.link_domains) or default_doc_domains_csv(monitor),
+        link_hook_timeout=max(1, int(getattr(args, "link_hook_timeout_sec", 30) or 30)),
+        no_link_docs=not link_docs,
         all_chats=all_chats,
         allow_missing_msg_table=False,
         display=normalize_text(args.display or os.environ.get("DISPLAY")),
@@ -519,6 +579,59 @@ def build_daemon_args(
     )
 
 
+def apply_runtime_feature_overrides(
+    wx_monitor: Any,
+    args: argparse.Namespace,
+    monitor_module: Any,
+    *,
+    enable_link_docs: bool,
+) -> None:
+    wx_monitor.image_analysis = resolve_bool_arg(args, "image_analysis", True)
+    wx_monitor.video_analysis = resolve_bool_arg(args, "video_analysis", True)
+    wx_monitor.voice_asr = resolve_bool_arg(args, "voice_asr", True)
+    wx_monitor.doc_enabled = resolve_bool_arg(args, "link_docs", True) and enable_link_docs
+    if normalize_text(getattr(args, "vision_base_url", "")):
+        wx_monitor.ollama_url = normalize_text(args.vision_base_url)
+    if normalize_text(getattr(args, "vision_model", "")):
+        wx_monitor.vision_model = normalize_text(args.vision_model)
+    if normalize_text(getattr(args, "vision_api_key_env", "")):
+        wx_monitor.vision_api_key_env = normalize_text(args.vision_api_key_env)
+    if normalize_text(getattr(args, "summary_base_url", "")):
+        wx_monitor.summary_base_url = normalize_text(args.summary_base_url)
+    if normalize_text(getattr(args, "summary_model", "")):
+        wx_monitor.summary_model = normalize_text(args.summary_model)
+    if normalize_text(getattr(args, "summary_api_key_env", "")):
+        wx_monitor.summary_api_key_env = normalize_text(args.summary_api_key_env)
+    if normalize_text(getattr(args, "asr_url", "")):
+        wx_monitor.asr_url = normalize_text(args.asr_url)
+    if normalize_text(getattr(args, "link_hook_cmd", "")):
+        wx_monitor.doc_hook_cmd = normalize_text(args.link_hook_cmd)
+    if normalize_text(getattr(args, "link_doc_root", "")):
+        wx_monitor.doc_root = normalize_text(args.link_doc_root)
+    if normalize_text(getattr(args, "link_domains", "")):
+        wx_monitor.doc_domains = monitor_module.parse_doc_domains(normalize_text(args.link_domains))
+    wx_monitor.doc_hook_timeout = max(1, int(getattr(args, "link_hook_timeout_sec", 30) or 30))
+
+
+def build_all_chat_monitor(
+    modules: dict[str, Any],
+    args: argparse.Namespace,
+    *,
+    enable_link_docs: bool,
+) -> Any:
+    daemon = modules["daemon"]
+    watch_args = build_daemon_args(modules, args, target="*", all_chats=True)
+    wx_monitor = daemon.build_monitor(watch_args, doc_enabled=enable_link_docs)
+    daemon.setup_monitor(wx_monitor, announce=False)
+    apply_runtime_feature_overrides(
+        wx_monitor,
+        args,
+        modules["monitor"],
+        enable_link_docs=enable_link_docs,
+    )
+    return wx_monitor
+
+
 def probe_command(args: argparse.Namespace) -> int:
     try:
         modules = ensure_pywxdump_importable(args.pywxdump_root)
@@ -543,6 +656,10 @@ def probe_command(args: argparse.Namespace) -> int:
                 "wechat_process_count": len(modules["daemon"].list_wechat_processes()),
                 "window_class": normalize_text(args.window_class) or DEFAULT_WINDOW_CLASS,
                 "window_mode": normalize_text(args.window_mode) or DEFAULT_WINDOW_MODE,
+                "image_analysis": resolve_bool_arg(args, "image_analysis", True),
+                "video_analysis": resolve_bool_arg(args, "video_analysis", True),
+                "voice_asr": resolve_bool_arg(args, "voice_asr", True),
+                "link_docs": resolve_bool_arg(args, "link_docs", True),
             }
         )
     except Exception as exc:  # noqa: BLE001
@@ -565,6 +682,10 @@ def probe_command(args: argparse.Namespace) -> int:
                 "wechat_process_count": 0,
                 "window_class": normalize_text(args.window_class) or DEFAULT_WINDOW_CLASS,
                 "window_mode": normalize_text(args.window_mode) or DEFAULT_WINDOW_MODE,
+                "image_analysis": resolve_bool_arg(args, "image_analysis", True),
+                "video_analysis": resolve_bool_arg(args, "video_analysis", True),
+                "voice_asr": resolve_bool_arg(args, "voice_asr", True),
+                "link_docs": resolve_bool_arg(args, "link_docs", True),
                 "error": str(exc),
             }
         )
@@ -642,10 +763,14 @@ def fetch_new_messages(
                 continue
             state["last_local_id"] = rows[-1][0]
             for row in rows:
-                bridge_message = normalize_bridge_message(
+                parsed_message = wx_monitor.parse_message_with_context(row, state)
+                if wx_monitor.doc_enabled:
+                    wx_monitor.maybe_generate_doc(parsed_message)
+                bridge_message = normalize_bridge_message_from_parsed(
                     wx_monitor,
                     row,
                     state,
+                    parsed_message,
                     file_locator,
                     self_sender_ids,
                     monitor,
@@ -655,6 +780,165 @@ def fetch_new_messages(
                 parsed.append((bridge_message["timestamp"], bridge_message["local_id"], bridge_message))
         parsed.sort(key=lambda item: (item[0], item[1]))
         return [item[2] for item in parsed]
+
+
+def append_search_text(parts: list[str], value: Any) -> None:
+    if value is None:
+        return
+    if isinstance(value, (str, int, float, bool)):
+        text = normalize_text(value)
+        if text:
+            parts.append(text)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            append_search_text(parts, item)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            append_search_text(parts, item)
+
+
+def build_message_search_haystack(message: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in (
+        "chat_name",
+        "sender_display",
+        "sender_id",
+        "content",
+        "analysis_text",
+        "type_label",
+        "normalized_kind",
+        "raw_xml",
+    ):
+        append_search_text(parts, message.get(key))
+    append_search_text(parts, message.get("url_list") or [])
+    append_search_text(parts, message.get("details") or {})
+    append_search_text(parts, message.get("document") or {})
+    append_search_text(parts, message.get("artifacts") or {})
+    append_search_text(parts, message.get("media_paths") or [])
+    return "\n".join(dict.fromkeys(part for part in parts if part)).casefold()
+
+
+def message_matches_search_kind(message: dict[str, Any], search_kind: str) -> bool:
+    normalized_kind = normalize_text(message.get("normalized_kind"))
+    media_types = [normalize_text(item).lower() for item in message.get("media_types") or []]
+    artifacts = message.get("artifacts") or {}
+
+    if search_kind == "file":
+        return normalized_kind == "file_manifest"
+    if search_kind == "image":
+        if int(message.get("base_type") or 0) == 3:
+            return True
+        if any(item.startswith("image/") for item in media_types):
+            return True
+        return any(
+            normalize_text(artifacts.get(key))
+            for key in ("analysis_path", "original_path", "image_utils_path", "thumb_path")
+        )
+    return normalized_kind != "skip"
+
+
+def filter_search_message(message: dict[str, Any], search_kind: str, query: str) -> bool:
+    if not message_matches_search_kind(message, search_kind):
+        return False
+    if not query:
+        return True
+    return query.casefold() in build_message_search_haystack(message)
+
+
+def search_history_command(args: argparse.Namespace) -> int:
+    modules = ensure_pywxdump_importable(args.pywxdump_root)
+    monitor = modules["monitor"]
+    wx_monitor = build_all_chat_monitor(modules, args, enable_link_docs=False)
+    wx_monitor.doc_enabled = False
+    if args.search_kind != "image":
+        wx_monitor.image_analysis = False
+        wx_monitor.video_analysis = False
+    if args.search_kind != "message":
+        wx_monitor.voice_asr = False
+    file_locator = PlainFileLocator(wx_monitor.wx_root)
+    self_sender_ids: set[str] = set()
+    query = normalize_text(args.query)
+    limit = max(1, min(20, int(args.limit or 5)))
+    scan_limit = max(limit, min(5000, int(args.scan_limit or 400)))
+
+    with tempfile.TemporaryDirectory(prefix="openclaw_wechat_search_", dir=wx_monitor.output_dir) as snapshot_dir:
+        msg_path = monitor.decrypt_single_db(
+            wx_monitor.keys,
+            wx_monitor.db_storage,
+            "message/message_0.db",
+            snapshot_dir,
+        )
+        if not msg_path:
+            raise RuntimeError("message_db_decrypt_failed")
+        wx_monitor.name2id_cache = monitor.build_name2id_cache(msg_path)
+
+        states = list(wx_monitor.chat_states.items())
+        if args.chat_id:
+            states = [
+                (table, state)
+                for table, state in states
+                if normalize_text(state.get("target_username")) == normalize_text(args.chat_id)
+            ]
+
+        if not states:
+            emit_json(
+                {
+                    "ok": True,
+                    "search_kind": args.search_kind,
+                    "query": query,
+                    "chat_id": normalize_text(args.chat_id) or None,
+                    "chat_name": None,
+                    "scanned": 0,
+                    "total": 0,
+                    "matches": [],
+                    "note": "chat not found" if args.chat_id else "no chats available",
+                }
+            )
+            return 0
+
+        matches: list[dict[str, Any]] = []
+        scanned = 0
+        for table, state in states:
+            rows = wx_monitor.query_message_rows(msg_path, table, limit=scan_limit)
+            for row in rows:
+                scanned += 1
+                parsed = wx_monitor.parse_message_with_context(row, state)
+                bridge_message = normalize_bridge_message_from_parsed(
+                    wx_monitor,
+                    row,
+                    state,
+                    parsed,
+                    file_locator,
+                    self_sender_ids,
+                    monitor,
+                )
+                if bridge_message is None:
+                    continue
+                if not filter_search_message(bridge_message, args.search_kind, query):
+                    continue
+                matches.append(bridge_message)
+
+        matches.sort(
+            key=lambda item: (int(item.get("timestamp") or 0), int(item.get("local_id") or 0)),
+            reverse=True,
+        )
+        limited = matches[:limit]
+        chat_name = states[0][1].get("target_display") if args.chat_id and states else None
+        emit_json(
+            {
+                "ok": True,
+                "search_kind": args.search_kind,
+                "query": query,
+                "chat_id": normalize_text(args.chat_id) or None,
+                "chat_name": normalize_text(chat_name) or None,
+                "scanned": scanned,
+                "total": len(matches),
+                "matches": limited,
+            }
+        )
+    return 0
 
 
 def is_relevant_message_change(path: str) -> bool:
@@ -667,11 +951,8 @@ def is_relevant_message_change(path: str) -> bool:
 
 def watch_command(args: argparse.Namespace) -> int:
     modules = ensure_pywxdump_importable(args.pywxdump_root)
-    daemon = modules["daemon"]
     watcher_cls = modules["InotifyWatcher"]
-    watch_args = build_daemon_args(modules, args, target="*", all_chats=True)
-    wx_monitor = daemon.build_monitor(watch_args, doc_enabled=False)
-    daemon.setup_monitor(wx_monitor, announce=False)
+    wx_monitor = build_all_chat_monitor(modules, args, enable_link_docs=True)
     file_locator = PlainFileLocator(wx_monitor.wx_root)
     self_sender_ids: set[str] = set()
 
@@ -706,6 +987,25 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--xauthority")
         subparser.add_argument("--window-class", default=DEFAULT_WINDOW_CLASS)
         subparser.add_argument("--window-mode", default=DEFAULT_WINDOW_MODE)
+        subparser.add_argument("--image-analysis", dest="image_analysis", action="store_true", default=None)
+        subparser.add_argument("--no-image-analysis", dest="image_analysis", action="store_false")
+        subparser.add_argument("--video-analysis", dest="video_analysis", action="store_true", default=None)
+        subparser.add_argument("--no-video-analysis", dest="video_analysis", action="store_false")
+        subparser.add_argument("--voice-asr", dest="voice_asr", action="store_true", default=None)
+        subparser.add_argument("--no-voice-asr", dest="voice_asr", action="store_false")
+        subparser.add_argument("--link-docs", dest="link_docs", action="store_true", default=None)
+        subparser.add_argument("--no-link-docs", dest="link_docs", action="store_false")
+        subparser.add_argument("--vision-base-url")
+        subparser.add_argument("--vision-model")
+        subparser.add_argument("--vision-api-key-env")
+        subparser.add_argument("--summary-base-url")
+        subparser.add_argument("--summary-model")
+        subparser.add_argument("--summary-api-key-env")
+        subparser.add_argument("--asr-url")
+        subparser.add_argument("--link-hook-cmd")
+        subparser.add_argument("--link-doc-root")
+        subparser.add_argument("--link-domains")
+        subparser.add_argument("--link-hook-timeout-sec", type=int, default=30)
 
     probe = sub.add_parser("probe")
     add_common(probe)
@@ -735,6 +1035,14 @@ def build_parser() -> argparse.ArgumentParser:
     send_image.add_argument("--chat-id", required=True)
     send_image.add_argument("--path", required=True)
 
+    search_history = sub.add_parser("search-history")
+    add_common(search_history)
+    search_history.add_argument("--search-kind", choices=["message", "file", "image"], required=True)
+    search_history.add_argument("--query", default="")
+    search_history.add_argument("--chat-id")
+    search_history.add_argument("--limit", type=int, default=5)
+    search_history.add_argument("--scan-limit", type=int, default=400)
+
     return parser
 
 
@@ -754,6 +1062,8 @@ def main() -> int:
             return send_file_like_command(args, image=False)
         if args.command == "send-image":
             return send_file_like_command(args, image=True)
+        if args.command == "search-history":
+            return search_history_command(args)
         raise RuntimeError(f"unknown command: {args.command}")
     except Exception as exc:  # noqa: BLE001
         if args.command == "resolve-target":
@@ -792,6 +1102,21 @@ def main() -> int:
                 }
             )
             return 1
+        if args.command == "search-history":
+            emit_json(
+                {
+                    "ok": False,
+                    "search_kind": getattr(args, "search_kind", "message"),
+                    "query": normalize_text(getattr(args, "query", "")),
+                    "chat_id": normalize_text(getattr(args, "chat_id", "")) or None,
+                    "chat_name": None,
+                    "scanned": 0,
+                    "total": 0,
+                    "matches": [],
+                    "note": str(exc),
+                }
+            )
+            return 0
         print(str(exc), file=sys.stderr)
         return 1
 

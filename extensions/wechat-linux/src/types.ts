@@ -24,6 +24,21 @@ export type WechatLinuxAccountConfig = {
   textChunkLimit?: number;
   blockStreaming?: boolean;
   mediaMaxMb?: number;
+  imageAnalysis?: boolean;
+  videoAnalysis?: boolean;
+  voiceAsr?: boolean;
+  linkDocs?: boolean;
+  visionBaseUrl?: string;
+  visionModel?: string;
+  visionApiKeyEnv?: string;
+  summaryBaseUrl?: string;
+  summaryModel?: string;
+  summaryApiKeyEnv?: string;
+  asrUrl?: string;
+  linkHookCmd?: string;
+  linkDocRoot?: string;
+  linkDomains?: string[];
+  linkHookTimeoutSec?: number;
 };
 
 export type WechatLinuxConfig = WechatLinuxAccountConfig & {
@@ -64,6 +79,8 @@ export type BridgeMessage = {
   server_id?: string;
   timestamp: number;
   time?: string;
+  base_type?: number;
+  sub_type?: number;
   chat_id: string;
   chat_name: string;
   chat_type: "direct" | "group";
@@ -123,6 +140,10 @@ export type BridgeProbe = {
   wechat_process_count: number;
   window_class: string;
   window_mode: WechatLinuxWindowMode;
+  image_analysis?: boolean;
+  video_analysis?: boolean;
+  voice_asr?: boolean;
+  link_docs?: boolean;
   error?: string;
 };
 
@@ -135,4 +156,18 @@ export type BridgeSendResult = {
   path?: string;
   text?: string;
   error?: string;
+};
+
+export type BridgeSearchKind = "message" | "file" | "image";
+
+export type BridgeSearchResult = {
+  ok: boolean;
+  search_kind: BridgeSearchKind;
+  query?: string;
+  chat_id?: string;
+  chat_name?: string;
+  scanned: number;
+  total: number;
+  matches: BridgeMessage[];
+  note?: string;
 };

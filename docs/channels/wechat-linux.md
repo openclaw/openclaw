@@ -50,12 +50,38 @@ Minimal config:
 }
 ```
 
+## Runtime commands
+
+Typical local development run command for the OpenClaw gateway:
+
+```bash
+npx -y node@22 /usr/local/bin/corepack pnpm openclaw gateway run --bind loopback --port 18789 --force
+```
+
+Typical `wechat-linux` bridge watch command after the gateway expands the channel config:
+
+```bash
+"/path/to/PyWxDump/.venv/bin/python" \
+  "/path/to/openclaw/extensions/wechat-linux/bridge/wechat_linux_bridge.py" watch \
+  --pywxdump-root "/path/to/PyWxDump" \
+  --key-file "$HOME/.wx_db_keys.json" \
+  --output-dir "$HOME/wx_decrypted" \
+  --window-class wechat \
+  --window-mode auto \
+  --db-dir "/path/to/xwechat_files/<wxid>/db_storage" \
+  --display ":1.0"
+```
+
+In normal use you only launch the gateway command. The bridge command is started by the gateway.
+
 ## What this channel does
 
 - Watches Linux desktop WeChat chats through a Python bridge.
+- Enriches inbound voice, image, video, and link messages before handing them to the agent.
 - Normalizes inbound messages into OpenClaw sessions and routes them to the configured agent.
 - Sends final agent replies back to WeChat as text, images, or files.
 - Keeps DM pairing and group mention safety behavior aligned with other OpenClaw channels.
+- Registers WeChat history search tools for messages, files, and images.
 
 ## Why `contact.db` matters
 
@@ -223,8 +249,9 @@ Manual sends can target:
 | Files           | Supported           |
 | Threads         | Not supported       |
 | Reactions       | Not supported       |
-| Voice and video | Metadata only in v1 |
-| Search actions  | Not included in v1  |
+| Voice           | Supported via ASR   |
+| Video           | Best effort summary |
+| Search actions  | Supported           |
 
 ## Notes
 
@@ -232,6 +259,27 @@ Manual sends can target:
 - The bridge needs readable local media files to attach inbound images and files. If a file cannot be materialized locally, the message still reaches the agent as text metadata.
 - Outbound streaming is blocked. Only final replies are sent to WeChat.
 - `windowMode` defaults to `auto`. Use `standalone` or `main` only when you need to force a specific desktop window flow.
+
+## Rich media conversion
+
+Inbound rich media is converted before the OpenClaw agent sees it:
+
+- Voice: WeChat transcript when available, otherwise optional ASR through `asrUrl`
+- Images: OCR or caption text through the configured vision endpoint
+- Videos: thumbnail or frame summary when video analysis is enabled
+- Links: URL extraction plus optional local document bundle generation through `link_doc_hook.py`
+
+The converted summary is appended to the inbound body together with useful local artifact paths, so the agent can both read the extracted text and access the downloaded file when needed.
+
+## Search tools
+
+The bundled `wechat-linux` plugin registers these agent tools:
+
+- `wechat_search_messages`
+- `wechat_search_files`
+- `wechat_search_images`
+
+Each tool can search one chat or all chats, with optional `query`, `chat`, `limit`, and `scan_limit` parameters.
 
 ## Configuration reference
 
@@ -255,4 +303,19 @@ Provider options:
 - `channels.wechat-linux.textChunkLimit`: outbound text chunk limit.
 - `channels.wechat-linux.blockStreaming`: disable block streaming for this channel.
 - `channels.wechat-linux.mediaMaxMb`: inbound and outbound media cap in MB.
+- `channels.wechat-linux.imageAnalysis`: enable inbound image OCR or caption analysis.
+- `channels.wechat-linux.videoAnalysis`: enable inbound video frame or thumbnail analysis.
+- `channels.wechat-linux.voiceAsr`: enable inbound audio transcription through `asrUrl`.
+- `channels.wechat-linux.linkDocs`: enable inbound link to document conversion.
+- `channels.wechat-linux.visionBaseUrl`: OpenAI-compatible or Anthropic-compatible vision endpoint for image or video analysis.
+- `channels.wechat-linux.visionModel`: model id used for image or video analysis.
+- `channels.wechat-linux.visionApiKeyEnv`: API key environment variable name for the vision endpoint.
+- `channels.wechat-linux.summaryBaseUrl`: optional summary endpoint override for media or chat summarization.
+- `channels.wechat-linux.summaryModel`: optional summary model override.
+- `channels.wechat-linux.summaryApiKeyEnv`: optional API key environment variable name for summary calls.
+- `channels.wechat-linux.asrUrl`: HTTP endpoint used for voice transcription.
+- `channels.wechat-linux.linkHookCmd`: override for the link-to-document hook command.
+- `channels.wechat-linux.linkDocRoot`: root directory for generated link document bundles.
+- `channels.wechat-linux.linkDomains`: allowed link domains for automatic document generation.
+- `channels.wechat-linux.linkHookTimeoutSec`: timeout for the link document hook.
 - `channels.wechat-linux.accounts.<id>.*`: per-account overrides for all fields above.

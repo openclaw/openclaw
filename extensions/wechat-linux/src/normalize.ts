@@ -123,11 +123,106 @@ export function buildWechatLinuxOutboundTarget(raw: string): {
   };
 }
 
-export function buildWechatLinuxBodyForAgent(message: BridgeMessage): string {
-  const parts = [message.content.trim()];
-  const analysisText = message.analysis_text?.trim();
-  if (analysisText && analysisText !== message.content.trim()) {
-    parts.push(analysisText);
+function trimText(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function pushUniqueLine(target: string[], label: string, value: unknown) {
+  const text = trimText(value);
+  if (!text) {
+    return;
   }
-  return parts.filter(Boolean).join("\n\n").trim();
+  const line = `${label}: ${text}`;
+  if (!target.includes(line)) {
+    target.push(line);
+  }
+}
+
+function pushUniqueBlock(target: string[], label: string, values: string[]) {
+  const normalized = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+  if (normalized.length === 0) {
+    return;
+  }
+  const block = `${label}:\n${normalized.map((value) => `- ${value}`).join("\n")}`;
+  if (!target.includes(block)) {
+    target.push(block);
+  }
+}
+
+export function buildWechatLinuxBodyForAgent(message: BridgeMessage): string {
+  const content = trimText(message.content);
+  const analysisText = trimText(message.analysis_text);
+  const details = (message.details ?? {}) as Record<string, unknown>;
+  const document = (message.document ?? {}) as Record<string, unknown>;
+  const parts = [content];
+  const contextBlocks: string[] = [];
+
+  const typeLabel =
+    trimText(message.type_label) ||
+    (message.normalized_kind && message.normalized_kind !== "skip" ? message.normalized_kind : "");
+  if (typeLabel && typeLabel !== "text" && typeLabel !== "普通文本") {
+    pushUniqueLine(contextBlocks, "消息类型", typeLabel);
+  }
+
+  if (analysisText && analysisText !== content) {
+    pushUniqueLine(contextBlocks, "分析", analysisText);
+  }
+
+  const wechatTranscript = trimText(details.wechat_transcript);
+  if (wechatTranscript && wechatTranscript !== content && wechatTranscript !== analysisText) {
+    pushUniqueLine(contextBlocks, "语音转写", wechatTranscript);
+  }
+  pushUniqueLine(contextBlocks, "转写来源", details.transcript_source);
+  pushUniqueLine(contextBlocks, "转写错误", details.asr_error);
+
+  const detailTitle = trimText(details.title);
+  if (detailTitle && detailTitle !== content) {
+    pushUniqueLine(contextBlocks, "标题", detailTitle);
+  }
+  pushUniqueLine(contextBlocks, "来源", details.source_display_name);
+  pushUniqueLine(contextBlocks, "文件名", details.file_name);
+  pushUniqueLine(contextBlocks, "文件大小", details.size_human);
+  pushUniqueLine(contextBlocks, "链接", details.url);
+
+  const urlList = Array.from(
+    new Set((message.url_list ?? []).map((value) => value.trim()).filter(Boolean)),
+  );
+  if (urlList.length > 1 || (urlList.length === 1 && urlList[0] !== trimText(details.url))) {
+    pushUniqueBlock(contextBlocks, "链接列表", urlList);
+  }
+
+  const documentTitle = trimText(document.title);
+  const documentSummary = trimText(document.summary);
+  const documentPath = trimText(document.doc_path);
+  const documentStatus = trimText(document.status);
+  if (documentStatus && documentStatus !== "skip") {
+    pushUniqueLine(contextBlocks, "文档状态", documentStatus);
+  }
+  if (documentTitle && documentTitle !== detailTitle) {
+    pushUniqueLine(contextBlocks, "文档标题", documentTitle);
+  }
+  if (documentSummary && documentSummary !== content && documentSummary !== analysisText) {
+    pushUniqueLine(contextBlocks, "文档摘要", documentSummary);
+  }
+  if (documentPath) {
+    pushUniqueLine(contextBlocks, "文档路径", documentPath);
+  }
+
+  const mediaPaths = Array.from(
+    new Set((message.media_paths ?? []).map((value) => value.trim()).filter(Boolean)),
+  );
+  if (mediaPaths.length > 0) {
+    pushUniqueBlock(contextBlocks, "附件路径", mediaPaths);
+  }
+
+  const fallbackContent =
+    trimText(details.preview) ||
+    trimText(details.description) ||
+    trimText(details.summary) ||
+    trimText(message.raw_xml);
+  if (!parts[0] && fallbackContent) {
+    parts[0] = fallbackContent;
+  }
+
+  return [...parts.filter(Boolean), ...contextBlocks].join("\n\n").trim();
 }
