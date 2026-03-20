@@ -6,6 +6,7 @@ describe("isUnitConfigTestFile", () => {
     expect(isUnitConfigTestFile("src/infra/git-commit.test.ts")).toBe(true);
     expect(isUnitConfigTestFile("test/format-error.test.ts")).toBe(true);
     expect(isUnitConfigTestFile("ui/src/ui/views/chat.test.ts")).toBe(true);
+    expect(isUnitConfigTestFile("ui/src/ui/views/exec-approval.test.ts")).toBe(true);
   });
 
   it("rejects files excluded from the unit config", () => {

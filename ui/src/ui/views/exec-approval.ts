@@ -32,7 +32,7 @@ export function renderExecApprovalPrompt(state: AppViewState) {
   const remaining = remainingMs > 0 ? `expires in ${formatRemaining(remainingMs)}` : "expired";
   const queueCount = state.execApprovalQueue.length;
   return html`
-    <div class="exec-approval-overlay" role="dialog" aria-live="polite">
+    <div class="exec-approval-overlay" role="dialog" aria-modal="true" aria-live="polite">
       <div class="exec-approval-card">
         <div class="exec-approval-header">
           <div>
@@ -45,21 +45,23 @@ export function renderExecApprovalPrompt(state: AppViewState) {
               : nothing
           }
         </div>
-        <div class="exec-approval-command mono">${request.command}</div>
-        <div class="exec-approval-meta">
-          ${renderMetaRow("Host", request.host)}
-          ${renderMetaRow("Agent", request.agentId)}
-          ${renderMetaRow("Session", request.sessionKey)}
-          ${renderMetaRow("CWD", request.cwd)}
-          ${renderMetaRow("Resolved", request.resolvedPath)}
-          ${renderMetaRow("Security", request.security)}
-          ${renderMetaRow("Ask", request.ask)}
+        <div class="exec-approval-body">
+          <div class="exec-approval-command mono">${request.command}</div>
+          <div class="exec-approval-meta">
+            ${renderMetaRow("Host", request.host)}
+            ${renderMetaRow("Agent", request.agentId)}
+            ${renderMetaRow("Session", request.sessionKey)}
+            ${renderMetaRow("CWD", request.cwd)}
+            ${renderMetaRow("Resolved", request.resolvedPath)}
+            ${renderMetaRow("Security", request.security)}
+            ${renderMetaRow("Ask", request.ask)}
+          </div>
+          ${
+            state.execApprovalError
+              ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
+              : nothing
+          }
         </div>
-        ${
-          state.execApprovalError
-            ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
-            : nothing
-        }
         <div class="exec-approval-actions">
           <button
             class="btn primary"

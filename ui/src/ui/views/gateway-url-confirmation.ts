@@ -16,9 +16,11 @@ export function renderGatewayUrlConfirmation(state: AppViewState) {
             <div class="exec-approval-sub">This will reconnect to a different gateway server</div>
           </div>
         </div>
-        <div class="exec-approval-command mono">${pendingGatewayUrl}</div>
-        <div class="callout danger" style="margin-top: 12px;">
-          Only confirm if you trust this URL. Malicious URLs can compromise your system.
+        <div class="exec-approval-body">
+          <div class="exec-approval-command mono">${pendingGatewayUrl}</div>
+          <div class="callout danger">
+            Only confirm if you trust this URL. Malicious URLs can compromise your system.
+          </div>
         </div>
         <div class="exec-approval-actions">
           <button
