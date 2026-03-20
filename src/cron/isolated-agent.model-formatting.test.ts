@@ -1,5 +1,5 @@
 import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelection from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
@@ -11,6 +11,7 @@ import {
   withTempCronHome,
   writeSessionStoreEntries,
 } from "./isolated-agent.test-harness.js";
+import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 import type { CronJob } from "./types.js";
 
 const withTempHome = withTempCronHome;
@@ -126,9 +127,14 @@ async function expectInvalidModel(home: string, model: string) {
 
 describe("cron model formatting and precedence edge cases", () => {
   beforeEach(() => {
+    setupIsolatedAgentTurnMocks({ fast: true });
     vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue("off");
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   // ------ provider/model string splitting ------

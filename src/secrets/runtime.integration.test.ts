@@ -289,6 +289,7 @@ describe("secrets runtime snapshot integration", () => {
           plugins: {
             entries: {
               google: {
+                enabled: true,
                 config: {
                   webSearch: {
                     apiKey: {
