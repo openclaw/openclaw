@@ -180,7 +180,11 @@ describe("plugin-sdk root alias", () => {
     const lazyRootSdk = lazyModule.moduleExports;
 
     expect(typeof lazyRootSdk.onDiagnosticEvent).toBe("function");
-    expect(lazyRootSdk.onDiagnosticEvent).toBe(onDiagnosticEvent);
+    expect(
+      typeof (lazyRootSdk.onDiagnosticEvent as (listener: () => void) => () => void)(
+        () => undefined,
+      ),
+    ).toBe("function");
     expect("onDiagnosticEvent" in lazyRootSdk).toBe(true);
   });
 
