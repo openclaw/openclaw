@@ -22,6 +22,18 @@ export function resolveGigachatAuthProfileMetadata(
   return undefined;
 }
 
+export function resolveGigachatInsecureTlsOverride(
+  metadata?: GigachatAuthMetadata,
+): boolean | undefined {
+  if (metadata?.insecureTls === "true") {
+    return true;
+  }
+  if (metadata?.insecureTls === "false") {
+    return false;
+  }
+  return undefined;
+}
+
 function looksLikeGigachatBasicCredentials(apiKey: string | undefined): boolean {
   const trimmed = apiKey?.trim();
   if (!trimmed) {

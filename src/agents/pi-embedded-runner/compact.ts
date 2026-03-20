@@ -43,7 +43,11 @@ import { ensureCustomApiRegistered } from "../custom-api-registry.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
-import { resolveGigachatAuthMode, resolveGigachatAuthProfileMetadata } from "../gigachat-auth.js";
+import {
+  resolveGigachatAuthMode,
+  resolveGigachatAuthProfileMetadata,
+  resolveGigachatInsecureTlsOverride,
+} from "../gigachat-auth.js";
 import { createGigachatStreamFn } from "../gigachat-stream.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import {
@@ -868,7 +872,7 @@ export async function compactEmbeddedPiSessionDirect(
             apiKey: apiKeyInfo?.apiKey,
             authProfileId: resolvedGigachatProfileId,
           }),
-          insecureTls: gigachatMeta?.insecureTls === "true",
+          insecureTls: resolveGigachatInsecureTlsOverride(gigachatMeta),
           scope: gigachatMeta?.scope,
         });
       }

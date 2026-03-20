@@ -55,6 +55,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import {
+  resolveGigachatInsecureTlsOverride,
   resolveGigachatAuthMode,
   resolveGigachatAuthProfileMetadata,
 } from "../../gigachat-auth.js";
@@ -228,7 +229,10 @@ function createYieldAbortedResponse(model: { api?: string; provider?: string; id
     result: async () => message,
   };
 }
-export { resolveGigachatAuthProfileMetadata } from "../../gigachat-auth.js";
+export {
+  resolveGigachatAuthProfileMetadata,
+  resolveGigachatInsecureTlsOverride,
+} from "../../gigachat-auth.js";
 
 export async function resolveGigachatApiKeyForRun(params: {
   model: EmbeddedRunAttemptParams["model"];
@@ -2035,7 +2039,7 @@ export async function runEmbeddedAttempt(
             apiKey: resolvedGigachatAuth.apiKey,
             authProfileId: resolvedGigachatAuth.authProfileId,
           }),
-          insecureTls: gigachatMeta?.insecureTls === "true",
+          insecureTls: resolveGigachatInsecureTlsOverride(gigachatMeta),
           scope: gigachatMeta?.scope,
         });
         activeSession.agent.streamFn = gigachatStreamFn;

@@ -1040,7 +1040,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       expect(createGigachatStreamFnMock).toHaveBeenCalledWith({
         baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
         authMode: "basic",
-        insecureTls: false,
+        insecureTls: undefined,
         scope: undefined,
       });
       return {
@@ -1100,7 +1100,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       expect(createGigachatStreamFnMock).toHaveBeenCalledWith({
         baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
         authMode: "oauth",
-        insecureTls: false,
+        insecureTls: undefined,
         scope: undefined,
       });
       return {

@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
-import { resolveGigachatAuthMode } from "../../gigachat-auth.js";
+import {
+  resolveGigachatAuthMode,
+  resolveGigachatInsecureTlsOverride,
+} from "../../gigachat-auth.js";
 import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
@@ -250,6 +253,18 @@ describe("resolveGigachatAuthMode", () => {
         authProfileId: "gigachat:default",
       }),
     ).toBe("basic");
+  });
+});
+
+describe("resolveGigachatInsecureTlsOverride", () => {
+  it("maps explicit metadata flags to boolean overrides", () => {
+    expect(resolveGigachatInsecureTlsOverride({ insecureTls: "true" })).toBe(true);
+    expect(resolveGigachatInsecureTlsOverride({ insecureTls: "false" })).toBe(false);
+  });
+
+  it("leaves the override unset when metadata does not specify TLS behavior", () => {
+    expect(resolveGigachatInsecureTlsOverride(undefined)).toBeUndefined();
+    expect(resolveGigachatInsecureTlsOverride({ scope: "GIGACHAT_API_PERS" })).toBeUndefined();
   });
 });
 
