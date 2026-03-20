@@ -127,6 +127,53 @@ describe("resolveAgentRoute", () => {
     }
   });
 
+  test("resolvedPeerId overrides identityLinks for direct-message routing", () => {
+    const cfg: OpenClawConfig = {
+      session: {
+        dmScope: "per-peer",
+        identityLinks: {
+          alice: ["slack:U123"],
+        },
+      },
+    };
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      peer: { kind: "direct", id: "U123" },
+      resolvedPeerId: "employee-123",
+    });
+
+    expect(route.sessionKey).toBe("agent:main:direct:employee-123");
+  });
+
+  test("resolvedPeerId bypasses the resolved-route cache", () => {
+    const cfg: OpenClawConfig = {
+      session: {
+        dmScope: "per-peer",
+      },
+    };
+
+    const first = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      peer: { kind: "direct", id: "U123" },
+      resolvedPeerId: "employee-123",
+    });
+    const second = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      peer: { kind: "direct", id: "U123" },
+      resolvedPeerId: "employee-456",
+    });
+
+    expect(first.sessionKey).toBe("agent:main:direct:employee-123");
+    expect(second.sessionKey).toBe("agent:main:direct:employee-456");
+  });
+
   test("peer binding wins over account binding", () => {
     const cfg: OpenClawConfig = {
       bindings: [

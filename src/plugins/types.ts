@@ -1368,6 +1368,7 @@ export type PluginDiagnostic = {
 // ============================================================================
 
 export type PluginHookName =
+  | "before_identity_resolve"
   | "before_model_resolve"
   | "before_prompt_build"
   | "before_agent_start"
@@ -1395,6 +1396,7 @@ export type PluginHookName =
   | "gateway_stop";
 
 export const PLUGIN_HOOK_NAMES = [
+  "before_identity_resolve",
   "before_model_resolve",
   "before_prompt_build",
   "before_agent_start",
@@ -1455,6 +1457,17 @@ export type PluginHookAgentContext = {
   trigger?: string;
   /** Channel identifier (e.g. "telegram", "discord", "whatsapp"). */
   channelId?: string;
+};
+
+// before_identity_resolve hook
+export type PluginHookBeforeIdentityResolveEvent = {
+  peerId: string;
+  channel: string;
+  accountId: string;
+};
+
+export type PluginHookBeforeIdentityResolveResult = {
+  canonicalPeerId?: string;
 };
 
 // before_model_resolve hook
@@ -1867,6 +1880,13 @@ export type PluginHookGatewayStopEvent = {
 
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
+  before_identity_resolve: (
+    event: PluginHookBeforeIdentityResolveEvent,
+    ctx: PluginHookAgentContext,
+  ) =>
+    | Promise<PluginHookBeforeIdentityResolveResult | void>
+    | PluginHookBeforeIdentityResolveResult
+    | void;
   before_model_resolve: (
     event: PluginHookBeforeModelResolveEvent,
     ctx: PluginHookAgentContext,

@@ -115,6 +115,11 @@ export function sanitizeAgentId(value: string | undefined | null): string {
   return normalizeAgentId(value);
 }
 
+function normalizeResolvedPeerId(value: string | undefined | null): string | null {
+  const trimmed = (value ?? "").trim().toLowerCase();
+  return trimmed || null;
+}
+
 export function buildAgentMainSessionKey(params: {
   agentId: string;
   mainKey?: string | undefined;
@@ -132,6 +137,7 @@ export function buildAgentPeerSessionKey(params: {
   peerKind?: ChatType | null;
   peerId?: string | null;
   identityLinks?: Record<string, string[]>;
+  resolvedPeerId?: string | null;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
 }): string {
@@ -139,16 +145,21 @@ export function buildAgentPeerSessionKey(params: {
   if (peerKind === "direct") {
     const dmScope = params.dmScope ?? "main";
     let peerId = (params.peerId ?? "").trim();
-    const linkedPeerId =
-      dmScope === "main"
-        ? null
-        : resolveLinkedPeerId({
-            identityLinks: params.identityLinks,
-            channel: params.channel,
-            peerId,
-          });
-    if (linkedPeerId) {
-      peerId = linkedPeerId;
+    const normalizedResolvedPeerId = normalizeResolvedPeerId(params.resolvedPeerId);
+    if (normalizedResolvedPeerId) {
+      peerId = normalizedResolvedPeerId;
+    } else {
+      const linkedPeerId =
+        dmScope === "main"
+          ? null
+          : resolveLinkedPeerId({
+              identityLinks: params.identityLinks,
+              channel: params.channel,
+              peerId,
+            });
+      if (linkedPeerId) {
+        peerId = linkedPeerId;
+      }
     }
     peerId = peerId.toLowerCase();
     if (dmScope === "per-account-channel-peer" && peerId) {

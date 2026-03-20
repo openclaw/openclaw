@@ -15,7 +15,7 @@ Use `session.dmScope` to control how **direct messages** are grouped:
 - `per-peer`: isolate by sender id across channels.
 - `per-channel-peer`: isolate by channel + sender (recommended for multi-user inboxes).
 - `per-account-channel-peer`: isolate by account + channel + sender (recommended for multi-account inboxes).
-  Use `session.identityLinks` to map provider-prefixed peer ids to a canonical identity so the same person shares a DM session across channels when using `per-peer`, `per-channel-peer`, or `per-account-channel-peer`.
+  Use `session.identityLinks` to map provider-prefixed peer ids to a canonical identity so the same person shares a DM session across channels when using `per-peer`, `per-channel-peer`, or `per-account-channel-peer`. Plugins can also resolve identities dynamically via the `before_identity_resolve` hook (see [Plugin Architecture](/plugins/architecture)).
 
 ## Secure DM mode (recommended for multi-user setups)
 
@@ -51,7 +51,7 @@ Notes:
 - Default is `dmScope: "main"` for continuity (all DMs share the main session). This is fine for single-user setups.
 - Local CLI onboarding writes `session.dmScope: "per-channel-peer"` by default when unset (existing explicit values are preserved).
 - For multi-account inboxes on the same channel, prefer `per-account-channel-peer`.
-- If the same person contacts you on multiple channels, use `session.identityLinks` to collapse their DM sessions into one canonical identity.
+- If the same person contacts you on multiple channels, use `session.identityLinks` to collapse their DM sessions into one canonical identity. Plugins can do this dynamically via the `before_identity_resolve` hook.
 - You can verify your DM settings with `openclaw security audit` (see [security](/cli/security)).
 
 ## Gateway is the source of truth
@@ -194,7 +194,7 @@ the workspace is writable. See [Memory](/concepts/memory) and
   - `per-peer`: `agent:<agentId>:direct:<peerId>`.
   - `per-channel-peer`: `agent:<agentId>:<channel>:direct:<peerId>`.
   - `per-account-channel-peer`: `agent:<agentId>:<channel>:<accountId>:direct:<peerId>` (accountId defaults to `default`).
-  - If `session.identityLinks` matches a provider-prefixed peer id (for example `telegram:123`), the canonical key replaces `<peerId>` so the same person shares a session across channels.
+  - If a plugin `before_identity_resolve` hook or `session.identityLinks` resolves a canonical identity, the canonical key replaces `<peerId>` so the same person shares a session across channels. Plugin results take precedence over `identityLinks`.
 - Group chats isolate state: `agent:<agentId>:<channel>:group:<id>` (rooms/channels use `agent:<agentId>:<channel>:channel:<id>`).
   - Telegram forum topics append `:topic:<threadId>` to the group id for isolation.
   - Legacy `group:<id>` keys are still recognized for migration.

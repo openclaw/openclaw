@@ -28,6 +28,7 @@ export type ResolveAgentRouteInput = {
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
+  resolvedPeerId?: string | null;
   /** Parent peer for threads — used for binding inheritance when peer doesn't match directly. */
   parentPeer?: RoutePeer | null;
   guildId?: string | null;
@@ -93,6 +94,7 @@ export function buildAgentSessionKey(params: {
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
+  resolvedPeerId?: string | null;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   identityLinks?: Record<string, string[]>;
@@ -106,6 +108,7 @@ export function buildAgentSessionKey(params: {
     accountId: params.accountId,
     peerKind: peer?.kind ?? "direct",
     peerId: peer ? normalizeId(peer.id) || "unknown" : null,
+    resolvedPeerId: params.resolvedPeerId,
     dmScope: params.dmScope,
     identityLinks: params.identityLinks,
   });
@@ -635,7 +638,9 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     : null;
 
   const routeCache =
-    !shouldLogDebug && !identityLinks ? resolveRouteCacheForConfig(input.cfg) : null;
+    !shouldLogDebug && !identityLinks && !input.resolvedPeerId
+      ? resolveRouteCacheForConfig(input.cfg)
+      : null;
   const routeCacheKey = routeCache
     ? buildResolvedRouteCacheKey({
         channel,
@@ -665,6 +670,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       channel,
       accountId,
       peer,
+      resolvedPeerId: input.resolvedPeerId,
       dmScope,
       identityLinks,
     }).toLowerCase();

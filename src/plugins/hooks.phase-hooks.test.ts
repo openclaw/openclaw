@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
+  PluginHookBeforeIdentityResolveResult,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
   PluginHookRegistration,
@@ -9,9 +10,10 @@ import type {
 
 function addTypedHook(
   registry: PluginRegistry,
-  hookName: "before_model_resolve" | "before_prompt_build",
+  hookName: "before_identity_resolve" | "before_model_resolve" | "before_prompt_build",
   pluginId: string,
   handler: () =>
+    | PluginHookBeforeIdentityResolveResult
     | PluginHookBeforeModelResolveResult
     | PluginHookBeforePromptBuildResult
     | Promise<PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult>,
@@ -100,5 +102,34 @@ describe("phase hooks merger", () => {
 
     expect(result?.prependSystemContext).toBe("prepend A\n\nprepend B");
     expect(result?.appendSystemContext).toBe("append A\n\nappend B");
+  });
+
+  it("before_identity_resolve keeps the first canonicalPeerId by priority", async () => {
+    addTypedHook(
+      registry,
+      "before_identity_resolve",
+      "high",
+      () => ({ canonicalPeerId: "employee-123" }),
+      10,
+    );
+    addTypedHook(
+      registry,
+      "before_identity_resolve",
+      "low",
+      () => ({ canonicalPeerId: "employee-456" }),
+      1,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeIdentityResolve(
+      {
+        peerId: "U123",
+        channel: "slack",
+        accountId: "default",
+      },
+      {},
+    );
+
+    expect(result?.canonicalPeerId).toBe("employee-123");
   });
 });

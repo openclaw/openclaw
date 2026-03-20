@@ -29,3 +29,4 @@ export {
   formatSetExplicitDefaultInstruction,
   formatSetExplicitDefaultToConfiguredInstruction,
 } from "../routing/default-account-warnings.js";
+export { resolveInboundPeerIdentity } from "../routing/identity-resolve.js";

@@ -6,8 +6,10 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/config-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { type ChatCommandDefinition, type CommandArgs } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveInboundPeerIdentity } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { chunkItems } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
@@ -521,10 +523,20 @@ export async function registerSlackMonitorSlashCommands(params: {
         resolveMarkdownTableMode,
       } = await loadSlashDispatchRuntime();
 
+      const resolvedPeerId = isDirectMessage
+        ? await resolveInboundPeerIdentity({
+            peerId: command.user_id,
+            channel: "slack",
+            accountId: account.accountId,
+            hookRunner: getGlobalHookRunner() ?? undefined,
+          })
+        : null;
+
       const route = resolveAgentRoute({
         cfg,
         channel: "slack",
         accountId: account.accountId,
+        resolvedPeerId,
         teamId: ctx.teamId || undefined,
         peer: {
           kind: isDirectMessage ? "direct" : isRoom ? "channel" : "group",

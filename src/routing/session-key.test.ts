@@ -5,6 +5,7 @@ import {
   isCronSessionKey,
 } from "../sessions/session-key-utils.js";
 import {
+  buildAgentPeerSessionKey,
   classifySessionKeyShape,
   isValidAgentId,
   parseAgentSessionKey,
@@ -128,5 +129,61 @@ describe("isValidAgentId", () => {
     expect(isValidAgentId("Agent not found: xyz")).toBe(false);
     expect(isValidAgentId("../../../etc/passwd")).toBe(false);
     expect(isValidAgentId("a".repeat(65))).toBe(false);
+  });
+});
+
+describe("buildAgentPeerSessionKey resolvedPeerId", () => {
+  it("prefers resolvedPeerId over identityLinks for direct sessions", () => {
+    expect(
+      buildAgentPeerSessionKey({
+        agentId: "main",
+        channel: "slack",
+        peerKind: "direct",
+        peerId: "U123",
+        dmScope: "per-peer",
+        identityLinks: { alice: ["slack:U123"] },
+        resolvedPeerId: "employee-123",
+      }),
+    ).toBe("agent:main:direct:employee-123");
+  });
+
+  it("falls back to identityLinks when resolvedPeerId is whitespace-only", () => {
+    expect(
+      buildAgentPeerSessionKey({
+        agentId: "main",
+        channel: "slack",
+        peerKind: "direct",
+        peerId: "U123",
+        dmScope: "per-channel-peer",
+        identityLinks: { alice: ["slack:U123"] },
+        resolvedPeerId: "   ",
+      }),
+    ).toBe("agent:main:slack:direct:alice");
+  });
+
+  it("preserves email-format canonical peer IDs", () => {
+    expect(
+      buildAgentPeerSessionKey({
+        agentId: "main",
+        channel: "slack",
+        peerKind: "direct",
+        peerId: "U123",
+        dmScope: "per-peer",
+        resolvedPeerId: "john.doe@acme.com",
+      }),
+    ).toBe("agent:main:direct:john.doe@acme.com");
+  });
+
+  it("preserves canonical peer ID 'main' without discarding it", () => {
+    expect(
+      buildAgentPeerSessionKey({
+        agentId: "main",
+        channel: "slack",
+        peerKind: "direct",
+        peerId: "U123",
+        dmScope: "per-peer",
+        resolvedPeerId: "main",
+      }),
+    ).toBe("agent:main:direct:main");
   });
 });

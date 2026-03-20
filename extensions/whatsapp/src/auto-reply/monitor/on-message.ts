@@ -1,8 +1,13 @@
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { buildGroupHistoryKey } from "openclaw/plugin-sdk/routing";
+import {
+  buildGroupHistoryKey,
+  DEFAULT_ACCOUNT_ID,
+  resolveAgentRoute,
+  resolveInboundPeerIdentity,
+} from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import type { MentionConfig } from "../mentions.js";
@@ -63,11 +68,21 @@ export function createWebOnMessageHandler(params: {
   return async (msg: WebInboundMsg) => {
     const conversationId = msg.conversationId ?? msg.from;
     const peerId = resolvePeerId(msg);
+    const resolvedPeerId =
+      msg.chatType === "group"
+        ? null
+        : await resolveInboundPeerIdentity({
+            peerId,
+            channel: "whatsapp",
+            accountId: msg.accountId ?? DEFAULT_ACCOUNT_ID,
+            hookRunner: getGlobalHookRunner() ?? undefined,
+          });
     // Fresh config for bindings lookup; other routing inputs are payload-derived.
     const route = resolveAgentRoute({
       cfg: loadConfig(),
       channel: "whatsapp",
       accountId: msg.accountId,
+      resolvedPeerId,
       peer: {
         kind: msg.chatType === "group" ? "group" : "direct",
         id: peerId,
