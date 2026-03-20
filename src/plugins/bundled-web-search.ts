@@ -105,6 +105,20 @@ function resolvePerplexityRuntimeMetadata(
 
 const BUNDLED_WEB_SEARCH_PROVIDER_DESCRIPTORS = [
   {
+    pluginId: "baidu",
+    id: "baidu",
+    label: "Baidu Search",
+    hint: "Structured results",
+    envVars: ["BAIDU_SEARCH_API_KEY"],
+    placeholder: "bce...",
+    signupUrl: "https://console.bce.baidu.com/ai-search/qianfan/ais/console/apiKey",
+    docsUrl: "https://docs.openclaw.ai/tools/web",
+    autoDetectOrder: 5,
+    credentialPath: "plugins.entries.baidu.config.webSearch.apiKey",
+    inactiveSecretPaths: ["plugins.entries.baidu.config.webSearch.apiKey"],
+    credentialScope: { kind: "scoped", key: "baidu" },
+  },
+  {
     pluginId: "brave",
     id: "brave",
     label: "Brave Search",

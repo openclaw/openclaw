@@ -734,6 +734,17 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
+    id: "plugins.entries.baidu.config.webSearch.apiKey",
+    targetType: "plugins.entries.baidu.config.webSearch.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "plugins.entries.baidu.config.webSearch.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
     id: "plugins.entries.brave.config.webSearch.apiKey",
     targetType: "plugins.entries.brave.config.webSearch.apiKey",
     configFile: "openclaw.json",
