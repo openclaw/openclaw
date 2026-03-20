@@ -1,16 +1,28 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { __testing } from "./loader.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 type CreateJiti = typeof import("jiti").createJiti;
+type LoaderTesting = (typeof import("./loader.js"))["__testing"];
 
 let createJitiPromise: Promise<CreateJiti> | undefined;
+let loaderTestingPromise: Promise<LoaderTesting> | undefined;
 
 async function getCreateJiti() {
   createJitiPromise ??= import("jiti").then(({ createJiti }) => createJiti);
   return createJitiPromise;
+}
+
+async function getLoaderTesting() {
+  loaderTestingPromise ??= (async () => {
+    vi.resetModules();
+    vi.doUnmock("jiti");
+    vi.doUnmock("./loader.js");
+    const { __testing } = await import("./loader.js");
+    return __testing;
+  })();
+  return loaderTestingPromise;
 }
 
 const tempRoots: string[] = [];
@@ -29,10 +41,13 @@ afterEach(() => {
   for (const dir of tempRoots.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+  createJitiPromise = undefined;
+  loaderTestingPromise = undefined;
 });
 
 describe("plugin loader git path regression", () => {
   it("loads git-style package extension entries when they import plugin-sdk channel-runtime (#49806)", async () => {
+    const __testing = await getLoaderTesting();
     const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "imessage");
     const copiedSourceDir = path.join(copiedExtensionRoot, "src");
     const copiedPluginSdkDir = path.join(copiedExtensionRoot, "plugin-sdk");
