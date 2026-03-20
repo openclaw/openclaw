@@ -78,4 +78,37 @@ describe("sandbox explain command", () => {
       expect(parsed.sessionKey).toBe("agent:main:telegram:slash:200");
     },
   );
+
+  it(
+    "preserves already agent-scoped colon keys unchanged",
+    { timeout: SANDBOX_EXPLAIN_TEST_TIMEOUT_MS },
+    async () => {
+      mockCfg = {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
+          },
+        },
+        tools: {
+          elevated: { enabled: true },
+        },
+        session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      };
+
+      const logs: string[] = [];
+      await sandboxExplainCommand(
+        { json: true, session: "agent:main:telegram:slash:200" },
+        {
+          log: (msg: string) => logs.push(msg),
+          error: (msg: string) => logs.push(msg),
+          exit: (_code: number) => {},
+        } as unknown as Parameters<typeof sandboxExplainCommand>[1],
+      );
+
+      const out = logs.join("");
+      const parsed = JSON.parse(out);
+      // Already agent-scoped — should pass through unchanged.
+      expect(parsed.sessionKey).toBe("agent:main:telegram:slash:200");
+    },
+  );
 });
