@@ -1,13 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { matrixPlugin } from "../../extensions/matrix/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { agentsBindCommand } from "./agents.js";
 import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+
+const matrixBindingPlugin = {
+  ...createChannelTestPluginBase({ id: "matrix" }),
+  setup: {
+    resolveBindingAccountId: ({ accountId, agentId }: { accountId?: string; agentId?: string }) => {
+      const explicit = accountId?.trim();
+      if (explicit) {
+        return explicit;
+      }
+      const agent = agentId?.trim();
+      return agent || "default";
+    },
+  },
+};
 
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
@@ -26,7 +39,7 @@ describe("agents bind matrix integration", () => {
     runtime.exit.mockClear();
 
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "matrix", plugin: matrixPlugin, source: "test" }]),
+      createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
     );
   });
 
