@@ -54,13 +54,13 @@ describe("chat-model-ref helpers", () => {
       expect(buildQualifiedChatModelValue("gpt-5-mini", "openai")).toBe("openai/gpt-5-mini");
     });
 
-    it("does not double-prefix when model already starts with provider/", () => {
+    it("prepends provider prefix to sub-provider model IDs (e.g. openrouter multi-segment)", () => {
       expect(buildQualifiedChatModelValue("moonshotai/kimi-k2.5", "openrouter")).toBe(
         "openrouter/moonshotai/kimi-k2.5",
       );
     });
 
-    it("returns model as-is when it already starts with provider/ (case-insensitive)", () => {
+    it("does not double-prefix when model already starts with provider/ (case-insensitive)", () => {
       expect(buildQualifiedChatModelValue("OpenAI/gpt-5-mini", "openai")).toBe("OpenAI/gpt-5-mini");
     });
 
