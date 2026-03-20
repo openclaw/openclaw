@@ -251,6 +251,32 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
 }
 
 describe("chat view", () => {
+  it("renders inline images returned by tool result messages", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "toolResult",
+              toolCallId: "tool-read-image-1",
+              content: [
+                { type: "text", text: "Read image file [image/png]" },
+                { type: "image", data: "QUJDRA==", mimeType: "image/png" },
+              ],
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(image).not.toBeNull();
+    expect(image?.getAttribute("src")).toBe("data:image/png;base64,QUJDRA==");
+  });
+
   it("hides the context notice when only cumulative inputTokens exceed the limit", () => {
     const container = document.createElement("div");
     render(

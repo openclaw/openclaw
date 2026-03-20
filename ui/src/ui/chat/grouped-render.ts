@@ -44,6 +44,11 @@ function extractImages(message: unknown): ImageBlock[] {
           // If data is already a data URL, use it directly
           const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
           images.push({ url });
+        } else if (typeof b.data === "string") {
+          const data = b.data;
+          const mediaType = typeof b.mimeType === "string" ? b.mimeType : "image/png";
+          const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
+          images.push({ url });
         } else if (typeof b.url === "string") {
           images.push({ url: b.url });
         }
