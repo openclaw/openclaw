@@ -78,6 +78,7 @@ Docs: https://docs.openclaw.ai
 - Doctor/refactor: start splitting doctor provider checks into `src/commands/doctor/providers/*` by extracting Telegram first-run and group allowlist warnings into a provider-specific module, keeping the current setup guidance and warning behavior intact. Thanks @vincentkoc.
 - Refactor/channels: remove the legacy channel shim directories and point channel-specific imports directly at the extension-owned implementations. (#45967) Thanks @scoootscooob.
 - Docs/Zalo: clarify the Marketplace-bot support matrix and config guidance so the Zalo channel docs match current Bot Creator behavior more closely. (#47552) Thanks @No898.
+- Plugins/DeepInfra: add DeepInfra as a bundled LLM provider with API-key auth, dynamic model discovery, and default-on extension wiring. (#48088) Thanks @ats3v.
 - Docs/plugins: add the community DingTalk plugin listing to the docs catalog. (#29913) Thanks @sliverp.
 - Docs/plugins: add the community QQbot plugin listing to the docs catalog. (#29898) Thanks @sliverp.
 - Docs/plugins: add the community wecom plugin listing to the docs catalog. (#29905) Thanks @sliverp.
