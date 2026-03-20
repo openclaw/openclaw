@@ -1,4 +1,4 @@
-import type { HyperionDynamoDBConfig } from "../../../src/hyperion/types.js";
+import type { HyperionDynamoDBConfig } from "./lib/types.js";
 
 /**
  * Resolve the Hyperion stage from environment or plugin config.

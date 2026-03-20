@@ -17,9 +17,8 @@ import type {
   AcpRuntimeTurnInput,
 } from "openclaw/plugin-sdk/acpx";
 import { AcpRuntimeError } from "openclaw/plugin-sdk/acpx";
-import { extractTenantId, extractAgentId } from "../../../src/hyperion/session-manager.js";
-import { DEFAULT_AGENT_ID } from "../../../src/hyperion/types.js";
 import { hasHyperionRuntime, getHyperionRuntime } from "../../hyperion/src/globals.js";
+import { extractTenantId, extractAgentId, DEFAULT_AGENT_ID } from "../../hyperion/src/lib/index.js";
 import type { AgentCoreHandleState, AgentCoreRuntimeConfig } from "./types.js";
 
 export const AGENTCORE_BACKEND_ID = "agentcore";

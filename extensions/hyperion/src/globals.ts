@@ -1,4 +1,4 @@
-import type { HyperionRuntime } from "../../../src/hyperion/index.js";
+import type { HyperionRuntime } from "./lib/index.js";
 
 let hyperionRuntime: HyperionRuntime | null = null;
 
