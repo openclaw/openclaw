@@ -12,6 +12,7 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
     setMatrixRuntime({
       channel: {
         mentions: {
+          buildMentionRegexes: () => [],
           matchesMentionPatterns: () => false,
         },
         media: {

@@ -10,6 +10,7 @@ describe("createMatrixRoomMessageHandler thread root media", () => {
     setMatrixRuntime({
       channel: {
         mentions: {
+          buildMentionRegexes: () => [],
           matchesMentionPatterns: (text: string, patterns: RegExp[]) =>
             patterns.some((pattern) => pattern.test(text)),
         },
@@ -32,6 +33,9 @@ describe("createMatrixRoomMessageHandler thread root media", () => {
 
     const core = {
       channel: {
+        mentions: {
+          buildMentionRegexes: () => [],
+        },
         pairing: {
           readAllowFromStore: vi.fn().mockResolvedValue([]),
           upsertPairingRequest: vi.fn().mockResolvedValue(undefined),
@@ -105,7 +109,6 @@ describe("createMatrixRoomMessageHandler thread root media", () => {
       allowFrom: [],
       groupAllowFrom: [],
       roomsConfig: undefined,
-      mentionRegexes: [],
       groupPolicy: "open",
       replyToMode: "first",
       threadReplies: "inbound",

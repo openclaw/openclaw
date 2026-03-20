@@ -29,6 +29,7 @@ beforeEach(() => {
   setMatrixRuntime({
     channel: {
       mentions: {
+        buildMentionRegexes: () => [],
         matchesMentionPatterns: (text: string, patterns: RegExp[]) =>
           patterns.some((pattern) => pattern.test(text)),
       },
@@ -351,7 +352,7 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(resolveAgentRoute).not.toHaveBeenCalled();
+    expect(resolveAgentRoute).toHaveBeenCalled();
     expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
@@ -442,7 +443,7 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(resolveAgentRoute).not.toHaveBeenCalled();
+    expect(resolveAgentRoute).toHaveBeenCalled();
     expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
@@ -479,7 +480,7 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(downloadContent).not.toHaveBeenCalled();
     expect(getMemberDisplayName).not.toHaveBeenCalled();
     expect(getRoomInfo).not.toHaveBeenCalled();
-    expect(resolveAgentRoute).not.toHaveBeenCalled();
+    expect(resolveAgentRoute).toHaveBeenCalled();
   });
 
   it("skips poll snapshot fetches for unmentioned group poll responses", async () => {
@@ -535,7 +536,7 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(getRelations).not.toHaveBeenCalled();
     expect(getMemberDisplayName).not.toHaveBeenCalled();
     expect(getRoomInfo).not.toHaveBeenCalled();
-    expect(resolveAgentRoute).not.toHaveBeenCalled();
+    expect(resolveAgentRoute).toHaveBeenCalled();
   });
 
   it("records thread starter context for inbound thread replies", async () => {
@@ -685,6 +686,9 @@ describe("matrix monitor handler pairing account scope", () => {
       } as never,
       core: {
         channel: {
+          mentions: {
+            buildMentionRegexes: () => [],
+          },
           pairing: {
             readAllowFromStore: async () => [] as string[],
             upsertPairingRequest: async () => ({ code: "ABCDEFGH", created: false }),
@@ -746,7 +750,6 @@ describe("matrix monitor handler pairing account scope", () => {
       } as never,
       logVerboseMessage: () => {},
       allowFrom: [],
-      mentionRegexes: [],
       groupPolicy: "open",
       replyToMode: "off",
       threadReplies: "inbound",

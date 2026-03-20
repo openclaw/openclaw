@@ -61,7 +61,6 @@ export type MatrixMonitorHandlerParams = {
   roomsConfig?: Record<string, MatrixRoomConfig>;
   accountAllowBots?: boolean | "mentions";
   configuredBotUserIds?: ReadonlySet<string>;
-  mentionRegexes: ReturnType<PluginRuntime["channel"]["mentions"]["buildMentionRegexes"]>;
   groupPolicy: "open" | "allowlist" | "disabled";
   replyToMode: ReplyToMode;
   threadReplies: "off" | "inbound" | "always";
@@ -152,7 +151,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     roomsConfig,
     accountAllowBots,
     configuredBotUserIds = new Set<string>(),
-    mentionRegexes,
     groupPolicy,
     replyToMode,
     threadReplies,
@@ -494,6 +492,23 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
+      // Resolve route early so agent-level mentionPatterns are included in the
+      // mention check that gates room messages.
+      const messageId = event.event_id ?? "";
+      const threadRootId = resolveMatrixThreadRootId({ event, content });
+      const { route, configuredBinding } = resolveMatrixInboundRoute({
+        cfg,
+        accountId,
+        roomId,
+        senderId,
+        isDirectMessage,
+        messageId,
+        threadRootId,
+        eventTs: eventTs ?? undefined,
+        resolveAgentRoute: core.channel.routing.resolveAgentRoute,
+      });
+
+      const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
       const { wasMentioned, hasExplicitMention } = resolveMentions({
         content,
         userId: selfUserId,
@@ -637,9 +652,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const roomInfo = isRoom ? await getRoomInfo(roomId) : undefined;
       const roomName = roomInfo?.name;
 
-      const messageId = event.event_id ?? "";
       const replyToEventId = content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
-      const threadRootId = resolveMatrixThreadRootId({ event, content });
       const threadTarget = resolveMatrixThreadTarget({
         threadReplies,
         messageId,
@@ -650,17 +663,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         ? await resolveThreadContext({ roomId, threadRootId })
         : undefined;
 
-      const { route, configuredBinding } = resolveMatrixInboundRoute({
-        cfg,
-        accountId,
-        roomId,
-        senderId,
-        isDirectMessage,
-        messageId,
-        threadRootId,
-        eventTs: eventTs ?? undefined,
-        resolveAgentRoute: core.channel.routing.resolveAgentRoute,
-      });
       if (configuredBinding) {
         const ensured = await ensureConfiguredAcpBindingReady({
           cfg,

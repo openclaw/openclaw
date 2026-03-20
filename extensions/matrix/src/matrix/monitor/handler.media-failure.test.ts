@@ -27,6 +27,9 @@ function createHandlerHarness() {
   } as unknown as RuntimeEnv;
   const core = {
     channel: {
+      mentions: {
+        buildMentionRegexes: () => [],
+      },
       pairing: {
         readAllowFromStore: vi.fn().mockResolvedValue([]),
         upsertPairingRequest: vi.fn().mockResolvedValue(undefined),
@@ -90,7 +93,6 @@ function createHandlerHarness() {
     allowFrom: [],
     groupAllowFrom: [],
     roomsConfig: undefined,
-    mentionRegexes: [],
     groupPolicy: "open",
     replyToMode: "first",
     threadReplies: "inbound",
@@ -135,6 +137,7 @@ describe("createMatrixRoomMessageHandler media failures", () => {
     setMatrixRuntime({
       channel: {
         mentions: {
+          buildMentionRegexes: () => [],
           matchesMentionPatterns: (text: string, patterns: RegExp[]) =>
             patterns.some((pattern) => pattern.test(text)),
         },

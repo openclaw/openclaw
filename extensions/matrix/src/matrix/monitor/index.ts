@@ -149,7 +149,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     }
   };
 
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg);
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const { groupPolicy: groupPolicyRaw, providerMissingFallbackApplied } =
     resolveAllowlistProviderRuntimeGroupPolicy({
@@ -208,7 +207,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     roomsConfig,
     accountAllowBots,
     configuredBotUserIds,
-    mentionRegexes,
     groupPolicy,
     replyToMode,
     threadReplies,
