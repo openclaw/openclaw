@@ -42,6 +42,12 @@ export const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS = new Set<string>(
   HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES,
 );
 
+export type HostExecEnvSanitizationResult = {
+  env: Record<string, string>;
+  rejectedOverrideBlockedKeys: string[];
+  rejectedOverrideInvalidKeys: string[];
+};
+
 export function normalizeEnvVarKey(
   rawKey: string,
   options?: { portable?: boolean },
@@ -97,14 +103,69 @@ function listNormalizedPortableEnvEntries(
   return entries;
 }
 
-export function sanitizeHostExecEnv(params?: {
+function sortUnique(values: Iterable<string>): string[] {
+  return Array.from(new Set(values)).toSorted((a, b) => a.localeCompare(b));
+}
+
+function sanitizeHostEnvOverridesWithDiagnostics(params?: {
+  overrides?: Record<string, string> | null;
+  blockPathOverrides?: boolean;
+}): {
+  acceptedOverrides?: Record<string, string>;
+  rejectedOverrideBlockedKeys: string[];
+  rejectedOverrideInvalidKeys: string[];
+} {
+  const overrides = params?.overrides ?? undefined;
+  if (!overrides) {
+    return {
+      acceptedOverrides: undefined,
+      rejectedOverrideBlockedKeys: [],
+      rejectedOverrideInvalidKeys: [],
+    };
+  }
+
+  const blockPathOverrides = params?.blockPathOverrides ?? true;
+  const acceptedOverrides: Record<string, string> = {};
+  const rejectedBlocked: string[] = [];
+  const rejectedInvalid: string[] = [];
+
+  for (const [rawKey, value] of Object.entries(overrides)) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const normalized = normalizeEnvVarKey(rawKey, { portable: true });
+    if (!normalized) {
+      const candidate = rawKey.trim();
+      rejectedInvalid.push(candidate || rawKey);
+      continue;
+    }
+    const upper = normalized.toUpperCase();
+    // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
+    // request-scoped PATH overrides from agents/gateways.
+    if (blockPathOverrides && upper === "PATH") {
+      rejectedBlocked.push(upper);
+      continue;
+    }
+    if (isDangerousHostEnvVarName(upper) || isDangerousHostEnvOverrideVarName(upper)) {
+      rejectedBlocked.push(upper);
+      continue;
+    }
+    acceptedOverrides[normalized] = value;
+  }
+
+  return {
+    acceptedOverrides,
+    rejectedOverrideBlockedKeys: sortUnique(rejectedBlocked),
+    rejectedOverrideInvalidKeys: sortUnique(rejectedInvalid),
+  };
+}
+
+export function sanitizeHostExecEnvWithDiagnostics(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
-}): Record<string, string> {
+}): HostExecEnvSanitizationResult {
   const baseEnv = params?.baseEnv ?? process.env;
-  const overrides = params?.overrides ?? undefined;
-  const blockPathOverrides = params?.blockPathOverrides ?? true;
 
   const merged: Record<string, string> = {};
   for (const [key, value] of listNormalizedPortableEnvEntries(baseEnv)) {
@@ -114,24 +175,29 @@ export function sanitizeHostExecEnv(params?: {
     merged[key] = value;
   }
 
-  if (!overrides) {
-    return markOpenClawExecEnv(merged);
+  const overrideResult = sanitizeHostEnvOverridesWithDiagnostics({
+    overrides: params?.overrides ?? undefined,
+    blockPathOverrides: params?.blockPathOverrides ?? true,
+  });
+  if (overrideResult.acceptedOverrides) {
+    for (const [key, value] of Object.entries(overrideResult.acceptedOverrides)) {
+      merged[key] = value;
+    }
   }
 
-  for (const [key, value] of listNormalizedPortableEnvEntries(overrides)) {
-    const upper = key.toUpperCase();
-    // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
-    // request-scoped PATH overrides from agents/gateways.
-    if (blockPathOverrides && upper === "PATH") {
-      continue;
-    }
-    if (isDangerousHostEnvVarName(upper) || isDangerousHostEnvOverrideVarName(upper)) {
-      continue;
-    }
-    merged[key] = value;
-  }
+  return {
+    env: markOpenClawExecEnv(merged),
+    rejectedOverrideBlockedKeys: overrideResult.rejectedOverrideBlockedKeys,
+    rejectedOverrideInvalidKeys: overrideResult.rejectedOverrideInvalidKeys,
+  };
+}
 
-  return markOpenClawExecEnv(merged);
+export function sanitizeHostExecEnv(params?: {
+  baseEnv?: Record<string, string | undefined>;
+  overrides?: Record<string, string> | null;
+  blockPathOverrides?: boolean;
+}): Record<string, string> {
+  return sanitizeHostExecEnvWithDiagnostics(params).env;
 }
 
 export function sanitizeSystemRunEnvOverrides(params?: {

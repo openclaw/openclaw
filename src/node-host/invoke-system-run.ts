@@ -14,7 +14,10 @@ import {
 } from "../infra/exec-approvals.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import { sanitizeSystemRunEnvOverrides } from "../infra/host-env-security.js";
+import {
+  sanitizeHostExecEnvWithDiagnostics,
+  sanitizeSystemRunEnvOverrides,
+} from "../infra/host-env-security.js";
 import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
@@ -248,6 +251,36 @@ async function parseSystemRunPhase(
     overrides: opts.params.env ?? undefined,
     shellWrapper: shellPayload !== null,
   });
+  const envSanitizeResult = sanitizeHostExecEnvWithDiagnostics({
+    overrides: envOverrides,
+    blockPathOverrides: true,
+  });
+  if (
+    envSanitizeResult.rejectedOverrideBlockedKeys.length > 0 ||
+    envSanitizeResult.rejectedOverrideInvalidKeys.length > 0
+  ) {
+    const details: string[] = [];
+    if (envSanitizeResult.rejectedOverrideBlockedKeys.length > 0) {
+      details.push(
+        `blocked override keys: ${envSanitizeResult.rejectedOverrideBlockedKeys.join(", ")}`,
+      );
+    }
+    if (envSanitizeResult.rejectedOverrideInvalidKeys.length > 0) {
+      details.push(
+        `invalid non-portable override keys: ${envSanitizeResult.rejectedOverrideInvalidKeys.join(
+          ", ",
+        )}`,
+      );
+    }
+    await opts.sendInvokeResult({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: `SYSTEM_RUN_DENIED: environment override rejected (${details.join("; ")})`,
+      },
+    });
+    return null;
+  }
   return {
     argv: command.argv,
     shellPayload,

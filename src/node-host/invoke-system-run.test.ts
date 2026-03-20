@@ -336,6 +336,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     preferMacAppExecHost: boolean;
     runViaResponse?: ExecHostResponse | null;
     command?: string[];
+    env?: Record<string, string>;
     rawCommand?: string | null;
     systemRunPlan?: SystemRunApprovalPlan | null;
     cwd?: string;
@@ -391,6 +392,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       client: {} as never,
       params: {
         command: params.command ?? ["echo", "ok"],
+        env: params.env,
         rawCommand: params.rawCommand,
         systemRunPlan: params.systemRunPlan,
         cwd: params.cwd,
@@ -1104,6 +1106,23 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
     expect(runCommand).not.toHaveBeenCalled();
     expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
+  });
+
+  it("rejects blocked environment overrides before execution", async () => {
+    const { runCommand, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      security: "full",
+      ask: "off",
+      env: { CLASSPATH: "/tmp/evil-classpath" },
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(sendInvokeResult, {
+      message: "SYSTEM_RUN_DENIED: environment override rejected",
+    });
+    expectInvokeErrorMessage(sendInvokeResult, {
+      message: "CLASSPATH",
+    });
   });
 
   async function expectNestedEnvShellDenied(params: {

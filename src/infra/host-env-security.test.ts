@@ -8,6 +8,7 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
   sanitizeHostExecEnv,
+  sanitizeHostExecEnvWithDiagnostics,
   sanitizeSystemRunEnvOverrides,
 } from "./host-env-security.js";
 import { OPENCLAW_CLI_ENV_VALUE } from "./openclaw-exec-env.js";
@@ -114,6 +115,10 @@ describe("sanitizeHostExecEnv", () => {
         GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
         SHELLOPTS: "xtrace",
         PS4: "$(touch /tmp/pwned)",
+        CLASSPATH: "/tmp/evil-classpath",
+        GOFLAGS: "-mod=mod",
+        PHPRC: "/tmp/evil-php.ini",
+        XDG_CONFIG_HOME: "/tmp/evil-config",
         SAFE: "ok",
       },
     });
@@ -128,6 +133,10 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.GIT_CONFIG_GLOBAL).toBeUndefined();
     expect(env.SHELLOPTS).toBeUndefined();
     expect(env.PS4).toBeUndefined();
+    expect(env.CLASSPATH).toBeUndefined();
+    expect(env.GOFLAGS).toBeUndefined();
+    expect(env.PHPRC).toBeUndefined();
+    expect(env.XDG_CONFIG_HOME).toBeUndefined();
     expect(env.SAFE).toBe("ok");
     expect(env.HOME).toBe("/tmp/trusted-home");
     expect(env.ZDOTDIR).toBe("/tmp/trusted-zdotdir");
@@ -212,8 +221,38 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("git_config_global")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GRADLE_USER_HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("gradle_user_home")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CLASSPATH")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("classpath")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("GOFLAGS")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("goflags")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CORECLR_PROFILER_PATH")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("coreclr_profiler_path")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("XDG_CONFIG_HOME")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("xdg_config_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("BASH_ENV")).toBe(false);
     expect(isDangerousHostEnvOverrideVarName("FOO")).toBe(false);
+  });
+});
+
+describe("sanitizeHostExecEnvWithDiagnostics", () => {
+  it("reports blocked and invalid requested overrides", () => {
+    const result = sanitizeHostExecEnvWithDiagnostics({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+      },
+      overrides: {
+        PATH: "/tmp/evil",
+        CLASSPATH: "/tmp/evil-classpath",
+        SAFE_KEY: "ok",
+        "BAD-KEY": "bad",
+      },
+    });
+
+    expect(result.rejectedOverrideBlockedKeys).toEqual(["CLASSPATH", "PATH"]);
+    expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
+    expect(result.env.SAFE_KEY).toBe("ok");
+    expect(result.env.PATH).toBe("/usr/bin:/bin");
+    expect(result.env.CLASSPATH).toBeUndefined();
   });
 });
 
