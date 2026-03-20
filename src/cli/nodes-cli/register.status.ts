@@ -342,11 +342,11 @@ export function registerNodesStatusCommands(nodes: Command) {
             return true;
           });
 
-          const liveNodes = parseNodeList(nodeListResult);
-          const livePairedNodes = liveNodes.filter((n) => n.paired);
+          const hasFilters = connectedOnly || sinceMs !== undefined;
+          const livePairedNodes = Array.from(liveNodesById.values()).filter((n) => n.paired);
           const totalPairedCount = paired.length > 0 ? paired.length : livePairedNodes.length;
           const filteredLabel =
-            filteredPaired.length !== totalPairedCount ? ` (of ${totalPairedCount})` : "";
+            hasFilters && filteredPaired.length !== totalPairedCount ? ` (of ${totalPairedCount})` : "";
           defaultRuntime.log(
             `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
           );
