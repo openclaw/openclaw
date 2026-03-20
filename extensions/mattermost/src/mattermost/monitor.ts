@@ -1583,21 +1583,26 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
           // Compute reply target divergence before flushing, so we don't
           // accidentally create a preview post in the wrong thread on flush.
-          // Compute the reply target for this payload. When payload.replyToId is set
-          // and resolves to a different thread than the one the streaming preview was
-          // created in (effectiveReplyToId), we must not patch the preview in-place.
-          // We compare the raw payload.replyToId against effectiveReplyToId directly
-          // instead of going through resolveMattermostReplyRootId(), because that
-          // helper always returns threadRootId when set, making the comparison always
-          // false when effectiveReplyToId is non-empty (ID=2965349638).
+          // Compute the reply target for this payload. When payload.replyToId resolves
+          // to a different Mattermost thread root than effectiveReplyToId, we must not
+          // patch the preview in-place (different thread).
+          //
+          // Both sides go through resolveMattermostReplyRootId so that child-post IDs
+          // (e.g. from [[reply_to_current]] inside a thread) are normalized to the same
+          // thread root as effectiveReplyToId before comparing. Raw payload.replyToId
+          // comparison was wrong: [[reply_to_current]] sets a child-post id that differs
+          // from the thread root but resolves to the same thread (ID=2965488514).
           const finalReplyToId = resolveMattermostReplyRootId({
             threadRootId: effectiveReplyToId,
             replyToId: payload.replyToId,
           });
+          const baseReplyToId = resolveMattermostReplyRootId({
+            threadRootId: effectiveReplyToId,
+          });
           const replyTargetDiverged =
             payload.replyToId != null &&
             payload.replyToId.trim() !== "" &&
-            payload.replyToId.trim() !== effectiveReplyToId;
+            finalReplyToId !== baseReplyToId;
 
           if (isFinal && blockStreamingClient) {
             if (replyTargetDiverged) {
