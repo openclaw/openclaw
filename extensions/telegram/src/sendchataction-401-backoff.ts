@@ -157,6 +157,10 @@ export function createTelegramSendChatActionHandler({
             consecutiveFailures: consecutiveNetworkFailures,
           });
         }
+      } else {
+        // Any non-network Telegram response (429, 403, etc.) proves the request
+        // reached Telegram, so the network is healthy — break the outage streak.
+        noteNetworkHealthy();
       }
       throw error;
     }

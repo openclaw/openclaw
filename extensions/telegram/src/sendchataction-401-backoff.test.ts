@@ -260,6 +260,35 @@ describe("createTelegramSendChatActionHandler", () => {
     expect(onRecoverableNetworkFailure).not.toHaveBeenCalled();
   });
 
+  it("resets the network failure streak when a non-network Telegram rejection (429/403) proves the network is healthy", async () => {
+    const make429Error = () => new Error("429 Too Many Requests");
+    const errors = [makeNetworkError(), make429Error(), makeNetworkError()];
+    let callCount = 0;
+    const fn = vi.fn().mockImplementation(async () => {
+      const err = errors[callCount++];
+      if (err) throw err;
+      return true;
+    });
+    const logger = vi.fn();
+    const onRecoverableNetworkFailure = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutiveNetworkFailures: 2,
+      onRecoverableNetworkFailure,
+    });
+
+    // 1st: network error (consecutive = 1)
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+    // 2nd: 429 — request reached Telegram, so network streak resets to 0
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("429");
+    // 3rd: network error again (consecutive = 1, not 2)
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+
+    // Callback should NOT have fired — the 429 broke the streak
+    expect(onRecoverableNetworkFailure).not.toHaveBeenCalled();
+  });
+
   it("does not clear the outage streak on proxy-generated HTTP errors", async () => {
     const errors = [makeNetworkError(), makeProxyHttpError(), makeNetworkError()];
     let callCount = 0;

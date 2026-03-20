@@ -88,9 +88,7 @@ function isPreviewRetryAbortedAfterPreconnectFailure(err: unknown): boolean {
   return (
     !!err &&
     typeof err === "object" &&
-    Boolean(
-      (err as Record<PropertyKey, unknown>)[PREVIEW_RETRY_ABORTED_AFTER_PRECONNECT_FAILURE],
-    )
+    Boolean((err as Record<PropertyKey, unknown>)[PREVIEW_RETRY_ABORTED_AFTER_PRECONNECT_FAILURE])
   );
 }
 
