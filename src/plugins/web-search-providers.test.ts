@@ -15,6 +15,7 @@ const BUNDLED_WEB_SEARCH_PROVIDERS = [
   { pluginId: "moonshot", id: "kimi", order: 40 },
   { pluginId: "perplexity", id: "perplexity", order: 50 },
   { pluginId: "firecrawl", id: "firecrawl", order: 60 },
+  { pluginId: "tavily", id: "tavily", order: 70 },
 ] as const;
 
 const { loadOpenClawPluginsMock } = vi.hoisted(() => ({
@@ -96,6 +97,7 @@ describe("resolvePluginWebSearchProviders", () => {
       "moonshot:kimi",
       "perplexity:perplexity",
       "firecrawl:firecrawl",
+      "tavily:tavily",
     ]);
     expect(providers.map((provider) => provider.credentialPath)).toEqual([
       "plugins.entries.brave.config.webSearch.apiKey",
@@ -104,6 +106,7 @@ describe("resolvePluginWebSearchProviders", () => {
       "plugins.entries.moonshot.config.webSearch.apiKey",
       "plugins.entries.perplexity.config.webSearch.apiKey",
       "plugins.entries.firecrawl.config.webSearch.apiKey",
+      "plugins.entries.tavily.config.webSearch.apiKey",
     ]);
     expect(providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig).toEqual(
       expect.any(Function),
@@ -130,6 +133,7 @@ describe("resolvePluginWebSearchProviders", () => {
       "moonshot",
       "perplexity",
       "firecrawl",
+      "tavily",
     ]);
   });
 
@@ -183,6 +187,7 @@ describe("resolvePluginWebSearchProviders", () => {
       "moonshot:kimi",
       "perplexity:perplexity",
       "firecrawl:firecrawl",
+      "tavily:tavily",
     ]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });

@@ -53,7 +53,10 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
     config,
     bundledAllowlistCompat: true,
   }).find((candidate) => candidate.id === provider);
-  return entry?.getCredentialValue(search as Record<string, unknown> | undefined);
+  return (
+    entry?.getConfiguredCredentialValue?.(config) ??
+    entry?.getCredentialValue(search as Record<string, unknown> | undefined)
+  );
 }
 
 /** Returns the plaintext key string, or undefined for SecretRefs/missing. */
@@ -104,7 +107,7 @@ export function applySearchKey(
     bundledAllowlistCompat: true,
   }).find((candidate) => candidate.id === provider);
   const search: MutableSearchConfig = { ...config.tools?.web?.search, provider, enabled: true };
-  if (providerEntry) {
+  if (providerEntry && !providerEntry.setConfiguredCredentialValue) {
     providerEntry.setCredentialValue(search, key);
   }
   const nextBase: OpenClawConfig = {
@@ -114,7 +117,9 @@ export function applySearchKey(
       web: { ...config.tools?.web, search },
     },
   };
-  return providerEntry?.applySelectionConfig?.(nextBase) ?? nextBase;
+  const next = providerEntry?.applySelectionConfig?.(nextBase) ?? nextBase;
+  providerEntry?.setConfiguredCredentialValue?.(next, key);
+  return next;
 }
 
 function applyProviderOnly(config: OpenClawConfig, provider: SearchProvider): OpenClawConfig {
