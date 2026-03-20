@@ -404,6 +404,10 @@ export class PostgresMemoryManager implements MemorySearchManager {
 
     if (results.length === 0) {
       results = await this.ftsSearch(query, maxResults);
+      // Apply minScore to FTS results — ts_rank values are lower than cosine
+      // similarity, so this mainly filters out near-zero junk matches.
+      const minScore = opts?.minScore ?? this.minSimilarity;
+      results = results.filter((r) => r.score >= minScore);
     }
 
     return results;
