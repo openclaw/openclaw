@@ -23,8 +23,8 @@ enum SignificantLocationMonitor {
             let lat = location.coordinate.latitude
             let lon = location.coordinate.longitude
             let accuracy = location.horizontalAccuracy
-            logger.info("Significant location change detected accuracyMeters=\(accuracy)")
-            logger.debug("Location detail lat=\(lat) lon=\(lon)")
+            logger.info("Significant location change detected")
+            logger.debug("Location detail lat=\(lat) lon=\(lon) accuracyMeters=\(accuracy)")
             struct Payload: Codable {
                 var lat: Double
                 var lon: Double
