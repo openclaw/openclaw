@@ -4,7 +4,7 @@ import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinkin
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
-import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
+import { resolveSessionThreadIdForRouting } from "../config/sessions/delivery-info.js";
 import { callGateway } from "../gateway/call.js";
 import {
   pruneLegacyStoreKeys,
@@ -231,6 +231,13 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+function resolveRequesterSessionThreadId(
+  sessionKey: string | undefined,
+  explicitThreadId: string | number | undefined,
+): string | number | undefined {
+  return explicitThreadId ?? resolveSessionThreadIdForRouting(sessionKey);
+}
+
 async function ensureThreadBindingForSubagentSpawn(params: {
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
   childSessionKey: string;
@@ -335,7 +342,7 @@ export async function spawnSubagentDirect(
     channel: ctx.agentChannel,
     accountId: ctx.agentAccountId,
     to: ctx.agentTo,
-    threadId: ctx.agentThreadId ?? parseSessionThreadInfo(ctx.agentSessionKey).threadId,
+    threadId: resolveRequesterSessionThreadId(ctx.agentSessionKey, ctx.agentThreadId),
   });
   const hookRunner = getGlobalHookRunner();
   const cfg = loadConfig();

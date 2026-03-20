@@ -1,4 +1,4 @@
-import { parseSessionThreadInfo } from "../../config/sessions/delivery-info.js";
+import { resolveSessionThreadIdForRouting } from "../../config/sessions/delivery-info.js";
 import { normalizeAccountId } from "../../utils/account-id.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
@@ -34,12 +34,7 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     merged.groupSpace = groupSpace;
   }
 
-  const trimmedSessionKey = opts.sessionKey?.trim();
-  const sessionThreadInfo = parseSessionThreadInfo(trimmedSessionKey);
-  const inferredSessionThreadId =
-    sessionThreadInfo.baseSessionKey?.includes(":dm:") && !trimmedSessionKey?.includes(":topic:")
-      ? undefined
-      : sessionThreadInfo.threadId;
+  const inferredSessionThreadId = resolveSessionThreadIdForRouting(opts.sessionKey?.trim());
 
   if (merged.currentThreadTs == null) {
     if (opts.threadId != null && opts.threadId !== "" && opts.threadId !== null) {

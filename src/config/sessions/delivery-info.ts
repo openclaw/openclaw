@@ -25,6 +25,16 @@ export function parseSessionThreadInfo(sessionKey: string | undefined): {
   return { baseSessionKey, threadId };
 }
 
+export function resolveSessionThreadIdForRouting(
+  sessionKey: string | undefined,
+): string | undefined {
+  const info = parseSessionThreadInfo(sessionKey);
+  if (info.baseSessionKey?.includes(":dm:") && !sessionKey?.includes(":topic:")) {
+    return undefined;
+  }
+  return info.threadId;
+}
+
 export function extractDeliveryInfo(sessionKey: string | undefined): {
   deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
   threadId: string | undefined;
