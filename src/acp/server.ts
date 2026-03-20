@@ -200,7 +200,7 @@ function parseArgs(args: string[]): AcpServerOptions {
       opts.verbose = true;
       continue;
     }
-    if (arg === "--no-device-identity") {
+    if (arg === "--skip-device-identity") {
       opts.noDeviceIdentity = true;
       continue;
     }
@@ -241,7 +241,7 @@ Options:
   --reset-session         Reset the session key before first use
   --no-prefix-cwd         Do not prefix prompts with the working directory
   --provenance <mode>     ACP provenance mode: off, meta, or meta+receipt
-  --no-device-identity    Skip device identity (use token-only auth)
+  --skip-device-identity  Skip device identity (use token-only auth)
   --verbose, -v           Verbose logging to stderr
   --help, -h              Show this help message
 `);

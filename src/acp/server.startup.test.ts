@@ -280,6 +280,7 @@ describe("serveAcpGateway startup", () => {
 
       const gateway = getMockGateway();
       expect(gateway.deviceIdentity).toBeUndefined();
+      expect(mockState.gatewayDeviceIdentity[0]).toBeUndefined();
 
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
