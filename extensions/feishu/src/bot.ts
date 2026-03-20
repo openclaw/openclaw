@@ -364,6 +364,13 @@ export async function handleFeishuMessage(params: {
   }
 
   log(
+
+    // Resolve human-readable group name for session labeling
+    let groupName: string | undefined;
+    if (isGroup) {
+      groupName = await resolveGroupName({ account, chatId: ctx.chatId, log });
+    }
+
     `feishu[${account.accountId}]: received message from ${ctx.senderOpenId} in ${ctx.chatId} (${ctx.chatType})`,
   );
 
