@@ -276,6 +276,11 @@ export async function clearActiveTurn(stateDir: string, sessionId: string): Prom
       if (!existing.activeTurns) {
         return;
       }
+      // Early return when the key is absent — avoids a spurious atomic write
+      // with no observable change (Greptile: unnecessary write in clearActiveTurn).
+      if (!(sessionId in existing.activeTurns)) {
+        return;
+      }
       delete existing.activeTurns[sessionId];
       await writeJsonAtomic(filePath, existing, {
         mode: 0o600,

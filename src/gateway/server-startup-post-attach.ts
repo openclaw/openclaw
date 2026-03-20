@@ -392,10 +392,17 @@ export async function startGatewaySidecars(params: {
         try {
           const recoveryMessage =
             "I was restarted mid-conversation. Please resend your last message.";
-          enqueueSystemEvent(`[active-turn-recovery] ${recoveryMessage}`, {
-            sessionKey: turn.sessionKey,
-            contextKey: `active-turn-recovery:${turn.sessionId}`,
-          });
+          // Embed turn.sessionId in the event text to prevent deduplication when
+          // multiple concurrent stale turns share the same sessionKey (e.g. multi-
+          // threaded Discord session). enqueueSystemEvent deduplicates on lastText,
+          // so a fixed string would silently drop all but the first recovery notice.
+          enqueueSystemEvent(
+            `[active-turn-recovery:${turn.sessionId}] ${recoveryMessage}`,
+            {
+              sessionKey: turn.sessionKey,
+              contextKey: `active-turn-recovery:${turn.sessionId}`,
+            },
+          );
           params.log.warn(
             `active-turn recovery: notified session ${turn.sessionKey} (sessionId=${turn.sessionId}, channel=${turn.channel})`,
           );

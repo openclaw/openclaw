@@ -31,17 +31,19 @@ const MAX_JSON_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
 export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
-    // Check file size before reading to prevent unbounded memory allocation
-    // from unexpectedly large or corrupted JSON files.
-    const stat = await fs.stat(filePath).catch(() => null);
-    if (!stat) {
+    // Read the raw buffer first, then check its byte length before parsing.
+    // A separate stat() + readFile() pair is vulnerable to TOCTOU: an attacker
+    // could replace the file with a much larger one between the two calls,
+    // bypassing the size guard entirely (Aisle Low: CWE-367 TOCTOU).
+    // Reading into a Buffer first bounds the allocation check to the actual bytes read.
+    const buf = await fs.readFile(filePath).catch(() => null);
+    if (!buf) {
       return null;
     }
-    if (stat.size > MAX_JSON_FILE_SIZE_BYTES) {
+    if (buf.byteLength > MAX_JSON_FILE_SIZE_BYTES) {
       return null;
     }
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw) as T;
+    return JSON.parse(buf.toString("utf8")) as T;
   } catch {
     return null;
   }
