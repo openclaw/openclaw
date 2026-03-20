@@ -15,6 +15,12 @@ describe("GigaChat implicit provider", () => {
     );
   });
 
+  it("keeps the OAuth default host for OAuth credentials keys that contain colons", async () => {
+    expect(resolveImplicitGigachatBaseUrl({ apiKey: "oauth:credential:with:colon" })).toBe(
+      GIGACHAT_BASE_URL,
+    );
+  });
+
   it("honors GIGACHAT_BASE_URL for implicit providers", async () => {
     expect(
       resolveImplicitGigachatBaseUrl({

@@ -383,6 +383,41 @@ describe("applyAuthChoice", () => {
     await expect(readAuthProfile("gigachat:default")).rejects.toThrow();
   });
 
+  it("accepts OAuth GigaChat credentials keys that contain colons", async () => {
+    await setupTempState();
+
+    delete process.env.GIGACHAT_CREDENTIALS;
+    delete process.env.GIGACHAT_USER;
+    delete process.env.GIGACHAT_PASSWORD;
+    delete process.env.GIGACHAT_BASE_URL;
+
+    const { prompter, runtime } = createApiKeyPromptHarness();
+
+    const result = await applyAuthChoice({
+      authChoice: "gigachat-personal",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: false,
+      opts: { gigachatApiKey: "oauth:credential:with:colon" },
+    });
+
+    expect(result.config.auth?.profiles?.["gigachat:default"]).toMatchObject({
+      provider: "gigachat",
+      mode: "api_key",
+    });
+    const profile = await readAuthProfile("gigachat:default");
+    expect(profile).toMatchObject({
+      type: "api_key",
+      provider: "gigachat",
+      metadata: {
+        authMode: "oauth",
+        scope: "GIGACHAT_API_PERS",
+        insecureTls: "false",
+      },
+    });
+  });
+
   it("resets a custom Basic GigaChat base URL when switching to OAuth", async () => {
     await setupTempState();
 

@@ -207,8 +207,12 @@ describe("resolveGigachatAuthProfileMetadata", () => {
 });
 
 describe("resolveGigachatAuthMode", () => {
-  it("infers basic auth for env-backed combined credentials without profile metadata", () => {
+  it("infers basic auth for single-separator combined credentials without profile metadata", () => {
     expect(resolveGigachatAuthMode({ apiKey: "user:password" })).toBe("basic");
+  });
+
+  it("keeps oauth as the fallback for colon-containing credentials keys", () => {
+    expect(resolveGigachatAuthMode({ apiKey: "oauth:credential:with:colon" })).toBe("oauth");
   });
 
   it("keeps oauth as the fallback when a profile is selected but has no metadata", () => {

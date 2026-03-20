@@ -432,7 +432,7 @@ describe("createGigachatStreamFn tool calling", () => {
     );
   });
 
-  it("sanitizes historical assistant/tool result names in the outbound request", async () => {
+  it("sanitizes historical assistant/tool result names and preserves structured JSON tool results", async () => {
     request.mockResolvedValueOnce({
       status: 200,
       data: createSseStream(['data: {"choices":[{"delta":{"content":"done"}}]}', "data: [DONE]"]),
@@ -461,7 +461,7 @@ describe("createGigachatStreamFn tool calling", () => {
           {
             role: "toolResult",
             toolName: "llm-task",
-            content: "ok",
+            content: '{"summary":"He said “hi” — then left"}',
           },
         ],
         tools: [
@@ -493,6 +493,7 @@ describe("createGigachatStreamFn tool calling", () => {
             expect.objectContaining({
               role: "function",
               name: "llm_task",
+              content: '{"summary":"He said “hi” — then left"}',
             }),
           ],
         }),

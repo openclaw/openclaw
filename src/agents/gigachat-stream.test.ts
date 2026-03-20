@@ -73,6 +73,11 @@ describe("gigachat stream helpers", () => {
     expect(ensureJsonObjectStr('{"ok":true}')).toBe('{"ok":true}');
   });
 
+  it("preserves valid JSON object tool results before sanitizing text", () => {
+    const content = '{"summary":"He said “hi” — then left"}';
+    expect(ensureJsonObjectStr(content)).toBe(content);
+  });
+
   it("extracts readable API errors from GigaChat/Axios-like responses", () => {
     const err = new Error("[object Object]") as Error & {
       response?: {

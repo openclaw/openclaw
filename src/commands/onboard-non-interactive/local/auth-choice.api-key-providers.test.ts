@@ -170,6 +170,50 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("accepts OAuth credentials keys that contain colons", async () => {
+    const agentDir = "/tmp/openclaw-agents/work/agent";
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    const runtime: RuntimeEnv = {
+      error: vi.fn(),
+      exit: vi.fn(),
+      log: vi.fn(),
+    };
+    const resolveApiKey = vi.fn(async () => ({
+      key: "oauth:credential:with:colon",
+      source: "env" as const,
+    }));
+    const maybeSetResolvedApiKey = vi.fn(async (resolved, setter) => {
+      await setter(resolved.key);
+      return true;
+    });
+
+    const result = await applySimpleNonInteractiveApiKeyChoice({
+      authChoice: "gigachat-api-key",
+      nextConfig,
+      baseConfig: nextConfig,
+      opts: {} as never,
+      runtime,
+      agentDir,
+      apiKeyStorageOptions: undefined,
+      resolveApiKey,
+      maybeSetResolvedApiKey,
+    });
+
+    expect(result).toBe(nextConfig);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(setGigachatApiKey).toHaveBeenCalledWith(
+      "oauth:credential:with:colon",
+      agentDir,
+      undefined,
+      {
+        authMode: "oauth",
+        insecureTls: "false",
+        scope: "GIGACHAT_API_PERS",
+      },
+    );
+  });
+
   it("resets the GigaChat provider base URL when replacing a Basic profile with OAuth", async () => {
     const agentDir = "/tmp/openclaw-agents/work/agent";
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;

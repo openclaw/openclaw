@@ -301,6 +301,19 @@ function sanitizeContent(content: string | null | undefined): string {
   );
 }
 
+function tryParseJsonObjectString(content: string): string | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? trimmed : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Coerce tool result content to a JSON object string (gpt2giga compatibility).
  * GigaChat expects tool results to be JSON objects. If the content is already
@@ -310,19 +323,23 @@ function sanitizeContent(content: string | null | undefined): string {
  * This behavior is intentionally consistent with gpt2giga proxy.
  */
 export function ensureJsonObjectStr(content: string, toolName?: string): string {
-  const trimmed = content.trim();
-  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-    try {
-      JSON.parse(trimmed);
-      return trimmed;
-    } catch {
-      // Invalid JSON that looks like an object - wrap it
-      log.debug(`GigaChat: wrapping invalid JSON-like tool result for "${toolName ?? "unknown"}"`);
-    }
-  } else {
-    log.debug(`GigaChat: wrapping non-object tool result for "${toolName ?? "unknown"}"`);
+  const parsedOriginal = tryParseJsonObjectString(content);
+  if (parsedOriginal) {
+    return parsedOriginal;
   }
-  return JSON.stringify({ result: content });
+
+  const sanitized = sanitizeContent(content);
+  const parsedSanitized = sanitized === content ? null : tryParseJsonObjectString(sanitized);
+  if (parsedSanitized) {
+    return parsedSanitized;
+  }
+
+  if (!content.trim().startsWith("{") || !content.trim().endsWith("}")) {
+    log.debug(`GigaChat: wrapping non-object tool result for "${toolName ?? "unknown"}"`);
+  } else {
+    log.debug(`GigaChat: wrapping invalid JSON-like tool result for "${toolName ?? "unknown"}"`);
+  }
+  return JSON.stringify({ result: sanitized });
 }
 
 // ── Error message extraction ─────────────────────────────────────────────────
@@ -663,10 +680,7 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
               : typeof msgContent === "string"
                 ? msgContent
                 : JSON.stringify(msgContent ?? {});
-            const coercedContent = ensureJsonObjectStr(
-              sanitizeContent(resultContent || "ok"),
-              toolName,
-            );
+            const coercedContent = ensureJsonObjectStr(resultContent || "ok", toolName);
             const gigaToolName = rememberToolNameMapping(toolNameToGiga, gigaToToolName, toolName);
             messages.push({
               role: "function",

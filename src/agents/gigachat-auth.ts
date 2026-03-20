@@ -24,7 +24,9 @@ function looksLikeGigachatBasicCredentials(apiKey: string | undefined): boolean 
     return false;
   }
   const separatorIndex = trimmed.indexOf(":");
-  return separatorIndex > 0;
+  // OAuth credential keys can legitimately contain additional ":" segments, so
+  // only infer Basic auth for the obvious single-separator user:password shape.
+  return separatorIndex > 0 && separatorIndex === trimmed.lastIndexOf(":");
 }
 
 export function resolveGigachatAuthMode(params: {
