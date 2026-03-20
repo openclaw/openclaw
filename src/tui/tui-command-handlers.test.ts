@@ -212,7 +212,6 @@ describe("tui command handlers", () => {
     ]);
     const client = { listModels } as never;
     const harness = createHarness({ client });
-    harness.state.sessionInfo = { modelProvider: "openai", model: "gpt-4" };
     const { handleCommand } = harness;
 
     await handleCommand("/model list");
@@ -228,5 +227,14 @@ describe("tui command handlers", () => {
     await handleCommand("/model status");
 
     expect(addSystem).toHaveBeenCalledWith("model: anthropic/claude-3");
+  });
+
+  it("handles /model status when session info is not loaded", async () => {
+    const harness = createHarness();
+    const { handleCommand, addSystem } = harness;
+
+    await handleCommand("/model status");
+
+    expect(addSystem).toHaveBeenCalledWith("model: unknown (session not loaded)");
   });
 });
