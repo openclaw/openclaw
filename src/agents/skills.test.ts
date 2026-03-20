@@ -295,6 +295,9 @@ describe("buildWorkspaceSkillsPrompt", () => {
       ...resolveTestSkillDirs(workspaceDir),
       agentId: "ops",
       config: {
+        agents: {
+          list: [{ id: "ops" }],
+        },
         skills: {
           policy: {
             globalEnabled: ["alpha", "beta"],

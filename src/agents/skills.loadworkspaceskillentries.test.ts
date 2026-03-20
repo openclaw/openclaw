@@ -187,6 +187,9 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     const config = {
+      agents: {
+        list: [{ id: "ops" }],
+      },
       skills: {
         policy: {
           globalEnabled: [],

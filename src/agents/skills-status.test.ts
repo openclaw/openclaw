@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
+import { writeSkill } from "./skills.e2e-test-helpers.js";
 import type { SkillEntry } from "./skills/types.js";
 
 describe("buildWorkspaceSkillStatus", () => {
@@ -39,5 +43,42 @@ describe("buildWorkspaceSkillStatus", () => {
     const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
     expect(report.skills).toHaveLength(1);
     expect(report.skills[0]?.install).toEqual([]);
+  });
+
+  it("applies skills policy when status is scoped to an agent", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-status-"));
+    try {
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "alpha"),
+        name: "alpha",
+        description: "Alpha",
+      });
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "beta"),
+        name: "beta",
+        description: "Beta",
+      });
+
+      const report = buildWorkspaceSkillStatus(workspaceDir, {
+        agentId: "ops",
+        config: {
+          agents: {
+            list: [{ id: "ops" }],
+          },
+          skills: {
+            policy: {
+              globalEnabled: ["alpha"],
+              agentOverrides: {
+                ops: {},
+              },
+            },
+          },
+        },
+      });
+
+      expect(report.skills.map((entry) => entry.name).toSorted()).toEqual(["alpha"]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 });
