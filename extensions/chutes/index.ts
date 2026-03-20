@@ -1,12 +1,12 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  buildOauthProviderAuthResult,
   createProviderApiKeyAuthMethod,
   resolveOAuthApiKeyMarker,
   type ProviderAuthContext,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { loginChutes } from "openclaw/plugin-sdk/provider-auth-login";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-oauth";
 import {
   CHUTES_DEFAULT_MODEL_REF,
   applyChutesApiKeyConfig,

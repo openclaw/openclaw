@@ -16,12 +16,14 @@ This is the difference between telling your assistant "send the weekly report" e
 ## Why Standing Orders?
 
 **Without standing orders:**
+
 - You must prompt the agent for every task
 - The agent sits idle between requests
 - Routine work gets forgotten or delayed
 - You become the bottleneck
 
 **With standing orders:**
+
 - The agent executes autonomously within defined boundaries
 - Routine work happens on schedule without prompting
 - You only get involved for exceptions and approvals
@@ -55,6 +57,7 @@ Put standing orders in `AGENTS.md` to guarantee they're loaded every session. Th
 **Escalation:** If data source is unavailable or metrics look unusual (>2σ from norm)
 
 ### Execution Steps
+
 1. Pull metrics from configured sources
 2. Compare to prior week and targets
 3. Generate report in Reports/weekly/YYYY-MM-DD.md
@@ -62,6 +65,7 @@ Put standing orders in `AGENTS.md` to guarantee they're loaded every session. Th
 5. Log completion to Agent/Logs/
 
 ### What NOT to Do
+
 - Do not send reports to external parties
 - Do not modify source data
 - Do not skip delivery if metrics look bad — report accurately
@@ -105,11 +109,13 @@ openclaw cron create \
 **Trigger:** Weekly cycle (Monday review → mid-week drafts → Friday brief)
 
 ### Weekly Cycle
+
 - **Monday:** Review platform metrics and audience engagement
 - **Tuesday–Thursday:** Draft social posts, create blog content
 - **Friday:** Compile weekly marketing brief → deliver to owner
 
 ### Content Rules
+
 - Voice must match the brand (see SOUL.md or brand voice guide)
 - Never identify as AI in public-facing content
 - Include metrics when available
@@ -126,6 +132,7 @@ openclaw cron create \
 **Trigger:** New data file detected OR scheduled monthly cycle
 
 ### When New Data Arrives
+
 1. Detect new file in designated input directory
 2. Parse and categorize all transactions
 3. Compare against budget targets
@@ -134,6 +141,7 @@ openclaw cron create \
 6. Deliver summary to owner via configured channel
 
 ### Escalation Rules
+
 - Single item > $500: immediate alert
 - Category > budget by 20%: flag in report
 - Unrecognizable transaction: ask owner for categorization
@@ -150,18 +158,20 @@ openclaw cron create \
 **Trigger:** Every heartbeat cycle
 
 ### Checks
+
 - Service health endpoints responding
 - Disk space above threshold
 - Pending tasks not stale (>24 hours)
 - Delivery channels operational
 
 ### Response Matrix
-| Condition | Action | Escalate? |
-|-----------|--------|-----------|
-| Service down | Restart automatically | Only if restart fails 2x |
-| Disk space < 10% | Alert owner | Yes |
-| Stale task > 24h | Remind owner | No |
-| Channel offline | Log and retry next cycle | If offline > 2 hours |
+
+| Condition        | Action                   | Escalate?                |
+| ---------------- | ------------------------ | ------------------------ |
+| Service down     | Restart automatically    | Only if restart fails 2x |
+| Disk space < 10% | Alert owner              | Yes                      |
+| Stale task > 24h | Remind owner             | No                       |
+| Channel offline  | Log and retry next cycle | If offline > 2 hours     |
 ```
 
 ## The Execute-Verify-Report Pattern
@@ -174,6 +184,7 @@ Standing orders work best when combined with strict execution discipline. Every 
 
 ```markdown
 ### Execution Rules
+
 - Every task follows Execute-Verify-Report. No exceptions.
 - "I'll do that" is not execution. Do it, then report.
 - "Done" without verification is not acceptable. Prove it.
@@ -192,20 +203,25 @@ For agents managing multiple concerns, organize standing orders as separate prog
 # Standing Orders
 
 ## Program 1: [Domain A] (Weekly)
+
 ...
 
 ## Program 2: [Domain B] (Monthly + On-Demand)
+
 ...
 
 ## Program 3: [Domain C] (As-Needed)
+
 ...
 
 ## Escalation Rules (All Programs)
+
 - [Common escalation criteria]
 - [Approval gates that apply across programs]
 ```
 
 Each program should have:
+
 - Its own **trigger cadence** (weekly, monthly, event-driven, continuous)
 - Its own **approval gates** (some programs need more oversight than others)
 - Clear **boundaries** (the agent should know where one program ends and another begins)
@@ -213,6 +229,7 @@ Each program should have:
 ## Best Practices
 
 ### Do
+
 - Start with narrow authority and expand as trust builds
 - Define explicit approval gates for high-risk actions
 - Include "What NOT to do" sections — boundaries matter as much as permissions
@@ -221,6 +238,7 @@ Each program should have:
 - Update standing orders as your needs evolve — they're living documents
 
 ### Don't
+
 - Grant broad authority on day one ("do whatever you think is best")
 - Skip escalation rules — every program needs a "when to stop and ask" clause
 - Assume the agent will remember verbal instructions — put everything in the file

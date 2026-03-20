@@ -3,7 +3,10 @@
  */
 
 import * as crypto from "node:crypto";
-import { createFixedWindowRateLimiter, type FixedWindowRateLimiter } from "../api.js";
+import {
+  createFixedWindowRateLimiter,
+  type FixedWindowRateLimiter,
+} from "openclaw/plugin-sdk/webhook-ingress";
 
 export type DmAuthorizationResult =
   | { allowed: true }
