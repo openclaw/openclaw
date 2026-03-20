@@ -857,6 +857,81 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        oag: z
+          .object({
+            delivery: z
+              .object({
+                maxRetries: z.number().int().positive().optional(),
+                recoveryBudgetMs: z.number().int().positive().optional(),
+              })
+              .strict()
+              .optional(),
+            lock: z
+              .object({
+                timeoutMs: z.number().int().positive().optional(),
+                staleMs: z.number().int().positive().optional(),
+              })
+              .strict()
+              .optional(),
+            health: z
+              .object({
+                stalePollFactor: z.number().positive().optional(),
+              })
+              .strict()
+              .optional(),
+            notes: z
+              .object({
+                dedupWindowMs: z.number().int().nonnegative().optional(),
+                maxDeliveredHistory: z.number().int().positive().optional(),
+              })
+              .strict()
+              .optional(),
+            evolution: z
+              .object({
+                autoApply: z.boolean().optional(),
+                maxStepPercent: z.number().int().positive().optional(),
+                maxCumulativePercent: z.number().int().positive().optional(),
+                maxNotificationsPerDay: z.number().int().positive().optional(),
+                minCrashesForAnalysis: z.number().int().positive().optional(),
+                cooldownMs: z.number().int().positive().optional(),
+                observationWindowMs: z.number().int().positive().optional(),
+                restartRegressionThreshold: z.number().int().positive().optional(),
+                failureRegressionThreshold: z.number().int().positive().optional(),
+                periodicAnalysisIntervalMs: z.number().int().positive().optional(),
+                minChannelIncidentsForAnalysis: z.number().int().positive().optional(),
+              })
+              .strict()
+              .optional(),
+            scheduler: z
+              .object({
+                maxWaitMs: z.number().int().positive().optional(),
+              })
+              .strict()
+              .optional(),
+            memory: z
+              .object({
+                maxLifecycleAgeDays: z.number().int().positive().optional(),
+              })
+              .strict()
+              .optional(),
+            diagnosis: z
+              .object({
+                model: z.union([z.literal("lightweight"), z.literal("embedded")]).optional(),
+              })
+              .strict()
+              .optional(),
+            watchdog: z
+              .object({
+                enabled: z.boolean().optional(),
+                channelTextLimits: z.record(z.string(), z.number().int().positive()).optional(),
+                additionalErrorPatterns: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+            channels: z.record(z.string(), z.any()).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .superRefine((gateway, ctx) => {
