@@ -56,7 +56,7 @@ Related:
 
 - [/providers/anthropic](/providers/anthropic)
 - [/reference/token-use](/reference/token-use)
-- [/help/faq#why-am-i-seeing-http-429-ratelimiterror-from-anthropic](/help/faq#why-am-i-seeing-http-429-ratelimiterror-from-anthropic)
+- [/help/faq#quick-start-and-first-run-setup](/help/faq#quick-start-and-first-run-setup)
 
 ## No replies
 

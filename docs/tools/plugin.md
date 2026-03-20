@@ -144,7 +144,7 @@ Fields:
 - `entries.<id>`: per-plugin toggles + config
 
 Config changes **require a gateway restart**. See
-[Configuration reference](/configuration) for the full config schema.
+[Configuration reference](/gateway/configuration-reference) for the full config schema.
 
 Validation rules (strict):
 

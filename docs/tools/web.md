@@ -114,7 +114,7 @@ All of these fields also support SecretRef objects.
 - Perplexity: `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
 - Tavily: `TAVILY_API_KEY`
 
-For a gateway install, put these in `~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
+For a gateway install, put these in `~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#env-vars-and-env-loading).
 
 ### Config examples
 
