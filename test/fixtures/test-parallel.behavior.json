@@ -228,44 +228,76 @@
         "reason": "Secrets apply coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
       },
       {
+        "file": "src/tui/tui-command-handlers.test.ts",
+        "reason": "TUI command handler coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/node-host/invoke-system-run.test.ts",
+        "reason": "Missing from unit timings and retained the largest shared unit-fast heap spike across the March 20, 2026 Linux Node 22 and Node 24 OOM lanes."
+      },
+      {
+        "file": "src/media-understanding/apply.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike across the March 20, 2026 Linux Node 22 and Node 24 OOM lanes."
+      },
+      {
+        "file": "src/plugins/commands.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 22 OOM lane."
+      },
+      {
+        "file": "src/infra/outbound/message-action-runner.plugin-dispatch.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 22 OOM lane."
+      },
+      {
         "file": "src/acp/translator.session-rate-limit.test.ts",
-        "reason": "Session rate-limit translator coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 22 OOM lane."
+      },
+      {
+        "file": "src/config/schema.hints.test.ts",
+        "reason": "Missing from unit timings and retained a recurring shared unit-fast heap spike across the March 20, 2026 Linux Node 22 and Node 24 OOM lanes."
+      },
+      {
+        "file": "src/tui/tui-event-handlers.test.ts",
+        "reason": "Missing from unit timings and retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/memory/manager.read-file.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/plugin-sdk/webhook-targets.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/daemon/systemd.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/cron/isolated-agent/delivery-target.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/cron/delivery.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/memory/manager.sync-errors-do-not-crash.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/tui/tui.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/cron/service.every-jobs-fire.test.ts",
+        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
       },
       {
         "file": "src/channels/channels-misc.test.ts",
         "reason": "Channels misc coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
       },
       {
-        "file": "src/config/schema.hints.test.ts",
-        "reason": "Schema hints coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
-      },
-      {
-        "file": "src/cron/delivery.test.ts",
-        "reason": "Cron delivery coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
-      },
-      {
-        "file": "src/daemon/systemd.test.ts",
-        "reason": "Systemd coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
-      },
-      {
         "file": "src/infra/node-pairing.test.ts",
         "reason": "Node pairing coverage hit the peak shared unit-fast RSS in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
-      },
-      {
-        "file": "src/media-understanding/apply.test.ts",
-        "reason": "Media understanding apply coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
-      },
-      {
-        "file": "src/memory/manager.sync-errors-do-not-crash.test.ts",
-        "reason": "Memory manager sync-error coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
-      },
-      {
-        "file": "src/node-host/invoke-system-run.test.ts",
-        "reason": "Node-host system-run coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
-      },
-      {
-        "file": "src/plugin-sdk/webhook-targets.test.ts",
-        "reason": "Plugin SDK webhook target coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
       },
       {
         "file": "src/channels/plugins/contracts/inbound.contract.test.ts",
@@ -300,10 +332,6 @@
         "reason": "Video runner coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
       },
       {
-        "file": "src/plugins/commands.test.ts",
-        "reason": "Plugin commands coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
-      },
-      {
         "file": "src/plugins/conversation-binding.test.ts",
         "reason": "Conversation binding coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
       },
@@ -318,10 +346,6 @@
       {
         "file": "src/config/schema.help.quality.test.ts",
         "reason": "Schema help quality coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
-      },
-      {
-        "file": "src/cron/isolated-agent/delivery-target.test.ts",
-        "reason": "Delivery target isolated-agent coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
       },
       {
         "file": "src/cron/isolated-agent/run.cron-model-override.test.ts",
@@ -360,20 +384,8 @@
         "reason": "Wizard contract coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
       },
       {
-        "file": "src/tui/tui.test.ts",
-        "reason": "TUI integration coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
-      },
-      {
-        "file": "src/tui/tui-event-handlers.test.ts",
-        "reason": "TUI event-handler coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
-      },
-      {
         "file": "src/tui/tui.submit-handler.test.ts",
         "reason": "TUI submit-handler coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
-      },
-      {
-        "file": "src/tui/tui-command-handlers.test.ts",
-        "reason": "TUI command handler coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
       },
       {
         "file": "src/infra/restart.test.ts",
