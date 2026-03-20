@@ -113,9 +113,7 @@ export function shouldIncludeSkill(params: {
     hasRemoteBin: eligibility?.remote?.hasBin,
     hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
     hasEnv: (envName) =>
-      skipHostEnvironmentCheck
-        ? hasConfiguredEnv(envName)
-        : Boolean(process.env[envName] || hasConfiguredEnv(envName)),
+      skipHostEnvironmentCheck ? true : Boolean(process.env[envName] || hasConfiguredEnv(envName)),
     isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
   });
 }
