@@ -214,7 +214,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         // oxlint-disable-next-line typescript/no-explicit-any
         const schema = (params as any).schema as unknown;
         if (schema && typeof schema === "object" && !Array.isArray(schema)) {
-          const ajv = new Ajv.default({ allErrors: true, strict: false });
+          const ajv = new Ajv({ allErrors: true, strict: false });
           // oxlint-disable-next-line typescript/no-explicit-any
           const validate = ajv.compile(schema as any);
           const ok = validate(parsed);

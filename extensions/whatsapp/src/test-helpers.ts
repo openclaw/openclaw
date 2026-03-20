@@ -1,3 +1,5 @@
+import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import { vi } from "vitest";
 import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
@@ -41,6 +43,56 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
       }
       return DEFAULT_CONFIG;
     },
+    loadSessionStore: (storePath: string) => {
+      try {
+        const raw = fsSync.readFileSync(storePath, "utf8");
+        return JSON.parse(raw || "{}");
+      } catch {
+        return {};
+      }
+    },
+    recordSessionMetaFromInbound: vi.fn(async () => undefined),
+    updateLastRoute: vi.fn(
+      async (params: {
+        storePath: string;
+        sessionKey: string;
+        deliveryContext?: {
+          channel?: string;
+          to?: string;
+          accountId?: string;
+          threadId?: string | number;
+        };
+      }) => {
+        const raw = await fs.readFile(params.storePath, "utf8").catch(() => "{}");
+        const store = JSON.parse(raw || "{}") as Record<
+          string,
+          {
+            lastChannel?: string;
+            lastTo?: string;
+            lastAccountId?: string;
+            lastThreadId?: string | number;
+          }
+        >;
+        const entry = store[params.sessionKey] ?? {};
+        store[params.sessionKey] = {
+          ...entry,
+          lastChannel: params.deliveryContext?.channel ?? entry.lastChannel,
+          lastTo: params.deliveryContext?.to ?? entry.lastTo,
+          lastAccountId: params.deliveryContext?.accountId ?? entry.lastAccountId,
+          lastThreadId: params.deliveryContext?.threadId ?? entry.lastThreadId,
+        };
+        await fs.writeFile(params.storePath, JSON.stringify(store));
+        return store[params.sessionKey];
+      },
+    ),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/state-paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/state-paths")>();
+  return {
+    ...actual,
+    resolveOAuthDir: () => "/tmp/openclaw-oauth",
   };
 });
 
