@@ -358,11 +358,15 @@ const unitFastExcludedFileSet = new Set(unitFastExcludedFiles);
 const unitFastCandidateFiles = allKnownUnitFiles.filter(
   (file) => !unitFastExcludedFileSet.has(file),
 );
-const defaultUnitFastLaneCount = isCI && !isWindows ? 2 : 1;
+const defaultUnitFastLaneCount = isCI && !isWindows ? 3 : 1;
 const unitFastLaneCount = Math.max(
   1,
   parseEnvNumber("OPENCLAW_TEST_UNIT_FAST_LANES", defaultUnitFastLaneCount),
 );
+// Heap snapshots on current main show long-lived unit-fast workers retaining
+// transformed Vitest/Vite module graphs rather than app objects. Multiple
+// bounded unit-fast lanes only help if we also recycle them serially instead
+// of keeping several transform-heavy workers resident at the same time.
 const unitFastBuckets =
   unitFastLaneCount > 1
     ? packFilesByDuration(unitFastCandidateFiles, unitFastLaneCount, estimateUnitDurationMs)
@@ -371,6 +375,7 @@ const unitFastEntries = unitFastBuckets
   .filter((files) => files.length > 0)
   .map((files, index) => ({
     name: unitFastBuckets.length === 1 ? "unit-fast" : `unit-fast-${String(index + 1)}`,
+    serialPhase: "unit-fast",
     env: {
       OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
         `vitest-unit-fast-include-${String(index + 1)}`,
@@ -678,6 +683,8 @@ const keepGatewaySerial =
   !parallelGatewayEnabled;
 const parallelRuns = keepGatewaySerial ? runs.filter((entry) => entry.name !== "gateway") : runs;
 const serialRuns = keepGatewaySerial ? runs.filter((entry) => entry.name === "gateway") : [];
+const serialPrefixRuns = parallelRuns.filter((entry) => entry.serialPhase);
+const deferredParallelRuns = parallelRuns.filter((entry) => !entry.serialPhase);
 const baseLocalWorkers = Math.max(4, Math.min(16, hostCpuCount));
 const loadAwareDisabledRaw = process.env.OPENCLAW_TEST_LOAD_AWARE?.trim().toLowerCase();
 const loadAwareDisabled = loadAwareDisabledRaw === "0" || loadAwareDisabledRaw === "false";
@@ -1234,7 +1241,18 @@ if (passthroughRequiresSingleRun && passthroughOptionArgs.length > 0) {
   process.exit(2);
 }
 
-if (isMacMiniProfile && targetedEntries.length === 0) {
+if (serialPrefixRuns.length > 0) {
+  const failedSerialPrefix = await runEntriesWithLimit(serialPrefixRuns, passthroughOptionArgs, 1);
+  if (failedSerialPrefix !== undefined) {
+    process.exit(failedSerialPrefix);
+  }
+  const failedDeferredParallel = isMacMiniProfile
+    ? await runEntriesWithLimit(deferredParallelRuns, passthroughOptionArgs, 3)
+    : await runEntries(deferredParallelRuns, passthroughOptionArgs);
+  if (failedDeferredParallel !== undefined) {
+    process.exit(failedDeferredParallel);
+  }
+} else if (isMacMiniProfile && targetedEntries.length === 0) {
   const unitFastEntriesForMacMini = parallelRuns.filter((entry) =>
     entry.name.startsWith("unit-fast"),
   );
