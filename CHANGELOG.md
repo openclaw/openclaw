@@ -44,6 +44,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/chat: add an expand-to-canvas button on assistant chat bubbles and in-app session navigation from Sessions and Cron views. Thanks @BunsDev.
 - Plugins/context engines: expose `delegateCompactionToRuntime(...)` on the public plugin SDK, refactor the legacy engine to use the shared helper, and clarify `ownsCompaction` delegation semantics for non-owning engines. (#49061) Thanks @jalehman.
 - Plugins/MiniMax: add MiniMax-M2.7 and MiniMax-M2.7-highspeed models and update the default model from M2.5 to M2.7. (#49691) Thanks @liyuan97.
+- Plugins/Xiaomi: switch the bundled Xiaomi provider to the `/v1` OpenAI-compatible endpoint and add MiMo V2 Pro plus MiMo V2 Omni to the built-in catalog. (#49214) thanks @DJjjjhao.
 
 ### Fixes
 

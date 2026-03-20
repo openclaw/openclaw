@@ -1,5 +1,5 @@
 ---
-summary: "Use Xiaomi MiMo (mimo-v2-flash) with OpenClaw"
+summary: "Use Xiaomi MiMo models with OpenClaw"
 read_when:
   - You want Xiaomi MiMo models in OpenClaw
   - You need XIAOMI_API_KEY setup
@@ -8,15 +8,18 @@ title: "Xiaomi MiMo"
 
 # Xiaomi MiMo
 
-Xiaomi MiMo is the API platform for **MiMo** models. It provides REST APIs compatible with
-OpenAI and Anthropic formats and uses API keys for authentication. Create your API key in
-the [Xiaomi MiMo console](https://platform.xiaomimimo.com/#/console/api-keys). OpenClaw uses
-the `xiaomi` provider with a Xiaomi MiMo API key.
+Xiaomi MiMo is the API platform for **MiMo** models. OpenClaw uses the Xiaomi
+OpenAI-compatible endpoint with API-key authentication. Create your API key in the
+[Xiaomi MiMo console](https://platform.xiaomimimo.com/#/console/api-keys), then configure the
+bundled `xiaomi` provider with that key.
 
 ## Model overview
 
-- **mimo-v2-flash**: 262144-token context window, Anthropic Messages API compatible.
-- Base URL: `https://api.xiaomimimo.com/anthropic`
+- **mimo-v2-flash**: default text model, 262144-token context window
+- **mimo-v2-pro**: reasoning text model, 1048576-token context window
+- **mimo-v2-omni**: reasoning multimodal model with text and image input, 262144-token context window
+- Base URL: `https://api.xiaomimimo.com/v1`
+- API: `openai-completions`
 - Authorization: `Bearer $XIAOMI_API_KEY`
 
 ## CLI setup
@@ -37,8 +40,8 @@ openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
     mode: "merge",
     providers: {
       xiaomi: {
-        baseUrl: "https://api.xiaomimimo.com/anthropic",
-        api: "anthropic-messages",
+        baseUrl: "https://api.xiaomimimo.com/v1",
+        api: "openai-completions",
         apiKey: "XIAOMI_API_KEY",
         models: [
           {
@@ -50,6 +53,24 @@ openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
             contextWindow: 262144,
             maxTokens: 8192,
           },
+          {
+            id: "mimo-v2-pro",
+            name: "Xiaomi MiMo V2 Pro",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 1048576,
+            maxTokens: 32000,
+          },
+          {
+            id: "mimo-v2-omni",
+            name: "Xiaomi MiMo V2 Omni",
+            reasoning: true,
+            input: ["text", "image"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 262144,
+            maxTokens: 32000,
+          },
         ],
       },
     },
@@ -59,6 +80,7 @@ openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
 
 ## Notes
 
-- Model ref: `xiaomi/mimo-v2-flash`.
+- Default model ref: `xiaomi/mimo-v2-flash`.
+- Additional built-in models: `xiaomi/mimo-v2-pro`, `xiaomi/mimo-v2-omni`.
 - The provider is injected automatically when `XIAOMI_API_KEY` is set (or an auth profile exists).
 - See [/concepts/model-providers](/concepts/model-providers) for provider rules.
