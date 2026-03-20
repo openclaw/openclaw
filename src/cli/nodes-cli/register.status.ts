@@ -442,7 +442,7 @@ export function registerNodesStatusCommands(nodes: Command) {
                     ? n.connectedAtMs
                     : undefined;
               return {
-                Node: n.displayName?.trim() ?? pairedNode?.displayName?.trim() ?? n.nodeId,
+                Node: n.displayName?.trim() || pairedNode?.displayName?.trim() || n.nodeId,
                 Id: n.nodeId,
                 IP: n.remoteIp ?? pairedNode?.remoteIp ?? "",
                 LastConnect:
