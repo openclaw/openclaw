@@ -46,7 +46,9 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
       run_node: ${{ steps.scope.outputs.run_node }}
+      run_channels: ${{ steps.scope.outputs.run_channels }}
       run_macos: ${{ steps.scope.outputs.run_macos }}
+      run_macos_native: ${{ steps.scope.outputs.run_macos_native }}
       run_android: ${{ steps.scope.outputs.run_android }}
       run_skills_python: ${{ steps.scope.outputs.run_skills_python }}
       run_windows: ${{ steps.scope.outputs.run_windows }}
@@ -221,20 +223,20 @@ jobs:
         run: echo "Skipping Bun compatibility lane on pull requests."
 
       - name: Checkout
-        if: github.event_name != 'pull_request' || matrix.runtime != 'bun'
+        if: (matrix.task != 'channels' || needs.changed-scope.outputs.run_channels == 'true') && (github.event_name != 'pull_request' || matrix.runtime != 'bun')
         uses: actions/checkout@v6
         with:
           submodules: false
 
       - name: Setup Node environment
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
+        if: (matrix.task != 'channels' || needs.changed-scope.outputs.run_channels == 'true') && (matrix.runtime != 'bun' || github.event_name != 'pull_request')
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "${{ matrix.runtime == 'bun' }}"
           use-sticky-disk: "false"
 
       - name: Configure Node test resources
-        if: (github.event_name != 'pull_request' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
+        if: (matrix.task != 'channels' || needs.changed-scope.outputs.run_channels == 'true') && (github.event_name != 'pull_request' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
         env:
           EVENT_NAME: ${{ github.event_name }}
           SHARD_COUNT: ${{ matrix.shard_count || '' }}
@@ -260,7 +262,7 @@ jobs:
           fi
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
+        if: (matrix.task != 'channels' || needs.changed-scope.outputs.run_channels == 'true') && (matrix.runtime != 'bun' || github.event_name != 'pull_request')
         run: ${{ matrix.command }}
 
   extension-fast:
@@ -736,7 +738,7 @@ jobs:
         run: pnpm canvas:a2ui:bundle
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        run: ${{ matrix.command }} -- --testTimeout=300000
+        run: ${{ matrix.task == 'test' && format('{0} -- --testTimeout=300000', matrix.command) || matrix.command }}
 
   # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
   # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;
@@ -766,25 +768,30 @@ jobs:
 
       # --- Xcode/Swift setup ---
       - name: Select Xcode 26.1
+        if: needs.changed-scope.outputs.run_macos_native == 'true'
         run: |
           sudo xcode-select -s /Applications/Xcode_26.1.app
           xcodebuild -version
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
+        if: needs.changed-scope.outputs.run_macos_native == 'true'
         run: brew install xcodegen swiftlint swiftformat
 
       - name: Show toolchain
+        if: needs.changed-scope.outputs.run_macos_native == 'true'
         run: |
           sw_vers
           xcodebuild -version
           swift --version
 
       - name: Swift lint
+        if: needs.changed-scope.outputs.run_macos_native == 'true'
         run: |
           swiftlint --config .swiftlint.yml
           swiftformat --lint apps/macos/Sources --config .swiftformat
 
       - name: Cache SwiftPM
+        if: needs.changed-scope.outputs.run_macos_native == 'true'
         uses: actions/cache@v5
         with:
           path: ~/Library/Caches/org.swift.swiftpm
@@ -793,6 +800,7 @@ jobs:
             ${{ runner.os }}-swiftpm-
 
       - name: Swift build (release)
+        if: needs.changed-scope.outputs.run_macos_native == 'true'
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
@@ -805,6 +813,7 @@ jobs:
           exit 1
 
       - name: Swift test
+        if: needs.changed-scope.outputs.run_macos_native == 'true'
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do

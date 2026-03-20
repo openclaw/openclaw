@@ -7,7 +7,9 @@ const { detectChangedScope, listChangedPaths } =
   (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
     detectChangedScope: (paths: string[]) => {
       runNode: boolean;
+      runChannels: boolean;
       runMacos: boolean;
+      runMacosNative: boolean;
       runAndroid: boolean;
       runWindows: boolean;
       runSkillsPython: boolean;
@@ -30,7 +32,9 @@ describe("detectChangedScope", () => {
   it("fails safe when no paths are provided", () => {
     expect(detectChangedScope([])).toEqual({
       runNode: true,
+      runChannels: true,
       runMacos: true,
+      runMacosNative: true,
       runAndroid: true,
       runWindows: true,
       runSkillsPython: true,
@@ -40,7 +44,9 @@ describe("detectChangedScope", () => {
   it("keeps all lanes off for docs-only changes", () => {
     expect(detectChangedScope(["docs/ci.md", "README.md"])).toEqual({
       runNode: false,
+      runChannels: false,
       runMacos: false,
+      runMacosNative: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -50,7 +56,9 @@ describe("detectChangedScope", () => {
   it("enables node lane for node-relevant files", () => {
     expect(detectChangedScope(["src/plugins/runtime/index.ts"])).toEqual({
       runNode: true,
+      runChannels: true,
       runMacos: false,
+      runMacosNative: false,
       runAndroid: false,
       runWindows: true,
       runSkillsPython: false,
@@ -60,14 +68,18 @@ describe("detectChangedScope", () => {
   it("keeps node lane off for native-only changes", () => {
     expect(detectChangedScope(["apps/macos/Sources/Foo.swift"])).toEqual({
       runNode: false,
+      runChannels: false,
       runMacos: true,
+      runMacosNative: true,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
     });
     expect(detectChangedScope(["apps/shared/OpenClawKit/Sources/Foo.swift"])).toEqual({
       runNode: false,
+      runChannels: false,
       runMacos: true,
+      runMacosNative: true,
       runAndroid: true,
       runWindows: false,
       runSkillsPython: false,
@@ -78,7 +90,9 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["apps/macos/Sources/OpenClawProtocol/GatewayModels.swift"])).toEqual(
       {
         runNode: false,
+        runChannels: false,
         runMacos: false,
+        runMacosNative: false,
         runAndroid: false,
         runWindows: false,
         runSkillsPython: false,
@@ -89,7 +103,9 @@ describe("detectChangedScope", () => {
   it("enables node lane for non-native non-doc files by fallback", () => {
     expect(detectChangedScope(["README.md"])).toEqual({
       runNode: false,
+      runChannels: false,
       runMacos: false,
+      runMacosNative: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -97,7 +113,9 @@ describe("detectChangedScope", () => {
 
     expect(detectChangedScope(["assets/icon.png"])).toEqual({
       runNode: true,
+      runChannels: true,
       runMacos: false,
+      runMacosNative: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -107,7 +125,9 @@ describe("detectChangedScope", () => {
   it("keeps windows lane off for non-runtime GitHub metadata files", () => {
     expect(detectChangedScope([".github/labeler.yml"])).toEqual({
       runNode: true,
+      runChannels: false,
       runMacos: false,
+      runMacosNative: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -117,7 +137,9 @@ describe("detectChangedScope", () => {
   it("runs Python skill tests when skills change", () => {
     expect(detectChangedScope(["skills/openai-image-gen/scripts/test_gen.py"])).toEqual({
       runNode: true,
+      runChannels: true,
       runMacos: false,
+      runMacosNative: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: true,
@@ -127,7 +149,9 @@ describe("detectChangedScope", () => {
   it("runs platform lanes when the CI workflow changes", () => {
     expect(detectChangedScope([".github/workflows/ci.yml"])).toEqual({
       runNode: true,
+      runChannels: false,
       runMacos: true,
+      runMacosNative: false,
       runAndroid: true,
       runWindows: true,
       runSkillsPython: true,

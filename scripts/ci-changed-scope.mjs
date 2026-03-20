@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
-/** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean }} ChangedScope */
+/** @typedef {{ runNode: boolean; runChannels: boolean; runMacos: boolean; runMacosNative: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean }} ChangedScope */
 
 const DOCS_PATH_RE = /^(docs\/|.*\.mdx?$)/;
 const SKILLS_PYTHON_SCOPE_RE = /^skills\//;
@@ -25,7 +25,9 @@ export function detectChangedScope(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
     return {
       runNode: true,
+      runChannels: true,
       runMacos: true,
+      runMacosNative: true,
       runAndroid: true,
       runWindows: true,
       runSkillsPython: true,
@@ -33,7 +35,9 @@ export function detectChangedScope(changedPaths) {
   }
 
   let runNode = false;
+  let runChannels = false;
   let runMacos = false;
+  let runMacosNative = false;
   let runAndroid = false;
   let runWindows = false;
   let runSkillsPython = false;
@@ -64,6 +68,7 @@ export function detectChangedScope(changedPaths) {
 
     if (!MACOS_PROTOCOL_GEN_RE.test(path) && MACOS_NATIVE_RE.test(path)) {
       runMacos = true;
+      runMacosNative = true;
     }
 
     if (ANDROID_NATIVE_RE.test(path)) {
@@ -72,6 +77,9 @@ export function detectChangedScope(changedPaths) {
 
     if (NODE_SCOPE_RE.test(path)) {
       runNode = true;
+      if (!path.startsWith(".github/")) {
+        runChannels = true;
+      }
     }
 
     if (WINDOWS_SCOPE_RE.test(path)) {
@@ -85,9 +93,10 @@ export function detectChangedScope(changedPaths) {
 
   if (!runNode && hasNonDocs && hasNonNativeNonDocs) {
     runNode = true;
+    runChannels = true;
   }
 
-  return { runNode, runMacos, runAndroid, runWindows, runSkillsPython };
+  return { runNode, runChannels, runMacos, runMacosNative, runAndroid, runWindows, runSkillsPython };
 }
 
 /**
@@ -118,7 +127,9 @@ export function writeGitHubOutput(scope, outputPath = process.env.GITHUB_OUTPUT)
     throw new Error("GITHUB_OUTPUT is required");
   }
   appendFileSync(outputPath, `run_node=${scope.runNode}\n`, "utf8");
+  appendFileSync(outputPath, `run_channels=${scope.runChannels}\n`, "utf8");
   appendFileSync(outputPath, `run_macos=${scope.runMacos}\n`, "utf8");
+  appendFileSync(outputPath, `run_macos_native=${scope.runMacosNative}\n`, "utf8");
   appendFileSync(outputPath, `run_android=${scope.runAndroid}\n`, "utf8");
   appendFileSync(outputPath, `run_windows=${scope.runWindows}\n`, "utf8");
   appendFileSync(outputPath, `run_skills_python=${scope.runSkillsPython}\n`, "utf8");
@@ -153,7 +164,9 @@ if (isDirectRun()) {
     if (changedPaths.length === 0) {
       writeGitHubOutput({
         runNode: true,
+        runChannels: true,
         runMacos: true,
+        runMacosNative: true,
         runAndroid: true,
         runWindows: true,
         runSkillsPython: true,
@@ -164,7 +177,9 @@ if (isDirectRun()) {
   } catch {
     writeGitHubOutput({
       runNode: true,
+      runChannels: true,
       runMacos: true,
+      runMacosNative: true,
       runAndroid: true,
       runWindows: true,
       runSkillsPython: true,
