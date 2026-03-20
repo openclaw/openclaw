@@ -47,6 +47,9 @@ describe("skills entries config schema", () => {
 
   it("accepts skills policy global+agent override shape", () => {
     const res = OpenClawSchema.safeParse({
+      agents: {
+        list: [{ id: "ops" }],
+      },
       skills: {
         policy: {
           globalEnabled: ["web-search", "weather"],
@@ -65,6 +68,9 @@ describe("skills entries config schema", () => {
 
   it("rejects unknown fields under skills policy overrides", () => {
     const res = OpenClawSchema.safeParse({
+      agents: {
+        list: [{ id: "ops" }],
+      },
       skills: {
         policy: {
           globalEnabled: ["web-search"],
@@ -79,5 +85,35 @@ describe("skills entries config schema", () => {
     });
 
     expect(res.success).toBe(false);
+  });
+
+  it("rejects unknown agent ids under skills policy overrides", () => {
+    const res = OpenClawSchema.safeParse({
+      agents: {
+        list: [{ id: "ops" }],
+      },
+      skills: {
+        policy: {
+          agentOverrides: {
+            typoedOps: {
+              enabled: ["jira"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+    if (res.success) {
+      return;
+    }
+
+    expect(
+      res.error.issues.some(
+        (issue) =>
+          issue.path.join(".") === "skills.policy.agentOverrides.typoedOps" &&
+          issue.message.includes("Unknown agent id"),
+      ),
+    ).toBe(true);
   });
 });
