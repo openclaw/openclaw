@@ -126,6 +126,7 @@ async function executeCompact(
   }
 }
 
+const MODEL_SUBCOMMANDS = new Set(["list", "status"]);
 async function executeModel(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -133,8 +134,7 @@ async function executeModel(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
-  if (!args) {
-    try {
+  if (!args || MODEL_SUBCOMMANDS.has(args.trim().toLowerCase())) {    try {
       const [sessions, models] = await Promise.all([
         client.request<SessionsListResult>("sessions.list", {}),
         modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),

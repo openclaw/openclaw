@@ -558,3 +558,55 @@ describe("executeSlashCommand directives", () => {
     });
   });
 });
+
+describe("executeSlashCommand /model subcommands", () => {
+  it("treats /model list as a status query, not a model-set", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: { modelProvider: "openai", model: "default-model" },
+          sessions: [row("agent:main:main", { model: "gpt-4.1-mini" })],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [{ id: "gpt-4.1-mini" }] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "list",
+    );
+
+    expect(result.content).toContain("Current model");
+    expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+  });
+
+  it("treats /model status as a status query, not a model-set", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: { modelProvider: "openai", model: "default-model" },
+          sessions: [row("agent:main:main", { model: "gpt-4.1-mini" })],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [{ id: "gpt-4.1-mini" }] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "status",
+    );
+
+    expect(result.content).toContain("Current model");
+    expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+  });
+});
