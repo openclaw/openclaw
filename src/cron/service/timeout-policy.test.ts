@@ -23,9 +23,28 @@ function makeJob(payload: CronJob["payload"]): CronJob {
 }
 
 describe("timeout-policy", () => {
-  it("uses default timeout for non-agent jobs", () => {
+  it("uses default timeout for systemEvent jobs with wakeMode=next-heartbeat", () => {
     const timeout = resolveCronJobTimeoutMs(makeJob({ kind: "systemEvent", text: "hello" }));
     expect(timeout).toBe(DEFAULT_JOB_TIMEOUT_MS);
+  });
+
+  it("uses expanded safety timeout for systemEvent jobs targeting main with wakeMode=now", () => {
+    // wakeMode="now" + sessionTarget="main" blocks until the full agent turn completes
+    // via runHeartbeatOnce(), so it needs the same generous ceiling as agentTurn jobs.
+    const job: CronJob = {
+      id: "job-1",
+      name: "job",
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "check in" },
+      state: {},
+    };
+    const timeout = resolveCronJobTimeoutMs(job);
+    expect(timeout).toBe(AGENT_TURN_SAFETY_TIMEOUT_MS);
   });
 
   it("uses expanded safety timeout for agentTurn jobs without explicit timeout", () => {
