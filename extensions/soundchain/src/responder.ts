@@ -41,11 +41,13 @@ export async function generateReply(senderName: string, message: string): Promis
   // Step 1: Enrich message with URL content (YouTube transcripts, web page text)
   let enrichedMessage = message;
   try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), CONTENT_FETCH_TIMEOUT_MS);
     enrichedMessage = await Promise.race([
-      enrichMessageWithUrlContent(message),
-      new Promise<string>((_, reject) =>
-        setTimeout(() => reject(new Error("content fetch timeout")), CONTENT_FETCH_TIMEOUT_MS),
-      ),
+      enrichMessageWithUrlContent(message).finally(() => clearTimeout(timer)),
+      new Promise<string>((_, reject) => {
+        ac.signal.addEventListener("abort", () => reject(new Error("content fetch timeout")));
+      }),
     ]);
     if (enrichedMessage !== message) {
       console.log(
