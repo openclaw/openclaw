@@ -580,9 +580,15 @@ function hasVisibleSkillMatch(params: {
 function rewriteUnknownToolAsSkillHint(params: {
   raw: string;
   skillsSnapshot?: SkillSnapshot;
+  allowedToolNames?: ReadonlySet<string>;
 }): string | undefined {
   const toolName = resolveUnknownToolName(params.raw);
   if (!toolName) {
+    return undefined;
+  }
+  // If the tool name matches an actual tool in the run's tool set, don't
+  // redirect to a skill — the real fix is to enable/load the tool.
+  if (params.allowedToolNames?.has(toolName)) {
     return undefined;
   }
   if (!hasVisibleSkillMatch({ skillsSnapshot: params.skillsSnapshot, toolName })) {
@@ -599,16 +605,19 @@ function rewriteUnknownToolAsSkillHint(params: {
 /**
  * Rewrites an unknown-tool error message in a tool result to include a skill
  * hint when the tool name matches a visible skill.  Returns `undefined` when
- * the message does not look like an unknown-tool error or when no skill match
- * is found (caller should leave the result unchanged in that case).
+ * the message does not look like an unknown-tool error, when no skill match
+ * is found, or when the tool name collides with a real tool in the run's tool
+ * set (caller should leave the result unchanged in that case).
  */
 export function rewriteToolResultUnknownToolError(params: {
   errorText: string;
   skillsSnapshot?: SkillSnapshot;
+  allowedToolNames?: ReadonlySet<string>;
 }): string | undefined {
   return rewriteUnknownToolAsSkillHint({
     raw: params.errorText,
     skillsSnapshot: params.skillsSnapshot,
+    allowedToolNames: params.allowedToolNames,
   });
 }
 export function formatAssistantErrorText(

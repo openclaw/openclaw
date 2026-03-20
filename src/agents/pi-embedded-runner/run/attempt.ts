@@ -1954,6 +1954,7 @@ export async function runEmbeddedAttempt(
         const rewritten = rewriteToolResultUnknownToolError({
           errorText,
           skillsSnapshot: params.skillsSnapshot,
+          allowedToolNames,
         });
         if (!rewritten) {
           return prev;
