@@ -617,6 +617,20 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.onPreviewDelivered).not.toHaveBeenCalled();
   });
 
+  it("calls onPreviewDelivered when stop creates first preview", async () => {
+    const harness = createHarness({ answerMessageIdAfterStop: 777 });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Hello final",
+      payload: { text: "Hello final" },
+      infoKind: "final",
+    });
+
+    expect(result).toBe("preview-finalized");
+    expect(harness.onPreviewDelivered).toHaveBeenCalledWith("Hello final", 777);
+  });
+
   it("calls onPreviewDelivered with visible preview text on regressive-skip", async () => {
     const harness = createHarness({ answerMessageId: 999 });
     harness.lanes.answer.lastPartialText = "Recovered final answer.";

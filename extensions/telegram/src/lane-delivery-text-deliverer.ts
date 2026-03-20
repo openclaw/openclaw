@@ -434,8 +434,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       if (finalized === "regressive-skipped") {
         // Kept the longer preview; emit hook with actual visible content.
-        const visibleText = archivedPreview.textSnapshot ?? text;
-        params.onPreviewDelivered?.(visibleText, archivedPreview.messageId);
+        params.onPreviewDelivered?.(archivedPreview.textSnapshot, archivedPreview.messageId);
         return "preview-finalized";
       }
       if (finalized === "retained") {
@@ -540,8 +539,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           markActivePreviewComplete(laneName);
           // The final text was shorter than the visible preview, so we kept the
           // preview. Emit the hook with the actual visible content (lastPartialText).
-          const visibleText = lane.lastPartialText ?? text;
-          params.onPreviewDelivered?.(visibleText, previewMessageId ?? lane.stream?.messageId());
+          params.onPreviewDelivered?.(
+            lane.lastPartialText,
+            previewMessageId ?? lane.stream?.messageId(),
+          );
           return "preview-finalized";
         }
         if (finalized === "retained") {
