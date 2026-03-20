@@ -216,6 +216,19 @@ interface OllamaChatResponse {
   eval_duration?: number;
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function parseToolArgs(raw: unknown): Record<string, unknown> {
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  return (raw as Record<string, unknown>) ?? {};
+}
+
 // ── Message conversion ──────────────────────────────────────────────────────
 
 type InputContentPart =
@@ -254,19 +267,7 @@ function extractToolCalls(content: unknown): OllamaToolCall[] {
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
-      // Ensure arguments are always an object, not a string (OpenAI format passes JSON string)
-      const args = part.arguments;
-      let parsedArgs: Record<string, unknown>;
-      if (typeof args === "string") {
-        try {
-          parsedArgs = JSON.parse(args);
-        } catch {
-          parsedArgs = {};
-        }
-      } else {
-        parsedArgs = args ?? {};
-      }
-      result.push({ function: { name: part.name, arguments: parsedArgs } });
+      result.push({ function: { name: part.name, arguments: parseToolArgs(part.arguments) } });
     } else if (part.type === "tool_use") {
       result.push({ function: { name: part.name, arguments: part.input ?? {} } });
     }
@@ -363,23 +364,11 @@ export function buildAssistantMessage(
   const toolCalls = response.message.tool_calls;
   if (toolCalls && toolCalls.length > 0) {
     for (const tc of toolCalls) {
-      // Normalize arguments: ensure it's always an object, not a string
-      const rawArgs = tc.function.arguments;
-      const normalizedArgs =
-        typeof rawArgs === "string"
-          ? (() => {
-              try {
-                return JSON.parse(rawArgs) as Record<string, unknown>;
-              } catch {
-                return {} as Record<string, unknown>;
-              }
-            })()
-          : (rawArgs ?? {});
       content.push({
         type: "toolCall",
         id: `ollama_call_${randomUUID()}`,
         name: tc.function.name,
-        arguments: normalizedArgs,
+        arguments: parseToolArgs(tc.function.arguments),
       });
     }
   }
