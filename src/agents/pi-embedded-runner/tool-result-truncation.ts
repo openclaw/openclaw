@@ -1,6 +1,8 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { acquireSessionWriteLock } from "../session-write-lock.js";
 import { log } from "./logger.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 
@@ -212,8 +214,10 @@ export async function truncateOversizedToolResultsInSession(params: {
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { sessionFile, contextWindowTokens } = params;
   const maxChars = calculateMaxToolResultChars(contextWindowTokens);
+  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
 
   try {
+    sessionLock = await acquireSessionWriteLock({ sessionFile });
     const sessionManager = SessionManager.open(sessionFile);
     const branch = sessionManager.getBranch();
 
@@ -266,6 +270,9 @@ export async function truncateOversizedToolResultsInSession(params: {
       sessionManager,
       replacements,
     });
+    if (rewriteResult.changed) {
+      emitSessionTranscriptUpdate(sessionFile);
+    }
 
     log.info(
       `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
@@ -282,6 +289,8 @@ export async function truncateOversizedToolResultsInSession(params: {
     const errMsg = err instanceof Error ? err.message : String(err);
     log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
     return { truncated: false, truncatedCount: 0, reason: errMsg };
+  } finally {
+    await sessionLock?.release();
   }
 }
 
