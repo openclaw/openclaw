@@ -1,207 +1,309 @@
 ---
-title: "Building Extensions"
-summary: "Step-by-step guide for creating OpenClaw channel and provider extensions"
+title: "Building Plugins"
+sidebarTitle: "Building Plugins"
+summary: "Step-by-step guide for creating OpenClaw plugins with any combination of capabilities"
 read_when:
-  - You want to create a new OpenClaw plugin or extension
+  - You want to create a new OpenClaw plugin
   - You need to understand the plugin SDK import patterns
-  - You are adding a new channel or provider to OpenClaw
+  - You are adding a new channel, provider, tool, or other capability to OpenClaw
 ---
 
-# Building Extensions
+# Building Plugins
 
-This guide walks through creating an OpenClaw extension from scratch. Extensions
-can add channels, model providers, tools, or other capabilities.
+Plugins extend OpenClaw with new capabilities: channels, model providers, speech,
+image generation, web search, agent tools, or any combination. A single plugin
+can register multiple capabilities.
+
+OpenClaw encourages **external plugin development**. You do not need to add your
+plugin to the OpenClaw repository. Publish your plugin on npm, and users install
+it with `openclaw plugins install <npm-spec>`. OpenClaw also maintains a set of
+core plugins in-repo, but the plugin system is designed for independent ownership
+and distribution.
 
 ## Prerequisites
 
-- OpenClaw repository cloned and dependencies installed (`pnpm install`)
+- Node >= 22 and a package manager (npm or pnpm)
 - Familiarity with TypeScript (ESM)
+- For in-repo plugins: OpenClaw repository cloned and `pnpm install` done
 
-## Extension structure
+## Plugin capabilities
 
-Every extension lives under `extensions/<name>/` and follows this layout:
+A plugin can register one or more capabilities. The capability you register
+determines what your plugin provides to OpenClaw:
+
+| Capability          | Registration method                           | What it adds                   |
+| ------------------- | --------------------------------------------- | ------------------------------ |
+| Text inference      | `api.registerProvider(...)`                   | Model provider (LLM)           |
+| Channel / messaging | `api.registerChannel(...)`                    | Chat channel (e.g. Slack, IRC) |
+| Speech              | `api.registerSpeechProvider(...)`             | Text-to-speech / STT           |
+| Media understanding | `api.registerMediaUnderstandingProvider(...)` | Image/audio/video analysis     |
+| Image generation    | `api.registerImageGenerationProvider(...)`    | Image generation               |
+| Web search          | `api.registerWebSearchProvider(...)`          | Web search provider            |
+| Agent tools         | `api.registerTool(...)`                       | Tools callable by the agent    |
+
+A plugin that registers zero capabilities but provides hooks or services is a
+**hook-only** plugin. That pattern is still supported.
+
+## Plugin structure
+
+Plugins follow this layout (whether in-repo or standalone):
 
 ```
-extensions/my-channel/
+my-plugin/
 ├── package.json          # npm metadata + openclaw config
-├── index.ts              # Entry point (defineChannelPluginEntry)
+├── openclaw.plugin.json  # Plugin manifest
+├── index.ts              # Entry point
 ├── setup-entry.ts        # Setup wizard (optional)
-├── api.ts                # Public contract barrel (optional)
-├── runtime-api.ts        # Internal runtime barrel (optional)
+├── api.ts                # Public exports (optional)
+├── runtime-api.ts        # Internal exports (optional)
 └── src/
-    ├── channel.ts        # Channel adapter implementation
+    ├── provider.ts       # Capability implementation
     ├── runtime.ts        # Runtime wiring
     └── *.test.ts         # Colocated tests
 ```
 
-## Step 1: Create the package
+## Create a plugin
 
-Create `extensions/my-channel/package.json`:
+<Steps>
+  <Step title="Create the package">
+    Create `package.json` with the `openclaw` metadata block. The structure
+    depends on what capabilities your plugin provides.
 
-```json
-{
-  "name": "@openclaw/my-channel",
-  "version": "2026.1.1",
-  "description": "OpenClaw My Channel plugin",
-  "type": "module",
-  "dependencies": {},
-  "openclaw": {
-    "extensions": ["./index.ts"],
-    "setupEntry": "./setup-entry.ts",
-    "channel": {
-      "id": "my-channel",
-      "label": "My Channel",
-      "selectionLabel": "My Channel (plugin)",
-      "docsPath": "/channels/my-channel",
-      "docsLabel": "my-channel",
-      "blurb": "Short description of the channel.",
-      "order": 80
-    },
-    "install": {
-      "npmSpec": "@openclaw/my-channel",
-      "localPath": "extensions/my-channel"
+    **Channel plugin example:**
+
+    ```json
+    {
+      "name": "@myorg/openclaw-my-channel",
+      "version": "1.0.0",
+      "type": "module",
+      "openclaw": {
+        "extensions": ["./index.ts"],
+        "channel": {
+          "id": "my-channel",
+          "label": "My Channel",
+          "blurb": "Short description of the channel."
+        }
+      }
     }
-  }
-}
-```
+    ```
 
-The `openclaw` field tells the plugin system what your extension provides.
-For provider plugins, use `providers` instead of `channel`.
+    **Provider plugin example:**
 
-## Step 2: Define the entry point
+    ```json
+    {
+      "name": "@myorg/openclaw-my-provider",
+      "version": "1.0.0",
+      "type": "module",
+      "openclaw": {
+        "extensions": ["./index.ts"],
+        "providers": ["my-provider"]
+      }
+    }
+    ```
 
-Create `extensions/my-channel/index.ts`:
+    The `openclaw` field tells the plugin system what your plugin provides.
+    A plugin can declare both `channel` and `providers` if it provides multiple
+    capabilities.
 
-```typescript
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+  </Step>
 
-export default defineChannelPluginEntry({
-  id: "my-channel",
-  name: "My Channel",
-  description: "Connects OpenClaw to My Channel",
-  plugin: {
-    // Channel adapter implementation
-  },
-});
-```
+  <Step title="Define the entry point">
+    The entry point registers your capabilities with the plugin API.
 
-For provider plugins, use `definePluginEntry` instead.
+    **Channel plugin:**
 
-## Step 3: Import from focused subpaths
+    ```typescript
+    import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 
-The plugin SDK exposes many focused subpaths. Always import from specific
-subpaths rather than the monolithic root:
+    export default defineChannelPluginEntry({
+      id: "my-channel",
+      name: "My Channel",
+      description: "Connects OpenClaw to My Channel",
+      plugin: {
+        // Channel adapter implementation
+      },
+    });
+    ```
 
-```typescript
-// Correct: focused subpaths
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import { createOptionalChannelSetupSurface } from "openclaw/plugin-sdk/channel-setup";
-import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
-import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-oauth";
+    **Provider plugin:**
 
-// Wrong: monolithic root (lint will reject this)
-import { ... } from "openclaw/plugin-sdk";
-```
+    ```typescript
+    import { definePluginEntry } from "openclaw/plugin-sdk/core";
 
-Common subpaths:
+    export default definePluginEntry({
+      id: "my-provider",
+      name: "My Provider",
+      register(api) {
+        api.registerProvider({
+          // Provider implementation
+        });
+      },
+    });
+    ```
 
-| Subpath                             | Purpose                              |
-| ----------------------------------- | ------------------------------------ |
-| `plugin-sdk/core`                   | Plugin entry definitions, base types |
-| `plugin-sdk/channel-setup`          | Optional setup adapters/wizards      |
-| `plugin-sdk/channel-pairing`        | DM pairing primitives                |
-| `plugin-sdk/channel-reply-pipeline` | Prefix + typing reply wiring         |
-| `plugin-sdk/channel-config-schema`  | Config schema builders               |
-| `plugin-sdk/channel-policy`         | Group/DM policy helpers              |
-| `plugin-sdk/secret-input`           | Secret input parsing/helpers         |
-| `plugin-sdk/webhook-ingress`        | Webhook request/target helpers       |
-| `plugin-sdk/runtime-store`          | Persistent plugin storage            |
-| `plugin-sdk/allow-from`             | Allowlist resolution                 |
-| `plugin-sdk/reply-payload`          | Message reply types                  |
-| `plugin-sdk/provider-oauth`         | OAuth login + PKCE helpers           |
-| `plugin-sdk/provider-onboard`       | Provider onboarding config patches   |
-| `plugin-sdk/testing`                | Test utilities                       |
+    **Multi-capability plugin** (provider + tool):
 
-Use the narrowest primitive that matches the job. Reach for `channel-runtime`
-or other larger helper barrels only when a dedicated subpath does not exist yet.
+    ```typescript
+    import { definePluginEntry } from "openclaw/plugin-sdk/core";
 
-## Step 4: Use local barrels for internal imports
+    export default definePluginEntry({
+      id: "my-plugin",
+      name: "My Plugin",
+      register(api) {
+        api.registerProvider({ /* ... */ });
+        api.registerTool({ /* ... */ });
+        api.registerImageGenerationProvider({ /* ... */ });
+      },
+    });
+    ```
 
-Within your extension, create barrel files for internal code sharing instead
-of importing through the plugin SDK:
+    Use `defineChannelPluginEntry` for channel plugins and `definePluginEntry`
+    for everything else. A single plugin can register as many capabilities as needed.
 
-```typescript
-// api.ts — public contract for this extension
-export { MyChannelConfig } from "./src/config.js";
-export { MyChannelRuntime } from "./src/runtime.js";
+  </Step>
 
-// runtime-api.ts — internal-only exports (not for production consumers)
-export { internalHelper } from "./src/helpers.js";
-```
+  <Step title="Import from focused SDK subpaths">
+    Always import from specific `openclaw/plugin-sdk/\<subpath\>` paths. The old
+    monolithic import is deprecated (see [SDK Migration](/plugins/sdk-migration)).
 
-**Self-import guardrail**: never import your own extension back through its
-published SDK contract path from production files. Route internal imports
-through `./api.ts` or `./runtime-api.ts` instead. The SDK contract is for
-external consumers only.
+    ```typescript
+    // Correct: focused subpaths
+    import { definePluginEntry } from "openclaw/plugin-sdk/core";
+    import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+    import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-oauth";
 
-## Step 5: Add a plugin manifest
+    // Wrong: monolithic root (lint will reject this)
+    import { ... } from "openclaw/plugin-sdk";
+    ```
 
-Create `openclaw.plugin.json` in your extension root:
+    <Accordion title="Common subpaths reference">
+      | Subpath | Purpose |
+      | --- | --- |
+      | `plugin-sdk/core` | Plugin entry definitions and base types |
+      | `plugin-sdk/channel-setup` | Setup wizard adapters |
+      | `plugin-sdk/channel-pairing` | DM pairing primitives |
+      | `plugin-sdk/channel-reply-pipeline` | Reply prefix + typing wiring |
+      | `plugin-sdk/channel-config-schema` | Config schema builders |
+      | `plugin-sdk/channel-policy` | Group/DM policy helpers |
+      | `plugin-sdk/secret-input` | Secret input parsing/helpers |
+      | `plugin-sdk/webhook-ingress` | Webhook request/target helpers |
+      | `plugin-sdk/runtime-store` | Persistent plugin storage |
+      | `plugin-sdk/allow-from` | Allowlist resolution |
+      | `plugin-sdk/reply-payload` | Message reply types |
+      | `plugin-sdk/provider-oauth` | OAuth login + PKCE helpers |
+      | `plugin-sdk/provider-onboard` | Provider onboarding config patches |
+      | `plugin-sdk/testing` | Test utilities |
+    </Accordion>
 
-```json
-{
-  "id": "my-channel",
-  "kind": "channel",
-  "channels": ["my-channel"],
-  "name": "My Channel Plugin",
-  "description": "Connects OpenClaw to My Channel"
-}
-```
+    Use the narrowest subpath that matches the job.
 
-See [Plugin manifest](/plugins/manifest) for the full schema.
+  </Step>
 
-## Step 6: Test with contract tests
+  <Step title="Use local modules for internal imports">
+    Within your plugin, create local module files for internal code sharing
+    instead of re-importing through the plugin SDK:
 
-OpenClaw runs contract tests against all registered plugins. After adding your
-extension, run:
+    ```typescript
+    // api.ts — public exports for this plugin
+    export { MyConfig } from "./src/config.js";
+    export { MyRuntime } from "./src/runtime.js";
 
-```bash
-pnpm test:contracts:channels   # channel plugins
-pnpm test:contracts:plugins    # provider plugins
-```
+    // runtime-api.ts — internal-only exports
+    export { internalHelper } from "./src/helpers.js";
+    ```
 
-Contract tests verify your plugin conforms to the expected interface (setup
-wizard, session binding, message handling, group policy, etc.).
+    <Warning>
+      Never import your own plugin back through its published SDK path from
+      production files. Route internal imports through local files like `./api.ts`
+      or `./runtime-api.ts`. The SDK path is for external consumers only.
+    </Warning>
 
-For unit tests, import test helpers from the public testing surface:
+  </Step>
 
-```typescript
-import { createTestRuntime } from "openclaw/plugin-sdk/testing";
-```
+  <Step title="Add a plugin manifest">
+    Create `openclaw.plugin.json` in your plugin root:
 
-## Lint enforcement
+    ```json
+    {
+      "id": "my-plugin",
+      "kind": "provider",
+      "name": "My Plugin",
+      "description": "Adds My Provider to OpenClaw"
+    }
+    ```
 
-Three scripts enforce SDK boundaries:
+    For channel plugins, set `"kind": "channel"` and add `"channels": ["my-channel"]`.
+
+    See [Plugin Manifest](/plugins/manifest) for the full schema.
+
+  </Step>
+
+  <Step title="Test your plugin">
+    **External plugins:** run your own test suite against the plugin SDK contracts.
+
+    **In-repo plugins:** OpenClaw runs contract tests against all registered plugins:
+
+    ```bash
+    pnpm test:contracts:channels   # channel plugins
+    pnpm test:contracts:plugins    # provider plugins
+    ```
+
+    For unit tests, import test helpers from the testing surface:
+
+    ```typescript
+    import { createTestRuntime } from "openclaw/plugin-sdk/testing";
+    ```
+
+  </Step>
+
+  <Step title="Publish and install">
+    **External plugins:** publish to npm, then install:
+
+    ```bash
+    npm publish
+    openclaw plugins install @myorg/openclaw-my-plugin
+    ```
+
+    **In-repo plugins:** place the plugin under `extensions/` and it is
+    automatically discovered during build.
+
+    Users can browse and install community plugins with:
+
+    ```bash
+    openclaw plugins search <query>
+    openclaw plugins install <npm-spec>
+    ```
+
+  </Step>
+</Steps>
+
+## Lint enforcement (in-repo plugins)
+
+Three scripts enforce SDK boundaries for plugins in the OpenClaw repository:
 
 1. **No monolithic root imports** — `openclaw/plugin-sdk` root is rejected
-2. **No direct src/ imports** — extensions cannot import `../../src/` directly
-3. **No self-imports** — extensions cannot import their own `plugin-sdk/<name>` subpath
+2. **No direct src/ imports** — plugins cannot import `../../src/` directly
+3. **No self-imports** — plugins cannot import their own `plugin-sdk/\<name\>` subpath
 
 Run `pnpm check` to verify all boundaries before committing.
 
-## Checklist
+External plugins are not subject to these lint rules, but following the same
+patterns is strongly recommended.
 
-Before submitting your extension:
+## Pre-submission checklist
 
-- [ ] `package.json` has correct `openclaw` metadata
-- [ ] Entry point uses `defineChannelPluginEntry` or `definePluginEntry`
-- [ ] All imports use focused `plugin-sdk/<subpath>` paths
-- [ ] Internal imports use local barrels, not SDK self-imports
-- [ ] `openclaw.plugin.json` manifest is present and valid
-- [ ] Contract tests pass (`pnpm test:contracts`)
-- [ ] Unit tests colocated as `*.test.ts`
-- [ ] `pnpm check` passes (lint + format)
-- [ ] Doc page created under `docs/channels/` or `docs/plugins/`
+<Check>**package.json** has correct `openclaw` metadata</Check>
+<Check>Entry point uses `defineChannelPluginEntry` or `definePluginEntry`</Check>
+<Check>All imports use focused `plugin-sdk/\<subpath\>` paths</Check>
+<Check>Internal imports use local modules, not SDK self-imports</Check>
+<Check>`openclaw.plugin.json` manifest is present and valid</Check>
+<Check>Tests pass</Check>
+<Check>`pnpm check` passes (in-repo plugins)</Check>
+
+## Related
+
+- [Plugin SDK Migration](/plugins/sdk-migration) — migrating from the deprecated compat import
+- [Plugin Architecture](/plugins/architecture) — internals and capability model
+- [Plugin Manifest](/plugins/manifest) — full manifest schema
+- [Plugin Agent Tools](/plugins/agent-tools) — adding agent tools in a plugin
+- [Community Plugins](/plugins/community) — listing and quality bar

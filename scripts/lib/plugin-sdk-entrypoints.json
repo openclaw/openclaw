@@ -54,8 +54,6 @@
   "tlon",
   "twitch",
   "voice-call",
-  "zalo",
-  "zalouser",
   "imessage",
   "imessage-core",
   "whatsapp",
@@ -115,6 +113,8 @@
   "secret-input",
   "thread-ownership",
   "web-media",
+  "zalo",
+  "zalouser",
   "speech",
   "state-paths",
   "tool-send"
