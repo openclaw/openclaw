@@ -658,6 +658,16 @@ type ReplayToolCallBlock = {
   arguments?: unknown;
 };
 
+type ReplayToolCallSanitizeReport = {
+  messages: AgentMessage[];
+  droppedAssistantMessages: number;
+};
+
+type AnthropicToolResultContentBlock = {
+  type?: unknown;
+  toolUseId?: unknown;
+};
+
 function isReplayToolCallBlock(block: unknown): block is ReplayToolCallBlock {
   if (!block || typeof block !== "object") {
     return false;
@@ -692,17 +702,15 @@ function resolveReplayToolCallName(
   if (!allowedToolNames || allowedToolNames.size === 0) {
     return trimmed;
   }
-  return (
-    resolveExactAllowedToolName(trimmed, allowedToolNames) ??
-    resolveStructuredAllowedToolName(trimmed, allowedToolNames)
-  );
+  return resolveExactAllowedToolName(trimmed, allowedToolNames);
 }
 
 function sanitizeReplayToolCallInputs(
   messages: AgentMessage[],
   allowedToolNames?: Set<string>,
-): AgentMessage[] {
+): ReplayToolCallSanitizeReport {
   let changed = false;
+  let droppedAssistantMessages = 0;
   const out: AgentMessage[] = [];
 
   for (const message of messages) {
@@ -752,11 +760,83 @@ function sanitizeReplayToolCallInputs(
       changed = true;
       if (nextContent.length > 0) {
         out.push({ ...message, content: nextContent });
+      } else {
+        droppedAssistantMessages += 1;
       }
       continue;
     }
 
     out.push(message);
+  }
+
+  return {
+    messages: changed ? out : messages,
+    droppedAssistantMessages,
+  };
+}
+
+function sanitizeAnthropicReplayToolResults(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const out: AgentMessage[] = [];
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object" || message.role !== "user") {
+      out.push(message);
+      continue;
+    }
+    if (!Array.isArray(message.content)) {
+      out.push(message);
+      continue;
+    }
+
+    const previous = messages[index - 1];
+    const validToolUseIds = new Set<string>();
+    if (previous && typeof previous === "object" && previous.role === "assistant") {
+      const previousContent = (previous as { content?: unknown }).content;
+      if (Array.isArray(previousContent)) {
+        for (const block of previousContent) {
+          if (!block || typeof block !== "object") {
+            continue;
+          }
+          const typedBlock = block as { type?: unknown; id?: unknown };
+          if (typedBlock.type !== "toolUse" || typeof typedBlock.id !== "string") {
+            continue;
+          }
+          const trimmedId = typedBlock.id.trim();
+          if (trimmedId) {
+            validToolUseIds.add(trimmedId);
+          }
+        }
+      }
+    }
+
+    const nextContent = message.content.filter((block) => {
+      if (!block || typeof block !== "object") {
+        return true;
+      }
+      const typedBlock = block as AnthropicToolResultContentBlock;
+      if (typedBlock.type !== "toolResult" || typeof typedBlock.toolUseId !== "string") {
+        return true;
+      }
+      return validToolUseIds.size > 0 && validToolUseIds.has(typedBlock.toolUseId);
+    });
+
+    if (nextContent.length === message.content.length) {
+      out.push(message);
+      continue;
+    }
+
+    changed = true;
+    if (nextContent.length > 0) {
+      out.push({ ...message, content: nextContent });
+      continue;
+    }
+
+    out.push({
+      ...message,
+      content: [{ type: "text", text: "[tool results omitted]" }],
+    } as AgentMessage);
   }
 
   return changed ? out : messages;
@@ -913,6 +993,7 @@ export function wrapStreamFnTrimToolCallNames(
 export function wrapStreamFnSanitizeMalformedToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
+  transcriptPolicy?: Pick<TranscriptPolicy, "validateGeminiTurns" | "validateAnthropicTurns">,
 ): StreamFn {
   return (model, context, options) => {
     const ctx = context as unknown as { messages?: unknown };
@@ -921,13 +1002,26 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       return baseFn(model, context, options);
     }
     const sanitized = sanitizeReplayToolCallInputs(messages as AgentMessage[], allowedToolNames);
-    if (sanitized === messages) {
+    if (sanitized.messages === messages) {
       return baseFn(model, context, options);
     }
-    const paired = sanitizeToolUseResultPairing(sanitized);
+    let nextMessages = sanitizeToolUseResultPairing(sanitized.messages, {
+      preserveErroredAssistantResults: true,
+    });
+    if (transcriptPolicy?.validateAnthropicTurns) {
+      nextMessages = sanitizeAnthropicReplayToolResults(nextMessages);
+    }
+    if (sanitized.droppedAssistantMessages > 0 || transcriptPolicy?.validateAnthropicTurns) {
+      if (transcriptPolicy?.validateGeminiTurns) {
+        nextMessages = validateGeminiTurns(nextMessages);
+      }
+      if (transcriptPolicy?.validateAnthropicTurns) {
+        nextMessages = validateAnthropicTurns(nextMessages);
+      }
+    }
     const nextContext = {
       ...(context as unknown as Record<string, unknown>),
-      messages: paired,
+      messages: nextMessages,
     } as unknown;
     return baseFn(model, nextContext as typeof context, options);
   };
