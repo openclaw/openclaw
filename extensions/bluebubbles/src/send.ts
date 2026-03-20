@@ -88,24 +88,22 @@ function resolvePrivateApiDecision(params: {
   wantsEffect: boolean;
 }): PrivateApiDecision {
   const { privateApiStatus, wantsReplyThread, wantsEffect } = params;
-  const needsPrivateApi = wantsReplyThread || wantsEffect;
-  const canUsePrivateApi =
-    isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
+  const canUsePrivateApi = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
   const throwEffectDisabledError = wantsEffect && privateApiStatus === false;
-  if (!needsPrivateApi || privateApiStatus !== null) {
-    return { canUsePrivateApi, throwEffectDisabledError };
+  if (privateApiStatus === null && (wantsReplyThread || wantsEffect)) {
+    const requested = [
+      wantsReplyThread ? "reply threading" : null,
+      wantsEffect ? "message effects" : null,
+    ]
+      .filter(Boolean)
+      .join(" + ");
+    return {
+      canUsePrivateApi,
+      throwEffectDisabledError,
+      warningMessage: `Private API status unknown; sending without ${requested}. Run a status probe to restore private-api features.`,
+    };
   }
-  const requested = [
-    wantsReplyThread ? "reply threading" : null,
-    wantsEffect ? "message effects" : null,
-  ]
-    .filter(Boolean)
-    .join(" + ");
-  return {
-    canUsePrivateApi,
-    throwEffectDisabledError,
-    warningMessage: `Private API status unknown; sending without ${requested}. Run a status probe to restore private-api features.`,
-  };
+  return { canUsePrivateApi, throwEffectDisabledError };
 }
 
 async function parseBlueBubblesMessageResponse(res: Response): Promise<BlueBubblesSendResult> {
