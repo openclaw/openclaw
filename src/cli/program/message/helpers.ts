@@ -53,6 +53,15 @@ function classifyGatewayError(err: unknown): "unreachable" | "server" {
   }
   // GatewayClientRequestError means the gateway was reachable and returned an error response
   if (err.constructor?.name === "GatewayClientRequestError") return "server";
+  // Remote-mode misconfiguration: gateway was configured but URL is missing — surface to user
+  if (msg.includes("gateway remote mode misconfigured")) return "server";
+  // Unsupported method: gateway is reachable but doesn't expose this RPC method
+  if (msg.includes("does not support required method")) return "server";
+  // Auth/close-frame errors: gateway accepted the connection but rejected the request
+  // formatGatewayCloseError produces "gateway closed (code...): reason"
+  if (msg.startsWith("gateway closed")) return "server";
+  // Explicit auth failures
+  if (msg.includes("unauthorized") || msg.includes("forbidden")) return "server";
   return "unreachable";
 }
 
@@ -147,6 +156,9 @@ export function createMessageCliHelpers(
         if (opts.json) {
           defaultRuntime.log(JSON.stringify({ ok: true, result: gatewayResult.result }));
         }
+        // Run gateway_stop hooks before exit so plugin-backed channels can
+        // perform cleanup (e.g. releasing one-shot CLI connections).
+        await runPluginStopHooks();
         defaultRuntime.exit(0);
         return;
       }
@@ -154,6 +166,7 @@ export function createMessageCliHelpers(
       if (gatewayResult.reason === "server") {
         // Gateway was reachable but returned an error — surface it, don't fall through
         defaultRuntime.error(danger(gatewayResult.error.message));
+        await runPluginStopHooks();
         defaultRuntime.exit(1);
         return;
       }
