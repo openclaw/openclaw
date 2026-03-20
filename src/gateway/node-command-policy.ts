@@ -36,6 +36,8 @@ const CONTACTS_DANGEROUS_COMMANDS = ["contacts.add"];
 const CALENDAR_COMMANDS = ["calendar.events"];
 const CALENDAR_DANGEROUS_COMMANDS = ["calendar.add"];
 
+const CALL_LOG_COMMANDS = ["callLog.search"];
+
 const REMINDERS_COMMANDS = ["reminders.list"];
 const REMINDERS_DANGEROUS_COMMANDS = ["reminders.add"];
 
@@ -43,6 +45,7 @@ const PHOTOS_COMMANDS = ["photos.latest"];
 
 const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
 
+const SMS_COMMANDS = ["sms.search"];
 const SMS_DANGEROUS_COMMANDS = ["sms.send"];
 
 // iOS nodes don't implement system.run/which, but they do support notifications.
@@ -93,7 +96,9 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...ANDROID_DEVICE_COMMANDS,
     ...CONTACTS_COMMANDS,
     ...CALENDAR_COMMANDS,
+    ...CALL_LOG_COMMANDS,
     ...REMINDERS_COMMANDS,
+    ...SMS_COMMANDS,
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
   ],

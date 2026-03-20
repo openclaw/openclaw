@@ -6,10 +6,14 @@ const hoisted = vi.hoisted(() => {
   return { updateSessionStore, resolveStorePath };
 });
 
-vi.mock("../../../../src/config/sessions.js", () => ({
-  updateSessionStore: hoisted.updateSessionStore,
-  resolveStorePath: hoisted.resolveStorePath,
-}));
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  return {
+    ...actual,
+    updateSessionStore: hoisted.updateSessionStore,
+    resolveStorePath: hoisted.resolveStorePath,
+  };
+});
 
 const { closeDiscordThreadSessions } = await import("./thread-session-close.js");
 
@@ -133,6 +137,24 @@ describe("closeDiscordThreadSessions", () => {
 
     expect(count).toBe(0);
     expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
+  });
+
+  it("does not recount sessions that were already reset", async () => {
+    const store = {
+      [MATCHED_KEY]: { updatedAt: 0 },
+      [UNMATCHED_KEY]: { updatedAt: 1_700_000_000_001 },
+    };
+    setupStore(store);
+
+    const count = await closeDiscordThreadSessions({
+      cfg: {},
+      accountId: "default",
+      threadId: THREAD_ID,
+    });
+
+    expect(count).toBe(0);
+    expect(store[MATCHED_KEY].updatedAt).toBe(0);
+    expect(store[UNMATCHED_KEY].updatedAt).toBe(1_700_000_000_001);
   });
 
   it("resolves the store path using cfg.session.store and accountId", async () => {

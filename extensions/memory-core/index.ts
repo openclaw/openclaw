@@ -1,13 +1,11 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/memory-core";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
 
-const memoryCorePlugin = {
+export default definePluginEntry({
   id: "memory-core",
   name: "Memory (Core)",
   description: "File-backed memory search tools and CLI",
   kind: "memory",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerTool(
       (ctx) => {
         const memorySearchTool = api.runtime.tools.createMemorySearchTool({
@@ -33,6 +31,4 @@ const memoryCorePlugin = {
       { commands: ["memory"] },
     );
   },
-};
-
-export default memoryCorePlugin;
+});

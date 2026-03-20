@@ -47,6 +47,7 @@ export function resolvePluginTools(params: {
   existingToolNames?: Set<string>;
   toolAllowlist?: string[];
   suppressNameConflicts?: boolean;
+  allowGatewaySubagentBinding?: boolean;
   env?: NodeJS.ProcessEnv;
 }): AnyAgentTool[] {
   // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
@@ -61,6 +62,11 @@ export function resolvePluginTools(params: {
   const registry = loadOpenClawPlugins({
     config: effectiveConfig,
     workspaceDir: params.context.workspaceDir,
+    runtimeOptions: params.allowGatewaySubagentBinding
+      ? {
+          allowGatewaySubagentBinding: true,
+        }
+      : undefined,
     env,
     logger: createPluginLoaderLogger(log),
   });

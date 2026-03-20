@@ -1,34 +1,31 @@
-import { hasControlCommand } from "../../../../src/auto-reply/command-detection.js";
+import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/channel-runtime";
+import { logInboundDrop } from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  resolveChannelGroupPolicy,
+  resolveChannelGroupRequireMention,
+} from "openclaw/plugin-sdk/config-runtime";
+import { hasControlCommand } from "openclaw/plugin-sdk/reply-runtime";
 import {
   formatInboundEnvelope,
   formatInboundFromLabel,
   resolveEnvelopeFormatOptions,
   type EnvelopeFormatOptions,
-} from "../../../../src/auto-reply/envelope.js";
+} from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
-} from "../../../../src/auto-reply/reply/history.js";
-import { finalizeInboundContext } from "../../../../src/auto-reply/reply/inbound-context.js";
-import {
-  buildMentionRegexes,
-  matchesMentionPatterns,
-} from "../../../../src/auto-reply/reply/mentions.js";
-import { resolveDualTextControlCommandGate } from "../../../../src/channels/command-gating.js";
-import { logInboundDrop } from "../../../../src/channels/logging.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import {
-  resolveChannelGroupPolicy,
-  resolveChannelGroupRequireMention,
-} from "../../../../src/config/group-policy.js";
-import { resolveAgentRoute } from "../../../../src/routing/resolve-route.js";
+} from "openclaw/plugin-sdk/reply-runtime";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   DM_GROUP_ACCESS_REASON,
   resolveDmGroupAccessWithLists,
-} from "../../../../src/security/dm-policy-shared.js";
-import { sanitizeTerminalText } from "../../../../src/terminal/safe-text.js";
-import { truncateUtf16Safe } from "../../../../src/utils.js";
+} from "openclaw/plugin-sdk/security-runtime";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 import {
   formatIMessageChatTarget,
   isAllowedIMessageSender,

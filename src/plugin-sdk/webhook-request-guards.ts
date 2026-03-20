@@ -81,6 +81,7 @@ function respondWebhookBodyReadError(params: {
   return { ok: false };
 }
 
+/** Create an in-memory limiter that caps concurrent webhook handlers per key. */
 export function createWebhookInFlightLimiter(options?: {
   maxInFlightPerKey?: number;
   maxTrackedKeys?: number;
@@ -127,6 +128,7 @@ export function createWebhookInFlightLimiter(options?: {
   };
 }
 
+/** Detect JSON content types, including structured syntax suffixes like `application/ld+json`. */
 export function isJsonContentType(value: string | string[] | undefined): boolean {
   const first = Array.isArray(value) ? value[0] : value;
   if (!first) {
@@ -136,6 +138,7 @@ export function isJsonContentType(value: string | string[] | undefined): boolean
   return mediaType === "application/json" || Boolean(mediaType?.endsWith("+json"));
 }
 
+/** Apply method, rate-limit, and content-type guards before a webhook handler reads the body. */
 export function applyBasicWebhookRequestGuards(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -176,6 +179,7 @@ export function applyBasicWebhookRequestGuards(params: {
   return true;
 }
 
+/** Start the shared webhook request lifecycle and return a release hook for in-flight tracking. */
 export function beginWebhookRequestPipelineOrReject(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -226,6 +230,7 @@ export function beginWebhookRequestPipelineOrReject(params: {
   };
 }
 
+/** Read a webhook request body with bounded size/time limits and translate failures into responses. */
 export async function readWebhookBodyOrReject(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -260,6 +265,7 @@ export async function readWebhookBodyOrReject(params: {
   }
 }
 
+/** Read and parse a JSON webhook body, rejecting malformed or oversized payloads consistently. */
 export async function readJsonWebhookBodyOrReject(params: {
   req: IncomingMessage;
   res: ServerResponse;
