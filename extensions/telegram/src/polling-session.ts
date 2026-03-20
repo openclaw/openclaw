@@ -27,6 +27,13 @@ const resolvePollStallThresholdMs = (value: number | undefined): number => {
   return Math.max(Math.floor(value), MIN_POLL_STALL_THRESHOLD_MS);
 };
 
+const resolvePollWatchdogIntervalMs = (pollStallThresholdMs: number): number => {
+  return Math.min(
+    POLL_WATCHDOG_INTERVAL_MS,
+    Math.max(1_000, pollStallThresholdMs - TELEGRAM_LONG_POLL_TIMEOUT_MS),
+  );
+};
+
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -218,6 +225,7 @@ export class TelegramPollingSession {
     await this.#confirmPersistedOffset(bot);
     this.#outboundRestartSignaled = false;
     const pollStallThresholdMs = resolvePollStallThresholdMs(this.opts.pollStallThresholdMs);
+    const pollWatchdogIntervalMs = resolvePollWatchdogIntervalMs(pollStallThresholdMs);
 
     let lastGetUpdatesAt = Date.now();
     bot.api.config.use((prev, method, payload, signal) => {
@@ -285,7 +293,7 @@ export class TelegramPollingSession {
           }, POLL_STOP_GRACE_MS);
         }
       }
-    }, POLL_WATCHDOG_INTERVAL_MS);
+    }, pollWatchdogIntervalMs);
 
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
     try {

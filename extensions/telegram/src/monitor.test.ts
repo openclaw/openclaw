@@ -725,16 +725,41 @@ describe("monitorTelegramProvider (grammY)", () => {
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
     await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
 
-    vi.advanceTimersByTime(36_000);
+    vi.advanceTimersByTime(32_000);
     await Promise.resolve();
 
-    expect(stop).not.toHaveBeenCalled();
-    expect(runSpy).toHaveBeenCalledTimes(1);
-
-    vi.advanceTimersByTime(30_000);
     await monitor;
 
     expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("honors configured poll stall thresholds between 31s and 59s", async () => {
+    const { monitorTelegramProvider } = await import("./monitor.js");
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    loadConfig.mockReturnValueOnce({
+      agents: { defaults: { maxConcurrent: 2 } },
+      channels: {
+        telegram: {
+          network: {
+            pollStallThresholdMs: 35_000,
+          },
+        },
+      },
+    });
+    const abort = new AbortController();
+    const { stop } = mockRunOnceWithStalledPollingRunner();
+    mockRunOnceAndAbort(abort);
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+
+    vi.advanceTimersByTime(40_000);
+    await Promise.resolve();
+
+    expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
+    await monitor;
     expect(runSpy).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });

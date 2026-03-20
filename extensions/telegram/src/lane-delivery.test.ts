@@ -295,6 +295,27 @@ describe("createLaneTextDeliverer", () => {
     expect(sleepWithAbort).toHaveBeenCalledTimes(1);
   });
 
+  it("retains preview when an ambiguous retry chain later ends with 4xx rejection", async () => {
+    computeBackoff.mockClear();
+    sleepWithAbort.mockClear();
+    const harness = createHarness({ answerMessageId: 999 });
+    const rejectionErr = Object.assign(new Error("429: Too Many Requests"), {
+      error_code: 429,
+    });
+    harness.editPreview
+      .mockRejectedValueOnce(new Error("timeout after Telegram accepted send"))
+      .mockRejectedValueOnce(rejectionErr);
+
+    await expectFinalPreviewRetained({
+      harness,
+      expectedLogSnippet: "failed after ambiguous network retry chain; keeping existing preview",
+    });
+
+    expect(harness.editPreview).toHaveBeenCalledTimes(2);
+    expect(computeBackoff).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbort).toHaveBeenCalledTimes(1);
+  });
+
   it("finalizes text-only replies by editing an existing preview message", async () => {
     const harness = createHarness({ answerMessageId: 999 });
 

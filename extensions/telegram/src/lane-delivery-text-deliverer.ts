@@ -297,7 +297,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           currentRetryKind === "ambiguous" || previousRetryKind === "ambiguous"
             ? "ambiguous"
             : currentRetryKind;
-        if (effectiveRetryKind === "ambiguous" && currentRetryKind === "preconnect") {
+        if (previousRetryKind === "ambiguous" && currentRetryKind !== "ambiguous") {
           markPreviewEditFailureKind(err, PREVIEW_EDIT_FAILED_AFTER_AMBIGUOUS_RETRY);
         }
         if (isAnyAbortError(err) && previousRetryKind) {
