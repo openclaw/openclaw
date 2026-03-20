@@ -42,7 +42,8 @@ function setSmallerContextWindow(
 }
 
 function toProviderQualifiedModelKey(model: ModelEntry): string | undefined {
-  const provider = model.provider?.trim().toLowerCase();
+  const providerRaw = model.provider?.trim();
+  const provider = providerRaw ? normalizeProviderId(providerRaw) : undefined;
   const id = model.id?.trim();
   if (!provider || !id || id.includes("/")) {
     return undefined;
@@ -54,6 +55,14 @@ export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
   models: ModelEntry[];
 }) {
+  const discoveredRawModelIds = new Set<string>();
+  for (const model of params.models) {
+    const modelId = model.id?.trim();
+    if (modelId) {
+      discoveredRawModelIds.add(modelId);
+    }
+  }
+
   for (const model of params.models) {
     if (!model?.id) {
       continue;
@@ -73,8 +82,9 @@ export function applyDiscoveredContextWindows(params: {
 
     // When discovery provides a separate provider field, also store the
     // provider-qualified key so provider-aware lookups can keep limits distinct.
+    // Guard against collisions with real slash-containing discovery ids.
     const qualifiedKey = toProviderQualifiedModelKey(model);
-    if (qualifiedKey) {
+    if (qualifiedKey && !discoveredRawModelIds.has(qualifiedKey)) {
       setSmallerContextWindow(params.cache, qualifiedKey, contextWindow);
     }
   }
@@ -435,8 +445,19 @@ export function resolveContextTokensForModel(params: {
       `${normalizeProviderId(ref.provider)}/${ref.model}`,
       { allowAsyncLoad: params.allowAsyncLoad },
     );
+    const bareResult = lookupContextTokens(ref.model, {
+      allowAsyncLoad: params.allowAsyncLoad,
+    });
+    if (qualifiedResult !== undefined && bareResult !== undefined) {
+      // Preserve configured bare-id overrides when present while keeping
+      // provider-specific discovery values for the common collision case.
+      return Math.max(qualifiedResult, bareResult);
+    }
     if (qualifiedResult !== undefined) {
       return qualifiedResult;
+    }
+    if (bareResult !== undefined) {
+      return bareResult;
     }
   }
 
