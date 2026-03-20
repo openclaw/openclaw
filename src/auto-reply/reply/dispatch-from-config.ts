@@ -188,6 +188,7 @@ export async function dispatchReplyFromConfig(params: {
   }
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
+  dispatcher.bindSessionKey?.(sessionStoreEntry.sessionKey ?? sessionKey);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be

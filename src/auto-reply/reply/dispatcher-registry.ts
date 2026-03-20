@@ -7,6 +7,7 @@ type TrackedDispatcher = {
   readonly id: string;
   readonly pending: () => number;
   readonly waitForIdle: () => Promise<void>;
+  readonly getSessionKey: () => string | undefined;
 };
 
 const activeDispatchers = new Set<TrackedDispatcher>();
@@ -19,12 +20,14 @@ let nextId = 0;
 export function registerDispatcher(dispatcher: {
   readonly pending: () => number;
   readonly waitForIdle: () => Promise<void>;
+  readonly getSessionKey?: () => string | undefined;
 }): { id: string; unregister: () => void } {
   const id = `dispatcher-${++nextId}`;
   const tracked: TrackedDispatcher = {
     id,
     pending: dispatcher.pending,
     waitForIdle: dispatcher.waitForIdle,
+    getSessionKey: dispatcher.getSessionKey ?? (() => undefined),
   };
   activeDispatchers.add(tracked);
 
@@ -44,6 +47,23 @@ export function getTotalPendingReplies(): number {
     total += dispatcher.pending();
   }
   return total;
+}
+
+export async function waitForSessionDispatchIdle(sessionKey: string): Promise<void> {
+  const normalized = sessionKey.trim();
+  if (!normalized) {
+    return;
+  }
+
+  while (true) {
+    const matching = [...activeDispatchers].filter(
+      (dispatcher) => dispatcher.getSessionKey() === normalized && dispatcher.pending() > 0,
+    );
+    if (matching.length === 0) {
+      return;
+    }
+    await Promise.allSettled(matching.map((dispatcher) => dispatcher.waitForIdle()));
+  }
 }
 
 /**

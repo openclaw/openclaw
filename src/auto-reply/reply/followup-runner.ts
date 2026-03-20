@@ -34,6 +34,7 @@ import {
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { waitForSessionDispatchIdle } from "./dispatcher-registry.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -133,6 +134,15 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    const queuedSessionKey = queued.run.sessionKey?.trim();
+    if (queuedSessionKey) {
+      // Wait for the current turn's final reply to fully leave the dispatcher
+      // before starting the queued followup. Otherwise the followup can read
+      // a session transcript that already includes the queued user turn but
+      // not yet the just-finished assistant reply.
+      await waitForSessionDispatchIdle(queuedSessionKey);
+    }
+
     try {
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
