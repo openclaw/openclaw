@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getCortexStatus = vi.hoisted(() => vi.fn());
@@ -59,11 +59,20 @@ let defaultRuntime: typeof import("../runtime.js").defaultRuntime;
 let isVerbose: typeof import("../globals.js").isVerbose;
 let setVerbose: typeof import("../globals.js").setVerbose;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ registerMemoryCli } = await import("./memory-cli.js"));
   ({ defaultRuntime } = await import("../runtime.js"));
   ({ isVerbose, setVerbose } = await import("../globals.js"));
+});
+
+beforeEach(() => {
+  getMemorySearchManager.mockReset();
+  loadConfig.mockReset().mockReturnValue({});
+  resolveDefaultAgentId.mockReset().mockReturnValue("main");
+  resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
+    resolvedConfig: config,
+    diagnostics: [] as string[],
+  }));
 });
 
 afterEach(() => {

@@ -4,6 +4,10 @@
   "private": true,
   "description": "OpenClaw Slack channel plugin",
   "type": "module",
+  "dependencies": {
+    "@slack/bolt": "^4.6.0",
+    "@slack/web-api": "^7.15.0"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
@@ -18,6 +22,9 @@
       "docsLabel": "slack",
       "blurb": "supported (Socket Mode).",
       "systemImage": "number"
+    },
+    "bundle": {
+      "stageRuntimeDependencies": true
     }
   }
 }

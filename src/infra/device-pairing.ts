@@ -175,29 +175,108 @@ function mergeScopes(...items: Array<string[] | undefined>): string[] | undefine
   return [...scopes];
 }
 
-function mergePendingDevicePairingRequest(
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const rightSet = new Set(right);
+  for (const value of left) {
+    if (!rightSet.has(value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function resolveRequestedRoles(input: { role?: string; roles?: string[] }): string[] {
+  return mergeRoles(input.roles, input.role) ?? [];
+}
+
+function resolveRequestedScopes(input: { scopes?: string[] }): string[] {
+  return normalizeDeviceAuthScopes(input.scopes);
+}
+
+function samePendingApprovalSnapshot(
+  existing: DevicePairingPendingRequest,
+  incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
+): boolean {
+  if (existing.publicKey !== incoming.publicKey) {
+    return false;
+  }
+  if (normalizeRole(existing.role) !== normalizeRole(incoming.role)) {
+    return false;
+  }
+  if (
+    !sameStringSet(resolveRequestedRoles(existing), resolveRequestedRoles(incoming)) ||
+    !sameStringSet(resolveRequestedScopes(existing), resolveRequestedScopes(incoming))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function refreshPendingDevicePairingRequest(
   existing: DevicePairingPendingRequest,
   incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
   isRepair: boolean,
 ): DevicePairingPendingRequest {
-  const existingRole = normalizeRole(existing.role);
-  const incomingRole = normalizeRole(incoming.role);
   return {
     ...existing,
+    publicKey: incoming.publicKey,
     displayName: incoming.displayName ?? existing.displayName,
     platform: incoming.platform ?? existing.platform,
     deviceFamily: incoming.deviceFamily ?? existing.deviceFamily,
     clientId: incoming.clientId ?? existing.clientId,
     clientMode: incoming.clientMode ?? existing.clientMode,
-    role: existingRole ?? incomingRole ?? undefined,
-    roles: mergeRoles(existing.roles, existing.role, incoming.role),
-    scopes: mergeScopes(existing.scopes, incoming.scopes),
     remoteIp: incoming.remoteIp ?? existing.remoteIp,
     // If either request is interactive, keep the pending request visible for approval.
     silent: Boolean(existing.silent && incoming.silent),
     isRepair: existing.isRepair || isRepair,
     ts: Date.now(),
   };
+}
+
+function buildPendingDevicePairingRequest(params: {
+  requestId?: string;
+  deviceId: string;
+  isRepair: boolean;
+  req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">;
+}): DevicePairingPendingRequest {
+  const role = normalizeRole(params.req.role) ?? undefined;
+  return {
+    requestId: params.requestId ?? randomUUID(),
+    deviceId: params.deviceId,
+    publicKey: params.req.publicKey,
+    displayName: params.req.displayName,
+    platform: params.req.platform,
+    deviceFamily: params.req.deviceFamily,
+    clientId: params.req.clientId,
+    clientMode: params.req.clientMode,
+    role,
+    roles: mergeRoles(params.req.roles, role),
+    scopes: mergeScopes(params.req.scopes),
+    remoteIp: params.req.remoteIp,
+    silent: params.req.silent,
+    isRepair: params.isRepair,
+    ts: Date.now(),
+  };
+}
+
+function resolvePendingApprovalRole(pending: DevicePairingPendingRequest): string | null {
+  const role = normalizeRole(pending.role);
+  if (role) {
+    return role;
+  }
+  if (!Array.isArray(pending.roles)) {
+    return null;
+  }
+  for (const candidate of pending.roles) {
+    const normalized = normalizeRole(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
 }
 
 function newToken() {
@@ -296,33 +375,37 @@ export async function requestDevicePairing(
       throw new Error("deviceId required");
     }
     const isRepair = Boolean(state.pairedByDeviceId[deviceId]);
-    const existing = Object.values(state.pendingById).find(
-      (pending) => pending.deviceId === deviceId,
-    );
-    if (existing) {
-      const merged = mergePendingDevicePairingRequest(existing, req, isRepair);
-      state.pendingById[existing.requestId] = merged;
+    const pendingForDevice = Object.values(state.pendingById)
+      .filter((pending) => pending.deviceId === deviceId)
+      .toSorted((left, right) => right.ts - left.ts);
+    const latestPending = pendingForDevice[0];
+    if (latestPending && pendingForDevice.length === 1) {
+      if (samePendingApprovalSnapshot(latestPending, req)) {
+        const refreshed = refreshPendingDevicePairingRequest(latestPending, req, isRepair);
+        state.pendingById[latestPending.requestId] = refreshed;
+        await persistState(state, baseDir);
+        return { status: "pending" as const, request: refreshed, created: false };
+      }
+    }
+    if (pendingForDevice.length > 0) {
+      for (const pending of pendingForDevice) {
+        delete state.pendingById[pending.requestId];
+      }
+      const superseded = buildPendingDevicePairingRequest({
+        deviceId,
+        isRepair,
+        req,
+      });
+      state.pendingById[superseded.requestId] = superseded;
       await persistState(state, baseDir);
-      return { status: "pending" as const, request: merged, created: false };
+      return { status: "pending" as const, request: superseded, created: true };
     }
 
-    const request: DevicePairingPendingRequest = {
-      requestId: randomUUID(),
+    const request = buildPendingDevicePairingRequest({
       deviceId,
-      publicKey: req.publicKey,
-      displayName: req.displayName,
-      platform: req.platform,
-      deviceFamily: req.deviceFamily,
-      clientId: req.clientId,
-      clientMode: req.clientMode,
-      role: req.role,
-      roles: req.role ? [req.role] : undefined,
-      scopes: req.scopes,
-      remoteIp: req.remoteIp,
-      silent: req.silent,
       isRepair,
-      ts: Date.now(),
-    };
+      req,
+    });
     state.pendingById[request.requestId] = request;
     await persistState(state, baseDir);
     return { status: "pending" as const, request, created: true };
@@ -354,9 +437,10 @@ export async function approveDevicePairing(
     if (!pending) {
       return null;
     }
-    if (pending.role && options?.callerScopes) {
+    const approvalRole = resolvePendingApprovalRole(pending);
+    if (approvalRole && options?.callerScopes) {
       const missingScope = resolveMissingRequestedScope({
-        role: pending.role,
+        role: approvalRole,
         requestedScopes: normalizeDeviceAuthScopes(pending.scopes),
         allowedScopes: options.callerScopes,
       });

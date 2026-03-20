@@ -923,10 +923,14 @@ Notes:
 Use SDK subpaths instead of the monolithic `openclaw/plugin-sdk` import when
 authoring plugins:
 
-- `openclaw/plugin-sdk/core` for the smallest generic plugin-facing contract.
-  It also carries small assembly helpers such as
-  `definePluginEntry`, `defineChannelPluginEntry`, `defineSetupPluginEntry`,
-  and `createChannelPluginBase` for bundled or third-party plugin entry wiring.
+- `openclaw/plugin-sdk/plugin-entry` for plugin registration primitives.
+- `openclaw/plugin-sdk/core` for the generic shared plugin-facing contract.
+- Stable channel primitives such as `openclaw/plugin-sdk/channel-setup`,
+  `openclaw/plugin-sdk/channel-pairing`,
+  `openclaw/plugin-sdk/channel-reply-pipeline`,
+  `openclaw/plugin-sdk/secret-input`, and
+  `openclaw/plugin-sdk/webhook-ingress` for shared setup/auth/reply/webhook
+  wiring.
 - Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
   `openclaw/plugin-sdk/channel-config-schema`,
   `openclaw/plugin-sdk/channel-policy`,
@@ -939,12 +943,9 @@ authoring plugins:
   `openclaw/plugin-sdk/runtime-store`, and
   `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
 - Narrow channel-core subpaths such as `openclaw/plugin-sdk/discord-core`,
-  `openclaw/plugin-sdk/telegram-core`, `openclaw/plugin-sdk/whatsapp-core`,
-  and `openclaw/plugin-sdk/line-core` for channel-specific primitives that
-  should stay smaller than the full channel helper barrels.
-- `openclaw/plugin-sdk/compat` remains as a legacy migration surface for older
-  external plugins. Bundled plugins should not use it, and non-test imports emit
-  a one-time deprecation warning outside test environments.
+  `openclaw/plugin-sdk/telegram-core`, and `openclaw/plugin-sdk/whatsapp-core`
+  for channel-specific primitives that should stay smaller than the full
+  channel helper barrels.
 - Bundled extension internals remain private. External plugins should use only
   `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
   public entry points under `extensions/<id>/index.js`, `api.js`, `runtime-api.js`,
@@ -958,35 +959,39 @@ authoring plugins:
 - `openclaw/plugin-sdk/telegram` for Telegram channel plugin types and shared channel-facing helpers. Built-in Telegram implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/discord` for Discord channel plugin types and shared channel-facing helpers. Built-in Discord implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/slack` for Slack channel plugin types and shared channel-facing helpers. Built-in Slack implementation internals stay private to the bundled extension.
-- `openclaw/plugin-sdk/signal` for Signal channel plugin types and shared channel-facing helpers. Built-in Signal implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/imessage` for iMessage channel plugin types and shared channel-facing helpers. Built-in iMessage implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/whatsapp` for WhatsApp channel plugin types and shared channel-facing helpers. Built-in WhatsApp implementation internals stay private to the bundled extension.
-- `openclaw/plugin-sdk/line` for LINE channel plugins.
-- `openclaw/plugin-sdk/msteams` for the bundled Microsoft Teams plugin surface.
-- Additional bundled extension-specific subpaths remain available where OpenClaw
-  intentionally exposes extension-facing helpers:
-  `openclaw/plugin-sdk/acpx`, `openclaw/plugin-sdk/bluebubbles`,
-  `openclaw/plugin-sdk/feishu`, `openclaw/plugin-sdk/googlechat`,
-  `openclaw/plugin-sdk/irc`, `openclaw/plugin-sdk/lobster`,
-  `openclaw/plugin-sdk/matrix`,
-  `openclaw/plugin-sdk/mattermost`, `openclaw/plugin-sdk/memory-core`,
-  `openclaw/plugin-sdk/minimax-portal-auth`,
-  `openclaw/plugin-sdk/nextcloud-talk`, `openclaw/plugin-sdk/nostr`,
-  `openclaw/plugin-sdk/synology-chat`, `openclaw/plugin-sdk/test-utils`,
-  `openclaw/plugin-sdk/tlon`, `openclaw/plugin-sdk/twitch`,
-  `openclaw/plugin-sdk/voice-call`,
-  `openclaw/plugin-sdk/zalo`, and `openclaw/plugin-sdk/zalouser`.
+- `openclaw/plugin-sdk/bluebubbles` remains public because it carries a small
+  focused helper surface that is shared intentionally.
 
 Compatibility note:
 
-- `openclaw/plugin-sdk` remains supported for existing external plugins.
-- New and migrated bundled plugins should use channel or extension-specific
-  subpaths; use `core` plus explicit domain subpaths for generic surfaces, and
-  treat `compat` as migration-only.
+- Avoid the root `openclaw/plugin-sdk` barrel for new code.
+- Prefer the narrow stable primitives first. The newer setup/pairing/reply/
+  secret-input/webhook subpaths are the intended contract for new bundled and
+  external plugin work.
+- Bundled extension-specific helper barrels are not stable by default. If a
+  helper is only needed by a bundled extension, keep it behind the extension's
+  local `api.js` or `runtime-api.js` seam instead of promoting it into
+  `openclaw/plugin-sdk/<extension>`.
 - Capability-specific subpaths such as `image-generation`,
   `media-understanding`, and `speech` exist because bundled/native plugins use
   them today. Their presence does not by itself mean every exported helper is a
   long-term frozen external contract.
+
+## Message tool schemas
+
+Plugins should own channel-specific `describeMessageTool(...)` schema
+contributions. Keep provider-specific fields in the plugin, not in shared core.
+
+For shared portable schema fragments, reuse the generic helpers exported through
+`openclaw/plugin-sdk/channel-runtime`:
+
+- `createMessageToolButtonsSchema()` for button-grid style payloads
+- `createMessageToolCardSchema()` for structured card payloads
+
+If a schema shape only makes sense for one provider, define it in that plugin's
+own source instead of promoting it into the shared SDK.
 
 ## Channel target resolution
 
