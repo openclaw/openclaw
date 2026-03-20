@@ -109,6 +109,32 @@ export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
   };
 }
 
+export function resolveCompactionModelFallbackOptions(run: FollowupRun["run"]) {
+  const resolved = resolveModelFallbackOptions(run);
+  const override = run.config?.agents?.defaults?.compaction?.model?.trim();
+  if (!override) {
+    return resolved;
+  }
+
+  const slashIdx = override.indexOf("/");
+  if (slashIdx > 0) {
+    const provider = override.slice(0, slashIdx).trim();
+    const model = override.slice(slashIdx + 1).trim();
+    if (provider && model) {
+      return {
+        ...resolved,
+        provider,
+        model,
+      };
+    }
+  }
+
+  return {
+    ...resolved,
+    model: override,
+  };
+}
+
 export function buildEmbeddedRunBaseParams(params: {
   run: FollowupRun["run"];
   provider: string;

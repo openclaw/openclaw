@@ -1,20 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun } from "./queue.js";
 
-const hoisted = vi.hoisted(() => {
-  const resolveRunModelFallbacksOverrideMock = vi.fn();
-  return { resolveRunModelFallbacksOverrideMock };
-});
-
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveRunModelFallbacksOverride: (...args: unknown[]) =>
-    hoisted.resolveRunModelFallbacksOverrideMock(...args),
-}));
-
 const {
   buildThreadingToolContext,
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
+  resolveCompactionModelFallbackOptions,
   resolveModelFallbackOptions,
   resolveProviderScopedAuthProfile,
 } = await import("./agent-runner-utils.js");
@@ -45,20 +36,21 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 
 describe("agent-runner-utils", () => {
   beforeEach(() => {
-    hoisted.resolveRunModelFallbacksOverrideMock.mockClear();
+    vi.restoreAllMocks();
   });
 
   it("resolves model fallback options from run context", () => {
-    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
-    const run = makeRun();
+    const run = makeRun({
+      sessionKey: "agent:agent-1:main",
+      config: {
+        agents: {
+          list: [{ id: "agent-1", model: { fallbacks: ["fallback-model"] } }],
+        },
+      },
+    });
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveRunModelFallbacksOverrideMock).toHaveBeenCalledWith({
-      cfg: run.config,
-      agentId: run.agentId,
-      sessionKey: run.sessionKey,
-    });
     expect(resolved).toEqual({
       cfg: run.config,
       provider: run.provider,
@@ -69,17 +61,71 @@ describe("agent-runner-utils", () => {
   });
 
   it("passes through missing agentId for helper-based fallback resolution", () => {
-    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
-    const run = makeRun({ agentId: undefined });
+    const run = makeRun({
+      agentId: undefined,
+      sessionKey: "agent:agent-2:main",
+      config: {
+        agents: {
+          list: [{ id: "agent-2", model: { fallbacks: ["fallback-model"] } }],
+        },
+      },
+    });
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveRunModelFallbacksOverrideMock).toHaveBeenCalledWith({
-      cfg: run.config,
-      agentId: undefined,
-      sessionKey: run.sessionKey,
-    });
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
+  });
+
+  it("uses compaction model override for compaction-scoped fallback resolution", () => {
+    const run = makeRun({
+      sessionKey: "agent:agent-1:main",
+      config: {
+        agents: {
+          list: [{ id: "agent-1", model: { fallbacks: ["fallback-model"] } }],
+          defaults: {
+            compaction: {
+              model: "openrouter/anthropic/claude-sonnet-4-5",
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveCompactionModelFallbackOptions(run);
+
+    expect(resolved).toEqual({
+      cfg: run.config,
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4-5",
+      agentDir: run.agentDir,
+      fallbacksOverride: ["fallback-model"],
+    });
+  });
+
+  it("keeps the primary provider when compaction model override omits a provider", () => {
+    const run = makeRun({
+      sessionKey: "agent:agent-1:main",
+      config: {
+        agents: {
+          list: [{ id: "agent-1", model: { fallbacks: ["fallback-model"] } }],
+          defaults: {
+            compaction: {
+              model: "claude-sonnet-4-5",
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveCompactionModelFallbackOptions(run);
+
+    expect(resolved).toEqual({
+      cfg: run.config,
+      provider: run.provider,
+      model: "claude-sonnet-4-5",
+      agentDir: run.agentDir,
+      fallbacksOverride: ["fallback-model"],
+    });
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {

@@ -31,7 +31,7 @@ import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   buildEmbeddedRunExecutionParams,
-  resolveModelFallbackOptions,
+  resolveCompactionModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import {
   hasAlreadyFlushedForCurrentCompaction,
@@ -679,7 +679,7 @@ export async function runMemoryFlushIfNeeded(params: {
   let postCompactionSessionId: string | undefined;
   try {
     await runWithModelFallback({
-      ...resolveModelFallbackOptions(params.followupRun.run),
+      ...resolveCompactionModelFallbackOptions(params.followupRun.run),
       runId: flushRunId,
       run: async (provider, model, runOptions) => {
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
