@@ -90,14 +90,18 @@ vi.mock("../../runtime.js", () => ({
   }),
 }));
 
-vi.mock("../accounts.js", () => ({
-  resolveMatrixAccount: () => ({
-    accountId: "default",
-    config: {
-      dm: {},
-    },
-  }),
-}));
+vi.mock("../accounts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../accounts.js")>();
+  return {
+    ...actual,
+    resolveMatrixAccount: () => ({
+      accountId: "default",
+      config: {
+        dm: {},
+      },
+    }),
+  };
+});
 
 vi.mock("../active-client.js", () => ({
   setActiveMatrixClient: hoisted.setActiveMatrixClient,

@@ -23,9 +23,13 @@ const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => [createGeminiTestProvider()]),
 }));
 
-vi.mock("../plugins/web-search-providers.js", () => ({
-  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
-}));
+vi.mock("../plugins/web-search-providers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/web-search-providers.js")>();
+  return {
+    ...actual,
+    resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+  };
+});
 
 const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
 const allowInsecureTempSecretFile = process.platform === "win32";
