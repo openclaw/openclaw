@@ -2113,18 +2113,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      dispatcherOptions.onError(new Error("network down"), { kind: "final" });
+      try {
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      } catch (err) {
+        dispatcherOptions.onError(err, { kind: "final" });
+      }
       return { queuedFinal: false };
     });
-    deliverReplies.mockResolvedValueOnce({ delivered: true });
+    deliverReplies
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce({ delivered: true });
 
     await expect(dispatchWithContext({ context: createContext() })).resolves.toBeUndefined();
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    // Fallback should be sent because failedDeliveries > 0
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
     expect(deliverReplies).toHaveBeenLastCalledWith(
       expect.objectContaining({
         replies: [
           expect.objectContaining({
-            text: expect.stringContaining("Something went wrong"),
+            text: expect.stringContaining("No response"),
           }),
         ],
       }),
@@ -2134,20 +2141,26 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("sends fallback in off mode when deliver throws", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      dispatcherOptions.onError(new Error("403 bot blocked"), { kind: "final" });
+      try {
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      } catch (err) {
+        dispatcherOptions.onError(err, { kind: "final" });
+      }
       return { queuedFinal: false };
     });
-    deliverReplies.mockResolvedValueOnce({ delivered: true });
+    deliverReplies
+      .mockRejectedValueOnce(new Error("403 bot blocked"))
+      .mockResolvedValueOnce({ delivered: true });
 
     await dispatchWithContext({ context: createContext(), streamMode: "off" });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
     expect(deliverReplies).toHaveBeenLastCalledWith(
       expect.objectContaining({
         replies: [
           expect.objectContaining({
-            text: expect.stringContaining("Something went wrong"),
+            text: expect.stringContaining("No response"),
           }),
         ],
       }),
@@ -2284,7 +2297,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    // Post-connect timeout is recoverable for idempotent preview edits,
+    // so the retry policy retries up to TELEGRAM_PREVIEW_EDIT_MAX_ATTEMPTS.
+    expect(editMessageTelegram).toHaveBeenCalled();
     const deliverCalls = deliverReplies.mock.calls;
     const finalTextSentViaDeliverReplies = deliverCalls.some((call: unknown[]) =>
       (call[0] as { replies?: Array<{ text?: string }> })?.replies?.some(
@@ -2311,7 +2326,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    // Pre-connect errors are retried for idempotent preview edits.
+    expect(editMessageTelegram).toHaveBeenCalled();
     const deliverCalls = deliverReplies.mock.calls;
     const finalTextSentViaDeliverReplies = deliverCalls.some((call: unknown[]) =>
       (call[0] as { replies?: Array<{ text?: string }> })?.replies?.some(

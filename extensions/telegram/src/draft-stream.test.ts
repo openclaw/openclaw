@@ -587,13 +587,13 @@ describe("createTelegramDraftStream", () => {
 
   async function expectSendMayHaveLandedStateAfterFirstFailure(error: Error, expected: boolean) {
     const api = createMockDraftApi();
-    api.sendMessage.mockRejectedValueOnce(error);
+    api.sendMessage.mockRejectedValue(error);
     const stream = createDraftStream(api);
 
     stream.update("Hello");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalled();
     expect(stream.sendMayHaveLanded?.()).toBe(expected);
   }
 
