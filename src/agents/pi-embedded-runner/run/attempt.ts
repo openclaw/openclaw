@@ -992,8 +992,7 @@ export async function runEmbeddedAttempt(
 
       if (
         params.model.api === "openai-responses" ||
-        params.model.api === "openai-codex-responses" ||
-        params.model.api === "azure-openai-responses"
+        params.model.api === "openai-codex-responses"
       ) {
         const inner = activeSession.agent.streamFn;
         activeSession.agent.streamFn = (model, context, options) => {
