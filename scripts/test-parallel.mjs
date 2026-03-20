@@ -586,6 +586,22 @@ const topLevelParallelEnabled =
   testProfile !== "serial" &&
   !(!isCI && nodeMajor >= 25) &&
   !isMacMiniProfile;
+const defaultTopLevelParallelLimit =
+  testProfile === "serial"
+    ? 1
+    : testProfile === "low"
+      ? 2
+      : testProfile === "max"
+        ? 5
+        : highMemLocalHost
+          ? 4
+          : lowMemLocalHost
+            ? 2
+            : 3;
+const topLevelParallelLimit = Math.max(
+  1,
+  parseEnvNumber("OPENCLAW_TEST_TOP_LEVEL_CONCURRENCY", defaultTopLevelParallelLimit),
+);
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
@@ -1079,8 +1095,10 @@ const runEntriesWithLimit = async (entries, extraArgs = [], concurrency = 1) => 
 
 const runEntries = async (entries, extraArgs = []) => {
   if (topLevelParallelEnabled) {
-    const codes = await Promise.all(entries.map((entry) => run(entry, extraArgs)));
-    return codes.find((code) => code !== 0);
+    // Keep a bounded number of top-level Vitest processes in flight. As the
+    // singleton lane list grows, unbounded Promise.all scheduling turns
+    // isolation into cross-process contention and can reintroduce timeouts.
+    return runEntriesWithLimit(entries, extraArgs, topLevelParallelLimit);
   }
 
   return runEntriesWithLimit(entries, extraArgs);
