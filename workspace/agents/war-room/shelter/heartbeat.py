@@ -129,6 +129,62 @@ def layer0_vital_signs() -> dict:
     except Exception:
         status["evo_phase"] = -1
 
+    # ── 本機資源監控 ──
+    import os
+
+    # CPU load
+    try:
+        load1, load5, load15 = os.getloadavg()
+        status["cpu_load"] = round(load1, 1)
+        if load1 > 8:
+            _act(f"[L0] CPU load {load1:.1f} (1m) / {load5:.1f} (5m) — 過載")
+    except Exception:
+        pass
+
+    # 殭屍/高 CPU 進程偵測
+    try:
+        result = subprocess.run(
+            ["ps", "aux", "--sort=-%cpu"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0:
+            # macOS ps 不支援 --sort，用另一種方式
+            result = subprocess.run(
+                ["ps", "-eo", "pid,%cpu,etime,command", "-r"],
+                capture_output=True, text=True, timeout=5
+            )
+        lines = result.stdout.strip().split("\n")[1:]  # 跳過 header
+        hogs = []
+        for line in lines[:20]:
+            parts = line.split()
+            if len(parts) >= 4:
+                try:
+                    pid = int(parts[0])
+                    cpu = float(parts[1])
+                    etime = parts[2]  # elapsed time
+                    cmd = " ".join(parts[3:])[:60]
+                    # 吃 > 50% CPU 且跑超過 10 分鐘的
+                    if cpu > 50 and (":" in etime and not etime.startswith("00:0")):
+                        hogs.append({"pid": pid, "cpu": cpu, "time": etime, "cmd": cmd})
+                except (ValueError, IndexError):
+                    continue
+        if hogs:
+            for h in hogs[:3]:
+                _act(f"[L0] HOG: PID {h['pid']} {h['cpu']:.0f}% CPU for {h['time']} — {h['cmd']}")
+            status["cpu_hogs"] = hogs
+    except Exception:
+        pass
+
+    # 磁碟空間
+    try:
+        st = os.statvfs("/")
+        free_gb = (st.f_bavail * st.f_frsize) / (1024**3)
+        status["disk_free_gb"] = round(free_gb, 1)
+        if free_gb < 5:
+            _act(f"[L0] Disk LOW: {free_gb:.1f} GB free")
+    except Exception:
+        pass
+
     return status
 
 
