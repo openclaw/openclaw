@@ -19,7 +19,7 @@
  *                                    WhatsApp / Telegram / Nostr
  */
 
-import type { ChannelPlugin } from "openclaw/plugin-sdk";
+import type { ChannelPlugin } from "../runtime-api.js";
 import { createMessagingClient, type MessagingClient } from "./messaging.js";
 import { generateReply } from "./responder.js";
 
