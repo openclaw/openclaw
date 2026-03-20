@@ -107,8 +107,6 @@ if (runtimeProbe !== "function") {
       () =>
         loadOpenClawPlugins({
           cache: false,
-          activate: false,
-          mode: "validate",
           workspaceDir: gitExtensionRoot,
           config: {
             plugins: {
