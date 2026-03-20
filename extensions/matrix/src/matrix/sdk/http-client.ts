@@ -1,3 +1,4 @@
+import type { SsrFPolicy } from "../../runtime-api.js";
 import { buildHttpError } from "./event-helpers.js";
 import { type HttpMethod, type QueryParams, performMatrixRequest } from "./transport.js";
 
@@ -5,6 +6,7 @@ export class MatrixAuthedHttpClient {
   constructor(
     private readonly homeserver: string,
     private readonly accessToken: string,
+    private readonly ssrfPolicy?: SsrFPolicy,
   ) {}
 
   async requestJson(params: {
@@ -23,6 +25,7 @@ export class MatrixAuthedHttpClient {
       qs: params.qs,
       body: params.body,
       timeoutMs: params.timeoutMs,
+      ssrfPolicy: this.ssrfPolicy,
       allowAbsoluteEndpoint: params.allowAbsoluteEndpoint,
     });
     if (!response.ok) {
@@ -57,6 +60,7 @@ export class MatrixAuthedHttpClient {
       raw: true,
       maxBytes: params.maxBytes,
       readIdleTimeoutMs: params.readIdleTimeoutMs,
+      ssrfPolicy: this.ssrfPolicy,
       allowAbsoluteEndpoint: params.allowAbsoluteEndpoint,
     });
     if (!response.ok) {
