@@ -500,5 +500,28 @@ describe("dispatchCronDelivery — delivered=false prevents additional-targets f
     const state = await dispatchCronDelivery(params);
 
     expect(state.delivered).toBe(true);
+    expect(state.sendOccurred).toBe(true);
+  });
+
+  it("SILENT_REPLY_TOKEN suppresses send, sendOccurred=false blocks fan-out", async () => {
+    const params = makeBaseParams({ synthesizedText: "NO_REPLY" });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.sendOccurred).toBe(false);
+    expect(vi.mocked(deliverOutboundPayloads)).not.toHaveBeenCalled();
+  });
+
+  it("replay cache-hit sets delivered=true but sendOccurred=false (no fan-out)", async () => {
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const params = makeBaseParams({ synthesizedText: "Replay-safe cron update." });
+    const first = await dispatchCronDelivery(params);
+    const second = await dispatchCronDelivery(params);
+
+    expect(first.delivered).toBe(true);
+    expect(first.sendOccurred).toBe(true);
+    expect(second.delivered).toBe(true);
+    expect(second.sendOccurred).toBe(false);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 });

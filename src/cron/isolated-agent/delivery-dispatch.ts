@@ -107,6 +107,7 @@ export type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
   delivered: boolean;
   deliveryAttempted: boolean;
+  sendOccurred?: boolean;
   summary?: string;
   outputText?: string;
   synthesizedText?: string;
@@ -294,6 +295,7 @@ export async function dispatchCronDelivery(
   // remains the only source of delivered state.
   let delivered = skipMessagingToolDelivery;
   let deliveryAttempted = skipMessagingToolDelivery;
+  let sendOccurred = false;
   const failDeliveryTarget = (error: string) =>
     params.withRunSession({
       status: "error",
@@ -344,8 +346,9 @@ export async function dispatchCronDelivery(
         agentId: params.agentId,
         sessionKey: params.agentSessionKey,
       });
-      const runDelivery = async () =>
-        await deliverOutboundPayloads({
+      const runDelivery = async () => {
+        sendOccurred = true;
+        return await deliverOutboundPayloads({
           cfg: params.cfgWithAgentDefaults,
           channel: delivery.channel,
           to: delivery.to,
@@ -364,6 +367,7 @@ export async function dispatchCronDelivery(
           // See: https://github.com/openclaw/openclaw/issues/40545
           skipQueue: true,
         });
+      };
       const deliveryResults = options?.retryTransient
         ? await retryTransientDirectCronDelivery({
             jobId: params.job.id,
@@ -559,6 +563,7 @@ export async function dispatchCronDelivery(
           result: directResult,
           delivered,
           deliveryAttempted,
+          sendOccurred,
           summary,
           outputText,
           synthesizedText,
@@ -572,6 +577,7 @@ export async function dispatchCronDelivery(
           result: finalizedTextResult,
           delivered,
           deliveryAttempted,
+          sendOccurred,
           summary,
           outputText,
           synthesizedText,
@@ -584,6 +590,7 @@ export async function dispatchCronDelivery(
   return {
     delivered,
     deliveryAttempted,
+    sendOccurred,
     summary,
     outputText,
     synthesizedText,
