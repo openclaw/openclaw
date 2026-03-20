@@ -825,11 +825,10 @@ export default function register(api: PluginApi) {
     },
   });
 
-  // 4. Register before_reset hook to sync the ending session to STORY.md when /new or /reset is called.
-  // This is fire-and-forget so it doesn't block the session reset.
-  api.on("before_reset", (event, _ctx) => {
-    const { messages } = event;
-    if (!messages || messages.length === 0) {
+  // 4. Register before_reset hook: trigger narrative sync when /new or /reset is called.
+  // Uses syncGlobalNarrative so it reads all sessions newer than STORY.md — no dependency on the closing session file.
+  api.on("before_reset", (_event, _ctx) => {
+    if (config.narrative?.enabled === false) {
       return;
     }
 
@@ -837,104 +836,30 @@ export default function register(api: PluginApi) {
       try {
         const agentId = resolveDefaultAgentId(api.config);
         const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
-        const { mkdir } = await import("node:fs/promises");
         await mkdir(narrativeDir, { recursive: true });
         const storyPath = path.join(narrativeDir, "STORY.md");
-        const agentDir = resolveOpenClawAgentDir();
-        const debug = !!config.debug;
+        const glossaryPath = path.join(narrativeDir, "GLOSSARY.md");
+        const summaryPath = path.join(narrativeDir, "SUMMARY.md");
+        const workspaceDir = resolveAgentWorkspaceDir(api.config, agentId);
+        const sessionsDir = resolveSessionTranscriptsDirForAgent(api.config, agentId);
 
-        // Resolve narrative model from config or fallback to main agent model
-        const consolidatorOverride = api.config.agents?.defaults?.auxiliaryModel;
-        const primaryModelRawReset =
-          typeof api.config.agents?.defaults?.model === "string"
-            ? api.config.agents.defaults.model
-            : api.config.agents?.defaults?.model?.primary;
-        const modelSourceReset = consolidatorOverride ?? primaryModelRawReset;
-        if (!modelSourceReset) {
-          api.logger.warn(
-            "[mind-memory] before_reset: no auxiliaryModel or primary model configured",
-          );
-          return;
-        }
-        const [narrativeProvider, narrativeModel] = modelSourceReset.includes("/")
-          ? modelSourceReset.split("/")
-          : ["github-copilot", modelSourceReset];
-
-        const { model, authStorage, modelRegistry, error } = resolveModel(
-          narrativeProvider,
-          narrativeModel,
-          agentDir,
-          api.config,
-        );
-
-        if (!model) {
-          api.logger.warn(
-            `[mind-memory] before_reset: could not resolve narrative model: ${error ?? "unknown"}`,
-          );
+        const agents = await resolveNarrativeAgents();
+        if (!agents) {
           return;
         }
 
-        if (debug) {
-          api.logger.info(
-            `🧠 [MIND] Story consolidation will use model: ${narrativeProvider}/${narrativeModel}`,
+        await consolidator
+          .syncGlobalNarrative(sessionsDir, storyPath, agents.narrativeAgent, undefined, 50000)
+          .then(() =>
+            Promise.all([
+              consolidator
+                .generateGlossary(storyPath, glossaryPath, workspaceDir, agents.narrativeAgent)
+                .catch(() => {}),
+              consolidator
+                .generateSummary(storyPath, summaryPath, workspaceDir, agents.narrativeAgent)
+                .catch(() => {}),
+            ]),
           );
-        }
-
-        // Create a subconscious agent for the narrative LLM call
-        const { createSubconsciousAgent } =
-          await import("../../agents/pi-embedded-runner/subconscious-agent.js");
-        const subconsciousAgent = createSubconsciousAgent({
-          model,
-          authStorage: wrapAuthStorage(authStorage),
-          modelRegistry,
-          debug,
-          autoBootstrapHistory: false,
-          reasoning: (config.narrative?.thinking ??
-            "low") as import("@mariozechner/pi-ai").ThinkingLevel,
-        });
-
-        // Map the raw hook messages to the shape syncStoryWithSession expects.
-        // commands-core.ts parses the .jsonl and provides: { type: "message", message: { role, text } }
-        type MessageEntry = {
-          role?: string;
-          text?: string;
-          content?: unknown;
-          timestamp?: number | string;
-          created_at?: string;
-        };
-        const sessionMessages = (messages as MessageEntry[]).filter(
-          (m): m is MessageEntry & { role: string } =>
-            typeof m.role === "string" && m.role !== "system",
-        );
-
-        if (sessionMessages.length === 0) {
-          return;
-        }
-
-        if (debug) {
-          process.stderr.write(
-            `🧠 [MIND] before_reset: syncing ${sessionMessages.length} messages to STORY.md...\n`,
-          );
-        }
-
-        const { ConsolidationService: CS } =
-          await import("../../services/memory/ConsolidationService.js");
-        const { GraphService: GS } = await import("../../services/memory/GraphService.js");
-        const gUrl = config.graphiti?.baseUrl || "http://localhost:8001";
-        const gs = new GS(gUrl, debug);
-        const cons = new CS(gs, debug);
-
-        await cons.syncStoryWithSession(
-          sessionMessages,
-          storyPath,
-          subconsciousAgent,
-          undefined,
-          50000,
-        );
-
-        if (debug) {
-          process.stderr.write(`✅ [MIND] before_reset: STORY.md sync complete.\n`);
-        }
       } catch (err: unknown) {
         api.logger.warn(`[mind-memory] before_reset hook failed: ${String(err)}`);
       }

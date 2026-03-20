@@ -1,9 +1,7 @@
-import fs from "node:fs/promises";
 import { resetAcpSessionInPlace } from "../../acp/persistent-bindings.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
 import { handleAcpCommand } from "./commands-acp.js";
@@ -96,48 +94,6 @@ export async function emitResetCommandHooks(params: {
         cfg: params.cfg,
       });
     }
-  }
-
-  // Fire before_reset plugin hook — extract memories before session history is lost
-  const hookRunner = getGlobalHookRunner();
-  if (hookRunner?.hasHooks("before_reset")) {
-    const prevEntry = params.previousSessionEntry;
-    const sessionFile = prevEntry?.sessionFile;
-    // Fire-and-forget: read old session messages and run hook
-    void (async () => {
-      try {
-        const messages: unknown[] = [];
-        if (sessionFile) {
-          const content = await fs.readFile(sessionFile, "utf-8");
-          for (const line of content.split("\n")) {
-            if (!line.trim()) {
-              continue;
-            }
-            try {
-              const entry = JSON.parse(line);
-              if (entry.type === "message" && entry.message) {
-                messages.push(entry.message);
-              }
-            } catch {
-              // skip malformed lines
-            }
-          }
-        } else {
-          logVerbose("before_reset: no session file available, firing hook with empty messages");
-        }
-        await hookRunner.runBeforeReset(
-          { sessionFile, messages, reason: params.action },
-          {
-            agentId: resolveAgentIdFromSessionKey(params.sessionKey),
-            sessionKey: params.sessionKey,
-            sessionId: prevEntry?.sessionId,
-            workspaceDir: params.workspaceDir,
-          },
-        );
-      } catch (err: unknown) {
-        logVerbose(`before_reset hook failed: ${String(err)}`);
-      }
-    })();
   }
 }
 
