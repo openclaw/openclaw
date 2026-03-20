@@ -53,6 +53,31 @@ describe("skills policy resolution", () => {
     });
   });
 
+  it("treats dotted and dashed names as the same skill when disabling", () => {
+    const resolved = resolveEffectiveSkillPolicy(
+      {
+        skills: {
+          policy: {
+            globalEnabled: ["web.search", "weather"],
+            agentOverrides: {
+              ops: {
+                disabled: ["web-search"],
+              },
+            },
+          },
+        },
+      },
+      "ops",
+    );
+
+    expect(resolved).toMatchObject({
+      agentId: "ops",
+      globalEnabled: ["weather", "web.search"],
+      agentDisabled: ["web-search"],
+      effective: ["weather"],
+    });
+  });
+
   it("matches entries by skillKey or skill name", () => {
     const resolved = resolveEffectiveSkillPolicy(
       {
