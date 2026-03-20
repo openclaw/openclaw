@@ -198,6 +198,39 @@ describe("buildWorkspaceSkillsPrompt", () => {
       await pathExists(path.join(targetWorkspace, "skills", "container-only", "SKILL.md")),
     ).toBe(true);
   });
+  it("keeps policy-allowed skills during sync even when required env secrets are missing", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "env-gated"),
+      name: "env-gated",
+      description: "Env-gated skill",
+      metadata:
+        '{"openclaw":{"requires":{"env":["OPENAI_API_KEY"]},"primaryEnv":"OPENAI_API_KEY"}}',
+    });
+
+    await withEnv({ HOME: sourceWorkspace, OPENAI_API_KEY: undefined, PATH: "" }, () =>
+      syncSkillsToWorkspace({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        agentId: "ops",
+        config: {
+          agents: {
+            list: [{ id: "ops" }],
+          },
+          skills: {
+            policy: {
+              globalEnabled: ["env-gated"],
+            },
+          },
+        },
+      }),
+    );
+
+    expect(await pathExists(path.join(targetWorkspace, "skills", "env-gated", "SKILL.md"))).toBe(
+      true,
+    );
+  });
   it.runIf(process.platform !== "win32")(
     "does not sync workspace skills that resolve outside the source workspace root",
     async () => {
