@@ -67,7 +67,7 @@ function buildOpenAICompatibleSelfHostedProviderConfig(params: {
           ...params.cfg.models?.providers,
           [params.providerId]: {
             baseUrl: params.baseUrl,
-            api: "openai-completions",
+            api: "openai-responses",
             apiKey: params.providerApiKey,
             models: [
               {
