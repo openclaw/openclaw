@@ -1292,8 +1292,28 @@ async function agentCommandInternal(
       const output = usage?.output ?? 0;
       const cacheRead = usage?.cacheRead ?? 0;
       const cacheWrite = usage?.cacheWrite ?? 0;
-      const promptTokens = promptTokensSnapshot ?? input + cacheRead + cacheWrite;
-      const totalTokens = usage?.total ?? promptTokens + output;
+      // Issue F fix: when `usage` is absent/zero but `lastCallUsage` has real counts (e.g. a
+      // provider that supplies per-call snapshots but omits aggregate totals), derive
+      // `promptTokens` and `total` from lastCallUsage so OTEL token metrics are non-zero.
+      const lastCallInput = lastCallUsage?.input ?? 0;
+      const lastCallOutput = lastCallUsage?.output ?? 0;
+      const lastCallCacheRead = lastCallUsage?.cacheRead ?? 0;
+      const lastCallCacheWrite = lastCallUsage?.cacheWrite ?? 0;
+      const promptTokens =
+        promptTokensSnapshot ??
+        (input + cacheRead + cacheWrite > 0
+          ? input + cacheRead + cacheWrite
+          : lastCallInput + lastCallCacheRead + lastCallCacheWrite > 0
+            ? lastCallInput + lastCallCacheRead + lastCallCacheWrite
+            : 0);
+      const totalTokens =
+        usage?.total ??
+        lastCallUsage?.total ??
+        (promptTokens + output > 0
+          ? promptTokens + output
+          : lastCallInput + lastCallCacheRead + lastCallCacheWrite + lastCallOutput > 0
+            ? lastCallInput + lastCallCacheRead + lastCallCacheWrite + lastCallOutput
+            : undefined);
       const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
       const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? model;
       const contextTokensUsed =
@@ -1345,25 +1365,31 @@ async function agentCommandInternal(
       };
 
       const payloads = result.payloads ?? [];
-      // Issue C fix: emit after delivery resolves so the channel field reflects the concrete
-      // channel selected by resolveMessageChannelSelection() in the --deliver path, preventing
-      // OTEL attribution to openclaw.channel=unknown.
-      const deliveryResult = await deliverAgentCommandResult({
-        cfg,
-        deps,
-        runtime,
-        opts,
-        outboundSession,
-        sessionEntry,
-        result,
-        payloads,
-      });
-      const resolvedChannel =
-        deliveryResult.resolvedChannel ??
-        messageChannel ??
-        sessionEntry?.lastChannel ??
-        sessionEntry?.channel;
-      emitDiagnosticEvent({ ...diagnosticPayload, channel: resolvedChannel });
+      // Issue C fix: capture the resolved delivery channel for accurate OTEL attribution.
+      // Issue G fix: always emit diagnostics even when delivery throws (e.g. unknown channel,
+      // missing target). Use try/finally so token telemetry is never silently dropped on
+      // delivery errors — emit with the best channel info available, then rethrow.
+      let deliveryResult: Awaited<ReturnType<typeof deliverAgentCommandResult>> | undefined =
+        undefined;
+      try {
+        deliveryResult = await deliverAgentCommandResult({
+          cfg,
+          deps,
+          runtime,
+          opts,
+          outboundSession,
+          sessionEntry,
+          result,
+          payloads,
+        });
+      } finally {
+        const resolvedChannel =
+          deliveryResult?.resolvedChannel ??
+          messageChannel ??
+          sessionEntry?.lastChannel ??
+          sessionEntry?.channel;
+        emitDiagnosticEvent({ ...diagnosticPayload, channel: resolvedChannel });
+      }
       return deliveryResult;
     }
 

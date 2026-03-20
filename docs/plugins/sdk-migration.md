@@ -156,9 +156,9 @@ check the source at `src/plugin-sdk/` or ask in Discord.
 
 ## Removal timeline
 
-| When | What happens |
-| --- | --- |
-| **Now** | Compat import and `openclaw/extension-api` emit runtime warnings |
+| When                   | What happens                                                            |
+| ---------------------- | ----------------------------------------------------------------------- |
+| **Now**                | Compat import and `openclaw/extension-api` emit runtime warnings        |
 | **Next major release** | These legacy bridges may be removed; plugins still using them will fail |
 
 All core plugins have already been migrated. External plugins should migrate

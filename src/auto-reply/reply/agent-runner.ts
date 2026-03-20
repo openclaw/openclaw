@@ -505,17 +505,32 @@ export async function runReplyAgent(params: {
       // Issue E fix: prefer the last-call/promptTokens snapshot for context.used, consistent
       // with session-usage.ts:100-143. The accumulated totalTokens overstates context size
       // after tool loops or compaction retries.
+      const lastCallInput = lastCallUsageSnap?.input ?? 0;
+      const lastCallOutput = lastCallUsageSnap?.output ?? 0;
+      const lastCallCacheRead = lastCallUsageSnap?.cacheRead ?? 0;
+      const lastCallCacheWrite = lastCallUsageSnap?.cacheWrite ?? 0;
       const lastCallPromptTokens =
         lastCallUsageSnap?.total ??
-        (lastCallUsageSnap
-          ? (lastCallUsageSnap.input ?? 0) +
-            (lastCallUsageSnap.cacheRead ?? 0) +
-            (lastCallUsageSnap.cacheWrite ?? 0)
-          : undefined);
+        (lastCallUsageSnap ? lastCallInput + lastCallCacheRead + lastCallCacheWrite : undefined);
       const contextUsed = lastCallPromptTokens ?? promptTokens ?? accumulatedPromptTokens;
+      // Issue F fix (agent-runner): when `usage` is absent/zero but `lastCallUsage` has real
+      // counts, derive emitted promptTokens and total from lastCallUsage so OTEL token metrics
+      // are non-zero for providers that supply per-call snapshots but omit aggregate totals.
+      const emittedPromptTokens =
+        promptTokens ??
+        (accumulatedPromptTokens > 0
+          ? accumulatedPromptTokens
+          : lastCallInput + lastCallCacheRead + lastCallCacheWrite > 0
+            ? lastCallInput + lastCallCacheRead + lastCallCacheWrite
+            : 0);
       const totalTokens =
         usage?.total ??
-        (accumulatedPromptTokens + output > 0 ? accumulatedPromptTokens + output : undefined);
+        lastCallUsageSnap?.total ??
+        (emittedPromptTokens + output > 0
+          ? emittedPromptTokens + output
+          : lastCallInput + lastCallCacheRead + lastCallCacheWrite + lastCallOutput > 0
+            ? lastCallInput + lastCallCacheRead + lastCallCacheWrite + lastCallOutput
+            : undefined);
       const costConfig = resolveModelCostConfig({
         provider: providerUsed,
         model: modelUsed,
@@ -534,7 +549,7 @@ export async function runReplyAgent(params: {
           output,
           cacheRead,
           cacheWrite,
-          promptTokens: promptTokens ?? accumulatedPromptTokens,
+          promptTokens: emittedPromptTokens,
           total: totalTokens,
         },
         lastCallUsage: lastCallUsageSnap,
