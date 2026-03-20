@@ -120,7 +120,7 @@ export async function acquireFileLock(
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const handle = await fs.open(lockPath, "wx");
-      // CERA: file handle acquired -- must be closed on ALL paths.
+      // FIX: file handle acquired -- must be closed on ALL paths.
       // If writeFile() throws below, the handle never reaches HELD_LOCKS
       // so releaseHeldLock() will never find or close it, leaking the FD.
       try {

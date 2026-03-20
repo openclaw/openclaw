@@ -196,10 +196,10 @@ export async function acquireGatewayLock(
   while (Date.now() - startedAt < timeoutMs) {
     try {
       const handle = await fs.open(lockPath, "wx");
-      // CERA: file handle acquired -- must be closed on ALL paths.
+      // FIX: file handle acquired -- must be closed on ALL paths.
       // If writeFile() throws (disk full, I/O error), the handle would
       // leak because release() is only returned on the success path.
-      // Wrap in try/finally to guarantee cleanup on failure.
+      // Wrap in try/catch to guarantee cleanup on failure.
       try {
         const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
         const payload: LockPayload = {
