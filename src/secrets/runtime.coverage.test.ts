@@ -20,7 +20,7 @@ vi.mock("../plugins/web-search-providers.js", () => ({
 }));
 
 function createTestProvider(params: {
-  id: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
+  id: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl" | "tavily";
   pluginId: string;
   order: number;
 }): PluginWebSearchProviderEntry {
@@ -197,6 +197,7 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   }
   if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");
+    setPathCreateStrict(config, ["plugins", "entries", "tavily", "enabled"], true);
   }
   return config;
 }
