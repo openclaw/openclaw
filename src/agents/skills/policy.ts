@@ -27,7 +27,7 @@ function normalizeAgentOverride(input: unknown): {
 
 function resolveAgentOverride(
   config: OpenClawConfig | undefined,
-  agentId: string,
+  normalizedAgentId: string,
 ): {
   enabled: string[];
   disabled: string[];
@@ -36,7 +36,6 @@ function resolveAgentOverride(
   if (!overrides || typeof overrides !== "object") {
     return { enabled: [], disabled: [] };
   }
-  const normalizedAgentId = normalizeAgentId(agentId);
   for (const [rawAgentId, override] of Object.entries(overrides)) {
     if (normalizeAgentId(rawAgentId) === normalizedAgentId) {
       return normalizeAgentOverride(override);

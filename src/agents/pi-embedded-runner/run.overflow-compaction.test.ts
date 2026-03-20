@@ -117,7 +117,17 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       compactDirect: mockedCompactDirect,
     });
 
-    await runEmbeddedPiAgent(overflowBaseRunParams);
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      currentChannelId: "C123",
+      currentThreadTs: "1710000000.000100",
+      currentMessageId: "M987",
+      senderId: "U456",
+      thinkLevel: "high",
+      reasoningLevel: "stream",
+      extraSystemPrompt: "extra policy",
+      ownerNumbers: ["+1234567890"],
+    });
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedCompactDirect).toHaveBeenCalledWith(
@@ -127,6 +137,14 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         runtimeContext: expect.objectContaining({
           trigger: "overflow",
           authProfileId: "test-profile",
+          currentChannelId: "C123",
+          currentThreadTs: "1710000000.000100",
+          currentMessageId: "M987",
+          senderId: "U456",
+          thinkLevel: "high",
+          reasoningLevel: "stream",
+          extraSystemPrompt: "extra policy",
+          ownerNumbers: ["+1234567890"],
         }),
       }),
     );
