@@ -1443,6 +1443,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     let lastSentText = "";
     let patchInterval: ReturnType<typeof setInterval> | null = null;
     let patchSending = false; // prevents concurrent network calls
+    // Tracks the currently in-flight sendMessageMattermost / patchMattermostPost
+    // promise so that onSettled can await it directly rather than busy-waiting.
+    let patchInflight: Promise<unknown> | null = null;
     // Latches true after the first send/edit failure to prevent the interval
     // from being re-armed by a later onPartialReply call (ID=2964357928).
     let previewSendFailed = false;
@@ -1525,7 +1528,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         // re-patching with the same truncated content every 200 ms and hit rate limits.
         if (text === lastSentText) return;
         patchSending = true;
-        void (async () => {
+        const runTick = async () => {
           try {
             if (!streamMessageId) {
               try {
@@ -1562,7 +1565,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           } finally {
             patchSending = false;
           }
-        })();
+        };
+        const inflightRun = runTick();
+        patchInflight = inflightRun;
+        inflightRun.finally(() => {
+          if (patchInflight === inflightRun) patchInflight = null;
+        });
+        void inflightRun;
       }, STREAM_PATCH_INTERVAL_MS);
     };
     // ── End P4 streaming state ────────────────────────────────────────────────
@@ -1754,10 +1763,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           lastSentText = "";
           const client = blockStreamingClient;
           void (async () => {
-            // Wait for any in-flight send/patch to settle so we get the final messageId.
-            const deadline = Date.now() + 3000;
-            while (patchSending && Date.now() < deadline) {
-              await new Promise((r) => setTimeout(r, 50));
+            // Await the in-flight promise directly so we never miss a late-resolving
+            // POST — a 3s timeout would race on slow Mattermost links (ID=2964616785).
+            if (patchInflight) {
+              await patchInflight.catch(() => {});
             }
             patchSending = false;
             const orphanId = streamMessageId;
