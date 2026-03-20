@@ -346,10 +346,7 @@ export function validateConfigObjectRaw(
       // Retry after stripping still failed — report the retry's issues for accuracy
       return {
         ok: false,
-        issues: retried.error.issues.map((iss) => ({
-          path: iss.path.join("."),
-          message: iss.message,
-        })),
+        issues: retried.error.issues.map((issue) => mapZodIssueToConfigIssue(issue)),
       };
     }
     return {
@@ -381,6 +378,10 @@ export function validateConfigObjectRaw(
     ok: true,
     config: validated.data as OpenClawConfig,
   };
+}
+
+export function isUnknownKeyRecoveryWarning(warning: ConfigValidationIssue): boolean {
+  return warning.message === UNKNOWN_KEY_STRIPPED_WARNING;
 }
 
 export function validateConfigObject(

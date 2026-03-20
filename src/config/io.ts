@@ -50,6 +50,7 @@ import { isBlockedObjectKey } from "./prototype-keys.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
+  isUnknownKeyRecoveryWarning,
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
@@ -1130,6 +1131,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       deps.logger.warn(`Config warnings:\n${details}`);
     }
 
+    // Preserve recovered unknown keys during writes so unrelated persistence
+    // paths do not silently delete future-version settings from disk.
+    const shouldPreserveRecoveredUnknownKeys =
+      validated.warnings.length > 0 && validated.warnings.every(isUnknownKeyRecoveryWarning);
+
     // Restore ${VAR} env var references that were resolved during config loading.
     // Read the current file (pre-substitution) and restore any references whose
     // resolved values match the incoming config — so we don't overwrite
@@ -1139,7 +1145,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     // pulling values from included files into the root config on write-back.
     // Apply env restoration to validated.config (which has runtime defaults stripped
     // per issue #6070) rather than the raw caller input.
-    let cfgToWrite = validated.config;
+    let cfgToWrite = shouldPreserveRecoveredUnknownKeys
+      ? (persistCandidate as OpenClawConfig)
+      : validated.config;
     try {
       if (deps.fs.existsSync(configPath)) {
         const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");

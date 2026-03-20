@@ -339,6 +339,38 @@ describe("config io write", () => {
     });
   });
 
+  it("preserves unknown keys on disk during unrelated writes", async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const logger = {
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        logger,
+        initialConfig: {
+          gateway: { port: 18789 },
+          futureFeature: { enabled: true },
+        },
+      });
+
+      const next = structuredClone(snapshot.config);
+      next.gateway = {
+        ...(next.gateway as Record<string, unknown>),
+        auth: { mode: "token" },
+      };
+
+      await io.writeConfigFile(next);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<
+        string,
+        unknown
+      >;
+      expect(persisted.futureFeature).toEqual({ enabled: true });
+      expect((persisted.gateway as Record<string, unknown>).auth).toEqual({ mode: "token" });
+    });
+  });
+
   it("does not reintroduce Slack/Discord legacy dm.policy defaults when writing", async () => {
     await withSuiteHome(async (home) => {
       const { configPath, io, snapshot } = await writeConfigAndCreateIo({

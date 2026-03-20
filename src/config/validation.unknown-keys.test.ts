@@ -120,6 +120,20 @@ describe("unknown config key recovery", () => {
     expect(raw).toEqual(rawCopy);
   });
 
+  it("fails gracefully when unknown-key recovery cannot clone the raw input", () => {
+    const res = validateConfigObjectRaw({
+      gateway: {
+        port: 18789,
+        bogusHandler: () => "not-cloneable",
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.message).toContain("Unrecognized key");
+    }
+  });
+
   it("handles deeply nested unknown keys in channel config", () => {
     const res = validateConfigObjectRaw({
       channels: {
