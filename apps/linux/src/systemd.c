@@ -71,19 +71,48 @@ static const gchar* discover_canonical_unit_name(void) {
     if (marked_units->len == 1) {
         cached_unit_name = g_strdup(g_ptr_array_index(marked_units, 0));
     } else if (marked_units->len > 1) {
-        gboolean found_default = FALSE;
-        for (guint i = 0; i < marked_units->len; i++) {
-            if (g_strcmp0((const gchar *)g_ptr_array_index(marked_units, i), "openclaw-gateway.service") == 0) {
-                found_default = TRUE;
-                break;
+        /*
+         * v1 multi-unit selection rule:
+         *
+         * 1. Check for a durable explicit selector at ~/.openclaw/systemd-unit.
+         *    When present, this file contains the unit filename written by the
+         *    install flow or manually by the user to resolve multi-profile
+         *    ambiguity (e.g. "openclaw-gateway-work.service").
+         * 2. If the selector resolves to one of the discovered marked units,
+         *    use it without warning.
+         * 3. Otherwise sort the marked units lexically and deterministically
+         *    select the first one.  Log a warning so the user knows ambiguity
+         *    remains unresolved by durable configuration.
+         */
+        gchar *selector_unit = NULL;
+        g_autofree gchar *selector_path = g_build_filename(
+            home_dir, ".openclaw", "systemd-unit", NULL);
+        gchar *selector_contents = NULL;
+        if (g_file_get_contents(selector_path, &selector_contents, NULL, NULL)) {
+            g_strstrip(selector_contents);
+            for (guint i = 0; i < marked_units->len; i++) {
+                if (g_strcmp0(selector_contents,
+                              (const gchar *)g_ptr_array_index(marked_units, i)) == 0) {
+                    selector_unit = g_strdup(selector_contents);
+                    break;
+                }
             }
+            if (!selector_unit) {
+                g_warning("Durable unit selector '%s' does not match any "
+                          "discovered marked unit; ignoring", selector_contents);
+            }
+            g_free(selector_contents);
         }
-        if (found_default) {
-            cached_unit_name = g_strdup("openclaw-gateway.service");
+
+        if (selector_unit) {
+            cached_unit_name = selector_unit;
         } else {
             g_ptr_array_sort(marked_units, sort_marked_units);
             const gchar *selected = g_ptr_array_index(marked_units, 0);
-            g_warning("Ambiguous OpenClaw systemd units found. Deterministically falling back to '%s'", selected);
+            g_warning("Multiple OpenClaw systemd units found but no durable "
+                      "selector at '%s'. Deterministically selecting '%s'. "
+                      "To pin a unit, write its filename to that path.",
+                      selector_path, selected);
             cached_unit_name = g_strdup(selected);
         }
     } else {
