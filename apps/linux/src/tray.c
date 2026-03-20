@@ -159,6 +159,7 @@ void tray_update_from_state(AppState state) {
     
     switch (state) {
         case STATE_NOT_INSTALLED:
+        case STATE_SYSTEM_UNSUPPORTED:
             break;
         case STATE_STOPPED:
         case STATE_ERROR:
