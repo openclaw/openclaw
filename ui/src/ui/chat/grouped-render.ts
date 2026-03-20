@@ -363,6 +363,24 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
           `;
           wrap.appendChild(popover);
 
+          // Clamp popover within viewport bounds
+          requestAnimationFrame(() => {
+            const rect = popover.getBoundingClientRect();
+            if (rect.left < 8) {
+              popover.style.left = "0";
+              popover.style.right = "auto";
+              popover.style.transform = `translateX(${8 - rect.left}px)`;
+            } else if (rect.right > window.innerWidth - 8) {
+              popover.style.right = "0";
+              popover.style.left = "auto";
+              popover.style.transform = `translateX(${window.innerWidth - 8 - rect.right}px)`;
+            }
+            if (rect.top < 8) {
+              popover.style.bottom = "auto";
+              popover.style.top = "calc(100% + 6px)";
+            }
+          });
+
           const cancel = popover.querySelector(".chat-delete-confirm__cancel")!;
           const yes = popover.querySelector(".chat-delete-confirm__yes")!;
           const check = popover.querySelector(".chat-delete-confirm__check") as HTMLInputElement;
