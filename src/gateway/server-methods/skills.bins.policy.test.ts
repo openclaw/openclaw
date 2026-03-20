@@ -81,4 +81,45 @@ describe("skills.bins", () => {
     });
     expect(payload).toEqual({ bins: ["git", "jq"] });
   });
+
+  it("scopes bins by requester platform when available", async () => {
+    loadWorkspaceSkillEntriesMock.mockReset();
+    loadWorkspaceSkillEntriesMock.mockReturnValue([
+      {
+        metadata: {
+          requires: {
+            bins: ["git"],
+          },
+        },
+      },
+    ]);
+
+    await skillsHandlers["skills.bins"]({
+      params: {},
+      req: {} as never,
+      client: {
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 3,
+          client: {
+            id: "node-host",
+            version: "1.0.0",
+            platform: "linux",
+            mode: "node",
+          },
+          role: "node",
+        },
+      } as never,
+      isWebchatConnect: () => false,
+      context: {} as never,
+      respond: () => {},
+    });
+
+    expect(loadWorkspaceSkillEntriesMock).toHaveBeenCalledWith("/tmp/ops", {
+      config: {},
+      agentId: "ops",
+      applyEligibility: false,
+      targetPlatform: "linux",
+    });
+  });
 });

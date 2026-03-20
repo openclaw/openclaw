@@ -78,6 +78,7 @@ function filterSkillEntries(
   eligibility?: SkillEligibilityContext,
   agentId?: string,
   applyEligibility = true,
+  targetPlatform?: string,
 ): { entries: SkillEntry[]; policy?: EffectiveSkillPolicy } {
   if (config?.skills?.policy && typeof config.skills.policy === "object") {
     assertNoCanonicalSkillAliasCollisions(entries);
@@ -92,6 +93,7 @@ function filterSkillEntries(
       config,
       eligibility,
       skipHostEnvironmentCheck: !applyEligibility,
+      targetPlatform,
     }),
   );
   if (policy) {
@@ -831,6 +833,7 @@ export function loadWorkspaceSkillEntries(
     agentId?: string;
     applyPolicy?: boolean;
     applyEligibility?: boolean;
+    targetPlatform?: string;
   },
 ): SkillEntry[] {
   const entries = loadSkillEntries(workspaceDir, opts);
@@ -845,6 +848,7 @@ export function loadWorkspaceSkillEntries(
     undefined,
     opts.agentId,
     opts.applyEligibility !== false,
+    opts.targetPlatform,
   ).entries;
 }
 

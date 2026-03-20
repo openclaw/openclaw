@@ -73,8 +73,12 @@ export function shouldIncludeSkill(params: {
   config?: OpenClawConfig;
   eligibility?: SkillEligibilityContext;
   skipHostEnvironmentCheck?: boolean;
+  targetPlatform?: string;
 }): boolean {
   const { entry, config, eligibility, skipHostEnvironmentCheck } = params;
+  const targetPlatformRaw =
+    typeof params.targetPlatform === "string" ? params.targetPlatform.trim().toLowerCase() : "";
+  const targetPlatform = targetPlatformRaw || undefined;
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
   const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
@@ -85,15 +89,23 @@ export function shouldIncludeSkill(params: {
   if (!isBundledSkillAllowed(entry, allowBundled)) {
     return false;
   }
+  if (targetPlatform) {
+    const allowedPlatforms = entry.metadata?.os ?? [];
+    if (allowedPlatforms.length > 0 && !allowedPlatforms.includes(targetPlatform)) {
+      return false;
+    }
+  }
   const hasConfiguredEnv = (envName: string): boolean =>
     Boolean(
       skillConfig?.env?.[envName] ||
       (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
     );
   return evaluateRuntimeEligibility({
-    os: entry.metadata?.os,
+    os: targetPlatform ? undefined : entry.metadata?.os,
     remotePlatforms: skipHostEnvironmentCheck
-      ? (eligibility?.remote?.platforms ?? entry.metadata?.os)
+      ? targetPlatform
+        ? [targetPlatform]
+        : (eligibility?.remote?.platforms ?? entry.metadata?.os)
       : eligibility?.remote?.platforms,
     always: entry.metadata?.always,
     requires: entry.metadata?.requires,
