@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { LITELLM_DEFAULT_MODEL_REF } from "../plugins/provider-auth-storage.js";
 import {
   applyAgentDefaultModelPrimary,
@@ -110,6 +111,52 @@ function buildLitellmModelDefinition(overrides?: { contextWindow?: number; maxTo
   };
 }
 
+/**
+ * Patch contextWindow/maxTokens on an existing model entry in the provider
+ * config. `applyProviderConfigWithDefaultModel` preserves existing model
+ * entries when the defaultModelId is already present, so a re-auth/upgrade
+ * would otherwise keep stale 128k/8192 values. This post-apply patch
+ * overwrites only the two capability fields on the matching model.
+ */
+function patchExistingModelLimits(
+  cfg: OpenClawConfig,
+  providerId: string,
+  modelId: string,
+  overrides: { contextWindow: number; maxTokens: number },
+): OpenClawConfig {
+  const provider = cfg.models?.providers?.[providerId];
+  if (!provider) {
+    return cfg;
+  }
+  const models = (provider as { models?: ModelDefinitionConfig[] }).models;
+  if (!models) {
+    return cfg;
+  }
+  const idx = models.findIndex((m) => m.id === modelId);
+  if (idx < 0) {
+    return cfg;
+  }
+  const existing = models[idx];
+  if (
+    existing.contextWindow === overrides.contextWindow &&
+    existing.maxTokens === overrides.maxTokens
+  ) {
+    return cfg; // already up to date
+  }
+  const updatedModels = [...models];
+  updatedModels[idx] = { ...existing, ...overrides };
+  return {
+    ...cfg,
+    models: {
+      ...cfg.models,
+      providers: {
+        ...cfg.models?.providers,
+        [providerId]: { ...provider, models: updatedModels },
+      },
+    },
+  };
+}
+
 export function applyLitellmProviderConfig(
   cfg: OpenClawConfig,
   modelInfoOverrides?: { contextWindow?: number; maxTokens?: number },
@@ -126,7 +173,7 @@ export function applyLitellmProviderConfig(
   const resolvedBaseUrl =
     typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
 
-  return applyProviderConfigWithDefaultModel(cfg, {
+  let next = applyProviderConfigWithDefaultModel(cfg, {
     agentModels: models,
     providerId: "litellm",
     api: "openai-completions",
@@ -134,6 +181,18 @@ export function applyLitellmProviderConfig(
     defaultModel,
     defaultModelId: LITELLM_DEFAULT_MODEL_ID,
   });
+
+  // When the model already existed in a previous config, the merge helper
+  // keeps the old entry unchanged. Patch contextWindow/maxTokens so re-auth
+  // picks up newly discovered limits (e.g. 128k → 1M after upgrading model).
+  if (modelInfoOverrides) {
+    next = patchExistingModelLimits(next, "litellm", LITELLM_DEFAULT_MODEL_ID, {
+      contextWindow: modelInfoOverrides.contextWindow ?? LITELLM_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: modelInfoOverrides.maxTokens ?? LITELLM_DEFAULT_MAX_TOKENS,
+    });
+  }
+
+  return next;
 }
 
 export function applyLitellmConfig(

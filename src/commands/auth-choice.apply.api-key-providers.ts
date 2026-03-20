@@ -62,11 +62,12 @@ export async function applyLiteLlmApiKeyProvider({
     profileId = existingProfileId;
   }
 
-  // Track the API key so we can authenticate the model info probe later.
+  // Track the resolved plaintext API key for the model info probe.
+  // ensureApiKeyFromOptionEnvOrPrompt always returns plaintext even in ref mode.
   let resolvedApiKey: string | undefined;
 
   if (!hasCredential) {
-    await ensureApiKeyFromOptionEnvOrPrompt({
+    resolvedApiKey = await ensureApiKeyFromOptionEnvOrPrompt({
       token: params.opts?.token,
       tokenProvider: normalizedTokenProvider,
       secretInputMode: requestedSecretInputMode,
@@ -78,10 +79,8 @@ export async function applyLiteLlmApiKeyProvider({
       normalize: normalizeApiKeyInput,
       validate: validateApiKeyInput,
       prompter: params.prompter,
-      setCredential: async (apiKey, mode) => {
-        resolvedApiKey = typeof apiKey === "string" ? apiKey : undefined;
-        return setLitellmApiKey(apiKey, params.agentDir, { secretInputMode: mode });
-      },
+      setCredential: async (apiKey, mode) =>
+        setLitellmApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
       noteMessage:
         "LiteLLM provides a unified API to 100+ LLM providers.\nGet your API key from your LiteLLM proxy or https://litellm.ai\nDefault proxy runs on http://localhost:4000",
       noteTitle: "LiteLLM",
@@ -89,7 +88,7 @@ export async function applyLiteLlmApiKeyProvider({
     hasCredential = true;
   }
 
-  // Also check the LITELLM_API_KEY env var as a fallback for the probe auth.
+  // Fall back to the LITELLM_API_KEY env var when reusing an existing credential.
   if (!resolvedApiKey) {
     resolvedApiKey = process.env.LITELLM_API_KEY ?? undefined;
   }
@@ -103,9 +102,9 @@ export async function applyLiteLlmApiKeyProvider({
   }
   setConfig(nextConfig);
 
-  // Resolve baseUrl: prefer any previously configured value (which may already
-  // include /v1), fall back to the default. fetchLitellmModelInfo handles
-  // stripping a trailing /v1 to avoid /v1/v1/model/info.
+  // Determine the LiteLLM base URL from a previously persisted config, if any,
+  // or fall back to the default localhost address. This fetch happens before
+  // applyProviderDefaultModel writes the new config.
   const existingProvider = nextConfig.models?.providers?.litellm as
     | { baseUrl?: unknown }
     | undefined;
@@ -114,9 +113,8 @@ export async function applyLiteLlmApiKeyProvider({
       ? existingProvider.baseUrl.trim()
       : LITELLM_BASE_URL;
 
-  // Fetch actual model capabilities from LiteLLM before applying config.
-  // This ensures contextWindow and maxTokens reflect the real model (e.g. 1M
-  // for claude-opus-4.6-1m) instead of the 128k default.
+  // Probe the proxy for actual model capabilities (context window, max tokens)
+  // so the config reflects the real model limits instead of the 128k default.
   const modelInfo = await fetchLitellmModelInfo(baseUrl, LITELLM_DEFAULT_MODEL_ID, resolvedApiKey);
 
   await applyProviderDefaultModel({
