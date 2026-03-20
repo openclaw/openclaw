@@ -5,7 +5,6 @@ export type { SecretInput } from "../config/types.secrets.js";
 export type { ProviderAuthResult } from "../plugins/types.js";
 export type { ProviderAuthContext } from "../plugins/types.js";
 export type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
-export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 
 export {
   CLAUDE_CLI_PROFILE_ID,
