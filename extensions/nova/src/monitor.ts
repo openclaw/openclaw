@@ -301,7 +301,9 @@ export async function monitorNovaProvider(opts: MonitorNovaOpts): Promise<void> 
             });
             logger.info(`nova: auto-initialized ACP session for ${acpSessionKey}`);
           } catch (err) {
-            logger.warn(`nova: ACP session auto-init failed, falling back to embedded agent: ${String(err)}`);
+            logger.warn(
+              `nova: ACP session auto-init failed, falling back to embedded agent: ${String(err)}`,
+            );
           }
         }
       }

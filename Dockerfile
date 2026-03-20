@@ -96,20 +96,8 @@ RUN pnpm ui:build
 # Prune dev dependencies and strip build-only metadata before copying
 # runtime assets into the final image.
 FROM build AS runtime-assets
-ARG OPENCLAW_EXTENSIONS=""
 RUN CI=true pnpm prune --prod && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete
-# When OPENCLAW_EXTENSIONS is set, remove all other extensions from the
-# runtime image to avoid OOM from loading unused plugins at startup.
-RUN if [ -n "$OPENCLAW_EXTENSIONS" ] && [ -d extensions ]; then \
-      for dir in extensions/*/; do \
-        name="$(basename "$dir")"; \
-        case " $OPENCLAW_EXTENSIONS " in \
-          *" $name "*) ;; \
-          *) rm -rf "$dir" ;; \
-        esac; \
-      done; \
-    fi
 
 # ── Runtime base images ─────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS base-default
