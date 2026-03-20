@@ -94,6 +94,7 @@ vi.mock("../accounts.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../accounts.js")>();
   return {
     ...actual,
+    resolveConfiguredMatrixBotUserIds: vi.fn(() => new Set<string>()),
     resolveMatrixAccount: () => ({
       accountId: "default",
       config: {
