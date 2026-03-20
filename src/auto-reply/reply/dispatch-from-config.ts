@@ -101,6 +101,10 @@ async function resolveInboundImages(ctx: FinalizedMsgContext): Promise<ImageCont
   for (let i = 0; i < paths.length; i++) {
     const path = paths[i];
     const mimeType = (types[i] ?? ctx.MediaType ?? "image/jpeg").split(";")[0].trim();
+    if (!mimeType.startsWith("image/")) {
+      logVerbose(`resolveInboundImages: skipping non-image file ${path} (${mimeType})`);
+      continue;
+    }
     try {
       const data = await fs.readFile(path);
       results.push({

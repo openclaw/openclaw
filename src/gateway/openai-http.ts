@@ -179,7 +179,7 @@ function extractTextContent(content: unknown): string {
         // Preserve image_url parts as text references so the model sees them
         if (type === "image_url") {
           const url = resolveImageUrlPart(part);
-          if (url) {
+          if (url && !url.startsWith("data:")) {
             return `[image: ${url}]`;
           }
         }
