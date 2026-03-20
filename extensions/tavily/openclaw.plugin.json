@@ -1,6 +1,9 @@
 {
   "id": "tavily",
   "skills": ["./skills"],
+  "providerAuthEnvVars": {
+    "tavily": ["TAVILY_API_KEY"]
+  },
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Tavily API Key",
