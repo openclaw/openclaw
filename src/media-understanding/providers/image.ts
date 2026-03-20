@@ -54,13 +54,14 @@ async function resolveImageRuntime(params: {
   // Use the full model resolution stack (registry → inline config → plugin →
   // ad-hoc provider config) instead of bare modelRegistry.find(), which misses
   // user-configured custom provider models (e.g. vllm, nvidia-api, iflow).
-  let model = (resolveModelWithRegistry({
-    provider: resolvedRef.provider,
-    modelId: resolvedRef.model,
-    modelRegistry,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-  }) ?? null) as Model<Api> | null;
+  let model: Model<Api> | null =
+    resolveModelWithRegistry({
+      provider: resolvedRef.provider,
+      modelId: resolvedRef.model,
+      modelRegistry,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    }) ?? null;
 
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
@@ -71,13 +72,19 @@ async function resolveImageRuntime(params: {
   // ID matching which can miss provider-prefixed IDs (e.g. "vllm/Qwen3.5" in
   // config vs "Qwen3.5" after model ref parsing).  Check the user's configured
   // model definition for explicit image support so the tool works correctly.
+  // We also match against the original params.provider (pre-normalization) since
+  // configs may use aliases like "nvidia-api/meta/..." while resolvedRef.provider
+  // is normalized to "nvidia".
   if (!model.input?.includes("image")) {
     const providerConfig = findNormalizedProviderValue(
       params.cfg?.models?.providers,
       resolvedRef.provider,
     );
     const configuredModel = providerConfig?.models?.find(
-      (m) => m.id === resolvedRef.model || m.id === `${resolvedRef.provider}/${resolvedRef.model}`,
+      (m) =>
+        m.id === resolvedRef.model ||
+        m.id === `${resolvedRef.provider}/${resolvedRef.model}` ||
+        m.id === `${params.provider}/${resolvedRef.model}`,
     );
     if (configuredModel?.input?.includes("image")) {
       model = {

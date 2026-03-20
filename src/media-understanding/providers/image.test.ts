@@ -294,6 +294,71 @@ describe("describeImageWithModel", () => {
     expect(completeMock).toHaveBeenCalledOnce();
   });
 
+  it("matches provider-prefixed model IDs against the original provider alias (#33185)", async () => {
+    // When provider is "nvidia-api", resolvedRef.provider becomes "nvidia" after
+    // normalization, but the user's config stores "nvidia-api/meta-llama".  The
+    // lookup must also try the original params.provider prefix.
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "nvidia",
+      id: "meta-llama",
+      api: "openai-completions",
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      input: ["text"],
+      contextWindow: 128000,
+      maxTokens: 4096,
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "nvidia",
+      model: "meta-llama",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "nvidia vision ok" }],
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "nvidia-api": {
+            baseUrl: "https://integrate.api.nvidia.com/v1",
+            apiKey: "nvidia-key", // pragma: allowlist secret
+            api: "openai-completions" as const,
+            models: [
+              {
+                id: "nvidia-api/meta-llama",
+                name: "meta-llama",
+                reasoning: false,
+                input: ["image", "text"] as Array<"text" | "image">,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 4096,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const result = await describeImageWithModel({
+      cfg,
+      agentDir: "/tmp/openclaw-agent",
+      provider: "nvidia-api",
+      model: "meta-llama",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "nvidia vision ok",
+      model: "meta-llama",
+    });
+    expect(completeMock).toHaveBeenCalledOnce();
+  });
+
   it("throws Unknown model when custom provider model is not resolvable at all (#33185)", async () => {
     resolveModelWithRegistryMock.mockReturnValue(undefined);
 

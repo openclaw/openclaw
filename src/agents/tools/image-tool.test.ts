@@ -982,7 +982,7 @@ describe("image tool custom provider fallback (#33185)", () => {
         )
         .mockResolvedValue({ text: "Image 1:\nfirst\n\nImage 2:\nsecond", model: "Qwen3.5" });
 
-      const res = await tool.execute("t1", {
+      const _res = await tool.execute("t1", {
         prompt: "Compare these images.",
         images: [`data:image/png;base64,${pngB64}`, `data:image/png;base64,${pngB64}`],
       });
