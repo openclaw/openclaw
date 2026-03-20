@@ -1,3 +1,17 @@
+/**
+ * @module redact
+ * @security
+ * Redacts sensitive values (API keys, tokens, passwords, PEM blocks) from
+ * log output and tool detail strings. Key design decisions:
+ *   - DEFAULT_REDACT_PATTERNS covers common secret prefixes (sk-, ghp_, AIza, xox, etc.)
+ *   - PEM private key blocks are redacted while preserving header/footer for debugging
+ *   - Token masking preserves the first 6 and last 4 characters for correlation
+ *   - All regex patterns are compiled via compileConfigRegex (ReDoS-safe)
+ *   - Mode "off" fully disables redaction (operator opt-out)
+ *   - Mode "tools" (default) redacts tool output only
+ *
+ * When adding new secret patterns, also add them to .detect-secrets.cfg.
+ */
 import type { OpenClawConfig } from "../config/config.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
