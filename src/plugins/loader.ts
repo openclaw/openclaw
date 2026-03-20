@@ -1283,6 +1283,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       hookPolicy: entry?.hooks,
       registrationMode,
     });
+    const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
 
     try {
       const result = register(api);
@@ -1294,9 +1295,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           message: "plugin register returned a promise; async registration is ignored",
         });
       }
+      // Snapshot loads should not replace process-global runtime prompt state.
+      if (!shouldActivate) {
+        restoreMemoryPromptSection(previousMemoryPromptBuilder);
+      }
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
     } catch (err) {
+      restoreMemoryPromptSection(previousMemoryPromptBuilder);
       recordPluginError({
         logger,
         registry,
