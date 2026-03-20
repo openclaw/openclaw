@@ -880,6 +880,23 @@ export const OpenClawSchema = z
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
+        policy: z
+          .object({
+            globalEnabled: z.array(z.string()).optional(),
+            agentOverrides: z
+              .record(
+                z.string(),
+                z
+                  .object({
+                    enabled: z.array(z.string()).optional(),
+                    disabled: z.array(z.string()).optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
+          })
+          .strict()
+          .optional(),
         load: z
           .object({
             extraDirs: z.array(z.string()).optional(),

@@ -11,6 +11,11 @@ export {
   resolveSkillConfig,
 } from "./skills/config.js";
 export {
+  isSkillAllowedByPolicy,
+  matchesSkillPolicySnapshot,
+  resolveEffectiveSkillPolicy,
+} from "./skills/policy.js";
+export {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
 } from "./skills/env-overrides.js";
