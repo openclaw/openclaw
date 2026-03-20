@@ -16,6 +16,53 @@ import {
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 
+type DeliveryConfig = {
+  mode: "announce" | "none";
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  bestEffort?: true;
+};
+
+/**
+ * Resolve the delivery config for a cron job create/edit operation.
+ * Extracted for unit testability — the action handler delegates here.
+ * Returns undefined when delivery is not applicable (systemEvent, no announce).
+ */
+export function resolveDeliveryConfig(opts: {
+  payloadKind: "agentTurn" | "script" | "systemEvent";
+  isIsolatedLike: boolean;
+  hasAnnounce: boolean;
+  hasNoDeliver: boolean;
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  bestEffortDeliver?: boolean;
+}): DeliveryConfig | undefined {
+  const { payloadKind, isIsolatedLike, hasAnnounce, hasNoDeliver } = opts;
+  let mode: "announce" | "none" | undefined;
+  if ((payloadKind === "agentTurn" || payloadKind === "script") && isIsolatedLike) {
+    if (hasAnnounce) {
+      mode = "announce";
+    } else if (hasNoDeliver) {
+      mode = "none";
+    } else if (payloadKind === "agentTurn") {
+      // agentTurn defaults to announce; script requires explicit --announce.
+      mode = "announce";
+    }
+  }
+  if (!mode) {
+    return undefined;
+  }
+  return {
+    mode,
+    channel: opts.channel?.trim() || undefined,
+    to: opts.to?.trim() || undefined,
+    accountId: opts.accountId || undefined,
+    bestEffort: opts.bestEffortDeliver ? true : undefined,
+  };
+}
+
 export function registerCronStatusCommand(cron: Command) {
   addGatewayClientOptions(
     cron
@@ -289,24 +336,19 @@ export function registerCronAddCommand(cron: Command) {
             throw new Error("--account requires a --message or --script job with delivery.");
           }
 
-          // agentTurn defaults to "announce"; script delivery is opt-in (requires --announce).
-          const deliveryMode =
-            payload.kind === "agentTurn" && isIsolatedLikeSessionTarget
-              ? hasAnnounce
-                ? "announce"
-                : hasNoDeliver
-                  ? "none"
-                  : "announce"
-              : payload.kind === "script" && isIsolatedLikeSessionTarget
-                ? hasAnnounce
-                  ? "announce"
-                  : hasNoDeliver
-                    ? "none"
-                    : undefined
-                : undefined;
+          const delivery = resolveDeliveryConfig({
+            payloadKind: payload.kind,
+            isIsolatedLike: isIsolatedLikeSessionTarget,
+            hasAnnounce,
+            hasNoDeliver,
+            channel: typeof opts.channel === "string" ? opts.channel : undefined,
+            to: typeof opts.to === "string" ? opts.to : undefined,
+            accountId,
+            bestEffortDeliver: opts.bestEffortDeliver === true,
+          });
 
           // Delivery-targeting flags only make sense when announce mode is active.
-          if (deliveryMode !== "announce") {
+          if (delivery?.mode !== "announce") {
             const hasExplicitDeliveryFlags =
               (typeof opts.to === "string" && opts.to.trim().length > 0) ||
               Boolean(accountId) ||
@@ -346,18 +388,7 @@ export function registerCronAddCommand(cron: Command) {
             sessionTarget,
             wakeMode,
             payload,
-            delivery: deliveryMode
-              ? {
-                  mode: deliveryMode,
-                  channel:
-                    typeof opts.channel === "string" && opts.channel.trim()
-                      ? opts.channel.trim()
-                      : undefined,
-                  to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
-                  accountId,
-                  bestEffort: opts.bestEffortDeliver ? true : undefined,
-                }
-              : undefined,
+            delivery,
           };
 
           const res = await callGatewayFromCli("cron.add", opts, params);
