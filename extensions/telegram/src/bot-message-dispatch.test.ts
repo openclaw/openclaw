@@ -11,6 +11,7 @@ import {
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
 const deliverReplies = vi.hoisted(() => vi.fn());
+const emitMessageSentHooks = vi.hoisted(() => vi.fn());
 const createForumTopicTelegram = vi.hoisted(() => vi.fn());
 const deleteMessageTelegram = vi.hoisted(() => vi.fn());
 const editForumTopicTelegram = vi.hoisted(() => vi.fn());
@@ -46,6 +47,10 @@ vi.mock("./draft-stream.js", () => ({
 
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
+}));
+
+vi.mock("./bot/delivery.replies.js", () => ({
+  emitMessageSentHooks,
 }));
 
 vi.mock("./send.js", () => ({
@@ -103,6 +108,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     createTelegramDraftStream.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     deliverReplies.mockClear();
+    emitMessageSentHooks.mockClear();
     createForumTopicTelegram.mockClear();
     deleteMessageTelegram.mockClear();
     editForumTopicTelegram.mockClear();
@@ -2348,6 +2354,36 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(statusReactionController.cancelPending.mock.invocationCallOrder[0]).toBeLessThan(
       statusReactionController.setThinking.mock.invocationCallOrder[1],
+    );
+  });
+
+  it("emits message:sent hook when streaming reply is delivered", async () => {
+    let capturedOnMessageSent: ((messageId: number, text: string) => void) | undefined;
+    createTelegramDraftStream.mockImplementation((options) => {
+      capturedOnMessageSent = options.onMessageSent;
+      return createDraftStream(123);
+    });
+
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Streaming..." });
+        // Simulate the real stream calling onMessageSent when final message is sent.
+        capturedOnMessageSent?.(123, "Final answer text");
+        await dispatcherOptions.deliver({ text: "Final answer text" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    // Verify emitMessageSentHooks was called for the streaming outbound message.
+    expect(emitMessageSentHooks).toHaveBeenCalledTimes(1);
+    expect(emitMessageSentHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 123,
+        content: "Final answer text",
+      }),
     );
   });
 });

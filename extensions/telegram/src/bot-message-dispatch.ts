@@ -19,14 +19,19 @@ import type {
   OpenClawConfig,
   ReplyToMode,
   TelegramAccountConfig,
-} from "../../../src/config/types.js";
-import { danger, logVerbose } from "../../../src/globals.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { fireAndForgetHook } from "../../../src/hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../../src/hooks/internal-hooks.js";
 import { toInternalMessageSentContext } from "../../../src/hooks/message-hook-mappers.js";
-import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
 import { getGlobalHookRunner } from "../../../src/plugins/hook-runner-global.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -248,7 +253,7 @@ export const dispatchTelegramMessage = async ({
     };
   };
 
-  // Callback to emit message:sent internal hook when streaming reply is sent.
+  // Emit message:sent hook when streaming reply is delivered via draft stream.
   const sessionKeyForStreamHooks = ctxPayload.SessionKey ?? route.sessionKey;
   const streamOnMessageSent = (messageId: number, text: string) => {
     const hookRunner = getGlobalHookRunner();
@@ -471,7 +476,7 @@ export const dispatchTelegramMessage = async ({
   const deliveryBaseOptions = {
     chatId: String(chatId),
     accountId: route.accountId,
-    sessionKeyForInternalHooks: ctxPayload.SessionKey ?? route.sessionKey,
+    sessionKeyForInternalHooks: ctxPayload.SessionKey,
     mirrorIsGroup: isGroup,
     mirrorGroupId: isGroup ? String(chatId) : undefined,
     token: opts.token,
