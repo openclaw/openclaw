@@ -46,6 +46,10 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
   },
+  moonshot: {
+    transcriptToolCallIdMode: "strict",
+    transcriptToolCallIdModelHints: ["kimi", "moonshot"],
+  },
   mistral: {
     transcriptToolCallIdMode: "strict9",
     transcriptToolCallIdModelHints: [
@@ -193,10 +197,10 @@ export function resolveTranscriptToolCallIdMode(
   provider?: string | null,
   modelId?: string | null,
   options?: ProviderCapabilityLookupOptions,
-): "strict9" | undefined {
+): "strict9" | "strict" | undefined {
   const capabilities = resolveProviderCapabilities(provider, options);
   const mode = capabilities.transcriptToolCallIdMode;
-  if (mode === "strict9") {
+  if (mode === "strict9" || mode === "strict") {
     return mode;
   }
   if (modelIncludesAnyHint(modelId, capabilities.transcriptToolCallIdModelHints)) {
