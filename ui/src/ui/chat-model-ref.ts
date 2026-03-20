@@ -42,7 +42,13 @@ export function normalizeChatModelOverrideValue(
     return "";
   }
   if (override.kind === "qualified") {
-    return trimmed;
+    const qualifiedMatch = catalog.some((entry) => {
+      const candidate = buildQualifiedChatModelValue(entry.id, entry.provider);
+      return candidate.toLowerCase() === trimmed.toLowerCase();
+    });
+    if (qualifiedMatch) {
+      return trimmed;
+    }
   }
 
   let matchedValue = "";

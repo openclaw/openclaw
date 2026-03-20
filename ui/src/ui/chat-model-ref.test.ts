@@ -38,6 +38,22 @@ describe("chat-model-ref helpers", () => {
     ).toBe("gpt-5-mini");
   });
 
+  it("normalizes misclassified slash model ids to the matching qualified value", () => {
+    const openRouterCatalog: ModelCatalogEntry[] = [
+      {
+        id: "moonshotai/kimi-k2.5",
+        name: "Kimi K2.5",
+        provider: "openrouter",
+      },
+    ];
+    expect(
+      normalizeChatModelOverrideValue(
+        createChatModelOverride("moonshotai/kimi-k2.5"),
+        openRouterCatalog,
+      ),
+    ).toBe("openrouter/moonshotai/kimi-k2.5");
+  });
+
   it("formats qualified model refs consistently for default labels", () => {
     expect(formatChatModelDisplay("openai/gpt-5-mini")).toBe("gpt-5-mini · openai");
     expect(formatChatModelDisplay("alias-only")).toBe("alias-only");
