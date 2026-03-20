@@ -3595,10 +3595,9 @@ export const syntheticRuntimeMarker = {
       ...__testing.buildPluginLoaderJitiOptions({}),
       tryNative: false,
     });
-    // Jiti's pre-alias failure text varies across Node versions and platforms.
-    // This boundary only needs to prove the source import rejects until the
-    // plugin-sdk alias is present.
-    await expect(withoutAlias.import(copiedChannelRuntime)).rejects.toThrow();
+    // The production loader uses sync Jiti evaluation, so this boundary should
+    // follow the same path instead of the async import helper.
+    expect(() => withoutAlias(copiedChannelRuntime)).toThrow();
 
     const withAlias = createJiti(jitiBaseUrl, {
       ...__testing.buildPluginLoaderJitiOptions({
@@ -3606,7 +3605,7 @@ export const syntheticRuntimeMarker = {
       }),
       tryNative: false,
     });
-    await expect(withAlias.import(copiedChannelRuntime)).resolves.toMatchObject({
+    expect(withAlias(copiedChannelRuntime)).toMatchObject({
       syntheticRuntimeMarker: {
         resolveOutboundSendDep: expect.any(Function),
       },
