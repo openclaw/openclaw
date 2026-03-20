@@ -297,7 +297,7 @@ export function registerNodesStatusCommands(nodes: Command) {
   nodesCallOpts(
     nodes
       .command("list")
-      .description("List pending and paired nodes")
+      .description("List pending, paired, and connected nodes")
       .option("--connected", "Only show connected nodes")
       .option("--last-connected <duration>", "Only show nodes connected within duration (e.g. 24h)")
       .action(async (opts: NodesRpcOpts) => {
@@ -312,7 +312,6 @@ export function registerNodesStatusCommands(nodes: Command) {
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const pendingRows = hasFilters ? [] : pending;
-          const liveById = new Map(nodes.map((node) => [node.nodeId, node]));
           const pairedById = new Map(paired.map((entry) => [entry.nodeId, entry]));
           const isPairedNode = (nodeId: string, pairedFlag: boolean | undefined) =>
             Boolean(pairedFlag) || pairedById.has(nodeId);
@@ -376,12 +375,11 @@ export function registerNodesStatusCommands(nodes: Command) {
           if (filteredNodes.length > 0) {
             const pairedRows = filteredNodes.map((n) => {
               const pairedNode = pairedById.get(n.nodeId);
-              const live = liveById.get(n.nodeId);
               const lastConnectedAtMs =
                 typeof pairedNode?.lastConnectedAtMs === "number"
                   ? pairedNode.lastConnectedAtMs
-                  : typeof live?.connectedAtMs === "number"
-                    ? live.connectedAtMs
+                  : typeof n.connectedAtMs === "number"
+                    ? n.connectedAtMs
                     : undefined;
               return {
                 Node: n.displayName?.trim() ?? pairedNode?.displayName?.trim() ?? n.nodeId,
@@ -394,7 +392,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               };
             });
             defaultRuntime.log("");
-            defaultRuntime.log(heading("Paired"));
+            defaultRuntime.log(heading("Paired / Connected"));
             defaultRuntime.log(
               renderTable({
                 width: tableWidth,
