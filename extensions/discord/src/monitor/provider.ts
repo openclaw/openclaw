@@ -306,6 +306,7 @@ async function deployDiscordCommands(params: {
       // errors like Discord 30034 fail fast and don't wedge the provider.
       restClient.options.queueRequests = false;
     }
+    params.runtime.log?.("discord: native commands using Carbon reconcile path");
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         await params.client.handleDeployRequest();
@@ -762,6 +763,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         baseUrl: "http://localhost",
         deploySecret: "a",
         clientId: applicationId,
+        commandDeploymentMode: "reconcile",
         publicKey: "a",
         token,
         autoDeploy: false,
@@ -805,7 +807,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       phase: "deploy-commands:start",
       startAt: startupStartedAt,
       gateway: lifecycleGateway,
-      details: `native=${nativeEnabled ? "on" : "off"} commandCount=${commands.length}`,
+      details: `native=${nativeEnabled ? "on" : "off"} reconcile=on commandCount=${commands.length}`,
     });
     await deployDiscordCommands({
       client,
