@@ -1596,6 +1596,56 @@ export async function runEmbeddedPiAgent(
             };
           }
 
+          // Detect incomplete turns where prompt() resolved prematurely due to
+          // pi-agent-core's auto-retry timing issue: when a mid-turn 429/overload
+          // triggers an internal retry, waitForRetry() resolves on the next
+          // assistant message *before* tool execution completes in the retried
+          // loop (see #8643). The captured lastAssistant has a non-terminal
+          // stopReason (e.g. "toolUse") with no text content, producing empty
+          // payloads. Surface an error instead of silently dropping the reply.
+          if (
+            payloads.length === 0 &&
+            !aborted &&
+            !timedOut &&
+            !attempt.didSendViaMessagingTool &&
+            !attempt.clientToolCall &&
+            !attempt.yieldDetected
+          ) {
+            const incompleteStopReason = lastAssistant?.stopReason;
+            // Only trigger for non-terminal stop reasons (toolUse, etc.) to
+            // avoid false positives when the model legitimately produces no text.
+            // StopReason union: "aborted" | "error" | "length" | "toolUse"
+            // "toolUse" is the key signal that prompt() resolved mid-turn.
+            if (incompleteStopReason === "toolUse" || incompleteStopReason === "error") {
+              log.warn(
+                `incomplete turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `stopReason=${incompleteStopReason} payloads=0 — surfacing error to user`,
+              );
+              return {
+                payloads: [
+                  {
+                    text:
+                      "⚠️ API rate limit reached mid-turn — the model couldn't generate a response " +
+                      "after tool calls completed. Please try again in a moment.",
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta,
+                  aborted,
+                  systemPromptReport: attempt.systemPromptReport,
+                },
+                didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+                didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+                messagingToolSentTexts: attempt.messagingToolSentTexts,
+                messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+                messagingToolSentTargets: attempt.messagingToolSentTargets,
+                successfulCronAdds: attempt.successfulCronAdds,
+              };
+            }
+          }
+
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
