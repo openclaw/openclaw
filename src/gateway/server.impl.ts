@@ -1278,11 +1278,12 @@ export async function startGatewayServer(
               activate: true,
             });
             try {
-              // Refresh plugin subagent override policies (model allowlists) so
-              // changes to plugins.entries.<id>.subagent in config take effect
-              // without a full gateway restart.
-              refreshPluginSubagentPolicies(prepared.config);
               await applyHotReload(plan, prepared.config);
+              // Refresh plugin subagent override policies (model allowlists)
+              // AFTER applyHotReload succeeds, so a failed reload does not
+              // leave expanded allowlists from the new config in effect while
+              // the rest of the gateway still runs the old config.
+              refreshPluginSubagentPolicies(prepared.config);
             } catch (err) {
               if (previousSnapshot) {
                 activateSecretsRuntimeSnapshot(previousSnapshot);
