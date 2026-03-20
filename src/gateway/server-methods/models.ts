@@ -1,5 +1,5 @@
-import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { buildAllowedModelSet } from "../../agents/model-selection.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { buildAllowedModelSet, resolveConfiguredModelRef } from "../../agents/model-selection.js";
 import { loadConfig } from "../../config/config.js";
 import {
   ErrorCodes,
@@ -25,10 +25,18 @@ export const modelsHandlers: GatewayRequestHandlers = {
     try {
       const catalog = await context.loadGatewayModelCatalog();
       const cfg = loadConfig();
+      // Use the session's configured provider instead of the hardcoded DEFAULT_PROVIDER
+      // so that non-anthropic model allowlists (e.g. minimax) are correctly filtered.
+      const resolvedDefault = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      });
       const { allowedCatalog } = buildAllowedModelSet({
         cfg,
         catalog,
-        defaultProvider: DEFAULT_PROVIDER,
+        defaultProvider: resolvedDefault.provider,
+        defaultModel: resolvedDefault.model,
       });
       const models = allowedCatalog.length > 0 ? allowedCatalog : catalog;
       respond(true, { models }, undefined);

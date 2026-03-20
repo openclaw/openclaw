@@ -629,11 +629,11 @@ export function buildStatusMessage(args: StatusArgs): string {
     }
     const aliasIndex = buildModelAliasIndex({
       cfg: args.config,
-      defaultProvider: DEFAULT_PROVIDER,
+      defaultProvider: selectedProvider,
     });
     const resolvedOverride = resolveModelRefFromString({
       raw: channelOverride.model,
-      defaultProvider: DEFAULT_PROVIDER,
+      defaultProvider: selectedProvider,
       aliasIndex,
     });
     if (!resolvedOverride) {

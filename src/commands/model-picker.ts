@@ -207,14 +207,15 @@ export async function promptDefaultModel(
 
   const aliasIndex = buildModelAliasIndex({
     cfg,
-    defaultProvider: DEFAULT_PROVIDER,
+    defaultProvider: resolved.provider,
   });
   let models = catalog;
   if (!ignoreAllowlist) {
     const { allowedCatalog } = buildAllowedModelSet({
       cfg,
       catalog,
-      defaultProvider: DEFAULT_PROVIDER,
+      defaultProvider: resolved.provider,
+      defaultModel: resolved.model,
     });
     models = allowedCatalog.length > 0 ? allowedCatalog : catalog;
   }
@@ -404,7 +405,7 @@ export async function promptModelAllowlist(params: {
 
   const aliasIndex = buildModelAliasIndex({
     cfg,
-    defaultProvider: DEFAULT_PROVIDER,
+    defaultProvider: resolved.provider,
   });
   const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
 
