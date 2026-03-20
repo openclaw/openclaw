@@ -631,9 +631,11 @@ export async function runCronIsolatedAgentTurn(params: {
             // Cron runs execute inside the gateway process and need the same
             // explicit subagent late-binding as other gateway-owned runners.
             allowGatewaySubagentBinding: true,
-            // Cron jobs are trusted local automation, so isolated runs should
-            // inherit owner-only tooling like local `openclaw agent` runs.
-            senderIsOwner: true,
+            // Isolated cron sessions must NOT have owner-level tool access.
+            // With senderIsOwner=true, the agent gets cron and gateway tools
+            // which let smaller models "helpfully" rewrite their own cron job
+            // config via cron.update or config.apply (#44940).
+            senderIsOwner: false,
             messageChannel,
             agentAccountId: resolvedDelivery.accountId,
             sessionFile,

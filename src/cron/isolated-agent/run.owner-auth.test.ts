@@ -52,15 +52,17 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
     restoreFastTestEnv(previousFastTestEnv);
   });
 
-  it("passes senderIsOwner=true to isolated cron agent runs", async () => {
+  it("passes senderIsOwner=false to prevent config-write tools (#44940)", async () => {
     await runCronIsolatedAgentTurn(makeParams());
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const senderIsOwner = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.senderIsOwner;
-    expect(senderIsOwner).toBe(true);
+    expect(senderIsOwner).toBe(false);
 
+    // With senderIsOwner=false, cron and gateway tools are stripped,
+    // preventing isolated sessions from rewriting their own config.
     const toolNames = createOpenClawCodingTools({ senderIsOwner }).map((tool) => tool.name);
-    expect(toolNames).toContain("cron");
-    expect(toolNames).toContain("gateway");
+    expect(toolNames).not.toContain("cron");
+    expect(toolNames).not.toContain("gateway");
   });
 });
