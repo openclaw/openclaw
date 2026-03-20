@@ -324,7 +324,9 @@ const createVitestConfigWithExtraExcludes = ({ baseConfigPath, extraExcludes, la
   if (extraExcludes.length === 0) {
     return baseConfigPath;
   }
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-config-"));
+  // Keep the generated config inside the repo so bare imports like
+  // `vitest/config` still resolve through the workspace node_modules on CI.
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".openclaw-vitest-config-"));
   const configPath = path.join(tempDir, `${label}.mjs`);
   const baseConfigUrl = pathToFileURL(path.resolve(baseConfigPath)).href;
   const contents = [
@@ -348,7 +350,7 @@ const createVitestConfigWithExtraExcludes = ({ baseConfigPath, extraExcludes, la
   return configPath;
 };
 const unitFastConfigPath =
-  isWindows && unitFastExcludedFiles.length > 0
+  unitFastExcludedFiles.length > 0
     ? createVitestConfigWithExtraExcludes({
         baseConfigPath: "vitest.unit.config.ts",
         extraExcludes: unitFastExcludedFiles,
