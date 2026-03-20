@@ -27,19 +27,16 @@ describe("plugin extension import boundary inventory", () => {
     expect(inventory.some((entry) => entry.file === "src/plugins/web-search-providers.ts")).toBe(
       false,
     );
-    expect(inventory).toContainEqual(
-      expect.objectContaining({
-        file: "src/plugins/runtime/runtime-signal.ts",
-        resolvedPath: "extensions/signal/runtime-api.js",
-      }),
-    );
   });
 
-  it("ignores plugin-sdk boundary shims by scope", async () => {
+  it("ignores boundary shims by scope", async () => {
     const inventory = await collectPluginExtensionImportBoundaryInventory();
 
     expect(inventory.some((entry) => entry.file.startsWith("src/plugin-sdk/"))).toBe(false);
     expect(inventory.some((entry) => entry.file.startsWith("src/plugin-sdk-internal/"))).toBe(
+      false,
+    );
+    expect(inventory.some((entry) => entry.file.startsWith("src/plugins/runtime/runtime-"))).toBe(
       false,
     );
   });

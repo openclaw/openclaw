@@ -1,3 +1,4 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
@@ -13,7 +14,6 @@ import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
-import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { normalizePollInput } from "../../polls.js";
 import {
   ErrorCodes,

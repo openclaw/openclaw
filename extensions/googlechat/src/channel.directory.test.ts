@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
 import { describe, expect, it } from "vitest";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
 } from "../../../test/helpers/extensions/directory.ts";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { googlechatPlugin } from "./channel.js";
 
 describe("googlechat directory", () => {

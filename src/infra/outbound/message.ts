@@ -1,7 +1,7 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { callGatewayLeastPrivilege, randomIdempotencyKey } from "../../gateway/call.js";
-import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import {

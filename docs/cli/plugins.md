@@ -138,13 +138,23 @@ state dir extensions root (`$OPENCLAW_STATE_DIR/extensions/<id>`). Use
 ### Update
 
 ```bash
-openclaw plugins update <id>
+openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
-openclaw plugins update <id> --dry-run
+openclaw plugins update <id-or-npm-spec> --dry-run
+openclaw plugins update @openclaw/voice-call@beta
 ```
 
 Updates apply to tracked installs in `plugins.installs`, currently npm and
 marketplace installs.
+
+When you pass a plugin id, OpenClaw reuses the recorded install spec for that
+plugin. That means previously stored dist-tags such as `@beta` and exact pinned
+versions continue to be used on later `update <id>` runs.
+
+For npm installs, you can also pass an explicit npm package spec with a dist-tag
+or exact version. OpenClaw resolves that package name back to the tracked plugin
+record, updates that installed plugin, and records the new npm spec for future
+id-based updates.
 
 When a stored integrity hash exists and the fetched artifact hash changes,
 OpenClaw prints a warning and asks for confirmation before proceeding. Use
@@ -168,7 +178,7 @@ Each plugin is classified by what it actually registers at runtime:
 - **hook-only** — only hooks, no capabilities or surfaces
 - **non-capability** — tools/commands/services but no capabilities
 
-See [Plugins](/tools/plugin#plugin-shapes) for more on the capability model.
+See [Plugin shapes](/plugins/architecture#plugin-shapes) for more on the capability model.
 
 The `--json` flag outputs a machine-readable report suitable for scripting and
 auditing.
