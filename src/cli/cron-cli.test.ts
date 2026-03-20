@@ -40,6 +40,8 @@ const { registerCronCli } = await import("./cron-cli.js");
 type CronUpdatePatch = {
   patch?: {
     schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
+    retryCount?: number;
+    retryDelayMs?: number;
     payload?: {
       kind?: string;
       message?: string;
@@ -59,6 +61,8 @@ type CronUpdatePatch = {
 
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
+  retryCount?: number;
+  retryDelayMs?: number;
   payload?: { model?: string; thinking?: string; lightContext?: boolean };
   delivery?: { mode?: string; accountId?: string };
   deleteAfterRun?: boolean;
@@ -318,6 +322,26 @@ describe("cron cli", () => {
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { deleteAfterRun?: boolean };
     expect(params?.deleteAfterRun).toBe(false);
+  });
+
+  it("parses retry policy on cron add", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Retrying job",
+      "--every",
+      "1h",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--retry-count",
+      "3",
+      "--retry-delay",
+      "10m",
+    ]);
+
+    expect(params?.retryCount).toBe(3);
+    expect(params?.retryDelayMs).toBe(600_000);
   });
 
   it("includes --account on isolated cron add delivery", async () => {
@@ -677,6 +701,12 @@ describe("cron cli", () => {
     expect(patch?.patch?.failureAlert?.cooldownMs).toBe(3_600_000);
     expect(patch?.patch?.failureAlert?.channel).toBe("telegram");
     expect(patch?.patch?.failureAlert?.to).toBe("19098680");
+  });
+
+  it("patches retry policy on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch(["--retry-count", "2", "--retry-delay", "15m"]);
+    expect(patch?.patch?.retryCount).toBe(2);
+    expect(patch?.patch?.retryDelayMs).toBe(900_000);
   });
 
   it("supports --no-failure-alert on cron edit", async () => {
