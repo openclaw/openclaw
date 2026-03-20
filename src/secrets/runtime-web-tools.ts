@@ -8,10 +8,8 @@ import type {
   PluginWebSearchProviderEntry,
   WebSearchCredentialResolutionSource,
 } from "../plugins/types.js";
-import {
-  resolveBundledPluginWebSearchProviders,
-  resolvePluginWebSearchProviders,
-} from "../plugins/web-search-providers.js";
+import { resolveBundledPluginWebSearchProviders } from "../plugins/web-search-providers.js";
+import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
 import { resolveSecretRefValues } from "./resolve.js";

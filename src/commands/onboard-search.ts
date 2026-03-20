@@ -7,7 +7,7 @@ import {
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
-import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.js";
+import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
