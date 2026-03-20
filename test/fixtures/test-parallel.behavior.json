@@ -14,7 +14,7 @@
         "reason": "Mutates process.cwd() and core loader seams."
       },
       {
-        "file": "src/config/doc-baseline.test.ts",
+        "file": "src/config/doc-baseline.integration.test.ts",
         "reason": "Rebuilds bundled config baselines through many channel schema subprocesses; keep out of the shared lane."
       },
       {
@@ -28,7 +28,7 @@
         "reason": "Clean in isolation, but can hang after sharing the broad lane."
       },
       {
-        "file": "src/config/doc-baseline.test.ts",
+        "file": "src/config/doc-baseline.integration.test.ts",
         "reason": "Builds the full bundled config schema graph and is safer outside the shared unit-fast heap."
       },
       {
@@ -182,6 +182,26 @@
       {
         "file": "src/infra/heartbeat-runner.returns-default-unset.test.ts",
         "reason": "Heartbeat default-unset coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
+      },
+      {
+        "file": "src/infra/heartbeat-runner.ghost-reminder.test.ts",
+        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
+      },
+      {
+        "file": "src/infra/heartbeat-runner.transcript-prune.test.ts",
+        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
+      },
+      {
+        "file": "src/infra/heartbeat-runner.sender-prefers-delivery-target.test.ts",
+        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
+      },
+      {
+        "file": "src/infra/heartbeat-runner.model-override.test.ts",
+        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
+      },
+      {
+        "file": "src/plugins/loader.git-path-regression.test.ts",
+        "reason": "Constructs a real Jiti boundary and is safer outside shared workers that may have mocked jiti earlier."
       },
       {
         "file": "src/infra/outbound/outbound-session.test.ts",
