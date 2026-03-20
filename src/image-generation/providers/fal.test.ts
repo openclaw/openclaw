@@ -1,31 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as modelAuth from "../../agents/model-auth.js";
 import { buildFalImageGenerationProvider } from "./fal.js";
-
-function expectFalJsonPost(
-  fetchMock: ReturnType<typeof vi.fn>,
-  params: {
-    call: number;
-    url: string;
-    body: Record<string, unknown>;
-  },
-) {
-  expect(fetchMock).toHaveBeenNthCalledWith(
-    params.call,
-    params.url,
-    expect.objectContaining({
-      method: "POST",
-      headers: expect.objectContaining({
-        Authorization: "Key fal-test-key",
-        "Content-Type": "application/json",
-      }),
-    }),
-  );
-
-  const request = fetchMock.mock.calls[params.call - 1]?.[1];
-  expect(request).toBeTruthy();
-  expect(JSON.parse(String(request?.body))).toEqual(params.body);
-}
+import { createFalFetchMock, mockProviderAuth, expectFalFetchCall, expectImageResult } from "./test-helpers.js";
 
 describe("fal image-generation provider", () => {
   afterEach(() => {
@@ -33,30 +9,13 @@ describe("fal image-generation provider", () => {
   });
 
   it("generates image buffers from the fal sync API", async () => {
-    vi.spyOn(modelAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
+    mockProviderAuth({ provider: "fal", apiKey: "fal-test-key" });
+    const fetchMock = createFalFetchMock({
+      imageUrl: "https://v3.fal.media/files/example/generated.png",
+      contentType: "image/png",
+      imageData: "png-data",
+      prompt: "draw a cat",
     });
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          images: [
-            {
-              url: "https://v3.fal.media/files/example/generated.png",
-              content_type: "image/png",
-            },
-          ],
-          prompt: "draw a cat",
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        headers: new Headers({ "content-type": "image/png" }),
-        arrayBuffer: async () => Buffer.from("png-data"),
-      });
     vi.stubGlobal("fetch", fetchMock);
 
     const provider = buildFalImageGenerationProvider();
@@ -69,7 +28,7 @@ describe("fal image-generation provider", () => {
       size: "1536x1024",
     });
 
-    expectFalJsonPost(fetchMock, {
+    expectFalFetchCall(fetchMock, {
       call: 1,
       url: "https://fal.run/fal-ai/flux/dev",
       body: {
@@ -83,25 +42,17 @@ describe("fal image-generation provider", () => {
       2,
       "https://v3.fal.media/files/example/generated.png",
     );
-    expect(result).toEqual({
-      images: [
-        {
-          buffer: Buffer.from("png-data"),
-          mimeType: "image/png",
-          fileName: "image-1.png",
-        },
-      ],
+    expectImageResult(result, {
+      imageData: "png-data",
+      mimeType: "image/png",
       model: "fal-ai/flux/dev",
-      metadata: { prompt: "draw a cat" },
+      fileName: "image-1.png",
     });
+    expect(result.metadata).toEqual({ prompt: "draw a cat" });
   });
 
   it("uses image-to-image endpoint and data-uri input for edits", async () => {
-    vi.spyOn(modelAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
+    mockProviderAuth({ provider: "fal", apiKey: "fal-test-key" });
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -133,7 +84,7 @@ describe("fal image-generation provider", () => {
       ],
     });
 
-    expectFalJsonPost(fetchMock, {
+    expectFalFetchCall(fetchMock, {
       call: 1,
       url: "https://fal.run/fal-ai/flux/dev/image-to-image",
       body: {
