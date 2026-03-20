@@ -1536,9 +1536,21 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   accountId: account.accountId,
                   replyToId: effectiveReplyToId,
                 });
-                streamMessageId = result.messageId;
-                lastSentText = text;
-                runtime.log?.(`stream-patch started ${streamMessageId}`);
+                // Guard: discard the result if a turn boundary reset cleared
+                // pendingPatchText while this send was in flight. In that case
+                // streamMessageId must stay null so the next turn's schedulePatch
+                // creates a fresh post instead of patching this orphaned one.
+                if (pendingPatchText) {
+                  streamMessageId = result.messageId;
+                  lastSentText = text;
+                  runtime.log?.(`stream-patch started ${streamMessageId}`);
+                } else {
+                  // Turn boundary passed — delete the now-orphaned post best-effort.
+                  runtime.log?.(
+                    `stream-patch discarding stale send result ${result.messageId} (turn boundary)`,
+                  );
+                  void deleteMattermostPost(blockStreamingClient, result.messageId).catch(() => {});
+                }
               } catch (err) {
                 logVerboseMessage(`mattermost stream-patch send failed: ${String(err)}`);
                 // Latch the failure so schedulePatch() does not re-arm the interval
