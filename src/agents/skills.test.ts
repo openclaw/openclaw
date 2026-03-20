@@ -322,6 +322,37 @@ describe("buildWorkspaceSkillsPrompt", () => {
     });
   });
 
+  it("throws when policy-enabled skills collide on canonical alias", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "web.search"),
+      name: "web.search",
+      description: "Web search dotted",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "web_search"),
+      name: "web_search",
+      description: "Web search underscored",
+    });
+
+    expect(() =>
+      buildWorkspaceSkillSnapshot(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        agentId: "ops",
+        config: {
+          agents: {
+            list: [{ id: "ops" }],
+          },
+          skills: {
+            policy: {
+              globalEnabled: ["web.search"],
+            },
+          },
+        },
+      }),
+    ).toThrow(/Skill alias collision detected for skills\.policy/);
+  });
+
   it("keeps legacy behavior when no skills policy is configured", async () => {
     const workspaceDir = await makeWorkspace();
     await writeSkill({
