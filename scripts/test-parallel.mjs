@@ -82,17 +82,18 @@ const testProfile =
     ? rawTestProfile
     : "normal";
 const isMacMiniProfile = testProfile === "macmini";
-// vmForks is still useful for local transform-heavy runs, but do not flip CI
-// back to vmForks by default unless you have fresh green evidence on current
-// main. The retained Vite/Vitest module graph is the OOM pattern we keep
-// tripping over under CI-style pressure. Keep it opt-out via
-// OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1 for comparison.
+// Vitest executes Node tests through Vite's SSR/module-runner pipeline, so the
+// shared unit lane still retains transformed ESM/module state even when the
+// tests themselves are not "server rendering" a website. vmForks can win in
+// ideal transform-heavy cases, but for this repo we measured higher aggregate
+// CPU load and fatal heap OOMs on memory-constrained dev machines and CI when
+// unit-fast stayed on vmForks. Keep forks as the default unless that evidence
+// is re-run and replaced:
+// PR: https://github.com/openclaw/openclaw/pull/51145
+// OOM evidence: https://github.com/openclaw/openclaw/pull/51145#issuecomment-4099663958
+// Preserve OPENCLAW_TEST_VM_FORKS=1 as the explicit override/debug escape hatch.
 const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor <= 24 : true;
-const preferVmForksByDefault =
-  !isCI && !isWindows && supportsVmForks && !lowMemLocalHost && testProfile !== "low";
-const useVmForks =
-  process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
-  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && preferVmForksByDefault);
+const useVmForks = process.env.OPENCLAW_TEST_VM_FORKS === "1" && supportsVmForks;
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
