@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { discordPlugin } from "../../extensions/discord/src/channel.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   __testing,
@@ -21,9 +20,7 @@ async function importCommandsModule(cacheBust: string): Promise<CommandsModule> 
 }
 
 beforeEach(() => {
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
-  );
+  setActivePluginRegistry(createTestRegistry([]));
 });
 
 afterEach(() => {

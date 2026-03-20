@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { discordPlugin } from "../../extensions/discord/src/channel.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import { isDiscordExecApprovalClientEnabled } from "../../extensions/discord/src/exec-approvals.js";
+import { buildTelegramExecApprovalButtons } from "../../extensions/telegram/src/approval-buttons.js";
+import { isTelegramExecApprovalClientEnabled } from "../../extensions/telegram/src/exec-approvals.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { buildExecApprovalPendingReplyPayload } from "../infra/exec-approval-reply.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
 
 const baseRequest = {
@@ -23,15 +26,65 @@ afterEach(() => {
 });
 
 const emptyRegistry = createTestRegistry([]);
+const telegramApprovalPlugin: Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config" | "execApprovals"
+> = {
+  ...createChannelTestPluginBase({ id: "telegram" }),
+  execApprovals: {
+    shouldSuppressForwardingFallback: ({ cfg, target, request }) => {
+      if (target.channel !== "telegram" || request.request.turnSourceChannel !== "telegram") {
+        return false;
+      }
+      const accountId = target.accountId?.trim() || request.request.turnSourceAccountId?.trim();
+      return isTelegramExecApprovalClientEnabled({ cfg, accountId });
+    },
+    buildPendingPayload: ({ request, nowMs }) => {
+      const payload = buildExecApprovalPendingReplyPayload({
+        approvalId: request.id,
+        approvalSlug: request.id.slice(0, 8),
+        approvalCommandId: request.id,
+        command: request.request.command,
+        cwd: request.request.cwd ?? undefined,
+        host: request.request.host === "node" ? "node" : "gateway",
+        nodeId: request.request.nodeId ?? undefined,
+        expiresAtMs: request.expiresAtMs,
+        nowMs,
+      });
+      const buttons = buildTelegramExecApprovalButtons(request.id);
+      if (!buttons) {
+        return payload;
+      }
+      return {
+        ...payload,
+        channelData: {
+          ...payload.channelData,
+          telegram: { buttons },
+        },
+      };
+    },
+  },
+};
+const discordApprovalPlugin: Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config" | "execApprovals"
+> = {
+  ...createChannelTestPluginBase({ id: "discord" }),
+  execApprovals: {
+    shouldSuppressForwardingFallback: ({ cfg, target }) =>
+      target.channel === "discord" &&
+      isDiscordExecApprovalClientEnabled({ cfg, accountId: target.accountId }),
+  },
+};
 const defaultRegistry = createTestRegistry([
   {
     pluginId: "telegram",
-    plugin: telegramPlugin,
+    plugin: telegramApprovalPlugin,
     source: "test",
   },
   {
     pluginId: "discord",
-    plugin: discordPlugin,
+    plugin: discordApprovalPlugin,
     source: "test",
   },
 ]);
