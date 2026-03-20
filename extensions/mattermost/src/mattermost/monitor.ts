@@ -1444,15 +1444,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     let patchInterval: ReturnType<typeof setInterval> | null = null;
     let patchSending = false; // prevents concurrent network calls
     // Tracks the currently in-flight sendMessageMattermost / patchMattermostPost
-    // promise so that onSettled can await it directly rather than busy-waiting.
+    // promise so that flushPendingPatch, onAssistantMessageStart, and onSettled
+    // can await it directly instead of busy-waiting on patchSending. Null when idle.
     let patchInflight: Promise<unknown> | null = null;
     // Latches true after the first send/edit failure to prevent the interval
     // from being re-armed by a later onPartialReply call (ID=2964357928).
     let previewSendFailed = false;
-    // Tracks the currently in-flight patchMattermostPost / sendMessageMattermost
-    // promise so that flushPendingPatch and onAssistantMessageStart can await it
-    // directly instead of busy-waiting on patchSending. Null when idle.
-    let patchInflight: Promise<unknown> | null = null;
     // Monotonically-increasing turn counter. Incremented at every
     // onAssistantMessageStart boundary. The schedulePatch send path captures
     // the current value and compares it after the async POST resolves; if
