@@ -171,8 +171,6 @@ function buildTalkTtsConfig(
       ...(proxy == null ? {} : { proxy }),
       ...(timeoutMs == null ? {} : { timeoutMs }),
     };
-  } else {
-    return { error: `talk.speak unavailable: unsupported talk provider '${resolved.provider}'` };
   }
 
   return {
