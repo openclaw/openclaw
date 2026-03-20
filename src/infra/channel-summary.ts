@@ -97,7 +97,7 @@ const buildAccountDetails = (params: {
       cfg: params.cfg,
       accountId: snapshot.accountId,
       allowFrom: snapshot.allowFrom,
-    }).slice(0, 2);
+    });
     if (formatted.length > 0) {
       details.push(`allow:${formatted.join(",")}`);
     }

@@ -235,7 +235,7 @@ describe("buildChannelSummary", () => {
     expect(lines).toEqual(["Telegram: disabled +15551234567"]);
   });
 
-  it("includes linked summary metadata and truncates allow-from details", async () => {
+  it("includes linked summary metadata and full allow-from details", async () => {
     vi.mocked(listChannelPlugins).mockReturnValue([
       makeTelegramSummaryPlugin({
         enabled: true,
@@ -252,7 +252,7 @@ describe("buildChannelSummary", () => {
     });
 
     expect(lines).toContain("Telegram: linked +15551234567 auth 5m ago");
-    expect(lines).toContain("  - primary (Main Bot) (dm:mutuals, token:env, allow:alice,bob)");
+    expect(lines).toContain("  - primary (Main Bot) (dm:mutuals, token:env, allow:alice,bob,carol)");
   });
 
   it("shows not-linked status when linked metadata is explicitly false", async () => {
