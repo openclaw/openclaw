@@ -1,18 +1,8 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { __testing } from "./loader.js";
-
-type CreateJiti = typeof import("jiti").createJiti;
-
-let createJitiPromise: Promise<CreateJiti> | undefined;
-
-async function getCreateJiti() {
-  createJitiPromise ??= import("jiti").then(({ createJiti }) => createJiti);
-  return createJitiPromise;
-}
 
 const tempRoots: string[] = [];
 
@@ -24,13 +14,6 @@ function makeTempDir() {
 
 function mkdirSafe(dir: string) {
   fs.mkdirSync(dir, { recursive: true });
-}
-
-function isReadonlyRequireJitiError(err: unknown): boolean {
-  return (
-    err instanceof Error &&
-    /Cannot set property require of \[object Object\] which has only a getter/.test(err.message)
-  );
 }
 
 afterEach(() => {
@@ -46,9 +29,8 @@ describe("plugin loader git path regression", () => {
     const copiedPluginSdkDir = path.join(copiedExtensionRoot, "plugin-sdk");
     mkdirSafe(copiedSourceDir);
     mkdirSafe(copiedPluginSdkDir);
-
-    const jitiBaseFile = path.join(copiedSourceDir, "__jiti-base__.cjs");
-    fs.writeFileSync(jitiBaseFile, "module.exports = {};\n", "utf-8");
+    const jitiBaseFile = path.join(copiedSourceDir, "__jiti-base__.mjs");
+    fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
       `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
@@ -76,51 +58,46 @@ export const copiedRuntimeMarker = {
 `,
       "utf-8",
     );
-
     const copiedChannelRuntime = path.join(copiedExtensionRoot, "src", "channel.runtime.ts");
-    const jitiBaseUrl = pathToFileURL(jitiBaseFile).href;
-    const createJiti = await getCreateJiti();
-    const withoutAlias = createJiti(jitiBaseUrl, {
-      ...__testing.buildPluginLoaderJitiOptions({}),
-      tryNative: false,
-    });
-    // The production loader uses sync Jiti evaluation, so this regression test
-    // should exercise the same seam instead of Jiti's async import helper.
-    let withoutAliasError: unknown = undefined;
-    try {
-      withoutAlias(copiedChannelRuntime);
-    } catch (err) {
-      withoutAliasError = err;
-    }
-    expect(withoutAliasError).toBeDefined();
-
-    const withAlias = createJiti(jitiBaseUrl, {
-      ...__testing.buildPluginLoaderJitiOptions({
-        "openclaw/plugin-sdk/channel-runtime": copiedChannelRuntimeShim,
-      }),
-      tryNative: false,
-    });
-    let withAliasResult: unknown = undefined;
-    let withAliasError: unknown = undefined;
-    try {
-      withAliasResult = withAlias(copiedChannelRuntime);
-    } catch (err) {
-      withAliasError = err;
-    }
-    if (withAliasError !== undefined) {
-      if (
-        isReadonlyRequireJitiError(withAliasError) &&
-        isReadonlyRequireJitiError(withoutAliasError)
-      ) {
-        return;
+    const script = `
+      import { createJiti } from "jiti";
+      const withoutAlias = createJiti(${JSON.stringify(jitiBaseFile)}, {
+        interopDefault: true,
+        tryNative: false,
+        extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+      });
+      let withoutAliasThrew = false;
+      try {
+        withoutAlias(${JSON.stringify(copiedChannelRuntime)});
+      } catch {
+        withoutAliasThrew = true;
       }
-      throw withAliasError;
-    }
-    expect(withAliasResult).toMatchObject({
-      copiedRuntimeMarker: {
-        PAIRING_APPROVED_MESSAGE: "paired",
-        resolveOutboundSendDep: expect.any(Function),
-      },
+      const withAlias = createJiti(${JSON.stringify(jitiBaseFile)}, {
+        interopDefault: true,
+        tryNative: false,
+        extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+        alias: {
+          "openclaw/plugin-sdk/channel-runtime": ${JSON.stringify(copiedChannelRuntimeShim)},
+        },
+      });
+      const mod = withAlias(${JSON.stringify(copiedChannelRuntime)});
+      console.log(JSON.stringify({
+        withoutAliasThrew,
+        marker: mod.copiedRuntimeMarker?.PAIRING_APPROVED_MESSAGE,
+        dep: mod.copiedRuntimeMarker?.resolveOutboundSendDep?.(),
+      }));
+    `;
+    const raw = execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
+      cwd: process.cwd(),
+      encoding: "utf-8",
     });
+    const result = JSON.parse(raw) as {
+      withoutAliasThrew: boolean;
+      marker?: string;
+      dep?: string;
+    };
+    expect(result.withoutAliasThrew).toBe(true);
+    expect(result.marker).toBe("paired");
+    expect(result.dep).toBe("shimmed");
   });
 });
