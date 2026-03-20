@@ -575,7 +575,7 @@ topics, OpenClaw preserves the topic for the approval prompt and the post-approv
 See:
 
 - [Discord](/channels/discord#tools-and-action-gates)
-- [Telegram](/channels/telegram#troubleshooting)
+- [Telegram](/channels/telegram#feature-reference)
 
 ### macOS IPC flow
 
