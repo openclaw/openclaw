@@ -100,16 +100,19 @@ export function shouldSpawnWithShell(params: {
 export async function runExec(
   command: string,
   args: string[],
-  opts: number | { timeoutMs?: number; maxBuffer?: number; cwd?: string } = 10_000,
+  opts:
+    | number
+    | { timeoutMs?: number; maxBuffer?: number; cwd?: string; encoding?: BufferEncoding } = 10_000,
 ): Promise<{ stdout: string; stderr: string }> {
+  const encoding = typeof opts === "number" ? "utf8" : (opts.encoding ?? "utf8");
   const options =
     typeof opts === "number"
-      ? { timeout: opts, encoding: "utf8" as const }
+      ? { timeout: opts, encoding }
       : {
           timeout: opts.timeoutMs,
           maxBuffer: opts.maxBuffer,
           cwd: opts.cwd,
-          encoding: "utf8" as const,
+          encoding,
         };
   try {
     const argv = [command, ...args];
@@ -129,10 +132,15 @@ export async function runExec(
       execArgs = args;
     }
     const useCmdWrapper = isWindowsBatchCommand(execCommand);
+    const cmdCommandLine = buildCmdExeCommandLine(execCommand, execArgs);
+    const wrappedCommandLine =
+      process.platform === "win32" && useCmdWrapper && encoding.toLowerCase() === "utf8"
+        ? `chcp 65001>nul && ${cmdCommandLine}`
+        : cmdCommandLine;
     const { stdout, stderr } = useCmdWrapper
       ? await execFileAsync(
           process.env.ComSpec ?? "cmd.exe",
-          ["/d", "/s", "/c", buildCmdExeCommandLine(execCommand, execArgs)],
+          ["/d", "/s", "/c", wrappedCommandLine],
           { ...options, windowsVerbatimArguments: true },
         )
       : await execFileAsync(execCommand, execArgs, options);

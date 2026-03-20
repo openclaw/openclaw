@@ -113,6 +113,7 @@ describe("windows command wrapper behavior", () => {
       await runExec("pnpm", ["--version"], 1000);
       const captured = execFileMock.mock.calls[0] as ExecCall | undefined;
       expectCmdWrappedInvocation({ captured, expectedComSpec });
+      expect(captured?.[1][3]).toContain("chcp 65001>nul &&");
     } finally {
       platformSpy.mockRestore();
     }
