@@ -256,13 +256,12 @@ This guide sets up an Azure Linux VM with the Azure CLI, applies Network Securit
 
   <Step title="Install OpenClaw (in the VM shell)">
     ```bash
-    curl -fsSL https://openclaw.ai/install.sh -o /tmp/openclaw-install.sh
-    bash /tmp/openclaw-install.sh
-    rm -f /tmp/openclaw-install.sh
-    openclaw --version
+    curl -fsSL https://openclaw.ai/install.sh -o /tmp/install.sh
+    bash /tmp/install.sh
+    rm -f /tmp/install.sh
     ```
 
-    The installer script handles Node detection/installation and runs onboarding by default.
+    The installer installs Node LTS and dependencies if not already present, installs OpenClaw, and launches the onboarding wizard. See [Install](/install) for details.
 
   </Step>
 
