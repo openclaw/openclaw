@@ -80,6 +80,7 @@ type CreateLaneTextDelivererParams = {
   activePreviewLifecycleByLane: Record<LaneName, LanePreviewLifecycle>;
   retainPreviewOnCleanupByLane: Record<LaneName, boolean>;
   draftMaxChars: number;
+  abortSignal?: AbortSignal;
   applyTextToPayload: (payload: ReplyPayload, text: string) => ReplyPayload;
   sendPayload: (payload: ReplyPayload) => Promise<boolean>;
   flushDraftLane: (lane: DraftLaneState) => Promise<void>;
@@ -219,6 +220,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       } catch (err) {
         attempt += 1;
         if (
+          params.abortSignal?.aborted ||
           isTelegramClientRejection(err) ||
           !isRecoverableTelegramNetworkError(err, { allowMessageMatch: true }) ||
           attempt >= TELEGRAM_PREVIEW_EDIT_MAX_ATTEMPTS
@@ -229,7 +231,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         params.log(
           `telegram: ${args.laneName} preview ${args.context} edit hit recoverable network error; retrying in ${delayMs}ms (${String(err)})`,
         );
-        await sleepWithAbort(delayMs);
+        await sleepWithAbort(delayMs, params.abortSignal);
       }
     }
   };

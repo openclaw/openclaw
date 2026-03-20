@@ -316,6 +316,29 @@ describe("createTelegramDraftStream", () => {
     expect(stream.previewMode?.()).toBe("draft");
   });
 
+  it("stops preview retries once the caller aborts", async () => {
+    const api = createMockDraftApi();
+    const abortController = new AbortController();
+    abortController.abort(new Error("poller restart"));
+    const abortErr = Object.assign(new Error("The operation was aborted"), {
+      name: "AbortError",
+    });
+    api.sendMessage.mockRejectedValueOnce(abortErr);
+    const stream = createDraftStream(api, {
+      previewTransport: "message",
+      abortSignal: abortController.signal,
+    });
+
+    stream.update("Hello");
+
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(computeBackoff).not.toHaveBeenCalled();
+    expect(sleepWithAbort).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBeUndefined();
+  });
+
   it("materializes draft previews using rendered HTML text", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, {

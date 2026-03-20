@@ -218,6 +218,7 @@ export const dispatchTelegramMessage = async ({
       ? createTelegramDraftStream({
           api: bot.api,
           chatId,
+          abortSignal: opts.fetchAbortSignal,
           maxChars: draftMaxChars,
           thread: threadSpec,
           previewTransport: useMessagePreviewTransportForDm ? "message" : "auto",
@@ -510,6 +511,7 @@ export const dispatchTelegramMessage = async ({
     activePreviewLifecycleByLane,
     retainPreviewOnCleanupByLane,
     draftMaxChars,
+    abortSignal: opts.fetchAbortSignal,
     applyTextToPayload,
     sendPayload,
     flushDraftLane,

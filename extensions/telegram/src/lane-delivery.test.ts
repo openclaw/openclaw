@@ -31,6 +31,7 @@ function createHarness(params?: {
   answerStream?: DraftLaneState["stream"];
   answerHasStreamedMessage?: boolean;
   answerLastPartialText?: string;
+  abortSignal?: AbortSignal;
 }) {
   const answer =
     params?.answerStream ?? createTestDraftStream({ messageId: params?.answerMessageId });
@@ -77,6 +78,7 @@ function createHarness(params?: {
     activePreviewLifecycleByLane: { ...activePreviewLifecycleByLane },
     retainPreviewOnCleanupByLane: { ...retainPreviewOnCleanupByLane },
     draftMaxChars: params?.draftMaxChars ?? 4_096,
+    abortSignal: params?.abortSignal,
     applyTextToPayload: (payload: ReplyPayload, text: string) => ({ ...payload, text }),
     sendPayload,
     flushDraftLane,
@@ -181,6 +183,31 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.log).toHaveBeenCalledWith(
       expect.stringContaining("preview final edit hit recoverable network error; retrying"),
     );
+  });
+
+  it("stops preview edit retries once the caller aborts", async () => {
+    computeBackoff.mockClear();
+    sleepWithAbort.mockClear();
+    const abortController = new AbortController();
+    abortController.abort(new Error("poller restart"));
+    const harness = createHarness({
+      answerMessageId: 999,
+      abortSignal: abortController.signal,
+    });
+    const abortErr = Object.assign(new Error("The operation was aborted"), {
+      name: "AbortError",
+    });
+    harness.editPreview.mockRejectedValueOnce(abortErr);
+
+    await expectFinalPreviewRetained({
+      harness,
+      expectedLogSnippet: "may have landed despite network error; keeping existing preview",
+    });
+
+    expect(harness.editPreview).toHaveBeenCalledTimes(1);
+    expect(computeBackoff).not.toHaveBeenCalled();
+    expect(sleepWithAbort).not.toHaveBeenCalled();
+    expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
   it("finalizes text-only replies by editing an existing preview message", async () => {

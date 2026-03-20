@@ -102,6 +102,7 @@ type SupersededTelegramPreview = {
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
   chatId: number;
+  abortSignal?: AbortSignal;
   maxChars?: number;
   thread?: TelegramThreadSpec | null;
   previewTransport?: "auto" | "message" | "draft";
@@ -208,14 +209,18 @@ export function createTelegramDraftStream(params: {
         return await fn();
       } catch (err) {
         attempt += 1;
-        if (!isSafeToRetrySendError(err) || attempt >= TELEGRAM_PREVIEW_MAX_ATTEMPTS) {
+        if (
+          params.abortSignal?.aborted ||
+          !isSafeToRetrySendError(err) ||
+          attempt >= TELEGRAM_PREVIEW_MAX_ATTEMPTS
+        ) {
           throw err;
         }
         const delayMs = computeBackoff(TELEGRAM_PREVIEW_RETRY_POLICY, attempt);
         params.warn?.(
           `telegram stream preview ${operation} failed before reaching Telegram; retrying in ${delayMs}ms (${String(err)})`,
         );
-        await sleepWithAbort(delayMs);
+        await sleepWithAbort(delayMs, params.abortSignal);
       }
     }
   };
