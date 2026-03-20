@@ -123,6 +123,57 @@ describe("onboard-search provider resolution", () => {
     ).toBe("next-key");
   });
 
+  it("uses config-aware non-bundled providers when building secret refs", async () => {
+    const customEntry = createCustomProviderEntry();
+    mocks.resolvePluginWebSearchProviders.mockImplementation((params) =>
+      params?.config ? [customEntry] : [],
+    );
+
+    const mod = await import("./onboard-search.js");
+    const cfg: OpenClawConfig = {
+      plugins: {
+        installs: {
+          "custom-plugin": {
+            installPath: "/tmp/custom-plugin",
+            source: "path",
+          },
+        },
+      },
+    };
+    const notes: Array<{ title?: string; message: string }> = [];
+    const prompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async (message: string, title?: string) => {
+        notes.push({ title, message });
+      }),
+      select: vi.fn(async () => "custom-search"),
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => true),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const result = await mod.setupSearch(cfg, {} as never, prompter as never, {
+      secretInputMode: "ref",
+    });
+
+    expect(result.tools?.web?.search?.provider).toBe("custom-search");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(
+      (
+        result.plugins?.entries?.["custom-plugin"]?.config as
+          | { webSearch?: { apiKey?: unknown } }
+          | undefined
+      )?.webSearch?.apiKey,
+    ).toEqual({
+      source: "env",
+      provider: "default",
+      id: "CUSTOM_SEARCH_API_KEY",
+    });
+    expect(notes.some((note) => note.message.includes("CUSTOM_SEARCH_API_KEY"))).toBe(true);
+  });
+
   it("does not treat hard-disabled bundled providers as selectable credentials", async () => {
     const firecrawlEntry = createBundledFirecrawlEntry();
     mocks.resolvePluginWebSearchProviders.mockReturnValue([]);

@@ -113,8 +113,9 @@ export function hasExistingKey(config: OpenClawConfig, provider: SearchProvider)
 }
 
 /** Build an env-backed SecretRef for a search provider. */
-function buildSearchEnvRef(provider: SearchProvider): SecretRef {
+function buildSearchEnvRef(config: OpenClawConfig, provider: SearchProvider): SecretRef {
   const entry =
+    resolveSearchProviderEntry(config, provider) ??
     SEARCH_PROVIDER_OPTIONS.find((candidate) => candidate.id === provider) ??
     listBundledWebSearchProviders().find((candidate) => candidate.id === provider);
   const envVar = entry?.envVars.find((k) => Boolean(process.env[k]?.trim())) ?? entry?.envVars[0];
@@ -128,13 +129,14 @@ function buildSearchEnvRef(provider: SearchProvider): SecretRef {
 
 /** Resolve a plaintext key into the appropriate SecretInput based on mode. */
 function resolveSearchSecretInput(
+  config: OpenClawConfig,
   provider: SearchProvider,
   key: string,
   secretInputMode?: SecretInputMode,
 ): SecretInput {
   const useSecretRefMode = secretInputMode === "ref"; // pragma: allowlist secret
   if (useSecretRefMode) {
-    return buildSearchEnvRef(provider);
+    return buildSearchEnvRef(config, provider);
   }
   return key;
 }
@@ -338,7 +340,7 @@ export async function setupSearch(
     if (keyConfigured) {
       return preserveDisabledState(config, applySearchProviderSelection(config, choice));
     }
-    const ref = buildSearchEnvRef(choice);
+    const ref = buildSearchEnvRef(config, choice);
     await prompter.note(
       [
         "Secret references enabled — OpenClaw will store a reference instead of the API key.",
@@ -362,7 +364,7 @@ export async function setupSearch(
 
   const key = keyInput?.trim() ?? "";
   if (key) {
-    const secretInput = resolveSearchSecretInput(choice, key, opts?.secretInputMode);
+    const secretInput = resolveSearchSecretInput(config, choice, key, opts?.secretInputMode);
     return applySearchKey(config, choice, secretInput);
   }
 
