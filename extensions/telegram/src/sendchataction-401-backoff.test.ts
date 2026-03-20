@@ -236,4 +236,22 @@ describe("createTelegramSendChatActionHandler", () => {
     // Callback should NOT have fired — the 401 broke the streak
     expect(onRecoverableNetworkFailure).not.toHaveBeenCalled();
   });
+
+  it("resets the network failure streak when another Telegram request proves the network is healthy", async () => {
+    const fn = vi.fn().mockRejectedValue(makeNetworkError());
+    const logger = vi.fn();
+    const onRecoverableNetworkFailure = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutiveNetworkFailures: 2,
+      onRecoverableNetworkFailure,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+    handler.noteNetworkHealthy();
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+
+    expect(onRecoverableNetworkFailure).not.toHaveBeenCalled();
+  });
 });

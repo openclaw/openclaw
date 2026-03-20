@@ -20,6 +20,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
+import { retryTelegramPreConnectSend } from "../final-reply-retry.js";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
@@ -291,39 +292,54 @@ async function deliverMediaReply(params: {
       }),
     };
     if (isGif) {
-      const result = await sendTelegramWithThreadFallback({
-        operation: "sendAnimation",
-        runtime: params.runtime,
-        thread: params.thread,
-        requestParams: mediaParams,
-        send: (effectiveParams) =>
-          params.bot.api.sendAnimation(params.chatId, file, { ...effectiveParams }),
+      const result = await retryTelegramPreConnectSend({
+        operationLabel: "sendAnimation",
+        log: params.runtime.log,
+        deliver: () =>
+          sendTelegramWithThreadFallback({
+            operation: "sendAnimation",
+            runtime: params.runtime,
+            thread: params.thread,
+            requestParams: mediaParams,
+            send: (effectiveParams) =>
+              params.bot.api.sendAnimation(params.chatId, file, { ...effectiveParams }),
+          }),
       });
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
       }
       markDelivered(params.progress);
     } else if (kind === "image") {
-      const result = await sendTelegramWithThreadFallback({
-        operation: "sendPhoto",
-        runtime: params.runtime,
-        thread: params.thread,
-        requestParams: mediaParams,
-        send: (effectiveParams) =>
-          params.bot.api.sendPhoto(params.chatId, file, { ...effectiveParams }),
+      const result = await retryTelegramPreConnectSend({
+        operationLabel: "sendPhoto",
+        log: params.runtime.log,
+        deliver: () =>
+          sendTelegramWithThreadFallback({
+            operation: "sendPhoto",
+            runtime: params.runtime,
+            thread: params.thread,
+            requestParams: mediaParams,
+            send: (effectiveParams) =>
+              params.bot.api.sendPhoto(params.chatId, file, { ...effectiveParams }),
+          }),
       });
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
       }
       markDelivered(params.progress);
     } else if (kind === "video") {
-      const result = await sendTelegramWithThreadFallback({
-        operation: "sendVideo",
-        runtime: params.runtime,
-        thread: params.thread,
-        requestParams: mediaParams,
-        send: (effectiveParams) =>
-          params.bot.api.sendVideo(params.chatId, file, { ...effectiveParams }),
+      const result = await retryTelegramPreConnectSend({
+        operationLabel: "sendVideo",
+        log: params.runtime.log,
+        deliver: () =>
+          sendTelegramWithThreadFallback({
+            operation: "sendVideo",
+            runtime: params.runtime,
+            thread: params.thread,
+            requestParams: mediaParams,
+            send: (effectiveParams) =>
+              params.bot.api.sendVideo(params.chatId, file, { ...effectiveParams }),
+          }),
       });
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
@@ -341,14 +357,19 @@ async function deliverMediaReply(params: {
           requestParams: typeof mediaParams,
           shouldLog?: (err: unknown) => boolean,
         ) => {
-          const result = await sendTelegramWithThreadFallback({
-            operation: "sendVoice",
-            runtime: params.runtime,
-            thread: params.thread,
-            requestParams,
-            shouldLog,
-            send: (effectiveParams) =>
-              params.bot.api.sendVoice(params.chatId, file, { ...effectiveParams }),
+          const result = await retryTelegramPreConnectSend({
+            operationLabel: "sendVoice",
+            log: params.runtime.log,
+            deliver: () =>
+              sendTelegramWithThreadFallback({
+                operation: "sendVoice",
+                runtime: params.runtime,
+                thread: params.thread,
+                requestParams,
+                shouldLog,
+                send: (effectiveParams) =>
+                  params.bot.api.sendVoice(params.chatId, file, { ...effectiveParams }),
+              }),
           });
           if (firstDeliveredMessageId == null) {
             firstDeliveredMessageId = result.message_id;
@@ -421,13 +442,18 @@ async function deliverMediaReply(params: {
           throw voiceErr;
         }
       } else {
-        const result = await sendTelegramWithThreadFallback({
-          operation: "sendAudio",
-          runtime: params.runtime,
-          thread: params.thread,
-          requestParams: mediaParams,
-          send: (effectiveParams) =>
-            params.bot.api.sendAudio(params.chatId, file, { ...effectiveParams }),
+        const result = await retryTelegramPreConnectSend({
+          operationLabel: "sendAudio",
+          log: params.runtime.log,
+          deliver: () =>
+            sendTelegramWithThreadFallback({
+              operation: "sendAudio",
+              runtime: params.runtime,
+              thread: params.thread,
+              requestParams: mediaParams,
+              send: (effectiveParams) =>
+                params.bot.api.sendAudio(params.chatId, file, { ...effectiveParams }),
+            }),
         });
         if (firstDeliveredMessageId == null) {
           firstDeliveredMessageId = result.message_id;
@@ -435,13 +461,18 @@ async function deliverMediaReply(params: {
         markDelivered(params.progress);
       }
     } else {
-      const result = await sendTelegramWithThreadFallback({
-        operation: "sendDocument",
-        runtime: params.runtime,
-        thread: params.thread,
-        requestParams: mediaParams,
-        send: (effectiveParams) =>
-          params.bot.api.sendDocument(params.chatId, file, { ...effectiveParams }),
+      const result = await retryTelegramPreConnectSend({
+        operationLabel: "sendDocument",
+        log: params.runtime.log,
+        deliver: () =>
+          sendTelegramWithThreadFallback({
+            operation: "sendDocument",
+            runtime: params.runtime,
+            thread: params.thread,
+            requestParams: mediaParams,
+            send: (effectiveParams) =>
+              params.bot.api.sendDocument(params.chatId, file, { ...effectiveParams }),
+          }),
       });
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;

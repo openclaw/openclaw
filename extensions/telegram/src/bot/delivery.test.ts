@@ -2,6 +2,10 @@ import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 
+const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
+  computeBackoff: vi.fn(() => 0),
+  sleepWithAbort: vi.fn(async () => undefined),
+}));
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
@@ -31,6 +35,14 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
 vi.mock("openclaw/plugin-sdk/web-media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
 }));
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    computeBackoff,
+    sleepWithAbort,
+  };
+});
 
 vi.mock("../../../../src/plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => messageHookRunner,
@@ -105,6 +117,14 @@ function createVoiceMessagesForbiddenError() {
   );
 }
 
+function createPreConnectNetworkError() {
+  return Object.assign(new Error("fetch failed"), {
+    cause: Object.assign(new Error("connection refused"), {
+      code: "ECONNREFUSED",
+    }),
+  });
+}
+
 function createThreadNotFoundError(operation = "sendMessage") {
   return new Error(
     `GrammyError: Call to '${operation}' failed! (400: Bad Request: message thread not found)`,
@@ -126,7 +146,9 @@ function createVoiceFailureHarness(params: {
 
 describe("deliverReplies", () => {
   beforeEach(() => {
+    computeBackoff.mockClear();
     loadWebMedia.mockClear();
+    sleepWithAbort.mockClear();
     triggerInternalHook.mockReset();
     messageHookRunner.hasHooks.mockReset();
     messageHookRunner.hasHooks.mockReturnValue(false);
@@ -182,6 +204,30 @@ describe("deliverReplies", () => {
     expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
       expect.objectContaining({ success: false, content: "" }),
       expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+    );
+  });
+
+  it("retries media sends that fail before reaching Telegram", async () => {
+    mockMediaLoad("photo.png", "image/png", "img");
+    const runtime = createRuntime();
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(createPreConnectNetworkError())
+      .mockResolvedValueOnce({
+        message_id: 2,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendPhoto });
+
+    await deliverWith({
+      replies: [{ text: "caption", mediaUrl: "https://example.com/photo.png" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("telegram: sendPhoto failed before reaching Telegram; retrying"),
     );
   });
 

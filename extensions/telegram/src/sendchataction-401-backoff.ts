@@ -37,6 +37,7 @@ export type TelegramSendChatActionHandler = {
     threadParams?: unknown,
   ) => Promise<void>;
   isSuspended: () => boolean;
+  noteNetworkHealthy: () => void;
   reset: () => void;
 };
 
@@ -87,10 +88,14 @@ export function createTelegramSendChatActionHandler({
   let networkFailureSignaled = false;
   let suspended = false;
 
-  const reset = () => {
-    consecutive401Failures = 0;
+  const noteNetworkHealthy = () => {
     consecutiveNetworkFailures = 0;
     networkFailureSignaled = false;
+  };
+
+  const reset = () => {
+    consecutive401Failures = 0;
+    noteNetworkHealthy();
     suspended = false;
   };
 
@@ -119,14 +124,12 @@ export function createTelegramSendChatActionHandler({
         logger(`sendChatAction recovered after ${consecutive401Failures} consecutive 401 failures`);
         consecutive401Failures = 0;
       }
-      consecutiveNetworkFailures = 0;
-      networkFailureSignaled = false;
+      noteNetworkHealthy();
     } catch (error) {
       if (is401Error(error)) {
         consecutive401Failures++;
         // 401 means the request reached Telegram, so the network is healthy.
-        consecutiveNetworkFailures = 0;
-        networkFailureSignaled = false;
+        noteNetworkHealthy();
 
         if (consecutive401Failures >= maxConsecutive401) {
           suspended = true;
@@ -155,8 +158,7 @@ export function createTelegramSendChatActionHandler({
           });
         }
       } else {
-        consecutiveNetworkFailures = 0;
-        networkFailureSignaled = false;
+        noteNetworkHealthy();
       }
       throw error;
     }
@@ -165,6 +167,7 @@ export function createTelegramSendChatActionHandler({
   return {
     sendChatAction,
     isSuspended: () => suspended,
+    noteNetworkHealthy,
     reset,
   };
 }

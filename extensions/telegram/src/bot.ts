@@ -170,6 +170,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const fetchForClient = telegramTransport.fetch as unknown as NonNullable<
     ApiClientOptions["fetch"]
   >;
+  let noteTelegramNetworkHealthy: (() => void) | undefined;
 
   // Wrap fetch so polling requests cannot hang indefinitely on a wedged network path,
   // and so shutdown still aborts in-flight Telegram API requests immediately.
@@ -229,18 +230,23 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   if (finalFetch) {
     const baseFetch = finalFetch;
     finalFetch = ((input: TelegramFetchInput, init?: TelegramFetchInit) => {
-      return Promise.resolve(baseFetch(input, init)).catch((err: unknown) => {
-        try {
-          tagTelegramNetworkError(err, {
-            method: extractTelegramApiMethod(input),
-            url: readRequestUrl(input),
-          });
-        } catch {
-          // Tagging is best-effort; preserve the original fetch failure if the
-          // error object cannot accept extra metadata.
-        }
-        throw err;
-      });
+      return Promise.resolve(baseFetch(input, init))
+        .then((response) => {
+          noteTelegramNetworkHealthy?.();
+          return response;
+        })
+        .catch((err: unknown) => {
+          try {
+            tagTelegramNetworkError(err, {
+              method: extractTelegramApiMethod(input),
+              url: readRequestUrl(input),
+            });
+          } catch {
+            // Tagging is best-effort; preserve the original fetch failure if the
+            // error object cannot accept extra metadata.
+          }
+          throw err;
+        });
     }) as unknown as NonNullable<ApiClientOptions["fetch"]>;
   }
 
@@ -503,6 +509,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     logger: (message) => logVerbose(`telegram: ${message}`),
     onRecoverableNetworkFailure: opts.onRecoverableSendChatActionNetworkFailure,
   });
+  noteTelegramNetworkHealthy = () => {
+    sendChatActionHandler.noteNetworkHealthy();
+  };
 
   const processMessage = createTelegramMessageProcessor({
     bot,
