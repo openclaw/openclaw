@@ -174,7 +174,7 @@ async function maybeAttachGif(reply: string): Promise<string> {
 
   try {
     const url = `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_API_KEY}&q=${encodeURIComponent(searchTerm)}&limit=10&rating=pg-13`;
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
     if (!res.ok) return reply;
     const data = (await res.json()) as {
       data?: Array<{ images?: { downsized_medium?: { url?: string } } }>;

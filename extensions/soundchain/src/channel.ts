@@ -316,6 +316,7 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
                   try {
                     ctx.log?.info(`[${account.accountId}] Generating reply for ${sender}...`);
                     const reply = await generateReply(sender, chat.message);
+                    if (aborted) break; // Don't send if shutdown during generation
                     await client.sendMessage(profileId, reply);
                     ctx.log?.info(
                       `[${account.accountId}] Replied to ${sender}: ${reply.slice(0, 80)}${reply.length > 80 ? "..." : ""}`,
