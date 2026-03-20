@@ -56,6 +56,8 @@ export type FollowupRun = {
     senderUsername?: string;
     senderE164?: string;
     senderIsOwner?: boolean;
+    /** Disable built-in tools for this run (e.g. guest RBAC role). */
+    disableTools?: boolean;
     sessionFile: string;
     workspaceDir: string;
     config: OpenClawConfig;

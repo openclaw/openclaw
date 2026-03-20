@@ -50,12 +50,13 @@ export function redactConfigForRole(params: {
       continue;
     }
     if (Array.isArray(value)) {
+      const arrayPath = `${path}[]`;
       result[key] = value.map((item) => {
         if (item !== null && typeof item === "object" && !Array.isArray(item)) {
           return redactConfigForRole({
             config: item as Record<string, unknown>,
             role,
-            pathPrefix: path,
+            pathPrefix: arrayPath,
           });
         }
         return item;

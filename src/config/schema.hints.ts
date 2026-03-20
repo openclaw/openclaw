@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { OpenClawSchema } from "./zod-schema.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const log = createSubsystemLogger("config/schema");
@@ -112,7 +113,8 @@ const NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES = SENSITIVE_KEY_WHITELIST_SUFF
 const SENSITIVE_PATTERNS = [/token$/i, /password/i, /secret/i, /api.?key/i];
 
 /**
- * Schema-derived sensitive paths populated by `registerSchemaSensitivePaths`.
+ * Schema-derived sensitive paths populated by `registerSchemaSensitivePaths`
+ * or lazily initialized on first call to `isSensitiveConfigPath`.
  * These come from Zod fields explicitly marked via `.register(sensitive)` and
  * are discovered by `mapSensitivePaths` when the schema is first built.
  * This set supplements the name-heuristic patterns so that fields like
@@ -128,6 +130,39 @@ let schemaSensitivePaths: ReadonlySet<string> | null = null;
  */
 export function registerSchemaSensitivePaths(paths: ReadonlySet<string>): void {
   schemaSensitivePaths = paths;
+}
+
+/** Guard to prevent re-entrant initialization (mapSensitivePaths calls isSensitiveConfigPath). */
+let schemaInitInProgress = false;
+
+/**
+ * Ensure schema-sensitive paths are initialized. If `registerSchemaSensitivePaths`
+ * has not been called yet (e.g. CLI/chat deployments that never call `buildConfigSchema`),
+ * this lazily derives them from the Zod schema.
+ */
+function ensureSchemaSensitivePaths(): ReadonlySet<string> {
+  if (schemaSensitivePaths) {
+    return schemaSensitivePaths;
+  }
+  // Prevent re-entrant call: mapSensitivePaths calls isSensitiveConfigPath
+  // which would call ensureSchemaSensitivePaths again.
+  if (schemaInitInProgress) {
+    return new Set();
+  }
+  schemaInitInProgress = true;
+  try {
+    const hints = mapSensitivePaths(OpenClawSchema, "", {});
+    const paths = new Set<string>();
+    for (const [path, hint] of Object.entries(hints)) {
+      if (hint.sensitive) {
+        paths.add(path);
+      }
+    }
+    schemaSensitivePaths = paths;
+    return schemaSensitivePaths;
+  } finally {
+    schemaInitInProgress = false;
+  }
 }
 
 function isWhitelistedSensitivePath(path: string): boolean {
@@ -157,8 +192,9 @@ export function isSensitiveConfigPath(path: string): boolean {
     return true;
   }
   // Check schema-derived sensitivity (exact match or wildcard ancestor match)
-  if (schemaSensitivePaths) {
-    if (schemaSensitivePaths.has(path)) {
+  const schemaPathSet = ensureSchemaSensitivePaths();
+  if (schemaPathSet.size > 0) {
+    if (schemaPathSet.has(path)) {
       return true;
     }
     // Support wildcard paths from schema (e.g. "plugins.*.apiKey"):
@@ -166,7 +202,7 @@ export function isSensitiveConfigPath(path: string): boolean {
     const segments = path.split(".");
     for (let i = segments.length - 1; i >= 1; i--) {
       const wildcardPath = [...segments.slice(0, i), "*", ...segments.slice(i + 1)].join(".");
-      if (schemaSensitivePaths.has(wildcardPath)) {
+      if (schemaPathSet.has(wildcardPath)) {
         return true;
       }
     }

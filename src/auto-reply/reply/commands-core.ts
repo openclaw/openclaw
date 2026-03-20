@@ -189,8 +189,12 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     commandSource: params.ctx.CommandSource,
   });
 
-  // Guest role: "AI only, no commands" — block all slash commands early.
-  if (allowTextCommands && params.command.commandBodyNormalized.startsWith("/")) {
+  // Guest role: "AI only, no commands" — block all slash and bang commands early.
+  if (
+    allowTextCommands &&
+    (params.command.commandBodyNormalized.startsWith("/") ||
+      params.command.commandBodyNormalized.startsWith("!"))
+  ) {
     const guestBlock = rejectGuestCommand(
       params,
       params.command.commandBodyNormalized.split(" ")[0],
