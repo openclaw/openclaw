@@ -130,6 +130,9 @@ export function handleMessageUpdate(
     return;
   }
 
+  // Fix for issue #50780: Handle content:null during reasoning phase
+  // Models like GLM-5, Qwen3.5-Plus, MiniMax-M2.5 send {content: null, reasoning_content: "..."} during reasoning
+  // The typeof check safely converts null to empty string (typeof null === "object", not "string")
   const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
   const content = typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
 
