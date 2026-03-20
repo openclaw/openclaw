@@ -839,17 +839,16 @@ export function loadWorkspaceSkillEntries(
 ): SkillEntry[] {
   const entries = loadSkillEntries(workspaceDir, opts);
   // Policy filtering needs both config (policy definition) and agentId (scope key).
-  if (!opts?.config || !opts.agentId || opts.applyPolicy === false) {
-    return entries;
-  }
+  // Eligibility/config gates should still run even when policy is skipped.
+  const policyAgentId = opts?.applyPolicy === false ? undefined : opts?.agentId;
   return filterSkillEntries(
     entries,
-    opts.config,
+    opts?.config,
     undefined,
     undefined,
-    opts.agentId,
-    opts.applyEligibility !== false,
-    opts.targetPlatform,
+    policyAgentId,
+    opts?.applyEligibility !== false,
+    opts?.targetPlatform,
   ).entries;
 }
 
