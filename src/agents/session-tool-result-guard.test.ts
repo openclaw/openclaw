@@ -518,4 +518,46 @@ describe("installSessionToolResultGuard", () => {
     );
     expect(syntheticForError).toHaveLength(0);
   });
+
+  it("does not insert synthetic results for stale pending IDs after clearPendingToolResults (post-compaction scenario)", () => {
+    // Regression test for #51031: after compaction rewrites the JSONL, in-flight tool
+    // call IDs no longer exist in the transcript. If clearPendingToolResults() is not
+    // called, the next assistant message triggers shouldFlushBeforeNewToolCalls(), which
+    // inserts synthetic tool results with stale IDs, corrupting the transcript.
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm);
+
+    // Simulate tool call in flight before compaction
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "pre_compaction_call", name: "exec", arguments: {} }],
+      }),
+    );
+    expect(guard.getPendingIds()).toContain("pre_compaction_call");
+
+    // Compaction fires: clears pending state without inserting synthetic results
+    guard.clearPendingToolResults();
+    expect(guard.getPendingIds()).toHaveLength(0);
+
+    // Post-compaction: new assistant message with a new tool call arrives
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "post_compaction_call", name: "read", arguments: {} }],
+      }),
+    );
+
+    // Only the two assistant messages should be in the transcript.
+    // No synthetic tool result for the pre-compaction call should be inserted.
+    const messages = getPersistedMessages(sm);
+    const toolResults = messages.filter((m) => m.role === "toolResult");
+    const staleResult = toolResults.find(
+      (m) => (m as { toolCallId?: string }).toolCallId === "pre_compaction_call",
+    );
+    expect(staleResult).toBeUndefined();
+
+    // The new pending call from post-compaction should be tracked
+    expect(guard.getPendingIds()).toContain("post_compaction_call");
+  });
 });

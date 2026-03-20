@@ -2673,6 +2673,15 @@ export async function runEmbeddedAttempt(
         // compactions that complete during activeSession.prompt() before the delta
         // baseline is sampled.
         const compactionOccurredThisAttempt = getCompactionCount() > 0;
+        // Compaction rewrites the JSONL file, removing any in-flight tool calls from the
+        // transcript. Clear stale pending tool call state so the guard does not later
+        // insert synthetic tool results with IDs that no longer exist in the session file.
+        // Leaving stale pending IDs causes shouldFlushBeforeNewToolCalls() to fire on the
+        // next assistant message, inserting orphaned synthetic results that corrupt the
+        // transcript and cause subsequent tool calls to silently hang. (#51031)
+        if (compactionOccurredThisAttempt) {
+          sessionManager.clearPendingToolResults?.();
+        }
         // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
         // Previously this was before the prompt, which caused a custom entry to be
         // inserted between compaction and the next prompt — breaking the
