@@ -680,4 +680,31 @@ describe("discoverOpenClawPlugins", () => {
     expect(first.candidates.map((candidate) => candidate.idHint)).toEqual(["alpha", "beta"]);
     expect(second.candidates.map((candidate) => candidate.idHint)).toEqual(["beta", "alpha"]);
   });
+
+  it("skips bundled extension entries with missing entry files (npm stripping) without error", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    const packDir = path.join(bundledDir, "stripped-pack");
+    mkdirSafe(packDir);
+
+    writePluginPackageManifest({
+      packageDir: packDir,
+      packageName: "@openclaw/stripped-pack",
+      extensions: ["./index.ts"],
+    });
+
+    const result = discoverOpenClawPlugins({
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      },
+    });
+
+    expect(result.candidates.some((candidate) => candidate.idHint === "stripped-pack")).toBe(false);
+    expect(
+      result.diagnostics.some((diag) => diag.message.includes("escapes package directory")),
+    ).toBe(false);
+  });
 });
