@@ -566,7 +566,7 @@ terms before depending on subscription auth.
     workspace: "~/.openclaw/workspace",
     model: {
       primary: "anthropic/claude-opus-4-6",
-      fallbacks: ["minimax/MiniMax-M2.5"],
+      fallbacks: ["minimax/MiniMax-M2.7"],
     },
   },
 }
