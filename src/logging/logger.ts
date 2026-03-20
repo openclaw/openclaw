@@ -77,6 +77,10 @@ export type LogTransport = (logObj: LogTransportRecord) => void;
 type LogTransportGlobalState = {
   transports: Set<LogTransport>;
   activeLogger: unknown; // TsLogger<LogObj> — stored as unknown to avoid type import in global
+  // Registry of all loggers built across module instances (gateway + jiti plugins).
+  // registerLogTransport() iterates this to late-attach transports to every logger,
+  // not just activeLogger. Entries are long-lived (one per module instance).
+  allLoggers: Set<unknown>;
 };
 
 function getLogTransportGlobalState(): LogTransportGlobalState {
@@ -87,6 +91,7 @@ function getLogTransportGlobalState(): LogTransportGlobalState {
     g.__openclawLogTransportState = {
       transports: new Set<LogTransport>(),
       activeLogger: null,
+      allLoggers: new Set(),
     };
   }
   return g.__openclawLogTransportState;
@@ -117,6 +122,11 @@ type DiagnosticLogAttributes = Record<string, string | number | boolean>;
 // which would cause registerLogTransport to attach to the wrong logger instance.
 function publishActiveLogger(logger: TsLogger<LogObj>): void {
   const globalState = getLogTransportGlobalState();
+  // Remove the previous logger from this module instance (if rebuilding) to avoid stale refs.
+  if (loggingState.cachedLogger) {
+    globalState.allLoggers.delete(loggingState.cachedLogger);
+  }
+  globalState.allLoggers.add(logger);
   if (!globalState.activeLogger || globalState.activeLogger === loggingState.cachedLogger) {
     globalState.activeLogger = logger;
   }
@@ -609,29 +619,37 @@ export function getResolvedLoggerSettings(): LoggerResolvedSettings {
 
 // Test helpers
 export function setLoggerOverride(settings: LoggerSettings | null) {
+  const globalState = getLogTransportGlobalState();
+  if (loggingState.cachedLogger) {
+    globalState.allLoggers.delete(loggingState.cachedLogger);
+  }
   loggingState.overrideSettings = settings;
   loggingState.cachedLogger = null;
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
-  getLogTransportGlobalState().activeLogger = null;
+  globalState.activeLogger = null;
 }
 
 export function resetLogger() {
+  const globalState = getLogTransportGlobalState();
+  if (loggingState.cachedLogger) {
+    globalState.allLoggers.delete(loggingState.cachedLogger);
+  }
   loggingState.cachedLogger = null;
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
   loggingState.overrideSettings = null;
-  getLogTransportGlobalState().activeLogger = null;
+  globalState.activeLogger = null;
 }
 
 export function registerLogTransport(transport: LogTransport): () => void {
   const globalState = getLogTransportGlobalState();
   globalState.transports.add(transport);
-  // Use the globally-published active logger so plugins loaded via jiti (separate module
-  // instance) can still attach to the gateway's logger after it has been built.
-  const logger = globalState.activeLogger as TsLogger<LogObj> | null;
-  if (logger) {
-    attachExternalTransport(logger, transport);
+  // Late-attach to every logger built across all module instances (gateway + jiti plugins).
+  // This ensures channel-plugin loggers created before diagnostics-otel starts also get
+  // the OTLP transport, not just the gateway's activeLogger.
+  for (const logger of globalState.allLoggers) {
+    attachExternalTransport(logger as TsLogger<LogObj>, transport);
   }
   return () => {
     globalState.transports.delete(transport);
