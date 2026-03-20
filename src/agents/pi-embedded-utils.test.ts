@@ -574,6 +574,11 @@ describe("stripDowngradedToolCallText", () => {
         text: "Just a normal response with no markers.",
         expected: "Just a normal response with no markers.",
       },
+      {
+        name: "preserves leading whitespace when no markers are present",
+        text: "  \n    code block",
+        expected: "  \n    code block",
+      },
     ] as const;
 
     for (const testCase of cases) {

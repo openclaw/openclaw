@@ -17,6 +17,8 @@ type ApiKeyStorageOptions = {
 type ResolvedNonInteractiveApiKey = {
   key: string;
   source: "profile" | "env" | "flag";
+  profileId?: string;
+  metadata?: Record<string, string>;
 };
 
 function hadStoredGigachatBasicProfile(agentDir?: string): boolean {
@@ -72,6 +74,21 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
         "GIGACHAT_CREDENTIALS looks like Basic user:password credentials.",
         'Non-interactive "--gigachat-api-key" only supports personal OAuth credentials keys.',
         "Set GIGACHAT_CREDENTIALS to a real OAuth credentials key and retry.",
+      ].join("\n"),
+    );
+    params.runtime.exit(1);
+    return null;
+  }
+  if (
+    resolved.source === "profile" &&
+    resolved.metadata?.scope &&
+    resolved.metadata.scope !== "GIGACHAT_API_PERS"
+  ) {
+    params.runtime.error(
+      [
+        `Stored GigaChat profile "${resolved.profileId ?? "gigachat profile"}" is scoped for business billing (${resolved.metadata.scope}).`,
+        'Non-interactive "--gigachat-api-key" only supports personal OAuth credentials keys.',
+        "Use a personal-scope key/profile for this path, or run interactive onboarding for business GigaChat setup.",
       ].join("\n"),
     );
     params.runtime.exit(1);

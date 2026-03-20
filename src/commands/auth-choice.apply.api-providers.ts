@@ -202,6 +202,18 @@ export async function applyAuthChoiceApiProviders(
   }
 
   if (authChoice === "gigachat-basic") {
+    if (!gigachatBasicScope) {
+      gigachatBasicScope = String(
+        await params.prompter.select({
+          message: "Select billing type",
+          options: [
+            { value: "GIGACHAT_API_PERS", label: "Personal" },
+            { value: "GIGACHAT_API_B2B", label: "Business (Prepaid)" },
+            { value: "GIGACHAT_API_CORP", label: "Business (Postpaid)" },
+          ],
+        }),
+      );
+    }
     const envBaseUrl = process.env.GIGACHAT_BASE_URL?.trim() ?? "";
     const envUser = process.env.GIGACHAT_USER?.trim() ?? "";
     const envPassword = process.env.GIGACHAT_PASSWORD?.trim() ?? "";

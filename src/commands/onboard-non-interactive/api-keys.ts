@@ -23,7 +23,7 @@ async function resolveApiKeyFromProfiles(params: {
   provider: string;
   cfg: OpenClawConfig;
   agentDir?: string;
-}): Promise<string | null> {
+}): Promise<{ key: string; profileId: string; metadata?: Record<string, string> } | null> {
   const store = ensureAuthProfileStore(params.agentDir);
   const order = resolveAuthProfileOrder({
     cfg: params.cfg,
@@ -42,7 +42,11 @@ async function resolveApiKeyFromProfiles(params: {
       agentDir: params.agentDir,
     });
     if (resolved?.apiKey) {
-      return resolved.apiKey;
+      return {
+        key: resolved.apiKey,
+        profileId,
+        metadata: cred.metadata,
+      };
     }
   }
   return null;
@@ -60,7 +64,13 @@ export async function resolveNonInteractiveApiKey(params: {
   allowProfile?: boolean;
   required?: boolean;
   secretInputMode?: SecretInputMode;
-}): Promise<{ key: string; source: NonInteractiveApiKeySource; envVarName?: string } | null> {
+}): Promise<{
+  key: string;
+  source: NonInteractiveApiKeySource;
+  envVarName?: string;
+  profileId?: string;
+  metadata?: Record<string, string>;
+} | null> {
   const flagKey = normalizeOptionalSecretInput(params.flagValue);
   const envResolved = resolveEnvApiKey(params.provider);
   const explicitEnvVar = params.envVarName?.trim();
@@ -112,7 +122,12 @@ export async function resolveNonInteractiveApiKey(params: {
       agentDir: params.agentDir,
     });
     if (profileKey) {
-      return { key: profileKey, source: "profile" };
+      return {
+        key: profileKey.key,
+        source: "profile",
+        profileId: profileKey.profileId,
+        metadata: profileKey.metadata,
+      };
     }
   }
 

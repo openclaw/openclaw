@@ -49,6 +49,11 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
     const resolveApiKey = vi.fn(async () => ({
       key: "gigachat-oauth-credentials",
       source: "profile" as const,
+      profileId: "gigachat:default",
+      metadata: {
+        authMode: "oauth",
+        scope: "GIGACHAT_API_PERS",
+      },
     }));
     const maybeSetResolvedApiKey = vi.fn(async (resolved, setter) => {
       if (resolved.source === "profile") {
@@ -81,6 +86,46 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
     );
     expect(maybeSetResolvedApiKey).toHaveBeenCalledOnce();
     expect(setGigachatApiKey).not.toHaveBeenCalled();
+  });
+
+  it("rejects business-scoped stored profiles for GigaChat personal OAuth onboarding", async () => {
+    const agentDir = "/tmp/openclaw-agents/work/agent";
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    const runtime: RuntimeEnv = {
+      error: vi.fn(),
+      exit: vi.fn(),
+      log: vi.fn(),
+    };
+    const resolveApiKey = vi.fn(async () => ({
+      key: "gigachat-business-credentials",
+      source: "profile" as const,
+      profileId: "gigachat:business",
+      metadata: {
+        authMode: "oauth",
+        scope: "GIGACHAT_API_B2B",
+      },
+    }));
+    const maybeSetResolvedApiKey = vi.fn();
+
+    const result = await applySimpleNonInteractiveApiKeyChoice({
+      authChoice: "gigachat-api-key",
+      nextConfig,
+      baseConfig: nextConfig,
+      opts: {} as never,
+      runtime,
+      agentDir,
+      apiKeyStorageOptions: undefined,
+      resolveApiKey,
+      maybeSetResolvedApiKey,
+    });
+
+    expect(result).toBeNull();
+    expect(maybeSetResolvedApiKey).not.toHaveBeenCalled();
+    expect(setGigachatApiKey).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("scoped for business billing"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("accepts the generic --token input for GigaChat non-interactive OAuth", async () => {

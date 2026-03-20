@@ -797,6 +797,15 @@ function createRun(params: {
   };
 }
 
+function createLegacyFlattenedRun(params: Parameters<typeof createRun>[0]): FollowupRun {
+  const nestedRun = createRun(params);
+  return {
+    ...nestedRun,
+    ...nestedRun.run,
+    run: undefined as never,
+  } as unknown as FollowupRun;
+}
+
 describe("followup queue deduplication", () => {
   beforeEach(() => {
     resetRecentQueuedMessageIdDedupe();
@@ -1611,6 +1620,61 @@ describe("followup queue drain restart after idle window", () => {
     // Only the first message was processed; the post-clear one is still pending.
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("before-clear");
+  });
+});
+
+describe("legacy flattened followup queue compatibility", () => {
+  beforeEach(() => {
+    resetRecentQueuedMessageIdDedupe();
+  });
+
+  it("normalizes collect-mode legacy runs before queue bookkeeping", async () => {
+    const key = `test-legacy-collect-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(key, createLegacyFlattenedRun({ prompt: "legacy item" }), settings);
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      done.resolve();
+    });
+
+    await done.promise;
+
+    expect(calls[0]?.prompt).toContain("Queued #1\nlegacy item");
+    expect(calls[0]?.run.provider).toBe("openai");
+  });
+
+  it("normalizes summary-mode legacy runs before overflow delivery", async () => {
+    const key = `test-legacy-summary-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
+    enqueueFollowupRun(key, createLegacyFlattenedRun({ prompt: "second" }), settings);
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      done.resolve();
+    });
+
+    await done.promise;
+
+    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[0]?.run.provider).toBe("openai");
   });
 });
 

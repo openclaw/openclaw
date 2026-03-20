@@ -158,7 +158,7 @@ export function stripDowngradedToolCallText(text: string): string {
 
   let cleaned = stripLeakedFunctionCallPrelude(text);
   if (!/\[Tool (?:Call|Result)/i.test(cleaned) && !/\[Historical context/i.test(cleaned)) {
-    return cleaned.trim();
+    return cleaned;
   }
 
   const stripToolCalls = (input: string): string => {

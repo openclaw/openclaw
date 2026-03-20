@@ -343,9 +343,43 @@ describe("applyAuthChoice", () => {
       metadata: {
         authMode: "basic",
         insecureTls: "false",
+        scope: "GIGACHAT_API_PERS",
       },
     });
     expect((await readAuthProfile("gigachat:default"))?.keyRef).toBeUndefined();
+  });
+
+  it("captures business scope for direct GigaChat Basic onboarding", async () => {
+    await setupTempState();
+
+    process.env.GIGACHAT_CREDENTIALS = "env-oauth-credentials"; // pragma: allowlist secret
+    delete process.env.GIGACHAT_USER;
+    delete process.env.GIGACHAT_PASSWORD;
+    delete process.env.GIGACHAT_BASE_URL;
+
+    const select: WizardPrompter["select"] = vi.fn(async () => "GIGACHAT_API_B2B" as never);
+    const text = vi
+      .fn()
+      .mockResolvedValueOnce("https://gigachat.ift.sberdevices.ru/v1")
+      .mockResolvedValueOnce("basic-user")
+      .mockResolvedValueOnce("basic-pass");
+    const { prompter, runtime } = createApiKeyPromptHarness({ select, text });
+
+    await applyAuthChoice({
+      authChoice: "gigachat-basic",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(await readAuthProfile("gigachat:default")).toMatchObject({
+      metadata: {
+        authMode: "basic",
+        insecureTls: "false",
+        scope: "GIGACHAT_API_B2B",
+      },
+    });
   });
 
   it("rejects Basic-shaped GigaChat credentials on the interactive OAuth path", async () => {
