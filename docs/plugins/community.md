@@ -45,6 +45,10 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **openclaw-dingtalk** — The OpenClaw DingTalk channel plugin enables the integration of enterprise robots using the Stream mode. It supports text, images and file messages via any DingTalk client.
+  npm: `@largezhou/ddingtalk`
+  repo: `https://github.com/largezhou/openclaw-dingtalk`
+  install: `openclaw plugins install @largezhou/ddingtalk`
 - **QQbot** — Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group mentions, channel messages, and rich media including voice, images, videos, and files.
   npm: `@sliverp/qqbot`
   repo: `https://github.com/sliverp/qqbot`
