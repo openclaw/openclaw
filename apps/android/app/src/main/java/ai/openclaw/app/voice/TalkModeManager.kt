@@ -748,7 +748,7 @@ class TalkModeManager(
 
   private suspend fun playGatewaySpeech(speech: GatewayTalkSpeech, playbackToken: Long) {
     ensurePlaybackActive(playbackToken)
-    stopSpeaking(resetInterrupt = false)
+    cleanupPlayer()
     ensurePlaybackActive(playbackToken)
 
     val audioBytes =
