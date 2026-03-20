@@ -69,9 +69,9 @@ Use `openclaw configure --section web` to set up your API key and choose a provi
 
 ### Baidu Search
 
-1.  Visit the [Baidu AI Search Console](https://console.bce.baidu.com/ai-search/qianfan/ais/console/apiKey)
-2.  Generate a new API key or select an existing one(format: `bce-v3/ALTAK-...`)
-3.  Copy the API key and use it with OpenClaw
+1. Visit the [Baidu AI Search Console](https://console.bce.baidu.com/ai-search/qianfan/ais/console/apiKey)
+2. Generate a new API key or select an existing one(format: `bce-v3/ALTAK-...`)
+3. Copy the API key and use it with OpenClaw
 
 ### Brave Search
 
