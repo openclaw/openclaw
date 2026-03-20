@@ -25,7 +25,8 @@ vi.mock("../../agents/sandbox.js", () => ({
   resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
 }));
 
-vi.mock("../../config/sessions.js", () => ({
+vi.mock("../../config/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions.js")>()),
   updateSessionStore: vi.fn(async () => {}),
 }));
 
@@ -69,6 +70,32 @@ function setAuthProfiles(
       store: { version: 1, profiles },
     },
   ]);
+}
+
+function configWithContextWindows(overrides?: { agentContextTokens?: number }): OpenClawConfig {
+  return {
+    commands: { text: true },
+    agents: {
+      defaults: {
+        ...(typeof overrides?.agentContextTokens === "number"
+          ? { contextTokens: overrides.agentContextTokens }
+          : {}),
+        compaction: {
+          reserveTokensFloor: 20_000,
+        },
+      },
+    },
+    models: {
+      providers: {
+        anthropic: {
+          models: [{ id: "claude-opus-4-5", contextWindow: 200_000 }],
+        },
+        openai: {
+          models: [{ id: "gpt-4o", contextWindow: 128_000 }],
+        },
+      },
+    },
+  } as unknown as OpenClawConfig;
 }
 
 function resolveModelSelectionForCommand(params: {
@@ -629,6 +656,70 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("failed");
   });
 
+  it("rejects switching to a smaller-context model when recorded session usage is already too large", async () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const sessionEntry = createSessionEntry({
+      totalTokens: 150_000,
+      totalTokensFresh: true,
+    });
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        cfg: configWithContextWindows(),
+        directives,
+        sessionEntry,
+      }),
+    );
+
+    expect(result?.text).toContain("Can't switch to openai/gpt-4o yet.");
+    expect(result?.text).toContain("/compact");
+    expect(result?.text).toContain("/new");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+  });
+
+  it("does not block a model switch when cached session usage is stale", async () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const sessionEntry = createSessionEntry({
+      totalTokens: 150_000,
+      totalTokensFresh: false,
+    });
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        cfg: configWithContextWindows(),
+        directives,
+        sessionEntry,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to");
+    expect(result?.text).toContain("openai/gpt-4o");
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+  });
+
+  it("blocks a model switch when the effective runtime context cap is smaller than the target model window", async () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const sessionEntry = createSessionEntry({
+      totalTokens: 80_000,
+      totalTokensFresh: true,
+    });
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        cfg: configWithContextWindows({ agentContextTokens: 90_000 }),
+        directives,
+        sessionEntry,
+      }),
+    );
+
+    expect(result?.text).toContain("Can't switch to openai/gpt-4o yet.");
+    expect(result?.text).toContain("70k/90k");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+  });
+
   it("persists thinkingLevel=off (does not clear)", async () => {
     const directives = parseInlineDirectives("/think off");
     const sessionEntry = createSessionEntry({ thinkingLevel: "low" });
@@ -731,5 +822,149 @@ describe("persistInlineDirectives internal exec scope gate", () => {
     expect(sessionEntry.execSecurity).toBeUndefined();
     expect(sessionEntry.execAsk).toBeUndefined();
     expect(sessionEntry.execNode).toBeUndefined();
+  });
+});
+
+describe("persistInlineDirectives model-switch context guard", () => {
+  it("does not persist an oversized switch during inline directive persistence", async () => {
+    const directives = parseInlineDirectives("please continue /model openai/gpt-4o");
+    const sessionEntry = createSessionEntry({
+      totalTokens: 150_000,
+      totalTokensFresh: true,
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await persistInlineDirectives({
+      directives,
+      effectiveModelDirective: "openai/gpt-4o",
+      cfg: configWithContextWindows(),
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => `Switched to ${label}`,
+      agentCfg: configWithContextWindows().agents?.defaults,
+    });
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-5");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+  });
+
+  it("does not persist other inline directive side effects when the model switch is blocked", async () => {
+    const directives = parseInlineDirectives("please continue /model openai/gpt-4o /think high");
+    const sessionEntry = createSessionEntry({
+      totalTokens: 150_000,
+      totalTokensFresh: true,
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await persistInlineDirectives({
+      directives,
+      effectiveModelDirective: "openai/gpt-4o",
+      cfg: configWithContextWindows(),
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => `Switched to ${label}`,
+      agentCfg: configWithContextWindows().agents?.defaults,
+    });
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-5");
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.thinkingLevel).toBeUndefined();
+  });
+
+  it("does not persist other inline directive side effects when the blocked model switch uses fuzzy resolution", async () => {
+    const directives = parseInlineDirectives("please continue /model gpt-4o /think high");
+    const sessionEntry = createSessionEntry({
+      totalTokens: 150_000,
+      totalTokensFresh: true,
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await persistInlineDirectives({
+      directives,
+      effectiveModelDirective: "gpt-4o",
+      cfg: configWithContextWindows(),
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => `Switched to ${label}`,
+      agentCfg: configWithContextWindows().agents?.defaults,
+    });
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-5");
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.thinkingLevel).toBeUndefined();
+  });
+
+  it("does not persist other inline directive side effects when the model directive fails to resolve", async () => {
+    const directives = parseInlineDirectives(
+      "please continue /model openai/gpt-4o@missing-profile /think high",
+    );
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await persistInlineDirectives({
+      directives,
+      effectiveModelDirective: "openai/gpt-4o",
+      cfg: baseConfig(),
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => `Switched to ${label}`,
+      agentCfg: baseConfig().agents?.defaults,
+    });
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-5");
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.thinkingLevel).toBeUndefined();
   });
 });

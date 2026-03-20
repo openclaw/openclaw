@@ -12,6 +12,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { resolveProfileOverride } from "./directive-handling.auth.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import {
@@ -19,6 +20,7 @@ import {
   enqueueModeSwitchEvents,
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
+import { maybeBlockOversizedModelSwitch } from "./model-switch-guard.js";
 
 export async function persistInlineDirectives(params: {
   directives: InlineDirectives;
@@ -68,7 +70,62 @@ export async function persistInlineDirectives(params: {
   const activeAgentId = sessionKey
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
-  const agentDir = params.agentDir ?? resolveAgentDir(cfg, activeAgentId);
+  const agentDir = resolveAgentDir(cfg, activeAgentId);
+  const modelDirective =
+    directives.hasModelDirective && params.effectiveModelDirective
+      ? params.effectiveModelDirective
+      : undefined;
+  const modelResolution = modelDirective
+    ? resolveModelSelectionFromDirective({
+        directives: {
+          ...directives,
+          hasModelDirective: true,
+          rawModelDirective: modelDirective,
+        },
+        cfg,
+        agentDir,
+        defaultProvider,
+        defaultModel,
+        aliasIndex,
+        allowedModelKeys,
+        allowedModelCatalog: [],
+        provider,
+      })
+    : {};
+  const resolvedModelSelection = modelResolution.modelSelection;
+  if (modelDirective && modelResolution.errorText) {
+    // Mixed-message flows already surfaced the model-selection error to the
+    // user in the fast lane. Keep persistence aligned by skipping any inline
+    // state writes after the same failed `/model` directive.
+    return {
+      provider,
+      model,
+      contextTokens:
+        agentCfg?.contextTokens ?? lookupContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
+    };
+  }
+  if (
+    resolvedModelSelection &&
+    sessionEntry &&
+    maybeBlockOversizedModelSwitch({
+      cfg,
+      sessionEntry,
+      currentProvider: provider,
+      currentModel: model,
+      targetProvider: resolvedModelSelection.provider,
+      targetModel: resolvedModelSelection.model,
+    })
+  ) {
+    // Mixed-message flows already surfaced the blocked switch to the user in
+    // the fast lane. Keep persistence aligned by skipping all inline state
+    // writes for the same blocked model switch.
+    return {
+      provider,
+      model,
+      contextTokens:
+        agentCfg?.contextTokens ?? lookupContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
+    };
+  }
 
   if (sessionEntry && sessionStore && sessionKey) {
     const prevElevatedLevel =
@@ -138,43 +195,45 @@ export async function persistInlineDirectives(params: {
       }
     }
 
-    const modelDirective =
-      directives.hasModelDirective && params.effectiveModelDirective
-        ? params.effectiveModelDirective
-        : undefined;
-    if (modelDirective) {
-      const modelResolution = resolveModelSelectionFromDirective({
-        directives: {
-          ...directives,
-          hasModelDirective: true,
-          rawModelDirective: modelDirective,
-        },
+    if (resolvedModelSelection) {
+      let profileOverride = modelResolution.profileOverride;
+      if (directives.rawModelProfile && profileOverride === undefined) {
+        const profileResolved = resolveProfileOverride({
+          rawProfile: directives.rawModelProfile,
+          provider: resolvedModelSelection.provider,
+          cfg,
+          agentDir,
+        });
+        if (profileResolved.error) {
+          throw new Error(profileResolved.error);
+        }
+        profileOverride = profileResolved.profileId;
+      }
+      const blockedModelSwitchText = maybeBlockOversizedModelSwitch({
         cfg,
-        agentDir,
-        defaultProvider,
-        defaultModel,
-        aliasIndex,
-        allowedModelKeys,
-        allowedModelCatalog: [],
-        provider,
+        sessionEntry,
+        currentProvider: provider,
+        currentModel: model,
+        targetProvider: resolvedModelSelection.provider,
+        targetModel: resolvedModelSelection.model,
       });
-      if (modelResolution.modelSelection) {
+      // The fast-lane `/model` path already returns the user-facing error.
+      // Keep persistence aligned so inline directives cannot write the
+      // blocked selection into the session store afterward.
+      if (!blockedModelSwitchText) {
         const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
           entry: sessionEntry,
-          selection: modelResolution.modelSelection,
-          profileOverride: modelResolution.profileOverride,
+          selection: resolvedModelSelection,
+          profileOverride,
         });
-        provider = modelResolution.modelSelection.provider;
-        model = modelResolution.modelSelection.model;
+        provider = resolvedModelSelection.provider;
+        model = resolvedModelSelection.model;
         const nextLabel = `${provider}/${model}`;
         if (nextLabel !== initialModelLabel) {
-          enqueueSystemEvent(
-            formatModelSwitchEvent(nextLabel, modelResolution.modelSelection.alias),
-            {
-              sessionKey,
-              contextKey: `model:${nextLabel}`,
-            },
-          );
+          enqueueSystemEvent(formatModelSwitchEvent(nextLabel, resolvedModelSelection.alias), {
+            sessionKey,
+            contextKey: `model:${nextLabel}`,
+          });
         }
         updated = updated || modelUpdated;
       }
