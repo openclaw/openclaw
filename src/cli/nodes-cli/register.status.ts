@@ -8,7 +8,7 @@ import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
-import type { NodesRpcOpts } from "./types.js";
+import type { NodeListNode, NodesRpcOpts } from "./types.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -95,6 +95,39 @@ function parseSinceMs(raw: unknown, label: string): number | undefined {
     defaultRuntime.exit(1);
     return undefined;
   }
+}
+
+function messageFromError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message;
+  }
+  return "";
+}
+
+function shouldFallbackToPairList(error: unknown): boolean {
+  const message = messageFromError(error).toLowerCase();
+  if (!message.includes("node.list")) {
+    return false;
+  }
+  return (
+    message.includes("unknown method") ||
+    message.includes("method not found") ||
+    message.includes("not implemented") ||
+    message.includes("unsupported") ||
+    message.includes("unauthorized") ||
+    message.includes("forbidden")
+  );
 }
 
 export function registerNodesStatusCommands(nodes: Command) {
@@ -306,13 +339,28 @@ export function registerNodesStatusCommands(nodes: Command) {
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
           const result = await callGatewayCli("node.pair.list", opts, {});
           const { pending, paired } = parsePairingList(result);
-          const nodes = parseNodeList(await callGatewayCli("node.list", opts, {}));
           const { heading, muted, warn } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const pendingRows = hasFilters ? [] : pending;
           const pairedById = new Map(paired.map((entry) => [entry.nodeId, entry]));
+
+          let nodes: NodeListNode[] = paired.map((entry) => ({
+            nodeId: entry.nodeId,
+            displayName: entry.displayName,
+            remoteIp: entry.remoteIp,
+            connected: false,
+            paired: true,
+          }));
+          try {
+            nodes = parseNodeList(await callGatewayCli("node.list", opts, {}));
+          } catch (error) {
+            if (hasFilters || !shouldFallbackToPairList(error)) {
+              throw error;
+            }
+          }
+
           const isPairedNode = (nodeId: string, pairedFlag: boolean | undefined) =>
             Boolean(pairedFlag) || pairedById.has(nodeId);
           const candidates = nodes.filter(
@@ -354,8 +402,21 @@ export function registerNodesStatusCommands(nodes: Command) {
           );
 
           if (opts.json) {
+            const filteredNodeIds = new Set(filteredNodes.map((node) => node.nodeId));
+            const filteredPaired = paired.filter((entry) => filteredNodeIds.has(entry.nodeId));
+            const filteredConnected = filteredNodes.filter(
+              (node) => !isPairedNode(node.nodeId, node.paired),
+            );
             defaultRuntime.log(
-              JSON.stringify({ pending: pendingRows, paired: filteredNodes }, null, 2),
+              JSON.stringify(
+                {
+                  pending: pendingRows,
+                  paired: filteredPaired,
+                  connected: filteredConnected,
+                },
+                null,
+                2,
+              ),
             );
             return;
           }
