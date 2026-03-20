@@ -265,6 +265,15 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
                   continue;
                 }
               }
+              // Re-prune the hourly bucket with a fresh timestamp so that entries
+              // which aged out during the drain window are not counted against the cap.
+              pruneOldRestarts(record, Date.now());
+              if (record.restartsThisHour.length >= maxRestartsPerHour) {
+                log.warn?.(
+                  `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit after drain, skipping`,
+                );
+                continue;
+              }
               await channelManager.stopChannel(channelId as ChannelId, accountId);
             }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
