@@ -10,6 +10,7 @@ import {
   type CortexPolicy,
   type CortexStatus,
 } from "../memory/cortex.js";
+import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import {
   appendCortexCaptureHistory,
@@ -136,16 +137,7 @@ const CORTEX_CODING_PROVIDER_PLATFORM_MAP: Record<string, string[]> = {
   cursor: ["cursor"],
   "gemini-cli": ["gemini-cli"],
 };
-const CORTEX_MESSAGING_PROVIDERS = new Set([
-  "discord",
-  "imessage",
-  "signal",
-  "slack",
-  "telegram",
-  "voice",
-  "webchat",
-  "whatsapp",
-]);
+const CORTEX_NON_GATEWAY_MESSAGING_PROVIDERS = new Set(["voice"]);
 const cortexCodingSyncCooldowns = new Map<string, number>();
 
 function normalizeMode(mode?: AgentCortexConfig["mode"]): CortexPolicy {
@@ -160,6 +152,17 @@ function normalizeMaxChars(value?: number): number {
     return DEFAULT_CORTEX_MAX_CHARS;
   }
   return Math.min(MAX_CORTEX_MAX_CHARS, Math.max(1, Math.floor(value)));
+}
+
+function isCortexMessagingProvider(provider?: string): boolean {
+  const normalized = provider?.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    CORTEX_NON_GATEWAY_MESSAGING_PROVIDERS.has(normalized) ||
+    resolveGatewayMessageChannel(normalized) !== undefined
+  );
 }
 
 export function resolveAgentCortexConfig(
@@ -391,7 +394,7 @@ function resolveAutoSyncCortexCodingContext(params: {
   const hasStrongCodingIntent = STRONG_CODING_SYNC_PATTERNS.some((pattern) =>
     pattern.test(params.commandBody),
   );
-  if (provider && CORTEX_MESSAGING_PROVIDERS.has(provider) && !hasStrongCodingIntent) {
+  if (provider && isCortexMessagingProvider(provider) && !hasStrongCodingIntent) {
     return null;
   }
 

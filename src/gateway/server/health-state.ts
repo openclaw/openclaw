@@ -1,5 +1,5 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { getCachedLatestCortexCaptureHistoryEntry } from "../../agents/cortex-history.js";
+import { getLatestCortexCaptureHistoryEntry } from "../../agents/cortex-history.js";
 import { resolveAgentCortexModeStatus, resolveCortexChannelTarget } from "../../agents/cortex.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
 import { STATE_DIR, createConfigIO, loadConfig } from "../../config/config.js";
@@ -42,11 +42,11 @@ export async function buildGatewaySnapshot(): Promise<Snapshot> {
     channelId,
   });
   const latestCortexCapture = cortex
-    ? getCachedLatestCortexCaptureHistoryEntry({
+    ? await getLatestCortexCaptureHistoryEntry({
         agentId: defaultAgentId,
         sessionId: mainSessionEntry?.sessionId,
         channelId,
-      })
+      }).catch(() => null)
     : null;
   const scope = cfg.session?.scope ?? "per-sender";
   const presence = listSystemPresence();

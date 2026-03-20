@@ -22,7 +22,7 @@ describe("cortex mode overrides", () => {
     return path.join(dir, "cortex-mode-overrides.json");
   }
 
-  it("prefers session overrides over channel overrides", async () => {
+  it("prefers channel overrides over session overrides", async () => {
     const pathname = await createStorePath();
     await setCortexModeOverride({
       pathname,
@@ -46,8 +46,8 @@ describe("cortex mode overrides", () => {
       channelId: "slack",
     });
 
-    expect(resolved?.mode).toBe("minimal");
-    expect(resolved?.scope).toBe("session");
+    expect(resolved?.mode).toBe("professional");
+    expect(resolved?.scope).toBe("channel");
   });
 
   it("can clear a stored override", async () => {

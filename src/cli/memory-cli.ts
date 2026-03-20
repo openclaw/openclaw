@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
 import { resolveDefaultAgentId, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveAgentCortexConfig } from "../agents/cortex.js";
 import { loadConfig, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
@@ -405,9 +406,10 @@ async function runCortexInit(opts: CortexCommandOptions): Promise<void> {
   const agentId = resolveAgent(cfg, opts.agent);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   try {
+    const graphPath = opts.graph?.trim() || resolveAgentCortexConfig(cfg, agentId)?.graphPath;
     const result = await ensureCortexGraphInitialized({
       workspaceDir,
-      graphPath: opts.graph,
+      graphPath,
     });
     if (opts.json) {
       defaultRuntime.log(JSON.stringify({ agentId, workspaceDir, ...result }, null, 2));

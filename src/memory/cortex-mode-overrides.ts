@@ -59,18 +59,18 @@ export async function getCortexModeOverride(params: {
   pathname?: string;
 }): Promise<CortexModeOverride | null> {
   const store = await readStore(params.pathname);
-  const sessionId = params.sessionId?.trim();
-  if (sessionId) {
-    const session = store.session[buildKey(params.agentId, sessionId)];
-    if (session) {
-      return session;
-    }
-  }
   const channelId = params.channelId?.trim();
   if (channelId) {
     const channel = store.channel[buildKey(params.agentId, channelId)];
     if (channel) {
       return channel;
+    }
+  }
+  const sessionId = params.sessionId?.trim();
+  if (sessionId) {
+    const session = store.session[buildKey(params.agentId, sessionId)];
+    if (session) {
+      return session;
     }
   }
   return null;

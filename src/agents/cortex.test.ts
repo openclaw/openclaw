@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const {
   previewCortexContext,
@@ -42,6 +44,7 @@ import {
 } from "./cortex.js";
 
 beforeEach(() => {
+  setActivePluginRegistry(createTestRegistry([]));
   getCortexStatus.mockResolvedValue({
     available: true,
     workspaceDir: "/tmp/openclaw-workspace",
@@ -52,6 +55,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  setActivePluginRegistry(createTestRegistry([]));
   resetAgentCortexConflictNoticeStateForTests();
 });
 
@@ -579,6 +583,54 @@ describe("ingestAgentCortexMemoryCandidate", () => {
       sessionId: "session-1",
       channelId: "telegram:1",
       provider: "telegram",
+    });
+
+    expect(result).toMatchObject({
+      captured: true,
+      syncedCodingContext: false,
+    });
+    expect(syncCortexCodingContext).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-sync generic technical chatter from registered channel plugins", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createChannelTestPluginBase({
+            id: "matrix",
+            label: "Matrix",
+            docsPath: "/channels/matrix",
+          }),
+        },
+      ]),
+    );
+    ingestCortexMemoryFromText.mockResolvedValueOnce({
+      workspaceDir: "/tmp/openclaw-workspace",
+      graphPath: "/tmp/openclaw-workspace/.cortex/context.json",
+      stored: true,
+    });
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+
+    const result = await ingestAgentCortexMemoryCandidate({
+      cfg,
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw-workspace",
+      commandBody: "I am debugging a Python API bug right now.",
+      sessionId: "session-1",
+      channelId: "!room:example.org",
+      provider: "matrix",
     });
 
     expect(result).toMatchObject({

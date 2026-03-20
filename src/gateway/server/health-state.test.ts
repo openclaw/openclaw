@@ -12,7 +12,7 @@ const resolveGatewayAuthMock = vi.hoisted(() => vi.fn());
 const getUpdateAvailableMock = vi.hoisted(() => vi.fn());
 const resolveAgentCortexModeStatusMock = vi.hoisted(() => vi.fn());
 const resolveCortexChannelTargetMock = vi.hoisted(() => vi.fn());
-const getCachedLatestCortexCaptureHistoryEntryMock = vi.hoisted(() => vi.fn());
+const getLatestCortexCaptureHistoryEntryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
   STATE_DIR: "/tmp/openclaw-state",
@@ -57,7 +57,7 @@ vi.mock("../../agents/cortex.js", () => ({
 }));
 
 vi.mock("../../agents/cortex-history.js", () => ({
-  getCachedLatestCortexCaptureHistoryEntry: getCachedLatestCortexCaptureHistoryEntryMock,
+  getLatestCortexCaptureHistoryEntry: getLatestCortexCaptureHistoryEntryMock,
 }));
 
 import { buildGatewaySnapshot } from "./health-state.js";
@@ -99,7 +99,7 @@ describe("buildGatewaySnapshot", () => {
       graphPath: ".cortex/context.json",
     });
     resolveCortexChannelTargetMock.mockReturnValue("telegram:user-123");
-    getCachedLatestCortexCaptureHistoryEntryMock.mockReturnValue({
+    getLatestCortexCaptureHistoryEntryMock.mockResolvedValue({
       agentId: "main",
       sessionId: "session-1",
       channelId: "telegram:user-123",
@@ -129,7 +129,7 @@ describe("buildGatewaySnapshot", () => {
       nativeChannelId: "telegram:user-123",
       to: "telegram:user-123",
     });
-    expect(getCachedLatestCortexCaptureHistoryEntryMock).toHaveBeenCalledWith({
+    expect(getLatestCortexCaptureHistoryEntryMock).toHaveBeenCalledWith({
       agentId: "main",
       sessionId: "session-1",
       channelId: "telegram:user-123",

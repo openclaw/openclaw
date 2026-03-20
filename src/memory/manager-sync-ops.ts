@@ -687,10 +687,11 @@ export abstract class MemoryManagerSyncOps {
       this.settings.multimodal,
     );
     const fileEntries = (
-      await Promise.all(
-        files.map(async (file) =>
-          buildFileEntry(file, this.workspaceDir, this.settings.multimodal),
+      await runWithConcurrency(
+        files.map(
+          (file) => async () => buildFileEntry(file, this.workspaceDir, this.settings.multimodal),
         ),
+        this.getIndexConcurrency(),
       )
     ).filter((entry): entry is MemoryFileEntry => entry !== null);
     log.debug("memory sync: indexing memory files", {

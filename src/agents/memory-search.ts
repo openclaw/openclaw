@@ -4,7 +4,9 @@ import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import {
+  isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
+  supportsMemoryMultimodalEmbeddings,
   type MemoryMultimodalSettings,
 } from "../memory/multimodal.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
@@ -385,6 +387,23 @@ export function resolveMemorySearchConfig(
   const resolved = mergeConfig(defaults, overrides, agentId);
   if (!resolved.enabled) {
     return null;
+  }
+  const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
+  if (
+    multimodalActive &&
+    !supportsMemoryMultimodalEmbeddings({
+      provider: resolved.provider,
+      model: resolved.model,
+    })
+  ) {
+    throw new Error(
+      'agents.*.memorySearch.multimodal requires memorySearch.provider = "gemini" and model = "gemini-embedding-2-preview".',
+    );
+  }
+  if (multimodalActive && resolved.fallback !== "none") {
+    throw new Error(
+      'agents.*.memorySearch.multimodal does not support memorySearch.fallback. Set fallback to "none".',
+    );
   }
   return resolved;
 }

@@ -8,6 +8,7 @@ const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getCortexStatus = vi.hoisted(() => vi.fn());
 const previewCortexContext = vi.hoisted(() => vi.fn());
 const ensureCortexGraphInitialized = vi.hoisted(() => vi.fn());
+const resolveAgentCortexConfig = vi.hoisted(() => vi.fn());
 const getCortexModeOverride = vi.hoisted(() => vi.fn());
 const setCortexModeOverride = vi.hoisted(() => vi.fn());
 const clearCortexModeOverride = vi.hoisted(() => vi.fn());
@@ -31,6 +32,10 @@ vi.mock("../memory/cortex.js", () => ({
   ensureCortexGraphInitialized,
   getCortexStatus,
   previewCortexContext,
+}));
+
+vi.mock("../agents/cortex.js", () => ({
+  resolveAgentCortexConfig,
 }));
 
 vi.mock("../memory/cortex-mode-overrides.js", () => ({
@@ -68,6 +73,7 @@ beforeAll(async () => {
 beforeEach(() => {
   getMemorySearchManager.mockReset();
   loadConfig.mockReset().mockReturnValue({});
+  resolveAgentCortexConfig.mockReset().mockReturnValue(null);
   resolveDefaultAgentId.mockReset().mockReturnValue("main");
   resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
@@ -748,6 +754,30 @@ describe("memory cli", () => {
     });
     expect(log).toHaveBeenCalledWith(
       "Cortex graph already present: /tmp/openclaw-workspace/.cortex/context.json",
+    );
+  });
+
+  it("initializes the configured Cortex graph path when --graph is omitted", async () => {
+    resolveAgentCortexConfig.mockReturnValue({
+      enabled: true,
+      graphPath: ".cortex/agent-main.json",
+      mode: "technical",
+      maxChars: 1500,
+    });
+    ensureCortexGraphInitialized.mockResolvedValueOnce({
+      graphPath: "/tmp/openclaw-workspace/.cortex/agent-main.json",
+      created: true,
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["cortex", "init"]);
+
+    expect(ensureCortexGraphInitialized).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw-workspace",
+      graphPath: ".cortex/agent-main.json",
+    });
+    expect(log).toHaveBeenCalledWith(
+      "Initialized Cortex graph: /tmp/openclaw-workspace/.cortex/agent-main.json",
     );
   });
 
