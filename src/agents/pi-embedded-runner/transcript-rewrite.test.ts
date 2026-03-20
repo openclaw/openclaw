@@ -173,6 +173,75 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     expect(sessionManager.getLabel(rewrittenSummaryEntry!.id)).toBe("bookmark");
     expect(sessionManager.getBranch().some((entry) => entry.type === "label")).toBe(true);
   });
+
+  it("remaps compaction keep markers when rewritten entries change ids", () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "read file",
+        timestamp: 1,
+      }),
+    );
+    sessionManager.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        timestamp: 2,
+      }),
+    );
+    const toolResultEntryId = sessionManager.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "x".repeat(8_000) }],
+        isError: false,
+        timestamp: 3,
+      }),
+    );
+    const keptAssistantEntryId = sessionManager.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "keep me" }],
+        timestamp: 4,
+      }),
+    );
+    sessionManager.appendCompaction("summary", keptAssistantEntryId, 123);
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: toolResultEntryId,
+          message: {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read",
+            content: [{ type: "text", text: "[externalized file_123]" }],
+            isError: false,
+            timestamp: 3,
+          },
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    const branch = sessionManager.getBranch();
+    const keptAssistantEntry = branch.find(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message.role === "assistant" &&
+        Array.isArray(entry.message.content) &&
+        entry.message.content.some((part) => part.type === "text" && part.text === "keep me"),
+    );
+    const compactionEntry = branch.find((entry) => entry.type === "compaction");
+
+    expect(keptAssistantEntry).toBeDefined();
+    expect(compactionEntry).toBeDefined();
+    expect(compactionEntry?.firstKeptEntryId).toBe(keptAssistantEntry?.id);
+    expect(compactionEntry?.firstKeptEntryId).not.toBe(keptAssistantEntryId);
+  });
 });
 
 describe("rewriteTranscriptEntriesInSessionFile", () => {

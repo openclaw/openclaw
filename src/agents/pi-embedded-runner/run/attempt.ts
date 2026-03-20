@@ -2036,13 +2036,15 @@ export async function runEmbeddedAttempt(
       });
       trackSessionManagerAccess(params.sessionFile);
 
-      if (hadSessionFile && params.contextEngine?.bootstrap) {
+      if (hadSessionFile && (params.contextEngine?.bootstrap || params.contextEngine?.maintain)) {
         try {
-          await params.contextEngine.bootstrap({
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            sessionFile: params.sessionFile,
-          });
+          if (typeof params.contextEngine?.bootstrap === "function") {
+            await params.contextEngine.bootstrap({
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              sessionFile: params.sessionFile,
+            });
+          }
           await runContextEngineMaintenance({
             contextEngine: params.contextEngine,
             sessionId: params.sessionId,

@@ -39,7 +39,7 @@ function appendBranchEntry(params: {
   if (entry.type === "compaction") {
     return sessionManager.appendCompaction(
       entry.summary,
-      entry.firstKeptEntryId,
+      remapEntryId(entry.firstKeptEntryId, rewrittenEntryIds) ?? entry.firstKeptEntryId,
       entry.tokensBefore,
       entry.details,
       entry.fromHook,

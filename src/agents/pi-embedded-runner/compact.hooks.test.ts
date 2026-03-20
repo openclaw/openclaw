@@ -624,7 +624,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
   });
 
   it("runs maintain after successful compaction with a transcript rewrite helper", async () => {
-    const maintain = vi.fn(async () => ({
+    const maintain = vi.fn(async (_params?: unknown) => ({
       changed: false,
       bytesFreed: 0,
       rewrittenEntries: 0,
@@ -633,7 +633,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       info: { ownsCompaction: true },
       compact: contextEngineCompactMock,
       maintain,
-    });
+    } as never);
 
     const result = await compactEmbeddedPiSession(wrappedCompactionArgs());
 
@@ -647,9 +647,9 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
         }),
       }),
     );
-    const runtimeContext = maintain.mock.calls[0]?.[0]?.runtimeContext as
-      | Record<string, unknown>
-      | undefined;
+    const runtimeContext = (
+      maintain.mock.calls[0]?.[0] as { runtimeContext?: Record<string, unknown> } | undefined
+    )?.runtimeContext as Record<string, unknown> | undefined;
     expect(typeof runtimeContext?.rewriteTranscriptEntries).toBe("function");
   });
 

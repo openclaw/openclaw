@@ -12,10 +12,10 @@ const rewriteTranscriptEntriesInSessionFileMock = vi.fn(async (_params?: unknown
 }));
 
 vi.mock("./transcript-rewrite.js", () => ({
-  rewriteTranscriptEntriesInSessionManager: (...args: unknown[]) =>
-    rewriteTranscriptEntriesInSessionManagerMock(...args),
-  rewriteTranscriptEntriesInSessionFile: (...args: unknown[]) =>
-    rewriteTranscriptEntriesInSessionFileMock(...args),
+  rewriteTranscriptEntriesInSessionManager: (params: unknown) =>
+    rewriteTranscriptEntriesInSessionManagerMock(params),
+  rewriteTranscriptEntriesInSessionFile: (params: unknown) =>
+    rewriteTranscriptEntriesInSessionFileMock(params),
 }));
 
 import {
@@ -102,7 +102,7 @@ describe("runContextEngineMaintenance", () => {
   });
 
   it("passes a rewrite-capable runtime context into maintain()", async () => {
-    const maintain = vi.fn(async () => ({
+    const maintain = vi.fn(async (_params?: unknown) => ({
       changed: false,
       bytesFreed: 0,
       rewrittenEntries: 0,
@@ -138,7 +138,11 @@ describe("runContextEngineMaintenance", () => {
         }),
       }),
     );
-    const runtimeContext = maintain.mock.calls[0]?.[0]?.runtimeContext as
+    const runtimeContext = (
+      maintain.mock.calls[0]?.[0] as
+        | { runtimeContext?: { rewriteTranscriptEntries?: (request: unknown) => Promise<unknown> } }
+        | undefined
+    )?.runtimeContext as
       | { rewriteTranscriptEntries?: (request: unknown) => Promise<unknown> }
       | undefined;
     expect(typeof runtimeContext?.rewriteTranscriptEntries).toBe("function");

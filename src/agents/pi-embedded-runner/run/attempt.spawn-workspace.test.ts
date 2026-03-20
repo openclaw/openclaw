@@ -40,7 +40,7 @@ const hoisted = vi.hoisted(() => {
   }));
   const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
   const initializeGlobalHookRunnerMock = vi.fn();
-  const runContextEngineMaintenanceMock = vi.fn(async () => undefined);
+  const runContextEngineMaintenanceMock = vi.fn(async (_params?: unknown) => undefined);
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
     branch: vi.fn(),
@@ -129,8 +129,7 @@ vi.mock("../skills-runtime.js", () => ({
 }));
 
 vi.mock("../context-engine-maintenance.js", () => ({
-  runContextEngineMaintenance: (...args: unknown[]) =>
-    hoisted.runContextEngineMaintenanceMock(...args),
+  runContextEngineMaintenance: (params: unknown) => hoisted.runContextEngineMaintenanceMock(params),
 }));
 
 vi.mock("../../docs-path.js", () => ({
@@ -877,6 +876,19 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(afterTurn).toHaveBeenCalled();
     expect(hoisted.runContextEngineMaintenanceMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ reason: "turn" }),
+    );
+  });
+
+  it("runs startup maintenance for existing sessions even without bootstrap()", async () => {
+    const { assemble } = createContextEngineBootstrapAndAssemble();
+
+    const result = await runAttemptWithContextEngine({
+      assemble,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(hoisted.runContextEngineMaintenanceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "bootstrap" }),
     );
   });
 
