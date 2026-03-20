@@ -44,19 +44,25 @@ function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
-function resolveReplyToMessageId(params: {
+function resolveReplyContext(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
-}): string | undefined {
+}): { replyToMessageId?: string; replyInThread: boolean } {
   const replyToId = params.replyToId?.trim();
   if (replyToId) {
-    return replyToId;
+    return {
+      replyToMessageId: replyToId,
+      replyInThread: false,
+    };
   }
   if (params.threadId == null) {
-    return undefined;
+    return { replyToMessageId: undefined, replyInThread: false };
   }
-  const trimmed = String(params.threadId).trim();
-  return trimmed || undefined;
+  const trimmedThreadId = String(params.threadId).trim();
+  return {
+    replyToMessageId: trimmedThreadId || undefined,
+    replyInThread: Boolean(trimmedThreadId),
+  };
 }
 
 async function sendOutboundText(params: {
@@ -95,8 +101,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       mediaLocalRoots,
       identity,
     }) => {
-      const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
-      const replyInThread = Boolean(threadId);
+      const { replyToMessageId, replyInThread } = resolveReplyContext({ replyToId, threadId });
       // Scheme A compatibility shim:
       // when upstream accidentally returns a local image path as plain text,
       // auto-upload and send as Feishu image message instead of leaking path text.
@@ -159,8 +164,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
     }) => {
-      const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
-      const replyInThread = Boolean(threadId);
+      const { replyToMessageId, replyInThread } = resolveReplyContext({ replyToId, threadId });
       // Send text first if provided
       if (text?.trim()) {
         await sendOutboundText({
