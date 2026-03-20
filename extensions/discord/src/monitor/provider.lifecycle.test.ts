@@ -813,6 +813,39 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
+  it("force-stops via watchdog when WS opens repeatedly but READY never arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      waitForDiscordGatewayStopMock.mockImplementationOnce(
+        async (waitParams: WaitForDiscordGatewayStopParams) => {
+          const stopPromise = new Promise<void>((_resolve, reject) => {
+            waitParams.registerForceStop?.((err) => reject(err));
+          });
+          stopPromise.catch(() => {});
+          emitter.emit("debug", "WebSocket connection closed with code 1005");
+          gateway.isConnected = false;
+          for (let i = 0; i < 8; i++) {
+            emitter.emit("debug", "WebSocket connection opened");
+            await vi.advanceTimersByTimeAsync(30_000);
+            emitter.emit("debug", "WebSocket connection closed with code 1006");
+          }
+          await vi.advanceTimersByTimeAsync(5 * 60_000 + 1_000);
+          await stopPromise;
+        },
+      );
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+        "reconnect watchdog timeout",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("suppresses reconnect-exhausted already queued before shutdown", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const pendingGatewayEvents: DiscordGatewayEvent[] = [];

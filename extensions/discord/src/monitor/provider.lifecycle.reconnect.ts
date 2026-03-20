@@ -305,8 +305,11 @@ export function createDiscordGatewayReconnectController(params: {
     if (message.includes("WebSocket connection closed")) {
       if (params.gateway?.isConnected) {
         resetHelloStallCounter();
+        reconnectStallWatchdog.disarm();
       }
-      reconnectStallWatchdog.arm(at);
+      if (!reconnectStallWatchdog.isArmed()) {
+        reconnectStallWatchdog.arm(at);
+      }
       params.pushStatus({
         connected: false,
         lastDisconnect: {
@@ -320,11 +323,11 @@ export function createDiscordGatewayReconnectController(params: {
     if (!message.includes("WebSocket connection opened")) {
       return;
     }
-    reconnectStallWatchdog.disarm();
     clearHelloWatch();
 
     let sawConnected = params.gateway?.isConnected === true;
     if (sawConnected) {
+      reconnectStallWatchdog.disarm();
       pushConnectedStatus(at);
     }
     helloConnectedPollId = setInterval(() => {
@@ -358,7 +361,9 @@ export function createDiscordGatewayReconnectController(params: {
           const forceFreshIdentify =
             consecutiveHelloStalls >= DISCORD_GATEWAY_MAX_CONSECUTIVE_HELLO_STALLS;
           const stalledAt = Date.now();
-          reconnectStallWatchdog.arm(stalledAt);
+          if (!reconnectStallWatchdog.isArmed()) {
+            reconnectStallWatchdog.arm(stalledAt);
+          }
           params.pushStatus({
             connected: false,
             lastEventAt: stalledAt,
