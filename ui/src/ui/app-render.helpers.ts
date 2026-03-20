@@ -372,7 +372,10 @@ function buildChatModelOptions(
 
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    // Use the full provider/id ref as the option value so sessions.patch receives
+    // an unambiguous model ref and doesn't fall back to the session's default provider.
+    const value = provider ? `${provider}/${entry.id}` : entry.id;
+    addOption(value, provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
   if (currentOverride) {
