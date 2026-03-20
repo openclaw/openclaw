@@ -8,7 +8,7 @@ import {
   sendZaloTextMessage,
   sendZaloTypingEvent,
 } from "./zalo-js.js";
-import { TextStyle } from "./zca-client.js";
+import { TextStyle } from "./zca-constants.js";
 
 export type ZalouserSendOptions = ZaloSendOptions;
 export type ZalouserSendResult = ZaloSendResult;

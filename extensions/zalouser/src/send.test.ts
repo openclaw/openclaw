@@ -17,7 +17,7 @@ import {
   sendZaloTextMessage,
   sendZaloTypingEvent,
 } from "./zalo-js.js";
-import { TextStyle } from "./zca-client.js";
+import { TextStyle } from "./zca-constants.js";
 
 vi.mock("./zalo-js.js", () => ({
   sendZaloTextMessage: vi.fn(),
