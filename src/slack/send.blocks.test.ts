@@ -70,6 +70,21 @@ describe("sendMessageSlack blocks", () => {
     expect(result).toEqual({ messageId: "171234.567", channelId: "C123" });
   });
 
+  it("normalizes incident labels in block fallback text", async () => {
+    const client = createSlackSendTestClient();
+    await sendMessageSlack("channel:C123", "_Incident:_ API down", {
+      token: "xoxb-test",
+      client,
+      blocks: [{ type: "divider" }],
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "*Incident:* API down",
+      }),
+    );
+  });
+
   it("derives fallback text from image blocks", async () => {
     const client = createSlackSendTestClient();
     await sendMessageSlack("channel:C123", "", {

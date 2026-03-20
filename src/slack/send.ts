@@ -281,7 +281,9 @@ export async function sendMessageSlack(
     if (opts.mediaUrl) {
       throw new Error("Slack send does not support blocks with mediaUrl");
     }
-    const fallbackText = trimmedMessage || buildSlackBlocksFallbackText(blocks);
+    const fallbackText = normalizeSlackOutboundText(
+      trimmedMessage || buildSlackBlocksFallbackText(blocks),
+    );
     const response = await postSlackMessageBestEffort({
       client,
       channelId,

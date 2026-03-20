@@ -1,70 +1,40 @@
+import { containsSlackIncidentLabel } from "../../../slack/format.js";
 import type { OpenClawPluginDefinition } from "../../types.js";
 
 export const SRE_INCIDENT_FORMAT_PLUGIN_ID = "sre-incident-format";
 
-// Phrases that indicate a progress-only message (no substantive content).
-const PROGRESS_PREFIXES = [
-  "now let me",
-  "now i have",
-  "now i understand",
-  "let me ",
-  "i need to",
-  "i'm checking",
-  "i'm looking",
-  "i'm pulling",
-  "i found the",
-  "found it",
-  "checking",
-  "good —",
-  "good -",
-  "the script",
-  "there are stale",
-  "the commit was created",
-  "pr is created",
-  "now i see",
-  "honest answer",
-  "even though this is",
-  "i'll follow the full protocol",
-  "on it",
-  "let me verify",
-  "let me compose",
-  "let me check",
-] as const;
-
-// Quick check: does the text contain any incident section label in bold format?
-// Used to distinguish substantive incident replies from progress noise.
-const INCIDENT_LABEL_BOLD_RE =
-  /\*(?:Incident|Customer impact|Affected services|Status|Evidence|Likely cause|Mitigation|Validate|Next|Also watching|Auto-fix PR|Linear|Suggested PR|Fix PR|Context|What the PR does):\*/;
+// Incident-only channels where the strict content gate applies.
+// Messages in these channels MUST contain incident section labels or they are blocked.
+// Other channels (DMs, #router-investigator, etc.) are not filtered.
+const INCIDENT_CHANNEL_IDS = new Set([
+  "C07G53ZCV5K", // #bug-report
+  "C0A3T6VVCPQ", // #platform-monitoring
+  "C09EQ94AN1L", // #staging-infra-monitoring
+  "C08BZRS6W12", // #public-api-monitoring
+]);
 
 /**
- * Check if a message is progress-only noise (no substantive content).
- * Returns true if the message should be blocked.
+ * Check if a message should be blocked in an incident channel.
+ *
+ * Only messages containing at least one incident section label
+ * (*Incident:*, *Evidence:*, _Status:_, etc.) are allowed through.
+ * Everything else is intermediate thinking.
  */
 export function isProgressOnlyMessage(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) {
     return true;
   }
-  // Messages containing incident section labels are substantive, not progress.
-  if (
-    INCIDENT_LABEL_BOLD_RE.test(trimmed) ||
-    /_(?:Incident|Evidence|Likely cause|Status):_/.test(trimmed)
-  ) {
-    return false;
-  }
-  const lower = trimmed.toLowerCase();
-  // Check if the message starts with a known progress prefix.
-  // These are noise regardless of length — the bot narrates multi-paragraph
-  // thinking-out-loud that starts with "Now I have..." or "Now let me...".
-  return PROGRESS_PREFIXES.some((prefix) => lower.startsWith(prefix));
+  return !containsSlackIncidentLabel(trimmed);
 }
 
 export function createSreIncidentFormatPlugin(): OpenClawPluginDefinition {
   return {
     id: SRE_INCIDENT_FORMAT_PLUGIN_ID,
     name: "SRE Incident Format Enforcer",
-    version: "1.0.0",
-    description: "Blocks progress-only messages in SRE incident threads.",
+    version: "2.1.0",
+    description:
+      "In incident channels, blocks messages without incident section labels. Other channels are unfiltered.",
     register(api) {
       api.on("message_sending", (event, ctx) => {
         const content = event.content;
@@ -78,24 +48,21 @@ export function createSreIncidentFormatPlugin(): OpenClawPluginDefinition {
           return;
         }
 
-        // Use metadata to get the Slack conversation ID.
+        // Resolve the Slack conversation ID.
         const metadata = event.metadata ?? {};
         const slackConversationId =
           (metadata.channelId as string | undefined) ?? (event.to as string | undefined);
 
-        // Skip direct messages (Slack DM IDs start with "D").
-        if (slackConversationId?.startsWith("D")) {
+        // Only enforce in incident channels. All other channels (DMs, group
+        // channels, #router-investigator, etc.) are unfiltered.
+        if (!slackConversationId || !INCIDENT_CHANNEL_IDS.has(slackConversationId)) {
           return;
         }
 
-        // Block progress-only messages
+        // Block any message that doesn't contain incident section labels.
         if (isProgressOnlyMessage(content)) {
           return { cancel: true };
         }
-
-        // Label enforcement is handled post-normalization in src/slack/format.ts
-        // and src/slack/send.ts, not in this hook (the hook runs before the
-        // Markdown→mrkdwn converter which would undo the fix).
 
         return;
       });
