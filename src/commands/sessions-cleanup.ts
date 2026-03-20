@@ -162,7 +162,7 @@ async function previewStoreCleanup(params: {
   activeKey?: string;
   fixMissing?: boolean;
 }) {
-  const maintenance = resolveMaintenanceConfig();
+  const maintenance = resolveMaintenanceConfig(params.target.agentId);
   const beforeStore = loadSessionStore(params.target.storePath, { skipCache: true });
   const previewStore = structuredClone(beforeStore);
   const staleKeys = new Set<string>();
@@ -371,6 +371,7 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
         });
       },
       {
+        agentId: target.agentId,
         activeSessionKey: opts.activeKey,
         maintenanceOverride: {
           mode,
