@@ -230,6 +230,7 @@ export function buildWorkspaceSkillStatus(
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     entries?: SkillEntry[];
+    agentId?: string;
     eligibility?: SkillEligibilityContext;
   },
 ): SkillStatusReport {
@@ -241,6 +242,8 @@ export function buildWorkspaceSkillStatus(
       config: opts?.config,
       managedSkillsDir,
       bundledSkillsDir: bundledContext.dir,
+      agentId: opts?.agentId,
+      applyPolicy: false,
     });
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   return {
