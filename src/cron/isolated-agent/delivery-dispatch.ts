@@ -433,9 +433,9 @@ export async function dispatchCronDelivery(
         : await runDelivery();
       // Only mark delivered when ALL payloads succeeded (no partial failure).
       delivered = deliveryResults.length > 0 && !hadPartialFailure;
-      // Always cache successful results to prevent replay duplicates,
-      // even when some payloads failed (partial failure).
-      if (deliveryResults.length > 0) {
+      // Cache only fully successful deliveries. Caching partial failures would
+      // replay as delivered=true on the fast path and lose failure state.
+      if (delivered) {
         rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryResults);
       }
       return null;
