@@ -59,6 +59,8 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
   successfulCronAdds?: number;
+  /** Final auth profile that actually succeeded for this run, after any rotation. */
+  finalAuthProfileId?: string;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
   compactionCount?: number;
