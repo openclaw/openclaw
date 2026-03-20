@@ -4,7 +4,7 @@ import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
 
-function stripRelevantMemoriesTags(text: string): string {
+export function stripRelevantMemoriesTags(text: string): string {
   if (!text || !MEMORY_TAG_QUICK_RE.test(text)) {
     return text;
   }
@@ -23,8 +23,11 @@ function stripRelevantMemoriesTags(text: string): string {
 
     const isClose = match[1] === "/";
     if (!inMemoryBlock) {
-      result += text.slice(lastIndex, idx);
-      if (!isClose) {
+      const before = text.slice(lastIndex, idx);
+      result += before;
+      // Only strip leading/prefix blocks (plugin-injected ones at the start of the message).
+      // If meaningful content has already been accumulated, leave subsequent blocks intact.
+      if (!isClose && result.trim() === "") {
         inMemoryBlock = true;
       }
     } else if (isClose) {

@@ -1,5 +1,6 @@
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
+import { stripRelevantMemoriesTags } from "../../../../src/shared/text/assistant-visible-text.js";
 import { stripThinkingTags } from "../format.ts";
 
 const textCache = new WeakMap<object, string | null>();
@@ -10,9 +11,10 @@ function processMessageText(text: string, role: string): string {
   if (role === "assistant") {
     return stripThinkingTags(text);
   }
-  return shouldStripInboundMetadata
-    ? stripInboundMetadata(stripEnvelope(text))
-    : stripEnvelope(text);
+  if (shouldStripInboundMetadata) {
+    return stripRelevantMemoriesTags(stripInboundMetadata(stripEnvelope(text)));
+  }
+  return stripEnvelope(text);
 }
 
 export function extractText(message: unknown): string | null {

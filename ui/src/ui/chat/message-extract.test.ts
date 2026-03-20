@@ -24,6 +24,26 @@ describe("extractTextCached", () => {
     expect(extractTextCached(message)).toBe("plain text");
   });
 
+  it("strips user relevant-memories scaffolding injected via prependContext", () => {
+    const message = {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: [
+            "<relevant-memories>",
+            "Internal memory context",
+            "</relevant-memories>",
+            "",
+            "User question here",
+          ].join("\n"),
+        },
+      ],
+    };
+    expect(extractText(message)).toBe("\n\nUser question here");
+    expect(extractTextCached(message)).toBe("\n\nUser question here");
+  });
+
   it("strips assistant relevant-memories scaffolding", () => {
     const message = {
       role: "assistant",
