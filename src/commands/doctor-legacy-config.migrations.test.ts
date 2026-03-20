@@ -394,4 +394,178 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.skills?.allowBundled).toEqual(["peekaboo"]);
     expect(res.changes).toEqual(["Removed nano-banana-pro from skills.allowBundled."]);
   });
+
+  it("migrates legacy web search provider config to plugin-owned config paths", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        web: {
+          search: {
+            provider: "gemini",
+            maxResults: 5,
+            apiKey: "brave-key",
+            gemini: {
+              apiKey: "gemini-key",
+              model: "gemini-2.5-flash",
+            },
+            firecrawl: {
+              apiKey: "firecrawl-key",
+              baseUrl: "https://api.firecrawl.dev",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.tools?.web?.search).toEqual({
+      provider: "gemini",
+      maxResults: 5,
+    });
+    expect(res.config.plugins?.entries?.brave).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "brave-key",
+        },
+      },
+    });
+    expect(res.config.plugins?.entries?.google).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "gemini-key",
+          model: "gemini-2.5-flash",
+        },
+      },
+    });
+    expect(res.config.plugins?.entries?.firecrawl).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "firecrawl-key",
+          baseUrl: "https://api.firecrawl.dev",
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Moved tools.web.search.apiKey → plugins.entries.brave.config.webSearch.apiKey.",
+      "Moved tools.web.search.firecrawl → plugins.entries.firecrawl.config.webSearch.",
+      "Moved tools.web.search.gemini → plugins.entries.google.config.webSearch.",
+    ]);
+  });
+
+  it("merges legacy web search provider config into explicit plugin config without overriding it", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        web: {
+          search: {
+            provider: "gemini",
+            gemini: {
+              apiKey: "legacy-gemini-key",
+              model: "legacy-model",
+            },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          google: {
+            enabled: true,
+            config: {
+              webSearch: {
+                model: "explicit-model",
+                baseUrl: "https://generativelanguage.googleapis.com",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.tools?.web?.search).toEqual({
+      provider: "gemini",
+    });
+    expect(res.config.plugins?.entries?.google).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "legacy-gemini-key",
+          model: "explicit-model",
+          baseUrl: "https://generativelanguage.googleapis.com",
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Merged tools.web.search.gemini → plugins.entries.google.config.webSearch (filled missing fields from legacy; kept explicit plugin config values).",
+    ]);
+  });
+
+  it("migrates legacy talk flat fields to provider/providers", () => {
+    const res = normalizeCompatibilityConfigValues({
+      talk: {
+        voiceId: "voice-123",
+        voiceAliases: {
+          Clawd: "EXAVITQu4vr4xnSDxMaL",
+        },
+        modelId: "eleven_v3",
+        outputFormat: "pcm_44100",
+        apiKey: "secret-key",
+        interruptOnSpeech: false,
+        silenceTimeoutMs: 1500,
+      },
+    });
+
+    expect(res.config.talk).toEqual({
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-123",
+          voiceAliases: {
+            Clawd: "EXAVITQu4vr4xnSDxMaL",
+          },
+          modelId: "eleven_v3",
+          outputFormat: "pcm_44100",
+          apiKey: "secret-key",
+        },
+      },
+      voiceId: "voice-123",
+      voiceAliases: {
+        Clawd: "EXAVITQu4vr4xnSDxMaL",
+      },
+      modelId: "eleven_v3",
+      outputFormat: "pcm_44100",
+      apiKey: "secret-key",
+      interruptOnSpeech: false,
+      silenceTimeoutMs: 1500,
+    });
+    expect(res.changes).toEqual([
+      "Moved legacy talk flat fields → talk.provider/talk.providers.elevenlabs.",
+    ]);
+  });
+
+  it("normalizes talk provider ids without overriding explicit provider config", () => {
+    const res = normalizeCompatibilityConfigValues({
+      talk: {
+        provider: " elevenlabs ",
+        providers: {
+          " elevenlabs ": {
+            voiceId: "voice-123",
+          },
+        },
+        apiKey: "secret-key",
+      },
+    });
+
+    expect(res.config.talk).toEqual({
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-123",
+        },
+      },
+      apiKey: "secret-key",
+    });
+    expect(res.changes).toEqual([
+      "Normalized talk.provider/providers shape (trimmed provider ids and merged missing compatibility fields).",
+    ]);
+  });
 });
