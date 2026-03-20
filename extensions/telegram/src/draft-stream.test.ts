@@ -339,6 +339,32 @@ describe("createTelegramDraftStream", () => {
     expect(stream.messageId()).toBeUndefined();
   });
 
+  it("clears sendMayHaveLanded when pre-connect preview retries abort during backoff", async () => {
+    const api = createMockDraftApi();
+    const abortController = new AbortController();
+    const preConnectErr = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+    });
+    const abortErr = Object.assign(new Error("The operation was aborted"), {
+      name: "AbortError",
+    });
+    api.sendMessage.mockRejectedValueOnce(preConnectErr);
+    sleepWithAbort.mockImplementationOnce(async () => {
+      abortController.abort(new Error("poller restart"));
+      throw abortErr;
+    });
+    const stream = createDraftStream(api, {
+      previewTransport: "message",
+      abortSignal: abortController.signal,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(stream.sendMayHaveLanded?.()).toBe(false);
+  });
+
   it("materializes draft previews using rendered HTML text", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, {

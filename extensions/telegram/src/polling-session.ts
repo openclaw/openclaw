@@ -15,6 +15,8 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 };
 
 const POLL_STALL_THRESHOLD_MS = 90_000;
+const TELEGRAM_LONG_POLL_TIMEOUT_MS = 30_000;
+const MIN_POLL_STALL_THRESHOLD_MS = TELEGRAM_LONG_POLL_TIMEOUT_MS + 1_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
 
@@ -22,7 +24,7 @@ const resolvePollStallThresholdMs = (value: number | undefined): number => {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return POLL_STALL_THRESHOLD_MS;
   }
-  return Math.floor(value);
+  return Math.max(Math.floor(value), MIN_POLL_STALL_THRESHOLD_MS);
 };
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {

@@ -705,7 +705,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     vi.useRealTimers();
   });
 
-  it("uses configured poll stall threshold for watchdog restarts", async () => {
+  it("clamps configured poll stall thresholds below the 30s long-poll timeout", async () => {
     const { monitorTelegramProvider } = await import("./monitor.js");
     vi.useFakeTimers({ shouldAdvanceTime: true });
     loadConfig.mockReturnValueOnce({
@@ -726,6 +726,12 @@ describe("monitorTelegramProvider (grammY)", () => {
     await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
 
     vi.advanceTimersByTime(36_000);
+    await Promise.resolve();
+
+    expect(stop).not.toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(30_000);
     await monitor;
 
     expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);

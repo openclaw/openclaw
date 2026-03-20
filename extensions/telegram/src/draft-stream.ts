@@ -1,6 +1,6 @@
 import type { Bot } from "grammy";
-import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
+import { computeBackoff, readErrorName, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
@@ -19,6 +19,9 @@ const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const DRAFT_METHOD_UNAVAILABLE_RE =
   /(unknown method|method .*not (found|available|supported)|unsupported)/i;
 const DRAFT_CHAT_UNSUPPORTED_RE = /(can't be used|can be used only)/i;
+const PREVIEW_RETRY_ABORTED_AFTER_PRECONNECT_FAILURE = Symbol(
+  "openclaw.telegram.preview-retry-aborted-after-preconnect-failure",
+);
 
 type TelegramSendMessageDraft = (
   chatId: number,
@@ -69,6 +72,30 @@ function shouldFallbackFromDraftTransport(err: unknown): boolean {
     return false;
   }
   return DRAFT_METHOD_UNAVAILABLE_RE.test(text) || DRAFT_CHAT_UNSUPPORTED_RE.test(text);
+}
+
+function markPreviewRetryAbortedAfterPreconnectFailure(err: unknown): void {
+  if (!err || typeof err !== "object") {
+    return;
+  }
+  Object.defineProperty(err, PREVIEW_RETRY_ABORTED_AFTER_PRECONNECT_FAILURE, {
+    value: true,
+    configurable: true,
+  });
+}
+
+function isPreviewRetryAbortedAfterPreconnectFailure(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    Boolean(
+      (err as Record<PropertyKey, unknown>)[PREVIEW_RETRY_ABORTED_AFTER_PRECONNECT_FAILURE],
+    )
+  );
+}
+
+function isAbortError(err: unknown): boolean {
+  return readErrorName(err) === "AbortError";
 }
 
 export type TelegramDraftStream = {
@@ -220,7 +247,14 @@ export function createTelegramDraftStream(params: {
         params.warn?.(
           `telegram stream preview ${operation} failed before reaching Telegram; retrying in ${delayMs}ms (${String(err)})`,
         );
-        await sleepWithAbort(delayMs, params.abortSignal);
+        try {
+          await sleepWithAbort(delayMs, params.abortSignal);
+        } catch (sleepErr) {
+          if (params.abortSignal?.aborted && isAbortError(sleepErr)) {
+            markPreviewRetryAbortedAfterPreconnectFailure(sleepErr);
+          }
+          throw sleepErr;
+        }
       }
     }
   };
@@ -257,7 +291,11 @@ export function createTelegramDraftStream(params: {
       // Pre-connect failures (DNS, refused) and explicit Telegram rejections (4xx)
       // guarantee the message was never delivered — clear the flag so
       // sendMayHaveLanded() doesn't suppress fallback.
-      if (isSafeToRetrySendError(err) || isTelegramClientRejection(err)) {
+      if (
+        isSafeToRetrySendError(err) ||
+        isTelegramClientRejection(err) ||
+        isPreviewRetryAbortedAfterPreconnectFailure(err)
+      ) {
         messageSendAttempted = false;
       }
       throw err;
