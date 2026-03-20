@@ -21,16 +21,13 @@ import type {
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { fireAndForgetHook } from "../../../src/hooks/fire-and-forget.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../../src/hooks/internal-hooks.js";
-import { toInternalMessageSentContext } from "../../../src/hooks/message-hook-mappers.js";
-import { getGlobalHookRunner } from "../../../src/plugins/hook-runner-global.js";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
