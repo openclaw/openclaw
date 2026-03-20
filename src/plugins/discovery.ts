@@ -467,6 +467,11 @@ function resolvePackageEntrySource(params: {
   });
   if (!opened.ok) {
     if (params.origin === "bundled" && opened.reason === "path") {
+      params.diagnostics.push({
+        level: "warn",
+        message: `bundled extension entry skipped — file not found (likely npm stripping): ${params.sourceLabel}/${params.entryPath}; install via pnpm or use the pre-built Docker image`,
+        source: params.sourceLabel,
+      });
       return null;
     }
     params.diagnostics.push({
