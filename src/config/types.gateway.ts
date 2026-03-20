@@ -81,6 +81,8 @@ export type TalkConfigResponse = TalkConfig & {
 export type GatewayControlUiConfig = {
   /** If false, the Gateway will not serve the Control UI (default /). */
   enabled?: boolean;
+  /** Custom browser tab title for the Control UI (default: "OpenClaw Control"). */
+  title?: string;
   /** Optional base path prefix for the Control UI (e.g. "/openclaw"). */
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
