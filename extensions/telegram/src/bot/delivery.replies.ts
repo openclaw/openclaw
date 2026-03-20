@@ -557,6 +557,9 @@ export function emitDeliveredReplyHooks(params: {
   isGroup?: boolean;
   groupId?: string;
 }): void {
+  // Keep this fire-and-forget path self-contained for both standard replies and
+  // preview-finalization callbacks; getGlobalHookRunner() resolves the shared
+  // singleton runner, so re-looking it up here does not add blocking work.
   const hookRunner = getGlobalHookRunner();
   emitMessageSentHooks({
     hookRunner,

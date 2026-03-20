@@ -365,9 +365,6 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       });
       if (shouldSkipRegressive) {
         params.markDelivered();
-        if (context === "final") {
-          await notifyFinalPreviewDelivered(laneName, text, previewMessageId);
-        }
         return "edited";
       }
       return editPreview(
@@ -419,7 +416,6 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           `telegram: ${laneName} preview send may have landed despite missing message id; keeping to avoid duplicate`,
         );
         params.markDelivered();
-        await notifyFinalPreviewDelivered(laneName, text);
         return "retained";
       }
       return "fallback";

@@ -551,6 +551,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         replies: [expect.objectContaining({ text: "⚠️ Recovered tool error details" })],
       }),
     );
+    expect(emitDeliveredReplyHooks).not.toHaveBeenCalled();
     expect(draftStream.clear).not.toHaveBeenCalled();
     expect(draftStream.stop).toHaveBeenCalled();
   });

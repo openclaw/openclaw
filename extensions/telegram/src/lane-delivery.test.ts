@@ -44,6 +44,7 @@ function createHarness(params?: {
   const deletePreviewMessage = vi.fn().mockResolvedValue(undefined);
   const log = vi.fn();
   const markDelivered = vi.fn();
+  const onFinalPreviewDelivered = vi.fn();
   const activePreviewLifecycleByLane = { answer: "transient", reasoning: "transient" } as const;
   const retainPreviewOnCleanupByLane = { answer: false, reasoning: false } as const;
   const archivedAnswerPreviews: Array<{
@@ -66,6 +67,7 @@ function createHarness(params?: {
     deletePreviewMessage,
     log,
     markDelivered,
+    onFinalPreviewDelivered,
   });
 
   return {
@@ -82,6 +84,7 @@ function createHarness(params?: {
     deletePreviewMessage,
     log,
     markDelivered,
+    onFinalPreviewDelivered,
     archivedAnswerPreviews,
   };
 }
@@ -295,6 +298,7 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.editPreview).not.toHaveBeenCalled();
     expect(harness.sendPayload).not.toHaveBeenCalled();
     expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+    expect(harness.onFinalPreviewDelivered).not.toHaveBeenCalled();
   });
 
   it("falls back to normal delivery when final text exceeds preview edit limit", async () => {
@@ -529,6 +533,7 @@ describe("createLaneTextDeliverer", () => {
       harness,
       expectedLogSnippet: "preview send may have landed despite missing message id",
     });
+    expect(harness.onFinalPreviewDelivered).not.toHaveBeenCalled();
   });
 
   it("deletes consumed boundary previews after fallback final send", async () => {

@@ -508,7 +508,7 @@ export const dispatchTelegramMessage = async ({
     markDelivered: () => {
       deliveryState.markDelivered();
     },
-    onFinalPreviewDelivered: async ({ text, messageId }) => {
+    onFinalPreviewDelivered: ({ text, messageId }) => {
       emitDeliveredReplyHooks({
         sessionKeyForInternalHooks: ctxPayload.SessionKey,
         chatId: String(chatId),
