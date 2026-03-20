@@ -55,6 +55,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
+  val sessionId by viewModel.chatSessionId.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
@@ -120,6 +121,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     Row(modifier = Modifier.fillMaxWidth().imePadding()) {
       ChatComposer(
         healthOk = healthOk,
+        sessionOk = sessionId != null,
         thinkingLevel = thinkingLevel,
         pendingRunCount = pendingRunCount,
         attachments = attachments,

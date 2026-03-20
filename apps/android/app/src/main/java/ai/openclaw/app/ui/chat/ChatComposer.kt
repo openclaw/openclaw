@@ -62,6 +62,7 @@ import ai.openclaw.app.ui.mobileTextTertiary
 @Composable
 fun ChatComposer(
   healthOk: Boolean,
+  sessionOk: Boolean,
   thinkingLevel: String,
   pendingRunCount: Int,
   attachments: List<PendingImageAttachment>,
@@ -75,7 +76,7 @@ fun ChatComposer(
   var input by rememberSaveable { mutableStateOf("") }
   var showThinkingMenu by remember { mutableStateOf(false) }
 
-  val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
+  val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && sessionOk && healthOk
   val sendBusy = pendingRunCount > 0
 
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {

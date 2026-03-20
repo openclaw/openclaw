@@ -27,6 +27,12 @@ class ChatController(
   private val _sessionKey = MutableStateFlow("main")
   val sessionKey: StateFlow<String> = _sessionKey.asStateFlow()
 
+  /**
+   * The unique backend instance ID for the current conversation.
+   * - **null**: Disconnected or loading (prevents stale event pollution).
+   * - **""**: A new session that has been initialized but not yet assigned a UUID.
+   * - **UUID**: An active session anchored to a specific backend instance.
+   */
   private val _sessionId = MutableStateFlow<String?>(null)
   val sessionId: StateFlow<String?> = _sessionId.asStateFlow()
 
@@ -251,7 +257,6 @@ class ChatController(
 
   private suspend fun bootstrap(forceHealth: Boolean) {
     _errorText.value = null
-    _healthOk.value = false
     clearPendingRuns()
     pendingToolCallsById.clear()
     publishPendingToolCalls()
@@ -267,7 +272,8 @@ class ChatController(
       val historyJson = session.request("chat.history", """{"sessionKey":"$key"}""")
       val history = parseHistory(historyJson, sessionKey = key, previousMessages = _messages.value)
       _messages.value = history.messages
-      _sessionId.value = history.sessionId
+      // Sync the session ID; empty string marks the session as "ready" even if no ID exists yet.
+      _sessionId.value = history.sessionId ?: ""
       history.thinkingLevel?.trim()?.takeIf { it.isNotEmpty() }?.let { _thinkingLevel.value = it }
 
       pollHealthIfNeeded(force = forceHealth)
@@ -338,7 +344,8 @@ class ChatController(
               session.request("chat.history", """{"sessionKey":"${_sessionKey.value}"}""")
             val history = parseHistory(historyJson, sessionKey = _sessionKey.value, previousMessages = _messages.value)
             _messages.value = history.messages
-            _sessionId.value = history.sessionId
+            // Sync the session ID; empty string marks the session as "ready" even if no ID exists yet.
+            _sessionId.value = history.sessionId ?: ""
             history.thinkingLevel?.trim()?.takeIf { it.isNotEmpty() }?.let { _thinkingLevel.value = it }
           } catch (_: Throwable) {
             // best-effort
