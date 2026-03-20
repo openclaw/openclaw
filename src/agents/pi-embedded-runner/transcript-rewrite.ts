@@ -6,6 +6,8 @@ import type {
   TranscriptRewriteResult,
 } from "../../context-engine/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { getRawSessionAppendMessage } from "../session-tool-result-guard.js";
+import { acquireSessionWriteLock } from "../session-write-lock.js";
 import { log } from "./logger.js";
 
 type SessionManagerLike = ReturnType<typeof SessionManager.open>;
@@ -29,12 +31,11 @@ function appendBranchEntry(params: {
   sessionManager: SessionManagerLike;
   entry: SessionBranchEntry;
   rewrittenEntryIds: ReadonlyMap<string, string>;
+  appendMessage: SessionManagerLike["appendMessage"];
 }): string {
-  const { sessionManager, entry, rewrittenEntryIds } = params;
+  const { sessionManager, entry, rewrittenEntryIds, appendMessage } = params;
   if (entry.type === "message") {
-    return sessionManager.appendMessage(
-      entry.message as Parameters<typeof sessionManager.appendMessage>[0],
-    );
+    return appendMessage(entry.message as Parameters<typeof sessionManager.appendMessage>[0]);
   }
   if (entry.type === "compaction") {
     return sessionManager.appendCompaction(
@@ -160,6 +161,9 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     params.sessionManager.branch(firstMatchedEntry.parentId);
   }
 
+  // Maintenance rewrites should preserve the exact requested history without
+  // re-running persistence hooks or size truncation on replayed messages.
+  const appendMessage = getRawSessionAppendMessage(params.sessionManager);
   const rewrittenEntryIds = new Map<string, string>();
   for (let index = matchedIndices[0]; index < branch.length; index++) {
     const entry = branch[index];
@@ -170,10 +174,9 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
             sessionManager: params.sessionManager,
             entry,
             rewrittenEntryIds,
+            appendMessage,
           })
-        : params.sessionManager.appendMessage(
-            replacement as Parameters<typeof params.sessionManager.appendMessage>[0],
-          );
+        : appendMessage(replacement as Parameters<typeof params.sessionManager.appendMessage>[0]);
     rewrittenEntryIds.set(entry.id, newEntryId);
   }
 
@@ -194,7 +197,11 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
   sessionKey?: string;
   request: TranscriptRewriteRequest;
 }): Promise<TranscriptRewriteResult> {
+  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
   try {
+    sessionLock = await acquireSessionWriteLock({
+      sessionFile: params.sessionFile,
+    });
     const sessionManager = SessionManager.open(params.sessionFile);
     const result = rewriteTranscriptEntriesInSessionManager({
       sessionManager,
@@ -219,5 +226,7 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
       rewrittenEntries: 0,
       reason,
     };
+  } finally {
+    await sessionLock?.release();
   }
 }

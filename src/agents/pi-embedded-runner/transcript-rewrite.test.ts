@@ -1,7 +1,18 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
+
+const acquireSessionWriteLockReleaseMock = vi.hoisted(() => vi.fn(async () => {}));
+const acquireSessionWriteLockMock = vi.hoisted(() =>
+  vi.fn(async (_params?: unknown) => ({ release: acquireSessionWriteLockReleaseMock })),
+);
+
+vi.mock("../session-write-lock.js", () => ({
+  acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
+}));
+
 import {
   rewriteTranscriptEntriesInSessionFile,
   rewriteTranscriptEntriesInSessionManager,
@@ -19,6 +30,11 @@ function getBranchMessages(sessionManager: SessionManager): AgentMessage[] {
     .filter((entry) => entry.type === "message")
     .map((entry) => entry.message);
 }
+
+beforeEach(() => {
+  acquireSessionWriteLockMock.mockClear();
+  acquireSessionWriteLockReleaseMock.mockClear();
+});
 
 describe("rewriteTranscriptEntriesInSessionManager", () => {
   it("branches from the first replaced message and re-appends the remaining suffix", () => {
@@ -242,6 +258,74 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     expect(compactionEntry?.firstKeptEntryId).toBe(keptAssistantEntry?.id);
     expect(compactionEntry?.firstKeptEntryId).not.toBe(keptAssistantEntryId);
   });
+
+  it("bypasses persistence hooks when replaying rewritten messages", () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "run tool",
+        timestamp: 1,
+      }),
+    );
+    const toolResultEntryId = sessionManager.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "before rewrite" }],
+        isError: false,
+        timestamp: 2,
+      }),
+    );
+    sessionManager.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "summarized" }],
+        timestamp: 3,
+      }),
+    );
+    installSessionToolResultGuard(sessionManager, {
+      transformToolResultForPersistence: (message) => ({
+        ...(message as Extract<AgentMessage, { role: "toolResult" }>),
+        content: [{ type: "text", text: "[hook transformed]" }],
+      }),
+      beforeMessageWriteHook: ({ message }) =>
+        message.role === "assistant" ? { block: true } : undefined,
+    });
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: toolResultEntryId,
+          message: {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "exec",
+            content: [{ type: "text", text: "[exact replacement]" }],
+            isError: false,
+            timestamp: 2,
+          },
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    const branchMessages = getBranchMessages(sessionManager);
+    expect(branchMessages.map((message) => message.role)).toEqual([
+      "user",
+      "toolResult",
+      "assistant",
+    ]);
+    expect((branchMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
+      { type: "text", text: "[exact replacement]" },
+    ]);
+    expect(branchMessages[2]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "summarized" }],
+    });
+  });
 });
 
 describe("rewriteTranscriptEntriesInSessionFile", () => {
@@ -299,6 +383,10 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
       });
 
       expect(result.changed).toBe(true);
+      expect(acquireSessionWriteLockMock).toHaveBeenCalledWith({
+        sessionFile,
+      });
+      expect(acquireSessionWriteLockReleaseMock).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({ sessionFile });
 
       const rewrittenToolResult = getBranchMessages(sessionManager)[1] as Extract<
