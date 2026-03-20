@@ -9,31 +9,71 @@ title: "Tools and Plugins"
 
 # Tools and Plugins
 
-OpenClaw gives the agent a set of **tools** it can call during a conversation.
+Everything the agent does beyond generating text happens through **tools**.
 Tools are how the agent reads files, runs commands, browses the web, sends
-messages, and interacts with devices. Everything the agent does beyond generating
-text happens through tools.
+messages, and interacts with devices.
 
-## How it all fits together
+## Tools, skills, and plugins
 
-<CardGroup cols={2}>
-  <Card title="Built-in tools" icon="wrench" href="/tools/exec">
-    Core tools shipped with OpenClaw: exec, browser, web search, file I/O,
-    messaging, cron, canvas, and nodes.
-  </Card>
-  <Card title="Skills" icon="book-open" href="/tools/skills">
-    Markdown instructions that teach the agent how and when to use tools.
-    Skills ship inside plugins or live in your workspace.
-  </Card>
-  <Card title="Plugins" icon="puzzle-piece" href="/tools/plugin">
-    Packages that add new capabilities: channels, model providers, tools,
-    skills, or any combination. Published on npm and installed with the CLI.
-  </Card>
-  <Card title="Automation" icon="clock" href="/automation/hooks">
-    Hooks, cron jobs, heartbeats, webhooks, and scheduled tasks that run
-    without manual messages.
-  </Card>
-</CardGroup>
+OpenClaw has three layers that work together:
+
+<Steps>
+  <Step title="Tools are what the agent calls">
+    A tool is a typed function the agent can invoke (e.g. `exec`, `browser`,
+    `web_search`, `message`). OpenClaw ships a set of **built-in tools** and
+    plugins can register additional ones.
+
+    The agent sees tools as structured function definitions sent to the model API.
+
+  </Step>
+
+  <Step title="Skills teach the agent when and how">
+    A skill is a markdown file (`SKILL.md`) injected into the system prompt.
+    Skills give the agent context, constraints, and step-by-step guidance for
+    using tools effectively. Skills live in your workspace, in shared folders,
+    or ship inside plugins.
+
+    [Skills reference](/tools/skills) | [Creating skills](/tools/creating-skills)
+
+  </Step>
+
+  <Step title="Plugins package everything together">
+    A plugin is a package that can register any combination of capabilities:
+    channels, model providers, tools, skills, speech, image generation, and more.
+    Some plugins are **core** (shipped with OpenClaw), others are **external**
+    (published on npm by the community).
+
+    [Install and configure plugins](/tools/plugin) | [Build your own](/plugins/building-plugins)
+
+  </Step>
+</Steps>
+
+## Built-in tools
+
+These tools ship with OpenClaw and are available without installing any plugins:
+
+| Tool                         | What it does                                             | Page                              |
+| ---------------------------- | -------------------------------------------------------- | --------------------------------- |
+| `exec` / `process`           | Run shell commands, manage background processes          | [Exec](/tools/exec)               |
+| `browser`                    | Control a Chromium browser (navigate, click, screenshot) | [Browser](/tools/browser)         |
+| `web_search` / `web_fetch`   | Search the web, fetch page content                       | [Web](/tools/web)                 |
+| `read` / `write` / `edit`    | File I/O in the workspace                                |                                   |
+| `apply_patch`                | Multi-hunk file patches                                  | [Apply Patch](/tools/apply-patch) |
+| `message`                    | Send messages across all channels                        | [Agent Send](/tools/agent-send)   |
+| `canvas`                     | Drive node Canvas (present, eval, snapshot)              |                                   |
+| `nodes`                      | Discover and target paired devices                       |                                   |
+| `cron` / `gateway`           | Manage scheduled jobs, restart gateway                   |                                   |
+| `image` / `image_generate`   | Analyze or generate images                               |                                   |
+| `sessions_*` / `agents_list` | Session management, sub-agents                           | [Sub-agents](/tools/subagents)    |
+
+### Plugin-provided tools
+
+Plugins can register additional tools. Some examples:
+
+- [Lobster](/tools/lobster) — typed workflow runtime with resumable approvals
+- [LLM Task](/tools/llm-task) — JSON-only LLM step for structured output
+- [Diffs](/tools/diffs) — diff viewer and renderer
+- [OpenProse](/prose) — markdown-first workflow orchestration
 
 ## Tool configuration
 
@@ -95,44 +135,3 @@ changing global defaults:
   },
 }
 ```
-
-## Built-in tool reference
-
-For the full tool-by-tool reference (parameters, actions, notes), see the
-individual tool pages in the sidebar. Key tools:
-
-| Tool                         | What it does                                             | Page                              |
-| ---------------------------- | -------------------------------------------------------- | --------------------------------- |
-| `exec` / `process`           | Run shell commands, manage background processes          | [Exec](/tools/exec)               |
-| `browser`                    | Control a Chromium browser (navigate, click, screenshot) | [Browser](/tools/browser)         |
-| `web_search` / `web_fetch`   | Search the web, fetch page content                       | [Web](/tools/web)                 |
-| `read` / `write` / `edit`    | File I/O in the workspace                                |                                   |
-| `apply_patch`                | Multi-hunk file patches                                  | [Apply Patch](/tools/apply-patch) |
-| `message`                    | Send messages across all channels                        | [Agent Send](/tools/agent-send)   |
-| `canvas`                     | Drive node Canvas (present, eval, snapshot)              |                                   |
-| `nodes`                      | Discover and target paired devices                       |                                   |
-| `cron` / `gateway`           | Manage scheduled jobs, restart gateway                   |                                   |
-| `image` / `image_generate`   | Analyze or generate images                               |                                   |
-| `sessions_*` / `agents_list` | Session management, sub-agents                           | [Sub-agents](/tools/subagents)    |
-
-## Plugins add more
-
-Plugins can register **additional tools** beyond the built-in set. Some examples:
-
-- [Lobster](/tools/lobster) — typed workflow runtime with resumable approvals
-- [LLM Task](/tools/llm-task) — JSON-only LLM step for structured output
-- [Diffs](/tools/diffs) — diff viewer and renderer
-- [OpenProse](/prose) — markdown-first workflow orchestration
-
-Plugins can also ship **skills** alongside tools, so the agent gets both the
-tool definition and the instructions for using it. See
-[Building Plugins](/plugins/building-plugins) to create your own.
-
-## How tools reach the agent
-
-Tools are exposed in two parallel channels:
-
-1. **System prompt text** — a human-readable list with guidance (from skills)
-2. **Tool schemas** — structured function definitions sent to the model API
-
-If a tool doesn't appear in either, the model cannot call it.
