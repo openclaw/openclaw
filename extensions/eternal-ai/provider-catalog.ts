@@ -10,9 +10,6 @@ export function buildEternalAiProvider(): ModelProviderConfig {
   return {
     baseUrl: ETERNAL_AI_BASE_URL,
     api: "openai-completions",
-    headers: {
-      "x-api-key": "${ETERNAL_AI_API_KEY}",
-    },
     models: [
       {
         id: ETERNAL_AI_DEFAULT_MODEL_ID,
