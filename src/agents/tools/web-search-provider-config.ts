@@ -71,6 +71,37 @@ export function setScopedCredentialValue(
   (scoped as Record<string, unknown>).apiKey = value;
 }
 
+export function mergeScopedSearchConfig(
+  searchConfig: Record<string, unknown> | undefined,
+  key: string,
+  pluginConfig: Record<string, unknown> | undefined,
+  options?: { mirrorApiKeyToTopLevel?: boolean },
+): Record<string, unknown> | undefined {
+  if (!pluginConfig) {
+    return searchConfig;
+  }
+
+  const currentScoped =
+    searchConfig?.[key] &&
+    typeof searchConfig[key] === "object" &&
+    !Array.isArray(searchConfig[key])
+      ? (searchConfig[key] as Record<string, unknown>)
+      : {};
+  const next: Record<string, unknown> = {
+    ...searchConfig,
+    [key]: {
+      ...currentScoped,
+      ...pluginConfig,
+    },
+  };
+
+  if (options?.mirrorApiKeyToTopLevel && pluginConfig.apiKey !== undefined) {
+    next.apiKey = pluginConfig.apiKey;
+  }
+
+  return next;
+}
+
 export function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
   if (!search || typeof search !== "object") {

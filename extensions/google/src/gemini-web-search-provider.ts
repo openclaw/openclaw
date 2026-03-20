@@ -3,7 +3,9 @@ import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  getScopedCredentialValue,
   MAX_SEARCH_COUNT,
+  mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readNumberParam,
@@ -14,6 +16,7 @@ import {
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
+  setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
@@ -250,20 +253,9 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     autoDetectOrder: 20,
     credentialPath: "plugins.entries.google.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.google.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => {
-      const gemini = searchConfig?.gemini;
-      return gemini && typeof gemini === "object" && !Array.isArray(gemini)
-        ? (gemini as Record<string, unknown>).apiKey
-        : undefined;
-    },
-    setCredentialValue: (searchConfigTarget, value) => {
-      const scoped = searchConfigTarget.gemini;
-      if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
-        searchConfigTarget.gemini = { apiKey: value };
-        return;
-      }
-      (scoped as Record<string, unknown>).apiKey = value;
-    },
+    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "gemini"),
+    setCredentialValue: (searchConfigTarget, value) =>
+      setScopedCredentialValue(searchConfigTarget, "gemini", value),
     getConfiguredCredentialValue: (config) =>
       resolveProviderWebSearchPluginConfig(config, "google")?.apiKey,
     setConfiguredCredentialValue: (configTarget, value) => {
@@ -271,20 +263,11 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     },
     createTool: (ctx) =>
       createGeminiToolDefinition(
-        (() => {
-          const searchConfig = ctx.searchConfig as SearchConfigRecord | undefined;
-          const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "google");
-          if (!pluginConfig) {
-            return searchConfig;
-          }
-          return {
-            ...(searchConfig ?? {}),
-            gemini: {
-              ...resolveGeminiConfig(searchConfig),
-              ...pluginConfig,
-            },
-          } as SearchConfigRecord;
-        })(),
+        mergeScopedSearchConfig(
+          ctx.searchConfig as SearchConfigRecord | undefined,
+          "gemini",
+          resolveProviderWebSearchPluginConfig(ctx.config, "google"),
+        ) as SearchConfigRecord | undefined,
       ),
   };
 }
