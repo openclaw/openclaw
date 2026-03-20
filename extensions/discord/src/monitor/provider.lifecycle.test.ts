@@ -526,6 +526,48 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
+  it("pushes connected status via proactive poll when WS open event was missed", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const { emitter, gateway } = createGatewayHarness();
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+      const statusUpdates: Array<Record<string, unknown>> = [];
+      const statusSink = (patch: Record<string, unknown>) => {
+        statusUpdates.push({ ...patch });
+      };
+
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+      (lifecycleParams as Record<string, unknown>).statusSink = statusSink;
+
+      // READY arrives at 200ms (sets isConnected without any "open" debug event
+      // reaching onGatewayDebug — the event was consumed by the early listener).
+      setTimeout(() => {
+        gateway.isConnected = true;
+      }, 200);
+
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+
+      // Advance past the READY poll tick so both the proactive poll and
+      // waitForDiscordGatewayReady detect isConnected.
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+
+      // With the proactive poll, connected: true is pushed TWICE — once by
+      // the proactive poll interval and once by the startup guard at line 390.
+      // Without the proactive poll, only the startup guard push would exist.
+      const connectedTruePushes = statusUpdates.filter((s) => s.connected === true);
+      expect(connectedTruePushes.length).toBeGreaterThanOrEqual(2);
+      expect(connectedTruePushes[0]).toMatchObject({
+        connected: true,
+        lastDisconnect: null,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not push connected: true when abortSignal is already aborted", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const emitter = new EventEmitter();

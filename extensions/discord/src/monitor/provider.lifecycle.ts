@@ -323,6 +323,39 @@ export async function runDiscordGatewayLifecycle(params: {
       return;
     }
 
+    // Proactive hello-connected poll: Carbon starts the gateway during client
+    // construction and the "WebSocket connection opened" debug event may fire
+    // before the lifecycle listener is attached (consumed by the early startup
+    // listener in provider.ts). Without the open event, onGatewayDebug never
+    // starts its own hello-connected poll, leaving the READY→isConnected
+    // transition undetected for status updates. Kickstart polling here so the
+    // first READY is caught even when the WS open event was missed.
+    if (gateway && !gateway.isConnected && !lifecycleStopping) {
+      helloConnectedPollId = setInterval(() => {
+        if (lifecycleStopping) {
+          if (helloConnectedPollId) {
+            clearInterval(helloConnectedPollId);
+            helloConnectedPollId = undefined;
+          }
+          return;
+        }
+        if (!gateway.isConnected) {
+          return;
+        }
+        resetHelloStallCounter();
+        const connectedAt = Date.now();
+        reconnectStallWatchdog.disarm();
+        pushStatus({
+          ...createConnectedChannelStatusPatch(connectedAt),
+          lastDisconnect: null,
+        });
+        if (helloConnectedPollId) {
+          clearInterval(helloConnectedPollId);
+          helloConnectedPollId = undefined;
+        }
+      }, HELLO_CONNECTED_POLL_MS);
+    }
+
     // Carbon starts the gateway during client construction, before OpenClaw can
     // attach lifecycle listeners. Require a READY/RESUMED-connected gateway
     // before continuing so the monitor does not look healthy while silently
