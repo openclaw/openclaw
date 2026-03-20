@@ -168,6 +168,44 @@ export function selectMemoryHeavyFiles({
     .map((entry) => entry.file);
 }
 
+export function selectUnitHeavyFileGroups({
+  candidates,
+  behaviorOverrides = new Set(),
+  timedLimit,
+  timedMinDurationMs,
+  memoryLimit,
+  memoryMinDeltaKb,
+  timings,
+  hotspots,
+}) {
+  const memoryHeavyFiles =
+    memoryLimit > 0
+      ? selectMemoryHeavyFiles({
+          candidates,
+          limit: memoryLimit,
+          minDeltaKb: memoryMinDeltaKb,
+          exclude: behaviorOverrides,
+          hotspots,
+        })
+      : [];
+  const schedulingOverrides = new Set([...behaviorOverrides, ...memoryHeavyFiles]);
+  const timedHeavyFiles =
+    timedLimit > 0
+      ? selectTimedHeavyFiles({
+          candidates,
+          limit: timedLimit,
+          minDurationMs: timedMinDurationMs,
+          exclude: schedulingOverrides,
+          timings,
+        })
+      : [];
+
+  return {
+    memoryHeavyFiles,
+    timedHeavyFiles,
+  };
+}
+
 export function packFilesByDuration(files, bucketCount, estimateDurationMs) {
   const normalizedBucketCount = Math.max(0, Math.floor(bucketCount));
   if (normalizedBucketCount <= 0 || files.length === 0) {
