@@ -149,6 +149,7 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
     ...actual,
+    enqueueSystemEvent: actual.enqueueSystemEvent,
     waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
   };
 });
