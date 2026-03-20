@@ -1,4 +1,5 @@
-import type { SsrFPolicy } from "openclaw/plugin-sdk";
+import type { SsrFPolicy } from "../../api.js";
+export { ssrfPolicyFromAllowPrivateNetwork } from "openclaw/plugin-sdk/infra-runtime";
 import { validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 
@@ -40,8 +41,11 @@ export function getUrbitContext(url: string, ship?: string): UrbitContext {
   };
 }
 
-export function ssrfPolicyFromAllowPrivateNetwork(
-  allowPrivateNetwork: boolean | null | undefined,
-): SsrFPolicy | undefined {
-  return allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
+/**
+ * Get the default SSRF policy for image uploads.
+ * Uses a restrictive policy that blocks private networks by default.
+ */
+export function getDefaultSsrFPolicy(): SsrFPolicy | undefined {
+  // Default: block private networks for image uploads (safer default)
+  return undefined;
 }

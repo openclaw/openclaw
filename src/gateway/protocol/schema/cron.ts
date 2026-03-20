@@ -11,6 +11,7 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
       thinking: Type.Optional(Type.String()),
       timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
+      lightContext: Type.Optional(Type.Boolean()),
       deliver: Type.Optional(Type.Boolean()),
       channel: Type.Optional(Type.String()),
       to: Type.Optional(Type.String()),
@@ -20,7 +21,12 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
   );
 }
 
-const CronSessionTargetSchema = Type.Union([Type.Literal("main"), Type.Literal("isolated")]);
+const CronSessionTargetSchema = Type.Union([
+  Type.Literal("main"),
+  Type.Literal("isolated"),
+  Type.Literal("current"),
+  Type.String({ pattern: "^session:.+" }),
+]);
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
 const CronRunStatusSchema = Type.Union([
   Type.Literal("ok"),
@@ -54,6 +60,15 @@ const CronDeliveryStatusSchema = Type.Union([
   Type.Literal("not-delivered"),
   Type.Literal("unknown"),
   Type.Literal("not-requested"),
+]);
+const CronFailoverReasonSchema = Type.Union([
+  Type.Literal("auth"),
+  Type.Literal("format"),
+  Type.Literal("rate_limit"),
+  Type.Literal("billing"),
+  Type.Literal("timeout"),
+  Type.Literal("model_not_found"),
+  Type.Literal("unknown"),
 ]);
 const CronCommonOptionalFields = {
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -137,10 +152,33 @@ export const CronPayloadPatchSchema = Type.Union([
   cronAgentTurnPayloadSchema({ message: Type.Optional(NonEmptyString) }),
 ]);
 
+export const CronFailureAlertSchema = Type.Object(
+  {
+    after: Type.Optional(Type.Integer({ minimum: 1 })),
+    channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+    to: Type.Optional(Type.String()),
+    cooldownMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook")])),
+    accountId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const CronFailureDestinationSchema = Type.Object(
+  {
+    channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+    to: Type.Optional(Type.String()),
+    accountId: Type.Optional(NonEmptyString),
+    mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook")])),
+  },
+  { additionalProperties: false },
+);
+
 const CronDeliverySharedProperties = {
   channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
   accountId: Type.Optional(NonEmptyString),
   bestEffort: Type.Optional(Type.Boolean()),
+  failureDestination: Type.Optional(CronFailureDestinationSchema),
 };
 
 const CronDeliveryNoopSchema = Type.Object(
@@ -187,16 +225,6 @@ export const CronDeliveryPatchSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const CronFailureAlertSchema = Type.Object(
-  {
-    after: Type.Optional(Type.Integer({ minimum: 1 })),
-    channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
-    to: Type.Optional(Type.String()),
-    cooldownMs: Type.Optional(Type.Integer({ minimum: 0 })),
-  },
-  { additionalProperties: false },
-);
-
 export const CronJobStateSchema = Type.Object(
   {
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -205,6 +233,7 @@ export const CronJobStateSchema = Type.Object(
     lastRunStatus: Type.Optional(CronRunStatusSchema),
     lastStatus: Type.Optional(CronRunStatusSchema),
     lastError: Type.Optional(Type.String()),
+    lastErrorReason: Type.Optional(CronFailoverReasonSchema),
     lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
     consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
     lastDelivered: Type.Optional(Type.Boolean()),

@@ -46,4 +46,24 @@ describe("splitTrailingAuthProfile", () => {
       model: "provider/foo@bar/baz",
     });
   });
+
+  it("uses first @ after last slash for email-based auth profiles", () => {
+    expect(splitTrailingAuthProfile("flash@google-gemini-cli:test@gmail.com")).toEqual({
+      model: "flash",
+      profile: "google-gemini-cli:test@gmail.com",
+    });
+  });
+
+  it("keeps @YYYYMMDD version suffixes in model ids", () => {
+    expect(splitTrailingAuthProfile("custom/vertex-ai_claude-haiku-4-5@20251001")).toEqual({
+      model: "custom/vertex-ai_claude-haiku-4-5@20251001",
+    });
+  });
+
+  it("supports auth profiles after @YYYYMMDD version suffixes", () => {
+    expect(splitTrailingAuthProfile("custom/vertex-ai_claude-haiku-4-5@20251001@work")).toEqual({
+      model: "custom/vertex-ai_claude-haiku-4-5@20251001",
+      profile: "work",
+    });
+  });
 });

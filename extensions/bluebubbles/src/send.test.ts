@@ -1,9 +1,9 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { clearBlueBubblesRuntime, setBlueBubblesRuntime } from "./runtime.js";
-import { sendMessageBlueBubbles, resolveChatGuidForTarget } from "./send.js";
+import { sendMessageBlueBubbles, resolveChatGuidForTarget, createChatForHandle } from "./send.js";
 import {
   BLUE_BUBBLES_PRIVATE_API_STATUS,
   installBlueBubblesFetchTestHooks,
@@ -721,6 +721,30 @@ describe("send", () => {
       expect(result.messageId).toBe("msg-guid-789");
     });
 
+    it("extracts top-level message_id from response payload", async () => {
+      mockResolvedHandleTarget();
+      mockSendResponse({ message_id: "bb-msg-321" });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+      });
+
+      expect(result.messageId).toBe("bb-msg-321");
+    });
+
+    it("extracts nested result.message_id from response payload", async () => {
+      mockResolvedHandleTarget();
+      mockSendResponse({ result: { message_id: "bb-msg-654" } });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+      });
+
+      expect(result.messageId).toBe("bb-msg-654");
+    });
+
     it("resolves credentials from config", async () => {
       mockResolvedHandleTarget();
       mockSendResponse({ data: { guid: "msg-123" } });
@@ -755,6 +779,111 @@ describe("send", () => {
       expect(body.tempGuid).toBeDefined();
       expect(typeof body.tempGuid).toBe("string");
       expect(body.tempGuid.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("createChatForHandle", () => {
+    it("creates a new chat and returns chatGuid from response", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              data: { guid: "iMessage;-;+15559876543", chatGuid: "iMessage;-;+15559876543" },
+            }),
+          ),
+      });
+
+      const result = await createChatForHandle({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        address: "+15559876543",
+        message: "Hello!",
+      });
+
+      expect(result.chatGuid).toBe("iMessage;-;+15559876543");
+      expect(result.messageId).toBeDefined();
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.addresses).toEqual(["+15559876543"]);
+      expect(body.message).toBe("Hello!");
+    });
+
+    it("creates a new chat without a message when message is omitted", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              data: { guid: "iMessage;-;+15559876543" },
+            }),
+          ),
+      });
+
+      const result = await createChatForHandle({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        address: "+15559876543",
+      });
+
+      expect(result.chatGuid).toBe("iMessage;-;+15559876543");
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.message).toBe("");
+    });
+
+    it.each([
+      ["data.chatGuid", { data: { chatGuid: "shape-chat-guid" } }, "shape-chat-guid"],
+      ["data.guid", { data: { guid: "shape-guid" } }, "shape-guid"],
+      [
+        "data.chats[0].guid",
+        { data: { chats: [{ guid: "shape-array-guid" }] } },
+        "shape-array-guid",
+      ],
+      ["data.chat.guid", { data: { chat: { guid: "shape-object-guid" } } }, "shape-object-guid"],
+    ])("extracts chatGuid from %s", async (_label, responseBody, expectedChatGuid) => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify(responseBody)),
+      });
+
+      const result = await createChatForHandle({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        address: "+15559876543",
+      });
+
+      expect(result.chatGuid).toBe(expectedChatGuid);
+    });
+
+    it("throws when Private API is not enabled", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: () => Promise.resolve("Private API not enabled"),
+      });
+
+      await expect(
+        createChatForHandle({
+          baseUrl: "http://localhost:1234",
+          password: "test",
+          address: "+15559876543",
+        }),
+      ).rejects.toThrow("Private API must be enabled");
+    });
+
+    it("returns null chatGuid when response has no chat data", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ data: {} })),
+      });
+
+      const result = await createChatForHandle({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        address: "+15559876543",
+        message: "Hello",
+      });
+
+      expect(result.chatGuid).toBeNull();
     });
   });
 });

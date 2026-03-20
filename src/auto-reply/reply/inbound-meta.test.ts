@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../../test-utils/env.js";
 import type { TemplateContext } from "../templating.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 
@@ -18,6 +19,14 @@ function parseConversationInfoPayload(text: string): Record<string, unknown> {
   return JSON.parse(match[1]) as Record<string, unknown>;
 }
 
+function parseSenderInfoPayload(text: string): Record<string, unknown> {
+  const match = text.match(/Sender \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/);
+  if (!match?.[1]) {
+    throw new Error("missing sender info json block");
+  }
+  return JSON.parse(match[1]) as Record<string, unknown>;
+}
+
 describe("buildInboundMetaSystemPrompt", () => {
   it("includes session-stable routing fields", () => {
     const prompt = buildInboundMetaSystemPrompt({
@@ -25,6 +34,7 @@ describe("buildInboundMetaSystemPrompt", () => {
       MessageSidFull: "123",
       ReplyToId: "99",
       OriginatingTo: "telegram:5494292670",
+      AccountId: " work ",
       OriginatingChannel: "telegram",
       Provider: "telegram",
       Surface: "telegram",
@@ -34,6 +44,7 @@ describe("buildInboundMetaSystemPrompt", () => {
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["schema"]).toBe("openclaw.inbound_meta.v1");
     expect(payload["chat_id"]).toBe("telegram:5494292670");
+    expect(payload["account_id"]).toBe("work");
     expect(payload["channel"]).toBe("telegram");
   });
 
@@ -101,14 +112,42 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toBe("");
   });
 
-  it("hides message identifiers for direct chats", () => {
+  it("hides message identifiers for direct webchat chats", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
+      OriginatingChannel: "webchat",
       MessageSid: "short-id",
       MessageSidFull: "provider-full-id",
     } as TemplateContext);
 
     expect(text).toBe("");
+  });
+
+  it("includes message identifiers for direct external-channel chats", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "whatsapp",
+      MessageSid: "short-id",
+      MessageSidFull: "provider-full-id",
+      SenderE164: " +15551234567 ",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["message_id"]).toBe("short-id");
+    expect(conversationInfo["message_id_full"]).toBeUndefined();
+    expect(conversationInfo["sender"]).toBe("+15551234567");
+    expect(conversationInfo["conversation_label"]).toBeUndefined();
+  });
+
+  it("includes message identifiers for direct chats when channel is inferred from Provider", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      Provider: "whatsapp",
+      MessageSid: "provider-only-id",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["message_id"]).toBe("provider-only-id");
   });
 
   it("does not treat group chats as direct based on sender id", () => {
@@ -145,6 +184,29 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["sender"]).toBe("+15551234567");
   });
 
+  it("prefers SenderName in conversation info sender identity", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      SenderName: " Tyler ",
+      SenderId: " +15551234567 ",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["sender"]).toBe("Tyler");
+  });
+
+  it("includes sender metadata block for direct chats", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      SenderName: "Tyler",
+      SenderId: "+15551234567",
+    } as TemplateContext);
+
+    const senderInfo = parseSenderInfoPayload(text);
+    expect(senderInfo["label"]).toBe("Tyler (+15551234567)");
+    expect(senderInfo["id"]).toBe("+15551234567");
+  });
+
   it("includes formatted timestamp in conversation info when provided", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
@@ -154,6 +216,25 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+  });
+
+  it("honors envelope user timezone for conversation timestamps", () => {
+    withEnv({ TZ: "America/Los_Angeles" }, () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          MessageSid: "msg-with-user-tz",
+          Timestamp: Date.UTC(2026, 2, 19, 0, 0),
+        } as TemplateContext,
+        {
+          timezone: "user",
+          userTimezone: "Asia/Tokyo",
+        },
+      );
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      expect(conversationInfo["timestamp"]).toBe("Thu 2026-03-19 09:00 GMT+9");
+    });
   });
 
   it("omits invalid timestamps instead of throwing", () => {
@@ -185,7 +266,7 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["message_id"]).toBe("msg-123");
   });
 
-  it("includes message_id_full when it differs from message_id", () => {
+  it("prefers MessageSid when both MessageSid and MessageSidFull are present", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
       MessageSid: "short-id",
@@ -194,18 +275,18 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["message_id"]).toBe("short-id");
-    expect(conversationInfo["message_id_full"]).toBe("full-provider-message-id");
+    expect(conversationInfo["message_id_full"]).toBeUndefined();
   });
 
-  it("omits message_id_full when it matches message_id", () => {
+  it("falls back to MessageSidFull when MessageSid is missing", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
-      MessageSid: "same-id",
-      MessageSidFull: "same-id",
+      MessageSid: "   ",
+      MessageSidFull: "full-provider-message-id",
     } as TemplateContext);
 
     const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["message_id"]).toBe("same-id");
+    expect(conversationInfo["message_id"]).toBe("full-provider-message-id");
     expect(conversationInfo["message_id_full"]).toBeUndefined();
   });
 

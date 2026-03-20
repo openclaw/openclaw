@@ -67,6 +67,15 @@ vi.mock("./queue.js", async () => {
   };
 });
 
+const loadCronStoreMock = vi.fn();
+vi.mock("../../cron/store.js", async () => {
+  const actual = await vi.importActual<typeof import("../../cron/store.js")>("../../cron/store.js");
+  return {
+    ...actual,
+    loadCronStore: (...args: unknown[]) => loadCronStoreMock(...args),
+  };
+});
+
 import { runReplyAgent } from "./agent-runner.js";
 
 type RunWithModelFallbackParams = {
@@ -80,6 +89,9 @@ beforeEach(() => {
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  loadCronStoreMock.mockClear();
+  // Default: no cron jobs in store.
+  loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
   resetSystemEventsForTest();
 
   // Default: no provider switch; execute the chosen provider+model.
@@ -310,7 +322,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     extraSystemPrompt?: string;
     onAgentEvent?: (evt: {
       stream?: string;
-      data?: { phase?: string; willRetry?: boolean };
+      data?: { phase?: string; willRetry?: boolean; completed?: boolean };
     }) => void;
   };
 
@@ -385,7 +397,10 @@ describe("runReplyAgent auto-compaction token update", () => {
     runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
       // Simulate auto-compaction during agent run
       params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
-      params.onAgentEvent?.({ stream: "compaction", data: { phase: "end", willRetry: false } });
+      params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", willRetry: false, completed: true },
+      });
       return {
         payloads: [{ text: "done" }],
         meta: {
@@ -443,6 +458,238 @@ describe("runReplyAgent auto-compaction token update", () => {
     expect(stored[sessionKey].compactionCount).toBe(1);
   });
 
+  it("tracks auto-compaction from embedded result metadata even when no compaction event is emitted", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-meta-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 181_000,
+      compactionCount: 0,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 190_000, output: 8_000, total: 198_000 },
+          lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
+          compactionCount: 2,
+        },
+      },
+    });
+
+    const config = {
+      agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
+    };
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+      config,
+    });
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(10_000);
+    expect(stored[sessionKey].compactionCount).toBe(2);
+  });
+
+  it("accumulates compactions across fallback attempts without double-counting a single attempt", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-fallback-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 181_000,
+      compactionCount: 0,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    runWithModelFallbackMock.mockImplementationOnce(async ({ run }: RunWithModelFallbackParams) => {
+      try {
+        await run("anthropic", "claude");
+      } catch {
+        // Expected first-attempt failure.
+      }
+      return {
+        result: await run("openai", "gpt-5.2"),
+        provider: "openai",
+        model: "gpt-5.2",
+        attempts: [{ provider: "anthropic", model: "claude", error: "attempt failed" }],
+      };
+    });
+
+    runEmbeddedPiAgentMock
+      .mockImplementationOnce(async (params: EmbeddedRunParams) => {
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", willRetry: true, completed: true },
+        });
+        throw new Error("attempt failed");
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "done" }],
+        meta: {
+          agentMeta: {
+            usage: { input: 190_000, output: 8_000, total: 198_000 },
+            lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
+            compactionCount: 2,
+          },
+        },
+      });
+
+    const config = {
+      agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
+    };
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+      config,
+    });
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(10_000);
+    expect(stored[sessionKey].compactionCount).toBe(3);
+  });
+
+  it("does not count failed compaction end events from earlier fallback attempts", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-fallback-failed-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 181_000,
+      compactionCount: 0,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    runWithModelFallbackMock.mockImplementationOnce(async ({ run }: RunWithModelFallbackParams) => {
+      try {
+        await run("anthropic", "claude");
+      } catch {
+        // Expected first-attempt failure.
+      }
+      return {
+        result: await run("openai", "gpt-5.2"),
+        provider: "openai",
+        model: "gpt-5.2",
+        attempts: [{ provider: "anthropic", model: "claude", error: "attempt failed" }],
+      };
+    });
+
+    runEmbeddedPiAgentMock
+      .mockImplementationOnce(async (params: EmbeddedRunParams) => {
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", willRetry: true, completed: false },
+        });
+        throw new Error("attempt failed");
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "done" }],
+        meta: {
+          agentMeta: {
+            usage: { input: 190_000, output: 8_000, total: 198_000 },
+            lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
+            compactionCount: 2,
+          },
+        },
+      });
+
+    const config = {
+      agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
+    };
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+      config,
+    });
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(10_000);
+    expect(stored[sessionKey].compactionCount).toBe(2);
+  });
   it("updates totalTokens from lastCallUsage even without compaction", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-last-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -525,7 +772,10 @@ describe("runReplyAgent auto-compaction token update", () => {
 
     runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
       params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
-      params.onAgentEvent?.({ stream: "compaction", data: { phase: "end", willRetry: false } });
+      params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", willRetry: false, completed: true },
+      });
       return {
         payloads: [{ text: "done" }],
         meta: {
@@ -1096,7 +1346,7 @@ describe("runReplyAgent messaging tool suppression", () => {
 });
 
 describe("runReplyAgent reminder commitment guard", () => {
-  function createRun() {
+  function createRun(params?: { sessionKey?: string; omitSessionKey?: boolean }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "telegram",
@@ -1144,7 +1394,7 @@ describe("runReplyAgent reminder commitment guard", () => {
       isStreaming: false,
       typing,
       sessionCtx,
-      sessionKey: "main",
+      ...(params?.omitSessionKey ? {} : { sessionKey: params?.sessionKey ?? "main" }),
       defaultModel: "anthropic/claude-opus-4-5",
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -1178,6 +1428,129 @@ describe("runReplyAgent reminder commitment guard", () => {
     const result = await createRun();
     expect(result).toMatchObject({
       text: "I'll remind you tomorrow morning.",
+    });
+  });
+
+  it("suppresses guard note when session already has an active cron job", async () => {
+    loadCronStoreMock.mockResolvedValueOnce({
+      version: 1,
+      jobs: [
+        {
+          id: "existing-job",
+          name: "monitor-task",
+          enabled: true,
+          sessionKey: "main",
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+        },
+      ],
+    });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll ping you when it's done." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun();
+    expect(result).toMatchObject({
+      text: "I'll ping you when it's done.",
+    });
+  });
+
+  it("still appends guard note when cron jobs exist but not for the current session", async () => {
+    loadCronStoreMock.mockResolvedValueOnce({
+      version: 1,
+      jobs: [
+        {
+          id: "unrelated-job",
+          name: "daily-news",
+          enabled: true,
+          sessionKey: "other-session",
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+        },
+      ],
+    });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll remind you tomorrow morning." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun();
+    expect(result).toMatchObject({
+      text: "I'll remind you tomorrow morning.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+    });
+  });
+
+  it("still appends guard note when cron jobs for session exist but are disabled", async () => {
+    loadCronStoreMock.mockResolvedValueOnce({
+      version: 1,
+      jobs: [
+        {
+          id: "disabled-job",
+          name: "old-monitor",
+          enabled: false,
+          sessionKey: "main",
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+        },
+      ],
+    });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll check back in an hour." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun();
+    expect(result).toMatchObject({
+      text: "I'll check back in an hour.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+    });
+  });
+
+  it("still appends guard note when sessionKey is missing", async () => {
+    loadCronStoreMock.mockResolvedValueOnce({
+      version: 1,
+      jobs: [
+        {
+          id: "existing-job",
+          name: "monitor-task",
+          enabled: true,
+          sessionKey: "main",
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+        },
+      ],
+    });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll ping you later." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun({ omitSessionKey: true });
+    expect(result).toMatchObject({
+      text: "I'll ping you later.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+    });
+  });
+
+  it("still appends guard note when cron store read fails", async () => {
+    loadCronStoreMock.mockRejectedValueOnce(new Error("store read failed"));
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll remind you after lunch." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun({ sessionKey: "main" });
+    expect(result).toMatchObject({
+      text: "I'll remind you after lunch.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
     });
   });
 });
@@ -1491,5 +1864,74 @@ describe("runReplyAgent transient HTTP retry", () => {
 
     const payload = Array.isArray(result) ? result[0] : result;
     expect(payload?.text).toContain("Recovered response");
+  });
+});
+
+describe("runReplyAgent billing error classification", () => {
+  // Regression guard for the runner-level catch block in runAgentTurnWithFallback.
+  // Billing errors from providers like OpenRouter can contain token/size wording that
+  // matches context overflow heuristics. This test verifies the final user-visible
+  // message is the billing-specific one, not the "Context overflow" fallback.
+  it("returns billing message for mixed-signal error (billing text + overflow patterns)", async () => {
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("402 Payment Required: request token limit exceeded for this billing plan"),
+    );
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(payload?.text).toContain("billing error");
+    expect(payload?.text).not.toContain("Context overflow");
   });
 });

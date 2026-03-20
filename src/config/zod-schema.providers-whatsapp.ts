@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
-import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
+import {
+  ChannelHealthMonitorSchema,
+  ChannelHeartbeatVisibilitySchema,
+} from "./zod-schema.channels.js";
 import {
   BlockStreamingCoalesceSchema,
   DmConfigSchema,
@@ -56,6 +59,7 @@ const WhatsAppSharedSchema = z.object({
   ackReaction: WhatsAppAckReactionSchema,
   debounceMs: z.number().int().nonnegative().optional().default(0),
   heartbeat: ChannelHeartbeatVisibilitySchema,
+  healthMonitor: ChannelHealthMonitorSchema,
 });
 
 function enforceOpenDmPolicyAllowFromStar(params: {
@@ -114,6 +118,7 @@ export const WhatsAppAccountSchema = WhatsAppSharedSchema.extend({
 
 export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({
   accounts: z.record(z.string(), WhatsAppAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
   mediaMaxMb: z.number().int().positive().optional().default(50),
   actions: z
     .object({

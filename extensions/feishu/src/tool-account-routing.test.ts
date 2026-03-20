@@ -1,5 +1,5 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import type { OpenClawPluginApi } from "../runtime-api.js";
 import { registerFeishuBitableTools } from "./bitable.js";
 import { registerFeishuDriveTools } from "./drive.js";
 import { registerFeishuPermTools } from "./perm.js";
@@ -25,20 +25,22 @@ function createConfig(params: {
     drive?: boolean;
     perm?: boolean;
   };
+  defaultAccount?: string;
 }): OpenClawPluginApi["config"] {
   return {
     channels: {
       feishu: {
         enabled: true,
+        defaultAccount: params.defaultAccount,
         accounts: {
           a: {
             appId: "app-a",
-            appSecret: "sec-a",
+            appSecret: "sec-a", // pragma: allowlist secret
             tools: params.toolsA,
           },
           b: {
             appId: "app-b",
-            appSecret: "sec-b",
+            appSecret: "sec-b", // pragma: allowlist secret
             tools: params.toolsB,
           },
         },
@@ -62,6 +64,22 @@ describe("feishu tool account routing", () => {
     registerFeishuWikiTools(api);
 
     const tool = resolveTool("feishu_wiki", { agentAccountId: "b" });
+    await tool.execute("call", { action: "search" });
+
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
+  });
+
+  test("wiki tool prefers configured defaultAccount over inherited default account context", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        defaultAccount: "b",
+        toolsA: { wiki: true },
+        toolsB: { wiki: true },
+      }),
+    );
+    registerFeishuWikiTools(api);
+
+    const tool = resolveTool("feishu_wiki", { agentAccountId: "a" });
     await tool.execute("call", { action: "search" });
 
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");

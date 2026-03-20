@@ -1,9 +1,12 @@
-import { normalizeWebhookPath, type OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 import type { BlueBubblesAccountConfig } from "./types.js";
-
-export { normalizeWebhookPath };
+export {
+  DEFAULT_WEBHOOK_PATH,
+  normalizeWebhookPath,
+  resolveWebhookPathFromConfig,
+} from "./webhook-shared.js";
 
 export type BlueBubblesRuntimeEnv = {
   log?: (message: string) => void;
@@ -29,13 +32,3 @@ export type WebhookTarget = {
   path: string;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
-
-export const DEFAULT_WEBHOOK_PATH = "/bluebubbles-webhook";
-
-export function resolveWebhookPathFromConfig(config?: BlueBubblesAccountConfig): string {
-  const raw = config?.webhookPath?.trim();
-  if (raw) {
-    return normalizeWebhookPath(raw);
-  }
-  return DEFAULT_WEBHOOK_PATH;
-}

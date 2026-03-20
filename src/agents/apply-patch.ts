@@ -7,7 +7,8 @@ import { openBoundaryFile, type BoundaryFileOpenResult } from "../infra/boundary
 import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
-import { assertSandboxPath, resolveSandboxInputPath } from "./sandbox-paths.js";
+import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
+import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
@@ -261,7 +262,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         await fs.writeFile(filePath, content, "utf8");
         return;
       }
-      const relative = toRelativeWorkspacePath(options.cwd, filePath);
+      const relative = toRelativeSandboxPath(options.cwd, filePath);
       await writeFileWithinRoot({
         rootDir: options.cwd,
         relativePath: relative,
@@ -269,8 +270,28 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         encoding: "utf8",
       });
     },
-    remove: (filePath) => fs.rm(filePath),
-    mkdirp: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
+    remove: async (filePath) => {
+      if (workspaceOnly) {
+        await assertSandboxPath({
+          filePath,
+          cwd: options.cwd,
+          root: options.cwd,
+          allowFinalSymlinkForUnlink: true,
+          allowFinalHardlinkForUnlink: true,
+        });
+      }
+      await fs.rm(filePath);
+    },
+    mkdirp: async (dir) => {
+      if (workspaceOnly) {
+        await assertSandboxPath({
+          filePath: dir,
+          cwd: options.cwd,
+          root: options.cwd,
+        });
+      }
+      await fs.mkdir(dir, { recursive: true });
+    },
   };
 }
 
@@ -292,7 +313,7 @@ async function resolvePatchPath(
       filePath,
       cwd: options.cwd,
     });
-    if (options.workspaceOnly !== false) {
+    if (options.workspaceOnly !== false && resolved.hostPath) {
       await assertSandboxPath({
         filePath: resolved.hostPath,
         cwd: options.cwd,
@@ -302,8 +323,8 @@ async function resolvePatchPath(
       });
     }
     return {
-      resolved: resolved.hostPath,
-      display: resolved.relativePath || resolved.hostPath,
+      resolved: resolved.hostPath ?? resolved.containerPath,
+      display: resolved.relativePath || resolved.containerPath,
     };
   }
 
@@ -318,25 +339,11 @@ async function resolvePatchPath(
           allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
         })
       ).resolved
-    : resolvePathFromCwd(filePath, options.cwd);
+    : resolvePathFromInput(filePath, options.cwd);
   return {
     resolved,
     display: toDisplayPath(resolved, options.cwd),
   };
-}
-
-function resolvePathFromCwd(filePath: string, cwd: string): string {
-  return path.normalize(resolveSandboxInputPath(filePath, cwd));
-}
-
-function toRelativeWorkspacePath(workspaceRoot: string, absolutePath: string): string {
-  const rootResolved = path.resolve(workspaceRoot);
-  const resolved = path.resolve(absolutePath);
-  const relative = path.relative(rootResolved, resolved);
-  if (!relative || relative === "." || relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Path escapes sandbox root (${workspaceRoot}): ${absolutePath}`);
-  }
-  return relative;
 }
 
 function assertBoundaryRead(

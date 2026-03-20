@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { discordPlugin } from "../../../extensions/discord/src/channel.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   ackDelivery,
@@ -39,15 +43,32 @@ import {
 } from "./payloads.js";
 import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
 
+beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
+  );
+});
+
 describe("delivery-queue", () => {
   let tmpDir: string;
+  let fixtureRoot = "";
+  let fixtureCount = 0;
 
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dq-test-"));
+  beforeAll(() => {
+    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dq-suite-"));
   });
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+  beforeEach(() => {
+    tmpDir = path.join(fixtureRoot, `case-${fixtureCount++}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+  });
+
+  afterAll(() => {
+    if (!fixtureRoot) {
+      return;
+    }
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    fixtureRoot = "";
   });
 
   describe("enqueue + ack lifecycle", () => {
@@ -101,6 +122,52 @@ describe("delivery-queue", () => {
 
     it("ack is idempotent (no error on missing file)", async () => {
       await expect(ackDelivery("nonexistent-id", tmpDir)).resolves.toBeUndefined();
+    });
+
+    it("ack cleans up leftover .delivered marker when .json is already gone", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "stale-marker" }] },
+        tmpDir,
+      );
+      const queueDir = path.join(tmpDir, "delivery-queue");
+
+      fs.renameSync(path.join(queueDir, `${id}.json`), path.join(queueDir, `${id}.delivered`));
+      await expect(ackDelivery(id, tmpDir)).resolves.toBeUndefined();
+
+      expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
+    });
+
+    it("ack removes .delivered marker so recovery does not replay", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "ack-test" }] },
+        tmpDir,
+      );
+      const queueDir = path.join(tmpDir, "delivery-queue");
+
+      await ackDelivery(id, tmpDir);
+
+      // Neither .json nor .delivered should remain.
+      expect(fs.existsSync(path.join(queueDir, `${id}.json`))).toBe(false);
+      expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
+    });
+
+    it("loadPendingDeliveries cleans up stale .delivered markers without replaying", async () => {
+      const id = await enqueueDelivery(
+        { channel: "telegram", to: "99", payloads: [{ text: "stale" }] },
+        tmpDir,
+      );
+      const queueDir = path.join(tmpDir, "delivery-queue");
+
+      // Simulate crash between ack phase 1 (rename) and phase 2 (unlink):
+      // rename .json → .delivered, then pretend the process died.
+      fs.renameSync(path.join(queueDir, `${id}.json`), path.join(queueDir, `${id}.delivered`));
+
+      const entries = await loadPendingDeliveries(tmpDir);
+
+      // The .delivered entry must NOT appear as pending.
+      expect(entries).toHaveLength(0);
+      // And the marker file should have been cleaned up.
+      expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
     });
   });
 
@@ -822,6 +889,10 @@ const discordConfig = {
 } as OpenClawConfig;
 
 describe("outbound policy", () => {
+  beforeEach(() => {
+    setDefaultChannelPluginRegistryForTests();
+  });
+
   it("allows cross-provider sends when enabled", () => {
     const cfg = {
       ...slackConfig,
@@ -864,6 +935,10 @@ describe("outbound policy", () => {
 });
 
 describe("resolveOutboundSessionRoute", () => {
+  beforeEach(() => {
+    setDefaultChannelPluginRegistryForTests();
+  });
+
   const baseConfig = {} as OpenClawConfig;
 
   it("resolves provider-specific session routes", async () => {
@@ -891,14 +966,51 @@ describe("resolveOutboundSessionRoute", () => {
       channel: string;
       target: string;
       replyToId?: string;
+      threadId?: string;
       expected: {
         sessionKey: string;
         from?: string;
         to?: string;
         threadId?: string | number;
-        chatType?: "direct" | "group";
+        chatType?: "channel" | "direct" | "group";
       };
     }> = [
+      {
+        name: "WhatsApp group jid",
+        cfg: baseConfig,
+        channel: "whatsapp",
+        target: "120363040000000000@g.us",
+        expected: {
+          sessionKey: "agent:main:whatsapp:group:120363040000000000@g.us",
+          from: "120363040000000000@g.us",
+          to: "120363040000000000@g.us",
+          chatType: "group",
+        },
+      },
+      {
+        name: "Matrix room target",
+        cfg: baseConfig,
+        channel: "matrix",
+        target: "room:!ops:matrix.example",
+        expected: {
+          sessionKey: "agent:main:matrix:channel:!ops:matrix.example",
+          from: "matrix:channel:!ops:matrix.example",
+          to: "room:!ops:matrix.example",
+          chatType: "channel",
+        },
+      },
+      {
+        name: "MSTeams conversation target",
+        cfg: baseConfig,
+        channel: "msteams",
+        target: "conversation:19:meeting_abc@thread.tacv2",
+        expected: {
+          sessionKey: "agent:main:msteams:channel:19:meeting_abc@thread.tacv2",
+          from: "msteams:channel:19:meeting_abc@thread.tacv2",
+          to: "conversation:19:meeting_abc@thread.tacv2",
+          chatType: "channel",
+        },
+      },
       {
         name: "Slack thread",
         cfg: baseConfig,
@@ -925,12 +1037,39 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
       {
+        name: "Telegram DM with topic",
+        cfg: perChannelPeerCfg,
+        channel: "telegram",
+        target: "123456789:topic:99",
+        expected: {
+          sessionKey: "agent:main:telegram:direct:123456789:thread:99",
+          from: "telegram:123456789:topic:99",
+          to: "telegram:123456789",
+          threadId: 99,
+          chatType: "direct",
+        },
+      },
+      {
         name: "Telegram unresolved username DM",
         cfg: perChannelPeerCfg,
         channel: "telegram",
         target: "@alice",
         expected: {
           sessionKey: "agent:main:telegram:direct:@alice",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Telegram DM scoped threadId fallback",
+        cfg: perChannelPeerCfg,
+        channel: "telegram",
+        target: "12345",
+        threadId: "12345:99",
+        expected: {
+          sessionKey: "agent:main:telegram:direct:12345:thread:99",
+          from: "telegram:12345:topic:99",
+          to: "telegram:12345",
+          threadId: 99,
           chatType: "direct",
         },
       },
@@ -944,6 +1083,18 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
       {
+        name: "Nextcloud Talk room target",
+        cfg: baseConfig,
+        channel: "nextcloud-talk",
+        target: "room:opsroom42",
+        expected: {
+          sessionKey: "agent:main:nextcloud-talk:group:opsroom42",
+          from: "nextcloud-talk:room:opsroom42",
+          to: "nextcloud-talk:opsroom42",
+          chatType: "group",
+        },
+      },
+      {
         name: "BlueBubbles chat_* prefix stripping",
         cfg: baseConfig,
         channel: "bluebubbles",
@@ -954,6 +1105,18 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
       {
+        name: "Zalo direct target",
+        cfg: perChannelPeerCfg,
+        channel: "zalo",
+        target: "zl:123456",
+        expected: {
+          sessionKey: "agent:main:zalo:direct:123456",
+          from: "zalo:123456",
+          to: "zalo:123456",
+          chatType: "direct",
+        },
+      },
+      {
         name: "Zalo Personal DM target",
         cfg: perChannelPeerCfg,
         channel: "zalouser",
@@ -961,6 +1124,30 @@ describe("resolveOutboundSessionRoute", () => {
         expected: {
           sessionKey: "agent:main:zalouser:direct:123456",
           chatType: "direct",
+        },
+      },
+      {
+        name: "Nostr prefixed target",
+        cfg: perChannelPeerCfg,
+        channel: "nostr",
+        target: "nostr:npub1example",
+        expected: {
+          sessionKey: "agent:main:nostr:direct:npub1example",
+          from: "nostr:npub1example",
+          to: "nostr:npub1example",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Tlon group target",
+        cfg: baseConfig,
+        channel: "tlon",
+        target: "group:~zod/main",
+        expected: {
+          sessionKey: "agent:main:tlon:group:chat/~zod/main",
+          from: "tlon:group:chat/~zod/main",
+          to: "tlon:chat/~zod/main",
+          chatType: "group",
         },
       },
       {
@@ -1009,6 +1196,30 @@ describe("resolveOutboundSessionRoute", () => {
           chatType: "direct",
         },
       },
+      {
+        name: "Slack user DM target",
+        cfg: perChannelPeerCfg,
+        channel: "slack",
+        target: "user:U12345ABC",
+        expected: {
+          sessionKey: "agent:main:slack:direct:u12345abc",
+          from: "slack:U12345ABC",
+          to: "user:U12345ABC",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Slack channel target without thread",
+        cfg: baseConfig,
+        channel: "slack",
+        target: "channel:C999XYZ",
+        expected: {
+          sessionKey: "agent:main:slack:channel:c999xyz",
+          from: "slack:channel:C999XYZ",
+          to: "channel:C999XYZ",
+          chatType: "channel",
+        },
+      },
     ];
 
     for (const testCase of cases) {
@@ -1018,6 +1229,7 @@ describe("resolveOutboundSessionRoute", () => {
         agentId: "main",
         target: testCase.target,
         replyToId: testCase.replyToId,
+        threadId: testCase.threadId,
       });
       expect(route?.sessionKey, testCase.name).toBe(testCase.expected.sessionKey);
       if (testCase.expected.from !== undefined) {
@@ -1033,6 +1245,60 @@ describe("resolveOutboundSessionRoute", () => {
         expect(route?.chatType, testCase.name).toBe(testCase.expected.chatType);
       }
     }
+  });
+
+  it("uses resolved Discord user targets to route bare numeric ids as DMs", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      channel: "discord",
+      agentId: "main",
+      target: "123",
+      resolvedTarget: {
+        to: "user:123",
+        kind: "user",
+        source: "directory",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:discord:direct:123",
+      from: "discord:123",
+      to: "user:123",
+      chatType: "direct",
+    });
+  });
+
+  it("uses resolved Mattermost user targets to route bare ids as DMs", async () => {
+    const userId = "dthcxgoxhifn3pwh65cut3ud3w";
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      channel: "mattermost",
+      agentId: "main",
+      target: userId,
+      resolvedTarget: {
+        to: `user:${userId}`,
+        kind: "user",
+        source: "directory",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: `agent:main:mattermost:direct:${userId}`,
+      from: `mattermost:${userId}`,
+      to: `user:${userId}`,
+      chatType: "direct",
+    });
+  });
+
+  it("rejects bare numeric Discord targets when the caller has no kind hint", async () => {
+    await expect(
+      resolveOutboundSessionRoute({
+        cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+        channel: "discord",
+        agentId: "main",
+        target: "123",
+      }),
+    ).rejects.toThrow(/Ambiguous Discord recipient/);
   });
 });
 
@@ -1116,6 +1382,16 @@ describe("normalizeOutboundPayloads", () => {
       { text: "final answer" },
     ]);
     expect(normalized).toEqual([{ text: "final answer", mediaUrls: [] }]);
+  });
+
+  it("formats BTW replies prominently for external delivery", () => {
+    const normalized = normalizeOutboundPayloads([
+      {
+        text: "323",
+        btw: { question: "what is 17 * 19?" },
+      },
+    ]);
+    expect(normalized).toEqual([{ text: "BTW\nQuestion: what is 17 * 19?\n\n323", mediaUrls: [] }]);
   });
 });
 

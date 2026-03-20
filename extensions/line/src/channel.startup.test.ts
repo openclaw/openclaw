@@ -1,12 +1,12 @@
+import { describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type {
   ChannelGatewayContext,
   ChannelAccountSnapshot,
   OpenClawConfig,
   PluginRuntime,
   ResolvedLineAccount,
-} from "openclaw/plugin-sdk";
-import { describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
+} from "../api.js";
 import { linePlugin } from "./channel.js";
 import { setLineRuntime } from "./runtime.js";
 
@@ -115,16 +115,15 @@ describe("linePlugin gateway.startAccount", () => {
       }),
     );
 
-    // Allow async internals (probeLineBot await) to flush
-    await new Promise((r) => setTimeout(r, 20));
-
-    expect(monitorLineProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        accountId: "default",
-      }),
-    );
+    await vi.waitFor(() => {
+      expect(monitorLineProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channelAccessToken: "token",
+          channelSecret: "secret",
+          accountId: "default",
+        }),
+      );
+    });
 
     abort.abort();
     await task;

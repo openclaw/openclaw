@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolvePluginTools } from "./tools.js";
 
 type MockRegistryToolEntry = {
   pluginId: string;
@@ -13,6 +12,8 @@ const loadOpenClawPluginsMock = vi.fn();
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
 }));
+
+let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 
 function makeTool(name: string) {
   return {
@@ -71,64 +72,49 @@ function resolveWithConflictingCoreName(options?: { suppressNameConflicts?: bool
   });
 }
 
+function setOptionalDemoRegistry() {
+  setRegistry([
+    {
+      pluginId: "optional-demo",
+      optional: true,
+      source: "/tmp/optional-demo.js",
+      factory: () => makeTool("optional_tool"),
+    },
+  ]);
+}
+
+function resolveOptionalDemoTools(toolAllowlist?: string[]) {
+  return resolvePluginTools({
+    context: createContext() as never,
+    ...(toolAllowlist ? { toolAllowlist } : {}),
+  });
+}
+
 describe("resolvePluginTools optional tools", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     loadOpenClawPluginsMock.mockClear();
+    ({ resolvePluginTools } = await import("./tools.js"));
   });
 
   it("skips optional tools without explicit allowlist", () => {
-    setRegistry([
-      {
-        pluginId: "optional-demo",
-        optional: true,
-        source: "/tmp/optional-demo.js",
-        factory: () => makeTool("optional_tool"),
-      },
-    ]);
-
-    const tools = resolvePluginTools({
-      context: createContext() as never,
-    });
+    setOptionalDemoRegistry();
+    const tools = resolveOptionalDemoTools();
 
     expect(tools).toHaveLength(0);
   });
 
   it("allows optional tools by tool name", () => {
-    setRegistry([
-      {
-        pluginId: "optional-demo",
-        optional: true,
-        source: "/tmp/optional-demo.js",
-        factory: () => makeTool("optional_tool"),
-      },
-    ]);
-
-    const tools = resolvePluginTools({
-      context: createContext() as never,
-      toolAllowlist: ["optional_tool"],
-    });
+    setOptionalDemoRegistry();
+    const tools = resolveOptionalDemoTools(["optional_tool"]);
 
     expect(tools.map((tool) => tool.name)).toEqual(["optional_tool"]);
   });
 
   it("allows optional tools via plugin-scoped allowlist entries", () => {
-    setRegistry([
-      {
-        pluginId: "optional-demo",
-        optional: true,
-        source: "/tmp/optional-demo.js",
-        factory: () => makeTool("optional_tool"),
-      },
-    ]);
-
-    const toolsByPlugin = resolvePluginTools({
-      context: createContext() as never,
-      toolAllowlist: ["optional-demo"],
-    });
-    const toolsByGroup = resolvePluginTools({
-      context: createContext() as never,
-      toolAllowlist: ["group:plugins"],
-    });
+    setOptionalDemoRegistry();
+    const toolsByPlugin = resolveOptionalDemoTools(["optional-demo"]);
+    const toolsByGroup = resolveOptionalDemoTools(["group:plugins"]);
 
     expect(toolsByPlugin.map((tool) => tool.name)).toEqual(["optional_tool"]);
     expect(toolsByGroup.map((tool) => tool.name)).toEqual(["optional_tool"]);
@@ -169,5 +155,40 @@ describe("resolvePluginTools optional tools", () => {
 
     expect(tools.map((tool) => tool.name)).toEqual(["other_tool"]);
     expect(registry.diagnostics).toHaveLength(0);
+  });
+
+  it("forwards an explicit env to plugin loading", () => {
+    setOptionalDemoRegistry();
+    const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
+
+    resolvePluginTools({
+      context: createContext() as never,
+      env,
+      toolAllowlist: ["optional_tool"],
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env,
+      }),
+    );
+  });
+
+  it("forwards gateway subagent binding to plugin runtime options", () => {
+    setOptionalDemoRegistry();
+
+    resolvePluginTools({
+      context: createContext() as never,
+      allowGatewaySubagentBinding: true,
+      toolAllowlist: ["optional_tool"],
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+      }),
+    );
   });
 });

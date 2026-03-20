@@ -1,4 +1,3 @@
-import type { AcpRuntime, OpenClawPluginServiceContext } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../../src/acp/runtime/errors.js";
 import {
@@ -6,15 +5,16 @@ import {
   getAcpRuntimeBackend,
   requireAcpRuntimeBackend,
 } from "../../../src/acp/runtime/registry.js";
-import { ACPX_BUNDLED_BIN } from "./config.js";
+import type { AcpRuntime, OpenClawPluginServiceContext } from "../runtime-api.js";
+import { ACPX_BUNDLED_BIN, ACPX_PINNED_VERSION } from "./config.js";
 import { createAcpxRuntimeService } from "./service.js";
 
-const { ensurePinnedAcpxSpy } = vi.hoisted(() => ({
-  ensurePinnedAcpxSpy: vi.fn(async () => {}),
+const { ensureAcpxSpy } = vi.hoisted(() => ({
+  ensureAcpxSpy: vi.fn(async () => {}),
 }));
 
 vi.mock("./ensure.js", () => ({
-  ensurePinnedAcpx: ensurePinnedAcpxSpy,
+  ensureAcpx: ensureAcpxSpy,
 }));
 
 type RuntimeStub = AcpRuntime & {
@@ -73,8 +73,8 @@ function createServiceContext(
 describe("createAcpxRuntimeService", () => {
   beforeEach(() => {
     __testing.resetAcpRuntimeBackendsForTests();
-    ensurePinnedAcpxSpy.mockReset();
-    ensurePinnedAcpxSpy.mockImplementation(async () => {});
+    ensureAcpxSpy.mockReset();
+    ensureAcpxSpy.mockImplementation(async () => {});
   });
 
   it("registers and unregisters the acpx backend", async () => {
@@ -88,7 +88,12 @@ describe("createAcpxRuntimeService", () => {
     expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtime);
 
     await vi.waitFor(() => {
-      expect(ensurePinnedAcpxSpy).toHaveBeenCalledOnce();
+      expect(ensureAcpxSpy).toHaveBeenCalledOnce();
+      expect(ensureAcpxSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stripProviderAuthEnvVars: true,
+        }),
+      );
       expect(probeAvailabilitySpy).toHaveBeenCalledOnce();
     });
 
@@ -132,6 +137,8 @@ describe("createAcpxRuntimeService", () => {
         queueOwnerTtlSeconds: 0.25,
         pluginConfig: expect.objectContaining({
           command: ACPX_BUNDLED_BIN,
+          expectedVersion: ACPX_PINNED_VERSION,
+          allowPluginLocalInstall: true,
         }),
       }),
     );
@@ -156,7 +163,7 @@ describe("createAcpxRuntimeService", () => {
 
   it("does not block startup while acpx ensure runs", async () => {
     const { runtime } = createRuntimeStub(true);
-    ensurePinnedAcpxSpy.mockImplementation(() => new Promise<void>(() => {}));
+    ensureAcpxSpy.mockImplementation(() => new Promise<void>(() => {}));
     const service = createAcpxRuntimeService({
       runtimeFactory: () => runtime,
     });

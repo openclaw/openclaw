@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,16 +7,22 @@ import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 import {
   connectDeviceAuthReq,
+  disconnectGatewayClient,
   connectGatewayClient,
   getFreeGatewayPort,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
-import { buildOpenAiResponsesProviderConfig } from "./test-openai-responses-model.js";
+import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 let writeConfigFile: typeof import("../config/config.js").writeConfigFile;
 let resolveConfigPath: typeof import("../config/config.js").resolveConfigPath;
 const GATEWAY_E2E_TIMEOUT_MS = 30_000;
+let gatewayTestSeq = 0;
+
+function nextGatewayId(prefix: string): string {
+  return `${prefix}-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${gatewayTestSeq++}`;
+}
 
 describe("gateway e2e", () => {
   beforeAll(async () => {
@@ -49,27 +54,28 @@ describe("gateway e2e", () => {
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
 
-      const token = `test-${randomUUID()}`;
+      const token = nextGatewayId("test-token");
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
       const workspaceDir = path.join(tempHome, "openclaw");
       await fs.mkdir(workspaceDir, { recursive: true });
 
-      const nonceA = randomUUID();
-      const nonceB = randomUUID();
+      const nonceA = nextGatewayId("nonce-a");
+      const nonceB = nextGatewayId("nonce-b");
       const toolProbePath = path.join(workspaceDir, `.openclaw-tool-probe.${nonceA}.txt`);
       await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
       const configDir = path.join(tempHome, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
       const configPath = path.join(configDir, "openclaw.json");
+      const mockProvider = buildMockOpenAiResponsesProvider(openaiBaseUrl);
 
       const cfg = {
         agents: { defaults: { workspace: workspaceDir } },
         models: {
           mode: "replace",
           providers: {
-            openai: buildOpenAiResponsesProviderConfig(openaiBaseUrl),
+            [mockProvider.providerId]: mockProvider.config,
           },
         },
         gateway: { auth: { token } },
@@ -87,10 +93,10 @@ describe("gateway e2e", () => {
 
         await client.request("sessions.patch", {
           key: sessionKey,
-          model: "openai/gpt-5.2",
+          model: mockProvider.modelRef,
         });
 
-        const runId = randomUUID();
+        const runId = nextGatewayId("run");
         const payload = await client.request<{
           status?: unknown;
           result?: unknown;
@@ -112,7 +118,7 @@ describe("gateway e2e", () => {
         expect(text).toContain(nonceA);
         expect(text).toContain(nonceB);
       } finally {
-        client.stop();
+        await disconnectGatewayClient(client);
         await server.close({ reason: "mock openai test complete" });
         await fs.rm(tempHome, { recursive: true, force: true });
         restore();
@@ -149,7 +155,7 @@ describe("gateway e2e", () => {
       delete process.env.OPENCLAW_STATE_DIR;
       delete process.env.OPENCLAW_CONFIG_PATH;
 
-      const wizardToken = `wiz-${randomUUID()}`;
+      const wizardToken = nextGatewayId("wiz-token");
       const port = await getFreeGatewayPort();
       const server = await startGatewayServer(port, {
         bind: "loopback",
@@ -212,7 +218,7 @@ describe("gateway e2e", () => {
           | undefined;
         expect((token?.auth as { token?: string } | undefined)?.token).toBe(wizardToken);
       } finally {
-        client.stop();
+        await disconnectGatewayClient(client);
         await server.close({ reason: "wizard e2e complete" });
       }
 

@@ -1,9 +1,40 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
+import type {
+  MarkdownTableMode,
+  OpenClawConfig,
+  ReplyPayload,
+  RuntimeEnv,
+} from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
+import type { MatrixClient } from "../sdk.js";
 import { sendMessageMatrix } from "../send.js";
 
+const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const THINKING_BLOCK_RE =
+  /<\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>[\s\S]*?<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
+
+function shouldSuppressReasoningReplyText(text?: string): boolean {
+  if (typeof text !== "string") {
+    return false;
+  }
+  const trimmedStart = text.trimStart();
+  if (!trimmedStart) {
+    return false;
+  }
+  if (trimmedStart.toLowerCase().startsWith("reasoning:")) {
+    return true;
+  }
+  THINKING_TAG_RE.lastIndex = 0;
+  if (!THINKING_TAG_RE.test(text)) {
+    return false;
+  }
+  THINKING_BLOCK_RE.lastIndex = 0;
+  const withoutThinkingBlocks = text.replace(THINKING_BLOCK_RE, "");
+  THINKING_TAG_RE.lastIndex = 0;
+  return !withoutThinkingBlocks.replace(THINKING_TAG_RE, "").trim();
+}
+
 export async function deliverMatrixReplies(params: {
+  cfg: OpenClawConfig;
   replies: ReplyPayload[];
   roomId: string;
   client: MatrixClient;
@@ -12,14 +43,14 @@ export async function deliverMatrixReplies(params: {
   replyToMode: "off" | "first" | "all";
   threadId?: string;
   accountId?: string;
+  mediaLocalRoots?: readonly string[];
   tableMode?: MarkdownTableMode;
 }): Promise<void> {
   const core = getMatrixRuntime();
-  const cfg = core.config.loadConfig();
   const tableMode =
     params.tableMode ??
     core.channel.text.resolveMarkdownTableMode({
-      cfg,
+      cfg: params.cfg,
       channel: "matrix",
       accountId: params.accountId,
     });
@@ -29,9 +60,13 @@ export async function deliverMatrixReplies(params: {
     }
   };
   const chunkLimit = Math.min(params.textLimit, 4000);
-  const chunkMode = core.channel.text.resolveChunkMode(cfg, "matrix", params.accountId);
+  const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "matrix", params.accountId);
   let hasReplied = false;
   for (const reply of params.replies) {
+    if (reply.isReasoning === true || shouldSuppressReasoningReplyText(reply.text)) {
+      logVerbose("matrix reply suppressed as reasoning-only");
+      continue;
+    }
     const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {
@@ -39,11 +74,6 @@ export async function deliverMatrixReplies(params: {
         continue;
       }
       params.runtime.error?.("matrix reply missing text/media");
-      continue;
-    }
-    // Skip pure reasoning messages so internal thinking traces are never delivered.
-    if (reply.text && isReasoningOnlyMessage(reply.text)) {
-      logVerbose("matrix reply is reasoning-only; skipping");
       continue;
     }
     const replyToIdRaw = reply.replyToId?.trim();
@@ -73,6 +103,7 @@ export async function deliverMatrixReplies(params: {
         }
         await sendMessageMatrix(params.roomId, trimmed, {
           client: params.client,
+          cfg: params.cfg,
           replyToId: replyToIdForReply,
           threadId: params.threadId,
           accountId: params.accountId,
@@ -90,7 +121,9 @@ export async function deliverMatrixReplies(params: {
       const caption = first ? text : "";
       await sendMessageMatrix(params.roomId, caption, {
         client: params.client,
+        cfg: params.cfg,
         mediaUrl,
+        mediaLocalRoots: params.mediaLocalRoots,
         replyToId: replyToIdForReply,
         threadId: params.threadId,
         audioAsVoice: reply.audioAsVoice,
@@ -102,23 +135,4 @@ export async function deliverMatrixReplies(params: {
       hasReplied = true;
     }
   }
-}
-
-const REASONING_PREFIX = "Reasoning:\n";
-const THINKING_TAG_RE = /^\s*<\s*(?:think(?:ing)?|thought|antthinking)\b/i;
-
-/**
- * Detect messages that contain only reasoning/thinking content and no user-facing answer.
- * These are emitted by the agent when `includeReasoning` is active but should not
- * be forwarded to channels that do not support a dedicated reasoning lane.
- */
-function isReasoningOnlyMessage(text: string): boolean {
-  const trimmed = text.trim();
-  if (trimmed.startsWith(REASONING_PREFIX)) {
-    return true;
-  }
-  if (THINKING_TAG_RE.test(trimmed)) {
-    return true;
-  }
-  return false;
 }

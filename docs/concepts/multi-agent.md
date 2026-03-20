@@ -9,7 +9,7 @@ status: active
 
 Goal: multiple _isolated_ agents (separate workspace + `agentDir` + sessions), plus multiple channel accounts (e.g. two WhatsApps) in one running Gateway. Inbound is routed to an agent via bindings.
 
-## What is “one agent”?
+## What is "one agent"?
 
 An **agent** is a fully scoped brain with its own:
 
@@ -197,6 +197,16 @@ Channels that support **multiple accounts** (e.g. WhatsApp) use `accountId` to i
 each login. Each `accountId` can be routed to a different agent, so one server can host
 multiple phone numbers without mixing sessions.
 
+If you want a channel-wide default account when `accountId` is omitted, set
+`channels.<channel>.defaultAccount` (optional). When unset, OpenClaw falls back
+to `default` if present, otherwise the first configured account id (sorted).
+
+Common channels supporting this pattern include:
+
+- `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`
+- `irc`, `line`, `googlechat`, `mattermost`, `matrix`, `nextcloud-talk`
+- `bluebubbles`, `zalo`, `zalouser`, `nostr`, `feishu`
+
 ## Concepts
 
 - `agentId`: one “brain” (workspace, per-agent auth, per-agent session store).
@@ -378,7 +388,7 @@ Split by channel: route WhatsApp to a fast everyday agent and Telegram to an Opu
         id: "chat",
         name: "Everyday",
         workspace: "~/.openclaw/workspace-chat",
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
       },
       {
         id: "opus",
@@ -412,7 +422,7 @@ Keep WhatsApp on the fast agent, but route one DM to Opus:
         id: "chat",
         name: "Everyday",
         workspace: "~/.openclaw/workspace-chat",
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
       },
       {
         id: "opus",
@@ -491,7 +501,7 @@ Notes:
 
 ## Per-Agent Sandbox and Tool Configuration
 
-Starting with v2026.1.6, each agent can have its own sandbox and tool restrictions:
+Each agent can have its own sandbox and tool restrictions:
 
 ```js
 {

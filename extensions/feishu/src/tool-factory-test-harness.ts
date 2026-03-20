@@ -1,4 +1,4 @@
-import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { AnyAgentTool, OpenClawPluginApi } from "../runtime-api.js";
 
 type ToolContextLike = {
   agentAccountId?: string;

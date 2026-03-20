@@ -9,6 +9,10 @@ vi.mock("../config/sessions.js", () => ({
   updateLastRoute: (args: unknown) => updateLastRouteMock(args),
 }));
 
+type SessionModule = typeof import("./session.js");
+
+let recordInboundSession: SessionModule["recordInboundSession"];
+
 describe("recordInboundSession", () => {
   const ctx: MsgContext = {
     Provider: "telegram",
@@ -17,14 +21,14 @@ describe("recordInboundSession", () => {
     OriginatingTo: "telegram:1234",
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ recordInboundSession } = await import("./session.js"));
     recordSessionMetaFromInboundMock.mockClear();
     updateLastRouteMock.mockClear();
   });
 
   it("does not pass ctx when updating a different session key", async () => {
-    const { recordInboundSession } = await import("./session.js");
-
     await recordInboundSession({
       storePath: "/tmp/openclaw-session-store.json",
       sessionKey: "agent:main:telegram:1234:thread:42",
@@ -50,8 +54,6 @@ describe("recordInboundSession", () => {
   });
 
   it("passes ctx when updating the same session key", async () => {
-    const { recordInboundSession } = await import("./session.js");
-
     await recordInboundSession({
       storePath: "/tmp/openclaw-session-store.json",
       sessionKey: "agent:main:telegram:1234:thread:42",
@@ -77,8 +79,6 @@ describe("recordInboundSession", () => {
   });
 
   it("normalizes mixed-case session keys before recording and route updates", async () => {
-    const { recordInboundSession } = await import("./session.js");
-
     await recordInboundSession({
       storePath: "/tmp/openclaw-session-store.json",
       sessionKey: "Agent:Main:Telegram:1234:Thread:42",
@@ -102,5 +102,32 @@ describe("recordInboundSession", () => {
         ctx,
       }),
     );
+  });
+
+  it("skips last-route updates when main DM owner pin mismatches sender", async () => {
+    const onSkip = vi.fn();
+
+    await recordInboundSession({
+      storePath: "/tmp/openclaw-session-store.json",
+      sessionKey: "agent:main:telegram:1234:thread:42",
+      ctx,
+      updateLastRoute: {
+        sessionKey: "agent:main:main",
+        channel: "telegram",
+        to: "telegram:1234",
+        mainDmOwnerPin: {
+          ownerRecipient: "1234",
+          senderRecipient: "9999",
+          onSkip,
+        },
+      },
+      onRecordError: vi.fn(),
+    });
+
+    expect(updateLastRouteMock).not.toHaveBeenCalled();
+    expect(onSkip).toHaveBeenCalledWith({
+      ownerRecipient: "1234",
+      senderRecipient: "9999",
+    });
   });
 });
