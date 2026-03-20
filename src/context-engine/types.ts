@@ -131,6 +131,9 @@ export interface ContextEngine {
     sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
+    /** Current model identifier (e.g. "claude-opus-4", "gpt-4o", "qwen2.5-7b").
+     *  Allows context engine plugins to adapt formatting per model. */
+    model?: string;
   }): Promise<AssembleResult>;
 
   /**
