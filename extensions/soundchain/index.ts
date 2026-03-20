@@ -3,7 +3,7 @@ import type {
   AnyAgentTool,
   OpenClawPluginApi,
   OpenClawPluginToolFactory,
-} from "../../src/plugins/types.js";
+} from "./runtime-api.js";
 import { createSoundChainApi, type SoundChainApi, type SoundChainConfig } from "./src/api.js";
 import { soundchainChannelPlugin } from "./src/channel.js";
 import {
@@ -225,7 +225,9 @@ function createDiagnoseTool(wr: WarRoomClient): AnyAgentTool {
           "The error message, build failure, bug description, or code problem to diagnose.",
       }),
       depth: Type.Optional(
-        Type.Union([Type.Literal("quick"), Type.Literal("standard"), Type.Literal("deep")], {
+        Type.Unsafe<"quick" | "standard" | "deep">({
+          type: "string",
+          enum: ["quick", "standard", "deep"],
           description:
             "Pipeline depth: 'quick' = 1 model (fast break), 'standard' = 3 models (half-court), 'deep' = all 7 (full triangle rotation). Default: 'standard'.",
         }),

@@ -22,6 +22,8 @@ const YOUTUBE_REGEX =
 
 const X_TWITTER_REGEX = /(?:x\.com|twitter\.com)\/(\w+)\/status\/(\d+)/;
 
+import { lookup } from "node:dns/promises";
+
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
@@ -63,6 +65,18 @@ function isBlockedUrl(url: string): boolean {
   }
 }
 
+/** Resolve hostname via DNS and check if the IP is private/blocked */
+async function isBlockedAfterResolve(url: string): Promise<boolean> {
+  if (isBlockedUrl(url)) return true;
+  try {
+    const parsed = new URL(url);
+    const { address } = await lookup(parsed.hostname);
+    return isBlockedHostname(address);
+  } catch {
+    return false; // DNS failure — allow (will fail at fetch anyway)
+  }
+}
+
 /**
  * Safe fetch that blocks redirects to private networks.
  * Uses redirect: "manual" to inspect each hop.
@@ -71,7 +85,7 @@ const MAX_REDIRECTS = 5;
 
 async function safeFetch(url: string, options?: RequestInit, hops = 0): Promise<Response> {
   if (hops > MAX_REDIRECTS) throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
-  if (isBlockedUrl(url)) throw new Error("Blocked URL");
+  if (await isBlockedAfterResolve(url)) throw new Error("Blocked URL (hostname or resolved IP)");
 
   const res = await fetch(url, {
     ...options,
@@ -131,8 +145,8 @@ export async function enrichMessageWithUrlContent(message: string): Promise<stri
 // ---------------------------------------------------------------------------
 
 async function extractContent(url: string): Promise<string | null> {
-  // Block private/internal network URLs (SSRF prevention)
-  if (isBlockedUrl(url)) return null;
+  // Block private/internal network URLs (SSRF prevention — checks both hostname and resolved IP)
+  if (await isBlockedAfterResolve(url)) return null;
 
   const ytMatch = url.match(YOUTUBE_REGEX);
   if (ytMatch) {
