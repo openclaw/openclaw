@@ -366,6 +366,10 @@ These hooks are not event-stream listeners; they let plugins synchronously adjus
 
 ### Plugin Hook Events
 
+Identity resolution hook:
+
+- **`before_identity_resolve`**: Resolve channel-specific peer IDs to canonical identities before session key construction. Scoped to direct-message peers only. Runs sequentially by priority; first `canonicalPeerId` wins. Falls back to `session.identityLinks` if no plugin returns a result. See [Sessions](/concepts/session).
+
 Compaction lifecycle hooks exposed through the plugin hook runner:
 
 - **`before_compaction`**: Runs before compaction with count/token metadata

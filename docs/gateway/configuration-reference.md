@@ -1609,7 +1609,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `per-peer`: isolate by sender id across channels.
   - `per-channel-peer`: isolate per channel + sender (recommended for multi-user inboxes).
   - `per-account-channel-peer`: isolate per account + channel + sender (recommended for multi-account).
-- **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing.
+- **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing. Plugins can also resolve identities dynamically via the `before_identity_resolve` hook; `identityLinks` serves as the fallback.
 - **`reset`**: primary reset policy. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins.
 - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Legacy `dm` accepted as alias for `direct`.
 - **`parentForkMaxTokens`**: max parent-session `totalTokens` allowed when creating a forked thread session (default `100000`).

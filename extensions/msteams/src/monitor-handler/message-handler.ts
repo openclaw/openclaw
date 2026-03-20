@@ -1,5 +1,7 @@
 import {
   DEFAULT_ACCOUNT_ID,
+  getGlobalHookRunner,
+  resolveInboundPeerIdentity,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   createChannelPairingController,
@@ -378,9 +380,19 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         : `msteams:group:${conversationId}`;
     const teamsTo = isDirectMessage ? `user:${senderId}` : `conversation:${conversationId}`;
 
+    const resolvedPeerId = isDirectMessage
+      ? await resolveInboundPeerIdentity({
+          peerId: senderId,
+          channel: "msteams",
+          accountId: DEFAULT_ACCOUNT_ID,
+          hookRunner: getGlobalHookRunner() ?? undefined,
+        })
+      : null;
+
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "msteams",
+      resolvedPeerId,
       peer: {
         kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
         id: isDirectMessage ? senderId : conversationId,

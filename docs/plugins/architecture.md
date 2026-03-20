@@ -83,6 +83,7 @@ Direction:
 - document it as legacy
 - prefer `before_model_resolve` for model/provider override work
 - prefer `before_prompt_build` for prompt mutation work
+- use `before_identity_resolve` for dynamic peer identity resolution (see [Sessions](/concepts/session))
 - remove only after real usage drops and fixture coverage proves migration safety
 
 ### Compatibility signals

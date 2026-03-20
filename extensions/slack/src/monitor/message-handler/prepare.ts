@@ -10,6 +10,7 @@ import { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-runt
 import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/reply-runtime";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/reply-runtime";
 import {
@@ -23,7 +24,7 @@ import {
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { buildMentionRegexes, matchesMentionWithExplicit } from "openclaw/plugin-sdk/reply-runtime";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute, resolveInboundPeerIdentity } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
@@ -258,12 +259,14 @@ function resolveSlackRoutingContext(params: {
   isGroupDm: boolean;
   isRoom: boolean;
   isRoomish: boolean;
+  resolvedPeerId?: string | null;
 }): SlackRoutingContext {
   const { ctx, account, message, isDirectMessage, isGroupDm, isRoom, isRoomish } = params;
   const route = resolveAgentRoute({
     cfg: ctx.cfg,
     channel: "slack",
     accountId: account.accountId,
+    resolvedPeerId: params.resolvedPeerId,
     teamId: ctx.teamId || undefined,
     peer: {
       kind: isDirectMessage ? "direct" : isRoom ? "channel" : "group",
@@ -341,6 +344,15 @@ export async function prepareSlackMessage(params: {
     return null;
   }
   const { senderId, allowFromLower } = authorization;
+  const resolvedPeerId =
+    isDirectMessage && message.user
+      ? await resolveInboundPeerIdentity({
+          peerId: message.user,
+          channel: "slack",
+          accountId: account.accountId,
+          hookRunner: getGlobalHookRunner() ?? undefined,
+        })
+      : null;
   const routing = resolveSlackRoutingContext({
     ctx,
     account,
@@ -349,6 +361,7 @@ export async function prepareSlackMessage(params: {
     isGroupDm,
     isRoom,
     isRoomish,
+    resolvedPeerId,
   });
   const {
     route,

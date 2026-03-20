@@ -14,6 +14,8 @@ import type {
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
+  PluginHookBeforeIdentityResolveEvent,
+  PluginHookBeforeIdentityResolveResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -60,6 +62,8 @@ export type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
+  PluginHookBeforeIdentityResolveEvent,
+  PluginHookBeforeIdentityResolveResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -435,6 +439,25 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       event,
       ctx,
       mergeBeforeModelResolve,
+    );
+  }
+
+  /**
+   * Run before_identity_resolve hook.
+   * Allows plugins to resolve channel-specific peer IDs to canonical identities.
+   * Runs sequentially so higher-priority handlers win deterministically.
+   */
+  async function runBeforeIdentityResolve(
+    event: PluginHookBeforeIdentityResolveEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeIdentityResolveResult | undefined> {
+    return runModifyingHook<"before_identity_resolve", PluginHookBeforeIdentityResolveResult>(
+      "before_identity_resolve",
+      event,
+      ctx,
+      (acc, next) => ({
+        canonicalPeerId: acc?.canonicalPeerId ?? next.canonicalPeerId,
+      }),
     );
   }
 
@@ -920,6 +943,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   return {
     // Agent hooks
+    runBeforeIdentityResolve,
     runBeforeModelResolve,
     runBeforePromptBuild,
     runBeforeAgentStart,
