@@ -1,4 +1,4 @@
-import { normalizeChatType } from "openclaw/plugin-sdk/channel-runtime";
+import { normalizeChatType } from "openclaw/plugin-sdk/account-resolution";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 
 export function normalizeExplicitDiscordSessionKey(

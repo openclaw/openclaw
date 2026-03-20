@@ -1,11 +1,9 @@
-import { resolveThreadBindingConversationIdFromBindingId } from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
-} from "openclaw/plugin-sdk/channel-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
   registerSessionBindingAdapter,
+  resolveThreadBindingConversationIdFromBindingId,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
   type SessionBindingRecord,

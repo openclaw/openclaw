@@ -1,4 +1,9 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+export {
+  createLoggedPairingApprovalNotifier,
+  createPairingPrefixStripper,
+  createTextPairingAdapter,
+} from "../channels/plugins/pairing-adapters.js";
 import { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createScopedPairingAccess } from "./pairing-access.js";

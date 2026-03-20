@@ -1,3 +1,8 @@
+export {
+  createUnionActionGate,
+  listTokenSourcedAccounts,
+} from "../channels/plugins/actions/shared.js";
+export { resolveReactionMessageId } from "../channels/plugins/actions/reaction-message-id.js";
 import { Type } from "@sinclair/typebox";
 import type { TSchema } from "@sinclair/typebox";
 import { stringEnum } from "../agents/schema/typebox.js";

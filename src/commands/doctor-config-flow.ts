@@ -4,7 +4,7 @@ import {
   isNumericTelegramUserId,
   listTelegramAccountIds,
   normalizeTelegramAllowFromEntry,
-} from "openclaw/plugin-sdk/telegram";
+} from "../../extensions/telegram/api.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";

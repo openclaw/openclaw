@@ -1,24 +1,25 @@
-import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/channel-runtime";
-import { logInboundDrop } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  buildMentionRegexes,
+  type EnvelopeFormatOptions,
+  formatInboundEnvelope,
+  formatInboundFromLabel,
+  logInboundDrop,
+  matchesMentionPatterns,
+  resolveEnvelopeFormatOptions,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
+import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/config-runtime";
-import { hasControlCommand } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  formatInboundEnvelope,
-  formatInboundFromLabel,
-  resolveEnvelopeFormatOptions,
-  type EnvelopeFormatOptions,
-} from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/reply-history";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
-import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   DM_GROUP_ACCESS_REASON,

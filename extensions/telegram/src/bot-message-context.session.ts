@@ -1,5 +1,10 @@
-import { toLocationContext } from "openclaw/plugin-sdk/channel-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+  toLocationContext,
+  type NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { normalizeCommandBody } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type {
@@ -7,15 +12,11 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeCommandBody } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "openclaw/plugin-sdk/reply-runtime";
+import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   buildPendingHistoryContextFromMap,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/reply-history";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
@@ -63,7 +64,7 @@ export async function buildTelegramInboundContextPayload(params: {
   stickerCacheHit: boolean;
   effectiveWasMentioned: boolean;
   commandAuthorized: boolean;
-  locationData?: import("openclaw/plugin-sdk/channel-runtime").NormalizedLocation;
+  locationData?: NormalizedLocation;
   options?: TelegramMessageContextOptions;
   dmAllowFrom?: Array<string | number>;
 }): Promise<{

@@ -1,5 +1,5 @@
-import type { RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/matrix";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv, WizardPrompter } from "../runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 const resolveMatrixTargetsMock = vi.hoisted(() =>

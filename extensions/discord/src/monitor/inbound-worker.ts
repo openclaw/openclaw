@@ -1,4 +1,4 @@
-import { createRunStateMachine } from "openclaw/plugin-sdk/channel-runtime";
+import { createRunStateMachine } from "openclaw/plugin-sdk/channel-lifecycle";
 import { formatDurationSeconds } from "openclaw/plugin-sdk/infra-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { danger } from "openclaw/plugin-sdk/runtime-env";

@@ -5,14 +5,14 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import {
+  createPairingPrefixStripper,
+  createTextPairingAdapter,
+} from "openclaw/plugin-sdk/channel-pairing";
+import {
   createOpenGroupPolicyRestrictSendersWarningCollector,
   projectWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import {
-  createAttachedChannelResultAdapter,
-  createPairingPrefixStripper,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-runtime";
+import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   listBlueBubblesAccountIds,

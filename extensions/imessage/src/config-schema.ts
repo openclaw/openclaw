@@ -1,3 +1,3 @@
-import { buildChannelConfigSchema, IMessageConfigSchema } from "openclaw/plugin-sdk/imessage-core";
+import { buildChannelConfigSchema, IMessageConfigSchema } from "../runtime-api.js";
 
 export const IMessageChannelConfigSchema = buildChannelConfigSchema(IMessageConfigSchema);

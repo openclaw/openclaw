@@ -46,7 +46,7 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/matrix", () => ({
+vi.mock("../../runtime-api.js", () => ({
   GROUP_POLICY_BLOCKED_LABEL: {
     room: "room",
   },

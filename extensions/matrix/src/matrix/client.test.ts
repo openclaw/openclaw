@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { LookupFn } from "../runtime-api.js";
+import type { LookupFn } from "../../runtime-api.js";
 import type { CoreConfig } from "../types.js";
 import {
   getMatrixScopedEnvVarNames,

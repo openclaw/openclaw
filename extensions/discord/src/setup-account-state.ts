@@ -1,9 +1,9 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/secret-input";
 import type { DiscordAccountConfig } from "./runtime-api.js";
 import { resolveDiscordToken } from "./token.js";
 

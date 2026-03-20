@@ -1,8 +1,8 @@
-import { resolveThreadBindingLifecycle } from "openclaw/plugin-sdk/channel-runtime";
 import type {
   BindingTargetKind,
   SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveThreadBindingLifecycle } from "openclaw/plugin-sdk/conversation-runtime";
 
 export type MatrixThreadBindingTargetKind = "subagent" | "acp";
 

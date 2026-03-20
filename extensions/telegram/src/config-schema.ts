@@ -1,3 +1,3 @@
-import { buildChannelConfigSchema, TelegramConfigSchema } from "openclaw/plugin-sdk/telegram-core";
+import { buildChannelConfigSchema, TelegramConfigSchema } from "../runtime-api.js";
 
 export const TelegramChannelConfigSchema = buildChannelConfigSchema(TelegramConfigSchema);

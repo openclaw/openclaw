@@ -1,5 +1,5 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
-import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-runtime";
+import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveTelegramPreviewStreamMode } from "openclaw/plugin-sdk/config-runtime";
 import type {
   TelegramDirectConfig,
