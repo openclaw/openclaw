@@ -29,6 +29,7 @@ import qianfanPlugin from "../../../extensions/qianfan/index.js";
 import qwenPortalAuthPlugin from "../../../extensions/qwen-portal-auth/index.js";
 import sglangPlugin from "../../../extensions/sglang/index.js";
 import syntheticPlugin from "../../../extensions/synthetic/index.js";
+import tavilyPlugin from "../../../extensions/tavily/index.js";
 import togetherPlugin from "../../../extensions/together/index.js";
 import venicePlugin from "../../../extensions/venice/index.js";
 import vercelAiGatewayPlugin from "../../../extensions/vercel-ai-gateway/index.js";
@@ -84,9 +85,9 @@ const bundledWebSearchPlugins: Array<RegistrablePlugin & { credentialValue: unkn
   { ...googlePlugin, credentialValue: "AIza-test" },
   { ...moonshotPlugin, credentialValue: "sk-test" },
   { ...perplexityPlugin, credentialValue: "pplx-test" },
+  { ...tavilyPlugin, credentialValue: "tvly-test" },
   { ...xaiPlugin, credentialValue: "xai-test" },
 ];
-
 const bundledSpeechPlugins: RegistrablePlugin[] = [elevenLabsPlugin, microsoftPlugin, openAIPlugin];
 
 const bundledMediaUnderstandingPlugins: RegistrablePlugin[] = [

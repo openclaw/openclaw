@@ -1031,6 +1031,7 @@
                   "tools/exec",
                   "tools/exec-approvals",
                   "tools/firecrawl",
+                  "tools/tavily",
                   "tools/llm-task",
                   "tools/lobster",
                   "tools/loop-detection",
