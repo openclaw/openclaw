@@ -19,6 +19,11 @@ export type MatrixRoomConfig = {
   allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
+  /**
+   * Allow messages from other configured Matrix bot accounts.
+   * true accepts all configured bot senders; "mentions" requires they mention this bot.
+   */
+  allowBots?: boolean | "mentions";
   /** Optional tool policy overrides for this room. */
   tools?: { allow?: string[]; deny?: string[] };
   /** If true, reply without mention requirements. */
@@ -63,6 +68,8 @@ export type MatrixConfig = {
   defaultAccount?: string;
   /** Matrix homeserver URL (https://matrix.example.org). */
   homeserver?: string;
+  /** Allow Matrix homeserver traffic to private/internal hosts. */
+  allowPrivateNetwork?: boolean;
   /** Matrix user id (@user:server). */
   userId?: string;
   /** Matrix access token. */
@@ -81,6 +88,11 @@ export type MatrixConfig = {
   encryption?: boolean;
   /** If true, enforce allowlists for groups + DMs regardless of policy. */
   allowlistOnly?: boolean;
+  /**
+   * Allow messages from other configured Matrix bot accounts.
+   * true accepts all configured bot senders; "mentions" requires they mention this bot.
+   */
+  allowBots?: boolean | "mentions";
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
   /** Allowlist for group senders (matrix user IDs). */

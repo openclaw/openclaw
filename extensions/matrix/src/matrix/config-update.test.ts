@@ -55,6 +55,31 @@ describe("updateMatrixAccountConfig", () => {
     expect(updated.channels?.["matrix"]?.accounts?.default?.userId).toBeUndefined();
   });
 
+  it("stores and clears Matrix allowBots and allowPrivateNetwork settings", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              allowBots: true,
+              allowPrivateNetwork: true,
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    const updated = updateMatrixAccountConfig(cfg, "default", {
+      allowBots: "mentions",
+      allowPrivateNetwork: null,
+    });
+
+    expect(updated.channels?.["matrix"]?.accounts?.default).toMatchObject({
+      allowBots: "mentions",
+    });
+    expect(updated.channels?.["matrix"]?.accounts?.default?.allowPrivateNetwork).toBeUndefined();
+  });
+
   it("normalizes account id and defaults account enabled=true", () => {
     const updated = updateMatrixAccountConfig({} as CoreConfig, "Main Bot", {
       name: "Main Bot",

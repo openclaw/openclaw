@@ -260,6 +260,172 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
+  it("drops room messages from configured Matrix bot accounts when allowBots is off", async () => {
+    const { handler, resolveAgentRoute, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      getMemberDisplayName: async () => "ops-bot",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-off",
+        sender: "@ops:example.org",
+        body: "hello from bot",
+      }),
+    );
+
+    expect(resolveAgentRoute).not.toHaveBeenCalled();
+    expect(recordInboundSession).not.toHaveBeenCalled();
+  });
+
+  it("accepts room messages from configured Matrix bot accounts when allowBots is true", async () => {
+    const { handler, resolveAgentRoute, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      accountAllowBots: true,
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      getMemberDisplayName: async () => "ops-bot",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-on",
+        sender: "@ops:example.org",
+        body: "hello from bot",
+      }),
+    );
+
+    expect(resolveAgentRoute).toHaveBeenCalled();
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
+  it("does not treat unconfigured Matrix users as bots when allowBots is off", async () => {
+    const { handler, resolveAgentRoute, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      getMemberDisplayName: async () => "human",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$non-bot",
+        sender: "@alice:example.org",
+        body: "hello from human",
+      }),
+    );
+
+    expect(resolveAgentRoute).toHaveBeenCalled();
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
+  it('drops configured Matrix bot room messages without a mention when allowBots="mentions"', async () => {
+    const { handler, resolveAgentRoute, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      accountAllowBots: "mentions",
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      mentionRegexes: [/@bot/i],
+      getMemberDisplayName: async () => "ops-bot",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-mentions-off",
+        sender: "@ops:example.org",
+        body: "hello from bot",
+      }),
+    );
+
+    expect(resolveAgentRoute).not.toHaveBeenCalled();
+    expect(recordInboundSession).not.toHaveBeenCalled();
+  });
+
+  it('accepts configured Matrix bot room messages with a mention when allowBots="mentions"', async () => {
+    const { handler, resolveAgentRoute, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      accountAllowBots: "mentions",
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      mentionRegexes: [/@bot/i],
+      getMemberDisplayName: async () => "ops-bot",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-mentions-on",
+        sender: "@ops:example.org",
+        body: "hello @bot",
+        mentions: { user_ids: ["@bot:example.org"] },
+      }),
+    );
+
+    expect(resolveAgentRoute).toHaveBeenCalled();
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
+  it('accepts configured Matrix bot DMs without a mention when allowBots="mentions"', async () => {
+    const { handler, resolveAgentRoute, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: true,
+      accountAllowBots: "mentions",
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      getMemberDisplayName: async () => "ops-bot",
+    });
+
+    await handler(
+      "!dm:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-dm-mentions",
+        sender: "@ops:example.org",
+        body: "hello from dm bot",
+      }),
+    );
+
+    expect(resolveAgentRoute).toHaveBeenCalled();
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
+  it("lets room-level allowBots override a permissive account default", async () => {
+    const { handler, resolveAgentRoute, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      accountAllowBots: true,
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      roomsConfig: {
+        "!room:example.org": { requireMention: false, allowBots: false },
+      },
+      getMemberDisplayName: async () => "ops-bot",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-room-override",
+        sender: "@ops:example.org",
+        body: "hello from bot",
+      }),
+    );
+
+    expect(resolveAgentRoute).not.toHaveBeenCalled();
+    expect(recordInboundSession).not.toHaveBeenCalled();
+  });
+
   it("drops forged metadata-only mentions before agent routing", async () => {
     const { handler, recordInboundSession, resolveAgentRoute } = createMatrixHandlerTestHarness({
       isDirectMessage: false,

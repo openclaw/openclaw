@@ -165,6 +165,34 @@ describe("createPatchedAccountSetupAdapter", () => {
 });
 
 describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
+  it("moves Matrix allowBots into the promoted default account", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.example.org",
+            userId: "@bot:example.org",
+            accessToken: "token",
+            allowBots: "mentions",
+          },
+        },
+      }),
+      channelKey: "matrix",
+    });
+
+    expect(next.channels?.matrix).toMatchObject({
+      accounts: {
+        default: {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "token",
+          allowBots: "mentions",
+        },
+      },
+    });
+    expect(next.channels?.matrix?.allowBots).toBeUndefined();
+  });
+
   it("promotes legacy Matrix keys into the sole named account when defaultAccount is unset", () => {
     const next = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: asConfig({
