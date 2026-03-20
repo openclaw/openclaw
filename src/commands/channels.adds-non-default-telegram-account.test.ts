@@ -489,6 +489,22 @@ describe("channels command", () => {
     expect(joined).toMatch(/bot:@openclaw_bot/);
   });
 
+  it("shows full allowFrom list in channels status output", () => {
+    const joined = formatChannelStatusJoined({
+      whatsapp: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          dmPolicy: "allowlist",
+          allowFrom: ["+491111111", "+492222222", "+493333333"],
+        },
+      ],
+    });
+
+    expect(joined).toMatch(/allow:\+491111111,\+492222222,\+493333333/);
+  });
+
   it("surfaces Telegram group membership audit issues in channels status output", () => {
     const joined = formatChannelStatusJoined({
       telegram: [
