@@ -1693,7 +1693,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             // Fall through to deliverMattermostReplyPayload which sends
             // text+media together in the correct Mattermost format (ID=2965096969).
             if (!hasMedia) {
-              const text = core.channel.text.convertMarkdownTables(payload.text, tableMode);              try {
+              const text = core.channel.text.convertMarkdownTables(payload.text, tableMode);
+              try {
                 await patchMattermostPost(blockStreamingClient!, {
                   postId: streamMessageId,
                   message: text,
@@ -1709,7 +1710,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 logVerboseMessage(
                   `mattermost stream-patch final edit failed: ${String(err)}, sending new message`,
                 );
-                // Fall through to deliverMattermostReplyPayload below.              }
+                // Fall through to deliverMattermostReplyPayload below.
+              }
             }
             // Media payload or patch failure: deliver the full payload via the
             // normal path (handles text+media together, chunking, etc.).
