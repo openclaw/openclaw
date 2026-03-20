@@ -305,7 +305,7 @@ export async function uploadImageFeishu(params: {
     // ReadStream.destroy() is idempotent and closes the underlying FD.
     // Safe to call after successful consumption -- Node marks the stream
     // as destroyed but the FD was already released by read completion.
-    if (needsCleanup && imageData !== image) {
+    if (needsCleanup) {
       (imageData as fs.ReadStream).destroy();
     }
   }
@@ -368,7 +368,7 @@ export async function uploadFileFeishu(params: {
       }),
     };
   } finally {
-    if (needsCleanup && fileData !== file) {
+    if (needsCleanup) {
       (fileData as fs.ReadStream).destroy();
     }
   }
