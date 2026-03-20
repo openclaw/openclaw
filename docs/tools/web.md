@@ -186,7 +186,251 @@ error prompting you to configure one).
   stay inactive.
 </Note>
 
-## Config
+Provider-specific web search config now lives under `plugins.entries.<plugin>.config.webSearch.*`.
+Legacy `tools.web.search.*` provider paths still load through a compatibility shim for one release, but they should not be used in new configs.
+
+See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quickstart) for more details.
+
+### Where to store the key
+
+**Via config:** run `openclaw configure --section web`. It stores the key under the provider-specific config path:
+
+- Brave: `plugins.entries.brave.config.webSearch.apiKey`
+- Firecrawl: `plugins.entries.firecrawl.config.webSearch.apiKey`
+- Gemini: `plugins.entries.google.config.webSearch.apiKey`
+- Grok: `plugins.entries.xai.config.webSearch.apiKey`
+- Kimi: `plugins.entries.moonshot.config.webSearch.apiKey`
+- Perplexity: `plugins.entries.perplexity.config.webSearch.apiKey`
+
+All of these fields also support SecretRef objects.
+
+**Via environment:** set provider env vars in the Gateway process environment:
+
+- Brave: `BRAVE_API_KEY`
+- Firecrawl: `FIRECRAWL_API_KEY`
+- Gemini: `GEMINI_API_KEY`
+- Grok: `XAI_API_KEY`
+- Kimi: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
+- Perplexity: `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
+
+For a gateway install, put these in `~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#env-vars-and-env-loading).
+
+### Config examples
+
+**Brave Search:**
+
+```json5
+{
+  plugins: {
+    entries: {
+      brave: {
+        config: {
+          webSearch: {
+            apiKey: "YOUR_BRAVE_API_KEY", // optional if BRAVE_API_KEY is set // pragma: allowlist secret
+          },
+        },
+      },
+    },
+  },
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "brave",
+      },
+    },
+  },
+}
+```
+
+**Firecrawl Search:**
+
+```json5
+{
+  plugins: {
+    entries: {
+      firecrawl: {
+        enabled: true,
+      },
+    },
+  },
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "firecrawl",
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      firecrawl: {
+        enabled: true,
+        config: {
+          webSearch: {
+            apiKey: "fc-...", // optional if FIRECRAWL_API_KEY is set
+            baseUrl: "https://api.firecrawl.dev",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+When you choose Firecrawl in onboarding or `openclaw configure --section web`, OpenClaw enables the bundled Firecrawl plugin automatically so `web_search`, `firecrawl_search`, and `firecrawl_scrape` are all available.
+
+**Brave LLM Context mode:**
+
+```json5
+{
+  plugins: {
+    entries: {
+      brave: {
+        config: {
+          webSearch: {
+            apiKey: "YOUR_BRAVE_API_KEY", // optional if BRAVE_API_KEY is set // pragma: allowlist secret
+            mode: "llm-context",
+          },
+        },
+      },
+    },
+  },
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "brave",
+      },
+    },
+  },
+}
+```
+
+`llm-context` returns extracted page chunks for grounding instead of standard Brave snippets.
+In this mode, `country` and `language` / `search_lang` still work, but `ui_lang`,
+`freshness`, `date_after`, and `date_before` are rejected.
+
+**Perplexity Search:**
+
+```json5
+{
+  plugins: {
+    entries: {
+      perplexity: {
+        config: {
+          webSearch: {
+            apiKey: "pplx-...", // optional if PERPLEXITY_API_KEY is set
+          },
+        },
+      },
+    },
+  },
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "perplexity",
+      },
+    },
+  },
+}
+```
+
+**Perplexity via OpenRouter / Sonar compatibility:**
+
+```json5
+{
+  plugins: {
+    entries: {
+      perplexity: {
+        config: {
+          webSearch: {
+            apiKey: "<openrouter-api-key>", // optional if OPENROUTER_API_KEY is set
+            baseUrl: "https://openrouter.ai/api/v1",
+            model: "perplexity/sonar-pro",
+          },
+        },
+      },
+    },
+  },
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "perplexity",
+      },
+    },
+  },
+}
+```
+
+## Using Gemini (Google Search grounding)
+
+Gemini models support built-in [Google Search grounding](https://ai.google.dev/gemini-api/docs/grounding),
+which returns AI-synthesized answers backed by live Google Search results with citations.
+
+### Getting a Gemini API key
+
+1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
+2. Create an API key
+3. Set `GEMINI_API_KEY` in the Gateway environment, or configure `plugins.entries.google.config.webSearch.apiKey`
+
+### Setting up Gemini search
+
+```json5
+{
+  plugins: {
+    entries: {
+      google: {
+        config: {
+          webSearch: {
+            // API key (optional if GEMINI_API_KEY is set)
+            apiKey: "AIza...",
+            // Model (defaults to "gemini-2.5-flash")
+            model: "gemini-2.5-flash",
+          },
+        },
+      },
+    },
+  },
+  tools: {
+    web: {
+      search: {
+        provider: "gemini",
+      },
+    },
+  },
+}
+```
+
+**Environment alternative:** set `GEMINI_API_KEY` in the Gateway environment.
+For a gateway install, put it in `~/.openclaw/.env`.
+
+### Notes
+
+- Citation URLs from Gemini grounding are automatically resolved from Google's
+  redirect URLs to direct URLs.
+- Redirect resolution uses the SSRF guard path (HEAD + redirect checks + http/https validation) before returning the final citation URL.
+- Redirect resolution uses strict SSRF defaults, so redirects to private/internal targets are blocked.
+- The default model (`gemini-2.5-flash`) is fast and cost-effective.
+  Any Gemini model that supports grounding can be used.
+
+## web_search
+
+Search the web using your configured provider.
+
+### Requirements
+
+- `tools.web.search.enabled` must not be `false` (default: enabled)
+- API key for your chosen provider:
+  - **Brave**: `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey`
+  - **Firecrawl**: `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
+  - **Gemini**: `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
+  - **Grok**: `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
+  - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `plugins.entries.moonshot.config.webSearch.apiKey`
+  - **Perplexity**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
+- All provider key fields above support SecretRef objects.
 
 ```json5
 {

@@ -130,4 +130,4 @@ Full troubleshooting: [/channels/qqbot#troubleshooting](/channels/qqbot#troubles
 | Backup restore is pending/broken    | `openclaw matrix verify backup status` | Run `openclaw matrix verify backup restore` or rerun with a recovery key. |
 | Cross-signing/bootstrap looks wrong | `openclaw matrix verify bootstrap`     | Repair secret storage, cross-signing, and backup state in one pass.       |
 
-Full setup and config: [Matrix](/channels/matrix)
+Full setup and configuration: [/channels/matrix](/channels/matrix)

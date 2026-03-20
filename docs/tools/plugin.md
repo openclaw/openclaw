@@ -147,11 +147,29 @@ Config changes **require a gateway restart**. If the Gateway is running with con
 watch + in-process restart enabled (the default `openclaw gateway` path), that
 restart is usually performed automatically a moment after the config write lands.
 
-<Accordion title="Plugin states: disabled vs missing vs invalid">
-  - **Disabled**: plugin exists but enablement rules turned it off. Config is preserved.
-  - **Missing**: config references a plugin id that discovery did not find.
-  - **Invalid**: plugin exists but its config does not match the declared schema.
-</Accordion>
+Config changes **require a gateway restart**. See
+[Configuration reference](/gateway/configuration-reference) for the full config schema.
+
+Validation rules (strict):
+
+- Unknown plugin ids in `entries`, `allow`, `deny`, or `slots` are **errors**.
+- Unknown `channels.<id>` keys are **errors** unless a plugin manifest declares
+  the channel id.
+- Native plugin config is validated using the JSON Schema embedded in
+  `openclaw.plugin.json` (`configSchema`).
+- Compatible bundles currently do not expose native OpenClaw config schemas.
+- If a plugin is disabled, its config is preserved and a **warning** is emitted.
+
+### Disabled vs missing vs invalid
+
+These states are intentionally different:
+
+- **disabled**: plugin exists, but enablement rules turned it off
+- **missing**: config references a plugin id that discovery did not find
+- **invalid**: plugin exists, but its config does not match the declared schema
+
+OpenClaw preserves config for disabled plugins so toggling them back on is not
+destructive.
 
 ## Discovery and precedence
 
