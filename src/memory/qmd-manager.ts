@@ -1281,16 +1281,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     const searchTypeMap: Record<string, string> = {
       search: "lex",
       vector_search: "vec",
-      // deep_search → hybrid lex+vec for best recall
-      deep_search: "lex",
     };
 
     const selector = `${params.mcporter.serverName}.query`;
+    // deep_search → hybrid: vec first (2× weight from qmd) + lex for best recall
     const searches: Array<{ type: string; query: string }> =
       params.tool === "deep_search"
         ? [
-            { type: "lex", query: params.query },
             { type: "vec", query: params.query },
+            { type: "lex", query: params.query },
           ]
         : [{ type: searchTypeMap[params.tool] ?? "lex", query: params.query }];
 
