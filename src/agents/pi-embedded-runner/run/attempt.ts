@@ -2858,6 +2858,13 @@ export async function runEmbeddedAttempt(
           });
       }
 
+      // Signal the inner finally (which runs before this return completes) to skip
+      // immediate cleanup. The caller will invoke clearDeferredActiveRun in its own
+      // outer finally, after the retry/failover decision is made.
+      if (params.deferActiveRunCleanup) {
+        deferredHookHandedOff = true;
+      }
+
       return {
         aborted,
         timedOut,
@@ -2885,12 +2892,9 @@ export async function runEmbeddedAttempt(
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
         yieldDetected: yieldDetected || undefined,
-        // Provide cleanup callback when deferred, and mark as handed off
+        // Deferred cleanup callback — caller invokes this in its outer finally
         clearDeferredActiveRun: params.deferActiveRunCleanup
-          ? (() => {
-              deferredHookHandedOff = true;
-              return () => clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
-            })()
+          ? () => clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey)
           : undefined,
       };
     } finally {
