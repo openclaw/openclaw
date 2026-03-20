@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { healthCommand } from "../../commands/health.js";
+import { sessionExportCommand } from "../../commands/session-export.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
@@ -208,6 +209,38 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             fixMissing: Boolean(opts.fixMissing),
             activeKey: opts.activeKey as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  sessionsCmd
+    .command("export")
+    .description("Export a session transcript to markdown or JSON")
+    .requiredOption("--session <key>", "Session key to export (e.g. main, group-xyz)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--format <fmt>", "Output format: md or json", "md")
+    .option("--output <path>", "Write to file instead of stdout")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw sessions export --session main", "Export main session as markdown."],
+          ["openclaw sessions export --session main --format json", "Export as JSON."],
+          ["openclaw sessions export --session main --output chat.md", "Write to file."],
+          ["openclaw sessions export --session main --agent work", "Export from a specific agent."],
+        ])}`,
+    )
+    .action(async (opts) => {
+      const format = opts.format === "json" ? "json" : "md";
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionExportCommand(
+          {
+            sessionKey: opts.session as string,
+            agentId: opts.agent as string | undefined,
+            format: format as "md" | "json",
+            output: opts.output as string | undefined,
           },
           defaultRuntime,
         );
