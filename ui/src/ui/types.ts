@@ -618,6 +618,31 @@ export type StatusSummary = Record<string, unknown>;
 
 export type HealthSnapshot = Record<string, unknown>;
 
+// ---------------------------------------------------------------------------
+// Session Health types (mirrors src/infra/session-health-types.ts Layer B)
+// ---------------------------------------------------------------------------
+
+export type SessionHealthLevel = "healthy" | "warning" | "critical" | "unknown" | "stale_data";
+
+export type SessionHealthIndicator = {
+  key: string;
+  label: string;
+  level: SessionHealthLevel;
+  summary: string;
+  valueText?: string | null;
+  actionHint?: string | null;
+  measuredAt: string;
+};
+
+export type SessionHealthSurface = {
+  overallLevel: SessionHealthLevel;
+  summary: string;
+  indicators: SessionHealthIndicator[];
+  diagnosticsAvailable: boolean;
+  measuredAt: string;
+  lastHealthyAt?: string | null;
+};
+
 /** Strongly-typed health response from the gateway (richer than HealthSnapshot). */
 export type HealthSummary = {
   ok: boolean;
@@ -635,6 +660,8 @@ export type HealthSummary = {
       age: number | null;
     }>;
   };
+  /** Derived operator-facing session health surface (Layer B). */
+  sessionHealthSurface?: SessionHealthSurface | null;
 };
 
 /** A model entry returned by the gateway model-catalog endpoint. */

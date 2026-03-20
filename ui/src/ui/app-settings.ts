@@ -36,6 +36,7 @@ import { startThemeTransition, type ThemeTransitionContext } from "./theme-trans
 import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type { AgentsListResult, AttentionItem } from "./types.ts";
 import { resetChatViewState } from "./views/chat.ts";
+import { extractSessionHealthAttentionItems } from "./views/overview-session-health.ts";
 
 type SettingsHost = {
   settings: UiSettings;
@@ -629,6 +630,13 @@ function buildAttentionItems(host: OpenClawApp) {
       title: `${overdue.length} overdue job${overdue.length > 1 ? "s" : ""}`,
       description: overdue.map((j) => j.name).join(", "),
     });
+  }
+
+  // Session Health attention items (from derived Layer B surface)
+  const sessionHealthSurface = host.healthResult?.sessionHealthSurface ?? null;
+  const sessionHealthItems = extractSessionHealthAttentionItems(sessionHealthSurface);
+  for (const item of sessionHealthItems) {
+    items.push(item);
   }
 
   host.attentionItems = items;

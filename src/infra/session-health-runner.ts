@@ -14,9 +14,11 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   collectSessionHealth,
   pruneOldHistory,
+  writeCachedDerivedSurface,
   writeCachedSnapshot,
   writeHistorySnapshot,
 } from "./session-health-collector.js";
+import { deriveSessionHealthSurface } from "./session-health-derive.js";
 
 const log = createSubsystemLogger("session-health");
 
@@ -53,10 +55,16 @@ export function startSessionHealthCollector(opts?: {
       await writeCachedSnapshot(snapshot);
       await writeHistorySnapshot(snapshot);
       await pruneOldHistory();
+
+      // Derive and cache the operator-facing health surface (Layer B)
+      const surface = deriveSessionHealthSurface(snapshot);
+      await writeCachedDerivedSurface(surface);
+
       log.info("session health snapshot collected", {
         durationMs: snapshot.collectorDurationMs,
         indexed: snapshot.sessions.indexedCount,
         agents: snapshot.agents.length,
+        overallLevel: surface.overallLevel,
       });
     } catch (err) {
       log.warn("session health collection failed", { error: String(err) });

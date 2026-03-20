@@ -10,6 +10,7 @@ import type {
   AttentionItem,
   CronJob,
   CronStatus,
+  SessionHealthSurface,
   SessionsListResult,
   SessionsUsageResult,
   SkillStatusReport,
@@ -23,6 +24,7 @@ import {
   shouldShowPairingHint,
 } from "./overview-hints.ts";
 import { renderOverviewLogTail } from "./overview-log-tail.ts";
+import { renderOverviewSessionHealth } from "./overview-session-health.ts";
 
 export type OverviewProps = {
   connected: boolean;
@@ -43,6 +45,7 @@ export type OverviewProps = {
   cronJobs: CronJob[];
   cronStatus: CronStatus | null;
   attentionItems: AttentionItem[];
+  sessionHealthSurface: SessionHealthSurface | null | undefined;
   eventLog: EventLogEntry[];
   overviewLogLines: string[];
   showGatewayToken: boolean;
@@ -392,6 +395,8 @@ export function renderOverview(props: OverviewProps) {
     })}
 
     ${renderOverviewAttention({ items: props.attentionItems })}
+
+    ${renderOverviewSessionHealth({ surface: props.sessionHealthSurface })}
 
     <div class="ov-section-divider"></div>
 

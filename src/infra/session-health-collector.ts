@@ -35,6 +35,7 @@ import type {
   SessionHealthGrowth,
   SessionHealthRawSnapshot,
   SessionHealthStorageBreakdown,
+  SessionHealthSurface,
 } from "./session-health-types.js";
 
 const log = createSubsystemLogger("session-health");
@@ -45,6 +46,7 @@ const log = createSubsystemLogger("session-health");
 
 const CACHE_DIR = path.join(STATE_DIR, "cache", "session-health");
 const SNAPSHOT_PATH = path.join(CACHE_DIR, "snapshot.json");
+const DERIVED_PATH = path.join(CACHE_DIR, "derived.json");
 const HISTORY_DIR = path.join(CACHE_DIR, "history");
 const HISTORY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -593,6 +595,23 @@ export async function pruneOldHistory(): Promise<number> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Derived surface persistence (Layer B)
+// ---------------------------------------------------------------------------
+
+export async function writeCachedDerivedSurface(surface: SessionHealthSurface): Promise<void> {
+  try {
+    await writeJsonAtomic(DERIVED_PATH, surface);
+  } catch (err) {
+    log.warn("failed to write session health derived surface", { error: String(err) });
+  }
+}
+
+export async function readCachedDerivedSurface(): Promise<SessionHealthSurface | null> {
+  return readJsonFile<SessionHealthSurface>(DERIVED_PATH);
+}
+
 /** Exported cache paths for testing/integration use. */
 export const SESSION_HEALTH_CACHE_DIR = CACHE_DIR;
 export const SESSION_HEALTH_SNAPSHOT_PATH = SNAPSHOT_PATH;
+export const SESSION_HEALTH_DERIVED_PATH = DERIVED_PATH;
