@@ -3,8 +3,8 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
 export const ETERNAL_AI_BASE_URL = "https://open.eternalai.org/v1";
 export const ETERNAL_AI_DEFAULT_MODEL_ID = "uncensored-eternal-ai-1.0";
 
-const ETERNAL_AI_DEFAULT_CONTEXT_WINDOW = 128000;
-const ETERNAL_AI_DEFAULT_MAX_TOKENS = 12288;
+const ETERNAL_AI_DEFAULT_CONTEXT_WINDOW = 200000;
+const ETERNAL_AI_DEFAULT_MAX_TOKENS = 200000;
 
 export function buildEternalAiProvider(): ModelProviderConfig {
   return {
