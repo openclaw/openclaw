@@ -10,6 +10,7 @@ import {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
 } from "../utils/normalize-secret-input.js";
+import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
@@ -21,6 +22,7 @@ import {
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
+  GCP_VERTEX_CREDENTIALS_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   OLLAMA_LOCAL_AUTH_MARKER,
@@ -428,6 +430,16 @@ export function resolveEnvApiKey(
     }
     return { apiKey: envKey, source: "gcloud adc" };
   }
+
+  if (normalized === "anthropic-vertex") {
+    // Vertex AI uses GCP credentials (SA JSON or ADC), not API keys.
+    // Return a sentinel so the model resolver considers this provider available.
+    if (hasAnthropicVertexAvailableAuth(env)) {
+      return { apiKey: GCP_VERTEX_CREDENTIALS_MARKER, source: "gcloud adc" };
+    }
+    return null;
+  }
+
   return null;
 }
 

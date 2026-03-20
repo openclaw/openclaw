@@ -41,6 +41,7 @@ export {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   resolveCloudflareAiGatewayBaseUrl,
 } from "../agents/cloudflare-ai-gateway.js";
+export { resolveAnthropicVertexRegion } from "../agents/anthropic-vertex-provider.js";
 export {
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,
