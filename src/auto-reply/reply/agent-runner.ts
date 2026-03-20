@@ -1435,10 +1435,11 @@ export async function runReplyAgent(params: {
         durationMs: Date.now() - runStartedAt,
       };
       // Include model-originated content when explicitly opted in via captureContent config.
-      // Uses payloadArray (pre-suppression) rather than replyPayloads so that
-      // streamed runs still capture content even when replyPayloads is empty.
-      // Excludes isError and isReasoning payloads: errors aren't model output,
-      // and reasoning/CoT is stripped before delivery and should not leak to OTEL.
+      // Prefer replyPayloads (sanitized by buildReplyPayloads: control tokens,
+      // heartbeat markers, messaging-tool duplicates, and reply directives are
+      // stripped). Fall back to payloadArray (raw) only for streamed runs where
+      // replyPayloads is empty because the block pipeline already delivered text.
+      // Excludes isError and isReasoning payloads in both paths.
       // Note: followupRun.prompt is the queue body, which may diverge from the
       // effective prompt the model actually sees (attempt.ts adds bootstrap warnings,
       // hook context, thread-history notes, etc.). This is a known approximation at
@@ -1449,7 +1450,8 @@ export async function runReplyAgent(params: {
         if (typeof followupRun.prompt === "string") {
           usageEvent.inputText = followupRun.prompt;
         }
-        const outputTexts = payloadArray
+        const contentSource = replyPayloads.length > 0 ? replyPayloads : payloadArray;
+        const outputTexts = contentSource
           .filter(
             (p): p is typeof p & { text: string } =>
               typeof p.text === "string" && !p.isError && p.isReasoning !== true,
