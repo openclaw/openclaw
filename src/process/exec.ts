@@ -21,6 +21,10 @@ function isWindowsBatchCommand(resolvedCommand: string): boolean {
   return ext === ".cmd" || ext === ".bat";
 }
 
+function isUtf8Encoding(encoding: BufferEncoding): boolean {
+  return encoding.toLowerCase().replaceAll("-", "") === "utf8";
+}
+
 function escapeForCmdExe(arg: string): string {
   // Reject cmd metacharacters to avoid injection when we must pass a single command line.
   if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
@@ -137,7 +141,7 @@ export async function runExec(
         return null;
       }
       const cmdCommandLine = buildCmdExeCommandLine(execCommand, execArgs);
-      return process.platform === "win32" && encoding.toLowerCase() === "utf8"
+      return process.platform === "win32" && isUtf8Encoding(encoding)
         ? `chcp 65001>nul && ${cmdCommandLine}`
         : cmdCommandLine;
     })();

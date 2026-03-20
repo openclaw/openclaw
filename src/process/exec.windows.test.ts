@@ -143,4 +143,27 @@ describe("windows command wrapper behavior", () => {
       platformSpy.mockRestore();
     }
   });
+
+  it("treats utf-8 encoding alias as UTF-8 for runExec cmd wrapper", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        cb: (err: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        cb(null, "ok", "");
+      },
+    );
+
+    try {
+      await runExec("pnpm", ["--version"], { timeoutMs: 1000, encoding: "utf-8" });
+      const captured = execFileMock.mock.calls[0] as ExecCall | undefined;
+      expect(captured?.[1][3]).toContain("chcp 65001>nul &&");
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
 });
