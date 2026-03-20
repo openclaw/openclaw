@@ -71,6 +71,8 @@ export type CronServiceDeps = {
     sessionKey?: string;
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
     heartbeat?: { target?: string };
+    /** When true, skip the cron-in-progress check (caller is already inside a cron lane). */
+    fromCronLane?: boolean;
   }) => Promise<HeartbeatRunResult>;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning

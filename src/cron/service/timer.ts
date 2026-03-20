@@ -1204,7 +1204,41 @@ async function executeMainSessionCronJob(
           reason,
           agentId: job.agentId,
           sessionKey: targetMainSessionKey,
+          // Cron-triggered heartbeats should deliver to the last active channel.
+          // Without this override, heartbeat target defaults to "none" (since
+          // e2362d35) and cron main-session responses are silently swallowed.
+          // See: https://github.com/openclaw/openclaw/issues/28508
+          heartbeat: { target: "last" },
+          // We are already inside the cron lane — skip the cron-in-progress
+          // check to avoid self-blocking.
+          fromCronLane: true,
         });
+        const isTransientBusy =
+          heartbeatResult.status === "skipped" &&
+          (heartbeatResult.reason === "requests-in-flight" ||
+            heartbeatResult.reason === "cron-in-progress" ||
+            heartbeatResult.reason === "lanes-busy");
+        if (!isTransientBusy) {
+          break;
+        }
+        if (abortSignal?.aborted) {
+          return resolveAbortError();
+        }
+        if (state.deps.nowMs() - waitStartedAt > maxWaitMs) {
+          if (abortSignal?.aborted) {
+            return resolveAbortError();
+          }
+          state.deps.requestHeartbeatNow({
+            reason,
+            agentId: job.agentId,
+            sessionKey: targetMainSessionKey,
+          });
+          return { status: "ok", summary: text };
+        }
+        await waitWithAbort(retryDelayMs);
+      }
+
+      if (heartbeatResult.status === "ran") {
         return { status: "ok", summary: text };
       }
       if (abortSignal?.aborted) {

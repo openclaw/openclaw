@@ -535,6 +535,8 @@ export async function runHeartbeatOnce(opts: {
   heartbeat?: HeartbeatConfig;
   reason?: string;
   deps?: HeartbeatDeps;
+  /** When true, skip the cron-in-progress check (caller is already inside a cron lane). */
+  fromCronLane?: boolean;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? loadConfig();
   const explicitAgentId = typeof opts.agentId === "string" ? opts.agentId.trim() : "";
@@ -559,9 +561,33 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "quiet-hours" };
   }
 
-  const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
-  if (queueSize > 0) {
+  const resolvedGetQueueSize = opts.deps?.getQueueSize ?? getQueueSize;
+  const mainQueueSize = resolvedGetQueueSize(CommandLane.Main);
+  if (mainQueueSize > 0) {
     return { status: "skipped", reason: "requests-in-flight" };
+  }
+
+  // Skip when a cron job is running to avoid competing for inference resources.
+  // NOTE: this catches manually-triggered / enqueued cron runs.  Timer-driven
+  // cron jobs execute outside the command queue (via onTimer), so they are not
+  // reflected in CommandLane.Cron.  A follow-up should route timer-driven cron
+  // execution through the lane or expose CronService.isRunning().
+  // When fromCronLane is true, the caller is already inside a cron lane
+  // (e.g. wakeMode: "now") — skip this check to avoid self-blocking.
+  if (!opts.fromCronLane) {
+    const cronQueueSize = resolvedGetQueueSize(CommandLane.Cron);
+    if (cronQueueSize > 0) {
+      return { status: "skipped", reason: "cron-in-progress" };
+    }
+  }
+
+  // Opt-in: skip when any lane (subagent, nested) has active tasks.
+  if (heartbeat?.skipWhenBusy) {
+    const subagentSize = resolvedGetQueueSize(CommandLane.Subagent);
+    const nestedSize = resolvedGetQueueSize(CommandLane.Nested);
+    if (subagentSize + nestedSize > 0) {
+      return { status: "skipped", reason: "lanes-busy" };
+    }
   }
 
   // Preflight centralizes trigger classification, event inspection, and HEARTBEAT.md gating.
@@ -1179,6 +1205,69 @@ export function startHeartbeatRunner(opts: {
         scheduleNext();
       }
     }
+
+    let hadLanesBusy = false;
+    for (const agent of state.agents.values()) {
+      if (isInterval && now < agent.nextDueMs) {
+        continue;
+      }
+
+      let res: HeartbeatRunResult;
+      try {
+        res = await runOnce({
+          cfg: state.cfg,
+          agentId: agent.agentId,
+          heartbeat: agent.heartbeat,
+          reason,
+          deps: { runtime: state.runtime },
+        });
+      } catch (err) {
+        // If runOnce throws (e.g. during session compaction), we must still
+        // advance the timer and call scheduleNext so heartbeats keep firing.
+        const errMsg = formatErrorMessage(err);
+        log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
+        advanceAgentSchedule(agent, now);
+        continue;
+      }
+      if (
+        res.status === "skipped" &&
+        (res.reason === "requests-in-flight" || res.reason === "cron-in-progress")
+      ) {
+        // Do not advance the schedule — a global lane is busy and the wake
+        // layer will retry shortly (DEFAULT_RETRY_MS = 1 s).  Calling
+        // scheduleNext() here would register a 0 ms timer that races with
+        // the wake layer's 1 s retry and wins, bypassing the cooldown.
+        return res;
+      }
+      if (res.status === "skipped" && res.reason === "lanes-busy") {
+        // lanes-busy is per-agent (opt-in via skipWhenBusy), so do not
+        // short-circuit the entire scheduler — other agents may still
+        // need to run.  Skip this agent without advancing its schedule,
+        // and defer to the wake layer's 1 s retry (no scheduleNext).
+        hadLanesBusy = true;
+        continue;
+      }
+      if (res.status !== "skipped" || res.reason !== "disabled") {
+        advanceAgentSchedule(agent, now);
+      }
+      if (res.status === "ran") {
+        ran = true;
+      }
+    }
+
+    if (hadLanesBusy && !ran) {
+      // At least one agent was skipped due to lanes-busy and no agent
+      // ran successfully.  Return without calling scheduleNext() so the
+      // wake layer retries after DEFAULT_RETRY_MS (1 s) instead of a
+      // tight 0 ms re-arm caused by the un-advanced nextDueMs.
+      return { status: "skipped", reason: "lanes-busy" };
+    }
+
+    scheduleNext();
+    if (ran) {
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    }
+    return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
   };
 
   const wakeHandler: HeartbeatWakeHandler = async (params) =>

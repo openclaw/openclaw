@@ -275,6 +275,8 @@ export type AgentDefaultsConfig = {
      * Default: false (only the final heartbeat payload is delivered).
      */
     includeReasoning?: boolean;
+    /** Skip heartbeat when other lanes (subagent, nested) have active tasks. Default: false. */
+    skipWhenBusy?: boolean;
   };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;

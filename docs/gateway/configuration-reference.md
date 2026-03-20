@@ -1053,6 +1053,7 @@ Periodic heartbeat runs.
         includeReasoning: false,
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
         isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
+        skipWhenBusy: false, // default: false; true skips heartbeat when subagent/nested lanes are active
         session: "main",
         to: "+15555550123",
         directPolicy: "allow", // allow (default) | block
@@ -1071,6 +1072,7 @@ Periodic heartbeat runs.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
+- `skipWhenBusy`: when true, skips the heartbeat turn when subagent or nested lanes have active tasks. Prevents heartbeat/subagent collisions. The cron wake-now path retries on this state instead of skipping permanently.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 

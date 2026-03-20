@@ -199,6 +199,69 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("reschedules timer when runOnce returns cron-in-progress", async () => {
+    useFakeHeartbeatTime();
+
+    let callCount = 0;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount <= 1) {
+        return { status: "skipped", reason: "cron-in-progress" } as const;
+      }
+      return { status: "ran", durationMs: 1 } as const;
+    });
+
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+    });
+
+    // First heartbeat returns cron-in-progress
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // The wake layer retries after DEFAULT_RETRY_MS (1 s).
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
+
+  it("lanes-busy does not short-circuit other agents in the scheduler", async () => {
+    useFakeHeartbeatTime();
+
+    // Two agents: first returns lanes-busy, second should still run.
+    let callIdx = 0;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      callIdx++;
+      // The scheduler iterates agents in list order.  The first call is
+      // for agent "a" (busy), the second is for agent "b" (runs fine).
+      if (callIdx === 1) {
+        return { status: "skipped", reason: "lanes-busy" } as const;
+      }
+      return { status: "ran", durationMs: 1 } as const;
+    });
+
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([
+        { id: "a", heartbeat: { every: "30m", skipWhenBusy: true } },
+        { id: "b", heartbeat: { every: "30m" } },
+      ]),
+      runOnce: runSpy,
+    });
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    // Both agents should have been visited — lanes-busy must not return early.
+    // runSpy is called at least twice (once per agent); the wake layer may also
+    // fire a retry for the lanes-busy agent, so allow ≥2.
+    expect(runSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // Verify agent "b" actually ran (not just retries of "a").
+    const results = await Promise.all(runSpy.mock.results.map((r: { value: unknown }) => r.value));
+    expect(results.some((r) => (r as { status: string }).status === "ran")).toBe(true);
+
+    runner.stop();
+  });
+
   it("does not push nextDueMs forward on repeated requests-in-flight skips", async () => {
     useFakeHeartbeatTime();
 

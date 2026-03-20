@@ -81,6 +81,32 @@ describe("heartbeat-wake", () => {
     });
   });
 
+  it("retries cron-in-progress after the default retry delay", async () => {
+    vi.useFakeTimers();
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "skipped", reason: "cron-in-progress" })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    await expectRetryAfterDefaultDelay({
+      handler,
+      initialReason: "interval",
+      expectedRetryReason: "interval",
+    });
+  });
+
+  it("retries lanes-busy after the default retry delay", async () => {
+    vi.useFakeTimers();
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "skipped", reason: "lanes-busy" })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    await expectRetryAfterDefaultDelay({
+      handler,
+      initialReason: "interval",
+      expectedRetryReason: "interval",
+    });
+  });
+
   it("keeps retry cooldown even when a sooner request arrives", async () => {
     vi.useFakeTimers();
     const handler = setRetryOnceHeartbeatHandler();

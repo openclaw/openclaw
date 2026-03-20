@@ -279,6 +279,7 @@ export function buildGatewayCronService(params: {
         agentId,
         sessionKey,
         heartbeat: heartbeatOverride,
+        fromCronLane: opts?.fromCronLane,
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
