@@ -1449,6 +1449,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     // Latches true after the first send/edit failure to prevent the interval
     // from being re-armed by a later onPartialReply call (ID=2964357928).
     let previewSendFailed = false;
+    // Tracks the currently in-flight patchMattermostPost / sendMessageMattermost
+    // promise so that flushPendingPatch and onAssistantMessageStart can await it
+    // directly instead of busy-waiting on patchSending. Null when idle.
+    let patchInflight: Promise<unknown> | null = null;
     // Monotonically-increasing turn counter. Incremented at every
     // onAssistantMessageStart boundary. The schedulePatch send path captures
     // the current value and compares it after the async POST resolves; if
@@ -1887,9 +1891,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
                   // Wait for any in-flight patch to settle before finalizing.
                   // This must run before patchSending is cleared so the wait is not a no-op.
-                  const deadline = Date.now() + 2000;
-                  while (patchSending && Date.now() < deadline) {
-                    await new Promise<void>((r) => setTimeout(r, 20));
+                  if (patchInflight) {
+                    await patchInflight.catch(() => {});
                   }
                   patchSending = false;
                   // Truncate to textLimit — the same cap applied by schedulePatch/
