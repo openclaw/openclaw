@@ -230,6 +230,54 @@
       {
         "file": "src/tui/tui-command-handlers.test.ts",
         "reason": "TUI command handler coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/node-host/invoke-system-run.test.ts",
+        "reason": "System run coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/media-understanding/apply.test.ts",
+        "reason": "Media understanding apply coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/acp/translator.session-rate-limit.test.ts",
+        "reason": "ACP translator session rate limit coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/tui/tui.test.ts",
+        "reason": "TUI coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/cron/delivery.test.ts",
+        "reason": "Cron delivery coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/channels/plugins/outbound/slack.sendpayload.test.ts",
+        "reason": "Slack outbound payload coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/daemon/systemd.test.ts",
+        "reason": "Systemd coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/tui/tui-event-handlers.test.ts",
+        "reason": "TUI event handler coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/cron/isolated-agent/delivery-target.test.ts",
+        "reason": "Isolated-agent delivery target coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/plugin-sdk/webhook-targets.test.ts",
+        "reason": "Plugin SDK webhook target coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/tui/tui-session-actions.test.ts",
+        "reason": "TUI session action coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/tui/tui.submit-handler.test.ts",
+        "reason": "TUI submit handler coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
       }
     ],
     "threadSingleton": [
