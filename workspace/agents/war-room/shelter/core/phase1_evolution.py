@@ -97,6 +97,36 @@ def _ensure_p1_schema(db_path: str = EVO_DB):
 
 ALPHA = 0.1  # Q-value 學習率
 
+# 停用詞（匹配時忽略）
+_STOPWORDS = set("的了是在不要有我你他她它這那就都會能可以")
+
+def _extract_keywords(text: str) -> set[str]:
+    """從文本中提取有意義的 2-3 字詞組"""
+    keywords = set()
+    # 取所有連續 2-3 字的中文組合
+    chars = [c for c in text if '\u4e00' <= c <= '\u9fff']
+    for n in (2, 3):
+        for i in range(len(chars) - n + 1):
+            word = ''.join(chars[i:i+n])
+            if not all(c in _STOPWORDS for c in word):
+                keywords.add(word)
+    # 也加英文詞
+    for word in re.split(r'\W+', text):
+        if len(word) >= 3 and word.isascii():
+            keywords.add(word.lower())
+    return keywords
+
+def _rule_matches_signal(rule: str, signal_content: str) -> bool:
+    """用關鍵詞集合交集判斷規則是否跟信號相關"""
+    rule_kw = _extract_keywords(rule)
+    sig_kw = _extract_keywords(signal_content)
+    if not rule_kw:
+        return False
+    overlap = rule_kw & sig_kw
+    # 至少 2 個關鍵詞重疊，或重疊率 > 30%
+    return len(overlap) >= 2 or (len(overlap) / len(rule_kw)) > 0.3
+
+
 def update_q_values(db_path: str = EVO_DB):
     """
     掃描最近的 Cruz 信號，更新相關規則的 Q-value。
@@ -124,14 +154,14 @@ def update_q_values(db_path: str = EVO_DB):
             reward = 0.0
         elif sig_type in ("approval", "silence"):
             reward = 1.0
+        elif sig_type == "redirect":
+            reward = 0.3
         else:
             continue
 
-        # 看哪條規則跟這個信號相關（簡單：規則的關鍵詞出現在信號內容裡）
+        # 看哪條規則跟這個信號相關（關鍵詞集合交集）
         for rule_id, rule_text, q_val in rules:
-            # 取規則的核心動詞短語（前 8 個字）
-            rule_core = rule_text[:8]
-            if len(rule_core) >= 4 and rule_core in sig_content:
+            if _rule_matches_signal(rule_text, sig_content):
                 new_q = q_val + ALPHA * (reward - q_val)
                 conn.execute(
                     "UPDATE distilled_rules SET q_value = ?, times_used = times_used + 1 WHERE id = ?",

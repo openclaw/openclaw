@@ -38,7 +38,19 @@ SIGNAL_TYPES = {
             r"你又在", r"你當我", r"哪來的", r"誰說的",
             # 要求重做
             r"重做", r"重寫", r"重新", r"再來", r"重構",
-            # Threads 風格（Cruz 回覆留言者的糾正語氣）
+            # 語義糾正（不是字面否定，但語氣明確是糾正）
+            r"這麼慢", r"怕.*車禍", r"大的膽子", r"認輸",
+            r"難道.*不能", r"自己解決", r"我都還沒",
+            r"又犯錯", r"又再次", r"你停下來",
+            r"好大的膽", r"誰叫你", r"誰說可以",
+            r"太舊了", r"過時", r"已經.*了",
+            # 嫌慢/嫌少/嫌爛
+            r"這麼少", r"為何.*少", r"怎麼.*少",
+            r"太少", r"不夠", r"遠遠不夠",
+            # 反問式糾正
+            r"你問這問題", r"你就停下來了嗎",
+            r"然後呢", r"就這樣\?", r"沒了\?",
+            # Threads 風格
             r"數據.*錯", r"來源.*不對", r"不是.*這樣解讀",
         ],
     },
@@ -53,10 +65,15 @@ SIGNAL_TYPES = {
             # 推進指令
             r"繼續推進", r"ok go", r"開始建", r"直接做", r"馬上",
             r"Day.*go", r"合稿", r"合併",
+            # 語義認可（不是字面肯定，但語氣是通過）
+            r"都可以", r"交給.*你", r"交給專業",
+            r"直接動手", r"全部都", r"開幹",
+            r"多.*幾個", r"又不用錢", r"千萬別.*節省",
+            r"已修好", r"不用再查",
             # 品味認可
             r"寫得.*好", r"這個好", r"完美", r"到位", r"精準",
             r"說得.*對", r"對.*說得",
-            # Threads 風格（Cruz 在 Threads 的肯定語氣）
+            # Threads 風格
             r"完全正確", r"你說對了", r"好問題",
         ],
     },
@@ -255,30 +272,56 @@ if __name__ == "__main__":
 
 # ── 多管道掃描 ──────────────────────────────────────────────────
 
-def scan_all_channels(clawd_root: str = "/Users/sulaxd/clawd") -> list[dict]:
+_SCAN_STATE_FILE = Path(__file__).resolve().parent.parent / "data" / "scan-state.json"
+
+def _load_scan_state() -> dict:
+    if _SCAN_STATE_FILE.exists():
+        try:
+            return json.loads(_SCAN_STATE_FILE.read_text())
+        except Exception:
+            pass
+    return {"file_offsets": {}, "last_full_scan": ""}
+
+def _save_scan_state(state: dict):
+    _SCAN_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _SCAN_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False))
+
+
+def scan_all_channels(clawd_root: str = "/Users/sulaxd/clawd", full: bool = False) -> list[dict]:
     """
     掃描 Cruz 所有管道的 input，回傳統一的對話格式。
-
-    管道：
-    1. Claude Code sessions（~/.claude/projects/ 下的 .jsonl）
-    2. Threads 互動（threads-snapshot.yaml 中 [我] 開頭的回覆）
-    3. TG 對話日誌（workspace/agents/*/memory/ 下的 .md）
-
-    回傳：[{"role": "user"/"assistant", "content": "...", "channel": "claude/threads/tg"}]
+    增量模式（預設）：只讀上次掃描後新增的行。
+    full=True：全掃（首次或手動觸發）。
     """
     import re
     from pathlib import Path
 
+    scan_state = _load_scan_state()
+    file_offsets = scan_state.get("file_offsets", {})
     all_msgs = []
 
     # 管道 1: Claude Code sessions
     session_dir = Path.home() / ".claude" / "projects" / "-Users-sulaxd-clawd"
     if session_dir.exists():
         session_files = sorted(session_dir.glob("*.jsonl"),
-                               key=lambda p: p.stat().st_mtime, reverse=True)  # 全讀，不截斷
+                               key=lambda p: p.stat().st_mtime, reverse=True)
         for sf in session_files:
             try:
-                lines = sf.read_text(encoding="utf-8", errors="ignore").strip().split("\n")  # 全讀
+                sf_key = str(sf)
+                last_offset = file_offsets.get(sf_key, 0) if not full else 0
+                file_size = sf.stat().st_size
+                if file_size <= last_offset and not full:
+                    continue  # 沒有新資料
+                text = sf.read_text(encoding="utf-8", errors="ignore")
+                lines = text.strip().split("\n")
+                # 增量：只處理 offset 之後的行
+                if not full and last_offset > 0:
+                    # 估算行數 offset（用字元位置除以平均行長）
+                    total_chars = len(text)
+                    ratio = last_offset / max(total_chars, 1)
+                    start_line = int(len(lines) * ratio)
+                    lines = lines[start_line:]
+                file_offsets[sf_key] = file_size
                 for line in lines:
                     try:
                         msg = json.loads(line)
@@ -396,6 +439,11 @@ def scan_all_channels(clawd_root: str = "/Users/sulaxd/clawd") -> list[dict]:
                                        "channel": f"tg_{agent_dir.name}"})
                 except Exception:
                     continue
+
+    # 保存掃描狀態（增量用）
+    scan_state["file_offsets"] = file_offsets
+    scan_state["last_full_scan"] = datetime.now().isoformat() if full else scan_state.get("last_full_scan", "")
+    _save_scan_state(scan_state)
 
     return all_msgs
 
