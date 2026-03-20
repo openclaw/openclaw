@@ -895,6 +895,7 @@ export async function syncSkillsToWorkspace(params: {
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
   config?: OpenClawConfig;
+  agentId?: string;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
 }) {
@@ -907,8 +908,9 @@ export async function syncSkillsToWorkspace(params: {
   await serializeByKey(`syncSkills:${targetDir}`, async () => {
     const targetSkillsDir = path.join(targetDir, "skills");
 
-    const entries = loadSkillEntries(sourceDir, {
+    const entries = loadWorkspaceSkillEntries(sourceDir, {
       config: params.config,
+      agentId: params.agentId,
       managedSkillsDir: params.managedSkillsDir,
       bundledSkillsDir: params.bundledSkillsDir,
     });
