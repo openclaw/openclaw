@@ -280,20 +280,35 @@ export async function uploadImageFeishu(params: {
   // See: https://github.com/larksuite/node-sdk/issues/121
   const imageData = typeof image === "string" ? fs.createReadStream(image) : image;
 
-  const response = await client.im.image.create({
-    data: {
-      image_type: imageType,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
-      image: imageData as any,
-    },
-  });
+  // CERA: when image is a file path, createReadStream() opens an FD.
+  // If the upload throws (network error, auth failure, rate limit), the
+  // stream is never consumed or closed, leaking the descriptor. Ensure
+  // cleanup on all exit paths. Only destroy streams we created -- caller-
+  // owned Buffers must not be touched.
+  const needsCleanup = typeof image === "string";
+  try {
+    const response = await client.im.image.create({
+      data: {
+        image_type: imageType,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
+        image: imageData as any,
+      },
+    });
 
-  return {
-    imageKey: extractFeishuUploadKey(response, {
-      key: "image_key",
-      errorPrefix: "Feishu image upload failed",
-    }),
-  };
+    return {
+      imageKey: extractFeishuUploadKey(response, {
+        key: "image_key",
+        errorPrefix: "Feishu image upload failed",
+      }),
+    };
+  } finally {
+    // ReadStream.destroy() is idempotent and closes the underlying FD.
+    // Safe to call after successful consumption -- Node marks the stream
+    // as destroyed but the FD was already released by read completion.
+    if (needsCleanup && imageData !== image) {
+      (imageData as fs.ReadStream).destroy();
+    }
+  }
 }
 
 /**
@@ -332,22 +347,31 @@ export async function uploadFileFeishu(params: {
 
   const safeFileName = sanitizeFileNameForUpload(fileName);
 
-  const response = await client.im.file.create({
-    data: {
-      file_type: fileType,
-      file_name: safeFileName,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
-      file: fileData as any,
-      ...(duration !== undefined && { duration }),
-    },
-  });
+  // CERA: same FD leak pattern as uploadImageFeishu -- createReadStream()
+  // opens a descriptor that must be released if the SDK call throws.
+  const needsCleanup = typeof file === "string";
+  try {
+    const response = await client.im.file.create({
+      data: {
+        file_type: fileType,
+        file_name: safeFileName,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
+        file: fileData as any,
+        ...(duration !== undefined && { duration }),
+      },
+    });
 
-  return {
-    fileKey: extractFeishuUploadKey(response, {
-      key: "file_key",
-      errorPrefix: "Feishu file upload failed",
-    }),
-  };
+    return {
+      fileKey: extractFeishuUploadKey(response, {
+        key: "file_key",
+        errorPrefix: "Feishu file upload failed",
+      }),
+    };
+  } finally {
+    if (needsCleanup && fileData !== file) {
+      (fileData as fs.ReadStream).destroy();
+    }
+  }
 }
 
 /**
