@@ -1073,9 +1073,6 @@
               {
                 "group": "Tools",
                 "pages": [
-                  "tools/exec",
-                  "tools/exec-approvals",
-                  "tools/elevated",
                   "tools/apply-patch",
                   {
                     "group": "Browser",
@@ -1086,24 +1083,27 @@
                       "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
                     ]
                   },
+                  "tools/btw",
+                  "tools/diffs",
+                  "tools/elevated",
+                  "tools/exec",
+                  "tools/exec-approvals",
+                  "tools/llm-task",
+                  "tools/lobster",
+                  "tools/loop-detection",
+                  "tools/pdf",
+                  "tools/reactions",
+                  "tools/thinking",
                   {
                     "group": "Web and search",
                     "pages": [
                       "tools/web",
                       "tools/brave-search",
                       "tools/firecrawl",
-                      "tools/tavily",
-                      "tools/perplexity-search"
+                      "tools/perplexity-search",
+                      "tools/tavily"
                     ]
-                  },
-                  "tools/pdf",
-                  "tools/diffs",
-                  "tools/llm-task",
-                  "tools/lobster",
-                  "tools/reactions",
-                  "tools/thinking",
-                  "tools/loop-detection",
-                  "tools/btw"
+                  }
                 ]
               },
               {
