@@ -35,6 +35,7 @@ export type PluginManifestRecord = {
   name?: string;
   description?: string;
   version?: string;
+  enabledByDefault?: boolean;
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
@@ -51,6 +52,7 @@ export type PluginManifestRecord = {
   rootDir: string;
   source: string;
   setupSource?: string;
+  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
   manifestPath: string;
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
@@ -153,6 +155,7 @@ function buildRecord(params: {
     description:
       normalizeManifestLabel(params.manifest.description) ?? params.candidate.packageDescription,
     version: normalizeManifestLabel(params.manifest.version) ?? params.candidate.packageVersion,
+    enabledByDefault: params.manifest.enabledByDefault === true ? true : undefined,
     format: params.candidate.format ?? "openclaw",
     bundleFormat: params.candidate.bundleFormat,
     kind: params.manifest.kind,
@@ -168,6 +171,9 @@ function buildRecord(params: {
     rootDir: params.candidate.rootDir,
     source: params.candidate.source,
     setupSource: params.candidate.setupSource,
+    startupDeferConfiguredChannelFullLoadUntilAfterListen:
+      params.candidate.packageManifest?.startup?.deferConfiguredChannelFullLoadUntilAfterListen ===
+      true,
     manifestPath: params.manifestPath,
     schemaCacheKey: params.schemaCacheKey,
     configSchema: params.configSchema,
@@ -268,14 +274,16 @@ function resolveDuplicatePrecedenceRank(params: {
   return 4;
 }
 
-export function loadPluginManifestRegistry(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  cache?: boolean;
-  env?: NodeJS.ProcessEnv;
-  candidates?: PluginCandidate[];
-  diagnostics?: PluginDiagnostic[];
-}): PluginManifestRegistry {
+export function loadPluginManifestRegistry(
+  params: {
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    cache?: boolean;
+    env?: NodeJS.ProcessEnv;
+    candidates?: PluginCandidate[];
+    diagnostics?: PluginDiagnostic[];
+  } = {},
+): PluginManifestRegistry {
   const config = params.config ?? {};
   const normalized = normalizePluginsConfig(config.plugins);
   const env = params.env ?? process.env;
@@ -296,6 +304,7 @@ export function loadPluginManifestRegistry(params: {
     : discoverOpenClawPlugins({
         workspaceDir: params.workspaceDir,
         extraPaths: normalized.loadPaths,
+        cache: params.cache,
         env,
       });
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];

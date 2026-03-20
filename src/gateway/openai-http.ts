@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ImageContent } from "../agents/command/types.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
-import type { ImageContent } from "../commands/agent/types.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -117,6 +117,7 @@ function buildAgentCommandInput(params: {
     bestEffortDeliver: false as const,
     // HTTP API callers are authenticated operator clients for this gateway context.
     senderIsOwner: true as const,
+    allowModelOverride: true as const,
   };
 }
 

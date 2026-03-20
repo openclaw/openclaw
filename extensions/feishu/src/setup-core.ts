@@ -1,6 +1,8 @@
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  type ChannelSetupAdapter,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/setup";
 import type { FeishuConfig } from "./types.js";
 
 export function setFeishuNamedAccountEnabled(

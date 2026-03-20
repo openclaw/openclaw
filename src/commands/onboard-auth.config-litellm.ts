@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { LITELLM_DEFAULT_MODEL_REF } from "../plugins/provider-auth-storage.js";
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModel,
-} from "./onboard-auth.config-shared.js";
-import { LITELLM_DEFAULT_MODEL_REF } from "./onboard-auth.credentials.js";
+} from "../plugins/provider-onboarding-config.js";
 
 export const LITELLM_BASE_URL = "http://localhost:4000";
 export const LITELLM_DEFAULT_MODEL_ID = "claude-opus-4-6";

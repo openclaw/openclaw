@@ -1,7 +1,5 @@
+import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
-import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
-import { resetSystemEventsForTest } from "../../../src/infra/system-events.js";
-import type { MockFn } from "../../../src/test-utils/vitest-mock-fn.js";
 import type { SignalDaemonExitEvent, SignalDaemonHandle } from "./daemon.js";
 
 type SignalToolResultTestMocks = {
@@ -68,37 +66,78 @@ export function createMockSignalDaemonHandle(
   };
 }
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+// Use importActual so shared-worker mocks from earlier test files do not leak
+// into this harness's partial overrides.
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
   return {
     ...actual,
     loadConfig: () => config,
-  };
-});
-
-vi.mock("../../../src/auto-reply/reply.js", () => ({
-  getReplyFromConfig: (...args: unknown[]) => replyMock(...args),
-}));
-
-vi.mock("./send.js", () => ({
-  sendMessageSignal: (...args: unknown[]) => sendMock(...args),
-  sendTypingSignal: vi.fn().mockResolvedValue(true),
-  sendReadReceiptSignal: vi.fn().mockResolvedValue(true),
-}));
-
-vi.mock("../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-}));
-
-vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/sessions.js")>();
-  return {
-    ...actual,
     resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
     readSessionUpdatedAt: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
+    "openclaw/plugin-sdk/reply-runtime",
+  );
+  return {
+    ...actual,
+    getReplyFromConfig: (...args: unknown[]) => replyMock(...args),
+    dispatchInboundMessage: async (params: {
+      ctx: unknown;
+      cfg: unknown;
+      dispatcher: {
+        sendFinalReply: (payload: { text: string }) => boolean;
+        markComplete?: () => void;
+        waitForIdle?: () => Promise<void>;
+      };
+    }) => {
+      const resolved = await replyMock(params.ctx, {}, params.cfg);
+      const text = typeof resolved?.text === "string" ? resolved.text.trim() : "";
+      if (text) {
+        params.dispatcher.sendFinalReply({ text });
+      }
+      params.dispatcher.markComplete?.();
+      await params.dispatcher.waitForIdle?.();
+      return { queuedFinal: Boolean(text) };
+    },
+  };
+});
+
+vi.mock("./send.js", async () => {
+  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
+  return {
+    ...actual,
+    sendMessageSignal: (...args: unknown[]) => sendMock(...args),
+    sendTypingSignal: vi.fn().mockResolvedValue(true),
+    sendReadReceiptSignal: vi.fn().mockResolvedValue(true),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
+  return {
+    ...actual,
+    readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/security-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/security-runtime")>(
+    "openclaw/plugin-sdk/security-runtime",
+  );
+  return {
+    ...actual,
+    readStoreAllowFromForDmPolicy: (...args: unknown[]) => readAllowFromStoreMock(...args),
   };
 });
 
@@ -108,20 +147,30 @@ vi.mock("./client.js", () => ({
   signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
 }));
 
-vi.mock("./daemon.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./daemon.js")>();
+vi.mock("./daemon.js", async () => {
+  const actual = await vi.importActual<typeof import("./daemon.js")>("./daemon.js");
   return {
     ...actual,
     spawnSignalDaemon: (...args: unknown[]) => spawnSignalDaemonMock(...args),
   };
 });
 
-vi.mock("../../../src/infra/transport-ready.js", () => ({
-  waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
+    "openclaw/plugin-sdk/infra-runtime",
+  );
+  return {
+    ...actual,
+    waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
+  };
+});
 
 export function installSignalToolResultTestHooks() {
-  beforeEach(() => {
+  beforeEach(async () => {
+    const [{ resetInboundDedupe }, { resetSystemEventsForTest }] = await Promise.all([
+      import("openclaw/plugin-sdk/reply-runtime"),
+      import("openclaw/plugin-sdk/infra-runtime"),
+    ]);
     resetInboundDedupe();
     config = {
       messages: { responsePrefix: "PFX" },
@@ -134,7 +183,7 @@ export function installSignalToolResultTestHooks() {
     replyMock.mockReset();
     updateLastRouteMock.mockReset();
     streamMock.mockReset();
-    signalCheckMock.mockReset().mockResolvedValue({});
+    signalCheckMock.mockReset().mockResolvedValue({ ok: true });
     signalRpcRequestMock.mockReset().mockResolvedValue({});
     spawnSignalDaemonMock.mockReset().mockReturnValue(createMockSignalDaemonHandle());
     readAllowFromStoreMock.mockReset().mockResolvedValue([]);

@@ -1,7 +1,3 @@
-import {
-  promptSecretRefForSetup,
-  resolveSecretInputModeForEnvSelection,
-} from "../../commands/auth-choice.apply-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { DmPolicy, GroupPolicy } from "../../config/types.js";
 import type { SecretInput } from "../../config/types.secrets.js";
@@ -11,7 +7,21 @@ import {
   moveSingleAccountChannelSectionToDefaultAccount,
   patchScopedAccountConfig,
 } from "./setup-helpers.js";
-import type { PromptAccountId, PromptAccountIdParams } from "./setup-wizard-types.js";
+import type {
+  ChannelSetupDmPolicy,
+  PromptAccountId,
+  PromptAccountIdParams,
+} from "./setup-wizard-types.js";
+import type { ChannelSetupWizard, ChannelSetupWizardAllowFromEntry } from "./setup-wizard.js";
+
+let providerAuthInputPromise:
+  | Promise<typeof import("../../plugins/provider-auth-input.js")>
+  | undefined;
+
+function loadProviderAuthInput() {
+  providerAuthInputPromise ??= import("../../plugins/provider-auth-input.js");
+  return providerAuthInputPromise;
+}
 
 export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
   const existingIds = params.listAccountIds(params.cfg);
@@ -192,14 +202,19 @@ export function setAccountAllowFromForChannel(params: {
   });
 }
 
-function patchTopLevelChannelConfig(params: {
+export function patchTopLevelChannelConfigSection(params: {
   cfg: OpenClawConfig;
   channel: string;
   enabled?: boolean;
+  clearFields?: string[];
   patch: Record<string, unknown>;
 }): OpenClawConfig {
-  const channelConfig =
-    (params.cfg.channels?.[params.channel] as Record<string, unknown> | undefined) ?? {};
+  const channelConfig = {
+    ...(params.cfg.channels?.[params.channel] as Record<string, unknown> | undefined),
+  };
+  for (const field of params.clearFields ?? []) {
+    delete channelConfig[field];
+  }
   return {
     ...params.cfg,
     channels: {
@@ -213,15 +228,64 @@ function patchTopLevelChannelConfig(params: {
   };
 }
 
+export function patchNestedChannelConfigSection(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  section: string;
+  enabled?: boolean;
+  clearFields?: string[];
+  patch: Record<string, unknown>;
+}): OpenClawConfig {
+  const channelConfig = {
+    ...(params.cfg.channels?.[params.channel] as Record<string, unknown> | undefined),
+  };
+  const sectionConfig = {
+    ...(channelConfig[params.section] as Record<string, unknown> | undefined),
+  };
+  for (const field of params.clearFields ?? []) {
+    delete sectionConfig[field];
+  }
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      [params.channel]: {
+        ...channelConfig,
+        ...(params.enabled ? { enabled: true } : {}),
+        [params.section]: {
+          ...sectionConfig,
+          ...params.patch,
+        },
+      },
+    },
+  };
+}
+
 export function setTopLevelChannelAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: string;
   allowFrom: string[];
   enabled?: boolean;
 }): OpenClawConfig {
-  return patchTopLevelChannelConfig({
+  return patchTopLevelChannelConfigSection({
     cfg: params.cfg,
     channel: params.channel,
+    enabled: params.enabled,
+    patch: { allowFrom: params.allowFrom },
+  });
+}
+
+export function setNestedChannelAllowFrom(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  section: string;
+  allowFrom: string[];
+  enabled?: boolean;
+}): OpenClawConfig {
+  return patchNestedChannelConfigSection({
+    cfg: params.cfg,
+    channel: params.channel,
+    section: params.section,
     enabled: params.enabled,
     patch: { allowFrom: params.allowFrom },
   });
@@ -241,11 +305,41 @@ export function setTopLevelChannelDmPolicyWithAllowFrom(params: {
     undefined;
   const allowFrom =
     params.dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
-  return patchTopLevelChannelConfig({
+  return patchTopLevelChannelConfigSection({
     cfg: params.cfg,
     channel: params.channel,
     patch: {
       dmPolicy: params.dmPolicy,
+      ...(allowFrom ? { allowFrom } : {}),
+    },
+  });
+}
+
+export function setNestedChannelDmPolicyWithAllowFrom(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  section: string;
+  dmPolicy: DmPolicy;
+  getAllowFrom?: (cfg: OpenClawConfig) => Array<string | number> | undefined;
+  enabled?: boolean;
+}): OpenClawConfig {
+  const channelConfig =
+    (params.cfg.channels?.[params.channel] as Record<string, unknown> | undefined) ?? {};
+  const sectionConfig =
+    (channelConfig[params.section] as Record<string, unknown> | undefined) ?? {};
+  const existingAllowFrom =
+    params.getAllowFrom?.(params.cfg) ??
+    (sectionConfig.allowFrom as Array<string | number> | undefined) ??
+    undefined;
+  const allowFrom =
+    params.dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
+  return patchNestedChannelConfigSection({
+    cfg: params.cfg,
+    channel: params.channel,
+    section: params.section,
+    enabled: params.enabled,
+    patch: {
+      policy: params.dmPolicy,
       ...(allowFrom ? { allowFrom } : {}),
     },
   });
@@ -257,12 +351,135 @@ export function setTopLevelChannelGroupPolicy(params: {
   groupPolicy: GroupPolicy;
   enabled?: boolean;
 }): OpenClawConfig {
-  return patchTopLevelChannelConfig({
+  return patchTopLevelChannelConfigSection({
     cfg: params.cfg,
     channel: params.channel,
     enabled: params.enabled,
     patch: { groupPolicy: params.groupPolicy },
   });
+}
+
+export function createTopLevelChannelDmPolicy(params: {
+  label: string;
+  channel: string;
+  policyKey: string;
+  allowFromKey: string;
+  getCurrent: (cfg: OpenClawConfig) => DmPolicy;
+  promptAllowFrom?: ChannelSetupDmPolicy["promptAllowFrom"];
+  getAllowFrom?: (cfg: OpenClawConfig) => Array<string | number> | undefined;
+}): ChannelSetupDmPolicy {
+  const setPolicy = createTopLevelChannelDmPolicySetter({
+    channel: params.channel,
+    getAllowFrom: params.getAllowFrom,
+  });
+  return {
+    label: params.label,
+    channel: params.channel,
+    policyKey: params.policyKey,
+    allowFromKey: params.allowFromKey,
+    getCurrent: params.getCurrent,
+    setPolicy,
+    ...(params.promptAllowFrom ? { promptAllowFrom: params.promptAllowFrom } : {}),
+  };
+}
+
+export function createNestedChannelDmPolicy(params: {
+  label: string;
+  channel: string;
+  section: string;
+  policyKey: string;
+  allowFromKey: string;
+  getCurrent: (cfg: OpenClawConfig) => DmPolicy;
+  promptAllowFrom?: ChannelSetupDmPolicy["promptAllowFrom"];
+  getAllowFrom?: (cfg: OpenClawConfig) => Array<string | number> | undefined;
+  enabled?: boolean;
+}): ChannelSetupDmPolicy {
+  const setPolicy = createNestedChannelDmPolicySetter({
+    channel: params.channel,
+    section: params.section,
+    getAllowFrom: params.getAllowFrom,
+    enabled: params.enabled,
+  });
+  return {
+    label: params.label,
+    channel: params.channel,
+    policyKey: params.policyKey,
+    allowFromKey: params.allowFromKey,
+    getCurrent: params.getCurrent,
+    setPolicy,
+    ...(params.promptAllowFrom ? { promptAllowFrom: params.promptAllowFrom } : {}),
+  };
+}
+
+export function createTopLevelChannelDmPolicySetter(params: {
+  channel: string;
+  getAllowFrom?: (cfg: OpenClawConfig) => Array<string | number> | undefined;
+}): (cfg: OpenClawConfig, dmPolicy: DmPolicy) => OpenClawConfig {
+  return (cfg, dmPolicy) =>
+    setTopLevelChannelDmPolicyWithAllowFrom({
+      cfg,
+      channel: params.channel,
+      dmPolicy,
+      getAllowFrom: params.getAllowFrom,
+    });
+}
+
+export function createNestedChannelDmPolicySetter(params: {
+  channel: string;
+  section: string;
+  getAllowFrom?: (cfg: OpenClawConfig) => Array<string | number> | undefined;
+  enabled?: boolean;
+}): (cfg: OpenClawConfig, dmPolicy: DmPolicy) => OpenClawConfig {
+  return (cfg, dmPolicy) =>
+    setNestedChannelDmPolicyWithAllowFrom({
+      cfg,
+      channel: params.channel,
+      section: params.section,
+      dmPolicy,
+      getAllowFrom: params.getAllowFrom,
+      enabled: params.enabled,
+    });
+}
+
+export function createTopLevelChannelAllowFromSetter(params: {
+  channel: string;
+  enabled?: boolean;
+}): (cfg: OpenClawConfig, allowFrom: string[]) => OpenClawConfig {
+  return (cfg, allowFrom) =>
+    setTopLevelChannelAllowFrom({
+      cfg,
+      channel: params.channel,
+      allowFrom,
+      enabled: params.enabled,
+    });
+}
+
+export function createNestedChannelAllowFromSetter(params: {
+  channel: string;
+  section: string;
+  enabled?: boolean;
+}): (cfg: OpenClawConfig, allowFrom: string[]) => OpenClawConfig {
+  return (cfg, allowFrom) =>
+    setNestedChannelAllowFrom({
+      cfg,
+      channel: params.channel,
+      section: params.section,
+      allowFrom,
+      enabled: params.enabled,
+    });
+}
+
+export function createTopLevelChannelGroupPolicySetter(params: {
+  channel: string;
+  enabled?: boolean;
+}): (cfg: OpenClawConfig, groupPolicy: "open" | "allowlist" | "disabled") => OpenClawConfig {
+  return (cfg, groupPolicy) =>
+    setTopLevelChannelGroupPolicy({
+      cfg,
+      channel: params.channel,
+      groupPolicy,
+      enabled: params.enabled,
+    });
 }
 
 export function setChannelDmPolicyWithAllowFrom(params: {
@@ -339,7 +556,185 @@ export function setAccountGroupPolicyForChannel(params: {
   });
 }
 
-type AccountScopedChannel = "discord" | "slack" | "telegram" | "imessage" | "signal";
+export function setAccountDmAllowFromForChannel(params: {
+  cfg: OpenClawConfig;
+  channel: "discord" | "slack";
+  accountId: string;
+  allowFrom: string[];
+}): OpenClawConfig {
+  return patchChannelConfigForAccount({
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+    patch: { dmPolicy: "allowlist", allowFrom: params.allowFrom },
+  });
+}
+
+export function createLegacyCompatChannelDmPolicy(params: {
+  label: string;
+  channel: LegacyDmChannel;
+  promptAllowFrom?: ChannelSetupDmPolicy["promptAllowFrom"];
+}): ChannelSetupDmPolicy {
+  return {
+    label: params.label,
+    channel: params.channel,
+    policyKey: `channels.${params.channel}.dmPolicy`,
+    allowFromKey: `channels.${params.channel}.allowFrom`,
+    getCurrent: (cfg) =>
+      (
+        cfg.channels?.[params.channel] as
+          | {
+              dmPolicy?: DmPolicy;
+              dm?: { policy?: DmPolicy };
+            }
+          | undefined
+      )?.dmPolicy ??
+      (
+        cfg.channels?.[params.channel] as
+          | {
+              dmPolicy?: DmPolicy;
+              dm?: { policy?: DmPolicy };
+            }
+          | undefined
+      )?.dm?.policy ??
+      "pairing",
+    setPolicy: (cfg, policy) =>
+      setLegacyChannelDmPolicyWithAllowFrom({
+        cfg,
+        channel: params.channel,
+        dmPolicy: policy,
+      }),
+    ...(params.promptAllowFrom ? { promptAllowFrom: params.promptAllowFrom } : {}),
+  };
+}
+
+export async function resolveGroupAllowlistWithLookupNotes<TResolved>(params: {
+  label: string;
+  prompter: Pick<WizardPrompter, "note">;
+  entries: string[];
+  fallback: TResolved;
+  resolve: () => Promise<TResolved>;
+}): Promise<TResolved> {
+  try {
+    return await params.resolve();
+  } catch (error) {
+    await noteChannelLookupFailure({
+      prompter: params.prompter,
+      label: params.label,
+      error,
+    });
+    await noteChannelLookupSummary({
+      prompter: params.prompter,
+      label: params.label,
+      resolvedSections: [],
+      unresolved: params.entries,
+    });
+    return params.fallback;
+  }
+}
+
+export function createAccountScopedAllowFromSection(params: {
+  channel: "discord" | "slack";
+  credentialInputKey?: NonNullable<ChannelSetupWizard["allowFrom"]>["credentialInputKey"];
+  helpTitle?: string;
+  helpLines?: string[];
+  message: string;
+  placeholder: string;
+  invalidWithoutCredentialNote: string;
+  parseId: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["parseId"]>;
+  resolveEntries: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["resolveEntries"]>;
+}): NonNullable<ChannelSetupWizard["allowFrom"]> {
+  return {
+    ...(params.helpTitle ? { helpTitle: params.helpTitle } : {}),
+    ...(params.helpLines ? { helpLines: params.helpLines } : {}),
+    ...(params.credentialInputKey ? { credentialInputKey: params.credentialInputKey } : {}),
+    message: params.message,
+    placeholder: params.placeholder,
+    invalidWithoutCredentialNote: params.invalidWithoutCredentialNote,
+    parseId: params.parseId,
+    resolveEntries: params.resolveEntries,
+    apply: ({ cfg, accountId, allowFrom }) =>
+      setAccountDmAllowFromForChannel({
+        cfg,
+        channel: params.channel,
+        accountId,
+        allowFrom,
+      }),
+  };
+}
+
+export function createAccountScopedGroupAccessSection<TResolved>(params: {
+  channel: "discord" | "slack";
+  label: string;
+  placeholder: string;
+  helpTitle?: string;
+  helpLines?: string[];
+  skipAllowlistEntries?: boolean;
+  currentPolicy: NonNullable<ChannelSetupWizard["groupAccess"]>["currentPolicy"];
+  currentEntries: NonNullable<ChannelSetupWizard["groupAccess"]>["currentEntries"];
+  updatePrompt: NonNullable<ChannelSetupWizard["groupAccess"]>["updatePrompt"];
+  resolveAllowlist?: NonNullable<
+    NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]
+  >;
+  fallbackResolved: (entries: string[]) => TResolved;
+  applyAllowlist: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    resolved: TResolved;
+  }) => OpenClawConfig;
+}): NonNullable<ChannelSetupWizard["groupAccess"]> {
+  return {
+    label: params.label,
+    placeholder: params.placeholder,
+    ...(params.helpTitle ? { helpTitle: params.helpTitle } : {}),
+    ...(params.helpLines ? { helpLines: params.helpLines } : {}),
+    ...(params.skipAllowlistEntries ? { skipAllowlistEntries: true } : {}),
+    currentPolicy: params.currentPolicy,
+    currentEntries: params.currentEntries,
+    updatePrompt: params.updatePrompt,
+    setPolicy: ({ cfg, accountId, policy }) =>
+      setAccountGroupPolicyForChannel({
+        cfg,
+        channel: params.channel,
+        accountId,
+        groupPolicy: policy,
+      }),
+    ...(params.resolveAllowlist
+      ? {
+          resolveAllowlist: ({ cfg, accountId, credentialValues, entries, prompter }) =>
+            resolveGroupAllowlistWithLookupNotes({
+              label: params.label,
+              prompter,
+              entries,
+              fallback: params.fallbackResolved(entries),
+              resolve: async () =>
+                await params.resolveAllowlist!({
+                  cfg,
+                  accountId,
+                  credentialValues,
+                  entries,
+                  prompter,
+                }),
+            }),
+        }
+      : {}),
+    applyAllowlist: ({ cfg, accountId, resolved }) =>
+      params.applyAllowlist({
+        cfg,
+        accountId,
+        resolved: resolved as TResolved,
+      }),
+  };
+}
+
+type AccountScopedChannel =
+  | "bluebubbles"
+  | "discord"
+  | "imessage"
+  | "line"
+  | "signal"
+  | "slack"
+  | "telegram";
 type LegacyDmChannel = "discord" | "slack";
 
 export function patchLegacyDmChannelConfig(params: {
@@ -604,6 +999,8 @@ export async function promptSingleChannelSecretInput(params: {
   inputPrompt: string;
   preferredEnvVar?: string;
 }): Promise<SingleChannelSecretInputPromptResult> {
+  const { promptSecretRefForSetup, resolveSecretInputModeForEnvSelection } =
+    await loadProviderAuthInput();
   const selectedMode = await resolveSecretInputModeForEnvSelection({
     prompter: params.prompter as WizardPrompter,
     explicitMode: params.secretInputMode,
@@ -668,9 +1065,8 @@ export async function promptSingleChannelSecretInput(params: {
 
 type ParsedAllowFromResult = { entries: string[]; error?: string };
 
-export async function promptParsedAllowFromForScopedChannel(params: {
-  cfg: OpenClawConfig;
-  channel: "imessage" | "signal";
+export async function promptParsedAllowFromForAccount<TConfig extends OpenClawConfig>(params: {
+  cfg: TConfig;
   accountId?: string;
   defaultAccountId: string;
   prompter: Pick<WizardPrompter, "note" | "text">;
@@ -679,11 +1075,14 @@ export async function promptParsedAllowFromForScopedChannel(params: {
   message: string;
   placeholder: string;
   parseEntries: (raw: string) => ParsedAllowFromResult;
-  getExistingAllowFrom: (params: {
-    cfg: OpenClawConfig;
+  getExistingAllowFrom: (params: { cfg: TConfig; accountId: string }) => Array<string | number>;
+  mergeEntries?: (params: { existing: Array<string | number>; parsed: string[] }) => string[];
+  applyAllowFrom: (params: {
+    cfg: TConfig;
     accountId: string;
-  }) => Array<string | number>;
-}): Promise<OpenClawConfig> {
+    allowFrom: string[];
+  }) => TConfig | Promise<TConfig>;
+}): Promise<TConfig> {
   const accountId = resolveSetupAccountId({
     accountId: params.accountId,
     defaultAccountId: params.defaultAccountId,
@@ -706,13 +1105,95 @@ export async function promptParsedAllowFromForScopedChannel(params: {
     },
   });
   const parsed = params.parseEntries(String(entry));
-  const unique = mergeAllowFromEntries(undefined, parsed.entries);
-  return setAccountAllowFromForChannel({
+  const unique =
+    params.mergeEntries?.({
+      existing,
+      parsed: parsed.entries,
+    }) ?? mergeAllowFromEntries(undefined, parsed.entries);
+  return await params.applyAllowFrom({
     cfg: params.cfg,
-    channel: params.channel,
     accountId,
     allowFrom: unique,
   });
+}
+
+export async function promptParsedAllowFromForScopedChannel(params: {
+  cfg: OpenClawConfig;
+  channel: "imessage" | "signal";
+  accountId?: string;
+  defaultAccountId: string;
+  prompter: Pick<WizardPrompter, "note" | "text">;
+  noteTitle: string;
+  noteLines: string[];
+  message: string;
+  placeholder: string;
+  parseEntries: (raw: string) => ParsedAllowFromResult;
+  getExistingAllowFrom: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+  }) => Array<string | number>;
+}): Promise<OpenClawConfig> {
+  return await promptParsedAllowFromForAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    defaultAccountId: params.defaultAccountId,
+    prompter: params.prompter,
+    noteTitle: params.noteTitle,
+    noteLines: params.noteLines,
+    message: params.message,
+    placeholder: params.placeholder,
+    parseEntries: params.parseEntries,
+    getExistingAllowFrom: params.getExistingAllowFrom,
+    applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
+      setAccountAllowFromForChannel({
+        cfg,
+        channel: params.channel,
+        accountId,
+        allowFrom,
+      }),
+  });
+}
+
+export function resolveParsedAllowFromEntries(params: {
+  entries: string[];
+  parseId: (raw: string) => string | null;
+}): ChannelSetupWizardAllowFromEntry[] {
+  return params.entries.map((entry) => {
+    const id = params.parseId(entry);
+    return {
+      input: entry,
+      resolved: Boolean(id),
+      id,
+    };
+  });
+}
+
+export function createAllowFromSection(params: {
+  helpTitle?: string;
+  helpLines?: string[];
+  credentialInputKey?: NonNullable<ChannelSetupWizard["allowFrom"]>["credentialInputKey"];
+  message: string;
+  placeholder: string;
+  invalidWithoutCredentialNote: string;
+  parseInputs?: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["parseInputs"]>;
+  parseId: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["parseId"]>;
+  resolveEntries?: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["resolveEntries"]>;
+  apply: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["apply"]>;
+}): NonNullable<ChannelSetupWizard["allowFrom"]> {
+  return {
+    ...(params.helpTitle ? { helpTitle: params.helpTitle } : {}),
+    ...(params.helpLines ? { helpLines: params.helpLines } : {}),
+    ...(params.credentialInputKey ? { credentialInputKey: params.credentialInputKey } : {}),
+    message: params.message,
+    placeholder: params.placeholder,
+    invalidWithoutCredentialNote: params.invalidWithoutCredentialNote,
+    ...(params.parseInputs ? { parseInputs: params.parseInputs } : {}),
+    parseId: params.parseId,
+    resolveEntries:
+      params.resolveEntries ??
+      (async ({ entries }) => resolveParsedAllowFromEntries({ entries, parseId: params.parseId })),
+    apply: params.apply,
+  };
 }
 
 export async function noteChannelLookupSummary(params: {
@@ -752,6 +1233,22 @@ type AllowFromResolution = {
   resolved: boolean;
   id?: string | null;
 };
+
+export async function resolveEntriesWithOptionalToken<TResult>(params: {
+  token?: string | null;
+  entries: string[];
+  buildWithoutToken: (input: string) => TResult;
+  resolveEntries: (params: { token: string; entries: string[] }) => Promise<TResult[]>;
+}): Promise<TResult[]> {
+  const token = params.token?.trim();
+  if (!token) {
+    return params.entries.map(params.buildWithoutToken);
+  }
+  return await params.resolveEntries({
+    token,
+    entries: params.entries,
+  });
+}
 
 export async function promptResolvedAllowFrom(params: {
   prompter: WizardPrompter;
@@ -836,5 +1333,43 @@ export async function promptLegacyChannelAllowFrom(params: {
     cfg: params.cfg,
     channel: params.channel,
     allowFrom: unique,
+  });
+}
+
+export async function promptLegacyChannelAllowFromForAccount<TAccount>(params: {
+  cfg: OpenClawConfig;
+  channel: LegacyDmChannel;
+  prompter: WizardPrompter;
+  accountId?: string;
+  defaultAccountId: string;
+  resolveAccount: (cfg: OpenClawConfig, accountId: string) => TAccount;
+  resolveExisting: (account: TAccount, cfg: OpenClawConfig) => Array<string | number>;
+  resolveToken: (account: TAccount) => string | null | undefined;
+  noteTitle: string;
+  noteLines: string[];
+  message: string;
+  placeholder: string;
+  parseId: (value: string) => string | null;
+  invalidWithoutTokenNote: string;
+  resolveEntries: (params: { token: string; entries: string[] }) => Promise<AllowFromResolution[]>;
+}): Promise<OpenClawConfig> {
+  const accountId = resolveSetupAccountId({
+    accountId: params.accountId,
+    defaultAccountId: params.defaultAccountId,
+  });
+  const account = params.resolveAccount(params.cfg, accountId);
+  return await promptLegacyChannelAllowFrom({
+    cfg: params.cfg,
+    channel: params.channel,
+    prompter: params.prompter,
+    existing: params.resolveExisting(account, params.cfg),
+    token: params.resolveToken(account),
+    noteTitle: params.noteTitle,
+    noteLines: params.noteLines,
+    message: params.message,
+    placeholder: params.placeholder,
+    parseId: params.parseId,
+    invalidWithoutTokenNote: params.invalidWithoutTokenNote,
+    resolveEntries: params.resolveEntries,
   });
 }

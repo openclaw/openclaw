@@ -43,7 +43,7 @@ if (
 } else {
   const { installGaxiosFetchCompat } = await import("./infra/gaxios-fetch-compat.js");
 
-  installGaxiosFetchCompat();
+  await installGaxiosFetchCompat();
   process.title = "openclaw";
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
