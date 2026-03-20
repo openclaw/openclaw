@@ -82,7 +82,7 @@ export async function sendMessage(
   incomingUrl: string,
   text: string,
   userId?: string | number,
-  allowInsecureSsl = true,
+  allowInsecureSsl = false,
 ): Promise<boolean> {
   // Synology Chat API requires user_ids (numeric) to specify the recipient
   // The @mention is optional but user_ids is mandatory
@@ -123,7 +123,7 @@ export async function sendFileUrl(
   incomingUrl: string,
   fileUrl: string,
   userId?: string | number,
-  allowInsecureSsl = true,
+  allowInsecureSsl = false,
 ): Promise<boolean> {
   const body = buildWebhookBody({ file_url: fileUrl }, userId);
 
@@ -145,7 +145,7 @@ export async function sendFileUrl(
  */
 export async function fetchChatUsers(
   incomingUrl: string,
-  allowInsecureSsl = true,
+  allowInsecureSsl = false,
   log?: { warn: (...args: unknown[]) => void },
 ): Promise<ChatUser[]> {
   const now = Date.now();
@@ -210,14 +210,14 @@ export async function fetchChatUsers(
  *
  * @returns The correct Chat user_id, or undefined if not found
  */
-export async function resolveLegacyWebhookNameToChatUserId(params: {
-  incomingUrl: string;
-  mutableWebhookUsername: string;
-  allowInsecureSsl?: boolean;
-  log?: { warn: (...args: unknown[]) => void };
-}): Promise<number | undefined> {
-  const users = await fetchChatUsers(params.incomingUrl, params.allowInsecureSsl, params.log);
-  const lower = params.mutableWebhookUsername.toLowerCase();
+export async function resolveChatUserId(
+  incomingUrl: string,
+  webhookUsername: string,
+  allowInsecureSsl = false,
+  log?: { warn: (...args: unknown[]) => void },
+): Promise<number | undefined> {
+  const users = await fetchChatUsers(incomingUrl, allowInsecureSsl, log);
+  const lower = webhookUsername.toLowerCase();
 
   // Match by nickname first (webhook "username" field = Chat "nickname")
   const byNickname = users.find((u) => u.nickname.toLowerCase() === lower);
@@ -246,7 +246,7 @@ function parseNumericUserId(userId?: string | number): number | undefined {
   return Number.isNaN(numericId) ? undefined : numericId;
 }
 
-function doPost(url: string, body: string, allowInsecureSsl = true): Promise<boolean> {
+function doPost(url: string, body: string, allowInsecureSsl = false): Promise<boolean> {
   return new Promise((resolve, reject) => {
     let parsedUrl: URL;
     try {
