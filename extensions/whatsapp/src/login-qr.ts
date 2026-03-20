@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { DisconnectReason } from "@whiskeysockets/baileys";
-import { loadConfig } from "../../../src/config/config.js";
-import { danger, info, success } from "../../../src/globals.js";
-import { logInfo } from "../../../src/logger.js";
-import { defaultRuntime, type RuntimeEnv } from "../../../src/runtime.js";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { danger, info, success } from "openclaw/plugin-sdk/runtime-env";
+import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { logInfo } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { renderQrPngBase64 } from "./qr-image.js";
 import {
@@ -12,6 +12,7 @@ import {
   getStatusCode,
   logoutWeb,
   readWebSelfId,
+  waitForCredsSaveQueueWithTimeout,
   waitForWaConnection,
   webAuthExists,
 } from "./session.js";
@@ -85,9 +86,10 @@ async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
   }
   login.restartAttempted = true;
   runtime.log(
-    info("WhatsApp asked for a restart after pairing (code 515); retrying connection once…"),
+    info("WhatsApp asked for a restart after pairing (code 515); waiting for creds to save…"),
   );
   closeSocket(login.sock);
+  await waitForCredsSaveQueueWithTimeout(login.authDir);
   try {
     const sock = await createWaSocket(false, login.verbose, {
       authDir: login.authDir,

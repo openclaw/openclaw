@@ -1,16 +1,19 @@
-import { resolveHumanDelayConfig } from "../../../../../src/agents/identity.js";
-import { dispatchInboundMessage } from "../../../../../src/auto-reply/dispatch.js";
-import { clearHistoryEntriesIfEnabled } from "../../../../../src/auto-reply/reply/history.js";
-import { createReplyDispatcherWithTyping } from "../../../../../src/auto-reply/reply/reply-dispatcher.js";
-import type { ReplyPayload } from "../../../../../src/auto-reply/types.js";
-import { removeAckReactionAfterReply } from "../../../../../src/channels/ack-reactions.js";
-import { logAckFailure, logTypingFailure } from "../../../../../src/channels/logging.js";
-import { createReplyPrefixOptions } from "../../../../../src/channels/reply-prefix.js";
-import { createTypingCallbacks } from "../../../../../src/channels/typing.js";
-import { resolveStorePath, updateLastRoute } from "../../../../../src/config/sessions.js";
-import { danger, logVerbose, shouldLogVerbose } from "../../../../../src/globals.js";
-import { resolveAgentOutboundIdentity } from "../../../../../src/infra/outbound/identity.js";
-import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../../../src/security/dm-policy-shared.js";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  logAckFailure,
+  logTypingFailure,
+  removeAckReactionAfterReply,
+} from "openclaw/plugin-sdk/channel-feedback";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/config-runtime";
+import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/infra-runtime";
+import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { editSlackMessage, reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
@@ -33,7 +36,7 @@ import {
 import type { PreparedSlackMessage } from "./types.js";
 
 function hasMedia(payload: ReplyPayload): boolean {
-  return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+  return resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
 export function isSlackStreamingEnabled(params: {
@@ -146,63 +149,62 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
   const typingReaction = ctx.typingReaction;
-  const typingCallbacks = createTypingCallbacks({
-    start: async () => {
-      didSetStatus = true;
-      await ctx.setSlackThreadStatus({
-        channelId: message.channel,
-        threadTs: statusThreadTs,
-        status: "is typing...",
-      });
-      if (typingReaction && message.ts) {
-        await reactSlackMessage(message.channel, message.ts, typingReaction, {
-          token: ctx.botToken,
-          client: ctx.app.client,
-        }).catch(() => {});
-      }
-    },
-    stop: async () => {
-      if (!didSetStatus) {
-        return;
-      }
-      didSetStatus = false;
-      await ctx.setSlackThreadStatus({
-        channelId: message.channel,
-        threadTs: statusThreadTs,
-        status: "",
-      });
-      if (typingReaction && message.ts) {
-        await removeSlackReaction(message.channel, message.ts, typingReaction, {
-          token: ctx.botToken,
-          client: ctx.app.client,
-        }).catch(() => {});
-      }
-    },
-    onStartError: (err) => {
-      logTypingFailure({
-        log: (message) => runtime.error?.(danger(message)),
-        channel: "slack",
-        action: "start",
-        target: typingTarget,
-        error: err,
-      });
-    },
-    onStopError: (err) => {
-      logTypingFailure({
-        log: (message) => runtime.error?.(danger(message)),
-        channel: "slack",
-        action: "stop",
-        target: typingTarget,
-        error: err,
-      });
-    },
-  });
-
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg,
     agentId: route.agentId,
     channel: "slack",
     accountId: route.accountId,
+    typing: {
+      start: async () => {
+        didSetStatus = true;
+        await ctx.setSlackThreadStatus({
+          channelId: message.channel,
+          threadTs: statusThreadTs,
+          status: "is typing...",
+        });
+        if (typingReaction && message.ts) {
+          await reactSlackMessage(message.channel, message.ts, typingReaction, {
+            token: ctx.botToken,
+            client: ctx.app.client,
+          }).catch(() => {});
+        }
+      },
+      stop: async () => {
+        if (!didSetStatus) {
+          return;
+        }
+        didSetStatus = false;
+        await ctx.setSlackThreadStatus({
+          channelId: message.channel,
+          threadTs: statusThreadTs,
+          status: "",
+        });
+        if (typingReaction && message.ts) {
+          await removeSlackReaction(message.channel, message.ts, typingReaction, {
+            token: ctx.botToken,
+            client: ctx.app.client,
+          }).catch(() => {});
+        }
+      },
+      onStartError: (err) => {
+        logTypingFailure({
+          log: (message) => runtime.error?.(danger(message)),
+          channel: "slack",
+          action: "start",
+          target: typingTarget,
+          error: err,
+        });
+      },
+      onStopError: (err) => {
+        logTypingFailure({
+          log: (message) => runtime.error?.(danger(message)),
+          channel: "slack",
+          action: "stop",
+          target: typingTarget,
+          error: err,
+        });
+      },
+    },
   });
 
   const slackStreaming = resolveSlackStreamingConfig({
@@ -250,17 +252,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   };
 
   const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
-    if (
-      streamFailed ||
-      hasMedia(payload) ||
-      readSlackReplyBlocks(payload)?.length ||
-      !payload.text?.trim()
-    ) {
+    const reply = resolveSendableOutboundReplyParts(payload);
+    if (streamFailed || reply.hasMedia || readSlackReplyBlocks(payload)?.length || !reply.hasText) {
       await deliverNormally(payload, streamSession?.threadTs);
       return;
     }
 
-    const text = payload.text.trim();
+    const text = reply.trimmedText;
     let plannedThreadTs: string | undefined;
     try {
       if (!streamSession) {
@@ -302,25 +300,24 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-    ...prefixOptions,
+    ...replyPipeline,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-    typingCallbacks,
     deliver: async (payload) => {
       if (useStreaming) {
         await deliverWithStreaming(payload);
         return;
       }
 
-      const mediaCount = payload.mediaUrls?.length ?? (payload.mediaUrl ? 1 : 0);
+      const reply = resolveSendableOutboundReplyParts(payload);
       const slackBlocks = readSlackReplyBlocks(payload);
       const draftMessageId = draftStream?.messageId();
       const draftChannelId = draftStream?.channelId();
-      const finalText = payload.text ?? "";
-      const trimmedFinalText = finalText.trim();
+      const finalText = reply.text;
+      const trimmedFinalText = reply.trimmedText;
       const canFinalizeViaPreviewEdit =
         previewStreamingEnabled &&
         streamMode !== "status_final" &&
-        mediaCount === 0 &&
+        !reply.hasMedia &&
         !payload.isError &&
         (trimmedFinalText.length > 0 || Boolean(slackBlocks?.length)) &&
         typeof draftMessageId === "string" &&
@@ -361,7 +358,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         } catch (err) {
           logVerbose(`slack: status_final completion update failed (${String(err)})`);
         }
-      } else if (mediaCount > 0) {
+      } else if (reply.hasMedia) {
         await draftStream?.clear();
         hasStreamedMessage = false;
       }
@@ -370,7 +367,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
     onError: (err, info) => {
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
-      typingCallbacks.onIdle?.();
+      replyPipeline.typingCallbacks?.onIdle?.();
     },
   });
 

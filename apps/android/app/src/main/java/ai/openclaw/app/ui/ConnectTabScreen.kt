@@ -1,7 +1,7 @@
 package ai.openclaw.app.ui
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Link
@@ -49,8 +50,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.ui.mobileCardSurface
 
 private enum class ConnectInputMode {
   SetupCode,
@@ -59,6 +62,7 @@ private enum class ConnectInputMode {
 
 @Composable
 fun ConnectTabScreen(viewModel: MainViewModel) {
+  val context = LocalContext.current
   val statusText by viewModel.statusText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
@@ -91,20 +95,28 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
     val prompt = pendingTrust!!
     AlertDialog(
       onDismissRequest = { viewModel.declineGatewayTrustPrompt() },
-      title = { Text("Trust this gateway?") },
+      containerColor = mobileCardSurface,
+      title = { Text("Trust this gateway?", style = mobileHeadline, color = mobileText) },
       text = {
         Text(
           "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}",
           style = mobileCallout,
+          color = mobileText,
         )
       },
       confirmButton = {
-        TextButton(onClick = { viewModel.acceptGatewayTrustPrompt() }) {
+        TextButton(
+          onClick = { viewModel.acceptGatewayTrustPrompt() },
+          colors = ButtonDefaults.textButtonColors(contentColor = mobileAccent),
+        ) {
           Text("Trust and continue")
         }
       },
       dismissButton = {
-        TextButton(onClick = { viewModel.declineGatewayTrustPrompt() }) {
+        TextButton(
+          onClick = { viewModel.declineGatewayTrustPrompt() },
+          colors = ButtonDefaults.textButtonColors(contentColor = mobileTextSecondary),
+        ) {
           Text("Cancel")
         }
       },
@@ -125,7 +137,8 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       }
     }
 
-  val primaryLabel = if (isConnected) "Disconnect Gateway" else "Connect Gateway"
+  val showDiagnostics = !isConnected && gatewayStatusHasDiagnostics(statusText)
+  val statusLabel = gatewayStatusForDisplay(statusText)
 
   Column(
     modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
@@ -144,7 +157,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
     Surface(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(14.dp),
-      color = Color.White,
+      color = mobileCardSurface,
       border = BorderStroke(1.dp, mobileBorder),
     ) {
       Column {
@@ -205,7 +218,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
         shape = RoundedCornerShape(14.dp),
         colors =
           ButtonDefaults.buttonColors(
-            containerColor = Color.White,
+            containerColor = mobileCardSurface,
             contentColor = mobileDanger,
           ),
         border = BorderStroke(1.dp, mobileDanger.copy(alpha = 0.4f)),
@@ -270,6 +283,46 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       }
     }
 
+    if (showDiagnostics) {
+      Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = mobileWarningSoft,
+        border = BorderStroke(1.dp, mobileWarning.copy(alpha = 0.25f)),
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Text("Last gateway error", style = mobileHeadline, color = mobileWarning)
+          Text(statusLabel, style = mobileBody.copy(fontFamily = FontFamily.Monospace), color = mobileText)
+          Text("OpenClaw Android ${openClawAndroidVersionLabel()}", style = mobileCaption1, color = mobileTextSecondary)
+          Button(
+            onClick = {
+              copyGatewayDiagnosticsReport(
+                context = context,
+                screen = "connect tab",
+                gatewayAddress = activeEndpoint,
+                statusText = statusLabel,
+              )
+            },
+            modifier = Modifier.fillMaxWidth().height(46.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors =
+              ButtonDefaults.buttonColors(
+                containerColor = mobileCardSurface,
+                contentColor = mobileWarning,
+              ),
+            border = BorderStroke(1.dp, mobileWarning.copy(alpha = 0.3f)),
+          ) {
+            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Copy Report for Claw", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
+          }
+        }
+      }
+    }
+
     Surface(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(14.dp),
@@ -298,7 +351,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
-        color = Color.White,
+        color = mobileCardSurface,
         border = BorderStroke(1.dp, mobileBorder),
       ) {
         Column(
@@ -480,7 +533,7 @@ private fun MethodChip(label: String, active: Boolean, onClick: () -> Unit) {
         containerColor = if (active) mobileAccent else mobileSurface,
         contentColor = if (active) Color.White else mobileText,
       ),
-    border = BorderStroke(1.dp, if (active) Color(0xFF184DAF) else mobileBorderStrong),
+    border = BorderStroke(1.dp, if (active) mobileAccentBorderStrong else mobileBorderStrong),
   ) {
     Text(label, style = mobileCaption1.copy(fontWeight = FontWeight.Bold))
   }
@@ -509,10 +562,10 @@ private fun CommandBlock(command: String) {
     modifier = Modifier.fillMaxWidth(),
     shape = RoundedCornerShape(12.dp),
     color = mobileCodeBg,
-    border = BorderStroke(1.dp, Color(0xFF2B2E35)),
+    border = BorderStroke(1.dp, mobileCodeBorder),
   ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-      Box(modifier = Modifier.width(3.dp).height(42.dp).background(Color(0xFF3FC97A)))
+      Box(modifier = Modifier.width(3.dp).height(42.dp).background(mobileCodeAccent))
       Text(
         text = command,
         modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),

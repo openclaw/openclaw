@@ -1,11 +1,41 @@
-import { describe, expect, it } from "vitest";
+import { Container, Separator, TextDisplay } from "@buape/carbon";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
   enforceCrossContextPolicy,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
+
+class TestDiscordUiContainer extends Container {}
+
+const discordCrossContextPlugin: Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config" | "messaging"
+> = {
+  ...createChannelTestPluginBase({ id: "discord" }),
+  messaging: {
+    buildCrossContextComponents: ({ originLabel, message, cfg, accountId }) => {
+      const trimmed = message.trim();
+      const components: Array<TextDisplay | Separator> = [];
+      if (trimmed) {
+        components.push(new TextDisplay(message));
+        components.push(new Separator({ divider: true, spacing: "small" }));
+      }
+      components.push(new TextDisplay(`*From ${originLabel}*`));
+      void cfg;
+      void accountId;
+      return [new TestDiscordUiContainer(components)];
+    },
+  },
+};
 
 const slackConfig = {
   channels: {
@@ -23,6 +53,14 @@ const discordConfig = {
 } as OpenClawConfig;
 
 describe("outbound policy helpers", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "discord", plugin: discordCrossContextPlugin, source: "test" },
+      ]),
+    );
+  });
+
   it("allows cross-provider sends when enabled", () => {
     const cfg = {
       ...slackConfig,

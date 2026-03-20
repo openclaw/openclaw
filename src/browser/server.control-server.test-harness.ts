@@ -18,7 +18,7 @@ type HarnessState = {
       cdpPort?: number;
       cdpUrl?: string;
       color: string;
-      driver?: "openclaw" | "extension" | "existing-session";
+      driver?: "openclaw" | "existing-session";
       attachOnly?: boolean;
     }
   >;

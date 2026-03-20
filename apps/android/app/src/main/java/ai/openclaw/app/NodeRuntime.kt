@@ -43,11 +43,12 @@ import kotlinx.serialization.json.buildJsonObject
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
-class NodeRuntime(context: Context) {
+class NodeRuntime(
+  context: Context,
+  val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
+) {
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-  val prefs = SecurePrefs(appContext)
   private val deviceAuthStore = DeviceAuthStore(prefs)
   val canvas = CanvasController()
   val camera = CameraCaptureManager(appContext)
@@ -88,6 +89,8 @@ class NodeRuntime(context: Context) {
 
   private val deviceHandler: DeviceHandler = DeviceHandler(
     appContext = appContext,
+    smsEnabled = BuildConfig.OPENCLAW_ENABLE_SMS,
+    callLogEnabled = BuildConfig.OPENCLAW_ENABLE_CALL_LOG,
   )
 
   private val notificationsHandler: NotificationsHandler = NotificationsHandler(
@@ -107,6 +110,10 @@ class NodeRuntime(context: Context) {
   )
 
   private val calendarHandler: CalendarHandler = CalendarHandler(
+    appContext = appContext,
+  )
+
+  private val callLogHandler: CallLogHandler = CallLogHandler(
     appContext = appContext,
   )
 
@@ -132,7 +139,9 @@ class NodeRuntime(context: Context) {
     voiceWakeMode = { VoiceWakeMode.Off },
     motionActivityAvailable = { motionHandler.isActivityAvailable() },
     motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
-    smsAvailable = { sms.canSendSms() },
+    sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
+    readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
+    callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
     hasRecordAudioPermission = { hasRecordAudioPermission() },
     manualTls = { manualTls.value },
   )
@@ -151,10 +160,13 @@ class NodeRuntime(context: Context) {
     smsHandler = smsHandlerImpl,
     a2uiHandler = a2uiHandler,
     debugHandler = debugHandler,
+    callLogHandler = callLogHandler,
     isForeground = { _isForeground.value },
     cameraEnabled = { cameraEnabled.value },
     locationEnabled = { locationMode.value != LocationMode.Off },
-    smsAvailable = { sms.canSendSms() },
+    sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
+    readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
+    callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
     debugBuild = { BuildConfig.DEBUG },
     refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
     onCanvasA2uiPush = {
@@ -560,43 +572,8 @@ class NodeRuntime(context: Context) {
 
     scope.launch(Dispatchers.Default) {
       gateways.collect { list ->
-        if (list.isNotEmpty()) {
-          // Security: don't let an unauthenticated discovery feed continuously steer autoconnect.
-          // UX parity with iOS: only set once when unset.
-          if (lastDiscoveredStableId.value.trim().isEmpty()) {
-            prefs.setLastDiscoveredStableId(list.first().stableId)
-          }
-        }
-
-        if (didAutoConnect) return@collect
-        if (_isConnected.value) return@collect
-
-        if (manualEnabled.value) {
-          val host = manualHost.value.trim()
-          val port = manualPort.value
-          if (host.isNotEmpty() && port in 1..65535) {
-            // Security: autoconnect only to previously trusted gateways (stored TLS pin).
-            if (!manualTls.value) return@collect
-            val stableId = GatewayEndpoint.manual(host = host, port = port).stableId
-            val storedFingerprint = prefs.loadGatewayTlsFingerprint(stableId)?.trim().orEmpty()
-            if (storedFingerprint.isEmpty()) return@collect
-
-            didAutoConnect = true
-            connect(GatewayEndpoint.manual(host = host, port = port))
-          }
-          return@collect
-        }
-
-        val targetStableId = lastDiscoveredStableId.value.trim()
-        if (targetStableId.isEmpty()) return@collect
-        val target = list.firstOrNull { it.stableId == targetStableId } ?: return@collect
-
-        // Security: autoconnect only to previously trusted gateways (stored TLS pin).
-        val storedFingerprint = prefs.loadGatewayTlsFingerprint(target.stableId)?.trim().orEmpty()
-        if (storedFingerprint.isEmpty()) return@collect
-
-        didAutoConnect = true
-        connect(target)
+        seedLastDiscoveredGateway(list)
+        autoConnectIfNeeded()
       }
     }
 
@@ -621,9 +598,51 @@ class NodeRuntime(context: Context) {
 
   fun setForeground(value: Boolean) {
     _isForeground.value = value
-    if (!value) {
+    if (value) {
+      reconnectPreferredGatewayOnForeground()
+    } else {
       stopActiveVoiceSession()
     }
+  }
+
+  private fun seedLastDiscoveredGateway(list: List<GatewayEndpoint>) {
+    if (list.isEmpty()) return
+    if (lastDiscoveredStableId.value.trim().isNotEmpty()) return
+    prefs.setLastDiscoveredStableId(list.first().stableId)
+  }
+
+  private fun resolvePreferredGatewayEndpoint(): GatewayEndpoint? {
+    if (manualEnabled.value) {
+      val host = manualHost.value.trim()
+      val port = manualPort.value
+      if (host.isEmpty() || port !in 1..65535) return null
+      return GatewayEndpoint.manual(host = host, port = port)
+    }
+
+    val targetStableId = lastDiscoveredStableId.value.trim()
+    if (targetStableId.isEmpty()) return null
+    val endpoint = gateways.value.firstOrNull { it.stableId == targetStableId } ?: return null
+    val storedFingerprint = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.trim().orEmpty()
+    if (storedFingerprint.isEmpty()) return null
+    return endpoint
+  }
+
+  private fun autoConnectIfNeeded() {
+    if (didAutoConnect) return
+    if (_isConnected.value) return
+    val endpoint = resolvePreferredGatewayEndpoint() ?: return
+    didAutoConnect = true
+    connect(endpoint)
+  }
+
+  private fun reconnectPreferredGatewayOnForeground() {
+    if (_isConnected.value) return
+    if (_pendingGatewayTrust.value != null) return
+    if (connectedEndpoint != null) {
+      refreshGatewayConnection()
+      return
+    }
+    resolvePreferredGatewayEndpoint()?.let(::connect)
   }
 
   fun setDisplayName(value: String) {

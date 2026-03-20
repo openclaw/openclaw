@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
-import type { ChannelAgentTool } from "../../../src/channels/plugins/types.js";
+import type { ChannelAgentTool } from "openclaw/plugin-sdk/channel-contract";
+import { startWebLoginWithQr, waitForWebLogin } from "../login-qr-api.js";
 
 export function createWhatsAppLoginTool(): ChannelAgentTool {
   return {
@@ -18,7 +19,6 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
       force: Type.Optional(Type.Boolean()),
     }),
     execute: async (_toolCallId, args) => {
-      const { startWebLoginWithQr, waitForWebLogin } = await import("./login-qr.js");
       const action = (args as { action?: string })?.action ?? "start";
       if (action === "wait") {
         const result = await waitForWebLogin({

@@ -1,4 +1,4 @@
-import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/msteams";
+import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
@@ -19,6 +19,12 @@ export type MSTeamsActivityHandler = {
     handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
   ) => MSTeamsActivityHandler;
   onMembersAdded: (
+    handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
+  ) => MSTeamsActivityHandler;
+  onReactionsAdded: (
+    handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
+  ) => MSTeamsActivityHandler;
+  onReactionsRemoved: (
     handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
   ) => MSTeamsActivityHandler;
   run?: (context: unknown) => Promise<void>;

@@ -30,6 +30,23 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
     ],
   };
 });
+const {
+  refreshProviderOAuthCredentialWithPluginMock,
+  formatProviderAuthProfileApiKeyWithPluginMock,
+  buildProviderAuthDoctorHintWithPluginMock,
+} = vi.hoisted(() => ({
+  refreshProviderOAuthCredentialWithPluginMock: vi.fn(
+    async (_params?: { context?: unknown }) => undefined,
+  ),
+  formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
+  buildProviderAuthDoctorHintWithPluginMock: vi.fn(async () => undefined),
+}));
+
+vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
+  refreshProviderOAuthCredentialWithPlugin: refreshProviderOAuthCredentialWithPluginMock,
+  formatProviderAuthProfileApiKeyWithPlugin: formatProviderAuthProfileApiKeyWithPluginMock,
+  buildProviderAuthDoctorHintWithPlugin: buildProviderAuthDoctorHintWithPluginMock,
+}));
 
 function createExpiredOauthStore(params: {
   profileId: string;
@@ -61,6 +78,12 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
 
   beforeEach(async () => {
     getOAuthApiKeyMock.mockClear();
+    refreshProviderOAuthCredentialWithPluginMock.mockReset();
+    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
+    formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
+    formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
+    buildProviderAuthDoctorHintWithPluginMock.mockReset();
+    buildProviderAuthDoctorHintWithPluginMock.mockResolvedValue(undefined);
     clearRuntimeAuthProfileStoreSnapshots();
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-refresh-fallback-"));
     agentDir = path.join(tempRoot, "agents", "main", "agent");
@@ -78,6 +101,9 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
 
   it("falls back to cached access token when openai-codex refresh fails on accountId extraction", async () => {
     const profileId = "openai-codex:default";
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async (params?: { context?: unknown }) => params?.context as never,
+    );
     saveAuthProfileStore(
       createExpiredOauthStore({
         profileId,
@@ -97,7 +123,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       provider: "openai-codex",
       email: undefined,
     });
-    expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(1);
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps throwing for non-codex providers on the same refresh error", async () => {
@@ -128,7 +154,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       }),
       agentDir,
     );
-    getOAuthApiKeyMock.mockImplementationOnce(async () => {
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
       throw new Error("invalid_grant");
     });
 

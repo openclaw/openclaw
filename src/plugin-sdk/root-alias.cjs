@@ -4,7 +4,8 @@ const path = require("node:path");
 const fs = require("node:fs");
 
 let monolithicSdk = null;
-let jitiLoader = null;
+const jitiLoaders = new Map();
+const pluginSdkSubpathsCache = new Map();
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -61,16 +62,72 @@ function resolveControlCommandGate(params) {
   return { commandAuthorized, shouldBlock };
 }
 
-function getJiti() {
-  if (jitiLoader) {
-    return jitiLoader;
+function onDiagnosticEvent(listener) {
+  const monolithic = loadMonolithicSdk();
+  if (!monolithic || typeof monolithic.onDiagnosticEvent !== "function") {
+    throw new Error("openclaw/plugin-sdk root alias could not resolve onDiagnosticEvent");
+  }
+  return monolithic.onDiagnosticEvent(listener);
+}
+
+function getPackageRoot() {
+  return path.resolve(__dirname, "..", "..");
+}
+
+function listPluginSdkExportedSubpaths() {
+  const packageRoot = getPackageRoot();
+  if (pluginSdkSubpathsCache.has(packageRoot)) {
+    return pluginSdkSubpathsCache.get(packageRoot);
+  }
+
+  let subpaths = [];
+  try {
+    const packageJsonPath = path.join(packageRoot, "package.json");
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+    subpaths = Object.keys(packageJson.exports ?? {})
+      .filter((key) => key.startsWith("./plugin-sdk/"))
+      .map((key) => key.slice("./plugin-sdk/".length));
+  } catch {
+    subpaths = [];
+  }
+
+  pluginSdkSubpathsCache.set(packageRoot, subpaths);
+  return subpaths;
+}
+
+function buildPluginSdkAliasMap(useDist) {
+  const packageRoot = getPackageRoot();
+  const pluginSdkDir = path.join(packageRoot, useDist ? "dist" : "src", "plugin-sdk");
+  const ext = useDist ? ".js" : ".ts";
+  const aliasMap = {
+    "openclaw/plugin-sdk": __filename,
+  };
+
+  for (const subpath of listPluginSdkExportedSubpaths()) {
+    const candidate = path.join(pluginSdkDir, `${subpath}${ext}`);
+    if (fs.existsSync(candidate)) {
+      aliasMap[`openclaw/plugin-sdk/${subpath}`] = candidate;
+    }
+  }
+
+  return aliasMap;
+}
+
+function getJiti(tryNative) {
+  if (jitiLoaders.has(tryNative)) {
+    return jitiLoaders.get(tryNative);
   }
 
   const { createJiti } = require("jiti");
-  jitiLoader = createJiti(__filename, {
+  const jitiLoader = createJiti(__filename, {
+    alias: buildPluginSdkAliasMap(tryNative),
     interopDefault: true,
+    // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
+    // so local plugins do not create a second transpiled OpenClaw core graph.
+    tryNative,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
+  jitiLoaders.set(tryNative, jitiLoader);
   return jitiLoader;
 }
 
@@ -79,19 +136,17 @@ function loadMonolithicSdk() {
     return monolithicSdk;
   }
 
-  const jiti = getJiti();
-
-  const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "index.js");
+  const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
   if (fs.existsSync(distCandidate)) {
     try {
-      monolithicSdk = jiti(distCandidate);
+      monolithicSdk = getJiti(true)(distCandidate);
       return monolithicSdk;
     } catch {
       // Fall through to source alias if dist is unavailable or stale.
     }
   }
 
-  monolithicSdk = jiti(path.join(__dirname, "index.ts"));
+  monolithicSdk = getJiti(false)(path.join(__dirname, "compat.ts"));
   return monolithicSdk;
 }
 
@@ -105,11 +160,19 @@ function tryLoadMonolithicSdk() {
 
 const fastExports = {
   emptyPluginConfigSchema,
+  onDiagnosticEvent,
   resolveControlCommandGate,
 };
 
 const target = { ...fastExports };
 let rootExports = null;
+
+function shouldResolveMonolithic(prop) {
+  if (typeof prop !== "string") {
+    return false;
+  }
+  return prop !== "then";
+}
 
 function getMonolithicSdk() {
   const loaded = tryLoadMonolithicSdk();
@@ -123,6 +186,9 @@ function getExportValue(prop) {
   if (Reflect.has(target, prop)) {
     return Reflect.get(target, prop);
   }
+  if (!shouldResolveMonolithic(prop)) {
+    return undefined;
+  }
   const monolithic = getMonolithicSdk();
   if (!monolithic) {
     return undefined;
@@ -134,6 +200,9 @@ function getExportDescriptor(prop) {
   const ownDescriptor = Reflect.getOwnPropertyDescriptor(target, prop);
   if (ownDescriptor) {
     return ownDescriptor;
+  }
+  if (!shouldResolveMonolithic(prop)) {
+    return undefined;
   }
 
   const monolithic = getMonolithicSdk();
@@ -164,14 +233,16 @@ rootExports = new Proxy(target, {
     if (Reflect.has(target, prop)) {
       return true;
     }
+    if (!shouldResolveMonolithic(prop)) {
+      return false;
+    }
     const monolithic = getMonolithicSdk();
     return monolithic ? Reflect.has(monolithic, prop) : false;
   },
   ownKeys() {
     const keys = new Set(Reflect.ownKeys(target));
-    const monolithic = getMonolithicSdk();
-    if (monolithic) {
-      for (const key of Reflect.ownKeys(monolithic)) {
+    if (monolithicSdk && typeof monolithicSdk === "object") {
+      for (const key of Reflect.ownKeys(monolithicSdk)) {
         if (!keys.has(key)) {
           keys.add(key);
         }

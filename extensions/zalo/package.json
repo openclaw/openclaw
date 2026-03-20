@@ -4,13 +4,14 @@
   "description": "OpenClaw Zalo channel plugin",
   "type": "module",
   "dependencies": {
-    "undici": "7.24.1",
+    "undici": "7.24.4",
     "zod": "^4.3.6"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "zalo",
       "label": "Zalo",
@@ -28,6 +29,9 @@
       "npmSpec": "@openclaw/zalo",
       "localPath": "extensions/zalo",
       "defaultChoice": "npm"
+    },
+    "release": {
+      "publishToNpm": true
     }
   }
 }
