@@ -31,7 +31,7 @@ openclaw agent --message "hi" --model claude-cli/opus-4.6
 Codex CLI also works out of the box:
 
 ```bash
-openclaw agent --message "hi" --model codex-cli/gpt-5.3-codex
+openclaw agent --message "hi" --model codex-cli/gpt-5.4
 ```
 
 If your gateway runs under launchd/systemd and PATH is minimal, add just the
@@ -114,8 +114,8 @@ The provider id becomes the left side of your model ref:
           modelArg: "--model",
           modelAliases: {
             "claude-opus-4-6": "opus",
-            "claude-opus-4-5": "opus",
-            "claude-sonnet-4-5": "sonnet",
+            "claude-opus-4-6": "opus",
+            "claude-sonnet-4-6": "sonnet",
           },
           sessionArg: "--session",
           sessionMode: "existing",

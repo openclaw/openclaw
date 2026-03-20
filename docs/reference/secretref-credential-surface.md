@@ -23,6 +23,7 @@ Scope intent:
 [//]: # "secretref-supported-list-start"
 
 - `models.providers.*.apiKey`
+- `models.providers.*.headers.*`
 - `skills.entries.*.apiKey`
 - `agents.defaults.memorySearch.remote.apiKey`
 - `agents.list[].memorySearch.remote.apiKey`
@@ -30,12 +31,21 @@ Scope intent:
 - `talk.providers.*.apiKey`
 - `messages.tts.elevenlabs.apiKey`
 - `messages.tts.openai.apiKey`
+- `tools.web.fetch.firecrawl.apiKey`
+- `plugins.entries.brave.config.webSearch.apiKey`
+- `plugins.entries.google.config.webSearch.apiKey`
+- `plugins.entries.xai.config.webSearch.apiKey`
+- `plugins.entries.moonshot.config.webSearch.apiKey`
+- `plugins.entries.perplexity.config.webSearch.apiKey`
+- `plugins.entries.firecrawl.config.webSearch.apiKey`
+- `plugins.entries.tavily.config.webSearch.apiKey`
 - `tools.web.search.apiKey`
 - `tools.web.search.gemini.apiKey`
 - `tools.web.search.grok.apiKey`
 - `tools.web.search.kimi.apiKey`
 - `tools.web.search.perplexity.apiKey`
 - `gateway.auth.password`
+- `gateway.auth.token`
 - `gateway.remote.token`
 - `gateway.remote.password`
 - `cron.webhookToken`
@@ -66,8 +76,10 @@ Scope intent:
 - `channels.bluebubbles.password`
 - `channels.bluebubbles.accounts.*.password`
 - `channels.feishu.appSecret`
+- `channels.feishu.encryptKey`
 - `channels.feishu.verificationToken`
 - `channels.feishu.accounts.*.appSecret`
+- `channels.feishu.accounts.*.encryptKey`
 - `channels.feishu.accounts.*.verificationToken`
 - `channels.msteams.appPassword`
 - `channels.mattermost.botToken`
@@ -97,9 +109,13 @@ Notes:
 - Auth-profile plan targets require `agentId`.
 - Plan entries target `profiles.*.key` / `profiles.*.token` and write sibling refs (`keyRef` / `tokenRef`).
 - Auth-profile refs are included in runtime resolution and audit coverage.
+- For SecretRef-managed model providers, generated `agents/*/agent/models.json` entries persist non-secret markers (not resolved secret values) for `apiKey`/header surfaces.
+- Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
 - For web search:
   - In explicit provider mode (`tools.web.search.provider` set), only the selected provider key is active.
-  - In auto mode (`tools.web.search.provider` unset), `tools.web.search.apiKey` and provider-specific keys are active.
+  - In auto mode (`tools.web.search.provider` unset), only the first provider key that resolves by precedence is active.
+  - In auto mode, non-selected provider refs are treated as inactive until selected.
+  - Legacy `tools.web.search.*` provider paths still resolve during the compatibility window, but the canonical SecretRef surface is `plugins.entries.<plugin>.config.webSearch.*`.
 
 ## Unsupported credentials
 
@@ -107,7 +123,6 @@ Out-of-scope credentials include:
 
 [//]: # "secretref-unsupported-list-start"
 
-- `gateway.auth.token`
 - `commands.ownerDisplaySecret`
 - `channels.matrix.accessToken`
 - `channels.matrix.accounts.*.accessToken`

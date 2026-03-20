@@ -257,6 +257,18 @@ describe("buildMinimalServicePath", () => {
     const unique = [...new Set(parts)];
     expect(parts.length).toBe(unique.length);
   });
+
+  it("prepends explicit runtime bin directories before guessed user paths", () => {
+    const result = buildMinimalServicePath({
+      platform: "linux",
+      extraDirs: ["/home/alice/.nvm/versions/node/v22.22.0/bin"],
+      env: { HOME: "/home/alice" },
+    });
+    const parts = splitPath(result, "linux");
+
+    expect(parts[0]).toBe("/home/alice/.nvm/versions/node/v22.22.0/bin");
+    expect(parts).toContain("/home/alice/.nvm/current/bin");
+  });
 });
 
 describe("buildServiceEnvironment", () => {
@@ -264,20 +276,20 @@ describe("buildServiceEnvironment", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
       port: 18789,
-      token: "secret",
     });
     expect(env.HOME).toBe("/home/user");
     if (process.platform === "win32") {
-      expect(env.PATH).toBe("");
+      expect(env).not.toHaveProperty("PATH");
     } else {
       expect(env.PATH).toContain("/usr/bin");
     }
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("18789");
-    expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("secret");
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
     expect(env.OPENCLAW_SERVICE_MARKER).toBe("openclaw");
     expect(env.OPENCLAW_SERVICE_KIND).toBe("gateway");
     expect(typeof env.OPENCLAW_SERVICE_VERSION).toBe("string");
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
     if (process.platform === "darwin") {
       expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
     }
@@ -305,6 +317,7 @@ describe("buildServiceEnvironment", () => {
       port: 18789,
     });
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-work.service");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway (work)");
     if (process.platform === "darwin") {
       expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
     }
@@ -328,6 +341,33 @@ describe("buildServiceEnvironment", () => {
     expect(env.NO_PROXY).toBe("localhost,127.0.0.1");
     expect(env.http_proxy).toBe("http://proxy.local:7890");
     expect(env.all_proxy).toBe("socks5://proxy.local:1080");
+  });
+
+  it("omits PATH on Windows so Scheduled Tasks can inherit the current shell path", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "C:\\Users\\alice",
+        PATH: "C:\\Windows\\System32;C:\\Tools\\rg",
+      },
+      port: 18789,
+      platform: "win32",
+    });
+
+    expect(env).not.toHaveProperty("PATH");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
+  });
+
+  it("prepends extra runtime directories to the gateway service PATH", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      platform: "linux",
+      extraPathDirs: ["/home/user/.nvm/versions/node/v22.22.0/bin"],
+    });
+
+    expect(env.PATH?.split(path.posix.delimiter)[0]).toBe(
+      "/home/user/.nvm/versions/node/v22.22.0/bin",
+    );
   });
 });
 
@@ -400,6 +440,18 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user" },
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
+  });
+
+  it("prepends extra runtime directories to the node service PATH", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+      platform: "linux",
+      extraPathDirs: ["/home/user/.nvm/versions/node/v22.22.0/bin"],
+    });
+
+    expect(env.PATH?.split(path.posix.delimiter)[0]).toBe(
+      "/home/user/.nvm/versions/node/v22.22.0/bin",
+    );
   });
 });
 

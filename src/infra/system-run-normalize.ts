@@ -1,3 +1,5 @@
+import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+
 export function normalizeNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -7,5 +9,5 @@ export function normalizeNonEmptyString(value: unknown): string | null {
 }
 
 export function normalizeStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.map((entry) => String(entry)) : [];
+  return Array.isArray(value) ? mapAllowFromEntries(value) : [];
 }

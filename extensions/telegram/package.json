@@ -1,12 +1,31 @@
 {
   "name": "@openclaw/telegram",
-  "version": "2026.3.2",
+  "version": "2026.3.14",
   "private": true,
   "description": "OpenClaw Telegram channel plugin",
   "type": "module",
+  "dependencies": {
+    "@grammyjs/runner": "^2.0.3",
+    "@grammyjs/transformer-throttler": "^1.2.1",
+    "grammy": "^1.41.1"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "telegram",
+      "label": "Telegram",
+      "selectionLabel": "Telegram (Bot API)",
+      "detailLabel": "Telegram Bot",
+      "docsPath": "/channels/telegram",
+      "docsLabel": "telegram",
+      "blurb": "simplest way to get started — register a bot with @BotFather and get going.",
+      "systemImage": "paperplane"
+    },
+    "bundle": {
+      "stageRuntimeDependencies": true
+    }
   }
 }

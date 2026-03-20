@@ -1,11 +1,12 @@
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-} from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { createAccountListHelpers, type OpenClawConfig } from "../runtime-api.js";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
-import type { MattermostAccountConfig, MattermostChatMode } from "../types.js";
+import type {
+  MattermostAccountConfig,
+  MattermostChatMode,
+  MattermostChatTypeKey,
+  MattermostReplyToMode,
+} from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
 
 export type MattermostTokenSource = "env" | "config" | "none";
@@ -28,36 +29,11 @@ export type ResolvedMattermostAccount = {
   blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
 };
 
-function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
-  const accounts = cfg.channels?.mattermost?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return [];
-  }
-  return Object.keys(accounts).filter(Boolean);
-}
-
-export function listMattermostAccountIds(cfg: OpenClawConfig): string[] {
-  const ids = listConfiguredAccountIds(cfg);
-  if (ids.length === 0) {
-    return [DEFAULT_ACCOUNT_ID];
-  }
-  return ids.toSorted((a, b) => a.localeCompare(b));
-}
-
-export function resolveDefaultMattermostAccountId(cfg: OpenClawConfig): string {
-  const preferred = normalizeOptionalAccountId(cfg.channels?.mattermost?.defaultAccount);
-  if (
-    preferred &&
-    listMattermostAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
-  ) {
-    return preferred;
-  }
-  const ids = listMattermostAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
-}
+const {
+  listAccountIds: listMattermostAccountIds,
+  resolveDefaultAccountId: resolveDefaultMattermostAccountId,
+} = createAccountListHelpers("mattermost");
+export { listMattermostAccountIds, resolveDefaultMattermostAccountId };
 
 function resolveAccountConfig(
   cfg: OpenClawConfig,
@@ -157,6 +133,20 @@ export function resolveMattermostAccount(params: {
     blockStreaming: merged.blockStreaming,
     blockStreamingCoalesce: merged.blockStreamingCoalesce,
   };
+}
+
+/**
+ * Resolve the effective replyToMode for a given chat type.
+ * Mattermost auto-threading only applies to channel and group messages.
+ */
+export function resolveMattermostReplyToMode(
+  account: ResolvedMattermostAccount,
+  kind: MattermostChatTypeKey,
+): MattermostReplyToMode {
+  if (kind === "direct") {
+    return "off";
+  }
+  return account.config.replyToMode ?? "off";
 }
 
 export function listEnabledMattermostAccounts(cfg: OpenClawConfig): ResolvedMattermostAccount[] {

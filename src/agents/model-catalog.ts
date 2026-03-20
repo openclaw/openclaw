@@ -29,37 +29,23 @@ type PiSdkModule = typeof import("./pi-model-discovery.js");
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
-const defaultImportPiSdk = () => import("./pi-model-discovery.js");
+const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
+let providerRuntimePromise:
+  | Promise<typeof import("../plugins/provider-runtime.runtime.js")>
+  | undefined;
+let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
 
-const CODEX_PROVIDER = "openai-codex";
-const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
-const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
 
-function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
-  const hasSpark = models.some(
-    (entry) =>
-      entry.provider === CODEX_PROVIDER &&
-      entry.id.toLowerCase() === OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-  );
-  if (hasSpark) {
-    return;
-  }
+function loadProviderRuntime() {
+  providerRuntimePromise ??= import("../plugins/provider-runtime.runtime.js");
+  return providerRuntimePromise;
+}
 
-  const baseModel = models.find(
-    (entry) =>
-      entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === OPENAI_CODEX_GPT53_MODEL_ID,
-  );
-  if (!baseModel) {
-    return;
-  }
-
-  models.push({
-    ...baseModel,
-    id: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-    name: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-  });
+function loadModelSuppression() {
+  modelSuppressionPromise ??= import("./model-suppression.runtime.js");
+  return modelSuppressionPromise;
 }
 
 function normalizeConfiguredModelInput(input: unknown): ModelInputType[] | undefined {
@@ -186,6 +172,8 @@ export async function loadModelCatalog(params?: {
       // will keep failing until restart).
       const piSdk = await importPiSdk();
       const agentDir = resolveOpenClawAgentDir();
+      const [{ shouldSuppressBuiltInModel }, { augmentModelCatalogWithProviderPlugins }] =
+        await Promise.all([loadModelSuppression(), loadProviderRuntime()]);
       const { join } = await import("node:path");
       const authStorage = piSdk.discoverAuthStorage(agentDir);
       const registry = new (piSdk.ModelRegistry as unknown as {
@@ -208,6 +196,9 @@ export async function loadModelCatalog(params?: {
         if (!provider) {
           continue;
         }
+        if (shouldSuppressBuiltInModel({ provider, id })) {
+          continue;
+        }
         const name = String(entry?.name ?? id).trim() || id;
         const contextWindow =
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
@@ -218,7 +209,31 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
-      applyOpenAICodexSparkFallback(models);
+      const supplemental = await augmentModelCatalogWithProviderPlugins({
+        config: cfg,
+        env: process.env,
+        context: {
+          config: cfg,
+          agentDir,
+          env: process.env,
+          entries: [...models],
+        },
+      });
+      if (supplemental.length > 0) {
+        const seen = new Set(
+          models.map(
+            (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
+          ),
+        );
+        for (const entry of supplemental) {
+          const key = `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
+          if (seen.has(key)) {
+            continue;
+          }
+          models.push(entry);
+          seen.add(key);
+        }
+      }
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.

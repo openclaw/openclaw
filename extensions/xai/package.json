@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/xai-plugin",
+  "version": "2026.3.14",
+  "private": true,
+  "description": "OpenClaw xAI plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

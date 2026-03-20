@@ -16,14 +16,20 @@ export function normalizeMessageActionInput(params: {
 }): Record<string, unknown> {
   const normalizedArgs = { ...params.args };
   const { action, toolContext } = params;
+  const explicitChannel =
+    typeof normalizedArgs.channel === "string" ? normalizedArgs.channel.trim() : "";
+  const inferredChannel =
+    explicitChannel || normalizeMessageChannel(toolContext?.currentChannelProvider) || "";
 
   const explicitTarget =
     typeof normalizedArgs.target === "string" ? normalizedArgs.target.trim() : "";
+  const hasLegacyTargetFields =
+    typeof normalizedArgs.to === "string" || typeof normalizedArgs.channelId === "string";
   const hasLegacyTarget =
     (typeof normalizedArgs.to === "string" && normalizedArgs.to.trim().length > 0) ||
     (typeof normalizedArgs.channelId === "string" && normalizedArgs.channelId.trim().length > 0);
 
-  if (explicitTarget && hasLegacyTarget) {
+  if (explicitTarget && hasLegacyTargetFields) {
     delete normalizedArgs.to;
     delete normalizedArgs.channelId;
   }
@@ -32,7 +38,7 @@ export function normalizeMessageActionInput(params: {
     !explicitTarget &&
     !hasLegacyTarget &&
     actionRequiresTarget(action) &&
-    !actionHasTarget(action, normalizedArgs)
+    !actionHasTarget(action, normalizedArgs, { channel: inferredChannel })
   ) {
     const inferredTarget = toolContext?.currentChannelId?.trim();
     if (inferredTarget) {
@@ -52,17 +58,17 @@ export function normalizeMessageActionInput(params: {
     }
   }
 
-  const explicitChannel =
-    typeof normalizedArgs.channel === "string" ? normalizedArgs.channel.trim() : "";
   if (!explicitChannel) {
-    const inferredChannel = normalizeMessageChannel(toolContext?.currentChannelProvider);
     if (inferredChannel && isDeliverableMessageChannel(inferredChannel)) {
       normalizedArgs.channel = inferredChannel;
     }
   }
 
   applyTargetToParams({ action, args: normalizedArgs });
-  if (actionRequiresTarget(action) && !actionHasTarget(action, normalizedArgs)) {
+  if (
+    actionRequiresTarget(action) &&
+    !actionHasTarget(action, normalizedArgs, { channel: inferredChannel })
+  ) {
     throw new Error(`Action ${action} requires a target.`);
   }
 

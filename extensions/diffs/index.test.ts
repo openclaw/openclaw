@@ -1,40 +1,29 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import { createMockServerResponse } from "../../src/test-utils/mock-http-response.js";
+import { createMockServerResponse } from "../../test/helpers/extensions/mock-http-response.js";
+import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
+import type { OpenClawPluginApi, OpenClawPluginToolContext } from "./api.js";
 import plugin from "./index.js";
 
 describe("diffs plugin registration", () => {
-  it("registers the tool and http route", () => {
+  it("registers the tool, http route, and system-prompt guidance hook", async () => {
     const registerTool = vi.fn();
     const registerHttpRoute = vi.fn();
     const on = vi.fn();
 
-    plugin.register?.({
-      id: "diffs",
-      name: "Diffs",
-      description: "Diffs",
-      source: "test",
-      config: {},
-      runtime: {} as never,
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-      },
-      registerTool,
-      registerHook() {},
-      registerHttpRoute,
-      registerChannel() {},
-      registerGatewayMethod() {},
-      registerCli() {},
-      registerService() {},
-      registerProvider() {},
-      registerCommand() {},
-      resolvePath(input: string) {
-        return input;
-      },
-      on,
-    });
+    plugin.register?.(
+      createTestPluginApi({
+        id: "diffs",
+        name: "Diffs",
+        description: "Diffs",
+        source: "test",
+        config: {},
+        runtime: {} as never,
+        registerTool,
+        registerHttpRoute,
+        on,
+      }),
+    );
 
     expect(registerTool).toHaveBeenCalledTimes(1);
     expect(registerHttpRoute).toHaveBeenCalledTimes(1);
@@ -43,21 +32,28 @@ describe("diffs plugin registration", () => {
       auth: "plugin",
       match: "prefix",
     });
-    expect(on).not.toHaveBeenCalled();
+    expect(on).toHaveBeenCalledTimes(1);
+    expect(on.mock.calls[0]?.[0]).toBe("before_prompt_build");
+    const beforePromptBuild = on.mock.calls[0]?.[1];
+    const result = await beforePromptBuild?.({}, {});
+    expect(result).toMatchObject({
+      prependSystemContext: expect.stringContaining("prefer the `diffs` tool"),
+    });
+    expect(result?.prependContext).toBeUndefined();
   });
 
   it("applies plugin-config defaults through registered tool and viewer handler", async () => {
-    let registeredTool:
-      | { execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown> }
-      | undefined;
-    let registeredHttpRouteHandler:
-      | ((
-          req: IncomingMessage,
-          res: ReturnType<typeof createMockServerResponse>,
-        ) => Promise<boolean>)
-      | undefined;
+    type RegisteredTool = {
+      execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+    };
+    type RegisteredHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
 
-    plugin.register?.({
+    let registeredToolFactory:
+      | ((ctx: OpenClawPluginToolContext) => RegisteredTool | RegisteredTool[] | null | undefined)
+      | undefined;
+    let registeredHttpRouteHandler: RegisteredHttpRouteParams["handler"] | undefined;
+
+    const api = createTestPluginApi({
       id: "diffs",
       name: "Diffs",
       description: "Diffs",
@@ -80,30 +76,22 @@ describe("diffs plugin registration", () => {
         },
       },
       runtime: {} as never,
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
+      registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
+        registeredToolFactory = typeof tool === "function" ? tool : () => tool;
       },
-      registerTool(tool) {
-        registeredTool = typeof tool === "function" ? undefined : tool;
+      registerHttpRoute(params: RegisteredHttpRouteParams) {
+        registeredHttpRouteHandler = params.handler;
       },
-      registerHook() {},
-      registerHttpRoute(params) {
-        registeredHttpRouteHandler = params.handler as typeof registeredHttpRouteHandler;
-      },
-      registerChannel() {},
-      registerGatewayMethod() {},
-      registerCli() {},
-      registerService() {},
-      registerProvider() {},
-      registerCommand() {},
-      resolvePath(input: string) {
-        return input;
-      },
-      on() {},
     });
 
+    plugin.register?.(api as unknown as OpenClawPluginApi);
+
+    const registeredTool = registeredToolFactory?.({
+      agentId: "main",
+      sessionId: "session-123",
+      messageChannel: "discord",
+      agentAccountId: "default",
+    }) as RegisteredTool | undefined;
     const result = await registeredTool?.execute?.("tool-1", {
       before: "one\n",
       after: "two\n",
@@ -128,12 +116,25 @@ describe("diffs plugin registration", () => {
     expect(String(res.body)).toContain('"disableLineNumbers":true');
     expect(String(res.body)).toContain('"diffIndicators":"classic"');
     expect(String(res.body)).toContain("--diffs-line-height: 30px;");
+    expect((result as { details?: Record<string, unknown> } | undefined)?.details?.context).toEqual(
+      {
+        agentId: "main",
+        sessionId: "session-123",
+        messageChannel: "discord",
+        agentAccountId: "default",
+      },
+    );
   });
 });
 
-function localReq(input: { method: string; url: string }): IncomingMessage {
+function localReq(input: {
+  method: string;
+  url: string;
+  headers?: IncomingMessage["headers"];
+}): IncomingMessage {
   return {
     ...input,
+    headers: input.headers ?? {},
     socket: { remoteAddress: "127.0.0.1" },
   } as unknown as IncomingMessage;
 }

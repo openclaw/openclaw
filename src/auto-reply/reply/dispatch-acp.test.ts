@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
@@ -131,6 +134,7 @@ async function runDispatch(params: {
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
   onReplyStart?: () => void;
+  ctxOverrides?: Record<string, unknown>;
 }) {
   return tryDispatchAcpReply({
     ctx: buildTestCtx({
@@ -138,6 +142,7 @@ async function runDispatch(params: {
       Surface: "discord",
       SessionKey: sessionKey,
       BodyForAgent: params.bodyForAgent,
+      ...params.ctxOverrides,
     }),
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
@@ -351,6 +356,64 @@ describe("tryDispatchAcpReply", () => {
 
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("forwards normalized image attachments into ACP turns", async () => {
+    setReadyAcpResolution();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "inbound.png");
+    try {
+      await fs.writeFile(imagePath, "image-bytes");
+      managerMocks.runTurn.mockResolvedValue(undefined);
+
+      await runDispatch({
+        bodyForAgent: "   ",
+        ctxOverrides: {
+          MediaPath: imagePath,
+          MediaType: "image/png",
+        },
+      });
+
+      expect(managerMocks.runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "",
+          attachments: [
+            {
+              mediaType: "image/png",
+              data: Buffer.from("image-bytes").toString("base64"),
+            },
+          ],
+        }),
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips ACP turns for non-image attachments when there is no text prompt", async () => {
+    setReadyAcpResolution();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const docPath = path.join(tempDir, "inbound.pdf");
+    const { dispatcher } = createDispatcher();
+    const onReplyStart = vi.fn();
+    try {
+      await fs.writeFile(docPath, "pdf-bytes");
+
+      await runDispatch({
+        bodyForAgent: "   ",
+        dispatcher,
+        onReplyStart,
+        ctxOverrides: {
+          MediaPath: docPath,
+          MediaType: "application/pdf",
+        },
+      });
+
+      expect(managerMocks.runTurn).not.toHaveBeenCalled();
+      expect(onReplyStart).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("surfaces ACP policy errors as final error replies", async () => {

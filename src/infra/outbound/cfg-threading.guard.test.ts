@@ -59,6 +59,15 @@ function listExtensionFiles(): {
   };
 }
 
+function listHighRiskRuntimeCfgFiles(): string[] {
+  return [
+    "extensions/telegram/src/action-runtime.ts",
+    "extensions/discord/src/monitor/reply-delivery.ts",
+    "extensions/discord/src/monitor/thread-bindings.discord-api.ts",
+    "extensions/discord/src/monitor/thread-bindings.manager.ts",
+  ];
+}
+
 function extractOutboundBlock(source: string, file: string): string {
   const outboundKeyIndex = source.indexOf("outbound:");
   expect(outboundKeyIndex, `${file} should define outbound:`).toBeGreaterThanOrEqual(0);
@@ -174,6 +183,14 @@ describe("outbound cfg-threading guard", () => {
       expect(outboundBlock, `${file} outbound block must not call loadConfig`).not.toMatch(
         loadConfigPattern,
       );
+    }
+  });
+
+  it("keeps high-risk runtime delivery paths free of loadConfig calls", () => {
+    const runtimeFiles = listHighRiskRuntimeCfgFiles();
+    for (const file of runtimeFiles) {
+      const source = readRepoFile(file);
+      expect(source, `${file} must not call loadConfig`).not.toMatch(loadConfigPattern);
     }
   });
 });

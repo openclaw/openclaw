@@ -1,13 +1,16 @@
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
-import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
+import { mediaKindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { withTempDownloadPath, type ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
+
+const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 
 export type DownloadImageResult = {
   buffer: Buffer;
@@ -19,6 +22,114 @@ export type DownloadMessageResourceResult = {
   contentType?: string;
   fileName?: string;
 };
+
+function createConfiguredFeishuMediaClient(params: { cfg: ClawdbotConfig; accountId?: string }): {
+  account: ReturnType<typeof resolveFeishuAccount>;
+  client: ReturnType<typeof createFeishuClient>;
+} {
+  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  return {
+    account,
+    client: createFeishuClient({
+      ...account,
+      httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+    }),
+  };
+}
+
+function extractFeishuUploadKey(
+  response: unknown,
+  params: {
+    key: "image_key" | "file_key";
+    errorPrefix: string;
+  },
+): string {
+  // SDK v1.30+ returns data directly without code wrapper on success.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
+  const responseAny = response as any;
+  if (responseAny.code !== undefined && responseAny.code !== 0) {
+    throw new Error(`${params.errorPrefix}: ${responseAny.msg || `code ${responseAny.code}`}`);
+  }
+
+  const key = responseAny[params.key] ?? responseAny.data?.[params.key];
+  if (!key) {
+    throw new Error(`${params.errorPrefix}: no ${params.key} returned`);
+  }
+  return key;
+}
+
+function readHeaderValue(
+  headers: Record<string, unknown> | undefined,
+  name: string,
+): string | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const target = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== target) {
+      continue;
+    }
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+    if (Array.isArray(value)) {
+      const first = value.find((entry) => typeof entry === "string" && entry.trim());
+      if (typeof first === "string") {
+        return first.trim();
+      }
+    }
+  }
+  return undefined;
+}
+
+function decodeDispositionFileName(value: string): string | undefined {
+  const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim().replace(/^"(.*)"$/, "$1"));
+    } catch {
+      return utf8Match[1].trim().replace(/^"(.*)"$/, "$1");
+    }
+  }
+
+  const plainMatch = value.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1]?.trim();
+}
+
+function extractFeishuDownloadMetadata(response: unknown): {
+  contentType?: string;
+  fileName?: string;
+} {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
+  const responseAny = response as any;
+  const headers =
+    (responseAny.headers as Record<string, unknown> | undefined) ??
+    (responseAny.header as Record<string, unknown> | undefined);
+
+  const contentType =
+    readHeaderValue(headers, "content-type") ??
+    (typeof responseAny.contentType === "string" ? responseAny.contentType : undefined) ??
+    (typeof responseAny.mime_type === "string" ? responseAny.mime_type : undefined) ??
+    (typeof responseAny.data?.contentType === "string"
+      ? responseAny.data.contentType
+      : undefined) ??
+    (typeof responseAny.data?.mime_type === "string" ? responseAny.data.mime_type : undefined);
+
+  const disposition = readHeaderValue(headers, "content-disposition");
+  const fileName =
+    (disposition ? decodeDispositionFileName(disposition) : undefined) ??
+    (typeof responseAny.file_name === "string" ? responseAny.file_name : undefined) ??
+    (typeof responseAny.fileName === "string" ? responseAny.fileName : undefined) ??
+    (typeof responseAny.data?.file_name === "string" ? responseAny.data.file_name : undefined) ??
+    (typeof responseAny.data?.fileName === "string" ? responseAny.data.fileName : undefined);
+
+  return { contentType, fileName };
+}
 
 async function readFeishuResponseBuffer(params: {
   response: unknown;
@@ -92,12 +203,7 @@ export async function downloadImageFeishu(params: {
   if (!normalizedImageKey) {
     throw new Error("Feishu image download failed: invalid image_key");
   }
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
+  const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
   const response = await client.im.image.get({
     path: { image_key: normalizedImageKey },
@@ -108,7 +214,8 @@ export async function downloadImageFeishu(params: {
     tmpDirPrefix: "openclaw-feishu-img-",
     errorPrefix: "Feishu image download failed",
   });
-  return { buffer };
+  const meta = extractFeishuDownloadMetadata(response);
+  return { buffer, contentType: meta.contentType };
 }
 
 /**
@@ -127,12 +234,7 @@ export async function downloadMessageResourceFeishu(params: {
   if (!normalizedFileKey) {
     throw new Error("Feishu message resource download failed: invalid file_key");
   }
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
+  const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
   const response = await client.im.messageResource.get({
     path: { message_id: messageId, file_key: normalizedFileKey },
@@ -144,7 +246,7 @@ export async function downloadMessageResourceFeishu(params: {
     tmpDirPrefix: "openclaw-feishu-resource-",
     errorPrefix: "Feishu message resource download failed",
   });
-  return { buffer };
+  return { buffer, ...extractFeishuDownloadMetadata(response) };
 }
 
 export type UploadImageResult = {
@@ -171,12 +273,7 @@ export async function uploadImageFeishu(params: {
   accountId?: string;
 }): Promise<UploadImageResult> {
   const { cfg, image, imageType = "message", accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
+  const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
   // SDK accepts Buffer directly or fs.ReadStream for file paths
   // Using Readable.from(buffer) causes issues with form-data library
@@ -191,38 +288,26 @@ export async function uploadImageFeishu(params: {
     },
   });
 
-  // SDK v1.30+ returns data directly without code wrapper on success
-  // On error, it throws or returns { code, msg }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
-  const responseAny = response as any;
-  if (responseAny.code !== undefined && responseAny.code !== 0) {
-    throw new Error(`Feishu image upload failed: ${responseAny.msg || `code ${responseAny.code}`}`);
-  }
-
-  const imageKey = responseAny.image_key ?? responseAny.data?.image_key;
-  if (!imageKey) {
-    throw new Error("Feishu image upload failed: no image_key returned");
-  }
-
-  return { imageKey };
+  return {
+    imageKey: extractFeishuUploadKey(response, {
+      key: "image_key",
+      errorPrefix: "Feishu image upload failed",
+    }),
+  };
 }
 
 /**
- * Encode a filename for safe use in Feishu multipart/form-data uploads.
- * Non-ASCII characters (Chinese, em-dash, full-width brackets, etc.) cause
- * the upload to silently fail when passed raw through the SDK's form-data
- * serialization.  RFC 5987 percent-encoding keeps headers 7-bit clean while
- * Feishu's server decodes and preserves the original display name.
+ * Sanitize a filename for safe use in Feishu multipart/form-data uploads.
+ * Strips control characters and multipart-injection vectors (CWE-93) while
+ * preserving the original UTF-8 display name (Chinese, emoji, etc.).
+ *
+ * Previous versions percent-encoded non-ASCII characters, but the Feishu
+ * `im.file.create` API uses `file_name` as a literal display name — it does
+ * NOT decode percent-encoding — so encoded filenames appeared as garbled text
+ * in chat (regression in v2026.3.2).
  */
 export function sanitizeFileNameForUpload(fileName: string): string {
-  const ASCII_ONLY = /^[\x20-\x7E]+$/;
-  if (ASCII_ONLY.test(fileName)) {
-    return fileName;
-  }
-  return encodeURIComponent(fileName)
-    .replace(/'/g, "%27")
-    .replace(/\(/g, "%28")
-    .replace(/\)/g, "%29");
+  return fileName.replace(/[\x00-\x1F\x7F\r\n"\\]/g, "_");
 }
 
 /**
@@ -238,12 +323,7 @@ export async function uploadFileFeishu(params: {
   accountId?: string;
 }): Promise<UploadFileResult> {
   const { cfg, file, fileName, fileType, duration, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
+  const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
   // SDK accepts Buffer directly or fs.ReadStream for file paths
   // Using Readable.from(buffer) causes issues with form-data library
@@ -262,19 +342,12 @@ export async function uploadFileFeishu(params: {
     },
   });
 
-  // SDK v1.30+ returns data directly without code wrapper on success
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
-  const responseAny = response as any;
-  if (responseAny.code !== undefined && responseAny.code !== 0) {
-    throw new Error(`Feishu file upload failed: ${responseAny.msg || `code ${responseAny.code}`}`);
-  }
-
-  const fileKey = responseAny.file_key ?? responseAny.data?.file_key;
-  if (!fileKey) {
-    throw new Error("Feishu file upload failed: no file_key returned");
-  }
-
-  return { fileKey };
+  return {
+    fileKey: extractFeishuUploadKey(response, {
+      key: "file_key",
+      errorPrefix: "Feishu file upload failed",
+    }),
+  };
 }
 
 /**
@@ -328,8 +401,8 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "audio" for audio files, "file" for documents and video */
-  msgType?: "file" | "audio";
+  /** Use "audio" for audio, "media" for video (mp4), "file" for documents */
+  msgType?: "file" | "audio" | "media";
   replyToMessageId?: string;
   replyInThread?: boolean;
   accountId?: string;
@@ -399,6 +472,53 @@ export function detectFileType(
   }
 }
 
+function resolveFeishuOutboundMediaKind(params: { fileName: string; contentType?: string }): {
+  fileType?: "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream";
+  msgType: "image" | "file" | "audio" | "media";
+} {
+  const { fileName, contentType } = params;
+  const ext = path.extname(fileName).toLowerCase();
+  const mimeKind = mediaKindFromMime(contentType);
+
+  const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
+    ext,
+  );
+  if (isImageExt || mimeKind === "image") {
+    return { msgType: "image" };
+  }
+
+  if (
+    ext === ".opus" ||
+    ext === ".ogg" ||
+    contentType === "audio/ogg" ||
+    contentType === "audio/opus"
+  ) {
+    return { fileType: "opus", msgType: "audio" };
+  }
+
+  if (
+    [".mp4", ".mov", ".avi"].includes(ext) ||
+    contentType === "video/mp4" ||
+    contentType === "video/quicktime" ||
+    contentType === "video/x-msvideo"
+  ) {
+    return { fileType: "mp4", msgType: "media" };
+  }
+
+  const fileType = detectFileType(fileName);
+  return {
+    fileType,
+    msgType:
+      fileType === "stream"
+        ? "file"
+        : fileType === "opus"
+          ? "audio"
+          : fileType === "mp4"
+            ? "media"
+            : "file",
+  };
+}
+
 /**
  * Upload and send media (image or file) from URL, local path, or buffer.
  * When mediaUrl is a local path, mediaLocalRoots (from core outbound context)
@@ -435,6 +555,7 @@ export async function sendMediaFeishu(params: {
 
   let buffer: Buffer;
   let name: string;
+  let contentType: string | undefined;
 
   if (mediaBuffer) {
     buffer = mediaBuffer;
@@ -447,33 +568,29 @@ export async function sendMediaFeishu(params: {
     });
     buffer = loaded.buffer;
     name = fileName ?? loaded.fileName ?? "file";
+    contentType = loaded.contentType;
   } else {
     throw new Error("Either mediaUrl or mediaBuffer must be provided");
   }
 
-  // Determine if it's an image based on extension
-  const ext = path.extname(name).toLowerCase();
-  const isImage = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(ext);
+  const routing = resolveFeishuOutboundMediaKind({ fileName: name, contentType });
 
-  if (isImage) {
+  if (routing.msgType === "image") {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
   } else {
-    const fileType = detectFileType(name);
     const { fileKey } = await uploadFileFeishu({
       cfg,
       file: buffer,
       fileName: name,
-      fileType,
+      fileType: routing.fileType ?? "stream",
       accountId,
     });
-    // Feishu API: opus -> "audio", everything else (including video) -> "file"
-    const msgType = fileType === "opus" ? "audio" : "file";
     return sendFileFeishu({
       cfg,
       to,
       fileKey,
-      msgType,
+      msgType: routing.msgType,
       replyToMessageId,
       replyInThread,
       accountId,

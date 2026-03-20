@@ -1,13 +1,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  isNonSecretApiKeyMarker,
+  isSecretRefHeaderValueMarker,
+} from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { createSecretsConfigIO } from "./config-io.js";
+import { getSkippedExecRefStaticError, selectRefsForExecPolicy } from "./exec-resolution-policy.js";
 import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
 import { secretRefKey } from "./ref-contract.js";
 import {
@@ -23,6 +29,7 @@ import {
 import { isNonEmptyString, isRecord } from "./shared.js";
 import { describeUnknownError } from "./shared.js";
 import {
+  listAgentModelsJsonPaths,
   listAuthProfileStorePaths,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
@@ -36,7 +43,7 @@ export type SecretsAuditCode =
   | "REF_SHADOWED"
   | "LEGACY_RESIDUE";
 
-export type SecretsAuditSeverity = "info" | "warn" | "error";
+export type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
 
 export type SecretsAuditFinding = {
   code: SecretsAuditCode;
@@ -48,11 +55,16 @@ export type SecretsAuditFinding = {
   profileId?: string;
 };
 
-export type SecretsAuditStatus = "clean" | "findings" | "unresolved";
+export type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
 
 export type SecretsAuditReport = {
   version: 1;
   status: SecretsAuditStatus;
+  resolution: {
+    refsChecked: number;
+    skippedExecRefs: number;
+    resolvabilityComplete: boolean;
+  };
   filesScanned: string[];
   summary: {
     plaintextCount: number;
@@ -91,6 +103,41 @@ type AuditCollector = {
 };
 
 const REF_RESOLVE_FALLBACK_CONCURRENCY = 8;
+const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
+const ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES = new Set([
+  "authorization",
+  "proxy-authorization",
+  "x-api-key",
+  "api-key",
+  "apikey",
+  "x-auth-token",
+  "auth-token",
+  "x-access-token",
+  "access-token",
+  "x-secret-key",
+  "secret-key",
+]);
+const SENSITIVE_MODEL_PROVIDER_HEADER_NAME_FRAGMENTS = [
+  "api-key",
+  "apikey",
+  "token",
+  "secret",
+  "password",
+  "credential",
+];
+
+function isLikelySensitiveModelProviderHeaderName(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES.has(normalized)) {
+    return true;
+  }
+  return SENSITIVE_MODEL_PROVIDER_HEADER_NAME_FRAGMENTS.some((fragment) =>
+    normalized.includes(fragment),
+  );
+}
 
 function addFinding(collector: AuditCollector, finding: SecretsAuditFinding): void {
   collector.findings.push(finding);
@@ -192,6 +239,12 @@ function collectConfigSecrets(params: {
       target.value,
       target.entry.expectedResolvedValue,
     );
+    if (
+      target.entry.id === "models.providers.*.headers.*" &&
+      !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "")
+    ) {
+      continue;
+    }
     if (!hasPlaintext) {
       continue;
     }
@@ -315,13 +368,107 @@ function collectAuthJsonResidue(params: { stateDir: string; collector: AuditColl
   }
 }
 
+function collectModelsJsonSecrets(params: {
+  modelsJsonPath: string;
+  collector: AuditCollector;
+}): void {
+  if (!fs.existsSync(params.modelsJsonPath)) {
+    return;
+  }
+  params.collector.filesScanned.add(params.modelsJsonPath);
+  const parsedResult = readJsonObjectIfExists(params.modelsJsonPath, {
+    requireRegularFile: true,
+    maxBytes: MAX_AUDIT_MODELS_JSON_BYTES,
+  });
+  if (parsedResult.error) {
+    addFinding(params.collector, {
+      code: "REF_UNRESOLVED",
+      severity: "error",
+      file: params.modelsJsonPath,
+      jsonPath: "<root>",
+      message: `Invalid JSON in models.json: ${parsedResult.error}`,
+    });
+    return;
+  }
+  const parsed = parsedResult.value;
+  if (!parsed || !isRecord(parsed.providers)) {
+    return;
+  }
+  for (const [providerId, providerValue] of Object.entries(parsed.providers)) {
+    if (!isRecord(providerValue)) {
+      continue;
+    }
+    const apiKey = providerValue.apiKey;
+    if (coerceSecretRef(apiKey)) {
+      addFinding(params.collector, {
+        code: "REF_UNRESOLVED",
+        severity: "error",
+        file: params.modelsJsonPath,
+        jsonPath: `providers.${providerId}.apiKey`,
+        message: "models.json contains an unresolved SecretRef object; regenerate models.json.",
+        provider: providerId,
+      });
+    } else if (isNonEmptyString(apiKey) && !isNonSecretApiKeyMarker(apiKey)) {
+      addFinding(params.collector, {
+        code: "PLAINTEXT_FOUND",
+        severity: "warn",
+        file: params.modelsJsonPath,
+        jsonPath: `providers.${providerId}.apiKey`,
+        message: "models.json provider apiKey is stored as plaintext.",
+        provider: providerId,
+      });
+    }
+
+    const headers = isRecord(providerValue.headers) ? providerValue.headers : undefined;
+    if (!headers) {
+      continue;
+    }
+    for (const [headerKey, headerValue] of Object.entries(headers)) {
+      const headerPath = `providers.${providerId}.headers.${headerKey}`;
+      if (coerceSecretRef(headerValue)) {
+        addFinding(params.collector, {
+          code: "REF_UNRESOLVED",
+          severity: "error",
+          file: params.modelsJsonPath,
+          jsonPath: headerPath,
+          message:
+            "models.json contains an unresolved SecretRef object for provider headers; regenerate models.json.",
+          provider: providerId,
+        });
+        continue;
+      }
+      if (!isNonEmptyString(headerValue)) {
+        continue;
+      }
+      if (isSecretRefHeaderValueMarker(headerValue)) {
+        continue;
+      }
+      if (!isLikelySensitiveModelProviderHeaderName(headerKey)) {
+        continue;
+      }
+      addFinding(params.collector, {
+        code: "PLAINTEXT_FOUND",
+        severity: "warn",
+        file: params.modelsJsonPath,
+        jsonPath: headerPath,
+        message: "models.json provider header value is stored as plaintext.",
+        provider: providerId,
+      });
+    }
+  }
+}
+
 async function collectUnresolvedRefFindings(params: {
   collector: AuditCollector;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): Promise<void> {
+  allowExec: boolean;
+}): Promise<{ refsChecked: number; skippedExecRefs: number }> {
   const cache: SecretRefResolveCache = {};
   const refsByProvider = new Map<string, Map<string, SecretRef>>();
+  const skippedRefKeys = new Set<string>();
+  let refsChecked = 0;
+  let skippedExecRefs = 0;
   for (const assignment of params.collector.refAssignments) {
     const providerKey = `${assignment.ref.source}:${assignment.ref.provider}`;
     let refsForProvider = refsByProvider.get(providerKey);
@@ -337,9 +484,30 @@ async function collectUnresolvedRefFindings(params: {
 
   for (const refsForProvider of refsByProvider.values()) {
     const refs = [...refsForProvider.values()];
+    const selectedRefs = selectRefsForExecPolicy({
+      refs,
+      allowExec: params.allowExec,
+    });
+    if (selectedRefs.skippedExecRefs.length > 0) {
+      skippedExecRefs += selectedRefs.skippedExecRefs.length;
+      for (const ref of selectedRefs.skippedExecRefs) {
+        skippedRefKeys.add(secretRefKey(ref));
+        const staticError = getSkippedExecRefStaticError({
+          ref,
+          config: params.config,
+        });
+        if (staticError) {
+          errorsByRefKey.set(secretRefKey(ref), new Error(staticError));
+        }
+      }
+    }
+    if (selectedRefs.refsToResolve.length === 0) {
+      continue;
+    }
+    refsChecked += selectedRefs.refsToResolve.length;
     const provider = refs[0]?.provider;
     try {
-      const resolved = await resolveSecretRefValues(refs, {
+      const resolved = await resolveSecretRefValues(selectedRefs.refsToResolve, {
         config: params.config,
         env: params.env,
         cache,
@@ -350,7 +518,7 @@ async function collectUnresolvedRefFindings(params: {
       continue;
     } catch (err) {
       if (provider && isProviderScopedSecretResolutionError(err)) {
-        for (const ref of refs) {
+        for (const ref of selectedRefs.refsToResolve) {
           errorsByRefKey.set(secretRefKey(ref), err);
         }
         continue;
@@ -358,7 +526,7 @@ async function collectUnresolvedRefFindings(params: {
       // Fall back to per-ref resolution for provider-specific pinpoint errors.
     }
 
-    const tasks = refs.map(
+    const tasks = selectedRefs.refsToResolve.map(
       (ref) => async (): Promise<{ key: string; resolved: unknown }> => ({
         key: secretRefKey(ref),
         resolved: await resolveSecretRefValue(ref, {
@@ -370,10 +538,10 @@ async function collectUnresolvedRefFindings(params: {
     );
     const fallback = await runTasksWithConcurrency({
       tasks,
-      limit: Math.min(REF_RESOLVE_FALLBACK_CONCURRENCY, refs.length),
+      limit: Math.min(REF_RESOLVE_FALLBACK_CONCURRENCY, selectedRefs.refsToResolve.length),
       errorMode: "continue",
       onTaskError: (error, index) => {
-        const ref = refs[index];
+        const ref = selectedRefs.refsToResolve[index];
         if (!ref) {
           return;
         }
@@ -390,6 +558,9 @@ async function collectUnresolvedRefFindings(params: {
 
   for (const assignment of params.collector.refAssignments) {
     const key = secretRefKey(assignment.ref);
+    if (skippedRefKeys.has(key) && !errorsByRefKey.has(key)) {
+      continue;
+    }
     const resolveErr = errorsByRefKey.get(key);
     if (resolveErr) {
       addFinding(params.collector, {
@@ -430,6 +601,10 @@ async function collectUnresolvedRefFindings(params: {
       });
     }
   }
+  return {
+    refsChecked,
+    skippedExecRefs,
+  };
 }
 
 function collectShadowingFindings(collector: AuditCollector): void {
@@ -464,9 +639,11 @@ function summarizeFindings(findings: SecretsAuditFinding[]): SecretsAuditReport[
 export async function runSecretsAudit(
   params: {
     env?: NodeJS.ProcessEnv;
+    allowExec?: boolean;
   } = {},
 ): Promise<SecretsAuditReport> {
   const env = params.env ?? process.env;
+  const allowExec = Boolean(params.allowExec);
   const io = createSecretsConfigIO({ env });
   const snapshot = await io.readConfigFileSnapshot();
   const configPath = resolveUserPath(snapshot.path);
@@ -483,6 +660,11 @@ export async function runSecretsAudit(
   const stateDir = resolveStateDir(env, os.homedir);
   const envPath = path.join(resolveConfigDir(env, os.homedir), ".env");
   const config = snapshot.valid ? snapshot.config : ({} as OpenClawConfig);
+  let resolution = {
+    refsChecked: 0,
+    skippedExecRefs: 0,
+    resolvabilityComplete: true,
+  };
 
   if (snapshot.valid) {
     collectConfigSecrets({
@@ -497,11 +679,23 @@ export async function runSecretsAudit(
         defaults,
       });
     }
-    await collectUnresolvedRefFindings({
+    for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir, env)) {
+      collectModelsJsonSecrets({
+        modelsJsonPath,
+        collector,
+      });
+    }
+    const unresolvedRefResult = await collectUnresolvedRefFindings({
       collector,
       config,
       env,
+      allowExec,
     });
+    resolution = {
+      refsChecked: unresolvedRefResult.refsChecked,
+      skippedExecRefs: unresolvedRefResult.skippedExecRefs,
+      resolvabilityComplete: unresolvedRefResult.skippedExecRefs === 0,
+    };
     collectShadowingFindings(collector);
   } else {
     addFinding(collector, {
@@ -533,6 +727,7 @@ export async function runSecretsAudit(
   return {
     version: 1,
     status,
+    resolution,
     filesScanned: [...collector.filesScanned].toSorted(),
     summary,
     findings: collector.findings,

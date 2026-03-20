@@ -74,6 +74,73 @@ function buildAuthProfileTargetIdIndex(): Map<string, CompiledTargetRegistryEntr
 
 const AUTH_PROFILES_TARGETS_BY_ID = buildAuthProfileTargetIdIndex();
 
+function normalizeAllowedTargetIds(targetIds?: Iterable<string>): Set<string> | null {
+  if (targetIds === undefined) {
+    return null;
+  }
+  return new Set(
+    Array.from(targetIds)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  );
+}
+
+function resolveDiscoveryEntries(params: {
+  allowedTargetIds: Set<string> | null;
+  defaultEntries: CompiledTargetRegistryEntry[];
+  entriesById: Map<string, CompiledTargetRegistryEntry[]>;
+}): CompiledTargetRegistryEntry[] {
+  if (params.allowedTargetIds === null) {
+    return params.defaultEntries;
+  }
+  return Array.from(params.allowedTargetIds).flatMap(
+    (targetId) => params.entriesById.get(targetId) ?? [],
+  );
+}
+
+function discoverSecretTargetsFromEntries(
+  source: unknown,
+  discoveryEntries: CompiledTargetRegistryEntry[],
+): DiscoveredConfigSecretTarget[] {
+  const out: DiscoveredConfigSecretTarget[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of discoveryEntries) {
+    const expanded = expandPathTokens(source, entry.pathTokens);
+    for (const match of expanded) {
+      const resolved = toResolvedPlanTarget(entry, match.segments, match.captures);
+      if (!resolved) {
+        continue;
+      }
+      const key = `${entry.id}:${resolved.pathSegments.join(".")}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      const refValue = resolved.refPathSegments
+        ? getPath(source, resolved.refPathSegments)
+        : undefined;
+      out.push({
+        entry,
+        path: resolved.pathSegments.join("."),
+        pathSegments: resolved.pathSegments,
+        ...(resolved.refPathSegments
+          ? {
+              refPathSegments: resolved.refPathSegments,
+              refPath: resolved.refPathSegments.join("."),
+            }
+          : {}),
+        value: match.value,
+        ...(resolved.providerId ? { providerId: resolved.providerId } : {}),
+        ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
+        ...(resolved.refPathSegments ? { refValue } : {}),
+      });
+    }
+  }
+
+  return out;
+}
+
 function toResolvedPlanTarget(
   entry: CompiledTargetRegistryEntry,
   pathSegments: string[],
@@ -172,6 +239,24 @@ export function resolvePlanTargetAgainstRegistry(candidate: {
   return null;
 }
 
+export function resolveConfigSecretTargetByPath(pathSegments: string[]): ResolvedPlanTarget | null {
+  for (const entry of OPENCLAW_COMPILED_SECRET_TARGETS) {
+    if (!entry.includeInPlan) {
+      continue;
+    }
+    const matched = matchPathTokens(pathSegments, entry.pathTokens);
+    if (!matched) {
+      continue;
+    }
+    const resolved = toResolvedPlanTarget(entry, pathSegments, matched.captures);
+    if (!resolved) {
+      continue;
+    }
+    return resolved;
+  }
+  return null;
+}
+
 export function discoverConfigSecretTargets(
   config: OpenClawConfig,
 ): DiscoveredConfigSecretTarget[] {
@@ -182,58 +267,13 @@ export function discoverConfigSecretTargetsByIds(
   config: OpenClawConfig,
   targetIds?: Iterable<string>,
 ): DiscoveredConfigSecretTarget[] {
-  const allowedTargetIds =
-    targetIds === undefined
-      ? null
-      : new Set(
-          Array.from(targetIds)
-            .map((entry) => entry.trim())
-            .filter((entry) => entry.length > 0),
-        );
-  const out: DiscoveredConfigSecretTarget[] = [];
-  const seen = new Set<string>();
-
-  const discoveryEntries =
-    allowedTargetIds === null
-      ? OPENCLAW_COMPILED_SECRET_TARGETS
-      : Array.from(allowedTargetIds).flatMap(
-          (targetId) => OPENCLAW_TARGETS_BY_ID.get(targetId) ?? [],
-        );
-
-  for (const entry of discoveryEntries) {
-    const expanded = expandPathTokens(config, entry.pathTokens);
-    for (const match of expanded) {
-      const resolved = toResolvedPlanTarget(entry, match.segments, match.captures);
-      if (!resolved) {
-        continue;
-      }
-      const key = `${entry.id}:${resolved.pathSegments.join(".")}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      const refValue = resolved.refPathSegments
-        ? getPath(config, resolved.refPathSegments)
-        : undefined;
-      out.push({
-        entry,
-        path: resolved.pathSegments.join("."),
-        pathSegments: resolved.pathSegments,
-        ...(resolved.refPathSegments
-          ? {
-              refPathSegments: resolved.refPathSegments,
-              refPath: resolved.refPathSegments.join("."),
-            }
-          : {}),
-        value: match.value,
-        ...(resolved.providerId ? { providerId: resolved.providerId } : {}),
-        ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
-        ...(resolved.refPathSegments ? { refValue } : {}),
-      });
-    }
-  }
-
-  return out;
+  const allowedTargetIds = normalizeAllowedTargetIds(targetIds);
+  const discoveryEntries = resolveDiscoveryEntries({
+    allowedTargetIds,
+    defaultEntries: OPENCLAW_COMPILED_SECRET_TARGETS,
+    entriesById: OPENCLAW_TARGETS_BY_ID,
+  });
+  return discoverSecretTargetsFromEntries(config, discoveryEntries);
 }
 
 export function discoverAuthProfileSecretTargets(store: unknown): DiscoveredConfigSecretTarget[] {
@@ -244,58 +284,13 @@ export function discoverAuthProfileSecretTargetsByIds(
   store: unknown,
   targetIds?: Iterable<string>,
 ): DiscoveredConfigSecretTarget[] {
-  const allowedTargetIds =
-    targetIds === undefined
-      ? null
-      : new Set(
-          Array.from(targetIds)
-            .map((entry) => entry.trim())
-            .filter((entry) => entry.length > 0),
-        );
-  const out: DiscoveredConfigSecretTarget[] = [];
-  const seen = new Set<string>();
-
-  const discoveryEntries =
-    allowedTargetIds === null
-      ? AUTH_PROFILES_COMPILED_SECRET_TARGETS
-      : Array.from(allowedTargetIds).flatMap(
-          (targetId) => AUTH_PROFILES_TARGETS_BY_ID.get(targetId) ?? [],
-        );
-
-  for (const entry of discoveryEntries) {
-    const expanded = expandPathTokens(store, entry.pathTokens);
-    for (const match of expanded) {
-      const resolved = toResolvedPlanTarget(entry, match.segments, match.captures);
-      if (!resolved) {
-        continue;
-      }
-      const key = `${entry.id}:${resolved.pathSegments.join(".")}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      const refValue = resolved.refPathSegments
-        ? getPath(store, resolved.refPathSegments)
-        : undefined;
-      out.push({
-        entry,
-        path: resolved.pathSegments.join("."),
-        pathSegments: resolved.pathSegments,
-        ...(resolved.refPathSegments
-          ? {
-              refPathSegments: resolved.refPathSegments,
-              refPath: resolved.refPathSegments.join("."),
-            }
-          : {}),
-        value: match.value,
-        ...(resolved.providerId ? { providerId: resolved.providerId } : {}),
-        ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
-        ...(resolved.refPathSegments ? { refValue } : {}),
-      });
-    }
-  }
-
-  return out;
+  const allowedTargetIds = normalizeAllowedTargetIds(targetIds);
+  const discoveryEntries = resolveDiscoveryEntries({
+    allowedTargetIds,
+    defaultEntries: AUTH_PROFILES_COMPILED_SECRET_TARGETS,
+    entriesById: AUTH_PROFILES_TARGETS_BY_ID,
+  });
+  return discoverSecretTargetsFromEntries(store, discoveryEntries);
 }
 
 export function listAuthProfileSecretTargetEntries(): SecretTargetRegistryEntry[] {

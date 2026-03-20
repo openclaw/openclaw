@@ -1,25 +1,18 @@
+import { stopOpenClawChrome } from "./chrome.js";
 import type { ResolvedBrowserConfig } from "./config.js";
-import { resolveProfile } from "./config.js";
-import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
 import {
   type BrowserServerState,
   createBrowserRouteContext,
   listKnownProfileNames,
 } from "./server-context.js";
 
-export async function ensureExtensionRelayForProfiles(params: {
+export async function ensureExtensionRelayForProfiles(_params: {
   resolved: ResolvedBrowserConfig;
   onWarn: (message: string) => void;
 }) {
-  for (const name of Object.keys(params.resolved.profiles)) {
-    const profile = resolveProfile(params.resolved, name);
-    if (!profile || profile.driver !== "extension") {
-      continue;
-    }
-    await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl }).catch((err) => {
-      params.onWarn(`Chrome extension relay init failed for profile "${name}": ${String(err)}`);
-    });
-  }
+  // Intentional no-op: the Chrome extension relay path has been removed.
+  // runtime-lifecycle still calls this helper, so keep the stub until the next
+  // breaking cleanup rather than changing the call graph in a patch release.
 }
 
 export async function stopKnownBrowserProfiles(params: {
@@ -37,6 +30,12 @@ export async function stopKnownBrowserProfiles(params: {
   try {
     for (const name of listKnownProfileNames(current)) {
       try {
+        const runtime = current.profiles.get(name);
+        if (runtime?.running) {
+          await stopOpenClawChrome(runtime.running);
+          runtime.running = null;
+          continue;
+        }
         await ctx.forProfile(name).stopRunningBrowser();
       } catch {
         // ignore
