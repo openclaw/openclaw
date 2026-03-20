@@ -15,6 +15,7 @@ import {
   resolveTestRunExitCode,
 } from "./test-parallel-utils.mjs";
 import {
+  dedupeFilesPreserveOrder,
   loadUnitMemoryHotspotManifest,
   loadTestRunnerBehavior,
   loadUnitTimingManifest,
@@ -81,18 +82,17 @@ const testProfile =
     ? rawTestProfile
     : "normal";
 const isMacMiniProfile = testProfile === "macmini";
-// vmForks is a big win for transform/import heavy suites. Node 24 is stable again
-// for the default unit-fast lane after moving the known flaky files to fork-only
-// isolation, but Node 25+ still falls back to process forks until re-validated.
-// Keep it opt-out via OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
+// vmForks is still useful for local transform-heavy runs, but do not flip CI
+// back to vmForks by default unless you have fresh green evidence on current
+// main. The retained Vite/Vitest module graph is the OOM pattern we keep
+// tripping over under CI-style pressure. Keep it opt-out via
+// OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1 for comparison.
 const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor <= 24 : true;
+const preferVmForksByDefault =
+  !isCI && !isWindows && supportsVmForks && !lowMemLocalHost && testProfile !== "low";
 const useVmForks =
   process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
-  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" &&
-    !isWindows &&
-    supportsVmForks &&
-    !lowMemLocalHost &&
-    (isCI || testProfile !== "low"));
+  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && preferVmForksByDefault);
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
@@ -345,15 +345,46 @@ const { memoryHeavyFiles: memoryHeavyUnitFiles, timedHeavyFiles: timedHeavyUnitF
         memoryHeavyFiles: [],
         timedHeavyFiles: [],
       };
+const unitSingletonBatchFiles = dedupeFilesPreserveOrder(
+  unitSingletonIsolatedFiles,
+  new Set(unitBehaviorIsolatedFiles),
+);
+const unitMemorySingletonFiles = dedupeFilesPreserveOrder(
+  memoryHeavyUnitFiles,
+  new Set([...unitBehaviorOverrideSet, ...unitSingletonBatchFiles]),
+);
 const unitSchedulingOverrideSet = new Set([...unitBehaviorOverrideSet, ...memoryHeavyUnitFiles]);
 const unitFastExcludedFiles = [
   ...new Set([...unitSchedulingOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
 ];
-const unitAutoSingletonFiles = [
-  ...new Set([...unitSingletonIsolatedFiles, ...memoryHeavyUnitFiles]),
-];
+const defaultSingletonBatchLaneCount =
+  testProfile === "serial"
+    ? 0
+    : unitSingletonBatchFiles.length === 0
+      ? 0
+      : isCI
+        ? Math.ceil(unitSingletonBatchFiles.length / 6)
+        : highMemLocalHost
+          ? Math.ceil(unitSingletonBatchFiles.length / 8)
+          : lowMemLocalHost
+            ? Math.ceil(unitSingletonBatchFiles.length / 12)
+            : Math.ceil(unitSingletonBatchFiles.length / 10);
+const singletonBatchLaneCount =
+  unitSingletonBatchFiles.length === 0
+    ? 0
+    : Math.min(
+        unitSingletonBatchFiles.length,
+        Math.max(
+          1,
+          parseEnvNumber("OPENCLAW_TEST_SINGLETON_ISOLATED_LANES", defaultSingletonBatchLaneCount),
+        ),
+      );
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
+const unitSingletonBuckets =
+  singletonBatchLaneCount > 0
+    ? packFilesByDuration(unitSingletonBatchFiles, singletonBatchLaneCount, estimateUnitDurationMs)
+    : [];
 const unitFastExcludedFileSet = new Set(unitFastExcludedFiles);
 const unitFastCandidateFiles = allKnownUnitFiles.filter(
   (file) => !unitFastExcludedFileSet.has(file),
@@ -400,6 +431,11 @@ const unitHeavyEntries = heavyUnitBuckets.map((files, index) => ({
   name: `unit-heavy-${String(index + 1)}`,
   args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
 }));
+const unitSingletonEntries = unitSingletonBuckets.map((files, index) => ({
+  name:
+    unitSingletonBuckets.length === 1 ? "unit-singleton" : `unit-singleton-${String(index + 1)}`,
+  args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
+}));
 const baseRuns = [
   ...(shouldSplitUnitRuns
     ? [
@@ -420,7 +456,8 @@ const baseRuns = [
             ]
           : []),
         ...unitHeavyEntries,
-        ...unitAutoSingletonFiles.map((file) => ({
+        ...unitSingletonEntries,
+        ...unitMemorySingletonFiles.map((file) => ({
           name: `${path.basename(file, ".test.ts")}-isolated`,
           args: [
             "vitest",
@@ -755,6 +792,9 @@ const defaultWorkerBudget =
 const maxWorkersForRun = (name) => {
   if (resolvedOverride) {
     return resolvedOverride;
+  }
+  if (name === "unit-singleton" || name.startsWith("unit-singleton-")) {
+    return 1;
   }
   if (isCI && !isMacOS) {
     return null;

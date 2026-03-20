@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  dedupeFilesPreserveOrder,
+  packFilesByDuration,
   selectMemoryHeavyFiles,
   selectTimedHeavyFiles,
   selectUnitHeavyFileGroups,
@@ -89,5 +91,46 @@ describe("scripts/test-runner-manifest memory selection", () => {
       memoryHeavyFiles: ["overlap.test.ts", "memory-only.test.ts"],
       timedHeavyFiles: ["timed-only.test.ts"],
     });
+  });
+});
+
+describe("dedupeFilesPreserveOrder", () => {
+  it("removes duplicates while keeping the first-seen order", () => {
+    expect(
+      dedupeFilesPreserveOrder([
+        "src/b.test.ts",
+        "src/a.test.ts",
+        "src/b.test.ts",
+        "src/c.test.ts",
+        "src/a.test.ts",
+      ]),
+    ).toEqual(["src/b.test.ts", "src/a.test.ts", "src/c.test.ts"]);
+  });
+
+  it("filters excluded files before deduping", () => {
+    expect(
+      dedupeFilesPreserveOrder(
+        ["src/a.test.ts", "src/b.test.ts", "src/c.test.ts", "src/b.test.ts"],
+        new Set(["src/b.test.ts"]),
+      ),
+    ).toEqual(["src/a.test.ts", "src/c.test.ts"]);
+  });
+});
+
+describe("packFilesByDuration", () => {
+  it("packs heavier files into the lightest remaining bucket", () => {
+    const durationByFile = {
+      "src/a.test.ts": 100,
+      "src/b.test.ts": 90,
+      "src/c.test.ts": 20,
+      "src/d.test.ts": 10,
+    } satisfies Record<string, number>;
+
+    expect(
+      packFilesByDuration(Object.keys(durationByFile), 2, (file) => durationByFile[file] ?? 0),
+    ).toEqual([
+      ["src/a.test.ts", "src/d.test.ts"],
+      ["src/b.test.ts", "src/c.test.ts"],
+    ]);
   });
 });
