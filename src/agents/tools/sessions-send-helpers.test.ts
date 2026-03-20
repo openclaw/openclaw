@@ -5,11 +5,22 @@ import {
 } from "./sessions-send-helpers.js";
 
 describe("sessions_send helper prompts", () => {
+  it("does not include private-delivery guidance by default", () => {
+    const prompt = buildAgentToAgentMessageContext({
+      requesterSessionKey: "agent:main:main",
+      requesterChannel: "main",
+      targetSessionKey: "agent:target:discord:group:123",
+    });
+
+    expect(prompt).not.toContain('deliveryMode: "private"');
+  });
+
   it("includes explicit private-delivery flags in sender reply guidance", () => {
     const prompt = buildAgentToAgentMessageContext({
       requesterSessionKey: "agent:main:main",
       requesterChannel: "main",
       targetSessionKey: "agent:target:discord:group:123",
+      includePrivateReplyGuidance: true,
     });
 
     expect(prompt).toContain(
@@ -27,6 +38,7 @@ describe("sessions_send helper prompts", () => {
       currentRole: "requester",
       turn: 1,
       maxTurns: 5,
+      includePrivateReplyGuidance: true,
     });
     expect(requesterTurnPrompt).not.toContain('deliveryMode: "private"');
 
@@ -38,6 +50,7 @@ describe("sessions_send helper prompts", () => {
       currentRole: "target",
       turn: 2,
       maxTurns: 5,
+      includePrivateReplyGuidance: true,
     });
     expect(targetTurnPrompt).toContain(
       'use sessions_send targeting agent:main:main with deliveryMode: "private"',

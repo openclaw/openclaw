@@ -701,8 +701,53 @@ describe("sessions_send gating", () => {
     expect(extraSystemPrompt).toContain(
       "For a private reply back to the sender, use sessions_send targeting agent:main:main",
     );
+    expect(extraSystemPrompt).toContain('deliveryMode: "private"');
     expect(extraSystemPrompt).toContain(
       "Do not use channel messaging tools for private agent-to-agent replies",
     );
+  });
+
+  it("does not inject private-reply guidance when announce delivery is used", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-initial" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "initial" }] }],
+        };
+      }
+      return {};
+    });
+
+    const tool = createMainSessionsSendTool();
+    await tool.execute("call-prompt-guidance-announce", {
+      sessionKey: "agent:main:discord:group:target",
+      message: "hi",
+      timeoutSeconds: 1,
+      deliveryMode: "announce",
+    });
+
+    const initialAgentCall = calls.find((call) => call.method === "agent");
+    const extraSystemPrompt =
+      typeof initialAgentCall?.params?.extraSystemPrompt === "string"
+        ? initialAgentCall.params.extraSystemPrompt
+        : "";
+    expect(extraSystemPrompt).toContain("This message was delivered via sessions_send.");
+    expect(extraSystemPrompt).not.toContain('deliveryMode: "private"');
+    expect(extraSystemPrompt).not.toContain("announce: false for legacy clients");
   });
 });

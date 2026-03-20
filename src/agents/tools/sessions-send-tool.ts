@@ -256,6 +256,7 @@ export function createSessionsSendTool(opts?: {
         requesterSessionKey: opts?.agentSessionKey,
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
+        includePrivateReplyGuidance: !announceEnabled,
       });
       const sendParams = {
         message,
@@ -285,6 +286,7 @@ export function createSessionsSendTool(opts?: {
           message,
           announceTimeoutMs,
           announceEnabled,
+          privateDelivery: !announceEnabled,
           maxPingPongTurns,
           requesterSessionKey,
           requesterChannel,
