@@ -671,6 +671,8 @@ export const OpenClawSchema = z
             root: z.string().optional(),
             allowedOrigins: z.array(z.string()).optional(),
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
+            ipAllowlist: z.array(z.string()).optional(),
+            ipBlocklist: z.array(z.string()).optional(),
             allowInsecureAuth: z.boolean().optional(),
             dangerouslyDisableDeviceAuth: z.boolean().optional(),
           })
@@ -733,7 +735,12 @@ export const OpenClawSchema = z
             enableRateLimiting: z.boolean().optional(),
             requireSubprotocol: z.boolean().optional(),
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
+            ipAllowlist: z.array(z.string()).optional(),
+            ipBlocklist: z.array(z.string()).optional(),
             validateHostHeader: z.boolean().optional(),
+            rejectUntrustedProxyHeaders: z.boolean().optional(),
+            autoDisableLocalhostBehindProxy: z.boolean().optional(),
+            enforceOriginCheckForAllClients: z.boolean().optional(),
           })
           .strict()
           .optional(),
