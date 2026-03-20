@@ -72,8 +72,9 @@ export function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: OpenClawConfig;
   eligibility?: SkillEligibilityContext;
+  skipHostEnvironmentCheck?: boolean;
 }): boolean {
-  const { entry, config, eligibility } = params;
+  const { entry, config, eligibility, skipHostEnvironmentCheck } = params;
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
   const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
@@ -84,20 +85,25 @@ export function shouldIncludeSkill(params: {
   if (!isBundledSkillAllowed(entry, allowBundled)) {
     return false;
   }
+  const hasConfiguredEnv = (envName: string): boolean =>
+    Boolean(
+      skillConfig?.env?.[envName] ||
+      (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
+    );
   return evaluateRuntimeEligibility({
     os: entry.metadata?.os,
-    remotePlatforms: eligibility?.remote?.platforms,
+    remotePlatforms: skipHostEnvironmentCheck
+      ? (eligibility?.remote?.platforms ?? entry.metadata?.os)
+      : eligibility?.remote?.platforms,
     always: entry.metadata?.always,
     requires: entry.metadata?.requires,
-    hasBin: hasBinary,
+    hasBin: skipHostEnvironmentCheck ? () => true : hasBinary,
     hasRemoteBin: eligibility?.remote?.hasBin,
     hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
     hasEnv: (envName) =>
-      Boolean(
-        process.env[envName] ||
-        skillConfig?.env?.[envName] ||
-        (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
-      ),
+      skipHostEnvironmentCheck
+        ? hasConfiguredEnv(envName)
+        : Boolean(process.env[envName] || hasConfiguredEnv(envName)),
     isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
   });
 }

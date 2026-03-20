@@ -86,9 +86,14 @@ function filterSkillEntries(
     typeof agentId === "string" && agentId.trim().length > 0
       ? resolveEffectiveSkillPolicy(config, agentId)
       : undefined;
-  let filtered = applyEligibility
-    ? entries.filter((entry) => shouldIncludeSkill({ entry, config, eligibility }))
-    : entries;
+  let filtered = entries.filter((entry) =>
+    shouldIncludeSkill({
+      entry,
+      config,
+      eligibility,
+      skipHostEnvironmentCheck: !applyEligibility,
+    }),
+  );
   if (policy) {
     filtered = filtered.filter((entry) => isSkillAllowedByPolicy(entry, policy));
   }

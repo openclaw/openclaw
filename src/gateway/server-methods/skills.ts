@@ -108,8 +108,9 @@ export const skillsHandlers: GatewayRequestHandlers = {
       const entries = loadWorkspaceSkillEntries(workspaceDir, {
         config: cfg,
         agentId,
-        // skills.bins powers remote node-host trust bootstrap; keep policy scoping but
-        // avoid host-local eligibility pruning so remote-only bins are preserved.
+        // skills.bins powers remote node-host trust bootstrap. Keep config/policy gates
+        // (enabled, allowBundled, skills.policy), but skip host-local runtime checks so
+        // remote-only bins are preserved.
         applyEligibility: false,
       });
       for (const bin of collectSkillBins(entries)) {
