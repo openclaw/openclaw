@@ -1,4 +1,4 @@
-// Narrow plugin-sdk surface for the bundled irc plugin.
+// Private helper surface for the bundled irc plugin.
 // Keep this list additive and scoped to symbols used under extensions/irc.
 
 export { resolveControlCommandGate } from "../channels/command-gating.js";
