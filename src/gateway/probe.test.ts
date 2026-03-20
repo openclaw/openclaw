@@ -61,7 +61,7 @@ describe("probeGateway", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("keeps device identity enabled for remote probes", async () => {
+  it("enables device identity for remote probes", async () => {
     await probeGateway({
       url: "wss://gateway.example/ws",
       auth: { token: "secret" },
@@ -71,13 +71,13 @@ describe("probeGateway", () => {
     expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
   });
 
-  it("keeps device identity disabled for unauthenticated loopback probes", async () => {
+  it("enables device identity for loopback probes", async () => {
     await probeGateway({
       url: "ws://127.0.0.1:18789",
       timeoutMs: 1_000,
     });
 
-    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+    expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
   });
 
   it("skips detail RPCs for lightweight reachability probes", async () => {
