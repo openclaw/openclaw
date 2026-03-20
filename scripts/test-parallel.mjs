@@ -320,7 +320,7 @@ const heavyUnitLaneCount = parseEnvNumber(
 );
 const heavyUnitMinDurationMs = parseEnvNumber("OPENCLAW_TEST_HEAVY_UNIT_MIN_MS", 1200);
 const defaultMemoryHeavyUnitFileLimit =
-  testProfile === "serial" ? 0 : isCI ? 32 : testProfile === "low" ? 8 : 16;
+  testProfile === "serial" ? 0 : isCI ? 64 : testProfile === "low" ? 8 : 16;
 const memoryHeavyUnitFileLimit = parseEnvNumber(
   "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_FILE_LIMIT",
   defaultMemoryHeavyUnitFileLimit,
