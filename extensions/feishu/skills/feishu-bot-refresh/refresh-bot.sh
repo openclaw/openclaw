@@ -1,11 +1,11 @@
 #!/bin/bash
 # Feishu Bot Identity Refresh Script
-# Usage: ./refresh-bot.sh [account_id]
+# Usage: ./refresh-bot.sh [account_id] [--json]
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OPENCLAW_DIR="/root/.openclaw"
+OPENCLAW_DIR="${OPENCLAW_DIR:-$HOME/.openclaw}"
 IDENTITY_FILE="$OPENCLAW_DIR/agents/main/sessions/bot-identity.json"
 
 # Get account ID from parameter or use default
@@ -67,18 +67,18 @@ echo "✅ 查询成功"
 
 # Step 3: Save to identity file
 echo "💾 保存配置..."
-cat > "$IDENTITY_FILE" << EOF
-{
-  "feishu": {
-    "appId": "$APP_ID",
-    "appName": "$APP_NAME",
-    "openId": "$OPEN_ID",
-    "activateStatus": $ACTIVATE_STATUS,
-    "avatarUrl": "$AVATAR_URL",
-    "queriedAt": "$QUERIED_AT"
-  }
-}
-EOF
+mkdir -p "$(dirname "$IDENTITY_FILE")"
+
+# Use jq to safely construct JSON (handles special characters in values)
+jq -n \
+  --arg appId "$APP_ID" \
+  --arg appName "$APP_NAME" \
+  --arg openId "$OPEN_ID" \
+  --argjson activateStatus "$ACTIVATE_STATUS" \
+  --arg avatarUrl "$AVATAR_URL" \
+  --arg queriedAt "$QUERIED_AT" \
+  '{"feishu": {"appId": $appId, "appName": $appName, "openId": $openId, "activateStatus": $activateStatus, "avatarUrl": $avatarUrl, "queriedAt": $queriedAt}}' \
+  > "$IDENTITY_FILE"
 
 echo "✅ 配置已保存至：$IDENTITY_FILE"
 
@@ -93,6 +93,6 @@ echo "  - **查询时间：** $QUERIED_AT"
 echo ""
 
 # Return JSON for programmatic use
-if [ "$1" = "--json" ]; then
+if [ "$2" = "--json" ]; then
     echo "$BOT_RESPONSE" | jq '.bot'
 fi

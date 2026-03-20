@@ -20,7 +20,7 @@ Activate when user message contains:
 
 ### 1. Get Current Account Configuration
 
-Read the current account's `app_id` and `app_secret` from `/root/.openclaw/openclaw.json`:
+Read the current account's `app_id` and `app_secret` from `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -83,7 +83,7 @@ Response:
 
 ### 4. Save to Identity File
 
-Write to `/root/.openclaw/agents/main/sessions/bot-identity.json`:
+Write to `~/.openclaw/agents/main/sessions/bot-identity.json`:
 
 ```json
 {

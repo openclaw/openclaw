@@ -24,13 +24,13 @@
 
 ```bash
 # 刷新当前账号
-/root/.openclaw/extensions/feishu/skills/feishu-bot-refresh/refresh-bot.sh
+~/.openclaw/extensions/feishu/skills/feishu-bot-refresh/refresh-bot.sh
 
 # 刷新指定账号
-/root/.openclaw/extensions/feishu/skills/feishu-bot-refresh/refresh-bot.sh dev-1
+~/.openclaw/extensions/feishu/skills/feishu-bot-refresh/refresh-bot.sh dev-1
 
 # 输出 JSON 格式
-/root/.openclaw/extensions/feishu/skills/feishu-bot-refresh/refresh-bot.sh dev-1 --json
+~/.openclaw/extensions/feishu/skills/feishu-bot-refresh/refresh-bot.sh dev-1 --json
 ```
 
 ## 输出示例
@@ -49,7 +49,7 @@
 刷新后的信息保存在：
 
 ```
-/root/.openclaw/agents/main/sessions/bot-identity.json
+~/.openclaw/agents/main/sessions/bot-identity.json
 ```
 
 格式：
@@ -69,7 +69,7 @@
 
 ## 支持的账号
 
-所有在 `/root/.openclaw/openclaw.json` 中配置的飞书账号都支持刷新：
+所有在 `~/.openclaw/openclaw.json` 中配置的飞书账号都支持刷新：
 
 - `dev-1` - 软件团队 1-开发 1
 - `dev-2` - 软件团队 1-开发 2
@@ -96,7 +96,7 @@
 
 ### 刷新失败：找不到账号配置
 
-确保账号 ID 在 `openclaw.json` 中存在：
+确保账号 ID 在 `~/.openclaw/openclaw.json` 中存在：
 
 ```json
 {
@@ -116,7 +116,7 @@
 
 ### 刷新失败：无法保存配置文件
 
-确保有写入 `/root/.openclaw/agents/main/sessions/` 目录的权限。
+确保有写入 `~/.openclaw/agents/main/sessions/` 目录的权限。
 
 ## 版本
 
