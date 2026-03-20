@@ -440,6 +440,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
     @Binding var shouldFocus: Bool
     var onSend: () -> Void
     var onPasteImageAttachment: (_ data: Data, _ fileName: String, _ mimeType: String) -> Void
+    var onDropFileURLs: (([URL]) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -472,12 +473,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
             self.onSend()
         }
         textView.onPasteImageAttachment = self.onPasteImageAttachment
-        textView.onDropFileURLs = { [viewModel = self.viewModel] urls in
-            viewModel.addAttachments(urls: urls)
-        }
-        textView.onDropFileURLs = { [viewModel = self.viewModel] urls in
-            viewModel.addAttachments(urls: urls)
-        }
+        textView.onDropFileURLs = self.onDropFileURLs
 
         let scroll = NSScrollView()
         scroll.drawsBackground = false
