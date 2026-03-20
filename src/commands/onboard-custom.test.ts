@@ -506,7 +506,7 @@ describe("applyCustomApiConfig", () => {
     const provider = result.config.models?.providers?.[providerId];
 
     expect(provider?.baseUrl).toBe("https://my-resource.services.ai.azure.com/openai/v1");
-    expect(provider?.api).toBe("openai-completions");
+    expect(provider?.api).toBe("openai-responses");
     expect(provider?.authHeader).toBe(false);
     expect(provider?.headers).toEqual({ "api-key": "key123" });
 

@@ -686,7 +686,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     normalizeOptionalProviderApiKey(params.apiKey) ??
     normalizeOptionalProviderApiKey(existingApiKey);
 
-  const providerApi = isAzureOpenAi
+  const providerApi = isAzure
     ? ("openai-responses" as const)
     : resolveProviderApi(params.compatibility);
   const azureHeaders = isAzure && normalizedApiKey ? { "api-key": normalizedApiKey } : undefined;
