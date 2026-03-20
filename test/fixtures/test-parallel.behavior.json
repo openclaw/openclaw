@@ -268,6 +268,54 @@
         "reason": "Plugin SDK webhook target coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
       },
       {
+        "file": "src/channels/plugins/contracts/inbound.contract.test.ts",
+        "reason": "Inbound contract coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/channels/plugins/outbound/signal.test.ts",
+        "reason": "Signal outbound coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/config/config.legacy-config-detection.rejects-routing-allowfrom.test.ts",
+        "reason": "Legacy routing allowFrom detection coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/config/sessions.test.ts",
+        "reason": "Session config coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/config/sessions/sessions.test.ts",
+        "reason": "Session store coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/cron/isolated-agent/delivery-dispatch.named-agent.test.ts",
+        "reason": "Named-agent delivery dispatch coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/media-understanding/providers/moonshot/video.test.ts",
+        "reason": "Moonshot video media-understanding coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/media-understanding/runner.video.test.ts",
+        "reason": "Video runner coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/plugins/commands.test.ts",
+        "reason": "Plugin commands coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/plugins/conversation-binding.test.ts",
+        "reason": "Conversation binding coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/utils/usage-format.test.ts",
+        "reason": "Usage format coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "ui/src/ui/views/chat.test.ts",
+        "reason": "Chat view UI coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
         "file": "src/config/schema.help.quality.test.ts",
         "reason": "Schema help quality coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
       },
