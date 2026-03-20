@@ -221,8 +221,9 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
 
     gchar **lines = g_strsplit(contents, "\n", -1);
     gboolean in_service_section = FALSE;
-    GPtrArray *env_array = g_ptr_array_new_with_free_func(g_free);
     gchar *exec_start = NULL;
+    gchar **inline_env = g_new0(gchar*, 1);
+    gchar **file_env = g_new0(gchar*, 1);
 
     for (gint i = 0; lines[i] != NULL; i++) {
         gchar *line = g_strstrip(lines[i]);
@@ -247,7 +248,11 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
                 gchar **argv = NULL;
                 if (g_shell_parse_argv(env_val, &argc, &argv, NULL)) {
                     for (gint j = 0; j < argc; j++) {
-                        g_ptr_array_add(env_array, g_strdup(argv[j]));
+                        gchar *eq = strchr(argv[j], '=');
+                        if (eq) {
+                            *eq = '\0';
+                            inline_env = g_environ_setenv(inline_env, argv[j], eq + 1, TRUE);
+                        }
                     }
                     g_strfreev(argv);
                 }
@@ -302,8 +307,7 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
                                         val[val_len-1] = '\0';
                                         val++;
                                     }
-                                    gchar *merged = g_strdup_printf("%s=%s", g_strstrip(key), val);
-                                    g_ptr_array_add(env_array, merged);
+                                    file_env = g_environ_setenv(file_env, key, val, TRUE);
                                     g_free(key);
                                 }
                             }
@@ -326,11 +330,23 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
 
     *exec_start_out = exec_start;
     
-    if (env_array->len > 0) {
-        g_ptr_array_add(env_array, NULL);
-        *environment_out = (gchar **)g_ptr_array_free(env_array, FALSE);
+    // Merge: file_env overrides inline_env
+    gchar **merged_env = inline_env;
+    for (gint i = 0; file_env && file_env[i]; i++) {
+        gchar *eq = strchr(file_env[i], '=');
+        if (eq) {
+            *eq = '\0';
+            merged_env = g_environ_setenv(merged_env, file_env[i], eq + 1, TRUE);
+            *eq = '=';
+        }
+    }
+    
+    g_strfreev(file_env);
+    
+    if (g_strv_length(merged_env) > 0) {
+        *environment_out = merged_env;
     } else {
-        g_ptr_array_free(env_array, TRUE);
+        g_strfreev(merged_env);
         *environment_out = NULL;
     }
 }

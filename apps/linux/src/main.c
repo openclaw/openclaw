@@ -58,15 +58,15 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     // 2. Initialize systemd D-Bus lane
     systemd_init();
     
-    // 3. Perform the initial systemd state fetch so we don't start with a blank UI
+    // 3. Initialize tray first so the UI helper exists when systemd_refresh fires
+    tray_init();
+    
+    // 4. Perform the initial systemd state fetch so we don't start with a blank UI
     systemd_refresh();
 
-    // 4. Initialize health subsystem
+    // 5. Initialize health subsystem
     health_init();
     
-    // 5. Initialize tray
-    tray_init();
-
     // 6. Trigger initial async fetches for CLI lanes
     health_probe_gateway();
     health_run_deep_probe();
