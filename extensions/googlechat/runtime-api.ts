@@ -1,4 +1,4 @@
 // Private runtime barrel for the bundled Google Chat extension.
-// Keep this barrel thin and aligned with the curated plugin-sdk/googlechat surface.
+// Keep this barrel thin and aligned with the local extension surface.
 
-export * from "openclaw/plugin-sdk/googlechat";
+export * from "../../src/plugin-sdk/googlechat.js";
