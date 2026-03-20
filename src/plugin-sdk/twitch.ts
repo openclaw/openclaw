@@ -1,4 +1,4 @@
-// Narrow plugin-sdk surface for the bundled twitch plugin.
+// Private helper surface for the bundled twitch plugin.
 // Keep this list additive and scoped to symbols used under extensions/twitch.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";

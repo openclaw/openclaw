@@ -1,4 +1,4 @@
-// Narrow plugin-sdk surface for the bundled zalouser plugin.
+// Private helper surface for the bundled zalouser plugin.
 // Keep this list additive and scoped to symbols used under extensions/zalouser.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";

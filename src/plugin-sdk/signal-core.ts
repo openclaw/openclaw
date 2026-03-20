@@ -1,3 +1,6 @@
+// Private helper surface for the bundled signal plugin.
+// Keep this list additive and scoped to symbols used under extensions/signal.
+
 export type { SignalAccountConfig } from "../config/types.js";
 export type { ChannelPlugin } from "./channel-plugin-common.js";
 export {

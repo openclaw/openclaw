@@ -1,4 +1,4 @@
-// Narrow plugin-sdk surface for the bundled googlechat plugin.
+// Private helper surface for the bundled googlechat plugin.
 // Keep this list additive and scoped to symbols used under extensions/googlechat.
 
 import { resolveChannelGroupRequireMention } from "./channel-policy.js";
