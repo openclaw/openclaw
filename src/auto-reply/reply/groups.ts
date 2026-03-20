@@ -1,3 +1,4 @@
+import { sanitizeForPromptLiteral } from "../../agents/sanitize-for-prompt.js";
 import {
   getChannelPlugin,
   normalizeChannelId as normalizePluginChannelId,
@@ -120,16 +121,18 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
 export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): string {
   const subject = params.sessionCtx.GroupSubject?.trim();
   const members = params.sessionCtx.GroupMembers?.trim();
+  const safeSubject = subject ? sanitizeForPromptLiteral(subject) : undefined;
+  const safeMembers = members ? sanitizeForPromptLiteral(members) : undefined;
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
 
   const lines: string[] = [];
-  if (subject) {
-    lines.push(`You are in the ${providerLabel} group chat "${subject}".`);
+  if (safeSubject) {
+    lines.push(`You are in the ${providerLabel} group chat "${safeSubject}".`);
   } else {
     lines.push(`You are in a ${providerLabel} group chat.`);
   }
-  if (members) {
-    lines.push(`Participants: ${members}.`);
+  if (safeMembers) {
+    lines.push(`Participants: ${safeMembers}.`);
   }
   lines.push(
     "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group — just reply normally.",
