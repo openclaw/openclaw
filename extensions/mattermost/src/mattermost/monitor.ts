@@ -1878,28 +1878,34 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   }
                   patchSending = false;
                   // Truncate to textLimit — the same cap applied by schedulePatch/
-                  // flushPendingPatch. For turns longer than the server limit the
-                  // patch would fail without truncation, leaving the post at whatever
-                  // partial text the interval last wrote. deliver() still sends the
-                  // full authoritative text via deliverMattermostReplyPayload.
-                  const finalizeTextTruncated =
-                    finalizeText.length > textLimit
-                      ? finalizeText.slice(0, textLimit)
-                      : finalizeText;
-                  try {
-                    await patchMattermostPost(blockStreamingClient, {
-                      postId: finalizeId,
-                      message: finalizeTextTruncated,
-                    });
-                    // Increment only after a successful patch so deliver() only
-                    // skips this turn if we know the complete text is visible.
-                    // If the patch fails, deliver() falls back to normal re-delivery.
-                    streamedTurnCount++;
-                    runtime.log?.(`stream-patch finalized turn ${finalizeId}`);
-                  } catch (err) {
-                    logVerboseMessage(
-                      `mattermost stream-patch turn finalize failed: ${String(err)}`,
+                  // Only increment streamedTurnCount when the full turn text fits within
+                  // textLimit. If the text is longer, the patch would only store the
+                  // first chunk — deliver() would then skip this turn and the remainder
+                  // would be silently dropped. Instead, skip the turn-finalization patch
+                  // entirely and let deliver() run normally via deliverMattermostReplyPayload,
+                  // which applies proper multi-chunk delivery. The preview post is deleted
+                  // so there is no orphaned partial-text post alongside the chunked reply.
+                  if (finalizeText.length > textLimit) {
+                    void deleteMattermostPost(blockStreamingClient, finalizeId).catch(() => {});
+                    runtime.log?.(
+                      `stream-patch skipping over-limit turn ${finalizeId} (${finalizeText.length} > ${textLimit}), will re-deliver`,
                     );
+                  } else {
+                    try {
+                      await patchMattermostPost(blockStreamingClient, {
+                        postId: finalizeId,
+                        message: finalizeText,
+                      });
+                      // Increment only after a successful patch so deliver() only
+                      // skips this turn if we know the complete text is visible.
+                      // If the patch fails, deliver() falls back to normal re-delivery.
+                      streamedTurnCount++;
+                      runtime.log?.(`stream-patch finalized turn ${finalizeId}`);
+                    } catch (err) {
+                      logVerboseMessage(
+                        `mattermost stream-patch turn finalize failed: ${String(err)}`,
+                      );
+                    }
                   }
                 }
               : undefined,
