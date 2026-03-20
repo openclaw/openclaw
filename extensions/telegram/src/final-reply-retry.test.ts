@@ -50,4 +50,22 @@ describe("retryTelegramFinalReplyDelivery", () => {
     expect(computeBackoff).not.toHaveBeenCalled();
     expect(sleepWithAbort).not.toHaveBeenCalled();
   });
+
+  it("retries undici connect-timeout errors before succeeding", async () => {
+    const timeoutErr = Object.assign(new Error("fetch failed"), {
+      cause: Object.assign(new Error("connect timeout"), {
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    });
+    const deliver = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(timeoutErr)
+      .mockResolvedValueOnce("ok");
+
+    await expect(retryTelegramFinalReplyDelivery({ deliver })).resolves.toBe("ok");
+
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(computeBackoff).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbort).toHaveBeenCalledTimes(1);
+  });
 });

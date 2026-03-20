@@ -157,8 +157,6 @@ export function createTelegramSendChatActionHandler({
             consecutiveFailures: consecutiveNetworkFailures,
           });
         }
-      } else {
-        noteNetworkHealthy();
       }
       throw error;
     }

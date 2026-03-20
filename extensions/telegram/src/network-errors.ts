@@ -42,6 +42,7 @@ const PRE_CONNECT_ERROR_CODES = new Set([
   "EAI_AGAIN", // Transient DNS failure (never sent)
   "ENETUNREACH", // No route to host (never sent)
   "EHOSTUNREACH", // Host unreachable (never sent)
+  "UND_ERR_CONNECT_TIMEOUT", // TCP connect timed out before any request reached Telegram
 ]);
 
 const RECOVERABLE_ERROR_NAMES = new Set([

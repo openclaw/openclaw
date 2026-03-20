@@ -13,6 +13,11 @@ vi.mock("../../../src/infra/backoff.js", async (importOriginal) => {
 describe("createTelegramSendChatActionHandler", () => {
   const make401Error = () => new Error("401 Unauthorized");
   const make500Error = () => new Error("500 Internal Server Error");
+  const makeProxyHttpError = () =>
+    Object.assign(new Error("Network request for 'sendChatAction' failed!"), {
+      name: "HttpError",
+      error: Object.assign(new Error("502 Bad Gateway"), { error_code: 502 }),
+    });
   const makeNetworkError = () =>
     Object.assign(new TypeError("fetch failed"), {
       cause: Object.assign(new Error("connect timeout"), {
@@ -253,5 +258,36 @@ describe("createTelegramSendChatActionHandler", () => {
     await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
 
     expect(onRecoverableNetworkFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not clear the outage streak on proxy-generated HTTP errors", async () => {
+    const errors = [makeNetworkError(), makeProxyHttpError(), makeNetworkError()];
+    let callCount = 0;
+    const fn = vi.fn().mockImplementation(async () => {
+      const err = errors[callCount++];
+      if (err) throw err;
+      return true;
+    });
+    const logger = vi.fn();
+    const onRecoverableNetworkFailure = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutiveNetworkFailures: 2,
+      onRecoverableNetworkFailure,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow(
+      "Network request for 'sendChatAction' failed!",
+    );
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+
+    expect(onRecoverableNetworkFailure).toHaveBeenCalledTimes(1);
+    expect(onRecoverableNetworkFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        consecutiveFailures: 2,
+      }),
+    );
   });
 });

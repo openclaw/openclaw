@@ -166,10 +166,10 @@ describe("isSafeToRetrySendError", () => {
     ["EAI_AGAIN", "getaddrinfo EAI_AGAIN", true],
     ["ENETUNREACH", "connect ENETUNREACH", true],
     ["EHOSTUNREACH", "connect EHOSTUNREACH", true],
+    ["UND_ERR_CONNECT_TIMEOUT", "connect timeout", true],
     ["ECONNRESET", "read ECONNRESET", false],
     ["ETIMEDOUT", "connect ETIMEDOUT", false],
     ["EPIPE", "write EPIPE", false],
-    ["UND_ERR_CONNECT_TIMEOUT", "connect timeout", false],
   ])("returns %s => %s", (code, message, expected) => {
     expect(isSafeToRetrySendError(errorWithCode(message, code))).toBe(expected);
   });
