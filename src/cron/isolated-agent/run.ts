@@ -42,6 +42,7 @@ import {
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  mergeSessionEntryPreserveActivity,
   resolveSessionTranscriptPath,
   setSessionRuntimeModel,
   updateSessionStore,
@@ -380,12 +381,21 @@ export async function runCronIsolatedAgentTurn(params: {
     if (isFastTestEnv) {
       return;
     }
-    cronSession.store[agentSessionKey] = cronSession.sessionEntry;
+    // For the agent session key (which may be the parent session key), preserve activity
+    // to avoid overwriting the parent session's updatedAt. This prevents isolated cron
+    // jobs from blocking daily session resets. See: #51000
+    cronSession.store[agentSessionKey] = mergeSessionEntryPreserveActivity(
+      cronSession.store[agentSessionKey],
+      cronSession.sessionEntry,
+    );
     if (runSessionKey !== agentSessionKey) {
       cronSession.store[runSessionKey] = cronSession.sessionEntry;
     }
     await updateSessionStore(cronSession.storePath, (store) => {
-      store[agentSessionKey] = cronSession.sessionEntry;
+      store[agentSessionKey] = mergeSessionEntryPreserveActivity(
+        store[agentSessionKey],
+        cronSession.sessionEntry,
+      );
       if (runSessionKey !== agentSessionKey) {
         store[runSessionKey] = cronSession.sessionEntry;
       }
