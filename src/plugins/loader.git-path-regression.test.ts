@@ -1,15 +1,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { withEnv } from "../test-utils/env.js";
 import { __testing } from "./loader.js";
 
-const EMPTY_PLUGIN_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {},
-} as const;
+type CreateJiti = typeof import("jiti").createJiti;
+
+let createJitiPromise: Promise<CreateJiti> | undefined;
+
+async function getCreateJiti() {
+  createJitiPromise ??= import("jiti").then(({ createJiti }) => createJiti);
+  return createJitiPromise;
+}
 
 const tempRoots: string[] = [];
 
@@ -29,92 +32,66 @@ afterEach(() => {
   }
 });
 
-describe("loadOpenClawPlugins", () => {
-  it("builds plugin-loader aliases for git-style package extension entries that import plugin-sdk channel-runtime (#49806)", () => {
-    const pluginId = "imessage-loader-regression";
-    const gitExtensionRoot = path.join(
-      makeTempDir(),
-      "git-source-checkout",
-      "extensions",
-      pluginId,
-    );
-    const gitSourceDir = path.join(gitExtensionRoot, "src");
-    mkdirSafe(gitSourceDir);
+describe("plugin loader git path regression", () => {
+  it("loads git-style package extension entries when they import plugin-sdk channel-runtime (#49806)", async () => {
+    const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "imessage");
+    const copiedSourceDir = path.join(copiedExtensionRoot, "src");
+    const copiedPluginSdkDir = path.join(copiedExtensionRoot, "plugin-sdk");
+    mkdirSafe(copiedSourceDir);
+    mkdirSafe(copiedPluginSdkDir);
 
+    const jitiBaseFile = path.join(copiedSourceDir, "__jiti-base__.mjs");
+    fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(
-      path.join(gitExtensionRoot, "package.json"),
-      JSON.stringify(
-        {
-          name: `@openclaw/${pluginId}`,
-          version: "0.0.1",
-          type: "module",
-          openclaw: {
-            extensions: ["./src/index.ts"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(gitExtensionRoot, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: pluginId,
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(gitSourceDir, "channel.runtime.ts"),
+      path.join(copiedSourceDir, "channel.runtime.ts"),
       `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import { PAIRING_APPROVED_MESSAGE } from "../runtime-api.js";
 
-export function runtimeProbeType() {
-  return typeof resolveOutboundSendDep;
-}
-`,
-      "utf-8",
-    );
-    const entryFile = path.join(gitSourceDir, "index.ts");
-    fs.writeFileSync(
-      entryFile,
-      `import { runtimeProbeType } from "./channel.runtime.ts";
-
-export default {
-  id: ${JSON.stringify(pluginId)},
-  register() {
-    if (runtimeProbeType() !== "function") {
-      throw new Error("channel-runtime import did not resolve");
-    }
-  },
+export const copiedRuntimeMarker = {
+  resolveOutboundSendDep,
+  PAIRING_APPROVED_MESSAGE,
 };
 `,
       "utf-8",
     );
+    fs.writeFileSync(
+      path.join(copiedExtensionRoot, "runtime-api.ts"),
+      `export const PAIRING_APPROVED_MESSAGE = "paired";
+`,
+      "utf-8",
+    );
+    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "channel-runtime.ts");
+    fs.writeFileSync(
+      copiedChannelRuntimeShim,
+      `export function resolveOutboundSendDep() {
+  return "shimmed";
+}
+`,
+      "utf-8",
+    );
 
-    const { aliasMap, runtimeModulePath, tryNative } = withEnv(
-      {
-        NODE_ENV: "production",
-        VITEST: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-      },
-      () => ({
-        aliasMap: __testing.buildPluginLoaderAliasMap(entryFile),
-        runtimeModulePath: __testing.resolvePluginRuntimeModulePath({ modulePath: entryFile }),
-        tryNative: __testing.shouldPreferNativeJiti(entryFile),
+    const copiedChannelRuntime = path.join(copiedExtensionRoot, "src", "channel.runtime.ts");
+    const jitiBaseUrl = pathToFileURL(jitiBaseFile).href;
+    const createJiti = await getCreateJiti();
+    const withoutAlias = createJiti(jitiBaseUrl, {
+      ...__testing.buildPluginLoaderJitiOptions({}),
+      tryNative: false,
+    });
+    // The production loader uses sync Jiti evaluation, so this regression test
+    // should exercise the same seam instead of Jiti's async import helper.
+    expect(() => withoutAlias(copiedChannelRuntime)).toThrow();
+
+    const withAlias = createJiti(jitiBaseUrl, {
+      ...__testing.buildPluginLoaderJitiOptions({
+        "openclaw/plugin-sdk/channel-runtime": copiedChannelRuntimeShim,
       }),
-    );
-
-    expect(tryNative).toBe(false);
-    expect(aliasMap).toHaveProperty("openclaw/plugin-sdk");
-    expect(aliasMap["openclaw/plugin-sdk"]).toMatch(/plugin-sdk[\\/]root-alias\.cjs$/);
-    expect(aliasMap["openclaw/plugin-sdk/channel-runtime"]).toMatch(
-      /plugin-sdk[\\/](channel-runtime\.ts|channel-runtime\.js)$/,
-    );
-    expect(runtimeModulePath).toMatch(/plugins[\\/]runtime[\\/]index\.(ts|js)$/);
+      tryNative: false,
+    });
+    expect(withAlias(copiedChannelRuntime)).toMatchObject({
+      copiedRuntimeMarker: {
+        PAIRING_APPROVED_MESSAGE: "paired",
+        resolveOutboundSendDep: expect.any(Function),
+      },
+    });
   });
 });

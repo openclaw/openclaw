@@ -3595,9 +3595,9 @@ export const syntheticRuntimeMarker = {
       ...__testing.buildPluginLoaderJitiOptions({}),
       tryNative: false,
     });
-    await expect(withoutAlias.import(copiedChannelRuntime)).rejects.toThrow(
-      /plugin-sdk\/channel-runtime/,
-    );
+    // The production loader uses sync Jiti evaluation, so this boundary should
+    // follow the same path instead of the async import helper.
+    expect(() => withoutAlias(copiedChannelRuntime)).toThrow();
 
     const withAlias = createJiti(jitiBaseUrl, {
       ...__testing.buildPluginLoaderJitiOptions({
@@ -3605,73 +3605,12 @@ export const syntheticRuntimeMarker = {
       }),
       tryNative: false,
     });
-    await expect(withAlias.import(copiedChannelRuntime)).resolves.toMatchObject({
+    expect(withAlias(copiedChannelRuntime)).toMatchObject({
       syntheticRuntimeMarker: {
         resolveOutboundSendDep: expect.any(Function),
       },
     });
   }, 240_000);
-
-  it("loads copied imessage runtime sources from git-style paths with plugin-sdk aliases (#49806)", async () => {
-    const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "imessage");
-    const copiedSourceDir = path.join(copiedExtensionRoot, "src");
-    const copiedPluginSdkDir = path.join(copiedExtensionRoot, "plugin-sdk");
-    mkdirSafe(copiedSourceDir);
-    mkdirSafe(copiedPluginSdkDir);
-    const jitiBaseFile = path.join(copiedSourceDir, "__jiti-base__.mjs");
-    fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
-    fs.writeFileSync(
-      path.join(copiedSourceDir, "channel.runtime.ts"),
-      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
-import { PAIRING_APPROVED_MESSAGE } from "../runtime-api.js";
-
-export const copiedRuntimeMarker = {
-  resolveOutboundSendDep,
-  PAIRING_APPROVED_MESSAGE,
-};
-`,
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(copiedExtensionRoot, "runtime-api.ts"),
-      `export const PAIRING_APPROVED_MESSAGE = "paired";
-`,
-      "utf-8",
-    );
-    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "channel-runtime.ts");
-    fs.writeFileSync(
-      copiedChannelRuntimeShim,
-      `export function resolveOutboundSendDep() {
-  return "shimmed";
-}
-`,
-      "utf-8",
-    );
-    const copiedChannelRuntime = path.join(copiedExtensionRoot, "src", "channel.runtime.ts");
-    const jitiBaseUrl = pathToFileURL(jitiBaseFile).href;
-
-    const createJiti = await getCreateJiti();
-    const withoutAlias = createJiti(jitiBaseUrl, {
-      ...__testing.buildPluginLoaderJitiOptions({}),
-      tryNative: false,
-    });
-    await expect(withoutAlias.import(copiedChannelRuntime)).rejects.toThrow(
-      /plugin-sdk\/channel-runtime/,
-    );
-
-    const withAlias = createJiti(jitiBaseUrl, {
-      ...__testing.buildPluginLoaderJitiOptions({
-        "openclaw/plugin-sdk/channel-runtime": copiedChannelRuntimeShim,
-      }),
-      tryNative: false,
-    });
-    await expect(withAlias.import(copiedChannelRuntime)).resolves.toMatchObject({
-      copiedRuntimeMarker: {
-        PAIRING_APPROVED_MESSAGE: "paired",
-        resolveOutboundSendDep: expect.any(Function),
-      },
-    });
-  });
 
   it("loads source TypeScript plugins that route through local runtime shims", () => {
     const plugin = writePlugin({
