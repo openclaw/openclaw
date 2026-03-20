@@ -964,10 +964,25 @@ export const OpenClawSchema = z
   .strict()
   .superRefine((cfg, ctx) => {
     const agents = cfg.agents?.list ?? [];
+    const agentIds = new Set(agents.map((agent) => agent.id));
+    const agentOverrides = cfg.skills?.policy?.agentOverrides;
+    if (agentOverrides && typeof agentOverrides === "object") {
+      for (const overrideAgentId of Object.keys(agentOverrides)) {
+        if (!agentIds.has(overrideAgentId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["skills", "policy", "agentOverrides", overrideAgentId],
+            message:
+              `Unknown agent id "${overrideAgentId}" in skills.policy.agentOverrides ` +
+              "(not in agents.list[].id).",
+          });
+        }
+      }
+    }
+
     if (agents.length === 0) {
       return;
     }
-    const agentIds = new Set(agents.map((agent) => agent.id));
 
     const broadcast = cfg.broadcast;
     if (!broadcast) {
