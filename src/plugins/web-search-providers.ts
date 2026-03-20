@@ -3,7 +3,15 @@ import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
-import { resolveBundledWebSearchPluginIds } from "./bundled-web-search.js";
+import {
+  listBundledWebSearchProviders as listBundledWebSearchProviderEntries,
+  resolveBundledWebSearchPluginIds,
+} from "./bundled-web-search.js";
+import {
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+  type NormalizedPluginsConfig,
+} from "./config-state.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import { getActivePluginRegistry } from "./runtime.js";
@@ -87,14 +95,15 @@ function sortWebSearchProviders(
   });
 }
 
-export function resolvePluginWebSearchProviders(params: {
+function resolveBundledWebSearchResolutionConfig(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   bundledAllowlistCompat?: boolean;
-  activate?: boolean;
-  cache?: boolean;
-}): PluginWebSearchProviderEntry[] {
+}): {
+  config: PluginLoadOptions["config"];
+  normalized: NormalizedPluginsConfig;
+} {
   const bundledCompatPluginIds = resolveBundledWebSearchCompatPluginIds({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -115,6 +124,50 @@ export function resolvePluginWebSearchProviders(params: {
     pluginIds: bundledCompatPluginIds,
     env: params.env,
   });
+
+  return {
+    config,
+    normalized: normalizePluginsConfig(config?.plugins),
+  };
+}
+
+function listBundledWebSearchProviders(): PluginWebSearchProviderEntry[] {
+  return sortWebSearchProviders(listBundledWebSearchProviderEntries());
+}
+
+export function resolveBundledPluginWebSearchProviders(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  bundledAllowlistCompat?: boolean;
+  onlyPluginIds?: readonly string[];
+}): PluginWebSearchProviderEntry[] {
+  const { config, normalized } = resolveBundledWebSearchResolutionConfig(params);
+  const onlyPluginIdSet =
+    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
+
+  return listBundledWebSearchProviders().filter((provider) => {
+    if (onlyPluginIdSet && !onlyPluginIdSet.has(provider.pluginId)) {
+      return false;
+    }
+    return resolveEffectiveEnableState({
+      id: provider.pluginId,
+      origin: "bundled",
+      config: normalized,
+      rootConfig: config,
+    }).enabled;
+  });
+}
+
+export function resolvePluginWebSearchProviders(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  bundledAllowlistCompat?: boolean;
+  activate?: boolean;
+  cache?: boolean;
+}): PluginWebSearchProviderEntry[] {
+  const { config } = resolveBundledWebSearchResolutionConfig(params);
   const registry = loadOpenClawPlugins({
     config,
     workspaceDir: params.workspaceDir,
