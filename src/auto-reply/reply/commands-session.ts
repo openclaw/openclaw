@@ -1,10 +1,9 @@
-import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import type { CommandHandler } from "./commands-types.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.js";
 import { logVerbose } from "../../globals.js";
+import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
@@ -21,6 +20,7 @@ import {
 } from "./channel-context.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
+import type { CommandHandler } from "./commands-types.js";
 import {
   resolveMatrixConversationId,
   resolveMatrixParentConversationId,

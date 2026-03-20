@@ -1,10 +1,10 @@
-import type { CommandHandler } from "./commands-types.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveSessionEntryForKey } from "./abort.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
+import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
 
 export const MAX_INTERRUPT_CHARS = 4_000;
