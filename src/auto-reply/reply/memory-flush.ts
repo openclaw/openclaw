@@ -167,6 +167,8 @@ export function resolveMemoryFlushContextWindowTokens(params: {
   );
 }
 
+const _warnedReserve = new Set<string>();
+
 export function shouldRunMemoryFlush(params: {
   entry?: Pick<
     SessionEntry,
@@ -198,10 +200,16 @@ export function shouldRunMemoryFlush(params: {
   }
   const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
   const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
-  const reserveTokens = Math.min(
-    Math.max(0, Math.floor(params.reserveTokensFloor)),
-    Math.max(0, contextWindow - softThreshold - 1),
-  );
+  const rawReserve = Math.max(0, Math.floor(params.reserveTokensFloor));
+  const maxReserve = Math.max(0, contextWindow - softThreshold - 1);
+  const warnKey = `${rawReserve}:${maxReserve}`;
+  if (rawReserve > maxReserve && !_warnedReserve.has(warnKey)) {
+    _warnedReserve.add(warnKey);
+    console.warn(
+      `reserveTokensFloor (${rawReserve}) exceeds contextWindow - softThreshold - 1 (${maxReserve}), clamping to ${maxReserve}`,
+    );
+  }
+  const reserveTokens = Math.min(rawReserve, maxReserve);
   const threshold = contextWindow - reserveTokens - softThreshold;
   if (threshold <= 0) {
     return false;
