@@ -122,6 +122,50 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Extra version");
     expect(prompt.replaceAll("\\", "/")).toContain("demo-skill/SKILL.md");
   });
+  it("syncs only policy-allowed skills into target workspaces", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "allowed"),
+      name: "allowed",
+      description: "Allowed skill",
+    });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "blocked"),
+      name: "blocked",
+      description: "Blocked skill",
+    });
+
+    await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
+      syncSkillsToWorkspace({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        agentId: "ops",
+        config: {
+          agents: {
+            list: [{ id: "ops" }],
+          },
+          skills: {
+            policy: {
+              globalEnabled: ["allowed", "blocked"],
+              agentOverrides: {
+                ops: {
+                  disabled: ["blocked"],
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(await pathExists(path.join(targetWorkspace, "skills", "allowed", "SKILL.md"))).toBe(
+      true,
+    );
+    expect(await pathExists(path.join(targetWorkspace, "skills", "blocked", "SKILL.md"))).toBe(
+      false,
+    );
+  });
   it.runIf(process.platform !== "win32")(
     "does not sync workspace skills that resolve outside the source workspace root",
     async () => {

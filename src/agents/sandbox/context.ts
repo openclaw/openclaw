@@ -21,6 +21,7 @@ import { ensureSandboxWorkspace } from "./workspace.js";
 async function ensureSandboxWorkspaceLayout(params: {
   cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
   rawSessionKey: string;
+  agentId?: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
 }): Promise<{
@@ -52,6 +53,7 @@ async function ensureSandboxWorkspaceLayout(params: {
           sourceWorkspaceDir: agentWorkspaceDir,
           targetWorkspaceDir: sandboxWorkspaceDir,
           config: params.config,
+          agentId: params.agentId,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
@@ -122,6 +124,7 @@ export async function resolveSandboxContext(params: {
   const { agentWorkspaceDir, scopeKey, workspaceDir } = await ensureSandboxWorkspaceLayout({
     cfg,
     rawSessionKey,
+    agentId: resolved.runtime.agentId,
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
