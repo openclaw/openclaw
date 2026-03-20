@@ -3,14 +3,14 @@ import {
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
 
-function stripZalouserTargetPrefix(raw: string): string {
+export function stripZalouserTargetPrefix(raw: string): string {
   return raw
     .trim()
     .replace(/^(zalouser|zlu):/i, "")
     .trim();
 }
 
-function normalizePrefixedTarget(raw: string): string | undefined {
+export function normalizeZalouserTarget(raw: string): string | undefined {
   const trimmed = stripZalouserTargetPrefix(raw);
   if (!trimmed) {
     return undefined;
@@ -47,8 +47,55 @@ function normalizePrefixedTarget(raw: string): string | undefined {
   return trimmed;
 }
 
+export function parseZalouserOutboundTarget(raw: string): {
+  threadId: string;
+  isGroup: boolean;
+} {
+  const normalized = normalizeZalouserTarget(raw);
+  if (!normalized) {
+    throw new Error("Zalouser target is required");
+  }
+  const lowered = normalized.toLowerCase();
+  if (lowered.startsWith("group:")) {
+    const threadId = normalized.slice("group:".length).trim();
+    if (!threadId) {
+      throw new Error("Zalouser group target is missing group id");
+    }
+    return { threadId, isGroup: true };
+  }
+  if (lowered.startsWith("user:")) {
+    const threadId = normalized.slice("user:".length).trim();
+    if (!threadId) {
+      throw new Error("Zalouser user target is missing user id");
+    }
+    return { threadId, isGroup: false };
+  }
+  // Backward-compatible fallback for bare IDs.
+  // Group sends should use explicit `group:<id>` targets.
+  return { threadId: normalized, isGroup: false };
+}
+
+export function parseZalouserDirectoryGroupId(raw: string): string {
+  const normalized = normalizeZalouserTarget(raw);
+  if (!normalized) {
+    throw new Error("Zalouser group target is required");
+  }
+  const lowered = normalized.toLowerCase();
+  if (lowered.startsWith("group:")) {
+    const groupId = normalized.slice("group:".length).trim();
+    if (!groupId) {
+      throw new Error("Zalouser group target is missing group id");
+    }
+    return groupId;
+  }
+  if (lowered.startsWith("user:")) {
+    throw new Error("Zalouser group members lookup requires a group target (group:<id>)");
+  }
+  return normalized;
+}
+
 export function resolveZalouserOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
-  const normalized = normalizePrefixedTarget(params.target);
+  const normalized = normalizeZalouserTarget(params.target);
   if (!normalized) {
     return null;
   }

@@ -1,6 +1,8 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   chunkMarkdownIR,
+  FILE_REF_EXTENSIONS_WITH_TLD,
+  isAutoLinkedFileRef,
   markdownToIR,
   type MarkdownLinkSpan,
   type MarkdownIR,
@@ -31,44 +33,6 @@ function escapeHtmlAttr(text: string): string {
  *
  * Excluded: .ai, .io, .tv, .fm (popular domain TLDs like x.ai, vercel.io, github.io)
  */
-const FILE_EXTENSIONS_WITH_TLD = new Set([
-  "md", // Markdown (Moldova) - very common in repos
-  "go", // Go language - common in Go projects
-  "py", // Python (Paraguay) - common in Python projects
-  "pl", // Perl (Poland) - common in Perl projects
-  "sh", // Shell (Saint Helena) - common for scripts
-  "am", // Automake files (Armenia)
-  "at", // Assembly (Austria)
-  "be", // Backend files (Belgium)
-  "cc", // C++ source (Cocos Islands)
-]);
-
-/** Detects when markdown-it linkify auto-generated a link from a bare filename (e.g. README.md → http://README.md) */
-function isAutoLinkedFileRef(href: string, label: string): boolean {
-  const stripped = href.replace(/^https?:\/\//i, "");
-  if (stripped !== label) {
-    return false;
-  }
-  const dotIndex = label.lastIndexOf(".");
-  if (dotIndex < 1) {
-    return false;
-  }
-  const ext = label.slice(dotIndex + 1).toLowerCase();
-  if (!FILE_EXTENSIONS_WITH_TLD.has(ext)) {
-    return false;
-  }
-  // Reject if any path segment before the filename contains a dot (looks like a domain)
-  const segments = label.split("/");
-  if (segments.length > 1) {
-    for (let i = 0; i < segments.length - 1; i++) {
-      if (segments[i].includes(".")) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
 function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   const href = link.href.trim();
   if (!href) {
@@ -139,7 +103,7 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const FILE_EXTENSIONS_PATTERN = Array.from(FILE_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
+const FILE_EXTENSIONS_PATTERN = Array.from(FILE_REF_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
 const AUTO_LINKED_ANCHOR_PATTERN = /<a\s+href="https?:\/\/([^"]+)"[^>]*>\1<\/a>/gi;
 const FILE_REFERENCE_PATTERN = new RegExp(
   `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${FILE_EXTENSIONS_PATTERN}))(?=$|[^a-zA-Z0-9_\\-/])`,
