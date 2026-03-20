@@ -606,6 +606,12 @@ export class AcpxRuntime implements AcpRuntime {
             continue;
           }
           sawDone = true;
+          yield parsed;
+          // Child emitted done — stop reading stdout and kill the child so
+          // waitForExit does not block on a process that never calls exit(0).
+          lines.close();
+          child.kill("SIGKILL");
+          break;
         }
         if (parsed.type === "error") {
           sawError = true;
@@ -650,6 +656,7 @@ export class AcpxRuntime implements AcpRuntime {
       }
     } finally {
       lines.close();
+      child.kill("SIGKILL");
       if (input.signal) {
         input.signal.removeEventListener("abort", onAbort);
       }
