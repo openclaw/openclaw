@@ -1835,32 +1835,25 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             // instead of overwriting the previous one. See GH issue #43020.
             onAssistantMessageStart: blockStreamingClient
               ? async () => {
-                  // Always stop the patch interval and reset turn-local text state,
-                  // even when no streaming post exists yet (short tool-call turns where
-                  // the 200ms ticker hasn't fired). Without this, pendingPatchText /
-                  // lastSentText / patchInterval state from the previous turn would carry
-                  // into the next turn and potentially patch a newer post with stale text.
-                  stopPatchInterval();
-                  pendingPatchText = "";
-                  lastSentText = "";
-
-                  if (!streamMessageId) {
-                    patchSending = false;
-                    return;
-                  }
-
-                  // Capture state before clearing streamMessageId so we can finalize.
+                  // Capture turn state FIRST, before any resets.
                   const finalizeId = streamMessageId;
                   const finalizeText = pendingPatchText;
 
-                  // Clear the stream ID immediately — onPartialReply calls for the next
-                  // turn will create a fresh post. patchSending stays as-is until after
-                  // the wait loop so the loop is not a no-op.
+                  // Stop the interval and reset turn-local text/ID state immediately
+                  // so new onPartialReply calls start fresh for the next turn.
+                  // patchSending is intentionally NOT cleared here — it stays set until
+                  // after the wait-loop below so the loop is not a no-op.
+                  stopPatchInterval();
                   streamMessageId = null;
-                  // Guard: pendingPatchText is set by the interval which requires
-                  // non-empty text, so finalizeText is always non-empty in practice.
-                  // (Already cleared above in the early-path reset.)
-                  if (!finalizeText) {
+                  pendingPatchText = "";
+                  lastSentText = "";
+
+                  // Short-turn path: no stream post existed (the 200ms ticker never
+                  // fired or the send is still in flight). Reset patchSending and return.
+                  // Note: if the send is truly still in flight, streamMessageId will be
+                  // populated after we return and that post will be cleaned up by the
+                  // next onAssistantMessageStart or by onSettled.
+                  if (!finalizeId || !finalizeText) {
                     patchSending = false;
                     return;
                   }
