@@ -5,7 +5,8 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 
 export const BUNDLED_WEB_SEARCH_PLUGIN_IDS = bundledWebSearchPluginRegistrations
-  .map((entry) => entry.plugin.id)
+  .map((entry) => entry.plugin?.id)
+  .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
   .toSorted((left, right) => left.localeCompare(right));
 
 const bundledWebSearchPluginIdSet = new Set<string>(BUNDLED_WEB_SEARCH_PLUGIN_IDS);
@@ -16,12 +17,15 @@ let bundledWebSearchProvidersCache: BundledWebSearchProviderEntry[] | null = nul
 
 function loadBundledWebSearchProviders(): BundledWebSearchProviderEntry[] {
   if (!bundledWebSearchProvidersCache) {
-    bundledWebSearchProvidersCache = bundledWebSearchPluginRegistrations.flatMap(({ plugin }) =>
-      capturePluginRegistration(plugin).webSearchProviders.map((provider) => ({
+    bundledWebSearchProvidersCache = bundledWebSearchPluginRegistrations.flatMap(({ plugin }) => {
+      if (!plugin?.id || typeof plugin.register !== "function") {
+        return [];
+      }
+      return capturePluginRegistration(plugin).webSearchProviders.map((provider) => ({
         ...provider,
         pluginId: plugin.id,
-      })),
-    );
+      }));
+    });
   }
   return bundledWebSearchProvidersCache;
 }
