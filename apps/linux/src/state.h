@@ -82,6 +82,8 @@ SystemdState* state_get_systemd(void);
 HealthState* state_get_health(void);
 ProbeState* state_get_probe(void);
 
+const gchar* systemd_get_canonical_unit_name(void);
+
 // Callbacks (implemented elsewhere)
 void notify_on_transition(AppState old_state, AppState new_state);
 void tray_update_from_state(AppState state);

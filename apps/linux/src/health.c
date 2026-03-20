@@ -57,6 +57,19 @@ static gchar** resolve_openclaw_argv(const gchar *subcommand) {
                 }
             }
             
+            // Explicit allowlist: we preserve only specific service context flags,
+            // avoiding unsupported `run` flags that crash `status` or `probe`.
+            for (gint i = gateway_idx + 1; i < len; i++) {
+                const gchar *arg = sys->exec_start_argv[i];
+                if (g_strcmp0(arg, "--port") == 0 || g_strcmp0(arg, "-p") == 0) {
+                    g_ptr_array_add(arr, g_strdup(arg));
+                    if (i + 1 < len) {
+                        g_ptr_array_add(arr, g_strdup(sys->exec_start_argv[i + 1]));
+                        i++; // Skip the value since we just consumed it
+                    }
+                }
+            }
+            
             g_ptr_array_add(arr, NULL);
             return (gchar **)g_ptr_array_free(arr, FALSE);
         }
@@ -141,7 +154,7 @@ static GSubprocess *spawn_gateway_subprocess(const gchar *subcommand, GError **e
     gchar **envp = g_new0(gchar *, 1);
     
     // Narrowly seed required execution variables if present in the ambient session
-    const gchar *whitelist[] = {"PATH", "USER", "HOME", "LOGNAME", "XDG_RUNTIME_DIR"};
+    const gchar *whitelist[] = {"PATH", "USER", "HOME", "LOGNAME", "XDG_RUNTIME_DIR", "SSH_AUTH_SOCK"};
     for (size_t i = 0; i < G_N_ELEMENTS(whitelist); i++) {
         const gchar *val = g_getenv(whitelist[i]);
         if (val) {
@@ -160,6 +173,13 @@ static GSubprocess *spawn_gateway_subprocess(const gchar *subcommand, GError **e
                 envp = g_environ_setenv(envp, key, value, TRUE);
             }
         }
+    }
+    
+    // Explicitly align the CLI subprocess with the canonical D-Bus selected unit,
+    // as legacy unit files lack a native profile environment variable.
+    const gchar *canonical_unit = systemd_get_canonical_unit_name();
+    if (canonical_unit) {
+        envp = g_environ_setenv(envp, "OPENCLAW_SYSTEMD_UNIT", canonical_unit, TRUE);
     }
     
     g_subprocess_launcher_set_environ(launcher, envp);

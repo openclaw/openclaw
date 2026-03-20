@@ -81,6 +81,16 @@ static gint sort_marked_units(gconstpointer a, gconstpointer b) {
     return g_strcmp0(*(const gchar **)a, *(const gchar **)b);
 }
 
+static const gchar* discover_canonical_unit_name(void);
+
+const gchar* systemd_get_canonical_unit_name(void) {
+    // If we have a cached name, return it. Otherwise, compute it inline.
+    if (cached_unit_name) {
+        return cached_unit_name;
+    }
+    return discover_canonical_unit_name();
+}
+
 static void get_unit_preference_score(const gchar *unit_name, gboolean *is_active, gboolean *is_enabled) {
     *is_active = FALSE;
     *is_enabled = FALSE;
