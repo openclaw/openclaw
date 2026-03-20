@@ -62,6 +62,14 @@ function resolveControlCommandGate(params) {
   return { commandAuthorized, shouldBlock };
 }
 
+function onDiagnosticEvent(listener) {
+  const monolithic = loadMonolithicSdk();
+  if (!monolithic || typeof monolithic.onDiagnosticEvent !== "function") {
+    throw new Error("openclaw/plugin-sdk root alias could not resolve onDiagnosticEvent");
+  }
+  return monolithic.onDiagnosticEvent(listener);
+}
+
 function getPackageRoot() {
   return path.resolve(__dirname, "..", "..");
 }
@@ -152,6 +160,7 @@ function tryLoadMonolithicSdk() {
 
 const fastExports = {
   emptyPluginConfigSchema,
+  onDiagnosticEvent,
   resolveControlCommandGate,
 };
 
