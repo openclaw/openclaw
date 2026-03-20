@@ -21,6 +21,13 @@ export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] ex
   : never) &
   Record<string, unknown>;
 
+type UnsupportedWebSearchFilterName =
+  | "country"
+  | "language"
+  | "freshness"
+  | "date_after"
+  | "date_before";
+
 export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;
 
@@ -209,4 +216,60 @@ export function writeCachedSearchPayload(
   ttlMs: number,
 ): void {
   writeCache(SEARCH_CACHE, cacheKey, payload, ttlMs);
+}
+
+function readUnsupportedSearchFilter(
+  params: Record<string, unknown>,
+): UnsupportedWebSearchFilterName | undefined {
+  for (const name of ["country", "language", "freshness", "date_after", "date_before"] as const) {
+    const value = params[name];
+    if (typeof value === "string" && value.trim()) {
+      return name;
+    }
+  }
+
+  return undefined;
+}
+
+function describeUnsupportedSearchFilter(name: UnsupportedWebSearchFilterName): string {
+  switch (name) {
+    case "country":
+      return "country filtering";
+    case "language":
+      return "language filtering";
+    case "freshness":
+      return "freshness filtering";
+    case "date_after":
+    case "date_before":
+      return "date_after/date_before filtering";
+  }
+}
+
+export function buildUnsupportedSearchFilterResponse(
+  params: Record<string, unknown>,
+  provider: string,
+  docs = "https://docs.openclaw.ai/tools/web",
+):
+  | {
+      error: string;
+      message: string;
+      docs: string;
+    }
+  | undefined {
+  const unsupported = readUnsupportedSearchFilter(params);
+  if (!unsupported) {
+    return undefined;
+  }
+
+  const label = describeUnsupportedSearchFilter(unsupported);
+  const supportedLabel =
+    unsupported === "date_after" || unsupported === "date_before" ? "date filtering" : label;
+
+  return {
+    error: unsupported.startsWith("date_")
+      ? "unsupported_date_filter"
+      : `unsupported_${unsupported}`,
+    message: `${label} is not supported by the ${provider} provider. Only Brave and Perplexity support ${supportedLabel}.`,
+    docs,
+  };
 }
