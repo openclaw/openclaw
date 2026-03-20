@@ -401,8 +401,23 @@ export function registerNodesStatusCommands(nodes: Command) {
           );
 
           if (opts.json) {
-            const filteredNodeIds = new Set(filteredNodes.map((node) => node.nodeId));
-            const filteredPaired = paired.filter((entry) => filteredNodeIds.has(entry.nodeId));
+            const filteredPaired = filteredNodes
+              .filter((node) => isPairedNode(node.nodeId, node.paired))
+              .map((node) => {
+                const pairedEntry = pairedById.get(node.nodeId);
+                if (pairedEntry) {
+                  return pairedEntry;
+                }
+                return {
+                  nodeId: node.nodeId,
+                  displayName: node.displayName,
+                  platform: node.platform,
+                  version: node.version,
+                  coreVersion: node.coreVersion,
+                  uiVersion: node.uiVersion,
+                  remoteIp: node.remoteIp,
+                };
+              });
             const filteredConnected = filteredNodes.filter(
               (node) => !isPairedNode(node.nodeId, node.paired),
             );

@@ -206,6 +206,40 @@ describe("cli program (nodes basics)", () => {
     expect(output).toContain('"approvedAtMs"');
   });
 
+  it("runs nodes list --json and keeps paired nodes reported only by node.list", async () => {
+    const now = Date.now();
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [],
+        };
+      }
+      if (opts.method === "node.list") {
+        return {
+          nodes: [
+            {
+              nodeId: "n-skew",
+              displayName: "Skew Node",
+              remoteIp: "10.0.0.7",
+              paired: true,
+              connected: true,
+              connectedAtMs: now - 1_000,
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "list", "--json"]);
+
+    const output = getRuntimeOutput();
+    expect(output).toContain('"paired"');
+    expect(output).toContain('"n-skew"');
+  });
+
   it("runs nodes status --last-connected and filters by age", async () => {
     const now = Date.now();
     callGateway.mockImplementation(async (...args: unknown[]) => {
