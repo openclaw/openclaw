@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -41,6 +41,13 @@ type TalkConfigPayload = {
   };
 };
 type TalkConfig = NonNullable<NonNullable<TalkConfigPayload["config"]>["talk"]>;
+type TalkSpeakPayload = {
+  audioBase64?: string;
+  provider?: string;
+  outputFormat?: string;
+  mimeType?: string;
+  fileExtension?: string;
+};
 const TALK_CONFIG_DEVICE_PATH = path.join(
   os.tmpdir(),
   `openclaw-talk-config-device-${process.pid}.json`,
@@ -93,6 +100,10 @@ async function fetchTalkConfig(
   params?: { includeSecrets?: boolean } | Record<string, unknown>,
 ) {
   return rpcReq<TalkConfigPayload>(ws, "talk.config", params ?? {});
+}
+
+async function fetchTalkSpeak(ws: GatewaySocket, params: Record<string, unknown>) {
+  return rpcReq<TalkSpeakPayload>(ws, "talk.speak", params);
 }
 
 function expectElevenLabsTalkConfig(
@@ -235,5 +246,59 @@ describe("gateway talk.config", () => {
         voiceId: "voice-normalized",
       });
     });
+  });
+
+  it("synthesizes talk audio via the active talk provider", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      talk: {
+        provider: "openai",
+        providers: {
+          openai: {
+            apiKey: "openai-talk-key", // pragma: allowlist secret
+            voiceId: "alloy",
+            modelId: "gpt-4o-mini-tts",
+          },
+        },
+      },
+    });
+
+    const originalFetch = globalThis.fetch;
+    const requestInits: RequestInit[] = [];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init) {
+        requestInits.push(init);
+      }
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    try {
+      await withServer(async (ws) => {
+        await connectOperator(ws, ["operator.read", "operator.write"]);
+        const res = await fetchTalkSpeak(ws, {
+          text: "Hello from talk mode.",
+          voiceId: "nova",
+          modelId: "tts-1",
+          speed: 1.25,
+        });
+        expect(res.ok).toBe(true);
+        expect(res.payload?.provider).toBe("openai");
+        expect(res.payload?.outputFormat).toBe("mp3");
+        expect(res.payload?.mimeType).toBe("audio/mpeg");
+        expect(res.payload?.fileExtension).toBe(".mp3");
+        expect(res.payload?.audioBase64).toBe(Buffer.from([1, 2, 3]).toString("base64"));
+      });
+
+      expect(fetchMock).toHaveBeenCalled();
+      const requestInit = requestInits.find((init) => typeof init.body === "string");
+      expect(requestInit).toBeDefined();
+      const body = JSON.parse(requestInit?.body as string) as Record<string, unknown>;
+      expect(body.model).toBe("tts-1");
+      expect(body.voice).toBe("nova");
+      expect(body.speed).toBe(1.25);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
