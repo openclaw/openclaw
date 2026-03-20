@@ -23,6 +23,17 @@ describe("resolveAgentRunContext", () => {
     expect(context.currentThreadTs).toBe("om_explicit");
   });
 
+  it("reuses shared session parsing for mattermost thread session keys", () => {
+    const context = resolveAgentRunContext({
+      message: "status update",
+      sessionKey: "agent:main:mattermost:default:chan-1:thread:post-123",
+      to: "mattermost:chan-1",
+    });
+
+    expect(context.currentThreadTs).toBe("post-123");
+    expect(context.currentChannelId).toBe("mattermost:chan-1");
+  });
+
   it("does not infer thread context from DM ids that literally end with :thread:<x>", () => {
     const context = resolveAgentRunContext({
       message: "status update",
