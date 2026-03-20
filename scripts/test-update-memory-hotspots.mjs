@@ -57,10 +57,24 @@ function parseArgs(argv) {
   return args;
 }
 
+const normalizeRepoPath = (value) => value.split(path.sep).join("/");
+const repoRoot = path.resolve(process.cwd());
+const normalizeTrackedRepoPath = (value) => {
+  const normalizedValue = typeof value === "string" ? value : String(value ?? "");
+  const repoRelative = path.isAbsolute(normalizedValue)
+    ? path.relative(repoRoot, path.resolve(normalizedValue))
+    : normalizedValue;
+  if (path.isAbsolute(repoRelative) || repoRelative.startsWith("..") || repoRelative === "") {
+    return normalizeRepoPath(normalizedValue);
+  }
+  return normalizeRepoPath(repoRelative);
+};
+
 function mergeHotspotEntry(aggregated, file, value) {
   if (!(Number.isFinite(value?.deltaKb) && value.deltaKb > 0)) {
     return;
   }
+  const normalizedFile = normalizeTrackedRepoPath(file);
   const normalizeSourceLabel = (source) => {
     const separator = source.lastIndexOf(":");
     if (separator === -1) {
@@ -75,9 +89,9 @@ function mergeHotspotEntry(aggregated, file, value) {
         .filter((source) => typeof source === "string" && source.length > 0)
         .map(normalizeSourceLabel)
     : [];
-  const previous = aggregated.get(file);
+  const previous = aggregated.get(normalizedFile);
   if (!previous) {
-    aggregated.set(file, {
+    aggregated.set(normalizedFile, {
       deltaKb: Math.round(value.deltaKb),
       sources: [...new Set(nextSources)],
     });

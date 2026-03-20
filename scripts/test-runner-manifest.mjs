@@ -25,14 +25,25 @@ const readJson = (filePath, fallback) => {
 };
 
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
+const repoRoot = path.resolve(process.cwd());
+const normalizeTrackedRepoPath = (value) => {
+  const normalizedValue = typeof value === "string" ? value : String(value ?? "");
+  const repoRelative = path.isAbsolute(normalizedValue)
+    ? path.relative(repoRoot, path.resolve(normalizedValue))
+    : normalizedValue;
+  if (path.isAbsolute(repoRelative) || repoRelative.startsWith("..") || repoRelative === "") {
+    return normalizeRepoPath(normalizedValue);
+  }
+  return normalizeRepoPath(repoRelative);
+};
 
 const normalizeManifestEntries = (entries) =>
   entries
     .map((entry) =>
       typeof entry === "string"
-        ? { file: normalizeRepoPath(entry), reason: "" }
+        ? { file: normalizeTrackedRepoPath(entry), reason: "" }
         : {
-            file: normalizeRepoPath(String(entry?.file ?? "")),
+            file: normalizeTrackedRepoPath(String(entry?.file ?? "")),
             reason: typeof entry?.reason === "string" ? entry.reason : "",
           },
     )
@@ -60,7 +71,7 @@ export function loadUnitTimingManifest() {
   const files = Object.fromEntries(
     Object.entries(raw.files ?? {})
       .map(([file, value]) => {
-        const normalizedFile = normalizeRepoPath(file);
+        const normalizedFile = normalizeTrackedRepoPath(file);
         const durationMs =
           Number.isFinite(value?.durationMs) && value.durationMs >= 0 ? value.durationMs : null;
         const testCount =
@@ -97,7 +108,7 @@ export function loadUnitMemoryHotspotManifest() {
   const files = Object.fromEntries(
     Object.entries(raw.files ?? {})
       .map(([file, value]) => {
-        const normalizedFile = normalizeRepoPath(file);
+        const normalizedFile = normalizeTrackedRepoPath(file);
         const deltaKb =
           Number.isFinite(value?.deltaKb) && value.deltaKb > 0 ? Math.round(value.deltaKb) : null;
         const sources = Array.isArray(value?.sources)

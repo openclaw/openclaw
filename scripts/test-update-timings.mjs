@@ -50,6 +50,17 @@ function parseArgs(argv) {
 }
 
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
+const repoRoot = path.resolve(process.cwd());
+const normalizeTrackedRepoPath = (value) => {
+  const normalizedValue = typeof value === "string" ? value : String(value ?? "");
+  const repoRelative = path.isAbsolute(normalizedValue)
+    ? path.relative(repoRoot, path.resolve(normalizedValue))
+    : normalizedValue;
+  if (path.isAbsolute(repoRelative) || repoRelative.startsWith("..") || repoRelative === "") {
+    return normalizeRepoPath(normalizedValue);
+  }
+  return normalizeRepoPath(repoRelative);
+};
 
 const opts = parseArgs(process.argv.slice(2));
 const reportPath =
@@ -74,7 +85,7 @@ const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
 const files = Object.fromEntries(
   (report.testResults ?? [])
     .map((result) => {
-      const file = typeof result.name === "string" ? normalizeRepoPath(result.name) : "";
+      const file = typeof result.name === "string" ? normalizeTrackedRepoPath(result.name) : "";
       const start = typeof result.startTime === "number" ? result.startTime : 0;
       const end = typeof result.endTime === "number" ? result.endTime : 0;
       const testCount = Array.isArray(result.assertionResults) ? result.assertionResults.length : 0;
