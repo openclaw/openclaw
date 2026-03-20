@@ -156,9 +156,11 @@ export function buildGroupIntro(params: {
       ? "Activation: always-on (you receive every group message)."
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
   const groupId = params.sessionEntry?.groupId ?? extractGroupId(params.sessionCtx.From);
-  const groupChannel =
+  const rawGroupChannel =
     params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim();
-  const groupSpace = params.sessionCtx.GroupSpace?.trim();
+  const groupChannel = rawGroupChannel ? sanitizeForPromptLiteral(rawGroupChannel) : undefined;
+  const rawGroupSpace = params.sessionCtx.GroupSpace?.trim();
+  const groupSpace = rawGroupSpace ? sanitizeForPromptLiteral(rawGroupSpace) : undefined;
   const providerIdsLine = providerId
     ? getChannelPlugin(providerId)?.groups?.resolveGroupIntroHint?.({
         cfg: params.cfg,
