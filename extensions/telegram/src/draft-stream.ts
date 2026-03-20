@@ -108,6 +108,8 @@ export function createTelegramDraftStream(params: {
   onSupersededPreview?: (preview: SupersededTelegramPreview) => void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
+  /** Called after a message is successfully sent to Telegram (with messageId and text). */
+  onMessageSent?: (messageId: number, text: string) => void;
 }): TelegramDraftStream {
   const maxChars = Math.min(
     params.maxChars ?? TELEGRAM_STREAM_MAX_CHARS,
@@ -240,6 +242,7 @@ export function createTelegramDraftStream(params: {
       return true;
     }
     streamMessageId = normalizedMessageId;
+    params.onMessageSent?.(normalizedMessageId, renderedText);
     return true;
   };
   const sendDraftTransportPreview = async ({
@@ -425,6 +428,7 @@ export function createTelegramDraftStream(params: {
             // Best-effort cleanup; draft clear failure is cosmetic.
           }
         }
+        params.onMessageSent?.(streamMessageId, renderedText);
         return streamMessageId;
       }
     } catch (err) {

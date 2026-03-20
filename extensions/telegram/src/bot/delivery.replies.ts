@@ -491,7 +491,7 @@ async function maybePinFirstDeliveredMessage(params: {
   }
 }
 
-function emitMessageSentHooks(params: {
+export function emitMessageSentHooks(params: {
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
   enabled: boolean;
   sessionKeyForInternalHooks?: string;
@@ -503,7 +503,12 @@ function emitMessageSentHooks(params: {
   messageId?: number;
   isGroup?: boolean;
   groupId?: string;
+  runtime?: RuntimeEnv;
 }): void {
+  // eslint-disable-next-line no-console
+  console.log(
+    `[diag] telegram: emitMessageSentHooks ENTRY (enabled=${params.enabled}, sessionKey=${params.sessionKeyForInternalHooks ?? "undefined"}, chatId=${params.chatId})`,
+  );
   if (!params.enabled && !params.sessionKeyForInternalHooks) {
     logVerbose(`telegram: emitMessageSentHooks skipped (no hooks enabled and no sessionKey)`);
     return;
@@ -577,6 +582,10 @@ export async function deliverReplies(params: {
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
 }): Promise<{ delivered: boolean }> {
+  // eslint-disable-next-line no-console
+  console.log(
+    `[diag] telegram: deliverReplies ENTRY replies=${params.replies.length} sessionKey=${params.sessionKeyForInternalHooks} chatId=${params.chatId}`,
+  );
   logVerbose(
     `telegram: deliverReplies called (replies=${params.replies.length}, sessionKey=${params.sessionKeyForInternalHooks}, chatId=${params.chatId})`,
   );
@@ -704,8 +713,9 @@ export async function deliverReplies(params: {
         messageId: firstDeliveredMessageId,
         isGroup: params.mirrorIsGroup,
         groupId: params.mirrorGroupId,
+        runtime: params.runtime,
       });
-      logVerbose(
+      params.runtime.log?.(
         `telegram: emitMessageSentHooks called (success=${progress.deliveredCount > deliveredCountBeforeReply}, sessionKey=${params.sessionKeyForInternalHooks}, messageId=${firstDeliveredMessageId})`,
       );
     } catch (error) {
@@ -720,6 +730,7 @@ export async function deliverReplies(params: {
         error: error instanceof Error ? error.message : String(error),
         isGroup: params.mirrorIsGroup,
         groupId: params.mirrorGroupId,
+        runtime: params.runtime,
       });
       throw error;
     }

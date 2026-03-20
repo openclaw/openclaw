@@ -19,18 +19,18 @@ import type {
   OpenClawConfig,
   ReplyToMode,
   TelegramAccountConfig,
-} from "openclaw/plugin-sdk/config-runtime";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
+} from "../../../src/config/types.js";
+import { danger, logVerbose } from "../../../src/globals.js";
+import { fireAndForgetHook } from "../../../src/hooks/fire-and-forget.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../../src/hooks/internal-hooks.js";
+import { toInternalMessageSentContext } from "../../../src/hooks/message-hook-mappers.js";
+import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
+import { getGlobalHookRunner } from "../../../src/plugins/hook-runner-global.js";
+import type { RuntimeEnv } from "../../../src/runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
+import { emitMessageSentHooks } from "./bot/delivery.replies.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
@@ -205,7 +205,11 @@ export const dispatchTelegramMessage = async ({
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
-  const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
+  const createDraftLane = (
+    laneName: LaneName,
+    enabled: boolean,
+    onMessageSent?: (messageId: number, text: string) => void,
+  ): DraftLaneState => {
     const stream = enabled
       ? createTelegramDraftStream({
           api: bot.api,
@@ -234,6 +238,7 @@ export const dispatchTelegramMessage = async ({
               : undefined,
           log: logVerbose,
           warn: logVerbose,
+          onMessageSent,
         })
       : undefined;
     return {
@@ -242,9 +247,29 @@ export const dispatchTelegramMessage = async ({
       hasStreamedMessage: false,
     };
   };
+
+  // Callback to emit message:sent internal hook when streaming reply is sent.
+  const sessionKeyForStreamHooks = ctxPayload.SessionKey ?? route.sessionKey;
+  const streamOnMessageSent = (messageId: number, text: string) => {
+    const hookRunner = getGlobalHookRunner();
+    const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
+    emitMessageSentHooks({
+      hookRunner,
+      enabled: hasMessageSentHooks,
+      sessionKeyForInternalHooks: sessionKeyForStreamHooks,
+      chatId: String(chatId),
+      accountId: route.accountId,
+      content: text,
+      success: true,
+      messageId,
+      isGroup,
+      groupId: isGroup ? String(chatId) : undefined,
+    });
+  };
+
   const lanes: Record<LaneName, DraftLaneState> = {
-    answer: createDraftLane("answer", canStreamAnswerDraft),
-    reasoning: createDraftLane("reasoning", canStreamReasoningDraft),
+    answer: createDraftLane("answer", canStreamAnswerDraft, streamOnMessageSent),
+    reasoning: createDraftLane("reasoning", canStreamReasoningDraft, streamOnMessageSent),
   };
   // Active preview lifecycle answers "can this current preview still be
   // finalized?" Cleanup retention is separate so archived-preview decisions do
