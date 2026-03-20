@@ -274,9 +274,10 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
           interval = setInterval(async () => {
             try {
               const chats = await client.getChats();
+              if (aborted) return; // Stop processing if shutdown during fetch
 
               for (const chat of chats) {
-                if (!chat.id) continue;
+                if (!chat.id || aborted) continue;
 
                 const prevTimestamp = lastSeen.get(chat.id);
                 const currentTimestamp = chat.createdAt ?? "";

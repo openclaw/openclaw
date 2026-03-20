@@ -326,7 +326,20 @@ async function fetchWebPageText(url: string): Promise<string | null> {
       return null; // Skip binary content (images, videos, PDFs, etc.)
     }
 
-    const raw = await res.text();
+    // Cap response body to 512KB to prevent memory exhaustion from large pages
+    const MAX_BODY_BYTES = 512 * 1024;
+    const reader = res.body?.getReader();
+    if (!reader) return null;
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    while (totalBytes < MAX_BODY_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      totalBytes += value.length;
+    }
+    reader.cancel();
+    const raw = new TextDecoder().decode(Buffer.concat(chunks));
 
     // JSON responses — return formatted
     if (contentType.includes("application/json")) {
