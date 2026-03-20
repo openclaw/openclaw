@@ -115,7 +115,7 @@ export async function runGatewayLoop(params: {
       // Exit non-zero on restart timeout so launchd/systemd treats it as a
       // failure and triggers a clean process restart instead of assuming the
       // shutdown was intentional. Stop-timeout stays at 0 (graceful). (#36822)
-      exitProcess(isRestart ? 1 : 0);
+      exitProcess(1);
     }, forceExitMs);
 
     void (async () => {
