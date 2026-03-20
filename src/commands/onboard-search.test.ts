@@ -57,6 +57,45 @@ function pluginWebSearchApiKey(config: OpenClawConfig, pluginId: string): unknow
   return entry?.config?.webSearch?.apiKey;
 }
 
+function createDisabledFirecrawlConfig(apiKey?: string): OpenClawConfig {
+  return {
+    tools: {
+      web: {
+        search: {
+          provider: "firecrawl",
+        },
+      },
+    },
+    plugins: {
+      entries: {
+        firecrawl: {
+          enabled: false,
+          ...(apiKey
+            ? {
+                config: {
+                  webSearch: {
+                    apiKey,
+                  },
+                },
+              }
+            : {}),
+        },
+      },
+    },
+  };
+}
+
+function readFirecrawlPluginApiKey(config: OpenClawConfig): string | undefined {
+  const pluginConfig = config.plugins?.entries?.firecrawl?.config as
+    | {
+        webSearch?: {
+          apiKey?: string;
+        };
+      }
+    | undefined;
+  return pluginConfig?.webSearch?.apiKey;
+}
+
 async function runBlankPerplexityKeyEntry(
   apiKey: string,
   enabled?: boolean,
@@ -139,6 +178,20 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(pluginWebSearchApiKey(result, "firecrawl")).toBe("fc-test-key");
     expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
+  });
+
+  it("re-enables firecrawl and persists its plugin config when selected from disabled state", async () => {
+    const cfg = createDisabledFirecrawlConfig();
+    const { prompter } = createPrompter({
+      selectValue: "firecrawl",
+      textValue: "fc-disabled-key",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("firecrawl");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.firecrawl?.apiKey).toBeUndefined();
+    expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    expect(readFirecrawlPluginApiKey(result)).toBe("fc-disabled-key");
   });
 
   it("sets provider and key for grok", async () => {
@@ -314,6 +367,60 @@ describe("setupSearch", () => {
     }
   });
 
+  it("quickstart detects an existing firecrawl key even when the plugin is disabled", async () => {
+    const cfg = createDisabledFirecrawlConfig("fc-configured-key");
+    const { prompter } = createPrompter({ selectValue: "firecrawl" });
+    const result = await setupSearch(cfg, runtime, prompter, {
+      quickstartDefaults: true,
+    });
+    expect(prompter.text).not.toHaveBeenCalled();
+    expect(result.tools?.web?.search?.provider).toBe("firecrawl");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.firecrawl?.apiKey).toBeUndefined();
+    expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    expect(readFirecrawlPluginApiKey(result)).toBe("fc-configured-key");
+  });
+
+  it("preserves disabled firecrawl plugin state and allowlist when web search stays disabled", async () => {
+    const original = process.env.FIRECRAWL_API_KEY;
+    process.env.FIRECRAWL_API_KEY = "env-firecrawl-key"; // pragma: allowlist secret
+    const cfg: OpenClawConfig = {
+      tools: {
+        web: {
+          search: {
+            provider: "firecrawl",
+            enabled: false,
+          },
+        },
+      },
+      plugins: {
+        allow: ["google"],
+        entries: {
+          firecrawl: {
+            enabled: false,
+          },
+        },
+      },
+    };
+    try {
+      const { prompter } = createPrompter({ selectValue: "firecrawl" });
+      const result = await setupSearch(cfg, runtime, prompter, {
+        quickstartDefaults: true,
+      });
+      expect(prompter.text).not.toHaveBeenCalled();
+      expect(result.tools?.web?.search?.provider).toBe("firecrawl");
+      expect(result.tools?.web?.search?.enabled).toBe(false);
+      expect(result.plugins?.entries?.firecrawl?.enabled).toBe(false);
+      expect(result.plugins?.allow).toEqual(["google"]);
+    } finally {
+      if (original === undefined) {
+        delete process.env.FIRECRAWL_API_KEY;
+      } else {
+        process.env.FIRECRAWL_API_KEY = original;
+      }
+    }
+  });
+
   it("stores env-backed SecretRef when secretInputMode=ref for perplexity", async () => {
     const originalPerplexity = process.env.PERPLEXITY_API_KEY;
     const originalOpenRouter = process.env.OPENROUTER_API_KEY;
@@ -430,8 +537,8 @@ describe("setupSearch", () => {
   });
 
   it("exports all 7 providers in SEARCH_PROVIDER_OPTIONS", () => {
+    const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.id);
     expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(7);
-    const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
     expect(values).toEqual([
       "brave",
       "gemini",
