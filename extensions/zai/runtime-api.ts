@@ -1,1 +1,5 @@
-export * from "../../src/plugin-sdk/zai.js";
+export {
+  detectZaiEndpoint,
+  type ZaiDetectedEndpoint,
+  type ZaiEndpointId,
+} from "openclaw/plugin-sdk/provider-zai-endpoint";

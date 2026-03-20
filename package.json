@@ -169,6 +169,10 @@
       "types": "./dist/plugin-sdk/process-runtime.d.ts",
       "default": "./dist/plugin-sdk/process-runtime.js"
     },
+    "./plugin-sdk/windows-spawn": {
+      "types": "./dist/plugin-sdk/windows-spawn.d.ts",
+      "default": "./dist/plugin-sdk/windows-spawn.js"
+    },
     "./plugin-sdk/acp-runtime": {
       "types": "./dist/plugin-sdk/acp-runtime.d.ts",
       "default": "./dist/plugin-sdk/acp-runtime.js"
@@ -357,6 +361,14 @@
       "types": "./dist/plugin-sdk/provider-catalog.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog.js"
     },
+    "./plugin-sdk/provider-env-vars": {
+      "types": "./dist/plugin-sdk/provider-env-vars.d.ts",
+      "default": "./dist/plugin-sdk/provider-env-vars.js"
+    },
+    "./plugin-sdk/provider-google": {
+      "types": "./dist/plugin-sdk/provider-google.d.ts",
+      "default": "./dist/plugin-sdk/provider-google.js"
+    },
     "./plugin-sdk/provider-models": {
       "types": "./dist/plugin-sdk/provider-models.d.ts",
       "default": "./dist/plugin-sdk/provider-models.js"
@@ -376,6 +388,10 @@
     "./plugin-sdk/provider-web-search": {
       "types": "./dist/plugin-sdk/provider-web-search.d.ts",
       "default": "./dist/plugin-sdk/provider-web-search.js"
+    },
+    "./plugin-sdk/provider-zai-endpoint": {
+      "types": "./dist/plugin-sdk/provider-zai-endpoint.d.ts",
+      "default": "./dist/plugin-sdk/provider-zai-endpoint.js"
     },
     "./plugin-sdk/image-generation": {
       "types": "./dist/plugin-sdk/image-generation.d.ts",
