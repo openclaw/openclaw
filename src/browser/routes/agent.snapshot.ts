@@ -397,25 +397,30 @@ export function registerBrowserAgentSnapshotRoutes(
         return jsonError(res, 400, "labels/mode=efficient require format=ai");
       }
       if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+        const compatibilityWarnings: string[] = [];
         if (plan.selectorValue || plan.frameSelectorValue) {
-          return jsonError(
-            res,
-            400,
-            "selector/frame snapshots are not supported for existing-session profiles; snapshot the whole page and use refs.",
+          compatibilityWarnings.push(
+            "selector/frame snapshots are not supported for existing-session profiles; ignoring selector/frame and using full-page snapshot.",
           );
         }
+        const withCompatibilityWarnings = <T extends Record<string, unknown>>(payload: T) =>
+          compatibilityWarnings.length > 0
+            ? { ...payload, warnings: compatibilityWarnings }
+            : payload;
         const snapshot = await takeChromeMcpSnapshot({
           profileName: profileCtx.profile.name,
           targetId: tab.targetId,
         });
         if (plan.format === "aria") {
-          return res.json({
-            ok: true,
-            format: "aria",
-            targetId: tab.targetId,
-            url: tab.url,
-            nodes: flattenChromeMcpSnapshotToAriaNodes(snapshot, plan.limit),
-          });
+          return res.json(
+            withCompatibilityWarnings({
+              ok: true,
+              format: "aria",
+              targetId: tab.targetId,
+              url: tab.url,
+              nodes: flattenChromeMcpSnapshotToAriaNodes(snapshot, plan.limit),
+            }),
+          );
         }
         const built = buildAiSnapshotFromChromeMcpSnapshot({
           root: snapshot,
@@ -450,18 +455,20 @@ export function registerBrowserAgentSnapshotRoutes(
               "browser",
               DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
             );
-            return res.json({
-              ok: true,
-              format: "ai",
-              targetId: tab.targetId,
-              url: tab.url,
-              labels: true,
-              labelsCount: labelResult.labels,
-              labelsSkipped: labelResult.skipped,
-              imagePath: path.resolve(saved.path),
-              imageType: normalized.contentType?.includes("jpeg") ? "jpeg" : "png",
-              ...built,
-            });
+            return res.json(
+              withCompatibilityWarnings({
+                ok: true,
+                format: "ai",
+                targetId: tab.targetId,
+                url: tab.url,
+                labels: true,
+                labelsCount: labelResult.labels,
+                labelsSkipped: labelResult.skipped,
+                imagePath: path.resolve(saved.path),
+                imageType: normalized.contentType?.includes("jpeg") ? "jpeg" : "png",
+                ...built,
+              }),
+            );
           } finally {
             await clearChromeMcpOverlay({
               profileName: profileCtx.profile.name,
@@ -469,13 +476,15 @@ export function registerBrowserAgentSnapshotRoutes(
             });
           }
         }
-        return res.json({
-          ok: true,
-          format: "ai",
-          targetId: tab.targetId,
-          url: tab.url,
-          ...built,
-        });
+        return res.json(
+          withCompatibilityWarnings({
+            ok: true,
+            format: "ai",
+            targetId: tab.targetId,
+            url: tab.url,
+            ...built,
+          }),
+        );
       }
       if (plan.format === "ai") {
         const pw = await requirePwAi(res, "ai snapshot");

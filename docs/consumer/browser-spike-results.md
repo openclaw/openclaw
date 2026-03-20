@@ -1,6 +1,6 @@
 # Browser Spike Results (Week 1)
 
-Last updated: 2026-03-19
+Last updated: 2026-03-20
 Owner: consumer execution team
 Status: In progress
 
@@ -35,12 +35,12 @@ Legend:
 
 - `PASS`, `FAIL`, `BLOCKED`, `PENDING`
 
-| Approach                  | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Notes                                                                                                                                          |
-| ------------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user` (existing-session) | PENDING       | PENDING     | PENDING            | PENDING          | PENDING           | Control lane passes when Chrome exposes standard CDP endpoint (example: launch with `--remote-debugging-port=9333` and attach via browser URL) |
-| `openclaw` (managed)      | PENDING       | PENDING     | PENDING            | PENDING          | PENDING           | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`)                                                          |
-| Claude-in-Chrome          | PENDING       | PENDING     | PENDING            | PENDING          | PENDING           | Investigation/adaptation track                                                                                                                 |
-| Browserbase               | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Credential-blocked (no Browserbase key configured)                                                                                             |
+| Approach                  | Task 1 Flight                       | Task 2 Form | Task 3 Web Summary                                  | Task 4 X Summary | Task 5 Multi-step | Notes                                                                                                                                          |
+| ------------------------- | ----------------------------------- | ----------- | --------------------------------------------------- | ---------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user` (existing-session) | PASS (`r1`: `107.2s`; `r2` pending) | PENDING     | PASS (median `39.0s`; `r1`: `49.2s`, `r2`: `28.7s`) | PENDING          | PENDING           | Control lane passes when Chrome exposes standard CDP endpoint (example: launch with `--remote-debugging-port=9333` and attach via browser URL) |
+| `openclaw` (managed)      | PASS (`r1`: `85.4s`; `r2` pending)  | PENDING     | PASS (median `33.9s`; `r1`: `29.1s`, `r2`: `38.6s`) | PENDING          | PENDING           | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`)                                                          |
+| Claude-in-Chrome          | PENDING                             | PENDING     | PENDING                                             | PENDING          | PENDING           | Investigation/adaptation track                                                                                                                 |
+| Browserbase               | BLOCKED                             | BLOCKED     | BLOCKED                                             | BLOCKED          | BLOCKED           | Credential-blocked (no Browserbase key configured)                                                                                             |
 
 ## Current blocker summary
 
@@ -58,12 +58,62 @@ Legend:
   - `chrome-devtools-mcp --autoConnect` against current desktop Chrome: `list_pages` request times out.
   - `chrome-devtools-mcp --browserUrl http://127.0.0.1:9222`: returns error content because `/json/version` is HTTP 404.
   - Launching a separate Chrome with `--remote-debugging-port=9333` exposes standard CDP (`/json/version` works), and OpenClaw `user` lane then passes `status`, `tabs`, and `open`.
+- Current benchmark harness findings:
+  - The benchmark gateway must run in a persistent terminal session; backgrounding it from a short-lived exec shell causes false "silent exit" failures because the child process gets reaped with the shell.
+  - The benchmark runtime must carry `agents/main/agent/auth-profiles.json` and `auth.json`; copying only `openclaw.json` is not enough for `agent --local`.
+  - The copied home config was too "live"; a stable benchmark lane requires `bindings=[]` and all chat channels disabled.
+  - Existing-session snapshot compatibility patch landed on this branch: selector/frame snapshot requests now degrade to full-page snapshot with a warning instead of failing the call.
+  - `profile=user` Task 3 passed; the warning may still appear as compatibility guidance but is no longer a hard error path.
+  - `profile=openclaw` has the better Task 3 median so far (`33.9s` vs `39.0s` for `profile=user`).
 
 Interpretation:
 
 - This is not a gateway/local-runner timeout issue anymore.
 - Existing-session instability is currently tied to the current Chrome runtime mode, not OpenClaw gateway routing.
 - Benchmark execution can proceed immediately on `openclaw` managed profile while existing-session is being stabilized.
+
+## 2026-03-20 partial benchmark evidence
+
+Artifact root:
+
+- `.artifacts/browser-spike-20260320-114824`
+
+Validated setup:
+
+- benchmark runtime: `/tmp/openclaw-consumer-bench`
+- model: `openai-codex/gpt-5.1-codex-mini`
+- browser attach for `profile=user`: `OPENCLAW_CHROME_MCP_BROWSER_URL=http://127.0.0.1:9333`
+- gateway must stay alive in a persistent terminal session on port `19001`
+
+Task 3, runs 1-2:
+
+- `user`
+  - result: `PASS`
+  - run 1: `49.2s`
+  - run 2: `28.7s`
+  - median: `39.0s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task3_r1/agent.json`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task3_r2/agent.json`
+  - note: run completed, but stderr showed `selector/frame snapshots are not supported for existing-session profiles`
+- `openclaw`
+  - result: `PASS`
+  - run 1: `29.1s`
+  - run 2: `38.6s`
+  - median: `33.9s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task3_r1/agent.json`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task3_r2/agent.json`
+  - note: no matching browser snapshot warning on run 1
+
+Task 1, run 1:
+
+- `user`
+  - result: `PASS`
+  - run 1: `107.2s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/user_task1_r1/agent.json`
+- `openclaw`
+  - result: `PASS`
+  - run 1: `85.4s`
+  - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task1_r1/agent.json`
 
 ## Command-level benchmark runbook (week 1)
 

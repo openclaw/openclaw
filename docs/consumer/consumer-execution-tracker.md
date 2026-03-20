@@ -1,6 +1,6 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-19
+Last updated: 2026-03-20
 Owner: consumer execution team
 Status: Active
 
@@ -63,9 +63,15 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
   - `profile=openclaw` control lane passes on a clean direct-built gateway (`start`, `status`, `tabs`, `open https://example.com`).
   - Gateway/browser control is healthy for both profiles under explicit CDP attach.
   - A benchmark-only runtime at `/tmp/openclaw-consumer-bench` disables Telegram and removes the stale `plugins.entries.openai` config noise so browser checks do not collide with shared bot traffic.
-  - Local runner is no longer blocked: trivial `agent --local` prompt now returns `OK` reliably.
+  - Local runner is partially restored on the benchmark runtime after copying `agents/main/agent/auth-profiles.json` and `auth.json`; real task runs now execute again.
   - External probe confirms the same failure outside OpenClaw (`chrome-devtools-mcp list_pages` times out on `--autoConnect` against current Chrome session).
   - `pnpm openclaw ...` runs from a dirty tree can trigger rebuild churn via `scripts/run-node.mjs`; use the already-built `node dist/entry.js ...` path for clean benchmark/debug runs to avoid false negatives.
+  - New benchmark evidence:
+    - Task 1 run 1 passed on both profiles (`user`: `107.2s`, `openclaw`: `85.4s`).
+    - Task 3 runs 1-2 passed on `profile=user` with median `39.0s`.
+    - Task 3 runs 1-2 passed on `profile=openclaw` with median `33.9s`.
+    - Existing-session selector/frame snapshot requests now degrade to full-page snapshot with warning (compatibility patch landed on this branch), instead of failing the snapshot call.
+    - The benchmark gateway must stay alive in a persistent terminal session; backgrounding it from a short-lived exec shell causes false "silent exit" failures.
 
 ## Execution phases and gates
 
@@ -238,5 +244,43 @@ Out of scope:
   - `/tmp/chrome-mcp-probe-browserurl.log`
 - Next 3 actions:
   - Capture and codify the exact existing-session prerequisite: launch Chrome with explicit CDP endpoint and point gateway Chrome MCP to it.
+
+### 2026-03-20
+
+- Done:
+  - Rebuilt `/tmp/openclaw-consumer-bench` from local config, then trimmed it into a browser-only benchmark runtime (`bindings=[]`, Telegram disabled, WhatsApp disabled).
+  - Restored isolated `main` agent auth by copying `agents/main/agent/auth-profiles.json` and `auth.json` into the benchmark runtime.
+  - Proved the benchmark gateway has to stay alive in a persistent terminal session; short-lived exec shells were reaping the child gateway and creating fake silent-exit failures.
+  - Validated control lanes again on the persistent session:
+    - `profile=user status` PASS
+    - `profile=openclaw start` PASS
+    - `profile=openclaw status` PASS
+  - Captured first real benchmark artifacts for Task 3:
+    - `profile=user` runs 1-2: PASS, median `39.0s`
+    - `profile=openclaw` runs 1-2: PASS, median `33.9s`
+  - Captured Task 1 run 1 artifacts:
+    - `profile=user` run 1: PASS in `107.2s`
+    - `profile=openclaw` run 1: PASS in `85.4s`
+  - Landed existing-session snapshot compatibility patch: selector/frame snapshot requests no longer fail hard; they now fallback to full-page snapshot with warning.
+- Blocked:
+  - Phase B still needs the remaining task matrix beyond Task 3.
+  - Existing-session path still emits a browser-tool limitation warning: selector/frame snapshots are unsupported for `profile=user`.
+- Evidence links:
+  - `.artifacts/browser-spike-20260320-114824/runs/user_task3_r1/agent.json`
+  - `.artifacts/browser-spike-20260320-114824/runs/user_task3_r1/agent.stderr.log`
+  - `.artifacts/browser-spike-20260320-114824/runs/user_task3_r2/agent.json`
+  - `.artifacts/browser-spike-20260320-114824/runs/user_task3_r2/result.tsv`
+  - `.artifacts/browser-spike-20260320-114824/runs/user_task1_r1/agent.json`
+  - `.artifacts/browser-spike-20260320-114824/runs/user_task1_r1/result.tsv`
+  - `.artifacts/browser-spike-20260320-114824/runs/openclaw_task3_r1/agent.json`
+  - `.artifacts/browser-spike-20260320-114824/runs/openclaw_task3_r1/agent.stderr.log`
+  - `.artifacts/browser-spike-20260320-114824/runs/openclaw_task3_r2/agent.json`
+  - `.artifacts/browser-spike-20260320-114824/runs/openclaw_task1_r1/agent.json`
+  - `.artifacts/browser-spike-20260320-114824/runs/openclaw_task1_r1/result.tsv`
+  - `docs/consumer/browser-spike-results.md`
+- Next 3 actions:
+  - Run Task 1 run 2 on both profiles for median timing.
+  - Run Task 2 form-fill on both profiles to see whether `profile=user` snapshot limitations turn into real failures.
+  - Decide whether `profile=user` needs a prompt/tool workaround for snapshot limitations before attempting the multi-step task.
   - Run phase-B benchmark tasks on `profile=openclaw` immediately while existing-session is being stabilized.
   - Keep benchmark/debug runs on `node dist/entry.js ...` until the rebuild-churn path is out of the picture.

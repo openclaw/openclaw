@@ -158,6 +158,33 @@ describe("existing-session browser routes", () => {
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalled();
   });
 
+  it("falls back to full-page snapshots when selector/frame is requested for existing-session profiles", async () => {
+    const handler = getSnapshotGetHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: { format: "ai", selector: "#submit", frame: "iframe[name=checkout]" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      format: "ai",
+      warnings: [
+        expect.stringContaining(
+          "selector/frame snapshots are not supported for existing-session profiles",
+        ),
+      ],
+    });
+    expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+    });
+  });
+
   it("allows ref screenshots for existing-session profiles", async () => {
     const handler = getSnapshotPostHandler();
     const response = createBrowserRouteResponse();
