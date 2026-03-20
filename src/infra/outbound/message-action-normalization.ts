@@ -64,6 +64,20 @@ export function normalizeMessageActionInput(params: {
     }
   }
 
+  // LLMs (especially in cron/isolated contexts without toolContext) sometimes place the
+  // target identifier in "channel" instead of "target" — e.g. "channel:123456" when the
+  // intended field is "target". Recover by promoting "channel" to "target" when: (a) no
+  // explicit target was resolved yet, (b) the channel value looks like a target identifier
+  // (contains ":" — e.g. "channel:id", "user:id", "+phone"), and (c) the action needs one.
+  if (
+    actionRequiresTarget(action) &&
+    !actionHasTarget(action, normalizedArgs) &&
+    explicitChannel &&
+    explicitChannel.includes(":")
+  ) {
+    normalizedArgs.target = explicitChannel;
+  }
+
   applyTargetToParams({ action, args: normalizedArgs });
   if (
     actionRequiresTarget(action) &&
