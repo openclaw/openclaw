@@ -8,8 +8,10 @@ const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
 const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
 const saveMediaBufferSpy = vi.fn();
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
   return {
     ...actual,
     loadConfig: vi.fn().mockReturnValue({
@@ -37,8 +39,10 @@ vi.mock("../../../src/pairing/pairing-store.js", () => {
   };
 });
 
-vi.mock("../../../src/media/store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/media/store.js")>();
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
   return {
     ...actual,
     saveMediaBuffer: vi.fn(async (...args: Parameters<typeof actual.saveMediaBuffer>) => {

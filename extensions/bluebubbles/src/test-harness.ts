@@ -62,14 +62,16 @@ export function createBlueBubblesProbeMockModule(): BlueBubblesProbeMockModule {
 export function installBlueBubblesFetchTestHooks(params: {
   mockFetch: ReturnType<typeof vi.fn>;
   privateApiStatusMock: {
-    mockReset: () => unknown;
+    mockReset?: () => unknown;
+    mockClear?: () => unknown;
     mockReturnValue: (value: boolean | null) => unknown;
   };
 }) {
   beforeEach(() => {
     vi.stubGlobal("fetch", params.mockFetch);
     params.mockFetch.mockReset();
-    params.privateApiStatusMock.mockReset();
+    params.privateApiStatusMock.mockReset?.();
+    params.privateApiStatusMock.mockClear?.();
     params.privateApiStatusMock.mockReturnValue(BLUE_BUBBLES_PRIVATE_API_STATUS.unknown);
   });
 
