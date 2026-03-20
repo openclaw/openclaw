@@ -57,6 +57,7 @@ async function graphql(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(10_000),
   });
 
   const json = (await res.json()) as GraphQLResponse;

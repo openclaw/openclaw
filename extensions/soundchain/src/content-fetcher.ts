@@ -41,11 +41,11 @@ const BLOCKED_HOST_PATTERNS = [
   /^192\.168\.\d+\.\d+$/,
   /^169\.254\.\d+\.\d+$/, // Link-local
   /^0\.0\.0\.0$/,
-  /^\[::1?\]$/,
-  /^\[::ffff:/i, // IPv6-mapped IPv4 (e.g. [::ffff:127.0.0.1])
-  /^\[fd[0-9a-f]{2}:/i, // IPv6 ULA (fd00::/8)
-  /^\[fe80:/i, // IPv6 link-local (fe80::/10)
-  /^\[fc[0-9a-f]{2}:/i, // IPv6 ULA (fc00::/7)
+  /^\[?::1?\]?$/,
+  /^\[?::ffff:/i, // IPv6-mapped IPv4 (bracketed or bare)
+  /^\[?fd[0-9a-f]{2}:/i, // IPv6 ULA fd00::/8 (bracketed or bare)
+  /^\[?fe80:/i, // IPv6 link-local fe80::/10 (bracketed or bare)
+  /^\[?fc[0-9a-f]{2}:/i, // IPv6 ULA fc00::/7 (bracketed or bare)
   /\.internal$/i,
   /\.local$/i,
   /metadata\.google/i, // Cloud metadata
