@@ -46,6 +46,8 @@ import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "./group-policy.js";
+import { getDiscordGatewayEmitter } from "./monitor.gateway.js";
+import { getGateway, unregisterGateway } from "./monitor/gateway-registry.js";
 import {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
@@ -701,6 +703,25 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         historyLimit: account.config.historyLimit,
         setStatus: (patch) => ctx.setStatus({ accountId: account.accountId, ...patch }),
       });
+    },
+    stopAccount: async (ctx) => {
+      const accountId = ctx.accountId;
+      const gateway = getGateway(accountId);
+      if (gateway) {
+        try {
+          // Prevent reconnect attempts and forcibly close the WebSocket.
+          // Suppress any error event emitted during disconnect to avoid unhandled rejections.
+          const emitter = getDiscordGatewayEmitter(gateway);
+          emitter?.once("error", () => {});
+          gateway.options.reconnect = { maxAttempts: 0 };
+          gateway.disconnect();
+        } catch (err) {
+          ctx.log?.warn?.(
+            `[${accountId}] discord stopAccount: error during gateway disconnect: ${String(err)}`,
+          );
+        }
+        unregisterGateway(accountId);
+      }
     },
   },
 };
