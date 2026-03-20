@@ -30,6 +30,10 @@ static guint properties_changed_signal_id = 0;
 static void fetch_unit_properties(void);
 extern void systemd_refresh(void);
 
+static gint sort_marked_units(gconstpointer a, gconstpointer b) {
+    return g_strcmp0(*(const gchar **)a, *(const gchar **)b);
+}
+
 static const gchar* discover_canonical_unit_name(void) {
     if (cached_unit_name) return cached_unit_name;
 
@@ -77,8 +81,10 @@ static const gchar* discover_canonical_unit_name(void) {
         if (found_default) {
             cached_unit_name = g_strdup("openclaw-gateway.service");
         } else {
-            g_warning("Ambiguous OpenClaw systemd units found. Falling back to default 'openclaw-gateway.service'");
-            cached_unit_name = g_strdup("openclaw-gateway.service");
+            g_ptr_array_sort(marked_units, sort_marked_units);
+            const gchar *selected = g_ptr_array_index(marked_units, 0);
+            g_warning("Ambiguous OpenClaw systemd units found. Deterministically falling back to '%s'", selected);
+            cached_unit_name = g_strdup(selected);
         }
     } else {
         cached_unit_name = g_strdup("openclaw-gateway.service");
@@ -138,40 +144,71 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
                     g_strfreev(argv);
                 }
             } else if (g_str_has_prefix(line, "EnvironmentFile=")) {
-                gchar *env_file = g_strstrip(line + 16);
-                gboolean is_optional = FALSE;
-                if (env_file[0] == '-') {
-                    is_optional = TRUE;
-                    env_file++;
-                    env_file = g_strstrip(env_file);
-                }
+                gchar *env_val = line + 16;
+                gint argc = 0;
+                gchar **argv = NULL;
                 
-                gchar *file_contents = NULL;
-                if (g_file_get_contents(env_file, &file_contents, NULL, NULL)) {
-                    gchar **env_lines = g_strsplit(file_contents, "\n", -1);
-                    for (gint j = 0; env_lines[j] != NULL; j++) {
-                        gchar *env_line = g_strstrip(env_lines[j]);
-                        if (env_line[0] == '#' || env_line[0] == ';' || env_line[0] == '\0') continue;
+                // Parse the line as a shell command to handle multiple files and quotes
+                if (g_shell_parse_argv(env_val, &argc, &argv, NULL)) {
+                    for (gint k = 0; k < argc; k++) {
+                        gchar *env_file = argv[k];
+                        gboolean is_optional = FALSE;
                         
-                        gchar *eq = strchr(env_line, '=');
-                        if (eq) {
-                            gchar *key = g_strndup(env_line, eq - env_line);
-                            gchar *val = g_strstrip(eq + 1);
-                            gsize val_len = strlen(val);
-                            if (val_len >= 2 && ((val[0] == '"' && val[val_len-1] == '"') ||
-                                                 (val[0] == '\'' && val[val_len-1] == '\''))) {
-                                val[val_len-1] = '\0';
-                                val++;
-                            }
-                            gchar *merged = g_strdup_printf("%s=%s", g_strstrip(key), val);
-                            g_ptr_array_add(env_array, merged);
-                            g_free(key);
+                        if (env_file[0] == '-') {
+                            is_optional = TRUE;
+                            env_file++;
                         }
+                        
+                        if (env_file[0] == '\0') continue;
+                        
+                        gchar *expanded_h = NULL;
+                        if (strstr(env_file, "%h")) {
+                            gchar **parts = g_strsplit(env_file, "%h", -1);
+                            expanded_h = g_strjoinv(home_dir, parts);
+                            g_strfreev(parts);
+                            env_file = expanded_h;
+                        }
+                        
+                        gchar *resolved_path = NULL;
+                        if (!g_path_is_absolute(env_file)) {
+                            gchar *systemd_user_dir = g_build_filename(home_dir, ".config", "systemd", "user", NULL);
+                            resolved_path = g_build_filename(systemd_user_dir, env_file, NULL);
+                            g_free(systemd_user_dir);
+                            env_file = resolved_path;
+                        }
+                        
+                        gchar *file_contents = NULL;
+                        if (g_file_get_contents(env_file, &file_contents, NULL, NULL)) {
+                            gchar **env_lines = g_strsplit(file_contents, "\n", -1);
+                            for (gint j = 0; env_lines[j] != NULL; j++) {
+                                gchar *env_line = g_strstrip(env_lines[j]);
+                                if (env_line[0] == '#' || env_line[0] == ';' || env_line[0] == '\0') continue;
+                                
+                                gchar *eq = strchr(env_line, '=');
+                                if (eq) {
+                                    gchar *key = g_strndup(env_line, eq - env_line);
+                                    gchar *val = g_strstrip(eq + 1);
+                                    gsize val_len = strlen(val);
+                                    if (val_len >= 2 && ((val[0] == '"' && val[val_len-1] == '"') ||
+                                                         (val[0] == '\'' && val[val_len-1] == '\''))) {
+                                        val[val_len-1] = '\0';
+                                        val++;
+                                    }
+                                    gchar *merged = g_strdup_printf("%s=%s", g_strstrip(key), val);
+                                    g_ptr_array_add(env_array, merged);
+                                    g_free(key);
+                                }
+                            }
+                            g_strfreev(env_lines);
+                            g_free(file_contents);
+                        } else if (!is_optional) {
+                            g_warning("Failed to read EnvironmentFile: %s", env_file);
+                        }
+                        
+                        g_free(expanded_h);
+                        g_free(resolved_path);
                     }
-                    g_strfreev(env_lines);
-                    g_free(file_contents);
-                } else if (!is_optional) {
-                    g_warning("Failed to read EnvironmentFile: %s", env_file);
+                    g_strfreev(argv);
                 }
             }
         }
