@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveThreadBindingConversationIdFromBindingId } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveThreadBindingEffectiveExpiresAt } from "openclaw/plugin-sdk/channel-runtime";
 import { formatThreadBindingDurationLabel } from "openclaw/plugin-sdk/channel-runtime";
 import {
   registerSessionBindingAdapter,
@@ -115,32 +116,6 @@ function toTelegramTargetKind(raw: BindingTargetKind): TelegramBindingTargetKind
   return raw === "subagent" ? "subagent" : "acp";
 }
 
-function resolveEffectiveBindingExpiresAt(params: {
-  record: TelegramThreadBindingRecord;
-  defaultIdleTimeoutMs: number;
-  defaultMaxAgeMs: number;
-}): number | undefined {
-  const idleTimeoutMs =
-    typeof params.record.idleTimeoutMs === "number"
-      ? Math.max(0, Math.floor(params.record.idleTimeoutMs))
-      : params.defaultIdleTimeoutMs;
-  const maxAgeMs =
-    typeof params.record.maxAgeMs === "number"
-      ? Math.max(0, Math.floor(params.record.maxAgeMs))
-      : params.defaultMaxAgeMs;
-
-  const inactivityExpiresAt =
-    idleTimeoutMs > 0
-      ? Math.max(params.record.lastActivityAt, params.record.boundAt) + idleTimeoutMs
-      : undefined;
-  const maxAgeExpiresAt = maxAgeMs > 0 ? params.record.boundAt + maxAgeMs : undefined;
-
-  if (inactivityExpiresAt != null && maxAgeExpiresAt != null) {
-    return Math.min(inactivityExpiresAt, maxAgeExpiresAt);
-  }
-  return inactivityExpiresAt ?? maxAgeExpiresAt;
-}
-
 function toSessionBindingRecord(
   record: TelegramThreadBindingRecord,
   defaults: { idleTimeoutMs: number; maxAgeMs: number },
@@ -159,7 +134,7 @@ function toSessionBindingRecord(
     },
     status: "active",
     boundAt: record.boundAt,
-    expiresAt: resolveEffectiveBindingExpiresAt({
+    expiresAt: resolveThreadBindingEffectiveExpiresAt({
       record,
       defaultIdleTimeoutMs: defaults.idleTimeoutMs,
       defaultMaxAgeMs: defaults.maxAgeMs,
