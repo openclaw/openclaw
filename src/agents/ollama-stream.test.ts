@@ -335,12 +335,7 @@ async function withMockNdjsonFetch(
 async function createOllamaTestStream(params: {
   baseUrl: string;
   defaultHeaders?: Record<string, string>;
-  options?: {
-    apiKey?: string;
-    maxTokens?: number;
-    signal?: AbortSignal;
-    headers?: Record<string, string>;
-  };
+  options?: Parameters<ReturnType<typeof createOllamaStreamFn>>[2];
 }) {
   const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
   return streamFn(
@@ -395,6 +390,40 @@ describe("createOllamaStreamFn", () => {
         };
         expect(requestBody.options.num_ctx).toBe(131072);
         expect(requestBody.options.num_predict).toBe(123);
+      },
+    );
+  });
+
+  it("applies onPayload mutations before sending the Ollama request", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          options: {
+            onPayload: (payload) => {
+              const payloadObj = payload as { options?: Record<string, unknown> };
+              payloadObj.options ??= {};
+              payloadObj.options.think = false;
+            },
+          },
+        });
+
+        const events = await collectStreamEvents(stream);
+        expect(events.at(-1)?.type).toBe("done");
+
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+
+        const requestBody = JSON.parse(requestInit.body) as {
+          options?: Record<string, unknown>;
+        };
+        expect(requestBody.options?.think).toBe(false);
       },
     );
   });

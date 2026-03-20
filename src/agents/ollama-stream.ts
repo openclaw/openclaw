@@ -466,6 +466,7 @@ export function createOllamaStreamFn(
           ...(ollamaTools.length > 0 ? { tools: ollamaTools } : {}),
           options: ollamaOptions,
         };
+        options?.onPayload?.(body as unknown as Record<string, unknown>, model);
 
         const headers: Record<string, string> = {
           "Content-Type": "application/json",

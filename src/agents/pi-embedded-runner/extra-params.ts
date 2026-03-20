@@ -23,6 +23,7 @@ import {
   shouldApplyMoonshotPayloadCompat,
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
+import { createOllamaThinkingPayloadWrapper } from "./ollama-stream-wrappers.js";
 import {
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
@@ -235,6 +236,10 @@ export function applyExtraParamsToAgent(
       `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
     );
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
+  }
+
+  if (thinkingLevel === "off") {
+    agent.streamFn = createOllamaThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
   }
 
   agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn, {
