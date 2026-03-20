@@ -1449,6 +1449,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     // Latches true after the first send/edit failure to prevent the interval
     // from being re-armed by a later onPartialReply call (ID=2964357928).
     let previewSendFailed = false;
+    // Monotonically-increasing turn counter. Incremented at every
+    // onAssistantMessageStart boundary. The schedulePatch send path captures
+    // the current value and compares it after the async POST resolves; if
+    // the value has changed the turn boundary has passed and the result is stale.
+    let currentTurnSeq = 0;
     // Count of turns already posted via streaming (flushed at assistant message boundaries).
     // Used to skip re-delivery of those turns in the final reply array.
     let streamedTurnCount = 0;
@@ -1532,22 +1537,26 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           try {
             if (!streamMessageId) {
               try {
+                // Capture the turn sequence BEFORE the async POST so we can
+                // detect whether a turn boundary fired while we were waiting.
+                const sendTurnSeq = currentTurnSeq;
                 const result = await sendMessageMattermost(to, text, {
                   accountId: account.accountId,
                   replyToId: effectiveReplyToId,
                 });
-                // Guard: discard the result if a turn boundary reset cleared
-                // pendingPatchText while this send was in flight. In that case
-                // streamMessageId must stay null so the next turn's schedulePatch
-                // creates a fresh post instead of patching this orphaned one.
-                if (pendingPatchText) {
+                // Guard: discard the result if a turn boundary has advanced
+                // currentTurnSeq while this send was in flight. Using the
+                // sequence counter (instead of pendingPatchText) prevents the
+                // false-positive where turn B has already written to
+                // pendingPatchText by the time turn A's POST resolves.
+                if (currentTurnSeq === sendTurnSeq) {
                   streamMessageId = result.messageId;
                   lastSentText = text;
                   runtime.log?.(`stream-patch started ${streamMessageId}`);
                 } else {
                   // Turn boundary passed — delete the now-orphaned post best-effort.
                   runtime.log?.(
-                    `stream-patch discarding stale send result ${result.messageId} (turn boundary)`,
+                    `stream-patch discarding stale send result ${result.messageId} (turn boundary seq ${sendTurnSeq} → ${currentTurnSeq})`,
                   );
                   void deleteMattermostPost(blockStreamingClient, result.messageId).catch(() => {});
                 }
@@ -1851,6 +1860,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   const finalizeId = streamMessageId;
                   const finalizeText = pendingPatchText;
 
+                  // Advance the turn sequence counter BEFORE clearing state.
+                  // schedulePatch captures this value when it starts a send; if the
+                  // value has changed by the time the POST resolves, the result belongs
+                  // to the previous turn and must be discarded / the post deleted.
+                  currentTurnSeq++;
+
                   // Stop the interval and reset turn-local text/ID state immediately
                   // so new onPartialReply calls start fresh for the next turn.
                   // patchSending is intentionally NOT cleared here — it stays set until
@@ -1886,7 +1901,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   // which applies proper multi-chunk delivery. The preview post is deleted
                   // so there is no orphaned partial-text post alongside the chunked reply.
                   if (finalizeText.length > textLimit) {
-                    void deleteMattermostPost(blockStreamingClient, finalizeId).catch(() => {});
+                    // Defer the preview delete: deliver() runs after this callback
+                    // returns, so deleting immediately would remove the only visible
+                    // copy of this turn if deliverMattermostReplyPayload later fails.
+                    // A short delay gives the delivery path time to succeed first.
+                    const clientRef = blockStreamingClient;
+                    void new Promise<void>((r) => setTimeout(r, 5000)).then(() =>
+                      deleteMattermostPost(clientRef, finalizeId).catch(() => {}),
+                    );
                     runtime.log?.(
                       `stream-patch skipping over-limit turn ${finalizeId} (${finalizeText.length} > ${textLimit}), will re-deliver`,
                     );
