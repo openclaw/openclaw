@@ -19,17 +19,16 @@ import type {
   ZcaUserInfo,
 } from "./types.js";
 import {
-  LoginQRCallbackEventType,
   TextStyle,
-  ThreadType,
-  Zalo,
   type API,
   type Credentials,
   type GroupInfo,
   type LoginQRCallbackEvent,
   type Message,
   type User,
+  Zalo,
 } from "./zca-client.js";
+import { LoginQRCallbackEventType, ThreadType } from "./zca-constants.js";
 
 const API_LOGIN_TIMEOUT_MS = 20_000;
 const QR_LOGIN_TTL_MS = 3 * 60_000;

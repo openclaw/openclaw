@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
+import "./zalo-js.test-mocks.js";
 import { zalouserSetupPlugin } from "./channel.setup.js";
 
 const zalouserSetupAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
