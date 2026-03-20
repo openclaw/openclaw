@@ -144,12 +144,36 @@
         "reason": "Isolated-agent sandbox config coverage retained a large shared unit-fast heap spike on Linux CI."
       },
       {
+        "file": "src/cron/isolated-agent.direct-delivery-core-channels.test.ts",
+        "reason": "Direct-delivery isolated-agent coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 OOM lane."
+      },
+      {
+        "file": "src/cron/service.issue-regressions.test.ts",
+        "reason": "Issue regression cron coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 22 and Node 24 OOM lanes."
+      },
+      {
         "file": "src/cron/store.test.ts",
         "reason": "Cron store coverage retained a large shared unit-fast heap spike on Linux Node 24 CI."
       },
       {
+        "file": "src/context-engine/context-engine.test.ts",
+        "reason": "Context-engine coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/acp/control-plane/manager.test.ts",
+        "reason": "ACP control-plane manager coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 22 and Node 24 OOM lanes."
+      },
+      {
+        "file": "src/acp/translator.stop-reason.test.ts",
+        "reason": "ACP translator stop-reason coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
         "file": "src/infra/exec-approval-forwarder.test.ts",
         "reason": "Exec approval forwarder coverage retained a top shared unit-fast heap spike in the March 19, 2026 Linux Node 22 OOM lane."
+      },
+      {
+        "file": "src/infra/restart-stale-pids.test.ts",
+        "reason": "Restart-stale-pids coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
       },
       {
         "file": "src/infra/heartbeat-runner.respects-ackmaxchars-heartbeat-acks.test.ts",
@@ -172,16 +196,40 @@
         "reason": "Mistral provider coverage retained a large shared unit-fast heap spike on Linux Node 24 CI."
       },
       {
+        "file": "src/memory/manager.batch.test.ts",
+        "reason": "Memory manager batch coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 22 and Node 24 OOM lanes."
+      },
+      {
         "file": "src/memory/qmd-manager.test.ts",
         "reason": "QMD manager coverage retained recurring shared unit-fast heap spikes across Linux CI lanes."
+      },
+      {
+        "file": "src/media-understanding/providers/image.test.ts",
+        "reason": "Image provider coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
       },
       {
         "file": "src/plugins/contracts/auth.contract.test.ts",
         "reason": "Plugin auth contract coverage retained a large shared unit-fast heap spike on Linux Node 24 CI."
       },
       {
+        "file": "src/plugins/contracts/discovery.contract.test.ts",
+        "reason": "Plugin discovery contract coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/plugins/hooks.phase-hooks.test.ts",
+        "reason": "Phase hooks coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/channels/plugins/plugins-core.test.ts",
+        "reason": "Core plugin coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 22 OOM lane."
+      },
+      {
         "file": "src/secrets/apply.test.ts",
         "reason": "Secrets apply coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
+      },
+      {
+        "file": "src/tui/tui-command-handlers.test.ts",
+        "reason": "TUI command handler coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
       }
     ],
     "threadSingleton": [
