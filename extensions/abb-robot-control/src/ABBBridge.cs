@@ -710,13 +710,20 @@ public class ABBBridge
 
         var task = controller.Rapid.GetTask("T_ROB1");
 
-        // Use a unique module name to avoid collision with existing MainModule.
-        string uniqueModuleName = "AgentMod_" + Guid.NewGuid().ToString("N").Substring(0, 8);
-        string uniqueCode = RenameModuleInCode(rapidCode, uniqueModuleName);
-        string fileName = uniqueModuleName + ".mod";
-        string tempFile = Path.Combine(Path.GetTempPath(), fileName);
-        File.WriteAllText(tempFile, uniqueCode);
-        string remotePath = fileName;
+        // Use Replace mode on MainModule to avoid ambiguous main() proc errors.
+        // RapidLoadMode.Add with unique names causes C0049003 when Communicate module
+        // already has a main() proc as the task entry point.
+        string targetModuleName = "MainModule";
+        string normalizedCode = RenameModuleInCode(rapidCode, targetModuleName);
+        string modFileName  = targetModuleName + ".mod";
+        string pgfFileName  = "RobotProgram.pgf";
+        string tempModFile  = Path.Combine(Path.GetTempPath(), modFileName);
+        string tempPgfFile  = Path.Combine(Path.GetTempPath(), pgfFileName);
+        string pgfContent   = "<?xml version=\"1.0\" encoding=\"ISO-8859-1\" ?>\r\n<Program>\r\n  <Module>" + modFileName + "</Module>\r\n</Program>";
+        File.WriteAllText(tempModFile, normalizedCode);
+        File.WriteAllText(tempPgfFile, pgfContent);
+        // Keep uniqueModuleName alias for error messages
+        string uniqueModuleName = targetModuleName;
 
         var tcs = new TaskCompletionSource<bool>();
         EventHandler<ExecutionStatusChangedEventArgs> statusChangedHandler = null;
@@ -730,7 +737,11 @@ public class ABBBridge
         {
             await System.Threading.Tasks.Task.Run(() =>
             {
-                controller.FileSystem.PutFile(tempFile, remotePath, true);
+                // Upload .mod and .pgf to controller HOME
+                string homeDir = controller.FileSystem.RemoteDirectory;
+                controller.FileSystem.PutFile(tempModFile, modFileName, true);
+                controller.FileSystem.PutFile(tempPgfFile, pgfFileName, true);
+                string remotePgfPath = homeDir.TrimEnd('/') + "/" + pgfFileName;
 
                 using (Mastership m = RequestMastershipWithRetry(controller.Rapid))
                 {
@@ -741,8 +752,16 @@ public class ABBBridge
                         Thread.Sleep(400);
                     }
                     // Use Add mode with unique name 鈥?no collision possible
-                    bool loaded = task.LoadModuleFromFile(remotePath, RapidLoadMode.Add);
-                    if (!loaded) throw new InvalidOperationException($"Failed to load module {uniqueModuleName}.");
+                    // Clean up leftover AgentMod_* modules to avoid ambiguous main() error
+                    foreach (Module oldMod in task.GetModules())
+                    {
+                        if (oldMod.Name.StartsWith("AgentMod_"))
+                        {
+                            try { task.DeleteModule(oldMod.Name); } catch { }
+                        }
+                    }
+                    bool loaded = task.LoadProgramFromFile(remotePgfPath, RapidLoadMode.Replace);
+                    if (!loaded) throw new InvalidOperationException($"Failed to load program {targetModuleName}.");
                     task.ResetProgramPointer();
                 }
             });
@@ -774,18 +793,11 @@ public class ABBBridge
         finally
         {
             controller.Rapid.ExecutionStatusChanged -= statusChangedHandler;
-            TryDeleteTempFile(tempFile);
-            try { controller.FileSystem.RemoveFile(remotePath); } catch { }
-            // Delete the temp module from controller to keep T_ROB1 clean
-            try
-            {
-                using (Mastership m = RequestMastershipWithRetry(controller.Rapid))
-                {
-                    var mod = task.GetModule(uniqueModuleName);
-                    if (mod != null) mod.Delete();
-                }
-            }
-            catch { }
+            TryDeleteTempFile(tempModFile);
+            TryDeleteTempFile(tempPgfFile);
+            try { controller.FileSystem.RemoveFile(modFileName); } catch { }
+            try { controller.FileSystem.RemoveFile(pgfFileName); } catch { }
+            // MainModule replaced in-place; no cleanup needed
         }
     }
 

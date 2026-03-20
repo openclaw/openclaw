@@ -1,50 +1,49 @@
 ---
 name: abb-robot-virtual-control
 description: >
-  Virtual ABB viewer operation skill. Use ONLY for the 3D kinematic viewer via
-  ws-bridge simulation. For RobotStudio or physical robot control, use
-  abb-robot-real-control instead — RobotStudio uses the real PC SDK plugin.
+  ABB虚拟视图操作技能。仅适用于通过ws-bridge的3D运动学视图仿真工作流。
+  不支持物理机器人操作。如需控制RobotStudio或真实机器人，请使用abb-robot-real-control技能。
 ---
 
-# ABB Virtual Control Skill
+# ABB虚拟控制技能
 
-Use tool `abb_robot_virtual` only.
+仅使用工具 `abb_robot_virtual`。
 
-## Important: RobotStudio vs Virtual Viewer
+## 重要说明：RobotStudio vs 虚拟视图
 
-This skill is for the **OpenClaw 3D kinematic viewer** (ws-bridge), NOT for RobotStudio.
+本技能适用于**OpenClaw 3D运动学视图**（ws-bridge），**不适用于RobotStudio**。
 
-| Target | Plugin to use |
-|--------|---------------|
-| Physical ABB robot | `abb_robot_real` |
-| ABB RobotStudio | `abb_robot_real` (same PC SDK interface) |
-| OpenClaw 3D viewer (ws-bridge) | `abb_robot_virtual` (this skill) |
+| 目标 | 使用插件 |
+|------|----------|
+| 物理ABB机器人 | `abb_robot_real` |
+| ABB RobotStudio | `abb_robot_real`（相同PC SDK接口） |
+| OpenClaw 3D视图（ws-bridge） | `abb_robot_virtual`（本技能） |
 
-## Required Environment
+## 所需环境
 
-- ws-bridge running on `127.0.0.1:9877`
-- `robot_kinematic_viewer.html` opened and connected
-- Robot model loaded in viewer
+- ws-bridge运行于 `127.0.0.1:9877`
+- 已打开并连接 `robot_kinematic_viewer.html`
+- 视图中已加载机器人模型
 
-## Standard Flow
+## 标准流程
 
-1. Connect
+1. 连接
 `abb_robot_virtual action:connect host:127.0.0.1 port:9877 robot_id:abb-crb-15000`
 
-2. Check
+2. 检查状态
 `abb_robot_virtual action:get_status`
 
-3. Motion
+3. 运动
 `abb_robot_virtual action:movj joints:[10,-10,20,0,10,0] speed:40`
 
-4. Return home
+4. 回原点
 `abb_robot_virtual action:go_home`
 
-5. Disconnect
+5. 断开连接
 `abb_robot_virtual action:disconnect`
 
-## Notes
+## 注意事项
 
-- This skill is for the 3D viewer simulation only — no physical robot operations.
-- If movement is not visible, verify ws-bridge connection and model loading first.
-- For RobotStudio, use `abb_robot_real` — it connects via ABB PC SDK just like a real robot.
+- 本技能仅用于3D视图仿真，不执行物理机器人操作。
+- 如运动不可见，首先检查ws-bridge连接和模型加载状态。
+- 如需控制RobotStudio，请使用 `abb_robot_real`——RobotStudio通过ABB PC SDK连接，与真实机器人使用相同插件。
