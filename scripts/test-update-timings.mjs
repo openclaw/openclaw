@@ -9,7 +9,7 @@ function parseArgs(argv) {
     config: "vitest.unit.config.ts",
     out: unitTimingManifestPath,
     reportPath: "",
-    limit: 128,
+    limit: 256,
     defaultDurationMs: 250,
   };
   for (let i = 0; i < argv.length; i += 1) {
