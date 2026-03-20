@@ -130,6 +130,8 @@ export function handleMessageUpdate(
     return;
   }
 
+  // Fix for issue #50780: Handle content:null during reasoning phase
+  // Models like GLM-5, Qwen3.5-Plus send {content: null, reasoning_content: "..."} during reasoning
   const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
   const content = typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
 
