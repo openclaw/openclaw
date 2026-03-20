@@ -263,26 +263,33 @@ This prevents the user from seeing only "Agent failed before reply" and having n
 
 ---
 
-## Auto-Notify on Completion
+## Recommended: sessions_spawn + sessions_yield
 
-For long-running background tasks, append a wake trigger to your prompt so OpenClaw gets notified immediately when the agent finishes (instead of waiting for the next heartbeat):
-
-```
-... your task here.
-
-When completely finished, run this command to notify me:
-openclaw system event --text "Done: [brief summary of what was built]" --mode now
-```
-
-**Example:**
+**For long-running tasks, use `sessions_spawn` with `sessions_yield` instead of `exec background`.**
 
 ```bash
-bash pty:true workdir:~/project background:true command:"codex --yolo exec 'Build a REST API for todos.
+# ✅ Recommended: sessions_spawn + sessions_yield
+sessions_spawn(task="Build a REST API for todos", mode="run", label="my-task")
+sessions_yield(message="Waiting for completion...")
 
-When completely finished, run: openclaw system event --text \"Done: Built todos REST API with CRUD endpoints\" --mode now'"
+# Result auto-announces back to the requester session
+# Agent has full context to take the next action
 ```
 
-This triggers an immediate wake event — Skippy gets pinged in seconds, not 10 minutes.
+**Why this works:**
+- Delivers the result **back to the session that spawned the task**
+- Full conversation context is preserved
+- The agent can verify the work, execute the next step, or escalate to the user
+- No broken notification pipeline
+
+**When to use exec (non-background):**
+- Quick one-shot commands that complete immediately
+- No need for result notification back to the session
+
+**When to use exec background (legacy - not recommended):**
+- ⚠️ NOT recommended - completion notifications via `openclaw system event` are broken
+- The background process exits, triggers heartbeat, but heartbeat runs as an isolated session with no context
+- Result is silently consumed by a context-free heartbeat session
 
 ---
 
