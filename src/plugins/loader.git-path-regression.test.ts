@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { __testing } from "./loader.js";
 
@@ -40,8 +39,6 @@ describe("plugin loader git path regression", () => {
     mkdirSafe(copiedSourceDir);
     mkdirSafe(copiedPluginSdkDir);
 
-    const jitiBaseFile = path.join(copiedSourceDir, "__jiti-base__.mjs");
-    fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
       `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
@@ -71,9 +68,8 @@ export const copiedRuntimeMarker = {
     );
 
     const copiedChannelRuntime = path.join(copiedExtensionRoot, "src", "channel.runtime.ts");
-    const jitiBaseUrl = pathToFileURL(jitiBaseFile).href;
     const createJiti = await getCreateJiti();
-    const withoutAlias = createJiti(jitiBaseUrl, {
+    const withoutAlias = createJiti(import.meta.url, {
       ...__testing.buildPluginLoaderJitiOptions({}),
       tryNative: false,
     });
@@ -81,7 +77,7 @@ export const copiedRuntimeMarker = {
     // should exercise the same seam instead of Jiti's async import helper.
     expect(() => withoutAlias(copiedChannelRuntime)).toThrow();
 
-    const withAlias = createJiti(jitiBaseUrl, {
+    const withAlias = createJiti(import.meta.url, {
       ...__testing.buildPluginLoaderJitiOptions({
         "openclaw/plugin-sdk/channel-runtime": copiedChannelRuntimeShim,
       }),
