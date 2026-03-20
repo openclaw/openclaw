@@ -297,6 +297,14 @@ if (command === "prompt") {
     process.exit(0);
   }
 
+  if (process.env.MOCK_ACPX_PROMPT_HANG === "1") {
+    writeLog({ kind: "prompt-hang", agent, args, sessionName: sessionFromOption, stdinText, pid: process.pid });
+    emitJson({ type: "done", stopReason: "end_turn" });
+    // Keep process alive — simulates a child that emits done but does not exit naturally
+    setInterval(() => {}, 9999);
+    return;
+  }
+
   emitUpdate(sessionFromOption, {
     sessionUpdate: "agent_thought_chunk",
     content: { type: "text", text: "thinking" },
@@ -399,6 +407,7 @@ export async function cleanupMockRuntimeFixtures(): Promise<void> {
   delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
   delete process.env.MOCK_ACPX_STATUS_STATUS;
   delete process.env.MOCK_ACPX_STATUS_SUMMARY;
+  delete process.env.MOCK_ACPX_PROMPT_HANG;
   sharedMockCliScriptPath = null;
   logFileSequence = 0;
   while (tempDirs.length > 0) {
