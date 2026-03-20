@@ -1393,8 +1393,8 @@ function summarizeSessionContext(messages: AgentMessage[]): {
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
-  const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
+  const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const runAbortController = new AbortController();
   // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
   // active EnvHttpProxyAgent instead of being replaced by a bare proxy dispatcher.
