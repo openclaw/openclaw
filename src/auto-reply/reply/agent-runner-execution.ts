@@ -702,26 +702,32 @@ export async function runAgentTurnWithFallback(params: {
   // avoid self-matching on pre-formatted "⚠️" messages from run.ts, and
   // skip already-formatted payloads so tool-specific 429 errors (e.g.
   // browser/search tool failures) are preserved rather than overwritten.
-  {
-    const hasNonErrorContent = runResult?.payloads?.some(
+  //
+  // Instead of early-returning kind:"final" (which would bypass
+  // buildReplyPayloads() filtering and session bookkeeping), inject the
+  // error payload into runResult so it flows through the normal
+  // kind:"success" path — preserving streaming dedup, message_send
+  // suppression, and usage/model metadata updates.
+  if (runResult && !runResult.didSendViaMessagingTool) {
+    const hasNonErrorContent = runResult.payloads?.some(
       (p) => !p.isError && (p.text?.trim() || (p.mediaUrls?.length ?? 0) > 0),
     );
     if (!hasNonErrorContent) {
       const metaErrorMsg = finalEmbeddedError?.message ?? "";
       const rawErrorPayloadText =
-        runResult?.payloads?.find((p) => p.isError && p.text?.trim() && !p.text.startsWith("⚠️"))
+        runResult.payloads?.find((p) => p.isError && p.text?.trim() && !p.text.startsWith("⚠️"))
           ?.text ?? "";
       const errorCandidate = metaErrorMsg || rawErrorPayloadText;
       if (
         errorCandidate &&
         (isRateLimitErrorMessage(errorCandidate) || isOverloadedErrorMessage(errorCandidate))
       ) {
-        return {
-          kind: "final",
-          payload: {
+        runResult.payloads = [
+          {
             text: "⚠️ API rate limit reached — the model couldn't generate a response. Please try again in a moment.",
+            isError: true,
           },
-        };
+        ];
       }
     }
   }
