@@ -1,63 +1,114 @@
 ---
-summary: "Elevated exec mode and /elevated directives"
+summary: "Elevated exec mode: run commands on the gateway host from a sandboxed agent"
 read_when:
   - Adjusting elevated mode defaults, allowlists, or slash command behavior
+  - Understanding how sandboxed agents can access the host
 title: "Elevated Mode"
 ---
 
-# Elevated Mode (/elevated directives)
+# Elevated Mode
 
-## What it does
+When an agent runs inside a sandbox, its `exec` commands are confined to the
+sandbox environment. **Elevated mode** lets the agent break out and run commands
+on the gateway host instead, with configurable approval gates.
 
-- `/elevated on` runs on the gateway host and keeps exec approvals (same as `/elevated ask`).
-- `/elevated full` runs on the gateway host **and** auto-approves exec (skips exec approvals).
-- `/elevated ask` runs on the gateway host but keeps exec approvals (same as `/elevated on`).
-- `on`/`ask` do **not** force `exec.security=full`; configured security/ask policy still applies.
-- Only changes behavior when the agent is **sandboxed** (otherwise exec already runs on the host).
-- Directive forms: `/elevated on|off|ask|full`, `/elev on|off|ask|full`.
-- Only `on|off|ask|full` are accepted; anything else returns a hint and does not change state.
+<Info>
+  Elevated mode only changes behavior when the agent is **sandboxed**. For
+  unsandboxed agents, exec already runs on the host.
+</Info>
 
-## What it controls (and what it does not)
+## Directives
 
-- **Availability gates**: `tools.elevated` is the global baseline. `agents.list[].tools.elevated` can further restrict elevated per agent (both must allow).
-- **Per-session state**: `/elevated on|off|ask|full` sets the elevated level for the current session key.
-- **Inline directive**: `/elevated on|ask|full` inside a message applies to that message only.
-- **Groups**: In group chats, elevated directives are only honored when the agent is mentioned. Command-only messages that bypass mention requirements are treated as mentioned.
-- **Host execution**: elevated forces `exec` onto the gateway host; `full` also sets `security=full`.
-- **Approvals**: `full` skips exec approvals; `on`/`ask` honor them when allowlist/ask rules require.
-- **Unsandboxed agents**: no-op for location; only affects gating, logging, and status.
-- **Tool policy still applies**: if `exec` is denied by tool policy, elevated cannot be used.
-- **Separate from `/exec`**: `/exec` adjusts per-session defaults for authorized senders and does not require elevated.
+Control elevated mode per-session with slash commands:
+
+| Directive        | What it does                                        |
+| ---------------- | --------------------------------------------------- |
+| `/elevated on`   | Run on the gateway host, keep exec approvals        |
+| `/elevated ask`  | Same as `on` (alias)                                |
+| `/elevated full` | Run on the gateway host **and** skip exec approvals |
+| `/elevated off`  | Return to sandbox-confined execution                |
+
+Also available as `/elev on|off|ask|full`.
+
+Send `/elevated` with no argument to see the current level.
+
+## How it works
+
+<Steps>
+  <Step title="Check availability">
+    Elevated must be enabled in config and the sender must be on the allowlist:
+
+    ```json5
+    {
+      tools: {
+        elevated: {
+          enabled: true,
+          allowFrom: {
+            discord: ["user-id-123"],
+            whatsapp: ["+15555550123"],
+          },
+        },
+      },
+    }
+    ```
+
+  </Step>
+
+  <Step title="Set the level">
+    Send a directive-only message to set the session default:
+
+    ```
+    /elevated full
+    ```
+
+    Or use it inline (applies to that message only):
+
+    ```
+    /elevated on run the deployment script
+    ```
+
+  </Step>
+
+  <Step title="Commands run on the host">
+    With elevated active, `exec` calls route to the gateway host instead of the
+    sandbox. In `full` mode, exec approvals are skipped. In `on`/`ask` mode,
+    configured approval rules still apply.
+  </Step>
+</Steps>
 
 ## Resolution order
 
-1. Inline directive on the message (applies only to that message).
-2. Session override (set by sending a directive-only message).
-3. Global default (`agents.defaults.elevatedDefault` in config).
+1. **Inline directive** on the message (applies only to that message)
+2. **Session override** (set by sending a directive-only message)
+3. **Global default** (`agents.defaults.elevatedDefault` in config)
 
-## Setting a session default
+## Availability and allowlists
 
-- Send a message that is **only** the directive (whitespace allowed), e.g. `/elevated full`.
-- Confirmation reply is sent (`Elevated mode set to full...` / `Elevated mode disabled.`).
-- If elevated access is disabled or the sender is not on the approved allowlist, the directive replies with an actionable error and does not change session state.
-- Send `/elevated` (or `/elevated:`) with no argument to see the current elevated level.
+- **Global gate**: `tools.elevated.enabled` (must be `true`)
+- **Sender allowlist**: `tools.elevated.allowFrom` with per-channel lists
+- **Per-agent gate**: `agents.list[].tools.elevated.enabled` (can only further restrict)
+- **Per-agent allowlist**: `agents.list[].tools.elevated.allowFrom` (sender must match both global + per-agent)
+- **Discord fallback**: if `tools.elevated.allowFrom.discord` is omitted, `channels.discord.allowFrom` is used as fallback
+- **All gates must pass**; otherwise elevated is treated as unavailable
 
-## Availability + allowlists
+Allowlist entry formats:
 
-- Feature gate: `tools.elevated.enabled` (default can be off via config even if the code supports it).
-- Sender allowlist: `tools.elevated.allowFrom` with per-provider allowlists (e.g. `discord`, `whatsapp`).
-- Unprefixed allowlist entries match sender-scoped identity values only (`SenderId`, `SenderE164`, `From`); recipient routing fields are never used for elevated authorization.
-- Mutable sender metadata requires explicit prefixes:
-  - `name:<value>` matches `SenderName`
-  - `username:<value>` matches `SenderUsername`
-  - `tag:<value>` matches `SenderTag`
-  - `id:<value>`, `from:<value>`, `e164:<value>` are available for explicit identity targeting
-- Per-agent gate: `agents.list[].tools.elevated.enabled` (optional; can only further restrict).
-- Per-agent allowlist: `agents.list[].tools.elevated.allowFrom` (optional; when set, the sender must match **both** global + per-agent allowlists).
-- Discord fallback: if `tools.elevated.allowFrom.discord` is omitted, the `channels.discord.allowFrom` list is used as a fallback (legacy: `channels.discord.dm.allowFrom`). Set `tools.elevated.allowFrom.discord` (even `[]`) to override. Per-agent allowlists do **not** use the fallback.
-- All gates must pass; otherwise elevated is treated as unavailable.
+| Prefix                  | Matches                         |
+| ----------------------- | ------------------------------- |
+| (none)                  | Sender ID, E.164, or From field |
+| `name:`                 | Sender display name             |
+| `username:`             | Sender username                 |
+| `tag:`                  | Sender tag                      |
+| `id:`, `from:`, `e164:` | Explicit identity targeting     |
 
-## Logging + status
+## What elevated does not control
 
-- Elevated exec calls are logged at info level.
-- Session status includes elevated mode (e.g. `elevated=ask`, `elevated=full`).
+- **Tool policy**: if `exec` is denied by tool policy, elevated cannot override it
+- **Separate from `/exec`**: the `/exec` directive adjusts per-session exec defaults for authorized senders and does not require elevated mode
+
+## Related
+
+- [Exec tool](/tools/exec) — shell command execution
+- [Exec approvals](/tools/exec-approvals) — approval and allowlist system
+- [Sandboxing](/gateway/sandboxing) — sandbox configuration
+- [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)

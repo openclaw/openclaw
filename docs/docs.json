@@ -1026,43 +1026,6 @@
                 "pages": ["tools/index"]
               },
               {
-                "group": "Built-in tools",
-                "pages": [
-                  "tools/exec",
-                  "tools/exec-approvals",
-                  "tools/elevated",
-                  "tools/apply-patch",
-                  "tools/web",
-                  "tools/brave-search",
-                  "tools/firecrawl",
-                  "tools/tavily",
-                  "tools/perplexity-search",
-                  "tools/pdf",
-                  "tools/reactions",
-                  "tools/thinking",
-                  "tools/loop-detection",
-                  "tools/btw"
-                ]
-              },
-              {
-                "group": "Browser",
-                "pages": [
-                  "tools/browser",
-                  "tools/browser-login",
-                  "tools/browser-linux-troubleshooting",
-                  "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
-                ]
-              },
-              {
-                "group": "Agent coordination",
-                "pages": [
-                  "tools/agent-send",
-                  "tools/subagents",
-                  "tools/acp-agents",
-                  "tools/multi-agent-sandbox-tools"
-                ]
-              },
-              {
                 "group": "Plugins",
                 "pages": [
                   "tools/plugin",
@@ -1088,10 +1051,6 @@
                 ]
               },
               {
-                "group": "Plugin tools",
-                "pages": ["tools/diffs", "tools/llm-task", "tools/lobster"]
-              },
-              {
                 "group": "Automation",
                 "pages": [
                   "automation/hooks",
@@ -1106,18 +1065,43 @@
                 ]
               },
               {
-                "group": "Media and devices",
+                "group": "Tools",
                 "pages": [
-                  "nodes/index",
-                  "nodes/troubleshooting",
-                  "nodes/media-understanding",
-                  "nodes/images",
-                  "nodes/audio",
-                  "nodes/camera",
-                  "nodes/talk",
-                  "nodes/voicewake",
-                  "nodes/location-command",
-                  "tools/tts"
+                  "tools/exec",
+                  "tools/exec-approvals",
+                  "tools/elevated",
+                  "tools/apply-patch",
+                  "tools/web",
+                  "tools/brave-search",
+                  "tools/firecrawl",
+                  "tools/tavily",
+                  "tools/perplexity-search",
+                  "tools/pdf",
+                  "tools/diffs",
+                  "tools/llm-task",
+                  "tools/lobster",
+                  "tools/reactions",
+                  "tools/thinking",
+                  "tools/loop-detection",
+                  "tools/btw"
+                ]
+              },
+              {
+                "group": "Browser",
+                "pages": [
+                  "tools/browser",
+                  "tools/browser-login",
+                  "tools/browser-linux-troubleshooting",
+                  "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
+                ]
+              },
+              {
+                "group": "Agent coordination",
+                "pages": [
+                  "tools/agent-send",
+                  "tools/subagents",
+                  "tools/acp-agents",
+                  "tools/multi-agent-sandbox-tools"
                 ]
               }
             ]
@@ -1285,6 +1269,21 @@
                   "security/formal-verification",
                   "security/THREAT-MODEL-ATLAS",
                   "security/CONTRIBUTING-THREAT-MODEL"
+                ]
+              },
+              {
+                "group": "Nodes and devices",
+                "pages": [
+                  "nodes/index",
+                  "nodes/troubleshooting",
+                  "nodes/media-understanding",
+                  "nodes/images",
+                  "nodes/audio",
+                  "nodes/camera",
+                  "nodes/talk",
+                  "nodes/voicewake",
+                  "nodes/location-command",
+                  "tools/tts"
                 ]
               },
               {
