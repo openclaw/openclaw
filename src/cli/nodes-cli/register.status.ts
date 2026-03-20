@@ -8,7 +8,7 @@ import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
-import type { NodesRpcOpts } from "./types.js";
+import type { NodeListNode, NodesRpcOpts, PairedNode } from "./types.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -95,6 +95,31 @@ function parseSinceMs(raw: unknown, label: string): number | undefined {
     defaultRuntime.exit(1);
     return undefined;
   }
+}
+
+function mergePairedNodes(pairingPaired: PairedNode[], liveNodes: NodeListNode[]): PairedNode[] {
+  if (liveNodes.length === 0) {
+    return pairingPaired;
+  }
+  const pairedById = new Map(pairingPaired.map((node) => [node.nodeId, node] as const));
+  const merged = [...pairingPaired];
+  for (const live of liveNodes) {
+    if (!live.paired || pairedById.has(live.nodeId)) {
+      continue;
+    }
+    merged.push({
+      nodeId: live.nodeId,
+      displayName: live.displayName,
+      platform: live.platform,
+      version: live.version,
+      coreVersion: live.coreVersion,
+      uiVersion: live.uiVersion,
+      remoteIp: live.remoteIp,
+      permissions: live.permissions,
+      lastConnectedAtMs: live.connectedAtMs,
+    });
+  }
+  return merged;
 }
 
 export function registerNodesStatusCommands(nodes: Command) {
@@ -311,15 +336,10 @@ export function registerNodesStatusCommands(nodes: Command) {
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const pendingRows = hasFilters ? [] : pending;
-          const connectedById = hasFilters
-            ? new Map(
-                parseNodeList(await callGatewayCli("node.list", opts, {})).map((node) => [
-                  node.nodeId,
-                  node,
-                ]),
-              )
-            : null;
-          const filteredPaired = paired.filter((node) => {
+          const liveNodes = parseNodeList(await callGatewayCli("node.list", opts, {}));
+          const connectedById = new Map(liveNodes.map((node) => [node.nodeId, node] as const));
+          const pairedNodes = mergePairedNodes(paired, liveNodes);
+          const filteredPaired = pairedNodes.filter((node) => {
             if (connectedOnly) {
               const live = connectedById?.get(node.nodeId);
               if (!live?.connected) {
@@ -344,7 +364,9 @@ export function registerNodesStatusCommands(nodes: Command) {
             return true;
           });
           const filteredLabel =
-            hasFilters && filteredPaired.length !== paired.length ? ` (of ${paired.length})` : "";
+            hasFilters && filteredPaired.length !== pairedNodes.length
+              ? ` (of ${pairedNodes.length})`
+              : "";
           defaultRuntime.log(
             `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
           );
