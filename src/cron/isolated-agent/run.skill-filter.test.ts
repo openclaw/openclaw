@@ -117,6 +117,47 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     ]);
   });
 
+  it("refreshes cached snapshot when skills.policy changes without version bump", async () => {
+    resolveAgentSkillsFilterMock.mockReturnValue(["weather"]);
+    resolveCronSessionMock.mockReturnValue({
+      storePath: "/tmp/store.json",
+      store: {},
+      sessionEntry: {
+        sessionId: "test-session-id",
+        updatedAt: 0,
+        systemSent: false,
+        skillsSnapshot: {
+          prompt: "<available_skills><skill>weather</skill></available_skills>",
+          skills: [{ name: "weather" }],
+          skillFilter: ["weather"],
+          policy: {
+            agentId: "weather-bot",
+            globalEnabled: ["weather"],
+            agentEnabled: [],
+            agentDisabled: [],
+            effective: ["weather"],
+          },
+          version: 42,
+        },
+      },
+      systemSent: false,
+      isNewSession: true,
+    });
+
+    await runSkillFilterCase({
+      cfg: {
+        agents: { list: [{ id: "weather-bot", skills: ["weather"] }] },
+        skills: { policy: { globalEnabled: ["meme-factory"] } },
+      },
+      agentId: "weather-bot",
+    });
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
+    expect(buildWorkspaceSkillSnapshotMock.mock.calls[0][1]).toMatchObject({
+      agentId: "weather-bot",
+      skillFilter: ["weather"],
+    });
+  });
+
   it("forces a fresh session for isolated cron runs", async () => {
     await runSkillFilterCase();
     expect(resolveCronSessionMock).toHaveBeenCalledOnce();
@@ -147,6 +188,43 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
     await runSkillFilterCase({
       cfg: { agents: { list: [{ id: "weather-bot", skills: ["weather", "meme-factory"] }] } },
+      agentId: "weather-bot",
+    });
+    expect(buildWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("reuses cached snapshot when version/filter/policy are unchanged", async () => {
+    resolveAgentSkillsFilterMock.mockReturnValue(["weather"]);
+    resolveCronSessionMock.mockReturnValue({
+      storePath: "/tmp/store.json",
+      store: {},
+      sessionEntry: {
+        sessionId: "test-session-id",
+        updatedAt: 0,
+        systemSent: false,
+        skillsSnapshot: {
+          prompt: "<available_skills><skill>weather</skill></available_skills>",
+          skills: [{ name: "weather" }],
+          skillFilter: ["weather"],
+          policy: {
+            agentId: "weather-bot",
+            globalEnabled: ["weather"],
+            agentEnabled: [],
+            agentDisabled: [],
+            effective: ["weather"],
+          },
+          version: 42,
+        },
+      },
+      systemSent: false,
+      isNewSession: true,
+    });
+
+    await runSkillFilterCase({
+      cfg: {
+        agents: { list: [{ id: "weather-bot", skills: ["weather"] }] },
+        skills: { policy: { globalEnabled: ["weather"] } },
+      },
       agentId: "weather-bot",
     });
     expect(buildWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();

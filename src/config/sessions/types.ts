@@ -333,6 +333,14 @@ export type SessionSkillSnapshot = {
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /** Resolved runtime skill policy for this snapshot (when configured). */
+  policy?: {
+    agentId: string;
+    globalEnabled: string[];
+    agentEnabled: string[];
+    agentDisabled: string[];
+    effective: string[];
+  };
   resolvedSkills?: Skill[];
   version?: number;
 };

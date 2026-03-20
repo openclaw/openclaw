@@ -3,6 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
+import { matchesSkillFilter } from "../../agents/skills/filter.js";
+import {
+  matchesSkillPolicySnapshot,
+  resolveSkillPolicySnapshot,
+} from "../../agents/skills/policy.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -188,9 +193,14 @@ export async function ensureSkillSnapshot(params: {
   let systemSent = sessionEntry?.systemSent ?? false;
   const remoteEligibility = getRemoteSkillEligibility();
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+  const sessionAgentId = resolveAgentIdFromSessionKey(sessionKey);
+  const existingSnapshot = nextEntry?.skillsSnapshot;
+  const policySnapshot = resolveSkillPolicySnapshot(cfg, sessionAgentId);
   ensureSkillsWatcher({ workspaceDir, config: cfg });
   const shouldRefreshSnapshot =
-    snapshotVersion > 0 && (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion;
+    (snapshotVersion > 0 && (existingSnapshot?.version ?? 0) < snapshotVersion) ||
+    !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter) ||
+    !matchesSkillPolicySnapshot(existingSnapshot?.policy, policySnapshot);
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??
@@ -202,6 +212,7 @@ export async function ensureSkillSnapshot(params: {
       isFirstTurnInSession || !current.skillsSnapshot || shouldRefreshSnapshot
         ? buildWorkspaceSkillSnapshot(workspaceDir, {
             config: cfg,
+            agentId: sessionAgentId,
             skillFilter,
             eligibility: { remote: remoteEligibility },
             snapshotVersion,
@@ -221,6 +232,7 @@ export async function ensureSkillSnapshot(params: {
   const skillsSnapshot = shouldRefreshSnapshot
     ? buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfg,
+        agentId: sessionAgentId,
         skillFilter,
         eligibility: { remote: remoteEligibility },
         snapshotVersion,
@@ -230,6 +242,7 @@ export async function ensureSkillSnapshot(params: {
         ? undefined
         : buildWorkspaceSkillSnapshot(workspaceDir, {
             config: cfg,
+            agentId: sessionAgentId,
             skillFilter,
             eligibility: { remote: remoteEligibility },
             snapshotVersion,
