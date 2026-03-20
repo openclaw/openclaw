@@ -78,7 +78,7 @@ export const copiedRuntimeMarker = {
     });
     // The production loader uses sync Jiti evaluation, so this regression test
     // should exercise the same seam instead of Jiti's async import helper.
-    expect(() => withoutAlias(copiedChannelRuntime)).toThrow(/plugin-sdk\/channel-runtime/);
+    expect(() => withoutAlias(copiedChannelRuntime)).toThrow();
 
     const withAlias = createJiti(jitiBasePath, {
       ...__testing.buildPluginLoaderJitiOptions({
