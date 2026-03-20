@@ -592,7 +592,8 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         typeof obj.accuracyMeters === "number" && Number.isFinite(obj.accuracyMeters)
           ? obj.accuracyMeters
           : undefined;
-      const source = normalizeNonEmptyString(obj.source);
+      const rawSource = normalizeNonEmptyString(obj.source);
+      const source = rawSource ? compactNotificationEventText(rawSource) : null;
       const sessionKeyRaw = normalizeNonEmptyString(obj.sessionKey) ?? `node-${nodeId}`;
       const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
 
