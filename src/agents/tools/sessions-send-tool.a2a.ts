@@ -28,7 +28,7 @@ export async function runSessionsSendA2AFlow(params: {
   roundOneReply?: string;
   waitRunId?: string;
 }) {
-  const runContextId = params.waitRunId ?? "unknown";
+  const runContextId = params.waitRunId ?? crypto.randomUUID();
   try {
     let primaryReply = params.roundOneReply;
     let latestReply = params.roundOneReply;
@@ -84,8 +84,7 @@ export async function runSessionsSendA2AFlow(params: {
             threadId: announceTarget.threadId,
           }
         : undefined;
-      // eslint-disable-next-line no-unused-vars
-      let _hookChain: Promise<void> = Promise.resolve();
+      let hookChain: Promise<void> = Promise.resolve();
 
       // Emit turn=0 for the initial target reply (before ping-pong starts).
       if (hasA2ATurnHooks && latestReply) {
@@ -101,7 +100,7 @@ export async function runSessionsSendA2AFlow(params: {
           targetChannel: resolvedTargetChannel,
           deliveryTarget,
         };
-        _hookChain = _hookChain.then(() =>
+        hookChain = hookChain.then(() =>
           withTimeout(hookRunner!.runAgentToAgentTurn(event, hookCtx), perTurnTimeout).catch(
             () => {},
           ),
@@ -150,7 +149,7 @@ export async function runSessionsSendA2AFlow(params: {
             targetChannel: resolvedTargetChannel,
             deliveryTarget,
           };
-          _hookChain = _hookChain.then(() =>
+          hookChain = hookChain.then(() =>
             withTimeout(hookRunner!.runAgentToAgentTurn(event, hookCtx), perTurnTimeout).catch(
               () => {},
             ),
@@ -164,7 +163,8 @@ export async function runSessionsSendA2AFlow(params: {
       }
       // Wait for queued turn hooks before announce so users see intermediate
       // turns before the final conclusion.
-      await _hookChain;
+      // Bound the wait so a slow plugin cannot stall the announce step.
+      await withTimeout(hookChain, perTurnTimeout).catch(() => {});
     }
 
     const announcePrompt = buildAgentToAgentAnnounceContext({
