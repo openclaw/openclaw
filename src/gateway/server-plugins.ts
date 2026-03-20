@@ -24,6 +24,7 @@ export function loadGatewayPlugins(params: {
       debug: (msg) => params.log.debug(msg),
     },
     coreGatewayHandlers: params.coreGatewayHandlers,
+    cache: false,
   });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));

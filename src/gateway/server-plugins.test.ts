@@ -51,6 +51,12 @@ describe("loadGatewayPlugins", () => {
       baseMethods: [],
     });
 
+    expect(loadDNAPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cache: false,
+        workspaceDir: "/tmp",
+      }),
+    );
     expect(log.error).toHaveBeenCalledWith(
       "[plugins] failed to load plugin: boom (plugin=telegram, source=/tmp/telegram/index.ts)",
     );

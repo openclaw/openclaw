@@ -589,7 +589,7 @@ extension GatewayConnection {
         thinking: String,
         idempotencyKey: String,
         attachments: [DNAChatAttachmentPayload],
-        timeoutMs: Int = 30000) async throws -> DNAChatSendResponse
+        timeoutMs: Int = 240000) async throws -> DNAChatSendResponse
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         var params: [String: AnyCodable] = [
