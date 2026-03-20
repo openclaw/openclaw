@@ -102,11 +102,8 @@ final class ContactsService: ContactsServicing {
         case .authorized, .limited:
             return true
         case .notDetermined:
-            return await withCheckedContinuation { continuation in
-                store.requestAccess(for: .contacts) { granted, _ in
-                    continuation.resume(returning: granted)
-                }
-            }
+            // Avoid prompting during node.invoke; headless/unattended flows should fail fast.
+            return false
         case .restricted, .denied:
             return false
         @unknown default:

@@ -56,6 +56,8 @@
 	<string>OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>OpenClaw uses your calendars to add events when you enable calendar access.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>OpenClaw uses your contacts so you can search and reference people while using the assistant.</string>
 	<key>NSLocalNetworkUsageDescription</key>

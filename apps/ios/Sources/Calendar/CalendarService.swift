@@ -46,7 +46,7 @@ final class CalendarService: CalendarServicing {
         let status = EKEventStore.authorizationStatus(for: .event)
         let authorized: Bool
         if status == .notDetermined {
-            authorized = await Self.requestEventAccess(store: store)
+            authorized = await Self.requestWriteOnlyEventAccess(store: store)
         } else {
             authorized = EventKitAuthorization.allowsWrite(status: status)
         }
@@ -109,6 +109,22 @@ final class CalendarService: CalendarServicing {
         if #available(iOS 17.0, *) {
             return await withCheckedContinuation { continuation in
                 store.requestFullAccessToEvents { granted, _ in
+                    continuation.resume(returning: granted)
+                }
+            }
+        }
+
+        return await withCheckedContinuation { continuation in
+            store.requestAccess(to: .event) { granted, _ in
+                continuation.resume(returning: granted)
+            }
+        }
+    }
+
+    private static func requestWriteOnlyEventAccess(store: EKEventStore) async -> Bool {
+        if #available(iOS 17.0, *) {
+            return await withCheckedContinuation { continuation in
+                store.requestWriteOnlyAccessToEvents { granted, _ in
                     continuation.resume(returning: granted)
                 }
             }
