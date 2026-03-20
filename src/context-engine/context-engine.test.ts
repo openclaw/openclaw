@@ -20,6 +20,7 @@ import type {
   ContextEngineInfo,
   AssembleResult,
   CompactResult,
+  ContextEngineMaintenanceResult,
   IngestResult,
 } from "./types.js";
 
@@ -118,6 +119,7 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
   readonly ingestCalls: Array<Record<string, unknown>> = [];
   readonly assembleCalls: Array<Record<string, unknown>> = [];
   readonly compactCalls: Array<Record<string, unknown>> = [];
+  readonly maintainCalls: Array<Record<string, unknown>> = [];
   readonly ingestedMessages: AgentMessage[] = [];
 
   private rejectSessionKey(params: { sessionKey?: string }): void {
@@ -170,6 +172,21 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
         tokensBefore: 50,
         tokensAfter: 25,
       },
+    };
+  }
+
+  async maintain(params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+    runtimeContext?: Record<string, unknown>;
+  }): Promise<ContextEngineMaintenanceResult> {
+    this.maintainCalls.push({ ...params });
+    this.rejectSessionKey(params);
+    return {
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
     };
   }
 }
@@ -461,6 +478,24 @@ describe("Legacy sessionKey compatibility", () => {
     expect(strictEngine.ingestCalls[1]).not.toHaveProperty("sessionKey");
     expect(strictEngine.ingestCalls[2]).not.toHaveProperty("sessionKey");
     expect(strictEngine.ingestedMessages).toEqual([firstMessage, secondMessage]);
+  });
+
+  it("retries strict maintain once and memoizes legacy mode there too", async () => {
+    const engineId = `legacy-sessionkey-maintain-${Date.now().toString(36)}`;
+    const strictEngine = new LegacySessionKeyStrictEngine();
+    registerContextEngine(engineId, () => strictEngine);
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+
+    await engine.maintain?.({
+      sessionId: "s1",
+      sessionKey: "agent:main:test",
+      sessionFile: "/tmp/session.json",
+    });
+
+    expect(strictEngine.maintainCalls).toHaveLength(2);
+    expect(strictEngine.maintainCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
+    expect(strictEngine.maintainCalls[1]).not.toHaveProperty("sessionKey");
   });
 
   it("does not retry non-compat runtime errors", async () => {
