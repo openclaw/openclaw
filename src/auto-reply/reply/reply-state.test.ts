@@ -357,6 +357,17 @@ describe("shouldRunMemoryFlush", () => {
       }),
     ).toBe(false);
   });
+
+  it("triggers when reserveTokensFloor equals contextWindowTokens", () => {
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 199_000, compactionCount: 0 },
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 200_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("hasAlreadyFlushedForCurrentCompaction", () => {
