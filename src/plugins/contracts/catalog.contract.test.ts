@@ -9,8 +9,8 @@ import { requireProviderContractProvider } from "./registry.js";
 type ResolvePluginProviders = typeof import("../providers.js").resolvePluginProviders;
 type ResolveOwningPluginIdsForProvider =
   typeof import("../providers.js").resolveOwningPluginIdsForProvider;
-type ResolveNonBundledProviderPluginIds =
-  typeof import("../providers.js").resolveNonBundledProviderPluginIds;
+type ResolveProviderPluginIdsForCatalogHooks =
+  typeof import("../providers.js").resolveProviderPluginIdsForCatalogHooks;
 
 const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
 const resolveOwningPluginIdsForProviderMock = vi.hoisted(() =>
@@ -18,16 +18,16 @@ const resolveOwningPluginIdsForProviderMock = vi.hoisted(() =>
     resolveProviderContractPluginIdsForProvider(params.provider),
   ),
 );
-const resolveNonBundledProviderPluginIdsMock = vi.hoisted(() =>
-  vi.fn<ResolveNonBundledProviderPluginIds>((_) => [] as string[]),
+const resolveProviderPluginIdsForCatalogHooksMock = vi.hoisted(() =>
+  vi.fn<ResolveProviderPluginIdsForCatalogHooks>((_) => [] as string[]),
 );
 
 vi.mock("../providers.js", () => ({
   resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
   resolveOwningPluginIdsForProvider: (params: unknown) =>
     resolveOwningPluginIdsForProviderMock(params as never),
-  resolveNonBundledProviderPluginIds: (params: unknown) =>
-    resolveNonBundledProviderPluginIdsMock(params as never),
+  resolveProviderPluginIdsForCatalogHooks: (params: unknown) =>
+    resolveProviderPluginIdsForCatalogHooksMock(params as never),
 }));
 
 let augmentModelCatalogWithProviderPlugins: typeof import("../provider-runtime.js").augmentModelCatalogWithProviderPlugins;
@@ -68,8 +68,8 @@ describe("provider catalog contract", () => {
       resolveProviderContractPluginIdsForProvider(params.provider),
     );
 
-    resolveNonBundledProviderPluginIdsMock.mockReset();
-    resolveNonBundledProviderPluginIdsMock.mockReturnValue([]);
+    resolveProviderPluginIdsForCatalogHooksMock.mockReset();
+    resolveProviderPluginIdsForCatalogHooksMock.mockReturnValue([]);
   });
 
   it("keeps codex-only missing-auth hints wired through the provider runtime", () => {

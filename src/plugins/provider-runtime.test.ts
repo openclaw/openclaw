@@ -7,13 +7,13 @@ import {
 import type { ProviderPlugin, ProviderRuntimeModel } from "./types.js";
 
 type ResolvePluginProviders = typeof import("./providers.js").resolvePluginProviders;
-type ResolveNonBundledProviderPluginIds =
-  typeof import("./providers.js").resolveNonBundledProviderPluginIds;
+type ResolveProviderPluginIdsForCatalogHooks =
+  typeof import("./providers.js").resolveProviderPluginIdsForCatalogHooks;
 type ResolveOwningPluginIdsForProvider =
   typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 
 const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
-const resolveNonBundledProviderPluginIdsMock = vi.fn<ResolveNonBundledProviderPluginIds>(
+const resolveProviderPluginIdsForCatalogHooksMock = vi.fn<ResolveProviderPluginIdsForCatalogHooks>(
   (_) => [] as string[],
 );
 const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForProvider>(
@@ -22,8 +22,8 @@ const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForPro
 
 vi.mock("./providers.js", () => ({
   resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
-  resolveNonBundledProviderPluginIds: (params: unknown) =>
-    resolveNonBundledProviderPluginIdsMock(params as never),
+  resolveProviderPluginIdsForCatalogHooks: (params: unknown) =>
+    resolveProviderPluginIdsForCatalogHooksMock(params as never),
   resolveOwningPluginIdsForProvider: (params: unknown) =>
     resolveOwningPluginIdsForProviderMock(params as never),
 }));
@@ -96,8 +96,8 @@ describe("provider-runtime", () => {
     resetProviderRuntimeHookCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
-    resolveNonBundledProviderPluginIdsMock.mockReset();
-    resolveNonBundledProviderPluginIdsMock.mockReturnValue([]);
+    resolveProviderPluginIdsForCatalogHooksMock.mockReset();
+    resolveProviderPluginIdsForCatalogHooksMock.mockReturnValue([]);
     resolveOwningPluginIdsForProviderMock.mockReset();
     resolveOwningPluginIdsForProviderMock.mockReturnValue(undefined);
   });
