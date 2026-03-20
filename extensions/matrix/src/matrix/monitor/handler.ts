@@ -496,14 +496,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       const messageId = event.event_id ?? "";
       const threadRootId = resolveMatrixThreadRootId({ event, content });
-      const { route: route, configuredBinding: configuredBinding } = resolveMatrixInboundRoute({
+      const { route, configuredBinding } = resolveMatrixInboundRoute({
         cfg,
         accountId,
         roomId,
         senderId,
         isDirectMessage,
-        messageId: messageId,
-        threadRootId: threadRootId,
+        messageId,
+        threadRootId,
         eventTs: eventTs ?? undefined,
         resolveAgentRoute: core.channel.routing.resolveAgentRoute,
       });
@@ -654,18 +654,18 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const replyToEventId = content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
       const threadTarget = resolveMatrixThreadTarget({
         threadReplies,
-        messageId: messageId,
-        threadRootId: threadRootId,
+        messageId,
+        threadRootId,
         isThreadRoot: false, // Raw event payload does not carry explicit thread-root metadata.
       });
       const threadContext = threadRootId
-        ? await resolveThreadContext({ roomId, threadRootId: threadRootId })
+        ? await resolveThreadContext({ roomId, threadRootId })
         : undefined;
 
       if (configuredBinding) {
         const ensured = await ensureConfiguredAcpBindingReady({
           cfg,
-          configuredBinding: configuredBinding,
+          configuredBinding,
         });
         if (!ensured.ok) {
           logInboundDrop({
