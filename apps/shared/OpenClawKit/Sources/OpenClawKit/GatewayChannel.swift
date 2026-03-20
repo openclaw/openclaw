@@ -44,7 +44,14 @@ public struct WebSocketTaskBox: @unchecked Sendable {
 
     public func sendPing() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let resumed = OSAllocatedUnfairLock(initialState: false)
             self.task.sendPing { error in
+                let alreadyResumed = resumed.withLock { value -> Bool in
+                    if value { return true }
+                    value = true
+                    return false
+                }
+                guard !alreadyResumed else { return }
                 ThrowingContinuationSupport.resumeVoid(continuation, error: error)
             }
         }
