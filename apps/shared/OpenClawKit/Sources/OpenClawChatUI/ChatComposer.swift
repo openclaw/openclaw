@@ -376,7 +376,11 @@ struct OpenClawChatComposer: View {
     }
 
     private var textMaxHeight: CGFloat {
+        #if os(macOS)
+        self.style == .onboarding ? 52 : .infinity
+        #else
         self.style == .onboarding ? 52 : 64
+        #endif
     }
 
     private var isComposerCompacted: Bool {
