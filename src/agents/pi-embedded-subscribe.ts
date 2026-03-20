@@ -571,11 +571,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // "_Checking files_" is NOT a prefix of "_Checking files done_" even though
     // "Checking files" IS a prefix of "Checking files done".
     const rawPrior = state.lastStreamedReasoningRaw ?? "";
-    const isRawAccumulated = trimmed.startsWith(rawPrior);
+    const isRawAccumulated = text.startsWith(rawPrior);
     // rawDelta: new incremental raw content
-    const rawDelta = isRawAccumulated ? trimmed.slice(rawPrior.length) : trimmed;
+    const rawDelta = isRawAccumulated ? text.slice(rawPrior.length) : text;
     // rawAccumulated: monotonically growing raw text
-    const rawAccumulated = isRawAccumulated ? trimmed : rawPrior + trimmed;
+    const rawAccumulated = isRawAccumulated ? text : rawPrior + text;
     state.lastStreamedReasoningRaw = rawAccumulated;
 
     const formatted = formatReasoningMessage(rawAccumulated);
