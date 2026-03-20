@@ -20,6 +20,7 @@ export async function runSessionsSendA2AFlow(params: {
   displayKey: string;
   message: string;
   announceTimeoutMs: number;
+  announceEnabled?: boolean;
   maxPingPongTurns: number;
   requesterSessionKey?: string;
   requesterChannel?: GatewayMessageChannel;
@@ -97,6 +98,10 @@ export async function runSessionsSendA2AFlow(params: {
         currentSessionKey = nextSessionKey;
         nextSessionKey = swap;
       }
+    }
+
+    if (params.announceEnabled === false) {
+      return;
     }
 
     const announcePrompt = buildAgentToAgentAnnounceContext({
