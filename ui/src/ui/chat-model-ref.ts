@@ -16,7 +16,14 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
     return "";
   }
   const trimmedProvider = provider?.trim();
-  return trimmedProvider ? `${trimmedProvider}/${trimmedModel}` : trimmedModel;
+  if (!trimmedProvider) {
+    return trimmedModel;
+  }
+  // Skip prefix if model ID already starts with "provider/" — mirrors server-side modelKey().
+  if (trimmedModel.toLowerCase().startsWith(`${trimmedProvider.toLowerCase()}/`)) {
+    return trimmedModel;
+  }
+  return `${trimmedProvider}/${trimmedModel}`;
 }
 
 export function createChatModelOverride(value: string): ChatModelOverride | null {
@@ -86,8 +93,9 @@ export function formatChatModelDisplay(value: string): string {
 
 export function buildChatModelOption(entry: ModelCatalogEntry): { value: string; label: string } {
   const provider = entry.provider?.trim();
+  const value = buildQualifiedChatModelValue(entry.id, provider);
   return {
-    value: buildQualifiedChatModelValue(entry.id, provider),
-    label: provider ? `${entry.id} · ${provider}` : entry.id,
+    value,
+    label: formatChatModelDisplay(value) || value,
   };
 }
