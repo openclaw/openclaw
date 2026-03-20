@@ -17,7 +17,7 @@ public struct OpenClawChatView: View {
     @State private var hasPerformedInitialScroll = false
     @State private var isPinnedToBottom = true
     @State private var lastUserMessageID: UUID?
-    @State private var composerHeight: CGFloat = 120
+    @State private var composerHeight: CGFloat = 150
     @State private var composerDragStart: CGFloat?
     private let showsSessionSwitcher: Bool
     private let style: Style
@@ -76,41 +76,37 @@ public struct OpenClawChatView: View {
                         .padding(.horizontal, Layout.outerPaddingHorizontal)
                         .frame(maxHeight: .infinity)
 
-                    // Draggable resize handle
-                    ZStack {
-                        // Background hit area
-                        Color.clear
-                            .frame(height: 12)
-                            .contentShape(Rectangle())
-                        // Visual grab bar (three dots)
-                        HStack(spacing: 2) {
+                    // ── Resize handle ──
+                    VStack(spacing: 0) {
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.15))
+                            .frame(height: 1)
+                        HStack(spacing: 3) {
                             ForEach(0..<3, id: \.self) { _ in
-                                Circle()
-                                    .fill(Color.primary.opacity(0.25))
-                                    .frame(width: 4, height: 4)
+                                RoundedRectangle(cornerRadius: 1)
+                                    .fill(Color.primary.opacity(0.3))
+                                    .frame(width: 20, height: 3)
                             }
                         }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 14)
                     }
-                    .frame(height: 12)
-                    .frame(maxWidth: .infinity)
+                    .frame(height: 15)
+                    .contentShape(Rectangle())
                     #if os(macOS)
                     .onHover { inside in
-                        if inside {
-                            NSCursor.resizeUpDown.push()
-                        } else {
-                            NSCursor.pop()
-                        }
+                        if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
                     }
                     #endif
-                    .gesture(
+                    .highPriorityGesture(
                         DragGesture(minimumDistance: 0, coordinateSpace: .global)
                             .onChanged { value in
                                 if self.composerDragStart == nil {
                                     self.composerDragStart = self.composerHeight
                                 }
-                                let minH: CGFloat = 60
-                                let maxH: CGFloat = geo.size.height * 0.6
-                                let proposed = (self.composerDragStart ?? self.composerHeight) - value.translation.height
+                                let minH: CGFloat = 80
+                                let maxH: CGFloat = geo.size.height * 0.65
+                                let proposed = (self.composerDragStart ?? 150) - value.translation.height
                                 self.composerHeight = min(maxH, max(minH, proposed))
                             }
                             .onEnded { _ in
@@ -118,17 +114,17 @@ public struct OpenClawChatView: View {
                             }
                     )
 
+                    // ── Composer ──
                     OpenClawChatComposer(
                         viewModel: self.viewModel,
                         style: self.style,
                         showsSessionSwitcher: self.showsSessionSwitcher)
                         .padding(.horizontal, Layout.composerPaddingHorizontal)
-                        .frame(height: self.composerHeight)
+                        .frame(minHeight: self.composerHeight, maxHeight: self.composerHeight)
                 }
                 .padding(.vertical, Layout.outerPaddingVertical)
             }
-            .frame(maxWidth: .infinity)
-            .frame(maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { self.viewModel.load() }
