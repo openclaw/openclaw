@@ -57,7 +57,7 @@ import {
   isExternalHookSession,
 } from "../../security/external-content.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
-import { resolveCronDeliveryPlan } from "../delivery.js";
+import { resolveCronDeliveryPlan, sendFailureNotificationAnnounce } from "../delivery.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
   dispatchCronDelivery,
@@ -724,11 +724,41 @@ export async function runCronIsolatedAgentTurn(params: {
       }
     }
   } catch (err) {
-    return withRunSession({ status: "error", error: String(err) });
+    const errorText = String(err);
+    if (deliveryRequested && resolvedDelivery.ok) {
+      void sendFailureNotificationAnnounce(
+        params.deps,
+        params.cfg,
+        agentId,
+        params.job.id,
+        {
+          channel: resolvedDelivery.channel,
+          to: resolvedDelivery.to,
+          accountId: resolvedDelivery.accountId,
+        },
+        `[cron:${params.job.id}] Job "${params.job.name}" failed: ${errorText}`,
+      );
+    }
+    return withRunSession({ status: "error", error: errorText });
   }
 
   if (isAborted()) {
-    return withRunSession({ status: "error", error: abortReason() });
+    const errorText = abortReason();
+    if (deliveryRequested && resolvedDelivery.ok) {
+      void sendFailureNotificationAnnounce(
+        params.deps,
+        params.cfg,
+        agentId,
+        params.job.id,
+        {
+          channel: resolvedDelivery.channel,
+          to: resolvedDelivery.to,
+          accountId: resolvedDelivery.accountId,
+        },
+        `[cron:${params.job.id}] Job "${params.job.name}" timed out: ${errorText}`,
+      );
+    }
+    return withRunSession({ status: "error", error: errorText });
   }
   if (!runResult) {
     return withRunSession({ status: "error", error: "cron isolated run returned no result" });
