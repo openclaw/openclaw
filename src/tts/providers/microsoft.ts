@@ -83,7 +83,7 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       const tempRoot = resolvePreferredOpenClawTmpDir();
       mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
       const tempDir = mkdtempSync(path.join(tempRoot, "tts-microsoft-"));
-      let outputFormat = req.config.edge.outputFormat;
+      let outputFormat = req.overrides?.microsoft?.outputFormat ?? req.config.edge.outputFormat;
       const fallbackOutputFormat =
         outputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
 
@@ -96,6 +96,7 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
             outputPath,
             config: {
               ...req.config.edge,
+              voice: req.overrides?.microsoft?.voice ?? req.config.edge.voice,
               outputFormat: format,
             },
             timeoutMs: req.config.timeoutMs,

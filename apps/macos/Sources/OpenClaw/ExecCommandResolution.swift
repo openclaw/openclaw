@@ -52,6 +52,23 @@ struct ExecCommandResolution {
         return [resolution]
     }
 
+    static func resolveAllowAlwaysPatterns(
+        command: [String],
+        cwd: String?,
+        env: [String: String]?) -> [String]
+    {
+        var patterns: [String] = []
+        var seen = Set<String>()
+        self.collectAllowAlwaysPatterns(
+            command: command,
+            cwd: cwd,
+            env: env,
+            depth: 0,
+            patterns: &patterns,
+            seen: &seen)
+        return patterns
+    }
+
     static func resolve(command: [String], cwd: String?, env: [String: String]?) -> ExecCommandResolution? {
         let effective = ExecEnvInvocationUnwrapper.unwrapDispatchWrappersForResolution(command)
         guard let raw = effective.first?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
@@ -99,6 +116,115 @@ struct ExecCommandResolution {
             return nil
         }
         return self.resolveExecutable(rawExecutable: raw, cwd: cwd, env: env)
+    }
+
+    private static func collectAllowAlwaysPatterns(
+        command: [String],
+        cwd: String?,
+        env: [String: String]?,
+        depth: Int,
+        patterns: inout [String],
+        seen: inout Set<String>)
+    {
+        guard depth < 3, !command.isEmpty else {
+            return
+        }
+
+        if let token0 = command.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+           ExecCommandToken.basenameLower(token0) == "env",
+           let envUnwrapped = ExecEnvInvocationUnwrapper.unwrap(command),
+           !envUnwrapped.isEmpty
+        {
+            self.collectAllowAlwaysPatterns(
+                command: envUnwrapped,
+                cwd: cwd,
+                env: env,
+                depth: depth + 1,
+                patterns: &patterns,
+                seen: &seen)
+            return
+        }
+
+        if let shellMultiplexer = self.unwrapShellMultiplexerInvocation(command) {
+            self.collectAllowAlwaysPatterns(
+                command: shellMultiplexer,
+                cwd: cwd,
+                env: env,
+                depth: depth + 1,
+                patterns: &patterns,
+                seen: &seen)
+            return
+        }
+
+        let shell = ExecShellWrapperParser.extract(command: command, rawCommand: nil)
+        if shell.isWrapper {
+            guard let shellCommand = shell.command,
+                  let segments = self.splitShellCommandChain(shellCommand)
+            else {
+                return
+            }
+            for segment in segments {
+                let tokens = self.tokenizeShellWords(segment)
+                guard !tokens.isEmpty else {
+                    continue
+                }
+                self.collectAllowAlwaysPatterns(
+                    command: tokens,
+                    cwd: cwd,
+                    env: env,
+                    depth: depth + 1,
+                    patterns: &patterns,
+                    seen: &seen)
+            }
+            return
+        }
+
+        guard let resolution = self.resolve(command: command, cwd: cwd, env: env),
+              let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: resolution),
+              seen.insert(pattern).inserted
+        else {
+            return
+        }
+        patterns.append(pattern)
+    }
+
+    private static func unwrapShellMultiplexerInvocation(_ argv: [String]) -> [String]? {
+        guard let token0 = argv.first?.trimmingCharacters(in: .whitespacesAndNewlines), !token0.isEmpty else {
+            return nil
+        }
+        let wrapper = ExecCommandToken.basenameLower(token0)
+        guard wrapper == "busybox" || wrapper == "toybox" else {
+            return nil
+        }
+
+        var appletIndex = 1
+        if appletIndex < argv.count, argv[appletIndex].trimmingCharacters(in: .whitespacesAndNewlines) == "--" {
+            appletIndex += 1
+        }
+        guard appletIndex < argv.count else {
+            return nil
+        }
+        let applet = argv[appletIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !applet.isEmpty else {
+            return nil
+        }
+
+        let normalizedApplet = ExecCommandToken.basenameLower(applet)
+        let shellWrappers = Set([
+            "ash",
+            "bash",
+            "dash",
+            "fish",
+            "ksh",
+            "powershell",
+            "pwsh",
+            "sh",
+            "zsh",
+        ])
+        guard shellWrappers.contains(normalizedApplet) else {
+            return nil
+        }
+        return Array(argv[appletIndex...])
     }
 
     private static func parseFirstToken(_ command: String) -> String? {
