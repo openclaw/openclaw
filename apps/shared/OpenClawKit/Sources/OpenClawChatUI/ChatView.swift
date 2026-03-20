@@ -18,6 +18,7 @@ public struct OpenClawChatView: View {
     @State private var isPinnedToBottom = true
     @State private var lastUserMessageID: UUID?
     @State private var composerHeight: CGFloat = 120
+    @State private var composerDragStart: CGFloat?
     private let showsSessionSwitcher: Bool
     private let style: Style
     private let markdownVariant: ChatMarkdownVariant
@@ -94,10 +95,16 @@ public struct OpenClawChatView: View {
                         .gesture(
                             DragGesture(minimumDistance: 1)
                                 .onChanged { value in
+                                    if self.composerDragStart == nil {
+                                        self.composerDragStart = self.composerHeight
+                                    }
                                     let minH: CGFloat = 60
                                     let maxH: CGFloat = geo.size.height * 0.6
-                                    let proposed = self.composerHeight - value.translation.height
+                                    let proposed = (self.composerDragStart ?? self.composerHeight) - value.translation.height
                                     self.composerHeight = min(maxH, max(minH, proposed))
+                                }
+                                .onEnded { _ in
+                                    self.composerDragStart = nil
                                 }
                         )
 
