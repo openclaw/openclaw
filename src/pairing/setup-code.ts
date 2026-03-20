@@ -16,8 +16,6 @@ import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 export type PairingSetupPayload = {
   url: string;
   bootstrapToken: string;
-  token?: string;
-  password?: string;
 };
 
 export type PairingSetupCommandResult = {
@@ -62,11 +60,6 @@ type ResolveUrlResult = {
 type ResolveAuthLabelResult = {
   label?: "token" | "password";
   error?: string;
-};
-
-type ResolveSharedAuthResult = {
-  token?: string;
-  password?: string;
 };
 
 function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null {
@@ -211,41 +204,6 @@ function resolvePairingSetupAuthLabel(
     return { label: "password" };
   }
   return { error: "Gateway auth is not configured (no token or password)." };
-}
-
-function resolvePairingSetupSharedAuth(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): ResolveSharedAuthResult {
-  const defaults = cfg.secrets?.defaults;
-  const tokenRef = resolveSecretInputRef({
-    value: cfg.gateway?.auth?.token,
-    defaults,
-  }).ref;
-  const passwordRef = resolveSecretInputRef({
-    value: cfg.gateway?.auth?.password,
-    defaults,
-  }).ref;
-  const token =
-    resolveGatewayTokenFromEnv(env) ||
-    (tokenRef ? undefined : normalizeSecretInputString(cfg.gateway?.auth?.token));
-  const password =
-    resolveGatewayPasswordFromEnv(env) ||
-    (passwordRef ? undefined : normalizeSecretInputString(cfg.gateway?.auth?.password));
-  const mode = cfg.gateway?.auth?.mode;
-  if (mode === "token") {
-    return { token };
-  }
-  if (mode === "password") {
-    return { password };
-  }
-  if (token) {
-    return { token };
-  }
-  if (password) {
-    return { password };
-  }
-  return {};
 }
 
 async function resolveGatewayTokenSecretRef(
@@ -417,8 +375,6 @@ export async function resolvePairingSetupFromConfig(
   if (authLabel.error) {
     return { ok: false, error: authLabel.error };
   }
-  const sharedAuth = resolvePairingSetupSharedAuth(cfgForAuth, env);
-
   const urlResult = await resolveGatewayUrl(cfgForAuth, {
     env,
     publicUrl: options.publicUrl,
@@ -445,8 +401,6 @@ export async function resolvePairingSetupFromConfig(
           baseDir: options.pairingBaseDir,
         })
       ).token,
-      ...(sharedAuth.token ? { token: sharedAuth.token } : {}),
-      ...(sharedAuth.password ? { password: sharedAuth.password } : {}),
     },
     authLabel: authLabel.label,
     urlSource: urlResult.source ?? "unknown",
