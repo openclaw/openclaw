@@ -1,4 +1,5 @@
 import { createDedupeCache } from "../infra/dedupe.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   dispatchDiscordInteractiveHandler,
   dispatchSlackInteractiveHandler,
@@ -33,11 +34,23 @@ type InteractiveDispatchResult =
   | { matched: false; handled: false; duplicate: false }
   | { matched: true; handled: boolean; duplicate: boolean };
 
-const interactiveHandlers = new Map<string, RegisteredInteractiveHandler>();
-const callbackDedupe = createDedupeCache({
-  ttlMs: 5 * 60_000,
-  maxSize: 4096,
-});
+type InteractiveState = {
+  interactiveHandlers: Map<string, RegisteredInteractiveHandler>;
+  callbackDedupe: ReturnType<typeof createDedupeCache>;
+};
+
+const PLUGIN_INTERACTIVE_STATE_KEY = Symbol.for("openclaw.pluginInteractiveState");
+
+const state = resolveGlobalSingleton<InteractiveState>(PLUGIN_INTERACTIVE_STATE_KEY, () => ({
+  interactiveHandlers: new Map<string, RegisteredInteractiveHandler>(),
+  callbackDedupe: createDedupeCache({
+    ttlMs: 5 * 60_000,
+    maxSize: 4096,
+  }),
+}));
+
+const interactiveHandlers = state.interactiveHandlers;
+const callbackDedupe = state.callbackDedupe;
 
 function toRegistryKey(channel: string, namespace: string): string {
   return `${channel.trim().toLowerCase()}:${namespace.trim()}`;
