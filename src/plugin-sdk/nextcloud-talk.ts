@@ -12,25 +12,30 @@ export {
 } from "../channels/plugins/channel-config.js";
 export {
   deleteAccountFromConfigSection,
+  clearAccountEntryFields,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
 export {
+  buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
   mergeAllowFromEntries,
-  promptAccountId,
   promptSingleChannelSecretInput,
-} from "../channels/plugins/onboarding/helpers.js";
-export { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
+  runSingleChannelSecretStep,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+} from "../channels/plugins/setup-wizard-helpers.js";
+export {
+  applyAccountNameToChannelSection,
+  patchScopedAccountConfig,
+} from "../channels/plugins/setup-helpers.js";
+export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export type { ChannelGroupContext, ChannelSetupInput } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
+export { mapAllowFromEntries } from "./channel-config-helpers.js";
+export { evaluateMatchedGroupAccessForPolicy } from "./group-access.js";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -44,12 +49,13 @@ export type {
   GroupPolicy,
   GroupToolPolicyConfig,
 } from "../config/types.js";
-export type { SecretInput } from "../config/types.secrets.js";
+export type { SecretInput } from "./secret-input.js";
 export {
+  buildSecretInputSchema,
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-} from "../config/types.secrets.js";
+} from "./secret-input.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export {
   BlockStreamingCoalesceSchema,
@@ -65,6 +71,7 @@ export {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../infra/http-body.js";
+export { waitForAbortSignal } from "../infra/abort-signal.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -81,12 +88,18 @@ export {
   listConfiguredAccountIds,
   resolveAccountWithDefaultFallback,
 } from "./account-resolution.js";
-export { createScopedPairingAccess } from "./pairing-access.js";
+export { createChannelPairingController } from "./channel-pairing.js";
 export { createPersistentDedupe } from "./persistent-dedupe.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
 export {
   createNormalizedOutboundDeliverer,
+  deliverFormattedTextWithAttachments,
   formatTextWithAttachmentLinks,
   resolveOutboundMediaUrls,
 } from "./reply-payload.js";
+export { dispatchInboundReplyWithBase } from "./inbound-reply-dispatch.js";
 export { createLoggerBackedRuntime } from "./runtime.js";
+export {
+  buildBaseChannelStatusSummary,
+  buildRuntimeAccountStatusSnapshot,
+} from "./status-helpers.js";

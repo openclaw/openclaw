@@ -118,10 +118,14 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (!status) {
             continue;
           }
+          if (!channelManager.isHealthMonitorEnabled(channelId as ChannelId, accountId)) {
+            continue;
+          }
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
           const healthPolicy: ChannelHealthPolicy = {
+            channelId,
             now,
             staleEventThresholdMs: timing.staleEventThresholdMs,
             channelConnectGraceMs: timing.channelConnectGraceMs,

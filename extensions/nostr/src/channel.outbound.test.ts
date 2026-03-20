@@ -1,6 +1,6 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/nostr";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStartAccountContext } from "../../test-utils/start-account-context.js";
+import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
+import type { PluginRuntime } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
 import { setNostrRuntime } from "./runtime.js";
 
@@ -51,8 +51,8 @@ describe("nostr outbound cfg threading", () => {
           accountId: "default",
           enabled: true,
           configured: true,
-          privateKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-          publicKey: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+          privateKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // pragma: allowlist secret
+          publicKey: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", // pragma: allowlist secret
           relays: ["wss://relay.example.com"],
           config: {},
         },
@@ -63,7 +63,7 @@ describe("nostr outbound cfg threading", () => {
     const cfg = {
       channels: {
         nostr: {
-          privateKey: "resolved-nostr-private-key",
+          privateKey: "resolved-nostr-private-key", // pragma: allowlist secret
         },
       },
     };

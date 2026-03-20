@@ -1,3 +1,8 @@
+import {
+  abortEmbeddedPiRun,
+  getActiveEmbeddedRunCount,
+  waitForActiveEmbeddedRuns,
+} from "../../agents/pi-embedded-runner/runs.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
@@ -5,6 +10,7 @@ import {
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
+  scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -75,7 +81,9 @@ export async function runGatewayLoop(params: {
         `full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
       );
     } else {
-      gatewayLog.info("restart mode: in-process restart (OPENCLAW_NO_RESPAWN)");
+      gatewayLog.info(
+        `restart mode: in-process restart (${respawn.detail ?? "OPENCLAW_NO_RESPAWN"})`,
+      );
     }
     if (hadLock && !(await reacquireLockForInProcessRestart())) {
       return;
@@ -88,7 +96,7 @@ export async function runGatewayLoop(params: {
     exitProcess(0);
   };
 
-  const DRAIN_TIMEOUT_MS = 30_000;
+  const DRAIN_TIMEOUT_MS = 90_000;
   const SHUTDOWN_TIMEOUT_MS = 5_000;
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
@@ -104,7 +112,10 @@ export async function runGatewayLoop(params: {
     const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
-      exitProcess(0);
+      // Exit non-zero on restart timeout so launchd/systemd treats it as a
+      // failure and triggers a clean process restart instead of assuming the
+      // shutdown was intentional. Stop-timeout stays at 0 (graceful). (#36822)
+      exitProcess(isRestart ? 1 : 0);
     }, forceExitMs);
 
     void (async () => {
@@ -116,15 +127,33 @@ export async function runGatewayLoop(params: {
           // sessions get an explicit restart error instead of silent task loss.
           markGatewayDraining();
           const activeTasks = getActiveTaskCount();
-          if (activeTasks > 0) {
+          const activeRuns = getActiveEmbeddedRunCount();
+
+          // Best-effort abort for compacting runs so long compaction operations
+          // don't hold session write locks across restart boundaries.
+          if (activeRuns > 0) {
+            abortEmbeddedPiRun(undefined, { mode: "compacting" });
+          }
+
+          if (activeTasks > 0 || activeRuns > 0) {
             gatewayLog.info(
-              `draining ${activeTasks} active task(s) before restart (timeout ${DRAIN_TIMEOUT_MS}ms)`,
+              `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart (timeout ${DRAIN_TIMEOUT_MS}ms)`,
             );
-            const { drained } = await waitForActiveTasks(DRAIN_TIMEOUT_MS);
-            if (drained) {
-              gatewayLog.info("all active tasks drained");
+            const [tasksDrain, runsDrain] = await Promise.all([
+              activeTasks > 0
+                ? waitForActiveTasks(DRAIN_TIMEOUT_MS)
+                : Promise.resolve({ drained: true }),
+              activeRuns > 0
+                ? waitForActiveEmbeddedRuns(DRAIN_TIMEOUT_MS)
+                : Promise.resolve({ drained: true }),
+            ]);
+            if (tasksDrain.drained && runsDrain.drained) {
+              gatewayLog.info("all active work drained");
             } else {
               gatewayLog.warn("drain timeout reached; proceeding with restart");
+              // Final best-effort abort to avoid carrying active runs into the
+              // next lifecycle when drain time budget is exhausted.
+              abortEmbeddedPiRun(undefined, { mode: "all" });
             }
           }
         }
@@ -158,10 +187,20 @@ export async function runGatewayLoop(params: {
   const onSigusr1 = () => {
     gatewayLog.info("signal SIGUSR1 received");
     const authorized = consumeGatewaySigusr1RestartAuthorization();
-    if (!authorized && !isGatewaySigusr1RestartExternallyAllowed()) {
-      gatewayLog.warn(
-        "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
-      );
+    if (!authorized) {
+      if (!isGatewaySigusr1RestartExternallyAllowed()) {
+        gatewayLog.warn(
+          "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
+        );
+        return;
+      }
+      if (shuttingDown) {
+        gatewayLog.info("received SIGUSR1 during shutdown; ignoring");
+        return;
+      }
+      // External SIGUSR1 requests should still reuse the in-process restart
+      // scheduler so idle drain and restart coalescing stay consistent.
+      scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "SIGUSR1" });
       return;
     }
     markGatewaySigusr1RestartHandled();
@@ -185,10 +224,34 @@ export async function runGatewayLoop(params: {
 
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).
     // SIGTERM/SIGINT still exit after a graceful shutdown.
+    let isFirstStart = true;
     // eslint-disable-next-line no-constant-condition
     while (true) {
       onIteration();
-      server = await params.start();
+      try {
+        server = await params.start();
+        isFirstStart = false;
+      } catch (err) {
+        // On initial startup, let the error propagate so the outer handler
+        // can report "Gateway failed to start" and exit non-zero. Only
+        // swallow errors on subsequent in-process restarts to keep the
+        // process alive (a crash would lose macOS TCC permissions). (#35862)
+        if (isFirstStart) {
+          throw err;
+        }
+        server = null;
+        // Release the gateway lock so that `daemon restart/stop` (which
+        // discovers PIDs via the gateway port) can still manage the process.
+        // Without this, the process holds the lock but is not listening,
+        // forcing manual cleanup. (#35862)
+        await releaseLockIfHeld();
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const errStack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
+        gatewayLog.error(
+          `gateway startup failed: ${errMsg}. ` +
+            `Process will stay alive; fix the issue and restart.${errStack}`,
+        );
+      }
       await new Promise<void>((resolve) => {
         restartResolver = resolve;
       });

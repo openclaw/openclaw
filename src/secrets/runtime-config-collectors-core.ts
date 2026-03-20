@@ -10,6 +10,7 @@ import { isRecord } from "./shared.js";
 
 type ProviderLike = {
   apiKey?: unknown;
+  headers?: unknown;
   enabled?: unknown;
 };
 
@@ -24,18 +25,37 @@ function collectModelProviderAssignments(params: {
   context: ResolverContext;
 }): void {
   for (const [providerId, provider] of Object.entries(params.providers)) {
+    const providerIsActive = provider.enabled !== false;
     collectSecretInputAssignment({
       value: provider.apiKey,
       path: `models.providers.${providerId}.apiKey`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
-      active: provider.enabled !== false,
+      active: providerIsActive,
       inactiveReason: "provider is disabled.",
       apply: (value) => {
         provider.apiKey = value;
       },
     });
+    const headers = isRecord(provider.headers) ? provider.headers : undefined;
+    if (!headers) {
+      continue;
+    }
+    for (const [headerKey, headerValue] of Object.entries(headers)) {
+      collectSecretInputAssignment({
+        value: headerValue,
+        path: `models.providers.${providerId}.headers.${headerKey}`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: providerIsActive,
+        inactiveReason: "provider is disabled.",
+        apply: (value) => {
+          headers[headerKey] = value;
+        },
+      });
+    }
   }
 }
 
@@ -272,67 +292,6 @@ function collectMessagesTtsAssignments(params: {
   });
 }
 
-function collectToolsWebSearchAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
-  const tools = params.config.tools as Record<string, unknown> | undefined;
-  if (!isRecord(tools) || !isRecord(tools.web) || !isRecord(tools.web.search)) {
-    return;
-  }
-  const search = tools.web.search;
-  const searchEnabled = search.enabled !== false;
-  const rawProvider =
-    typeof search.provider === "string" ? search.provider.trim().toLowerCase() : "";
-  const selectedProvider =
-    rawProvider === "brave" ||
-    rawProvider === "gemini" ||
-    rawProvider === "grok" ||
-    rawProvider === "kimi" ||
-    rawProvider === "perplexity"
-      ? rawProvider
-      : undefined;
-  const paths = [
-    "apiKey",
-    "gemini.apiKey",
-    "grok.apiKey",
-    "kimi.apiKey",
-    "perplexity.apiKey",
-  ] as const;
-  for (const path of paths) {
-    const [scope, field] = path.includes(".") ? path.split(".", 2) : [undefined, path];
-    const target = scope ? search[scope] : search;
-    if (!isRecord(target)) {
-      continue;
-    }
-    const active = scope
-      ? searchEnabled && (selectedProvider === undefined || selectedProvider === scope)
-      : searchEnabled && (selectedProvider === undefined || selectedProvider === "brave");
-    const inactiveReason = !searchEnabled
-      ? "tools.web.search is disabled."
-      : scope
-        ? selectedProvider === undefined
-          ? undefined
-          : `tools.web.search.provider is "${selectedProvider}".`
-        : selectedProvider === undefined
-          ? undefined
-          : `tools.web.search.provider is "${selectedProvider}".`;
-    collectSecretInputAssignment({
-      value: target[field],
-      path: `tools.web.search.${path}`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active,
-      inactiveReason,
-      apply: (value) => {
-        target[field] = value;
-      },
-    });
-  }
-}
-
 function collectCronAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -352,6 +311,90 @@ function collectCronAssignments(params: {
       cron.webhookToken = value;
     },
   });
+}
+
+function collectSandboxSshAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const agents = isRecord(params.config.agents) ? params.config.agents : undefined;
+  if (!agents) {
+    return;
+  }
+  const defaultsAgent = isRecord(agents.defaults) ? agents.defaults : undefined;
+  const defaultsSandbox = isRecord(defaultsAgent?.sandbox) ? defaultsAgent.sandbox : undefined;
+  const defaultsSsh = isRecord(defaultsSandbox?.ssh)
+    ? (defaultsSandbox.ssh as Record<string, unknown>)
+    : undefined;
+  const defaultsBackend =
+    typeof defaultsSandbox?.backend === "string" ? defaultsSandbox.backend : undefined;
+  const defaultsMode = typeof defaultsSandbox?.mode === "string" ? defaultsSandbox.mode : undefined;
+
+  const inheritedDefaultsUsage = {
+    identityData: false,
+    certificateData: false,
+    knownHostsData: false,
+  };
+
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  list.forEach((rawAgent, index) => {
+    const agentRecord = isRecord(rawAgent) ? (rawAgent as Record<string, unknown>) : null;
+    if (!agentRecord || agentRecord.enabled === false) {
+      return;
+    }
+    const sandbox = isRecord(agentRecord.sandbox) ? agentRecord.sandbox : undefined;
+    const ssh = isRecord(sandbox?.ssh) ? sandbox.ssh : undefined;
+    const effectiveBackend =
+      (typeof sandbox?.backend === "string" ? sandbox.backend : undefined) ??
+      defaultsBackend ??
+      "docker";
+    const effectiveMode =
+      (typeof sandbox?.mode === "string" ? sandbox.mode : undefined) ?? defaultsMode ?? "off";
+    const active = effectiveBackend.trim().toLowerCase() === "ssh" && effectiveMode !== "off";
+    for (const key of ["identityData", "certificateData", "knownHostsData"] as const) {
+      if (ssh && Object.prototype.hasOwnProperty.call(ssh, key)) {
+        collectSecretInputAssignment({
+          value: ssh[key],
+          path: `agents.list.${index}.sandbox.ssh.${key}`,
+          expected: "string",
+          defaults: params.defaults,
+          context: params.context,
+          active,
+          inactiveReason: "sandbox SSH backend is not active for this agent.",
+          apply: (value) => {
+            ssh[key] = value;
+          },
+        });
+      } else if (active) {
+        inheritedDefaultsUsage[key] = true;
+      }
+    }
+  });
+
+  if (!defaultsSsh) {
+    return;
+  }
+
+  const defaultsActive =
+    (defaultsBackend?.trim().toLowerCase() === "ssh" && defaultsMode !== "off") ||
+    inheritedDefaultsUsage.identityData ||
+    inheritedDefaultsUsage.certificateData ||
+    inheritedDefaultsUsage.knownHostsData;
+  for (const key of ["identityData", "certificateData", "knownHostsData"] as const) {
+    collectSecretInputAssignment({
+      value: defaultsSsh[key],
+      path: `agents.defaults.sandbox.ssh.${key}`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: defaultsActive || inheritedDefaultsUsage[key],
+      inactiveReason: "sandbox SSH backend is not active.",
+      apply: (value) => {
+        defaultsSsh[key] = value;
+      },
+    });
+  }
 }
 
 export function collectCoreConfigAssignments(params: {
@@ -380,7 +423,7 @@ export function collectCoreConfigAssignments(params: {
   collectAgentMemorySearchAssignments(params);
   collectTalkAssignments(params);
   collectGatewayAssignments(params);
+  collectSandboxSshAssignments(params);
   collectMessagesTtsAssignments(params);
-  collectToolsWebSearchAssignments(params);
   collectCronAssignments(params);
 }

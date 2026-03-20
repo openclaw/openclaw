@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
+import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   resolveVoiceCallConfig: vi.fn(),
@@ -45,48 +46,7 @@ vi.mock("./webhook/tailscale.js", () => ({
 import { createVoiceCallRuntime } from "./runtime.js";
 
 function createBaseConfig(): VoiceCallConfig {
-  return {
-    enabled: true,
-    provider: "mock",
-    fromNumber: "+15550001234",
-    inboundPolicy: "disabled",
-    allowFrom: [],
-    outbound: { defaultMode: "notify", notifyHangupDelaySec: 3 },
-    maxDurationSeconds: 300,
-    staleCallReaperSeconds: 600,
-    silenceTimeoutMs: 800,
-    transcriptTimeoutMs: 180000,
-    ringTimeoutMs: 30000,
-    maxConcurrentCalls: 1,
-    serve: { port: 3334, bind: "127.0.0.1", path: "/voice/webhook" },
-    tailscale: { mode: "off", path: "/voice/webhook" },
-    tunnel: { provider: "ngrok", allowNgrokFreeTierLoopbackBypass: false },
-    webhookSecurity: {
-      allowedHosts: [],
-      trustForwardingHeaders: false,
-      trustedProxyIPs: [],
-    },
-    streaming: {
-      enabled: false,
-      sttProvider: "openai-realtime",
-      sttModel: "gpt-4o-transcribe",
-      silenceDurationMs: 800,
-      vadThreshold: 0.5,
-      streamPath: "/voice/stream",
-      preStartTimeoutMs: 5000,
-      maxPendingConnections: 32,
-      maxPendingConnectionsPerIp: 4,
-      maxConnections: 128,
-    },
-    skipSignatureVerification: false,
-    stt: { provider: "openai", model: "whisper-1" },
-    tts: {
-      provider: "openai",
-      openai: { model: "gpt-4o-mini-tts", voice: "coral" },
-    },
-    responseModel: "openai/gpt-4o-mini",
-    responseTimeoutMs: 30000,
-  };
+  return createVoiceCallBaseConfig({ tunnelProvider: "ngrok" });
 }
 
 describe("createVoiceCallRuntime lifecycle", () => {
@@ -116,6 +76,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       createVoiceCallRuntime({
         config: createBaseConfig(),
         coreConfig: {},
+        agentRuntime: {} as never,
       }),
     ).rejects.toThrow("init failed");
 
@@ -135,6 +96,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const runtime = await createVoiceCallRuntime({
       config: createBaseConfig(),
       coreConfig: {} as CoreConfig,
+      agentRuntime: {} as never,
     });
 
     await runtime.stop();

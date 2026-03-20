@@ -1,43 +1,14 @@
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-} from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/zalouser";
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
 import { checkZaloAuthenticated, getZaloUserInfo } from "./zalo-js.js";
 
-function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
-  const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return [];
-  }
-  return Object.keys(accounts).filter(Boolean);
-}
-
-export function listZalouserAccountIds(cfg: OpenClawConfig): string[] {
-  const ids = listConfiguredAccountIds(cfg);
-  if (ids.length === 0) {
-    return [DEFAULT_ACCOUNT_ID];
-  }
-  return ids.toSorted((a, b) => a.localeCompare(b));
-}
-
-export function resolveDefaultZalouserAccountId(cfg: OpenClawConfig): string {
-  const zalouserConfig = cfg.channels?.zalouser as ZalouserConfig | undefined;
-  const preferred = normalizeOptionalAccountId(zalouserConfig?.defaultAccount);
-  if (
-    preferred &&
-    listZalouserAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
-  ) {
-    return preferred;
-  }
-  const ids = listZalouserAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
-}
+const {
+  listAccountIds: listZalouserAccountIds,
+  resolveDefaultAccountId: resolveDefaultZalouserAccountId,
+} = createAccountListHelpers("zalouser");
+export { listZalouserAccountIds, resolveDefaultZalouserAccountId };
 
 function resolveAccountConfig(
   cfg: OpenClawConfig,
@@ -54,7 +25,12 @@ function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): Zal
   const raw = (cfg.channels?.zalouser ?? {}) as ZalouserConfig;
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  const merged = { ...base, ...account };
+  return {
+    ...merged,
+    // Match Telegram's safe default: groups stay allowlisted unless explicitly opened.
+    groupPolicy: merged.groupPolicy ?? "allowlist",
+  };
 }
 
 function resolveProfile(config: ZalouserAccountConfig, accountId: string): string {
@@ -73,17 +49,24 @@ function resolveProfile(config: ZalouserAccountConfig, accountId: string): strin
   return "default";
 }
 
-export async function resolveZalouserAccount(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): Promise<ResolvedZalouserAccount> {
+function resolveZalouserAccountBase(params: { cfg: OpenClawConfig; accountId?: string | null }) {
   const accountId = normalizeAccountId(params.accountId);
   const baseEnabled =
     (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
   const merged = mergeZalouserAccountConfig(params.cfg, accountId);
-  const accountEnabled = merged.enabled !== false;
-  const enabled = baseEnabled && accountEnabled;
-  const profile = resolveProfile(merged, accountId);
+  return {
+    accountId,
+    enabled: baseEnabled && merged.enabled !== false,
+    merged,
+    profile: resolveProfile(merged, accountId),
+  };
+}
+
+export async function resolveZalouserAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): Promise<ResolvedZalouserAccount> {
+  const { accountId, enabled, merged, profile } = resolveZalouserAccountBase(params);
   const authenticated = await checkZaloAuthenticated(profile);
 
   return {
@@ -100,13 +83,7 @@ export function resolveZalouserAccountSync(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedZalouserAccount {
-  const accountId = normalizeAccountId(params.accountId);
-  const baseEnabled =
-    (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
-  const merged = mergeZalouserAccountConfig(params.cfg, accountId);
-  const accountEnabled = merged.enabled !== false;
-  const enabled = baseEnabled && accountEnabled;
-  const profile = resolveProfile(merged, accountId);
+  const { accountId, enabled, merged, profile } = resolveZalouserAccountBase(params);
 
   return {
     accountId,
