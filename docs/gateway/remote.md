@@ -132,6 +132,13 @@ The macOS menu bar app can drive the same setup end-to-end (remote status checks
 
 Runbook: [macOS remote access](/platforms/mac/remote).
 
+## Third-party tunnel tools
+
+When SSH and Tailscale are not available, third-party tunnel tools can expose the
+Gateway through an outbound connection to a public relay.
+
+See **[Tunnel Tools](/gateway/tunnel-tools)** for a comparison of options (tunelo,
+bore, ngrok, Cloudflare Tunnel, frp) with setup examples and security guidance.
 ## Security rules (remote/VPN)
 
 Short version: **keep the Gateway loopback-only** unless you’re sure you need a bind.
