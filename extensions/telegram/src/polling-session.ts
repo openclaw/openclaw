@@ -251,7 +251,7 @@ export class TelegramPollingSession {
       }
     }, POLL_WATCHDOG_INTERVAL_MS);
 
-    this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
+    this.opts.abortSignal?.addEventListener("abort", stopOnAbort);
     try {
       await Promise.race([runner.task(), forceCyclePromise]);
       if (this.opts.abortSignal?.aborted) {
