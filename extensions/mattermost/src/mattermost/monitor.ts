@@ -1443,6 +1443,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     let lastSentText = "";
     let patchInterval: ReturnType<typeof setInterval> | null = null;
     let patchSending = false; // prevents concurrent network calls
+    // Latches true after the first send/edit failure to prevent the interval
+    // from being re-armed by a later onPartialReply call (ID=2964357928).
+    let previewSendFailed = false;
     const STREAM_PATCH_INTERVAL_MS = 200;
 
     // Edit-in-place streaming is opt-in: only activate when blockStreaming is
@@ -1509,6 +1512,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const schedulePatch = (fullText: string) => {
       if (!blockStreamingClient) return;
+      // Do not re-arm if a permanent send/edit failure has been latched.
+      if (previewSendFailed) return;
       pendingPatchText = fullText;
       if (patchInterval) return;
       patchInterval = setInterval(() => {
@@ -1533,9 +1538,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 runtime.log?.(`stream-patch started ${streamMessageId}`);
               } catch (err) {
                 logVerboseMessage(`mattermost stream-patch send failed: ${String(err)}`);
-                // Stop retrying on initial-send failure (e.g. missing post permission,
-                // DM-channel creation failure). Without this the interval keeps firing
-                // every 200 ms and flooding the API/logs for the rest of the response.
+                // Latch the failure so schedulePatch() does not re-arm the interval
+                // on subsequent onPartialReply calls (which would retry indefinitely).
+                previewSendFailed = true;
                 stopPatchInterval();
               }
             } else {
@@ -1548,9 +1553,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 runtime.log?.(`stream-patch edited ${streamMessageId}`);
               } catch (err) {
                 logVerboseMessage(`mattermost stream-patch edit failed: ${String(err)}`);
-                // Stop retrying on patch failure — the post may not be editable
-                // (missing edit_post permission, deleted, etc.). The preview stays
-                // frozen; final delivery will patch or replace it via deliver().
+                // Latch the failure so schedulePatch() does not re-arm the interval
+                // on subsequent onPartialReply calls.
+                previewSendFailed = true;
                 stopPatchInterval();
               }
             }
@@ -1743,7 +1748,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         // (patchSending=true, streamMessageId=null): stopPatchInterval() prevents new
         // ticks, and the async cleanup waits for patchSending to clear so it can capture
         // the messageId that the in-flight send will set.
-        if ((streamMessageId || patchSending) && blockStreamingClient) {
+        if ((streamMessageId || patchSending || patchInterval) && blockStreamingClient) {
           stopPatchInterval();
           pendingPatchText = "";
           lastSentText = "";
