@@ -40,7 +40,9 @@ static gboolean is_gateway_unit(const gchar *filename, const gchar *contents) {
     gboolean is_gateway = FALSE;
     if (strstr(contents, "OPENCLAW_SERVICE_KIND=gateway")) {
         is_gateway = TRUE;
-    } else if (filename && g_str_has_prefix(filename, "openclaw-gateway")) {
+    } else if (filename && (g_str_has_prefix(filename, "openclaw-gateway") ||
+                            g_str_has_prefix(filename, "clawdbot-gateway") ||
+                            g_str_has_prefix(filename, "moltbot-gateway"))) {
         // Fallback for older units or manual installs missing the KIND marker
         is_gateway = TRUE;
     }
@@ -77,6 +79,42 @@ static gboolean check_system_scope_units(void) {
 
 static gint sort_marked_units(gconstpointer a, gconstpointer b) {
     return g_strcmp0(*(const gchar **)a, *(const gchar **)b);
+}
+
+static void get_unit_preference_score(const gchar *unit_name, gboolean *is_active, gboolean *is_enabled) {
+    *is_active = FALSE;
+    *is_enabled = FALSE;
+    if (!manager_proxy) return;
+    
+    // Check UnitFileState (enabled/disabled)
+    g_autoptr(GError) err1 = NULL;
+    g_autoptr(GVariant) fs_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnitFileState", 
+                                                        g_variant_new("(s)", unit_name), 
+                                                        G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err1);
+    if (fs_res) {
+        const gchar *state_str = NULL;
+        g_variant_get(fs_res, "(&s)", &state_str);
+        if (g_strcmp0(state_str, "enabled") == 0) *is_enabled = TRUE;
+    }
+    
+    // Check ActiveState by getting unit path, then property
+    g_autoptr(GError) err2 = NULL;
+    g_autoptr(GVariant) u_res = g_dbus_proxy_call_sync(manager_proxy, "GetUnit",
+                                                       g_variant_new("(s)", unit_name),
+                                                       G_DBUS_CALL_FLAGS_NONE, -1, NULL, &err2);
+    if (u_res) {
+        const gchar *path = NULL;
+        g_variant_get(u_res, "(&o)", &path);
+        if (path) {
+            g_autoptr(GDBusProxy) uproxy = g_dbus_proxy_new_sync(g_dbus_proxy_get_connection(manager_proxy), G_DBUS_PROXY_FLAGS_NONE, NULL, "org.freedesktop.systemd1", path, "org.freedesktop.systemd1.Unit", NULL, NULL);
+            if (uproxy) {
+                g_autoptr(GVariant) as_var = g_dbus_proxy_get_cached_property(uproxy, "ActiveState");
+                if (as_var) {
+                    if (g_strcmp0(g_variant_get_string(as_var, NULL), "active") == 0) *is_active = TRUE;
+                }
+            }
+        }
+    }
 }
 
 static const gchar* discover_canonical_unit_name(void) {
@@ -119,47 +157,43 @@ static const gchar* discover_canonical_unit_name(void) {
         /*
          * v1 multi-unit selection rule:
          *
-         * 1. Check for a durable explicit selector at ~/.openclaw/systemd-unit.
-         *    When present, this file contains the unit filename written by the
-         *    install flow or manually by the user to resolve multi-profile
-         *    ambiguity (e.g. "openclaw-gateway-work.service").
-         * 2. If the selector resolves to one of the discovered marked units,
-         *    use it without warning.
-         * 3. Otherwise sort the marked units lexically and deterministically
-         *    select the first one.  Log a warning so the user knows ambiguity
-         *    remains unresolved by durable configuration.
+         * 1. Prefer a candidate that is active.
+         * 2. Otherwise, prefer a candidate that is enabled.
+         * 3. Otherwise, deterministically select the first lexical candidate.
          */
-        gchar *selector_unit = NULL;
-        g_autofree gchar *selector_path = g_build_filename(
-            home_dir, ".openclaw", "systemd-unit", NULL);
-        gchar *selector_contents = NULL;
-        if (g_file_get_contents(selector_path, &selector_contents, NULL, NULL)) {
-            g_strstrip(selector_contents);
-            for (guint i = 0; i < marked_units->len; i++) {
-                if (g_strcmp0(selector_contents,
-                              (const gchar *)g_ptr_array_index(marked_units, i)) == 0) {
-                    selector_unit = g_strdup(selector_contents);
-                    break;
-                }
+        const gchar *best_candidate = NULL;
+        gboolean best_is_active = FALSE;
+        gboolean best_is_enabled = FALSE;
+        
+        // Sort lexically first so tie-breaking is deterministic
+        g_ptr_array_sort(marked_units, sort_marked_units);
+        
+        for (guint i = 0; i < marked_units->len; i++) {
+            const gchar *candidate = g_ptr_array_index(marked_units, i);
+            gboolean active = FALSE, enabled = FALSE;
+            get_unit_preference_score(candidate, &active, &enabled);
+            
+            if (!best_candidate) {
+                best_candidate = candidate;
+                best_is_active = active;
+                best_is_enabled = enabled;
+            } else if (active && !best_is_active) {
+                best_candidate = candidate;
+                best_is_active = active;
+                best_is_enabled = enabled;
+            } else if (!best_is_active && enabled && !best_is_enabled) {
+                best_candidate = candidate;
+                best_is_active = active;
+                best_is_enabled = enabled;
             }
-            if (!selector_unit) {
-                g_warning("Durable unit selector '%s' does not match any "
-                          "discovered marked unit; ignoring", selector_contents);
-            }
-            g_free(selector_contents);
         }
-
-        if (selector_unit) {
-            cached_unit_name = selector_unit;
-        } else {
-            g_ptr_array_sort(marked_units, sort_marked_units);
-            const gchar *selected = g_ptr_array_index(marked_units, 0);
-            g_warning("Multiple OpenClaw systemd units found but no durable "
-                      "selector at '%s'. Deterministically selecting '%s'. "
-                      "To pin a unit, write its filename to that path.",
-                      selector_path, selected);
-            cached_unit_name = g_strdup(selected);
+        
+        if (!best_is_active && !best_is_enabled) {
+            g_warning("Multiple OpenClaw systemd units found but none are active or enabled. "
+                      "Deterministically selecting '%s' via lexical fallback.", best_candidate);
         }
+        
+        cached_unit_name = g_strdup(best_candidate);
     } else {
         cached_unit_name = g_strdup("openclaw-gateway.service");
     }
