@@ -1308,15 +1308,23 @@ async function agentCommandInternal(
         usage,
         cost: resolveModelCostConfig({ provider: providerUsed, model: modelUsed, config: cfg }),
       });
-      const lastCallTotal =
+      // Issue B fix: compute lastCallPromptTokens from input+cacheRead+cacheWrite (context-size
+      // metric), not input+output. Counting output tokens overstates context and drops cache
+      // tokens for providers that omit `total` but supply `cacheRead`/`cacheWrite`.
+      const lastCallPromptTokens =
         lastCallUsage?.total ??
-        (lastCallUsage ? (lastCallUsage.input ?? 0) + (lastCallUsage.output ?? 0) : undefined);
-      const contextUsed = lastCallTotal ?? promptTokensSnapshot ?? totalTokens;
-      emitDiagnosticEvent({
-        type: "model.usage",
+        (lastCallUsage
+          ? (lastCallUsage.input ?? 0) +
+            (lastCallUsage.cacheRead ?? 0) +
+            (lastCallUsage.cacheWrite ?? 0)
+          : undefined);
+      // Issue A fix: prefer promptTokensSnapshot (populated from attemptUsage before tool loops
+      // accumulate) over totalTokens which overstates context for background runs.
+      const contextUsed = lastCallPromptTokens ?? promptTokensSnapshot ?? promptTokens;
+      const diagnosticPayload = {
+        type: "model.usage" as const,
         sessionKey: sessionKey ?? sessionId,
         sessionId,
-        channel: messageChannel ?? sessionEntry?.lastChannel ?? sessionEntry?.channel,
         provider: providerUsed,
         model: modelUsed,
         usage: {
@@ -1334,7 +1342,29 @@ async function agentCommandInternal(
         },
         costUsd,
         durationMs: Date.now() - startedAt,
+      };
+
+      const payloads = result.payloads ?? [];
+      // Issue C fix: emit after delivery resolves so the channel field reflects the concrete
+      // channel selected by resolveMessageChannelSelection() in the --deliver path, preventing
+      // OTEL attribution to openclaw.channel=unknown.
+      const deliveryResult = await deliverAgentCommandResult({
+        cfg,
+        deps,
+        runtime,
+        opts,
+        outboundSession,
+        sessionEntry,
+        result,
+        payloads,
       });
+      const resolvedChannel =
+        deliveryResult.resolvedChannel ??
+        messageChannel ??
+        sessionEntry?.lastChannel ??
+        sessionEntry?.channel;
+      emitDiagnosticEvent({ ...diagnosticPayload, channel: resolvedChannel });
+      return deliveryResult;
     }
 
     const payloads = result.payloads ?? [];

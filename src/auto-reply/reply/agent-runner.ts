@@ -486,13 +486,36 @@ export async function runReplyAgent(params: {
       cliSessionId,
     });
 
-    if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
-      const input = usage.input ?? 0;
-      const output = usage.output ?? 0;
-      const cacheRead = usage.cacheRead ?? 0;
-      const cacheWrite = usage.cacheWrite ?? 0;
-      const promptTokens = input + cacheRead + cacheWrite;
-      const totalTokens = usage.total ?? promptTokens + output;
+    // Issue D fix: also emit when lastCallUsage or promptTokens snapshot is non-zero — providers
+    // that omit aggregate `usage` but supply a lastCallUsage or promptTokens snapshot must not
+    // be silently dropped from telemetry.
+    const lastCallUsageSnap = runResult.meta?.agentMeta?.lastCallUsage;
+    const hasPromptTokensSnap =
+      typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0;
+    if (
+      isDiagnosticsEnabled(cfg) &&
+      (hasNonzeroUsage(usage) || lastCallUsageSnap != null || hasPromptTokensSnap)
+    ) {
+      const input = usage?.input ?? 0;
+      const output = usage?.output ?? 0;
+      const cacheRead = usage?.cacheRead ?? 0;
+      const cacheWrite = usage?.cacheWrite ?? 0;
+      // Accumulated prompt tokens derived from usage (may overstate after tool loops/compaction).
+      const accumulatedPromptTokens = input + cacheRead + cacheWrite;
+      // Issue E fix: prefer the last-call/promptTokens snapshot for context.used, consistent
+      // with session-usage.ts:100-143. The accumulated totalTokens overstates context size
+      // after tool loops or compaction retries.
+      const lastCallPromptTokens =
+        lastCallUsageSnap?.total ??
+        (lastCallUsageSnap
+          ? (lastCallUsageSnap.input ?? 0) +
+            (lastCallUsageSnap.cacheRead ?? 0) +
+            (lastCallUsageSnap.cacheWrite ?? 0)
+          : undefined);
+      const contextUsed = lastCallPromptTokens ?? promptTokens ?? accumulatedPromptTokens;
+      const totalTokens =
+        usage?.total ??
+        (accumulatedPromptTokens + output > 0 ? accumulatedPromptTokens + output : undefined);
       const costConfig = resolveModelCostConfig({
         provider: providerUsed,
         model: modelUsed,
@@ -511,13 +534,13 @@ export async function runReplyAgent(params: {
           output,
           cacheRead,
           cacheWrite,
-          promptTokens,
+          promptTokens: promptTokens ?? accumulatedPromptTokens,
           total: totalTokens,
         },
-        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+        lastCallUsage: lastCallUsageSnap,
         context: {
           limit: contextTokensUsed,
-          used: totalTokens,
+          used: contextUsed,
         },
         costUsd,
         durationMs: Date.now() - runStartedAt,

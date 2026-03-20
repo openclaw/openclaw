@@ -186,13 +186,13 @@ export async function deliverAgentCommandResult(params: {
       ),
     );
     if (!deliver) {
-      return { payloads: normalizedPayloads, meta: result.meta };
+      return { payloads: normalizedPayloads, meta: result.meta, resolvedChannel: deliveryChannel };
     }
   }
 
   if (!payloads || payloads.length === 0) {
     runtime.log("No reply from agent.");
-    return { payloads: [], meta: result.meta };
+    return { payloads: [], meta: result.meta, resolvedChannel: deliveryChannel };
   }
 
   const deliveryPayloads = normalizeOutboundPayloads(payloads);
@@ -234,5 +234,5 @@ export async function deliverAgentCommandResult(params: {
     }
   }
 
-  return { payloads: normalizedPayloads, meta: result.meta };
+  return { payloads: normalizedPayloads, meta: result.meta, resolvedChannel: deliveryChannel };
 }
