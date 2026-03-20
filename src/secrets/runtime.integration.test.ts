@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
 import {
   clearConfigCache,
@@ -10,6 +10,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
@@ -18,11 +19,57 @@ import {
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
 
+const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
+  resolvePluginWebSearchProvidersMock: vi.fn(() => [createGeminiTestProvider()]),
+}));
+
+vi.mock("../plugins/web-search-providers.js", () => ({
+  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+}));
+
 const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
 const allowInsecureTempSecretFile = process.platform === "win32";
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
+}
+
+function createGeminiTestProvider(): PluginWebSearchProviderEntry {
+  return {
+    pluginId: "google",
+    id: "gemini",
+    label: "gemini",
+    hint: "gemini test provider",
+    envVars: ["GEMINI_API_KEY"],
+    placeholder: "gemini-...",
+    signupUrl: "https://example.com/gemini",
+    autoDetectOrder: 20,
+    credentialPath: "plugins.entries.google.config.webSearch.apiKey",
+    inactiveSecretPaths: ["plugins.entries.google.config.webSearch.apiKey"],
+    getCredentialValue: (searchConfig) => {
+      const providerConfig =
+        searchConfig?.gemini && typeof searchConfig.gemini === "object"
+          ? (searchConfig.gemini as { apiKey?: unknown })
+          : undefined;
+      return providerConfig?.apiKey ?? searchConfig?.apiKey;
+    },
+    setCredentialValue: (searchConfigTarget, value) => {
+      const providerConfig = (searchConfigTarget.gemini ??= {}) as { apiKey?: unknown };
+      providerConfig.apiKey = value;
+    },
+    getConfiguredCredentialValue: (config) =>
+      (config?.plugins?.entries?.google?.config as { webSearch?: { apiKey?: unknown } })?.webSearch
+        ?.apiKey,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
+      const entries = (plugins.entries ??= {});
+      const google = (entries.google ??= {}) as { config?: Record<string, unknown> };
+      const pluginConfig = (google.config ??= {});
+      const webSearch = (pluginConfig.webSearch ??= {}) as { apiKey?: unknown };
+      webSearch.apiKey = value;
+    },
+    createTool: () => null,
+  };
 }
 
 function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
