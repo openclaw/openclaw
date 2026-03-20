@@ -299,7 +299,17 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
                 exec_start = g_strdup(line + 10);
             } else if (g_str_has_prefix(line, "WorkingDirectory=")) {
                 g_free(working_directory);
-                working_directory = g_strdup(line + 17);
+                gchar *wd_raw = g_strstrip(g_strdup(line + 17));
+                gsize len = strlen(wd_raw);
+                // Unquote WorkingDirectory= to respect actual filesystem paths that contain spaces
+                if (len >= 2 && ((wd_raw[0] == '"' && wd_raw[len-1] == '"') || 
+                                 (wd_raw[0] == '\'' && wd_raw[len-1] == '\''))) {
+                    wd_raw[len-1] = '\0';
+                    working_directory = g_strdup(wd_raw + 1);
+                    g_free(wd_raw);
+                } else {
+                    working_directory = wd_raw;
+                }
             } else if (g_str_has_prefix(line, "Environment=")) {
                 gchar *env_val = line + 12;
                 gint argc = 0;

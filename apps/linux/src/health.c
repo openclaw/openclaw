@@ -311,9 +311,10 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
 void health_probe_gateway(void) {
     if (state_get_health()->in_flight) return;
     
-    // Gate periodic probes on an installed supported user service
+    // Gate periodic probes on an installed supported user service.
+    // Stopped services should not keep spawning periodic CLI probes because they are already known offline.
     AppState st = state_get_current();
-    if (st == STATE_NOT_INSTALLED || st == STATE_SYSTEM_UNSUPPORTED) {
+    if (st == STATE_NOT_INSTALLED || st == STATE_SYSTEM_UNSUPPORTED || st == STATE_STOPPED) {
         return;
     }
     
@@ -412,9 +413,10 @@ static void on_deep_probe_finished(GObject *source_object, GAsyncResult *res, gp
 void health_run_deep_probe(void) {
     if (state_get_probe()->in_flight) return;
 
-    // Gate periodic probes on an installed supported user service
+    // Gate periodic probes on an installed supported user service.
+    // Stopped services should not keep spawning periodic CLI probes because they are already known offline.
     AppState st = state_get_current();
-    if (st == STATE_NOT_INSTALLED || st == STATE_SYSTEM_UNSUPPORTED) {
+    if (st == STATE_NOT_INSTALLED || st == STATE_SYSTEM_UNSUPPORTED || st == STATE_STOPPED) {
         return;
     }
 
