@@ -60,7 +60,7 @@ import {
 } from "../../gigachat-auth.js";
 import { createGigachatStreamFn } from "../../gigachat-stream.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
-import { resolveModelAuthMode } from "../../model-auth.js";
+import { getApiKeyForModel, resolveModelAuthMode } from "../../model-auth.js";
 import { resolveToolCallArgumentsEncoding } from "../../model-compat.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
@@ -229,6 +229,40 @@ function createYieldAbortedResponse(model: { api?: string; provider?: string; id
   };
 }
 export { resolveGigachatAuthProfileMetadata } from "../../gigachat-auth.js";
+
+export async function resolveGigachatApiKeyForRun(params: {
+  model: EmbeddedRunAttemptParams["model"];
+  config?: OpenClawConfig;
+  authProfileId?: string;
+  agentDir?: string;
+  authStorage: Pick<EmbeddedRunAttemptParams["authStorage"], "getApiKey">;
+}): Promise<{ apiKey?: string; authProfileId?: string }> {
+  const runtimeApiKey = await params.authStorage.getApiKey(params.model.provider);
+  let resolvedApiKey = runtimeApiKey ?? undefined;
+  let resolvedAuthProfileId = params.authProfileId?.trim() || undefined;
+
+  if (!resolvedApiKey || !resolvedAuthProfileId) {
+    try {
+      const resolvedAuth = await getApiKeyForModel({
+        model: params.model,
+        cfg: params.config,
+        profileId: params.authProfileId,
+        agentDir: params.agentDir,
+      });
+      resolvedApiKey ??= resolvedAuth.apiKey ?? undefined;
+      resolvedAuthProfileId ||= resolvedAuth.profileId?.trim() || undefined;
+    } catch (error) {
+      if (!resolvedApiKey) {
+        throw error;
+      }
+    }
+  }
+
+  return {
+    apiKey: resolvedApiKey,
+    authProfileId: resolvedAuthProfileId,
+  };
+}
 
 // Queue a hidden steering message so pi-agent-core skips any remaining tool calls.
 function queueSessionsYieldInterruptMessage(activeSession: {
@@ -1976,24 +2010,30 @@ export async function runEmbeddedAttempt(
           (typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined) ??
           process.env.GIGACHAT_BASE_URL?.trim() ??
           "https://gigachat.devices.sberbank.ru/api/v1";
+        const resolvedGigachatAuth = await resolveGigachatApiKeyForRun({
+          model: params.model,
+          config: params.config,
+          authProfileId: params.authProfileId,
+          agentDir,
+          authStorage: params.authStorage,
+        });
 
         // Read GigaChat-specific config from auth profile credential metadata.
         const gigachatStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
         const gigachatMeta = resolveGigachatAuthProfileMetadata(
           gigachatStore,
-          params.authProfileId,
+          resolvedGigachatAuth.authProfileId,
           {
-            allowDefaultProfileFallback: Boolean(params.authProfileId?.trim()),
+            allowDefaultProfileFallback: Boolean(resolvedGigachatAuth.authProfileId),
           },
         );
-        const gigachatApiKey = await params.authStorage.getApiKey(params.provider);
 
         const gigachatStreamFn = createGigachatStreamFn({
           baseUrl,
           authMode: resolveGigachatAuthMode({
             metadata: gigachatMeta,
-            apiKey: gigachatApiKey ?? undefined,
-            authProfileId: params.authProfileId,
+            apiKey: resolvedGigachatAuth.apiKey,
+            authProfileId: resolvedGigachatAuth.authProfileId,
           }),
           insecureTls: gigachatMeta?.insecureTls === "true",
           scope: gigachatMeta?.scope,

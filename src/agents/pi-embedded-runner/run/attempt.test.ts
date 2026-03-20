@@ -9,6 +9,7 @@ import {
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
+  resolveGigachatApiKeyForRun,
   resolveGigachatAuthProfileMetadata,
   resolveAttemptFsWorkspaceOnly,
   resolveOllamaCompatNumCtxEnabled,
@@ -249,6 +250,70 @@ describe("resolveGigachatAuthMode", () => {
         authProfileId: "gigachat:default",
       }),
     ).toBe("basic");
+  });
+});
+
+describe("resolveGigachatApiKeyForRun", () => {
+  it("falls back to config-backed GigaChat API keys when authStorage has no key", async () => {
+    const resolved = await resolveGigachatApiKeyForRun({
+      model: {
+        provider: "gigachat",
+        api: "openai-completions",
+        id: "GigaChat-2-Max",
+        input: ["text"],
+      } as never,
+      config: {
+        models: {
+          providers: {
+            gigachat: {
+              baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+              api: "openai-completions",
+              apiKey: "user:password",
+              models: [],
+            },
+          },
+        },
+      },
+      authStorage: {
+        getApiKey: vi.fn(async () => undefined),
+      },
+    });
+
+    expect(resolved).toEqual({
+      apiKey: "user:password",
+      authProfileId: undefined,
+    });
+  });
+
+  it("keeps runtime authStorage keys over config-backed GigaChat API keys", async () => {
+    const resolved = await resolveGigachatApiKeyForRun({
+      model: {
+        provider: "gigachat",
+        api: "openai-completions",
+        id: "GigaChat-2-Max",
+        input: ["text"],
+      } as never,
+      config: {
+        models: {
+          providers: {
+            gigachat: {
+              baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+              api: "openai-completions",
+              apiKey: "config-user:config-pass",
+              models: [],
+            },
+          },
+        },
+      },
+      authStorage: {
+        getApiKey: vi.fn(async () => "runtime-key"),
+      },
+    });
+
+    expect(resolved).toEqual({
+      apiKey: "runtime-key",
+      authProfileId: undefined,
+    });
   });
 });
 
