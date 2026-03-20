@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
 type CreateJiti = typeof import("jiti").createJiti;
 
@@ -702,6 +703,7 @@ function resolvePluginRuntimeModule(params: {
 
 afterEach(() => {
   clearPluginLoaderCache();
+  resetDiagnosticEventsForTest();
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -3286,6 +3288,70 @@ module.exports = {
     );
     const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
     expect(record?.status).toBe("loaded");
+  });
+
+  it("supports legacy plugins subscribing to diagnostic events from the root sdk", async () => {
+    useNoBundledPlugins();
+    const seenKey = "__openclawLegacyRootDiagnosticSeen";
+    delete (globalThis as Record<string, unknown>)[seenKey];
+
+    const plugin = writePlugin({
+      id: "legacy-root-diagnostic-listener",
+      filename: "legacy-root-diagnostic-listener.cjs",
+      body: `module.exports = {
+  id: "legacy-root-diagnostic-listener",
+  configSchema: (require("openclaw/plugin-sdk").emptyPluginConfigSchema)(),
+  register() {
+    const { onDiagnosticEvent } = require("openclaw/plugin-sdk");
+    if (typeof onDiagnosticEvent !== "function") {
+      throw new Error("missing onDiagnosticEvent root export");
+    }
+    globalThis.${seenKey} = [];
+    onDiagnosticEvent((event) => {
+      globalThis.${seenKey}.push({
+        type: event.type,
+        sessionKey: event.sessionKey,
+      });
+    });
+  },
+};`,
+    });
+
+    try {
+      const registry = withEnv(
+        { OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins" },
+        () =>
+          loadOpenClawPlugins({
+            cache: false,
+            workspaceDir: plugin.dir,
+            config: {
+              plugins: {
+                load: { paths: [plugin.file] },
+                allow: ["legacy-root-diagnostic-listener"],
+              },
+            },
+          }),
+      );
+      const record = registry.plugins.find(
+        (entry) => entry.id === "legacy-root-diagnostic-listener",
+      );
+      expect(record?.status).toBe("loaded");
+
+      emitDiagnosticEvent({
+        type: "model.usage",
+        sessionKey: "agent:main:test:dm:peer",
+        usage: { total: 1 },
+      });
+
+      expect((globalThis as Record<string, unknown>)[seenKey]).toEqual([
+        {
+          type: "model.usage",
+          sessionKey: "agent:main:test:dm:peer",
+        },
+      ]);
+    } finally {
+      delete (globalThis as Record<string, unknown>)[seenKey];
+    }
   });
 
   it.each([
