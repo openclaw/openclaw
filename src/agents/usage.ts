@@ -24,6 +24,14 @@ export type UsageLike = {
   total_tokens?: number;
   cache_read?: number;
   cache_write?: number;
+  // Nested usage object (e.g., Bailian API via OpenAI-compatible mode)
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    cached_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
 };
 
 export type NormalizedUsage = {
@@ -80,7 +88,18 @@ export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is Normal
   if (!usage) {
     return false;
   }
-  return [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.total].some(
+  // Support nested usage object (e.g., Bailian API via OpenAI-compatible mode)
+  const usageObj = (usage as any).usage ?? usage;
+  return [
+    usage.input,
+    usage.output,
+    usage.cacheRead,
+    usage.cacheWrite,
+    usage.total,
+    usageObj.prompt_tokens,
+    usageObj.completion_tokens,
+    usageObj.total_tokens,
+  ].some(
     (v) => typeof v === "number" && Number.isFinite(v) && v > 0,
   );
 }
@@ -90,11 +109,15 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     return undefined;
   }
 
+  // Support nested usage object (e.g., Bailian API via OpenAI-compatible mode)
+  const usageObj = (raw as any).usage ?? raw;
+
   // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
   // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
   // negative, which is nonsensical.  Clamp to 0.
   const rawInput = asFiniteNumber(
-    raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
+    raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens ??
+    usageObj.prompt_tokens,
   );
   const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
   const output = asFiniteNumber(
@@ -102,19 +125,25 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.outputTokens ??
       raw.output_tokens ??
       raw.completionTokens ??
-      raw.completion_tokens,
+      raw.completion_tokens ??
+      usageObj.completion_tokens,
   );
   const cacheRead = asFiniteNumber(
     raw.cacheRead ??
       raw.cache_read ??
       raw.cache_read_input_tokens ??
       raw.cached_tokens ??
-      raw.prompt_tokens_details?.cached_tokens,
+      raw.prompt_tokens_details?.cached_tokens ??
+      usageObj.cached_tokens,
   );
   const cacheWrite = asFiniteNumber(
-    raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
+    raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens ??
+    usageObj.cache_creation_input_tokens,
   );
-  const total = asFiniteNumber(raw.total ?? raw.totalTokens ?? raw.total_tokens);
+  const total = asFiniteNumber(
+    raw.total ?? raw.totalTokens ?? raw.total_tokens ??
+    usageObj.total_tokens,
+  );
 
   if (
     input === undefined &&
