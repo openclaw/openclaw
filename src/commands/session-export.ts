@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
 import type {
@@ -51,16 +52,24 @@ function extractUserText(msg: UserMessage): string {
     .join("\n");
 }
 
-function extractAssistantText(msg: AssistantMessage): { text: string; toolCalls: string[] } {
+function extractAssistantText(msg: AssistantMessage): {
+  text: string;
+  toolCalls: Array<{ name: string; body: string }>;
+} {
+  // Legacy messages may have string content instead of an array
+  if (typeof msg.content === "string") {
+    return { text: msg.content, toolCalls: [] };
+  }
+
   const textParts: string[] = [];
-  const toolCalls: string[] = [];
+  const toolCalls: Array<{ name: string; body: string }> = [];
 
   for (const block of msg.content) {
     if (block.type === "text") {
       textParts.push(block.text);
     } else if (block.type === "toolCall") {
       const argsStr = JSON.stringify(block.arguments, null, 2);
-      toolCalls.push(`${block.name}(${argsStr})`);
+      toolCalls.push({ name: block.name, body: `${block.name}(${argsStr})` });
     }
     // Skip thinking blocks in export
   }
@@ -81,6 +90,10 @@ function extractToolResultText(msg: ToolResultMessage): string {
     })
     .filter(Boolean)
     .join("\n");
+}
+
+function escapeCodeFence(text: string): string {
+  return text.replace(/```/g, "\\`\\`\\`");
 }
 
 export function sessionEntriesToMarkdown(
@@ -132,10 +145,10 @@ export function sessionEntriesToMarkdown(
       for (const tc of toolCalls) {
         lines.push("");
         lines.push("<details>");
-        lines.push(`<summary>Tool call</summary>`);
+        lines.push(`<summary>Tool call: ${tc.name}</summary>`);
         lines.push("");
         lines.push("```");
-        lines.push(tc);
+        lines.push(escapeCodeFence(tc.body));
         lines.push("```");
         lines.push("");
         lines.push("</details>");
@@ -151,7 +164,7 @@ export function sessionEntriesToMarkdown(
         );
         lines.push("");
         lines.push("```");
-        lines.push(truncated);
+        lines.push(escapeCodeFence(truncated));
         lines.push("```");
         lines.push("");
         lines.push("</details>");
@@ -207,14 +220,14 @@ export async function sessionExportCommand(
 
   if (output) {
     const outputPath = path.resolve(
-      output.startsWith("~") ? output.replace("~", process.env.HOME ?? "") : output,
+      output.startsWith("~") ? output.replace("~", os.homedir()) : output,
     );
     const outputDir = path.dirname(outputPath);
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
     fs.writeFileSync(outputPath, result, "utf-8");
-    console.log(`Exported session "${sessionKey}" to ${outputPath}`);
+    runtime.log(`Exported session "${sessionKey}" to ${outputPath}`);
   } else {
     process.stdout.write(result);
   }

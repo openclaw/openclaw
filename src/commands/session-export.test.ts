@@ -124,7 +124,7 @@ describe("sessionEntriesToMarkdown", () => {
     expect(md).toContain("**Messages:** 2");
   });
 
-  it("collapses tool calls into details blocks", () => {
+  it("collapses tool calls into details blocks with tool name", () => {
     const entries = [
       makeAssistantEntry("Checking...", 1742470260000, [
         { name: "weather.get", arguments: { city: "SF" } },
@@ -132,7 +132,7 @@ describe("sessionEntriesToMarkdown", () => {
     ];
     const md = sessionEntriesToMarkdown(makeHeader(), entries);
     expect(md).toContain("<details>");
-    expect(md).toContain("<summary>Tool call</summary>");
+    expect(md).toContain("<summary>Tool call: weather.get</summary>");
     expect(md).toContain("weather.get");
     expect(md).toContain("</details>");
   });
@@ -151,13 +151,12 @@ describe("sessionEntriesToMarkdown", () => {
     expect(md).toContain("(error)");
   });
 
-  it("truncates long tool results", () => {
+  it("truncates long tool results with ellipsis", () => {
     const longText = "x".repeat(1000);
     const entries = [makeToolResultEntry("read", longText)];
     const md = sessionEntriesToMarkdown(makeHeader(), entries);
     expect(md).toContain("...");
-    // Should not contain the full 1000 chars
-    expect(md.length).toBeLessThan(longText.length);
+    expect(md).not.toContain("x".repeat(501));
   });
 
   it("handles compaction entries", () => {
@@ -185,6 +184,54 @@ describe("sessionEntriesToMarkdown", () => {
   it("handles null header", () => {
     const md = sessionEntriesToMarkdown(null, [makeUserEntry("test")]);
     expect(md).toContain("# Session: unknown");
+  });
+
+  it("handles legacy assistant messages with string content", () => {
+    const entry: SessionMessageEntry = {
+      type: "message",
+      id: "msg-legacy",
+      parentId: null,
+      timestamp: new Date(1742470260000).toISOString(),
+      message: {
+        role: "assistant" as const,
+        content: "This is a legacy string response" as never,
+        api: "anthropic-messages" as const,
+        provider: "anthropic",
+        model: "claude-sonnet-4-5-20250514",
+        usage: {
+          input: 100,
+          output: 50,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 150,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop" as const,
+        timestamp: 1742470260000,
+      },
+    };
+    const md = sessionEntriesToMarkdown(makeHeader(), [entry]);
+    expect(md).toContain("**Assistant**");
+    expect(md).toContain("This is a legacy string response");
+  });
+
+  it("escapes triple backticks in tool result output", () => {
+    const entries = [makeToolResultEntry("bash", "output:\n```\nsome code\n```\nend")];
+    const md = sessionEntriesToMarkdown(makeHeader(), entries);
+    // The inner backticks from the tool output should be escaped
+    expect(md).toContain("\\`\\`\\`");
+    expect(md).not.toContain("output:\n```\n");
+  });
+
+  it("truncates long tool results to 500 characters", () => {
+    const longText = "x".repeat(1000);
+    const entries = [makeToolResultEntry("read", longText)];
+    const md = sessionEntriesToMarkdown(makeHeader(), entries);
+    expect(md).toContain("...");
+    const codeBlockMatch = md.match(/```\n([\s\S]*?)\n```/);
+    expect(codeBlockMatch).toBeTruthy();
+    // 500 chars + "..." = 503
+    expect(codeBlockMatch![1]!.length).toBeLessThanOrEqual(503);
   });
 
   it("handles user message with image content", () => {
