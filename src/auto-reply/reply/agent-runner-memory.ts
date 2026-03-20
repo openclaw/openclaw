@@ -25,6 +25,7 @@ import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
+import { isSilentReplyText, stripSilentToken } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   buildEmbeddedRunExecutionParams,
@@ -518,6 +519,34 @@ export async function runMemoryFlushIfNeeded(params: {
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
         );
+
+        // Filter NO_REPLY tokens from memory flush response payloads before they
+        // can leak to the user. The flush prompt instructs the model to reply with
+        // NO_REPLY when there is nothing to store, but this token must never reach
+        // the end user. (#50437)
+        if (result.payloads) {
+          result.payloads = result.payloads
+            .map((payload) => {
+              if (!payload.text) {
+                return payload;
+              }
+              if (isSilentReplyText(payload.text)) {
+                return { ...payload, text: undefined };
+              }
+              const stripped = stripSilentToken(payload.text);
+              if (stripped !== payload.text) {
+                return { ...payload, text: stripped || undefined };
+              }
+              return payload;
+            })
+            .filter(
+              (payload) =>
+                payload.text ||
+                payload.mediaUrl ||
+                (payload.mediaUrls && payload.mediaUrls.length > 0),
+            );
+        }
+
         return result;
       },
     });
