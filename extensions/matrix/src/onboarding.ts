@@ -8,7 +8,11 @@ import {
   resolveMatrixAccount,
   resolveMatrixAccountConfig,
 } from "./matrix/accounts.js";
-import { resolveMatrixEnvAuthReadiness, validateMatrixHomeserverUrl } from "./matrix/client.js";
+import {
+  resolveMatrixEnvAuthReadiness,
+  resolveValidatedMatrixHomeserverUrl,
+  validateMatrixHomeserverUrl,
+} from "./matrix/client.js";
 import {
   resolveMatrixConfigFieldPath,
   resolveMatrixConfigPath,
@@ -20,6 +24,7 @@ import type { DmPolicy } from "./runtime-api.js";
 import {
   addWildcardAllowFrom,
   formatDocsLink,
+  isPrivateOrLoopbackHost,
   mergeAllowFromEntries,
   moveSingleAccountChannelSectionToDefaultAccount,
   normalizeAccountId,
@@ -115,6 +120,15 @@ async function noteMatrixAuthHelp(prompter: WizardPrompter): Promise<void> {
     ].join("\n"),
     "Matrix setup",
   );
+}
+
+function requiresMatrixPrivateNetworkOptIn(homeserver: string): boolean {
+  try {
+    const parsed = new URL(homeserver);
+    return parsed.protocol === "http:" && !isPrivateOrLoopbackHost(parsed.hostname);
+  } catch {
+    return false;
+  }
 }
 
 async function promptMatrixAllowFrom(params: {
@@ -343,7 +357,9 @@ async function runMatrixConfigure(params: {
       initialValue: existing.homeserver ?? envHomeserver,
       validate: (value) => {
         try {
-          validateMatrixHomeserverUrl(String(value ?? ""));
+          validateMatrixHomeserverUrl(String(value ?? ""), {
+            allowPrivateNetwork: true,
+          });
           return undefined;
         } catch (error) {
           return error instanceof Error ? error.message : "Invalid Matrix homeserver URL";
@@ -351,6 +367,23 @@ async function runMatrixConfigure(params: {
       },
     }),
   ).trim();
+  const requiresAllowPrivateNetwork = requiresMatrixPrivateNetworkOptIn(homeserver);
+  const shouldPromptAllowPrivateNetwork =
+    requiresAllowPrivateNetwork || existing.allowPrivateNetwork === true;
+  const allowPrivateNetwork = shouldPromptAllowPrivateNetwork
+    ? await params.prompter.confirm({
+        message: "Allow private/internal Matrix homeserver traffic for this account?",
+        initialValue: existing.allowPrivateNetwork === true || requiresAllowPrivateNetwork,
+      })
+    : false;
+  if (requiresAllowPrivateNetwork && !allowPrivateNetwork) {
+    throw new Error(
+      "Matrix homeserver requires allowPrivateNetwork for trusted private/internal access",
+    );
+  }
+  await resolveValidatedMatrixHomeserverUrl(homeserver, {
+    allowPrivateNetwork,
+  });
 
   let accessToken = existing.accessToken ?? "";
   let password = typeof existing.password === "string" ? existing.password : "";
@@ -429,6 +462,9 @@ async function runMatrixConfigure(params: {
   next = updateMatrixAccountConfig(next, accountId, {
     enabled: true,
     homeserver,
+    ...(shouldPromptAllowPrivateNetwork
+      ? { allowPrivateNetwork: allowPrivateNetwork ? true : null }
+      : {}),
     userId: userId || null,
     accessToken: accessToken || null,
     password: password || null,

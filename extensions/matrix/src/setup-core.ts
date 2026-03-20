@@ -19,6 +19,7 @@ export function buildMatrixConfigUpdate(
   cfg: CoreConfig,
   input: {
     homeserver?: string;
+    allowPrivateNetwork?: boolean;
     userId?: string;
     accessToken?: string;
     password?: string;
@@ -29,6 +30,7 @@ export function buildMatrixConfigUpdate(
   return updateMatrixAccountConfig(cfg, DEFAULT_ACCOUNT_ID, {
     enabled: true,
     homeserver: input.homeserver,
+    allowPrivateNetwork: input.allowPrivateNetwork,
     userId: input.userId,
     accessToken: input.accessToken,
     password: input.password,
