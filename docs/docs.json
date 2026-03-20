@@ -69,6 +69,14 @@
       "destination": "/plugins/building-plugins"
     },
     {
+      "source": "/plugins/agent-tools",
+      "destination": "/plugins/building-plugins#registering-agent-tools"
+    },
+    {
+      "source": "/tools/capability-cookbook",
+      "destination": "/plugins/architecture"
+    },
+    {
       "source": "/brave-search",
       "destination": "/tools/brave-search"
     },
@@ -1033,10 +1041,8 @@
                   "plugins/community",
                   "plugins/bundles",
                   "plugins/manifest",
-                  "plugins/agent-tools",
                   "plugins/sdk-migration",
-                  "plugins/architecture",
-                  "tools/capability-cookbook"
+                  "plugins/architecture"
                 ]
               },
               {
