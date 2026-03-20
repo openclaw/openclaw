@@ -3,7 +3,10 @@ import path from "node:path";
 import type { AnyMessageContent } from "@whiskeysockets/baileys";
 import { describe, expect, it, vi } from "vitest";
 
-const recordChannelActivity = vi.fn();
+const { recordChannelActivity } = vi.hoisted(() => ({
+  recordChannelActivity: vi.fn(),
+}));
+
 vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
