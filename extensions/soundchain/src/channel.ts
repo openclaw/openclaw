@@ -38,6 +38,7 @@ export interface ResolvedSoundChainAccount {
   configured: boolean;
   apiUrl: string;
   apiToken: string;
+  autoFollow: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,7 @@ function resolveAccount(
   const apiToken = typeof sc.apiToken === "string" ? sc.apiToken : "";
   const accountName =
     typeof sc.accountName === "string" && sc.accountName ? sc.accountName : "SoundChain";
+  const autoFollow = sc.autoFollow === true; // Opt-in, defaults to false
 
   return {
     accountId: accountId ?? DEFAULT_ACCOUNT_ID,
@@ -74,6 +76,7 @@ function resolveAccount(
     configured: !!apiToken,
     apiUrl,
     apiToken,
+    autoFollow,
   };
 }
 
@@ -261,9 +264,11 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
             }
           };
 
-          // Run immediately on startup, then every 5 minutes to catch new users
-          autoFollowAll();
-          followInterval = setInterval(autoFollowAll, 5 * 60 * 1000);
+          // Auto-follow is opt-in (channels.soundchain.autoFollow: true)
+          if (account.autoFollow) {
+            autoFollowAll();
+            followInterval = setInterval(autoFollowAll, 5 * 60 * 1000);
+          }
 
           // Poll for new inbound messages (starts AFTER seed completes)
           interval = setInterval(async () => {

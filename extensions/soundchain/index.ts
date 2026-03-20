@@ -454,7 +454,7 @@ const plugin = {
         return {
         name: "soundchain_platform_docs" as const,
         description: "Fetch SoundChain platform documentation (skill.md) — API endpoints, architecture, and agent gateway capabilities.",
-        inputSchema: Type.Object({}),
+        parameters: Type.Object({}),
         label: "SoundChain Discovery",
         async execute() {
           try {

@@ -16,14 +16,12 @@
  */
 
 import { spawn } from "node:child_process";
-import { writeFileSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { enrichMessageWithUrlContent } from "./content-fetcher.js";
 
 const TIMEOUT_MS = 90_000; // Bumped to 90s — content extraction + Claude response
 const CONTENT_FETCH_TIMEOUT_MS = 15_000;
-const GIPHY_API_KEY = "GlVGYHkr3WSBnllca54iNt0yFbjz7L39"; // Giphy beta key
+const GIPHY_API_KEY = process.env.GIPHY_API_KEY ?? ""; // Optional — enables GIF replies
 
 // Mac Mini node/claude paths (launchd doesn't inherit shell PATH)
 const HOME_DIR = process.env.HOME ?? "/Users/soundchain";
@@ -59,29 +57,31 @@ export async function generateReply(senderName: string, message: string): Promis
     enrichedMessage = message;
   }
 
-  // Step 2: Write enriched message to temp file (handles long transcripts safely)
-  const userMsg = `[DM from ${senderName} on SoundChain Pulse]: ${enrichedMessage}`;
-  const tmpFile = join(
-    tmpdir(),
-    `furl-msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`,
-  );
-
+  // Step 2: Read system prompt from file (in Node.js, not shell)
+  let systemPrompt = "";
   try {
-    writeFileSync(tmpFile, userMsg, "utf-8");
+    systemPrompt = readFileSync(SYSTEM_PROMPT_FILE, "utf-8").trim();
   } catch (err) {
-    console.error(`[FURL responder] Failed to write temp file: ${err}`);
-    // Fallback: use shell-escaped inline message (no content extraction)
-    return generateReplyInline(senderName, message);
+    console.warn(`[FURL responder] Could not read system prompt: ${err}`);
+    systemPrompt = "You are FURL, a music AI assistant on SoundChain.";
   }
 
-  // Step 3: Build shell command — read both system prompt and user message from files
-  const cmd = `${CLAUDE_BIN} --print --dangerously-skip-permissions --model claude-haiku-4-5-20251001 --system-prompt "$(cat ${SYSTEM_PROMPT_FILE})" "$(cat ${tmpFile})"`;
+  // Step 3: Build user message (sanitized — never passed through shell)
+  const userMsg = `[DM from ${senderName} on SoundChain Pulse]: ${enrichedMessage}`;
+
+  // Step 4: Spawn Claude CLI with args array — NO shell, NO injection risk
+  const args = [
+    "--print",
+    "--model", "claude-haiku-4-5-20251001",
+    "--system-prompt", systemPrompt,
+    userMsg,
+  ];
 
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
 
-    const proc = spawn("bash", ["-c", cmd], {
+    const proc = spawn(CLAUDE_BIN, args, {
       env: {
         ...process.env,
         HOME: process.env.HOME ?? "/Users/soundchain",
@@ -106,11 +106,6 @@ export async function generateReply(senderName: string, message: string): Promis
 
     const cleanup = () => {
       clearTimeout(timer);
-      try {
-        unlinkSync(tmpFile);
-      } catch {
-        /* already cleaned */
-      }
     };
 
     proc.on("close", async (code) => {
@@ -143,16 +138,27 @@ export async function generateReply(senderName: string, message: string): Promis
  * Used when temp file write fails.
  */
 function generateReplyInline(senderName: string, message: string): Promise<string> {
-  const safeMessage = message.replace(/'/g, "'\\''");
-  const safeSender = senderName.replace(/'/g, "'\\''");
-  const userMsg = `[DM from ${safeSender} on SoundChain Pulse]: ${safeMessage}`;
-  const cmd = `${CLAUDE_BIN} --print --dangerously-skip-permissions --model claude-haiku-4-5-20251001 --system-prompt "$(cat ${SYSTEM_PROMPT_FILE})" '${userMsg}'`;
+  const userMsg = `[DM from ${senderName} on SoundChain Pulse]: ${message}`;
+
+  let systemPrompt = "";
+  try {
+    systemPrompt = readFileSync(SYSTEM_PROMPT_FILE, "utf-8").trim();
+  } catch {
+    systemPrompt = "You are FURL, a music AI assistant on SoundChain.";
+  }
+
+  const args = [
+    "--print",
+    "--model", "claude-haiku-4-5-20251001",
+    "--system-prompt", systemPrompt,
+    userMsg,
+  ];
 
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
 
-    const proc = spawn("bash", ["-c", cmd], {
+    const proc = spawn(CLAUDE_BIN, args, {
       env: {
         ...process.env,
         HOME: process.env.HOME ?? "/Users/soundchain",

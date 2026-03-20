@@ -60,12 +60,12 @@ export const OLLAMA_MODELS: Record<string, { model: string; role: string; descri
   },
 };
 
-// War Room fleet nodes
+// War Room fleet nodes — configurable via env vars for portability
 export const FLEET_NODES = {
-  mini: { ip: "192.168.1.22", role: "Headless test runner, CI/CD" },
-  grater: { ip: "192.168.1.23", role: "Log streaming, monitoring" },
-  rog: { ip: "192.168.1.29", role: "Windows testing, 16TB storage, GPU compute" },
-} as const;
+  mini: { ip: process.env.FLEET_MINI_IP ?? "192.168.1.22", role: "Headless test runner, CI/CD" },
+  grater: { ip: process.env.FLEET_GRATER_IP ?? "192.168.1.23", role: "Log streaming, monitoring" },
+  rog: { ip: process.env.FLEET_ROG_IP ?? "192.168.1.29", role: "Windows testing, 16TB storage, GPU compute" },
+};
 
 // 7 Specialist subagent domains (from archived Claude agents)
 export const SPECIALISTS = {
