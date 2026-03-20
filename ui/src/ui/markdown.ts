@@ -48,6 +48,7 @@ const allowedAttrs = [
   "data-code",
   "type",
   "aria-label",
+  "hidden",
 ];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
@@ -193,7 +194,7 @@ htmlEscapeRenderer.code = ({
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
+  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done" hidden>Copied!</span></button>`;
   const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
 
   const trimmed = text.trim();
