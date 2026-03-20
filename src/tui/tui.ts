@@ -542,12 +542,20 @@ export async function runTui(opts: TuiOptions) {
   const footer = new Text("", 1, 0);
   const chatLog = new ChatLog();
   const editor = new CustomEditor(tui, editorTheme);
-  const root = new Container();
-  root.addChild(header);
-  root.addChild(chatLog);
-  root.addChild(statusContainer);
-  root.addChild(footer);
-  root.addChild(editor);
+  const root = new (class extends Container {
+    override render(width: number) {
+      const headerLines = header.render(width);
+      const statusLines = statusContainer.render(width);
+      const footerLines = footer.render(width);
+      const editorLines = editor.render(width);
+      const reserved =
+        headerLines.length + statusLines.length + footerLines.length + editorLines.length;
+      const available = Math.max(1, tui.terminal.rows - reserved);
+      chatLog.setViewportHeight(available);
+      const chatLines = chatLog.render(width);
+      return [...headerLines, ...chatLines, ...statusLines, ...footerLines, ...editorLines];
+    }
+  })();
 
   const updateAutocompleteProvider = () => {
     editor.setAutocompleteProvider(
@@ -564,6 +572,14 @@ export async function runTui(opts: TuiOptions) {
 
   tui.addChild(root);
   tui.setFocus(editor);
+  editor.onPageUp = () => {
+    chatLog.scrollPageUp();
+    tui.requestRender();
+  };
+  editor.onPageDown = () => {
+    chatLog.scrollPageDown();
+    tui.requestRender();
+  };
 
   const formatSessionKey = (key: string) => {
     if (key === "global" || key === "unknown") {

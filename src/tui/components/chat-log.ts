@@ -8,6 +8,8 @@ import { UserMessageComponent } from "./user-message.js";
 
 export class ChatLog extends Container {
   private readonly maxComponents: number;
+  private viewportHeight: number | null = null;
+  private scrollOffset = 0;
   private toolById = new Map<string, ToolExecutionComponent>();
   private streamingRuns = new Map<string, AssistantMessageComponent>();
   private btwMessage: BtwInlineMessage | null = null;
@@ -46,8 +48,53 @@ export class ChatLog extends Container {
   }
 
   private append(component: Component) {
+    const wasAtLatest = this.scrollOffset === 0;
     this.addChild(component);
     this.pruneOverflow();
+    if (wasAtLatest) {
+      this.scrollToLatest();
+    }
+  }
+
+  setViewportHeight(height: number | null) {
+    if (height === null || Number.isNaN(height)) {
+      this.viewportHeight = null;
+      this.clampScrollOffset();
+      return;
+    }
+    this.viewportHeight = Math.max(1, Math.floor(height));
+    this.clampScrollOffset();
+  }
+
+  scrollPageUp() {
+    const page = this.viewportHeight ?? 10;
+    this.scrollOffset += page;
+    this.clampScrollOffset();
+  }
+
+  scrollPageDown() {
+    const page = this.viewportHeight ?? 10;
+    this.scrollOffset -= page;
+    this.clampScrollOffset();
+  }
+
+  scrollToLatest() {
+    this.scrollOffset = 0;
+  }
+
+  private getRenderedLineCount(width: number) {
+    return super.render(width).length;
+  }
+
+  private getMaxScrollOffset(width: number) {
+    if (!this.viewportHeight) {
+      return 0;
+    }
+    return Math.max(0, this.getRenderedLineCount(width) - this.viewportHeight);
+  }
+
+  private clampScrollOffset(width = 120) {
+    this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, this.getMaxScrollOffset(width)));
   }
 
   clearAll() {
@@ -185,5 +232,18 @@ export class ChatLog extends Container {
     for (const tool of this.toolById.values()) {
       tool.setExpanded(expanded);
     }
+  }
+
+  override render(width: number) {
+    const lines = super.render(width);
+    if (!this.viewportHeight || lines.length <= this.viewportHeight) {
+      this.scrollOffset = 0;
+      return lines;
+    }
+
+    this.clampScrollOffset(width);
+    const start = Math.max(0, lines.length - this.viewportHeight - this.scrollOffset);
+    const end = start + this.viewportHeight;
+    return lines.slice(start, end);
   }
 }
