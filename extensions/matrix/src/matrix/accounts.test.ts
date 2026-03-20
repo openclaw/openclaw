@@ -3,12 +3,21 @@ import { getMatrixScopedEnvVarNames } from "../env-vars.js";
 import type { CoreConfig } from "../types.js";
 import {
   listMatrixAccountIds,
+  resolveConfiguredMatrixBotUserIds,
   resolveDefaultMatrixAccountId,
   resolveMatrixAccount,
 } from "./accounts.js";
+import type { MatrixStoredCredentials } from "./credentials-read.js";
 
-vi.mock("./credentials.js", () => ({
-  loadMatrixCredentials: () => null,
+const loadMatrixCredentialsMock = vi.hoisted(() =>
+  vi.fn<(env?: NodeJS.ProcessEnv, accountId?: string | null) => MatrixStoredCredentials | null>(
+    () => null,
+  ),
+);
+
+vi.mock("./credentials-read.js", () => ({
+  loadMatrixCredentials: (env?: NodeJS.ProcessEnv, accountId?: string | null) =>
+    loadMatrixCredentialsMock(env, accountId),
   credentialsMatchConfig: () => false,
 }));
 
@@ -28,6 +37,7 @@ describe("resolveMatrixAccount", () => {
   let prevEnv: Record<string, string | undefined> = {};
 
   beforeEach(() => {
+    loadMatrixCredentialsMock.mockReset().mockReturnValue(null);
     prevEnv = {};
     for (const key of envKeys) {
       prevEnv[key] = process.env[key];
@@ -194,5 +204,67 @@ describe("resolveMatrixAccount", () => {
     };
 
     expect(resolveDefaultMatrixAccountId(cfg)).toBe("default");
+  });
+
+  it("collects other configured Matrix account user ids for bot detection", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          userId: "@main:example.org",
+          homeserver: "https://matrix.example.org",
+          accessToken: "main-token",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              userId: "@ops:example.org",
+              accessToken: "ops-token",
+            },
+            alerts: {
+              homeserver: "https://matrix.example.org",
+              userId: "@alerts:example.org",
+              accessToken: "alerts-token",
+            },
+          },
+        },
+      },
+    };
+
+    expect(
+      Array.from(resolveConfiguredMatrixBotUserIds({ cfg, accountId: "ops" })).toSorted(),
+    ).toEqual(["@alerts:example.org", "@main:example.org"]);
+  });
+
+  it("falls back to stored credentials when an access-token-only account omits userId", () => {
+    loadMatrixCredentialsMock.mockImplementation(
+      (env?: NodeJS.ProcessEnv, accountId?: string | null) =>
+        accountId === "ops"
+          ? {
+              homeserver: "https://matrix.example.org",
+              userId: "@ops:example.org",
+              accessToken: "ops-token",
+              createdAt: "2026-03-19T00:00:00.000Z",
+            }
+          : null,
+    );
+
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          userId: "@main:example.org",
+          homeserver: "https://matrix.example.org",
+          accessToken: "main-token",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    };
+
+    expect(Array.from(resolveConfiguredMatrixBotUserIds({ cfg, accountId: "default" }))).toEqual([
+      "@ops:example.org",
+    ]);
   });
 });
