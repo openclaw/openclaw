@@ -59,9 +59,9 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
     envVar: "GIGACHAT_CREDENTIALS",
     runtime: params.runtime,
     agentDir: params.agentDir,
-    // Personal OAuth onboarding must not silently reuse an existing Basic
-    // username:password profile and then rewrite the provider to OAuth config.
-    allowProfile: false,
+    // Allow existing OAuth profiles to be reused, but reject Basic-shaped
+    // credentials below before any OAuth metadata/config rewrite happens.
+    allowProfile: true,
   });
   if (!resolved) {
     return null;

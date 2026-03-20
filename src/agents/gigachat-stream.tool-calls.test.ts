@@ -502,6 +502,57 @@ describe("createGigachatStreamFn tool calling", () => {
     expect(event.content).toEqual([{ type: "text", text: "done" }]);
   });
 
+  it("preserves exact Unicode punctuation in system, user, and assistant history text", async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream(['data: {"choices":[{"delta":{"content":"done"}}]}', "data: [DONE]"]),
+    });
+
+    const systemPrompt = "Keep “curly quotes”, em dashes —, NBSP\u00A0gaps, and ellipses…";
+    const userText = "User asked to preserve “exact” punctuation — including\u00A0spacing…";
+    const assistantText = "Assistant replied with “quoted” text — unchanged\u00A0too…";
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      {
+        systemPrompt,
+        messages: [
+          {
+            role: "user",
+            content: userText,
+          },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: assistantText }],
+          },
+        ],
+        tools: [],
+      } as never,
+      { apiKey: "token" } as never,
+    );
+
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "done" }],
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          messages: [
+            expect.objectContaining({ role: "system", content: systemPrompt }),
+            expect.objectContaining({ role: "user", content: userText }),
+            expect.objectContaining({ role: "assistant", content: assistantText }),
+          ],
+        }),
+      }),
+    );
+  });
+
   it("preserves all historical tool calls from a single assistant turn", async () => {
     request.mockResolvedValueOnce({
       status: 200,

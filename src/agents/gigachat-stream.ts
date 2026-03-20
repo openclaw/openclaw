@@ -293,11 +293,6 @@ function sanitizeContent(content: string | null | undefined): string {
     content
       // eslint-disable-next-line no-control-regex
       .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
-      .replace(/[\u201C\u201D]/g, '"')
-      .replace(/[\u2018\u2019]/g, "'")
-      .replace(/[\u2013\u2014]/g, "-")
-      .replace(/\u00A0/g, " ")
-      .replace(/\u2026/g, "...")
   );
 }
 

@@ -43,14 +43,17 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
     applyLitellmConfig.mockImplementation((cfg: OpenClawConfig) => cfg);
   });
 
-  it("disables profile fallback for GigaChat personal OAuth onboarding", async () => {
+  it("allows stored OAuth profile fallback for GigaChat personal OAuth onboarding", async () => {
     const agentDir = "/tmp/openclaw-agents/work/agent";
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
     const resolveApiKey = vi.fn(async () => ({
       key: "gigachat-oauth-credentials",
-      source: "env" as const,
+      source: "profile" as const,
     }));
     const maybeSetResolvedApiKey = vi.fn(async (resolved, setter) => {
+      if (resolved.source === "profile") {
+        return true;
+      }
       await setter(resolved.key);
       return true;
     });
@@ -73,20 +76,11 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
         flagName: "--gigachat-api-key",
         envVar: "GIGACHAT_CREDENTIALS",
         agentDir,
-        allowProfile: false,
+        allowProfile: true,
       }),
     );
     expect(maybeSetResolvedApiKey).toHaveBeenCalledOnce();
-    expect(setGigachatApiKey).toHaveBeenCalledWith(
-      "gigachat-oauth-credentials",
-      agentDir,
-      undefined,
-      {
-        authMode: "oauth",
-        insecureTls: "false",
-        scope: "GIGACHAT_API_PERS",
-      },
-    );
+    expect(setGigachatApiKey).not.toHaveBeenCalled();
   });
 
   it("accepts the generic --token input for GigaChat non-interactive OAuth", async () => {
@@ -120,7 +114,7 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
         flagName: "--gigachat-api-key",
         envVar: "GIGACHAT_CREDENTIALS",
         agentDir,
-        allowProfile: false,
+        allowProfile: true,
       }),
     );
     expect(setGigachatApiKey).toHaveBeenCalledWith(
@@ -146,6 +140,41 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
     const resolveApiKey = vi.fn(async () => ({
       key: "basic-user:basic-pass",
       source: "env" as const,
+    }));
+    const maybeSetResolvedApiKey = vi.fn();
+
+    const result = await applySimpleNonInteractiveApiKeyChoice({
+      authChoice: "gigachat-api-key",
+      nextConfig,
+      baseConfig: nextConfig,
+      opts: {} as never,
+      runtime,
+      agentDir,
+      apiKeyStorageOptions: undefined,
+      resolveApiKey,
+      maybeSetResolvedApiKey,
+    });
+
+    expect(result).toBeNull();
+    expect(maybeSetResolvedApiKey).not.toHaveBeenCalled();
+    expect(setGigachatApiKey).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Basic user:password credentials"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects Basic-shaped stored profiles in the OAuth onboarding path", async () => {
+    const agentDir = "/tmp/openclaw-agents/work/agent";
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    const runtime: RuntimeEnv = {
+      error: vi.fn(),
+      exit: vi.fn(),
+      log: vi.fn(),
+    };
+    const resolveApiKey = vi.fn(async () => ({
+      key: "basic-user:basic-pass",
+      source: "profile" as const,
     }));
     const maybeSetResolvedApiKey = vi.fn();
 
