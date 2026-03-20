@@ -3,6 +3,15 @@ import {
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
 import {
+  authorizeConfigWrite,
+  canBypassConfigWritePolicy,
+  formatConfigWriteDeniedMessage,
+  resolveChannelConfigWrites,
+  type ConfigWriteAuthorizationResult,
+  type ConfigWriteScope,
+  type ConfigWriteTarget,
+} from "../channels/plugins/config-writes.js";
+import {
   collectAllowlistProviderGroupPolicyWarnings,
   collectAllowlistProviderRestrictSendersWarnings,
   collectOpenGroupPolicyConfiguredRouteWarnings,
@@ -16,6 +25,14 @@ import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
+
+export {
+  authorizeConfigWrite,
+  canBypassConfigWritePolicy,
+  formatConfigWriteDeniedMessage,
+  resolveChannelConfigWrites,
+};
+export type { ConfigWriteAuthorizationResult, ConfigWriteScope, ConfigWriteTarget };
 
 /** Coerce mixed allowlist config values into plain strings without trimming or deduping. */
 export function mapAllowFromEntries(
