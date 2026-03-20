@@ -45,6 +45,9 @@ function isFiniteTimestamp(value: unknown): value is number {
 
 function resolveStuckRunMs(job: CronJob): number {
   const timeoutMs = resolveCronJobTimeoutMs(job);
+  // In practice most job types resolve to a finite execution timeout here.
+  // Preserve the conservative 2-hour fallback only for effectively unlimited
+  // jobs (for example timeoutSeconds <= 0).
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
     return DEFAULT_STUCK_RUN_MS;
   }
