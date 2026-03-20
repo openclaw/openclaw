@@ -84,7 +84,7 @@ describe("scripts/test-parallel memory trace parsing", () => {
   it("parses memory trace summary lines and hotspot deltas", () => {
     const summaries = parseMemoryTraceSummaryLines(
       [
-        "[test-parallel][mem] summary unit-fast files=360 peak=13.22GiB totalDelta=+6.69GiB peakAt=poll top=src/config/schema.help.quality.test.ts:+1.06GiB, src/infra/update-runner.test.ts:+463.6MiB",
+        "2026-03-20T04:32:18.7721466Z [test-parallel][mem] summary unit-fast files=360 peak=13.22GiB totalDelta=6.69GiB peakAt=poll top=src/config/schema.help.quality.test.ts:1.06GiB, src/infra/update-runner.test.ts:+463.6MiB",
       ].join("\n"),
     );
 
@@ -93,12 +93,12 @@ describe("scripts/test-parallel memory trace parsing", () => {
       lane: "unit-fast",
       files: 360,
       peakRssKb: parseMemoryValueKb("13.22GiB"),
-      totalDeltaKb: parseMemoryValueKb("+6.69GiB"),
+      totalDeltaKb: parseMemoryValueKb("6.69GiB"),
       peakAt: "poll",
       top: [
         {
           file: "src/config/schema.help.quality.test.ts",
-          deltaKb: parseMemoryValueKb("+1.06GiB"),
+          deltaKb: parseMemoryValueKb("1.06GiB"),
         },
         {
           file: "src/infra/update-runner.test.ts",
