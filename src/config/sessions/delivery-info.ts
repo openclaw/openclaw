@@ -29,7 +29,9 @@ export function resolveSessionThreadIdForRouting(
   sessionKey: string | undefined,
 ): string | undefined {
   const info = parseSessionThreadInfo(sessionKey);
-  if (info.baseSessionKey?.includes(":dm:") && !sessionKey?.includes(":topic:")) {
+  const isTelegramDmThreadSuffix =
+    info.baseSessionKey?.includes(":telegram:dm:") && sessionKey?.includes(":thread:");
+  if (isTelegramDmThreadSuffix && !sessionKey?.includes(":topic:")) {
     return undefined;
   }
   return info.threadId;

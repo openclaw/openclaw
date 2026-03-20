@@ -128,6 +128,9 @@ describe("extractDeliveryInfo", () => {
     expect(
       resolveSessionThreadIdForRouting("agent:main:telegram:dm:user:thread:abc"),
     ).toBeUndefined();
+    expect(
+      resolveSessionThreadIdForRouting("agent:main:slack:dm:C0123ABC:thread:1234567890.123456"),
+    ).toBe("1234567890.123456");
     expect(resolveSessionThreadIdForRouting("agent:main:telegram:group:1:topic:55")).toBe("55");
     expect(
       resolveSessionThreadIdForRouting("agent:main:mattermost:default:chan-1:thread:post-123"),
