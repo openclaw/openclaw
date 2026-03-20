@@ -413,6 +413,14 @@ export function resolveModelSelectionFromDirective(params: {
   }
 
   const raw = params.directives.rawModelDirective.trim();
+
+  // Reserved subcommand keywords handled by maybeHandleModelDirectiveInfo —
+  // never attempt to resolve them as model identifiers.
+  const MODEL_SUBCOMMANDS = new Set(["list", "status", "show"]);
+  if (MODEL_SUBCOMMANDS.has(raw.toLowerCase())) {
+    return {};
+  }
+
   const storedNumericProfile =
     params.directives.rawModelProfile === undefined
       ? resolveStoredNumericProfileModelDirective({

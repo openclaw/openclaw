@@ -322,6 +322,28 @@ describe("/model chat UX", () => {
     expect(resolved.profileOverride).toBeUndefined();
   });
 
+  it.each(["list", "status", "show"])("does not parse /model %s as a model ID", (subcommand) => {
+    const resolved = resolveModelSelectionForCommand({
+      command: `/model ${subcommand}`,
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-5"]),
+      allowedModelCatalog: [{ provider: "anthropic", id: "claude-opus-4-5" }],
+    });
+
+    expect(resolved.modelSelection).toBeUndefined();
+    expect(resolved.errorText).toBeUndefined();
+  });
+
+  it("does not parse /model LIST (case-insensitive) as a model ID", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model LIST",
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-5"]),
+      allowedModelCatalog: [{ provider: "anthropic", id: "claude-opus-4-5" }],
+    });
+
+    expect(resolved.modelSelection).toBeUndefined();
+    expect(resolved.errorText).toBeUndefined();
+  });
+
   it("persists inferred numeric auth-profile overrides for mixed-content messages", async () => {
     setAuthProfiles({
       "20251001": {
