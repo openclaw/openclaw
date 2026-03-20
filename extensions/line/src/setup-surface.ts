@@ -7,7 +7,7 @@ import {
   splitSetupEntries,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
-} from "../../../src/plugin-sdk/line-core.js";
+} from "../runtime-api.js";
 import {
   isLineConfigured,
   listLineAccountIds,

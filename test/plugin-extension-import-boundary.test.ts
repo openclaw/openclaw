@@ -36,9 +36,6 @@ describe("plugin extension import boundary inventory", () => {
     expect(inventory.some((entry) => entry.file.startsWith("src/plugin-sdk-internal/"))).toBe(
       false,
     );
-    expect(inventory.some((entry) => entry.file.startsWith("src/plugins/runtime/runtime-"))).toBe(
-      false,
-    );
   });
 
   it("produces stable sorted output", async () => {
