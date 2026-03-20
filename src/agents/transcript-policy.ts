@@ -92,11 +92,7 @@ export function resolveTranscriptPolicy(params: {
     isGoogle || isAnthropic || isMistral || shouldSanitizeGeminiThoughtSignaturesForProvider;
 
   const sanitizeToolCallIds =
-    isGoogle ||
-    isMistral ||
-    isAnthropic ||
-    requiresOpenAiCompatibleToolIdSanitization ||
-    !!providerToolCallIdMode;
+    isGoogle || isMistral || isAnthropic || requiresOpenAiCompatibleToolIdSanitization;
   const toolCallIdMode: ToolCallIdMode | undefined = providerToolCallIdMode
     ? providerToolCallIdMode
     : isMistral
