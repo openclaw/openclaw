@@ -1660,6 +1660,26 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             pendingPatchText = "";
             lastSentText = "";
             patchSending = false;
+            // If the payload also has media attachments, deliver them now via the
+            // normal path. The patch only updates text; deliverMattermostReplyPayload
+            // is the only code that actually uploads/sends media (ID=2965023940).
+            if (payload.mediaUrls?.length || payload.mediaUrl) {
+              await deliverMattermostReplyPayload({
+                core,
+                cfg,
+                payload: { ...payload, text: undefined },
+                to,
+                accountId: account.accountId,
+                agentId: route.agentId,
+                replyToId: resolveMattermostReplyRootId({
+                  threadRootId: effectiveReplyToId,
+                  replyToId: payload.replyToId,
+                }),
+                textLimit,
+                tableMode,
+                sendMessage: sendMessageMattermost,
+              });
+            }
             return;
           }
 
