@@ -350,6 +350,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         }))
       : undefined;
 
+  // Discord thread ID is the root message ID (first message in the thread).
+  // This is used by other systems (e.g., Feishu) for thread reconstruction.
+  const rootMessageId = threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined;
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: baseText ?? text,
@@ -379,8 +383,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ReplyToId: replyContext?.id,
     ReplyToBody: replyContext?.body,
     ReplyToSender: replyContext?.sender,
+    RootMessageId: rootMessageId,
     ParentSessionKey: autoThreadContext?.ParentSessionKey ?? threadKeys.parentSessionKey,
-    MessageThreadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
+    MessageThreadId: rootMessageId,
+    ThreadParentId: threadParentId,
     ThreadStarterBody: threadStarterBody,
     ThreadLabel: threadLabel,
     Timestamp: resolveTimestampMs(message.timestamp),
