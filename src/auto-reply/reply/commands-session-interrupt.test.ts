@@ -97,6 +97,12 @@ describe("handleInterruptCommand", () => {
     expect(result).toBeNull();
   });
 
+  it("returns null for commands that merely start with /interrupt but are different words", async () => {
+    // e.g. /interruption should NOT be treated as /interrupt
+    const result = await handleInterruptCommand(buildParams("/interruption do stuff"), true);
+    expect(result).toBeNull();
+  });
+
   it("returns null when text commands are not allowed", async () => {
     const result = await handleInterruptCommand(buildParams("/interrupt hello"), false);
     expect(result).toBeNull();
@@ -142,12 +148,15 @@ describe("handleInterruptCommand", () => {
     expect(abortMock.abortEmbeddedPiRun).toHaveBeenCalledWith(sessionId);
     // Should have cleared queues.
     expect(clearQueuesMock.clearSessionQueues).toHaveBeenCalled();
-    // Should have re-queued the new message via the gateway.
+    // Should have stopped any subagents before re-queuing.
+    expect(abortUtilsMock.stopSubagentsForRequester).toHaveBeenCalled();
+    // Should have re-queued the new message via the gateway with an idempotency key.
     expect(callGatewayMock.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "agent",
         params: expect.objectContaining({
           message: expect.stringContaining("focus on the billing module"),
+          idempotencyKey: expect.any(String),
         }),
       }),
     );

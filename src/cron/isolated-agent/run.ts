@@ -942,6 +942,7 @@ export async function runCronIsolatedAgentTurn(params: {
       void saveThreadContext({
         channel: resolvedDelivery.channel,
         accountId: resolvedDelivery.accountId,
+        chatId: resolvedDelivery.to,
         threadId: resolvedDelivery.threadId,
         sessionKey: agentSessionKey,
         summary: ctxSummary,

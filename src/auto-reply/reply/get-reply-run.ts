@@ -369,9 +369,10 @@ export async function runPreparedReply(
   // (issue #50556). Only loaded for new sessions to avoid repeating stale info.
   const priorThreadContext =
     isNewSession && ctx.MessageThreadId != null
-      ? loadThreadContext({
+      ? await loadThreadContext({
           channel: ctx.OriginatingChannel ?? "",
           accountId: ctx.AccountId,
+          chatId: ctx.OriginatingTo,
           threadId: ctx.MessageThreadId,
         })
       : undefined;

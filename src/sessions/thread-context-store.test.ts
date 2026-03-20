@@ -18,22 +18,22 @@ function tmpDir() {
 }
 
 describe("buildThreadContextKey", () => {
-  it("builds a canonical key from channel/account/threadId", () => {
-    expect(buildThreadContextKey({ channel: "Slack", accountId: "T123", threadId: 42 })).toBe(
-      "slack:t123:42",
-    );
+  it("builds a canonical key from channel/account/chat/threadId", () => {
+    expect(
+      buildThreadContextKey({ channel: "Slack", accountId: "T123", chatId: "C99", threadId: 42 }),
+    ).toBe("slack:t123:c99:42");
   });
 
-  it("uses 'default' when accountId is missing", () => {
+  it("uses 'default' when accountId and chatId are missing", () => {
     expect(buildThreadContextKey({ channel: "telegram", threadId: "123" })).toBe(
-      "telegram:default:123",
+      "telegram:default:default:123",
     );
   });
 
   it("normalizes channel to lowercase", () => {
-    expect(buildThreadContextKey({ channel: "DISCORD", accountId: "A1", threadId: "t1" })).toBe(
-      "discord:a1:t1",
-    );
+    expect(
+      buildThreadContextKey({ channel: "DISCORD", accountId: "A1", chatId: "G1", threadId: "t1" }),
+    ).toBe("discord:a1:g1:t1");
   });
 });
 
@@ -61,6 +61,7 @@ describe("saveThreadContext / loadThreadContext (round-trip)", () => {
       {
         channel: "slack",
         accountId: "W1",
+        chatId: "C1",
         threadId: "ts-1234",
         sessionKey: "agent:main:main",
         summary: "Deployed the hotfix to production.",
@@ -69,8 +70,8 @@ describe("saveThreadContext / loadThreadContext (round-trip)", () => {
       stateDir,
     );
 
-    const entry = loadThreadContext(
-      { channel: "slack", accountId: "W1", threadId: "ts-1234" },
+    const entry = await loadThreadContext(
+      { channel: "slack", accountId: "W1", chatId: "C1", threadId: "ts-1234" },
       stateDir,
     );
     expect(entry).toBeDefined();
@@ -79,9 +80,30 @@ describe("saveThreadContext / loadThreadContext (round-trip)", () => {
     expect(entry?.sessionKey).toBe("agent:main:main");
   });
 
-  it("returns undefined for an unknown thread", () => {
-    const entry = loadThreadContext(
+  it("returns undefined for an unknown thread", async () => {
+    const entry = await loadThreadContext(
       { channel: "slack", accountId: "W1", threadId: "unknown" },
+      stateDir,
+    );
+    expect(entry).toBeUndefined();
+  });
+
+  it("does not load context when chatId differs (cross-chat isolation)", async () => {
+    await saveThreadContext(
+      {
+        channel: "telegram",
+        accountId: "bot1",
+        chatId: "chat-A",
+        threadId: 42,
+        sessionKey: "sk",
+        summary: "Chat A result",
+        task: "task-A",
+      },
+      stateDir,
+    );
+    // Same threadId but different chatId — must not return Chat A's context.
+    const entry = await loadThreadContext(
+      { channel: "telegram", accountId: "bot1", chatId: "chat-B", threadId: 42 },
       stateDir,
     );
     expect(entry).toBeUndefined();
@@ -91,6 +113,7 @@ describe("saveThreadContext / loadThreadContext (round-trip)", () => {
     await saveThreadContext(
       {
         channel: "telegram",
+        chatId: "chat-1",
         threadId: 99,
         sessionKey: "session-1",
         summary: "First run",
@@ -101,6 +124,7 @@ describe("saveThreadContext / loadThreadContext (round-trip)", () => {
     await saveThreadContext(
       {
         channel: "telegram",
+        chatId: "chat-1",
         threadId: 99,
         sessionKey: "session-2",
         summary: "Second run",
@@ -108,7 +132,10 @@ describe("saveThreadContext / loadThreadContext (round-trip)", () => {
       },
       stateDir,
     );
-    const entry = loadThreadContext({ channel: "telegram", threadId: 99 }, stateDir);
+    const entry = await loadThreadContext(
+      { channel: "telegram", chatId: "chat-1", threadId: 99 },
+      stateDir,
+    );
     expect(entry?.summary).toBe("Second run");
     expect(entry?.sessionKey).toBe("session-2");
   });
@@ -126,7 +153,7 @@ describe("saveThreadContext / loadThreadContext (round-trip)", () => {
       },
       stateDir,
     );
-    const entry = loadThreadContext({ channel: "discord", threadId: "ch-1" }, stateDir);
+    const entry = await loadThreadContext({ channel: "discord", threadId: "ch-1" }, stateDir);
     expect(entry?.summary.length).toBeLessThanOrEqual(1_000);
     expect(entry?.task.length).toBeLessThanOrEqual(500);
   });
@@ -156,7 +183,7 @@ describe("saveThreadContext / loadThreadContext (round-trip)", () => {
     store[key].savedAt = Date.now() - THREAD_CONTEXT_TTL_MS - 1_000;
     fs.writeFileSync(storePath, JSON.stringify(store, null, 2));
 
-    const entry = loadThreadContext(
+    const entry = await loadThreadContext(
       { channel: "slack", accountId: "W2", threadId: "old-thread" },
       stateDir,
     );
@@ -167,7 +194,7 @@ describe("saveThreadContext / loadThreadContext (round-trip)", () => {
 describe("formatThreadContextNote", () => {
   it("formats a note with task and summary", () => {
     const entry: ThreadContextEntry = {
-      threadKey: "slack:default:ts-1",
+      threadKey: "slack:default:default:ts-1",
       sessionKey: "agent:main:main",
       summary: "All tests passed.",
       task: "Run the CI suite",
@@ -181,7 +208,7 @@ describe("formatThreadContextNote", () => {
 
   it("omits empty fields gracefully", () => {
     const entry: ThreadContextEntry = {
-      threadKey: "slack:default:ts-2",
+      threadKey: "slack:default:default:ts-2",
       sessionKey: "sk",
       summary: "",
       task: "",

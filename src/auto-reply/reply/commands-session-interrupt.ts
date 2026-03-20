@@ -1,8 +1,10 @@
+import crypto from "node:crypto";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
+import { logWarn } from "../../logger.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { resolveSessionEntryForKey } from "./abort.js";
+import { resolveSessionEntryForKey, stopSubagentsForRequester } from "./abort.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
@@ -16,7 +18,7 @@ export const handleInterruptCommand: CommandHandler = async (params, allowTextCo
     return null;
   }
   const normalized = params.command.commandBodyNormalized;
-  if (!normalized.startsWith("/interrupt")) {
+  if (normalized !== "/interrupt" && !normalized.startsWith("/interrupt ")) {
     return null;
   }
 
@@ -55,10 +57,11 @@ export const handleInterruptCommand: CommandHandler = async (params, allowTextCo
   const targetKey = key ?? params.sessionKey;
   const sessionId = entry?.sessionId;
 
-  // Abort the current run.
+  // Abort the current run and stop any spawned subagents.
   if (sessionId) {
     abortEmbeddedPiRun(sessionId);
   }
+  stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: targetKey });
 
   const cleared = clearSessionQueues([targetKey, sessionId]);
   if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
@@ -84,13 +87,20 @@ export const handleInterruptCommand: CommandHandler = async (params, allowTextCo
         channel,
         to,
         timeout: 0,
+        idempotencyKey: crypto.randomUUID(),
       },
       timeoutMs: 10_000,
     });
   } catch (err) {
-    logVerbose(
+    logWarn(
       `interrupt: failed to re-queue message: ${err instanceof Error ? err.message : String(err)}`,
     );
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ Failed to redirect agent — the run was aborted but the new instruction could not be queued. Please try again.",
+      },
+    };
   }
 
   return {

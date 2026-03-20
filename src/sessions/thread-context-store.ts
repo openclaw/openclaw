@@ -7,7 +7,7 @@
  * injected into the session prompt so the agent knows what task triggered the
  * thread and what the previous run produced.
  */
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
@@ -47,9 +47,9 @@ export function resolveThreadContextStorePath(stateDir: string = resolveStateDir
 // Read / write
 // ---------------------------------------------------------------------------
 
-function loadThreadContextStore(storePath: string): ThreadContextStore {
+async function loadThreadContextStore(storePath: string): Promise<ThreadContextStore> {
   try {
-    const raw = fs.readFileSync(storePath, "utf8");
+    const raw = await fs.readFile(storePath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as ThreadContextStore;
@@ -78,16 +78,23 @@ function pruneThreadContextStore(store: ThreadContextStore, nowMs: number): Thre
 // ---------------------------------------------------------------------------
 
 /**
- * Build the canonical thread key for a given channel / account / thread tuple.
+ * Build the canonical thread key for a given channel / account / chat / thread tuple.
+ *
+ * `threadId` alone is not globally unique — for providers like Telegram it is
+ * a topic ID scoped to a specific chat, so two chats on the same account can
+ * share the same topic ID. Including `chatId` (the conversation/group ID)
+ * makes the key unambiguous.
  */
 export function buildThreadContextKey(params: {
   channel: string;
   accountId?: string | null;
+  chatId?: string | null;
   threadId: string | number;
 }): string {
   const channel = params.channel.trim().toLowerCase() || "unknown";
   const accountId = (params.accountId ?? "default").trim().toLowerCase() || "default";
-  return `${channel}:${accountId}:${String(params.threadId)}`;
+  const chatId = (params.chatId ?? "default").trim().toLowerCase() || "default";
+  return `${channel}:${accountId}:${chatId}:${String(params.threadId)}`;
 }
 
 /**
@@ -98,6 +105,7 @@ export async function saveThreadContext(
   params: {
     channel: string;
     accountId?: string | null;
+    chatId?: string | null;
     threadId: string | number;
     sessionKey: string;
     summary: string;
@@ -110,6 +118,7 @@ export async function saveThreadContext(
   const threadKey = buildThreadContextKey({
     channel: params.channel,
     accountId: params.accountId,
+    chatId: params.chatId,
     threadId: params.threadId,
   });
 
@@ -125,7 +134,7 @@ export async function saveThreadContext(
   };
 
   try {
-    const store = loadThreadContextStore(storePath);
+    const store = await loadThreadContextStore(storePath);
     // Add the new entry first, then prune so the new entry is always kept.
     store[threadKey] = entry;
     const pruned = pruneThreadContextStore(store, nowMs);
@@ -142,18 +151,19 @@ export async function saveThreadContext(
  * Load the most recent context entry for a thread. Returns `undefined` when no
  * context exists or when the stored entry is stale.
  */
-export function loadThreadContext(
+export async function loadThreadContext(
   params: {
     channel: string;
     accountId?: string | null;
+    chatId?: string | null;
     threadId: string | number;
   },
   stateDir?: string,
-): ThreadContextEntry | undefined {
+): Promise<ThreadContextEntry | undefined> {
   const storePath = resolveThreadContextStorePath(stateDir);
   const threadKey = buildThreadContextKey(params);
   try {
-    const store = loadThreadContextStore(storePath);
+    const store = await loadThreadContextStore(storePath);
     const entry = store[threadKey];
     if (!entry) {
       return undefined;
