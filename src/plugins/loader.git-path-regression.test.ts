@@ -77,10 +77,9 @@ export const copiedRuntimeMarker = {
       ...__testing.buildPluginLoaderJitiOptions({}),
       tryNative: false,
     });
-    // Jiti's pre-alias failure text varies across Node versions and platforms.
-    // The contract is simply that the source import rejects until the scoped
-    // plugin-sdk alias is applied.
-    await expect(withoutAlias.import(copiedChannelRuntime)).rejects.toThrow();
+    // The production loader uses sync Jiti evaluation, so this regression test
+    // should exercise the same seam instead of Jiti's async import helper.
+    expect(() => withoutAlias(copiedChannelRuntime)).toThrow();
 
     const withAlias = createJiti(jitiBaseUrl, {
       ...__testing.buildPluginLoaderJitiOptions({
@@ -88,7 +87,7 @@ export const copiedRuntimeMarker = {
       }),
       tryNative: false,
     });
-    await expect(withAlias.import(copiedChannelRuntime)).resolves.toMatchObject({
+    expect(withAlias(copiedChannelRuntime)).toMatchObject({
       copiedRuntimeMarker: {
         PAIRING_APPROVED_MESSAGE: "paired",
         resolveOutboundSendDep: expect.any(Function),
