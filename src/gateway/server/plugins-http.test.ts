@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../../plugins/registry.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./plugins-http.js";
@@ -67,6 +69,39 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(handled).toBe(true);
     expect(routeHandler).toHaveBeenCalledTimes(1);
     expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the global active registry when closure registry has no routes", async () => {
+    const closureRegistry = createTestRegistry(); // empty
+    const routeHandler = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+    });
+
+    // Set up a global active registry with a route
+    const activeReg = createEmptyPluginRegistry();
+    activeReg.httpRoutes.push({
+      pluginId: "gchat",
+      path: "/googlechat",
+      handler: routeHandler,
+    });
+    setActivePluginRegistry(activeReg);
+
+    const handler = createGatewayPluginRequestHandler({
+      registry: closureRegistry,
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/googlechat" } as IncomingMessage, res);
+    expect(handled).toBe(true);
+    expect(routeHandler).toHaveBeenCalledTimes(1);
+
+    // Clean up global state — clear routes before swapping so the
+    // route-preservation logic does not carry them forward.
+    activeReg.httpRoutes = [];
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("logs and responds with 500 when a handler throws", async () => {

@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -15,8 +16,20 @@ export function createGatewayPluginRequestHandler(params: {
 }): PluginHttpRequestHandler {
   const { registry, log } = params;
   return async (req, res) => {
-    const routes = registry.httpRoutes ?? [];
-    const handlers = registry.httpHandlers ?? [];
+    // The registry captured in the closure may become stale when
+    // setActivePluginRegistry() is called after startup (e.g. during
+    // config validation, health-monitor cycles, or memory updates).
+    // Fall back to the current global active registry when the closure
+    // registry has no routes.
+    const activeRegistry = getActivePluginRegistry();
+    const effectiveRegistry =
+      activeRegistry &&
+      (activeRegistry.httpRoutes?.length ?? 0) > 0 &&
+      (registry.httpRoutes?.length ?? 0) === 0
+        ? activeRegistry
+        : registry;
+    const routes = effectiveRegistry.httpRoutes ?? [];
+    const handlers = effectiveRegistry.httpHandlers ?? [];
     if (routes.length === 0 && handlers.length === 0) {
       return false;
     }
