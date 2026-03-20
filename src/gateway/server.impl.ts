@@ -103,7 +103,11 @@ import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
-import { loadGatewayPlugins, setFallbackGatewayContext } from "./server-plugins.js";
+import {
+  loadGatewayPlugins,
+  refreshPluginSubagentPolicies,
+  setFallbackGatewayContext,
+} from "./server-plugins.js";
 import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
@@ -1274,6 +1278,10 @@ export async function startGatewayServer(
               activate: true,
             });
             try {
+              // Refresh plugin subagent override policies (model allowlists) so
+              // changes to plugins.entries.<id>.subagent in config take effect
+              // without a full gateway restart.
+              refreshPluginSubagentPolicies(prepared.config);
               await applyHotReload(plan, prepared.config);
             } catch (err) {
               if (previousSnapshot) {

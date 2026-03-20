@@ -46,8 +46,19 @@ const fallbackGatewayContextState = (() => {
 })();
 
 export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
-  // TODO: This startup snapshot can become stale if runtime config/context changes.
+  // The context itself holds live closures (broadcast, cron, etc.) so it does
+  // not go stale as config changes. However, the policy table extracted from
+  // config below DOES need an explicit refresh on hot-reload – call
+  // refreshPluginSubagentPolicies(cfg) from the onHotReload handler.
   fallbackGatewayContextState.context = ctx;
+}
+
+/** Re-read the current config and update the plugin subagent policy table.
+ *  Call this whenever the gateway config is hot-reloaded so that changes to
+ *  `plugins.entries.<id>.subagent` take effect without a full restart.
+ */
+export function refreshPluginSubagentPolicies(cfg: ReturnType<typeof loadConfig>): void {
+  setPluginSubagentOverridePolicies(cfg);
 }
 
 type PluginSubagentOverridePolicy = {
