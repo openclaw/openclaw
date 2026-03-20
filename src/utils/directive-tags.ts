@@ -1,3 +1,5 @@
+import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
+
 export type InlineDirectiveParseResult = {
   text: string;
   audioAsVoice: boolean;
@@ -77,7 +79,8 @@ export function stripInlineDirectiveTagsFromMessageForDisplay(
     if (!isMessageTextPart(record)) {
       return part;
     }
-    return { ...record, text: stripInlineDirectiveTagsForDisplay(record.text).text };
+    const strippedDirectives = stripInlineDirectiveTagsForDisplay(record.text).text;
+    return { ...record, text: stripAssistantInternalScaffolding(strippedDirectives) };
   });
   return { ...message, content: cleaned };
 }

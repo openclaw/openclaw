@@ -28,6 +28,25 @@ describe("stripInlineDirectiveTagsForDisplay", () => {
 });
 
 describe("stripInlineDirectiveTagsFromMessageForDisplay", () => {
+  test("strips assistant internal relevant-memories scaffolding from text blocks", () => {
+    const input = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: [
+            "Visible answer",
+            "<relevant-memories>",
+            "private context",
+            "</relevant-memories>",
+          ].join("\n"),
+        },
+      ],
+    };
+    const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
+    expect(result?.content).toEqual([{ type: "text", text: "Visible answer\n" }]);
+  });
+
   test("strips inline directives from text content blocks", () => {
     const input = {
       role: "assistant",
