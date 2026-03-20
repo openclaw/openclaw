@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { resolveBundledWebSearchPluginIds } from "../bundled-web-search.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import {
-  capabilityContractLoadError,
   imageGenerationProviderContractRegistry,
   mediaUnderstandingProviderContractRegistry,
   pluginRegistrationContractRegistry,
+  providerContractLoadError,
   providerContractPluginIds,
   providerContractRegistry,
   speechProviderContractRegistry,
@@ -87,7 +87,7 @@ function findRegistrationForPlugin(pluginId: string) {
 
 describe("plugin contract registry", () => {
   it("loads bundled non-provider capability registries without import-time failure", () => {
-    expect(capabilityContractLoadError).toBeUndefined();
+    expect(providerContractLoadError).toBeUndefined();
     expect(pluginRegistrationContractRegistry.length).toBeGreaterThan(0);
   });
 
@@ -146,6 +146,7 @@ describe("plugin contract registry", () => {
     expect(findWebSearchIdsForPlugin("google")).toEqual(["gemini"]);
     expect(findWebSearchIdsForPlugin("moonshot")).toEqual(["kimi"]);
     expect(findWebSearchIdsForPlugin("perplexity")).toEqual(["perplexity"]);
+    expect(findWebSearchIdsForPlugin("tavily")).toEqual(["tavily"]);
     expect(findWebSearchIdsForPlugin("xai")).toEqual(["grok"]);
   });
 
@@ -182,6 +183,14 @@ describe("plugin contract registry", () => {
       imageGenerationProviderIds: [],
       webSearchProviderIds: ["firecrawl"],
       toolNames: ["firecrawl_search", "firecrawl_scrape"],
+    });
+    expect(findRegistrationForPlugin("tavily")).toMatchObject({
+      providerIds: [],
+      speechProviderIds: [],
+      mediaUnderstandingProviderIds: [],
+      imageGenerationProviderIds: [],
+      webSearchProviderIds: ["tavily"],
+      toolNames: ["tavily_search", "tavily_extract"],
     });
   });
 

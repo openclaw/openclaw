@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import {
+  resolveBundledPluginWebSearchProviders,
   resolvePluginWebSearchProviders,
   resolveRuntimeWebSearchProviders,
 } from "./web-search-providers.js";
@@ -14,6 +15,7 @@ const BUNDLED_WEB_SEARCH_PROVIDERS = [
   { pluginId: "moonshot", id: "kimi", order: 40 },
   { pluginId: "perplexity", id: "perplexity", order: 50 },
   { pluginId: "firecrawl", id: "firecrawl", order: 60 },
+  { pluginId: "tavily", id: "tavily", order: 70 },
 ] as const;
 
 const { loadOpenClawPluginsMock } = vi.hoisted(() => ({
@@ -95,6 +97,7 @@ describe("resolvePluginWebSearchProviders", () => {
       "moonshot:kimi",
       "perplexity:perplexity",
       "firecrawl:firecrawl",
+      "tavily:tavily",
     ]);
     expect(providers.map((provider) => provider.credentialPath)).toEqual([
       "plugins.entries.brave.config.webSearch.apiKey",
@@ -103,6 +106,7 @@ describe("resolvePluginWebSearchProviders", () => {
       "plugins.entries.moonshot.config.webSearch.apiKey",
       "plugins.entries.perplexity.config.webSearch.apiKey",
       "plugins.entries.firecrawl.config.webSearch.apiKey",
+      "plugins.entries.tavily.config.webSearch.apiKey",
     ]);
     expect(providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig).toEqual(
       expect.any(Function),
@@ -129,6 +133,7 @@ describe("resolvePluginWebSearchProviders", () => {
       "moonshot",
       "perplexity",
       "firecrawl",
+      "tavily",
     ]);
   });
 
@@ -168,6 +173,44 @@ describe("resolvePluginWebSearchProviders", () => {
     });
 
     expect(providers).toEqual([]);
+  });
+
+  it("can resolve bundled providers without the plugin loader", () => {
+    const providers = resolveBundledPluginWebSearchProviders({
+      bundledAllowlistCompat: true,
+    });
+
+    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
+      "brave:brave",
+      "google:gemini",
+      "xai:grok",
+      "moonshot:kimi",
+      "perplexity:perplexity",
+      "firecrawl:firecrawl",
+      "tavily:tavily",
+    ]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("can scope bundled resolution to one plugin id", () => {
+    const providers = resolveBundledPluginWebSearchProviders({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "gemini",
+            },
+          },
+        },
+      },
+      bundledAllowlistCompat: true,
+      onlyPluginIds: ["google"],
+    });
+
+    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
+      "google:gemini",
+    ]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("prefers the active plugin registry for runtime resolution", () => {

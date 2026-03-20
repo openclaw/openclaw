@@ -1,6 +1,7 @@
-import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 // WhatsApp-specific imports from local extension code (moved from src/web/ and src/channels/plugins/)
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
+import type { WebChannelStatus } from "./auto-reply/types.js";
 import {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
@@ -67,26 +68,15 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   pairing: {
     idLabel: "whatsappSenderId",
   },
-  allowlist: {
-    supportsScope: ({ scope }) => scope === "dm" || scope === "group" || scope === "all",
-    readConfig: ({ cfg, accountId }) => {
-      const account = resolveWhatsAppAccount({ cfg, accountId });
-      return {
-        dmAllowFrom: (account.allowFrom ?? []).map(String),
-        groupAllowFrom: (account.groupAllowFrom ?? []).map(String),
-        dmPolicy: account.dmPolicy,
-        groupPolicy: account.groupPolicy,
-      };
-    },
-    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
-      channelId: "whatsapp",
-      normalize: ({ values }) => formatWhatsAppConfigAllowFromEntries(values),
-      resolvePaths: (scope) => ({
-        readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
-        writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
-      }),
-    }),
-  },
+  allowlist: buildDmGroupAccountAllowlistAdapter({
+    channelId: "whatsapp",
+    resolveAccount: ({ cfg, accountId }) => resolveWhatsAppAccount({ cfg, accountId }),
+    normalize: ({ values }) => formatWhatsAppConfigAllowFromEntries(values),
+    resolveDmAllowFrom: (account) => account.allowFrom,
+    resolveGroupAllowFrom: (account) => account.groupAllowFrom,
+    resolveDmPolicy: (account) => account.dmPolicy,
+    resolveGroupPolicy: (account) => account.groupPolicy,
+  }),
   mentions: {
     stripRegexes: ({ ctx }) => resolveWhatsAppMentionStripRegexes(ctx),
   },
@@ -293,7 +283,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         ctx.runtime,
         ctx.abortSignal,
         {
-          statusSink: (next) => ctx.setStatus({ accountId: ctx.accountId, ...next }),
+          statusSink: (next: WebChannelStatus) =>
+            ctx.setStatus({ accountId: ctx.accountId, ...next }),
           accountId: account.accountId,
         },
       );
