@@ -511,7 +511,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           type: "session",
           version: 1,
           id: sessionId,
-          timestamp: new Date().toISOString(),
+          timestamp: Date.now(),
           cwd: process.cwd(),
         }),
         "{not-json",

@@ -76,7 +76,7 @@ async function ensureSessionHeader(params: {
     type: "session",
     version: CURRENT_SESSION_VERSION,
     id: params.sessionId,
-    timestamp: new Date().toISOString(),
+    timestamp: Date.now(),
     cwd: process.cwd(),
   };
   await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
