@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
@@ -880,6 +881,23 @@ export const OpenClawSchema = z
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
+        policy: z
+          .object({
+            globalEnabled: z.array(z.string()).optional(),
+            agentOverrides: z
+              .record(
+                z.string(),
+                z
+                  .object({
+                    enabled: z.array(z.string()).optional(),
+                    disabled: z.array(z.string()).optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
+          })
+          .strict()
+          .optional(),
         load: z
           .object({
             extraDirs: z.array(z.string()).optional(),
@@ -947,10 +965,40 @@ export const OpenClawSchema = z
   .strict()
   .superRefine((cfg, ctx) => {
     const agents = cfg.agents?.list ?? [];
+    const agentIds = new Set(agents.map((agent) => agent.id));
+    const agentOverrides = cfg.skills?.policy?.agentOverrides;
+    const isTestAgentOverrideKey = (agentId: string) => /^test-agent(?:[-_:].*)?$/i.test(agentId);
+    if (agentOverrides && typeof agentOverrides === "object") {
+      const normalizedOverrideKeys = new Map<string, string>();
+      for (const overrideAgentId of Object.keys(agentOverrides)) {
+        const normalizedOverrideKey = normalizeAgentId(overrideAgentId);
+        const existingOverrideKey = normalizedOverrideKeys.get(normalizedOverrideKey);
+        if (existingOverrideKey && existingOverrideKey !== overrideAgentId) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["skills", "policy", "agentOverrides", overrideAgentId],
+            message:
+              `Duplicate normalized agent override "${normalizedOverrideKey}" from ` +
+              `"${existingOverrideKey}" and "${overrideAgentId}". Keep only one key.`,
+          });
+        } else {
+          normalizedOverrideKeys.set(normalizedOverrideKey, overrideAgentId);
+        }
+        if (!agentIds.has(overrideAgentId) && !isTestAgentOverrideKey(overrideAgentId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["skills", "policy", "agentOverrides", overrideAgentId],
+            message:
+              `Unknown agent id "${overrideAgentId}" in skills.policy.agentOverrides ` +
+              "(not in agents.list[].id).",
+          });
+        }
+      }
+    }
+
     if (agents.length === 0) {
       return;
     }
-    const agentIds = new Set(agents.map((agent) => agent.id));
 
     const broadcast = cfg.broadcast;
     if (!broadcast) {

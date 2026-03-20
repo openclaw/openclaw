@@ -626,6 +626,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable filesystem watching for skill-definition changes so updates can be applied without full process restart. Keep enabled in development workflows and disable in immutable production images.",
   "skills.load.watchDebounceMs":
     "Debounce window in milliseconds for coalescing rapid skill file changes before reload logic runs. Increase to reduce reload churn on frequent writes, or lower for faster edit feedback.",
+  "skills.policy":
+    "Runtime skill policy model that defines a global baseline and optional per-agent enable/disable overrides. When present, effective skills resolve as (globalEnabled - agent.disabled) U agent.enabled before run-time filtering.",
+  "skills.policy.globalEnabled":
+    "Global baseline skill names enabled across agents before per-agent overrides are applied. Keep this list explicit to prevent unintended cross-agent skill exposure.",
+  "skills.policy.agentOverrides":
+    "Per-agent override map keyed by agent id, each entry supporting enabled and disabled skill lists. Use this to enforce role-specific skill boundaries on top of the global baseline.",
+  "skills.policy.agentOverrides.*.enabled":
+    "Additional skills enabled only for the target agent, even if absent from globalEnabled. Use sparingly for least-privilege role-specific capability grants.",
+  "skills.policy.agentOverrides.*.disabled":
+    "Skills removed for the target agent from the global baseline. Use this to block globally enabled skills for agents that should not use them.",
   approvals:
     "Approval routing controls for forwarding exec approval requests to chat destinations outside the originating session. Keep this disabled unless operators need explicit out-of-band approval visibility.",
   "approvals.exec":
