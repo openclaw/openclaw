@@ -45,4 +45,37 @@ describe("sandbox explain command", () => {
     expect(parsed.fixIt).toContain("agents.defaults.sandbox.mode=off");
     expect(parsed.fixIt).toContain("tools.sandbox.tools.deny");
   });
+
+  it(
+    "normalizes non-agent-scoped colon keys (e.g. telegram:slash:200)",
+    { timeout: SANDBOX_EXPLAIN_TEST_TIMEOUT_MS },
+    async () => {
+      mockCfg = {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
+          },
+        },
+        tools: {
+          elevated: { enabled: true, allowFrom: { telegram: ["200"] } },
+        },
+        session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      };
+
+      const logs: string[] = [];
+      await sandboxExplainCommand(
+        { json: true, session: "telegram:slash:200" },
+        {
+          log: (msg: string) => logs.push(msg),
+          error: (msg: string) => logs.push(msg),
+          exit: (_code: number) => {},
+        } as unknown as Parameters<typeof sandboxExplainCommand>[1],
+      );
+
+      const out = logs.join("");
+      const parsed = JSON.parse(out);
+      // The session key should have been normalized to agent-scoped format.
+      expect(parsed.sessionKey).toBe("agent:main:telegram:slash:200");
+    },
+  );
 });

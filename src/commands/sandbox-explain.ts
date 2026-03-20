@@ -45,7 +45,16 @@ function normalizeExplainSessionKey(params: {
     });
   }
   if (raw.includes(":")) {
-    return raw;
+    // Keys like "agent:main:telegram:slash:200" are already agent-scoped.
+    // Keys like "telegram:slash:200" contain colons but need wrapping so the
+    // session-store lookup and channel inference use the correct agent-scoped key.
+    if (parseAgentSessionKey(raw)) {
+      return raw;
+    }
+    return buildAgentMainSessionKey({
+      agentId: params.agentId,
+      mainKey: normalizeMainKey(raw),
+    });
   }
   if (raw === "global") {
     return "global";
