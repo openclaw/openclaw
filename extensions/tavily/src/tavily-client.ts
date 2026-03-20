@@ -86,6 +86,7 @@ async function postTavilyJson(params: {
           Accept: "application/json",
           Authorization: `Bearer ${params.apiKey}`,
           "Content-Type": "application/json",
+          "X-Client-Source": "openclaw",
         },
         body: JSON.stringify(params.body),
       },
