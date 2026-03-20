@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 import {
+  GCP_VERTEX_CREDENTIALS_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
@@ -13,6 +14,7 @@ describe("model auth markers", () => {
     expect(isNonSecretApiKeyMarker("qwen-oauth")).toBe(true);
     expect(isNonSecretApiKeyMarker(resolveOAuthApiKeyMarker("chutes"))).toBe(true);
     expect(isNonSecretApiKeyMarker("ollama-local")).toBe(true);
+    expect(isNonSecretApiKeyMarker(GCP_VERTEX_CREDENTIALS_MARKER)).toBe(true);
   });
 
   it("recognizes known env marker names but not arbitrary all-caps keys", () => {
