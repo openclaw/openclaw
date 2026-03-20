@@ -74,15 +74,17 @@ export function resolveMediaToolLocalRoots(
   options?: { workspaceOnly?: boolean; allowedRoots?: string[] },
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
+  const defaultRoots = getDefaultLocalRoots();
   const allowedRoots =
     options?.workspaceOnly === true
       ? (options?.allowedRoots ?? []).map(normalizeMediaAllowedRoot).filter(Boolean)
       : [];
   if (options?.workspaceOnly) {
-    return Array.from(new Set([...(workspaceDir ? [workspaceDir] : []), ...allowedRoots]));
+    return Array.from(
+      new Set([...defaultRoots, ...(workspaceDir ? [workspaceDir] : []), ...allowedRoots]),
+    );
   }
-  const roots = getDefaultLocalRoots();
-  return Array.from(new Set([...roots, ...(workspaceDir ? [workspaceDir] : [])]));
+  return Array.from(new Set([...defaultRoots, ...(workspaceDir ? [workspaceDir] : [])]));
 }
 
 export function resolvePromptAndModelOverride(

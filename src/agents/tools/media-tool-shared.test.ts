@@ -25,6 +25,16 @@ describe("resolveMediaToolLocalRoots", () => {
     expect(result).not.toContain(path.resolve("@/shared/media"));
   });
 
+  it("preserves default media roots when workspaceOnly is true", () => {
+    const result = resolveMediaToolLocalRoots("/workspace", {
+      workspaceOnly: true,
+      allowedRoots: ["/shared/media"],
+    });
+
+    expect(result).toEqual(expect.arrayContaining(getDefaultLocalRoots() as string[]));
+    expect(result).toEqual(expect.arrayContaining(["/workspace", "/shared/media"]));
+  });
+
   it("ignores allowedRoots when workspaceOnly is false", () => {
     const result = resolveMediaToolLocalRoots("/workspace", {
       workspaceOnly: false,
