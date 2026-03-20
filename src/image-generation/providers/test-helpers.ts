@@ -140,8 +140,41 @@ export function expectGoogleFetchCall(
 
 /**
  * Asserts fetch was called with expected fal API URL and body
+ * Preserves exact Authorization header check for API key verification
  */
 export function expectFalFetchCall(
+  fetchMock: ReturnType<typeof vi.fn>,
+  params: {
+    call: number;
+    url: string;
+    body: Record<string, unknown>;
+    expectedAuth?: string; // Optional exact auth header value (e.g., "Key fal-test-key")
+  },
+) {
+  const { call, url, body, expectedAuth } = params;
+
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    call,
+    url,
+    expect.objectContaining({
+      method: "POST",
+      headers: expect.objectContaining({
+        Authorization: expectedAuth ?? expect.stringMatching(/^Key /),
+        "Content-Type": "application/json",
+      }),
+    }),
+  );
+
+  const request = fetchMock.mock.calls[call - 1]?.[1];
+  expect(request).toBeTruthy();
+  expect(JSON.parse(String(request?.body))).toEqual(body);
+}
+
+/**
+ * Legacy function for fal JSON post assertions (kept for backward compatibility)
+ * Uses exact Authorization header check
+ */
+export function expectFalJsonPost(
   fetchMock: ReturnType<typeof vi.fn>,
   params: {
     call: number;
@@ -157,7 +190,7 @@ export function expectFalFetchCall(
     expect.objectContaining({
       method: "POST",
       headers: expect.objectContaining({
-        Authorization: expect.any(String),
+        Authorization: "Key fal-test-key",
         "Content-Type": "application/json",
       }),
     }),
@@ -170,18 +203,21 @@ export function expectFalFetchCall(
 
 /**
  * Asserts image generation result structure
+ * Supports optional metadata field for providers that include it
  */
 export function expectImageResult(
-  result: { images: MockImageResult[]; model: string },
+  result: { images: MockImageResult[]; model: string; metadata?: Record<string, unknown> },
   params: {
     imageData: string;
     mimeType: string;
     model: string;
     fileName?: string;
+    metadata?: Record<string, unknown>;
   },
 ) {
-  const { imageData, mimeType, model, fileName } = params;
-  expect(result).toEqual({
+  const { imageData, mimeType, model, fileName, metadata } = params;
+  
+  const expected: { images: MockImageResult[]; model: string; metadata?: Record<string, unknown> } = {
     images: [
       {
         buffer: Buffer.from(imageData),
@@ -190,5 +226,12 @@ export function expectImageResult(
       },
     ],
     model,
-  });
+  };
+  
+  // Only include metadata in expectation if provided
+  if (metadata !== undefined) {
+    expected.metadata = metadata;
+  }
+  
+  expect(result).toEqual(expected);
 }

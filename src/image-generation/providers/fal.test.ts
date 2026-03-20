@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as modelAuth from "../../agents/model-auth.js";
 import { buildFalImageGenerationProvider } from "./fal.js";
-import { createFalFetchMock, mockProviderAuth, expectFalFetchCall, expectImageResult } from "./test-helpers.js";
+import { createFalFetchMock, mockProviderAuth, expectFalFetchCall, expectFalJsonPost, expectImageResult } from "./test-helpers.js";
 
 describe("fal image-generation provider", () => {
   afterEach(() => {
@@ -47,8 +47,8 @@ describe("fal image-generation provider", () => {
       mimeType: "image/png",
       model: "fal-ai/flux/dev",
       fileName: "image-1.png",
+      metadata: { prompt: "draw a cat" },
     });
-    expect(result.metadata).toEqual({ prompt: "draw a cat" });
   });
 
   it("uses image-to-image endpoint and data-uri input for edits", async () => {
@@ -127,7 +127,7 @@ describe("fal image-generation provider", () => {
       aspectRatio: "16:9",
     });
 
-    expectFalJsonPost(fetchMock, {
+    expectFalFetchCall(fetchMock, {
       call: 1,
       url: "https://fal.run/fal-ai/flux/dev",
       body: {
@@ -136,6 +136,7 @@ describe("fal image-generation provider", () => {
         num_images: 1,
         output_format: "png",
       },
+      expectedAuth: "Key fal-test-key",
     });
   });
 
@@ -170,7 +171,7 @@ describe("fal image-generation provider", () => {
       aspectRatio: "9:16",
     });
 
-    expectFalJsonPost(fetchMock, {
+    expectFalFetchCall(fetchMock, {
       call: 1,
       url: "https://fal.run/fal-ai/flux/dev",
       body: {
@@ -179,6 +180,7 @@ describe("fal image-generation provider", () => {
         num_images: 1,
         output_format: "png",
       },
+      expectedAuth: "Key fal-test-key",
     });
   });
 
