@@ -168,10 +168,11 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       decision: pluginBindingApproval.decision,
       senderId: params.interactionCtx.userId,
     });
-    let cleared = false;
     try {
-      await respond.clearComponents();
-      cleared = true;
+      await respond.clearComponents({
+        text: buildPluginBindingResolvedText(resolved),
+      });
+      return "handled";
     } catch {
       try {
         await respond.acknowledge();
@@ -180,21 +181,19 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       }
     }
     try {
-      await respond.followUp({
+      await respond.reply({
         text: buildPluginBindingResolvedText(resolved),
         ephemeral: true,
       });
     } catch (err) {
-      logError(`discord plugin binding approval: failed to follow up: ${String(err)}`);
-      if (!cleared) {
-        try {
-          await respond.reply({
-            text: buildPluginBindingResolvedText(resolved),
-            ephemeral: true,
-          });
-        } catch {
-          // Interaction may no longer accept a direct reply.
-        }
+      logError(`discord plugin binding approval: failed to reply: ${String(err)}`);
+      try {
+        await respond.followUp({
+          text: buildPluginBindingResolvedText(resolved),
+          ephemeral: true,
+        });
+      } catch {
+        // Interaction may no longer accept a follow-up.
       }
     }
     return "handled";

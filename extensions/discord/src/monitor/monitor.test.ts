@@ -918,11 +918,13 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(update).toHaveBeenCalledWith({ components: [] });
-    expect(followUp).toHaveBeenCalledWith({
-      content: expect.stringContaining("bind approval"),
-      ephemeral: true,
-    });
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.any(String),
+        components: [],
+      }),
+    );
+    expect(followUp).not.toHaveBeenCalled();
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 });
