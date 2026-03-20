@@ -135,7 +135,19 @@ static GSubprocess *spawn_gateway_subprocess(const gchar *subcommand, GError **e
     
     GSubprocessLauncher *launcher = g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_PIPE);
     
-    gchar **envp = g_get_environ();
+    // Create an isolated environment to prevent ambient session variables
+    // (like OPENCLAW_PROFILE or OPENCLAW_CONFIG_PATH) from implicitly overriding
+    // the managed systemd service's configuration.
+    gchar **envp = g_new0(gchar *, 1);
+    
+    // Narrowly seed required execution variables if present in the ambient session
+    const gchar *whitelist[] = {"PATH", "USER", "HOME", "LOGNAME", "XDG_RUNTIME_DIR"};
+    for (size_t i = 0; i < G_N_ELEMENTS(whitelist); i++) {
+        const gchar *val = g_getenv(whitelist[i]);
+        if (val) {
+            envp = g_environ_setenv(envp, whitelist[i], val, TRUE);
+        }
+    }
     
     SystemdState *sys = state_get_systemd();
     if (sys && sys->environment) {

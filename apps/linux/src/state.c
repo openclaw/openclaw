@@ -74,6 +74,8 @@ static void trigger_updates(AppState new_state) {
 }
 
 void state_update_systemd(SystemdState *sys_state) {
+    gboolean became_active = (!current_sys_state.active && sys_state->active);
+
     g_free(current_sys_state.active_state);
     g_free(current_sys_state.sub_state);
     g_strfreev(current_sys_state.exec_start_argv);
@@ -91,6 +93,12 @@ void state_update_systemd(SystemdState *sys_state) {
         current_sys_state.environment = g_strdupv(sys_state->environment);
     } else {
         current_sys_state.environment = NULL;
+    }
+    
+    if (became_active) {
+        // Reset the health snapshot explicitly on the relevant systemd transition
+        // so the state model has a clear freshness boundary.
+        current_health_state.last_updated = 0;
     }
     
     trigger_updates(compute_state());
