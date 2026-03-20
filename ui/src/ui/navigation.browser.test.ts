@@ -23,6 +23,14 @@ describe("control UI routing", () => {
     expect(window.location.pathname).toBe("/sessions");
   });
 
+  it("does not silently rewrite unknown routes", async () => {
+    const app = mountApp("/tasks");
+    await app.updateComplete;
+
+    expect(app.tab).toBe("chat");
+    expect(window.location.pathname).toBe("/tasks");
+  });
+
   it("respects /ui base paths", async () => {
     const app = mountApp("/ui/cron");
     await app.updateComplete;
