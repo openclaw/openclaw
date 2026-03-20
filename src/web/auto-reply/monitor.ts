@@ -245,7 +245,9 @@ export async function monitorWebChannel(
     // Application-level send failures (bad JID, content errors) should NOT
     // trigger a reconnect — only connection/socket issues should.
     const isTransportError = (err: unknown): boolean => {
-      const msg = String(err).toLowerCase();
+      // Use formatError() to handle Boom-style wrappers and nested error
+      // objects that stringify as "[object Object]" with plain String().
+      const msg = formatError(err).toLowerCase();
       return (
         msg.includes("connection") ||
         msg.includes("socket") ||

@@ -128,17 +128,28 @@ export async function monitorWebInbox(options: {
       }
     } else {
       // Fallback: presence update when raw WebSocket ping is unavailable.
-      activePingTimeout = setTimeout(() => {
-        activePingTimeout = null;
+      // Each tick gets its own local timeout handle to prevent cross-tick
+      // interference when a slow presence response from tick N resolves
+      // after tick N+1's timeout has been stored in activePingTimeout.
+      const localTimeout = setTimeout(() => {
+        if (!settle()) return;
+        if (activePingTimeout === localTimeout) activePingTimeout = null;
         if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
         logVerbose("Health ping timed out — forcing reconnect");
         resolveClose({ status: 499, isLoggedOut: false, error: "health-ping-timeout" });
       }, PING_TIMEOUT_MS);
+      activePingTimeout = localTimeout;
       sock
         .sendPresenceUpdate("available")
-        .then(() => clearPingTimeout())
+        .then(() => {
+          if (!settle()) return;
+          clearTimeout(localTimeout);
+          if (activePingTimeout === localTimeout) activePingTimeout = null;
+        })
         .catch((err: unknown) => {
-          clearPingTimeout();
+          if (!settle()) return;
+          clearTimeout(localTimeout);
+          if (activePingTimeout === localTimeout) activePingTimeout = null;
           if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
           logVerbose(`Health ping failed: ${String(err)} — forcing reconnect`);
           resolveClose({ status: 499, isLoggedOut: false, error: err });
