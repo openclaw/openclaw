@@ -21,6 +21,12 @@ export type MSTeamsActivityHandler = {
   onMembersAdded: (
     handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
   ) => MSTeamsActivityHandler;
+  onReactionsAdded: (
+    handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
+  ) => MSTeamsActivityHandler;
+  onReactionsRemoved: (
+    handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
+  ) => MSTeamsActivityHandler;
   run?: (context: unknown) => Promise<void>;
 };
 

@@ -61,6 +61,8 @@ export type MSTeamsAdapter = {
     res: unknown,
     logic: (context: unknown) => Promise<void>,
   ) => Promise<void>;
+  updateActivity: (context: unknown, activity: object) => Promise<void>;
+  deleteActivity: (context: unknown, reference: { activityId?: string }) => Promise<void>;
 };
 
 export type MSTeamsReplyRenderOptions = {
