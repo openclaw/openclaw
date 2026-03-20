@@ -11,6 +11,7 @@ Refreshes the bot's identity information from Feishu API when requested by user.
 ## Trigger Conditions
 
 Activate when user message contains:
+
 - `/refresh-bot-name`
 - `刷新机器人名称`
 - `更新机器人信息`
@@ -51,6 +52,7 @@ curl -X POST "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/inter
 ```
 
 Response:
+
 ```json
 {
   "code": 0,
@@ -69,6 +71,7 @@ curl -X GET "https://open.feishu.cn/open-apis/bot/v3/info" \
 ```
 
 Response:
+
 ```json
 {
   "code": 0,
@@ -113,11 +116,11 @@ Confirm the refresh with formatted output:
 
 ## Error Handling
 
-| Error | Response |
-|-------|----------|
-| API call failed | ❌ 刷新失败：{error message} |
-| Invalid token | ❌ 刷新失败：凭证无效，请检查飞书应用配置 |
-| File write failed | ❌ 刷新失败：无法保存配置文件 |
+| Error             | Response                                  |
+| ----------------- | ----------------------------------------- |
+| API call failed   | ❌ 刷新失败：{error message}              |
+| Invalid token     | ❌ 刷新失败：凭证无效，请检查飞书应用配置 |
+| File write failed | ❌ 刷新失败：无法保存配置文件             |
 
 ## Configuration
 
@@ -125,7 +128,7 @@ Confirm the refresh with formatted output:
 channels:
   feishu:
     tools:
-      bot_refresh: true  # default: true
+      bot_refresh: true # default: true
 ```
 
 ## Permissions
@@ -135,11 +138,13 @@ Required: No special permissions needed (uses app's internal token)
 ## Examples
 
 ### User sends command
+
 ```
 /refresh-bot-name
 ```
 
 ### Bot responds
+
 ```
 ✅ 机器人信息已刷新：
 

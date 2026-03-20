@@ -84,7 +84,6 @@
 
 1. **获取访问令牌**
    - `POST /open-apis/auth/v3/tenant_access_token/internal`
-   
 2. **查询机器人信息**
    - `GET /open-apis/bot/v3/info`
 
