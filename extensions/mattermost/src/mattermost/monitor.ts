@@ -1533,6 +1533,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 runtime.log?.(`stream-patch started ${streamMessageId}`);
               } catch (err) {
                 logVerboseMessage(`mattermost stream-patch send failed: ${String(err)}`);
+                // Stop retrying on initial-send failure (e.g. missing post permission,
+                // DM-channel creation failure). Without this the interval keeps firing
+                // every 200 ms and flooding the API/logs for the rest of the response.
+                stopPatchInterval();
               }
             } else {
               try {
@@ -1730,6 +1734,21 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       dispatcher,
       onSettled: () => {
         markDispatchIdle();
+        // Clean up any streaming preview that was never finalized — this happens when
+        // the reply pipeline produces no final payload (e.g. messaging-tool sends that
+        // are suppressed, or empty/heartbeat responses). Without this, onPartialReply
+        // can create a Mattermost post that is never deleted or patched with final text.
+        if (streamMessageId && blockStreamingClient) {
+          stopPatchInterval();
+          const orphanId = streamMessageId;
+          streamMessageId = null;
+          pendingPatchText = "";
+          lastSentText = "";
+          patchSending = false;
+          void deleteMattermostPost(blockStreamingClient, orphanId).catch(() => {
+            // Best-effort — the run is already complete.
+          });
+        }
       },
       run: () =>
         core.channel.reply.dispatchReplyFromConfig({
