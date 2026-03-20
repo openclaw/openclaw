@@ -23,6 +23,7 @@ export {
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
   resolveSiteName,
+  postTrustedWebToolsJson,
   throwWebSearchApiError,
   withTrustedWebSearchEndpoint,
   writeCachedSearchPayload,

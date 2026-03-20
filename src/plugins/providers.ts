@@ -4,6 +4,7 @@ import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
+import { hasExplicitPluginConfig } from "./config-state.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
@@ -12,39 +13,17 @@ import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
-function hasExplicitPluginConfig(config: PluginLoadOptions["config"]): boolean {
-  const plugins = config?.plugins;
-  if (!plugins) {
-    return false;
-  }
-  if (typeof plugins.enabled === "boolean") {
-    return true;
-  }
-  if (Array.isArray(plugins.allow) && plugins.allow.length > 0) {
-    return true;
-  }
-  if (Array.isArray(plugins.deny) && plugins.deny.length > 0) {
-    return true;
-  }
-  if (Array.isArray(plugins.load?.paths) && plugins.load.paths.length > 0) {
-    return true;
-  }
-  if (plugins.entries && Object.keys(plugins.entries).length > 0) {
-    return true;
-  }
-  if (plugins.slots && Object.keys(plugins.slots).length > 0) {
-    return true;
-  }
-  return false;
-}
-
 function withBundledProviderVitestCompat(params: {
   config: PluginLoadOptions["config"];
   pluginIds: readonly string[];
   env?: PluginLoadOptions["env"];
 }): PluginLoadOptions["config"] {
   const env = params.env ?? process.env;
-  if (!env.VITEST || hasExplicitPluginConfig(params.config) || params.pluginIds.length === 0) {
+  if (
+    !env.VITEST ||
+    hasExplicitPluginConfig(params.config?.plugins) ||
+    params.pluginIds.length === 0
+  ) {
     return params.config;
   }
 
