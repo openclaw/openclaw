@@ -649,7 +649,7 @@ describe("agentCommand", () => {
           costUsd: expect.any(Number),
           context: expect.objectContaining({
             limit: 8_192,
-            used: 165,
+            used: 153,
           }),
           usage: expect.objectContaining({
             input: 120,
@@ -666,6 +666,80 @@ describe("agentCommand", () => {
         }),
       );
       expect(usageEvents[0]).toHaveProperty("channel", undefined);
+
+      resetDiagnosticEventsForTest();
+    });
+  });
+
+  it("uses promptTokens for context.used when lastCallUsage is unavailable", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      configSpy.mockReturnValue({
+        diagnostics: { enabled: true },
+        models: { providers: {} },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            models: { "anthropic/claude-opus-4-5": {} },
+            contextTokens: 8_192,
+            workspace: path.join(home, "openclaw"),
+          },
+        },
+        session: { store, mainKey: "main" },
+      } as OpenClawConfig);
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        payloads: [{ text: "prompt token reply" }],
+        meta: {
+          durationMs: 42,
+          agentMeta: {
+            sessionId: "session-bg-prompt-tokens",
+            provider: "openai",
+            model: "gpt-5.2",
+            promptTokens: 420,
+            usage: {
+              input: 1_200,
+              output: 33,
+              cacheRead: 10,
+              cacheWrite: 2,
+              total: 1_245,
+            },
+          },
+        },
+      } as never);
+
+      const events: Array<{ type: string; [key: string]: unknown }> = [];
+      resetDiagnosticEventsForTest();
+      const stop = onDiagnosticEvent((evt) => {
+        events.push(evt as { type: string; [key: string]: unknown });
+      });
+
+      try {
+        await agentCommand(
+          {
+            message: "check prompt token telemetry",
+            sessionKey: "agent:main:subagent:prompt-token-telemetry-test",
+          },
+          runtime,
+        );
+      } finally {
+        stop();
+      }
+
+      const usageEvents = events.filter((evt) => evt.type === "model.usage");
+      expect(usageEvents).toHaveLength(1);
+      expect(usageEvents[0]).toEqual(
+        expect.objectContaining({
+          context: expect.objectContaining({
+            limit: 8_192,
+            used: 420,
+          }),
+          usage: expect.objectContaining({
+            promptTokens: 420,
+            total: 1_245,
+          }),
+        }),
+      );
 
       resetDiagnosticEventsForTest();
     });
