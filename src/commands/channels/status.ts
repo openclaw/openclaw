@@ -142,7 +142,10 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
         bits.push(`dm:${account.dmPolicy}`);
       }
       if (Array.isArray(account.allowFrom) && account.allowFrom.length > 0) {
-        bits.push(`allow:${account.allowFrom.slice(0, 2).join(",")}`);
+        const MAX_DISPLAY = 5;
+        const displayed = account.allowFrom.slice(0, MAX_DISPLAY).join(",");
+        const remaining = account.allowFrom.length - MAX_DISPLAY;
+        bits.push(`allow:${displayed}${remaining > 0 ? `,+${remaining} more` : ""}`);
       }
       appendTokenSourceBits(bits, account);
       const application = account.application as
