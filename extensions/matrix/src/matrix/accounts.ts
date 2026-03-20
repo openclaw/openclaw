@@ -38,6 +38,31 @@ export type ResolvedMatrixAccount = {
   config: MatrixConfig;
 };
 
+function resolveMatrixAccountUserId(params: {
+  cfg: CoreConfig;
+  accountId: string;
+  env?: NodeJS.ProcessEnv;
+}): string | null {
+  const env = params.env ?? process.env;
+  const resolved = resolveMatrixConfigForAccount(params.cfg, params.accountId, env);
+  const configuredUserId = resolved.userId.trim();
+  if (configuredUserId) {
+    return configuredUserId;
+  }
+
+  const stored = loadMatrixCredentials(env, params.accountId);
+  if (!stored) {
+    return null;
+  }
+  if (resolved.homeserver && stored.homeserver !== resolved.homeserver) {
+    return null;
+  }
+  if (resolved.accessToken && stored.accessToken !== resolved.accessToken) {
+    return null;
+  }
+  return stored.userId.trim() || null;
+}
+
 export function listMatrixAccountIds(cfg: CoreConfig): string[] {
   const ids = resolveConfiguredMatrixAccountIds(cfg, process.env);
   return ids.length > 0 ? ids : [DEFAULT_ACCOUNT_ID];
@@ -45,6 +70,39 @@ export function listMatrixAccountIds(cfg: CoreConfig): string[] {
 
 export function resolveDefaultMatrixAccountId(cfg: CoreConfig): string {
   return normalizeAccountId(resolveMatrixDefaultOrOnlyAccountId(cfg));
+}
+
+export function resolveConfiguredMatrixBotUserIds(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
+}): Set<string> {
+  const env = params.env ?? process.env;
+  const currentAccountId = normalizeAccountId(params.accountId);
+  const accountIds = new Set(resolveConfiguredMatrixAccountIds(params.cfg, env));
+  if (resolveMatrixAccount({ cfg: params.cfg, accountId: DEFAULT_ACCOUNT_ID }).configured) {
+    accountIds.add(DEFAULT_ACCOUNT_ID);
+  }
+  const ids = new Set<string>();
+
+  for (const accountId of accountIds) {
+    if (normalizeAccountId(accountId) === currentAccountId) {
+      continue;
+    }
+    if (!resolveMatrixAccount({ cfg: params.cfg, accountId }).configured) {
+      continue;
+    }
+    const userId = resolveMatrixAccountUserId({
+      cfg: params.cfg,
+      accountId,
+      env,
+    });
+    if (userId) {
+      ids.add(userId);
+    }
+  }
+
+  return ids;
 }
 
 export function resolveMatrixAccount(params: {
