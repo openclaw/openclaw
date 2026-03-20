@@ -358,7 +358,9 @@ export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined):
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (
-      (model.api !== "openai-responses" && model.api !== "openai-codex-responses") ||
+      (model.api !== "openai-responses" &&
+        model.api !== "openai-codex-responses" &&
+        model.api !== "azure-openai-responses") ||
       (model.provider !== "openai" && model.provider !== "openai-codex")
     ) {
       return underlying(model, context, options);
