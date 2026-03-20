@@ -479,7 +479,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     replyOptions: {
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
-      disableBlockStreaming: true,
+      disableBlockStreaming: !streamingEnabled
+        ? true
+        : cfg.agents?.defaults?.blockStreamingDefault === "on"
+          ? false
+          : undefined,
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
