@@ -3561,7 +3561,7 @@ module.exports = {
   });
 
   it("loads source runtime shims through the non-native Jiti boundary", async () => {
-    const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "discord");
+    const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "imessage");
     const copiedSourceDir = path.join(copiedExtensionRoot, "src");
     const copiedPluginSdkDir = path.join(copiedExtensionRoot, "plugin-sdk");
     mkdirSafe(copiedSourceDir);
@@ -3571,10 +3571,18 @@ module.exports = {
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
       `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import { PAIRING_APPROVED_MESSAGE } from "../runtime-api.js";
 
 export const syntheticRuntimeMarker = {
   resolveOutboundSendDep,
+  PAIRING_APPROVED_MESSAGE,
 };
+`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(copiedExtensionRoot, "runtime-api.ts"),
+      `export const PAIRING_APPROVED_MESSAGE = "paired";
 `,
       "utf-8",
     );
@@ -3607,6 +3615,7 @@ export const syntheticRuntimeMarker = {
     });
     expect(withAlias(copiedChannelRuntime)).toMatchObject({
       syntheticRuntimeMarker: {
+        PAIRING_APPROVED_MESSAGE: "paired",
         resolveOutboundSendDep: expect.any(Function),
       },
     });
