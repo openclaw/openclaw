@@ -1,17 +1,24 @@
 ---
 title: "Plugin SDK Migration"
 sidebarTitle: "SDK Migration"
-summary: "Migrate from the deprecated openclaw/plugin-sdk/compat import to focused subpath imports"
+summary: "Migrate from legacy compat surfaces to focused plugin-sdk subpaths and injected runtime helpers"
 read_when:
   - You see the OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED warning
-  - You are updating a plugin from the monolithic import to scoped subpaths
+  - You see the OPENCLAW_EXTENSION_API_DEPRECATED warning
+  - You are updating a plugin from the monolithic plugin-sdk import to scoped subpaths
+  - You are updating a plugin away from openclaw/extension-api
   - You maintain an external OpenClaw plugin
 ---
 
 # Plugin SDK Migration
 
-The `openclaw/plugin-sdk/compat` import is deprecated. All plugins should use
-**focused subpath imports** (`openclaw/plugin-sdk/\<subpath\>`) instead.
+OpenClaw is migrating from broad compatibility surfaces to narrower, documented
+contracts:
+
+- `openclaw/plugin-sdk/compat` -> focused `openclaw/plugin-sdk/<subpath>` imports
+- `openclaw/extension-api` -> injected runtime helpers such as `api.runtime.agent.*`
+
+This page explains what changed, why, and how to migrate.
 
 <Info>
   The compat import still works at runtime. This is a deprecation warning, not
@@ -32,19 +39,21 @@ with a clear purpose.
 
 <Steps>
   <Step title="Find deprecated imports">
-    Search your plugin for imports from the compat path:
+    Search your plugin for imports from either deprecated surface:
 
     ```bash
     grep -r "plugin-sdk/compat" my-plugin/
+    grep -r "openclaw/extension-api" extensions/my-plugin/
     ```
 
   </Step>
 
-  <Step title="Replace with focused subpaths">
-    Each export maps to a specific subpath. Replace the import source:
+  <Step title="Replace with focused subpaths or runtime injection">
+    Each export from compat maps to a specific subpath. Replace the import
+    source:
 
     ```typescript
-    // Before (deprecated)
+    // Before (compat entry)
     import {
       createChannelReplyPipeline,
       createPluginRuntimeStore,
@@ -57,14 +66,60 @@ with a clear purpose.
     import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
     ```
 
-    See the [subpath reference](#subpath-reference) below for the full mapping.
+    If your plugin imports from `openclaw/extension-api`, you will now see:
+
+    ```text
+    [OPENCLAW_EXTENSION_API_DEPRECATED] Warning: openclaw/extension-api is deprecated.
+    Migrate to api.runtime.agent.* or focused openclaw/plugin-sdk/<subpath> imports.
+    ```
+
+    That bridge also still works at runtime today. It exists to preserve older
+    plugins while they migrate to the injected plugin runtime.
+
+    Move host-side helpers onto the injected plugin runtime instead of
+    importing them directly:
+
+    ```typescript
+    // Before (deprecated extension-api bridge)
+    import { runEmbeddedPiAgent } from "openclaw/extension-api";
+
+    const result = await runEmbeddedPiAgent({
+      sessionId,
+      sessionFile,
+      workspaceDir,
+      prompt,
+      timeoutMs,
+    });
+
+    // After (preferred injected runtime)
+    const result = await api.runtime.agent.runEmbeddedPiAgent({
+      sessionId,
+      sessionFile,
+      workspaceDir,
+      prompt,
+      timeoutMs,
+    });
+    ```
+
+    The same pattern applies to the other legacy `extension-api` helpers:
+
+    - `resolveAgentDir` -> `api.runtime.agent.resolveAgentDir`
+    - `resolveAgentWorkspaceDir` -> `api.runtime.agent.resolveAgentWorkspaceDir`
+    - `resolveAgentIdentity` -> `api.runtime.agent.resolveAgentIdentity`
+    - `resolveThinkingDefault` -> `api.runtime.agent.resolveThinkingDefault`
+    - `resolveAgentTimeoutMs` -> `api.runtime.agent.resolveAgentTimeoutMs`
+    - `ensureAgentWorkspace` -> `api.runtime.agent.ensureAgentWorkspace`
+    - session store helpers -> `api.runtime.agent.session.*`
+
+    See the [subpath reference](#subpath-reference) below for the scoped import
+    mapping.
 
   </Step>
 
   <Step title="Build and test">
     ```bash
     pnpm build
-    pnpm test -- my-plugin/
+    pnpm test -- extensions/my-plugin/
     ```
   </Step>
 </Steps>
@@ -101,10 +156,10 @@ check the source at `src/plugin-sdk/` or ask in Discord.
 
 ## Removal timeline
 
-| When                   | What happens                                                    |
-| ---------------------- | --------------------------------------------------------------- |
-| **Now**                | Compat import emits a runtime deprecation warning               |
-| **Next major release** | Compat import will be removed; plugins still using it will fail |
+| When | What happens |
+| --- | --- |
+| **Now** | Compat import and `openclaw/extension-api` emit runtime warnings |
+| **Next major release** | These legacy bridges may be removed; plugins still using them will fail |
 
 All core plugins have already been migrated. External plugins should migrate
 before the next major release.
@@ -115,6 +170,7 @@ Set this environment variable while you work on migrating:
 
 ```bash
 OPENCLAW_SUPPRESS_PLUGIN_SDK_COMPAT_WARNING=1 openclaw gateway run
+OPENCLAW_SUPPRESS_EXTENSION_API_WARNING=1 openclaw gateway run
 ```
 
 This is a temporary escape hatch, not a permanent solution.
