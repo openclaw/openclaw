@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
 import {
   clearConfigCache,
@@ -10,6 +10,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
@@ -17,6 +18,72 @@ import {
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
+
+function ensureRecord(target: Record<string, unknown>, key: string): Record<string, unknown> {
+  const current = target[key];
+  if (typeof current === "object" && current !== null && !Array.isArray(current)) {
+    return current as Record<string, unknown>;
+  }
+  const next: Record<string, unknown> = {};
+  target[key] = next;
+  return next;
+}
+
+function setConfiguredProviderKey(configTarget: OpenClawConfig, value: unknown): void {
+  const plugins = ensureRecord(configTarget as Record<string, unknown>, "plugins");
+  const entries = ensureRecord(plugins, "entries");
+  const googleEntry = ensureRecord(entries, "google");
+  const config = ensureRecord(googleEntry, "config");
+  const webSearch = ensureRecord(config, "webSearch");
+  webSearch.apiKey = value;
+}
+
+function buildGeminiTestProvider(): PluginWebSearchProviderEntry {
+  return {
+    pluginId: "google",
+    id: "gemini",
+    label: "gemini",
+    hint: "gemini test provider",
+    envVars: ["GEMINI_API_KEY"],
+    placeholder: "AIza...",
+    signupUrl: "https://example.com/gemini",
+    autoDetectOrder: 20,
+    credentialPath: "plugins.entries.google.config.webSearch.apiKey",
+    inactiveSecretPaths: ["plugins.entries.google.config.webSearch.apiKey"],
+    getCredentialValue: (searchConfig) => {
+      const gemini = searchConfig?.gemini;
+      return gemini && typeof gemini === "object" && !Array.isArray(gemini)
+        ? (gemini as Record<string, unknown>).apiKey
+        : undefined;
+    },
+    setCredentialValue: (searchConfigTarget, value) => {
+      const scoped = searchConfigTarget.gemini;
+      if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
+        searchConfigTarget.gemini = { apiKey: value };
+        return;
+      }
+      (scoped as Record<string, unknown>).apiKey = value;
+    },
+    getConfiguredCredentialValue: (config) => {
+      const entryConfig = config?.plugins?.entries?.google?.config;
+      return entryConfig && typeof entryConfig === "object"
+        ? (entryConfig as { webSearch?: { apiKey?: unknown } }).webSearch?.apiKey
+        : undefined;
+    },
+    setConfiguredCredentialValue: (configTarget, value) => {
+      setConfiguredProviderKey(configTarget, value);
+    },
+    createTool: () => null,
+  };
+}
+
+const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
+  resolvePluginWebSearchProvidersMock: vi.fn(() => [buildGeminiTestProvider()]),
+}));
+
+vi.mock("../plugins/web-search-providers.js", () => ({
+  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+}));
 
 const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
 const allowInsecureTempSecretFile = process.platform === "win32";

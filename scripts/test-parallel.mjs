@@ -266,6 +266,10 @@ const parseEnvNumber = (name, fallback) => {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
+const shardedCi = isCI && shardCount > 1;
+const shardedCiTopLevelConcurrency = shardedCi
+  ? Math.max(1, parseEnvNumber("OPENCLAW_TEST_TOP_LEVEL_CONCURRENCY", 3))
+  : null;
 const allKnownUnitFiles = allKnownTestFiles.filter((file) => {
   return isUnitConfigTestFile(file);
 });
@@ -664,23 +668,47 @@ const defaultWorkerBudget =
                   extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
                   gateway: 1,
                 };
+const shardedCiWorkerBudget =
+  shardedCi && !isMacOS
+    ? {
+        // Sharded Linux/Windows CI runs already divide the file set, so a smaller worker
+        // fan-out keeps vmFork/fork heaps under control without penalizing local runs.
+        unit: 2,
+        unitIsolated: 1,
+        extensions: 2,
+        gateway: 1,
+      }
+    : null;
 
 // Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.
-// In CI on linux/windows, prefer Vitest defaults to avoid cross-test interference from lower worker counts.
+// On sharded Linux/Windows CI, cap worker fan-out to avoid unit-fast heap blowups while still
+// keeping enough concurrency to finish quickly. Non-sharded CI keeps Vitest defaults.
 const maxWorkersForRun = (name) => {
   if (resolvedOverride) {
     return resolvedOverride;
-  }
-  if (isCI && !isMacOS) {
-    return null;
-  }
-  if (isCI && isMacOS) {
-    return 1;
   }
   if (name.endsWith("-threads") || name.endsWith("-vmforks")) {
     return 1;
   }
   if (name.endsWith("-isolated") && name !== "unit-isolated") {
+    return 1;
+  }
+  if (isCI && !isMacOS) {
+    if (shardedCiWorkerBudget) {
+      if (name === "unit-isolated" || name.startsWith("unit-heavy-")) {
+        return shardedCiWorkerBudget.unitIsolated;
+      }
+      if (name === "extensions") {
+        return shardedCiWorkerBudget.extensions;
+      }
+      if (name === "gateway") {
+        return shardedCiWorkerBudget.gateway;
+      }
+      return shardedCiWorkerBudget.unit;
+    }
+    return null;
+  }
+  if (isCI && isMacOS) {
     return 1;
   }
   if (name === "unit-isolated" || name.startsWith("unit-heavy-")) {
@@ -1079,6 +1107,9 @@ const runEntriesWithLimit = async (entries, extraArgs = [], concurrency = 1) => 
 
 const runEntries = async (entries, extraArgs = []) => {
   if (topLevelParallelEnabled) {
+    if (shardedCiTopLevelConcurrency !== null) {
+      return runEntriesWithLimit(entries, extraArgs, shardedCiTopLevelConcurrency);
+    }
     const codes = await Promise.all(entries.map((entry) => run(entry, extraArgs)));
     return codes.find((code) => code !== 0);
   }

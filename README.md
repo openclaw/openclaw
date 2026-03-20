@@ -30,6 +30,17 @@ OpenClaw Onboard guides you step by step through setting up the gateway, workspa
 Works with npm, pnpm, or bun.
 New install? Start here: [Getting started](https://docs.openclaw.ai/start/getting-started)
 
+## Cortex Companion
+
+This integration branch also pairs OpenClaw with [Cortex AI](https://github.com/Junebugg1214/Cortex-AI) for local memory, previewable context, conflict handling, and coding sync. If you want the assistant's memory to stay inspectable and versionable on your machine, Cortex is the companion repo for that flow.
+
+```bash
+openclaw memory cortex enable
+/cortex preview
+/cortex conflicts
+/cortex sync coding
+```
+
 ## Sponsors
 
 | OpenAI                                                            | Vercel                                                            | Blacksmith                                                                   | Convex                                                                |
