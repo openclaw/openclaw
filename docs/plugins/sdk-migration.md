@@ -16,7 +16,7 @@ what changed, why, and how to migrate.
 
 ## Why this change
 
-The monolithic compat barrel re-exported everything from a single entry point.
+The monolithic compat entry re-exported everything from a single entry point.
 This caused:
 
 - **Slow startup**: importing one helper pulled in dozens of unrelated modules.
@@ -28,14 +28,14 @@ with a clear purpose.
 
 ## What triggers the warning
 
-If your plugin imports from the compat barrel, you will see:
+If your plugin imports from the compat entry, you will see:
 
 ```
 [OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED] Warning: openclaw/plugin-sdk/compat is
 deprecated for new plugins. Migrate to focused openclaw/plugin-sdk/\<subpath\> imports.
 ```
 
-The compat barrel still works at runtime. This is a deprecation warning, not an
+The compat entry still works at runtime. This is a deprecation warning, not an
 error. But new plugins **must not** use it, and existing plugins should migrate
 before compat is removed.
 
@@ -54,7 +54,7 @@ grep -r "plugin-sdk/compat" extensions/my-plugin/
 Each export from compat maps to a specific subpath. Replace the import source:
 
 ```typescript
-// Before (compat barrel)
+// Before (compat entry)
 import {
   createChannelReplyPipeline,
   createPluginRuntimeStore,
@@ -106,8 +106,8 @@ check the source at `src/plugin-sdk/` or ask in Discord.
 
 ## Compat barrel removal timeline
 
-- **Now**: compat barrel emits a deprecation warning at runtime.
-- **Next major release**: compat barrel will be removed. Plugins still using it will
+- **Now**: compat entry emits a deprecation warning at runtime.
+- **Next major release**: compat entry will be removed. Plugins still using it will
   fail to import.
 
 Bundled plugins (under `extensions/`) have already been migrated. External plugins
