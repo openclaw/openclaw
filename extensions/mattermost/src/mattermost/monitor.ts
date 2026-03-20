@@ -1583,12 +1583,21 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
           // Compute reply target divergence before flushing, so we don't
           // accidentally create a preview post in the wrong thread on flush.
+          // Compute the reply target for this payload. When payload.replyToId is set
+          // and resolves to a different thread than the one the streaming preview was
+          // created in (effectiveReplyToId), we must not patch the preview in-place.
+          // We compare the raw payload.replyToId against effectiveReplyToId directly
+          // instead of going through resolveMattermostReplyRootId(), because that
+          // helper always returns threadRootId when set, making the comparison always
+          // false when effectiveReplyToId is non-empty (ID=2965349638).
           const finalReplyToId = resolveMattermostReplyRootId({
             threadRootId: effectiveReplyToId,
             replyToId: payload.replyToId,
           });
           const replyTargetDiverged =
-            finalReplyToId !== effectiveReplyToId && payload.replyToId != null;
+            payload.replyToId != null &&
+            payload.replyToId.trim() !== "" &&
+            payload.replyToId.trim() !== effectiveReplyToId;
 
           if (isFinal && blockStreamingClient) {
             if (replyTargetDiverged) {
