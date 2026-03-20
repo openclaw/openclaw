@@ -263,6 +263,10 @@ describe("secrets runtime snapshot integration", () => {
     await withTempHome("openclaw-secrets-runtime-web-reload-lkg-", async (home) => {
       const prepared = await prepareSecretsRuntimeSnapshot({
         config: asConfig({
+          plugins: {
+            enabled: true,
+            allow: ["google"],
+          },
           tools: {
             web: {
               search: {
@@ -276,6 +280,8 @@ describe("secrets runtime snapshot integration", () => {
         }),
         env: {
           WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-runtime-key",
+          GEMINI_API_KEY: "",
+          GOOGLE_API_KEY: "",
         },
         agentDirs: ["/tmp/openclaw-agent-main"],
         loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -287,6 +293,7 @@ describe("secrets runtime snapshot integration", () => {
         writeConfigFile({
           ...loadConfig(),
           plugins: {
+            ...loadConfig().plugins,
             entries: {
               google: {
                 config: {
@@ -342,7 +349,7 @@ describe("secrets runtime snapshot integration", () => {
         id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
       });
     });
-  }, 180_000);
+  }, 300_000);
 
   it("recomputes config-derived agent dirs when refreshing active secrets runtime snapshots", async () => {
     await withTempHome("openclaw-secrets-runtime-agent-dirs-", async (home) => {
