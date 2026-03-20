@@ -67,16 +67,18 @@ function isBlockedUrl(url: string): boolean {
  * Safe fetch that blocks redirects to private networks.
  * Uses redirect: "manual" to inspect each hop.
  */
-async function safeFetch(url: string, options?: RequestInit): Promise<Response> {
+const MAX_REDIRECTS = 5;
+
+async function safeFetch(url: string, options?: RequestInit, hops = 0): Promise<Response> {
+  if (hops > MAX_REDIRECTS) throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
   if (isBlockedUrl(url)) throw new Error("Blocked URL");
 
   const res = await fetch(url, {
     ...options,
-    redirect: "manual", // Don't auto-follow — we check each redirect
+    redirect: "manual",
     signal: options?.signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
 
-  // Follow redirects manually with SSRF check (max 5 hops)
   if (res.status >= 300 && res.status < 400) {
     const location = res.headers.get("location");
     if (!location) return res;
@@ -84,8 +86,7 @@ async function safeFetch(url: string, options?: RequestInit): Promise<Response> 
     const redirectUrl = new URL(location, url).toString();
     if (isBlockedUrl(redirectUrl)) throw new Error("Redirect to blocked URL");
 
-    // Recurse (fetch will handle further redirects)
-    return safeFetch(redirectUrl, options);
+    return safeFetch(redirectUrl, options, hops + 1);
   }
 
   return res;

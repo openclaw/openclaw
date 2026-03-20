@@ -169,9 +169,10 @@ export function createMessagingClient(apiUrl: string, token: string): MessagingC
   let baseUrl: string;
   try {
     const parsed = new URL(apiUrl);
-    // Strip "api." prefix if present, remove /graphql path
+    // Strip "api." prefix if present, preserve port, remove /graphql path
     const host = parsed.hostname.replace(/^api\./, "");
-    baseUrl = `${parsed.protocol}//${host}`;
+    const port = parsed.port ? `:${parsed.port}` : "";
+    baseUrl = `${parsed.protocol}//${host}${port}`;
   } catch {
     baseUrl = "https://soundchain.io";
   }
