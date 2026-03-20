@@ -276,6 +276,10 @@ const saveSessionToMemory: HookHandler = async (event) => {
       typeof hookConfig?.messages === "number" && hookConfig.messages > 0
         ? hookConfig.messages
         : 15;
+    const slugTimeoutMs =
+      typeof hookConfig?.slugTimeoutMs === "number" && hookConfig.slugTimeoutMs > 0
+        ? hookConfig.slugTimeoutMs
+        : undefined;
 
     let slug: string | null = null;
     let sessionContent: string | null = null;
@@ -299,7 +303,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
       if (sessionContent && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
         // Use LLM to generate a descriptive slug
-        slug = await generateSlugViaLLM({ sessionContent, cfg });
+        slug = await generateSlugViaLLM({ sessionContent, cfg, timeoutMs: slugTimeoutMs });
         log.debug("Generated slug", { slug });
       }
     }
