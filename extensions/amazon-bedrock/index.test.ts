@@ -348,4 +348,74 @@ describe("amazon-bedrock provider plugin", () => {
       expect(result).toMatchObject({ cacheRetention: "none" });
     });
   });
+
+  it("injects region from bedrockDiscovery config into stream options", () => {
+    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+    const baseFn = (_model: never, _context: never, options: Record<string, unknown>) => options;
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "eu.anthropic.claude-sonnet-4-6",
+      config: {
+        models: {
+          bedrockDiscovery: { region: "eu-west-1" },
+        },
+      },
+      streamFn: baseFn,
+    } as never);
+
+    const result = wrapped?.(
+      {
+        api: "bedrock-converse-stream",
+        provider: "amazon-bedrock",
+        id: "eu.anthropic.claude-sonnet-4-6",
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
+    expect(result).toMatchObject({ region: "eu-west-1" });
+  });
+
+  it("injects region extracted from provider baseUrl into stream options", () => {
+    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+    const baseFn = (_model: never, _context: never, options: Record<string, unknown>) => options;
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "eu.anthropic.claude-sonnet-4-6",
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://bedrock-runtime.eu-central-1.amazonaws.com",
+              models: [],
+            },
+          },
+        },
+      },
+      streamFn: baseFn,
+    } as never);
+
+    const result = wrapped?.(
+      {
+        api: "bedrock-converse-stream",
+        provider: "amazon-bedrock",
+        id: "eu.anthropic.claude-sonnet-4-6",
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
+    expect(result).toMatchObject({ region: "eu-central-1" });
+  });
+
+  it("does not inject region when neither bedrockDiscovery nor baseUrl is configured", () => {
+    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+    const baseFn = (_model: never, _context: never, options: Record<string, unknown>) => options;
+    const result = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "anthropic.claude-sonnet-4-6",
+      streamFn: baseFn,
+    } as never);
+
+    // Without region config, Claude model returns the base streamFn directly
+    expect(result).toBe(baseFn);
+  });
 });
