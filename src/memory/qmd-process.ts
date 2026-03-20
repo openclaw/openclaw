@@ -57,7 +57,7 @@ export async function runCliCommand(params: {
         }, params.timeoutMs)
       : null;
     // StringDecoder buffers incomplete multi-byte UTF-8 sequences across
-    // TCP/pipe chunks, preventing U+FFFD replacement at chunk boundaries.
+    // pipe chunks, preventing U+FFFD replacement at chunk boundaries.
     const stdoutDecoder = new StringDecoder("utf8");
     const stderrDecoder = new StringDecoder("utf8");
     child.stdout.on("data", (data) => {
