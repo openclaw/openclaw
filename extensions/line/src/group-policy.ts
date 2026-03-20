@@ -1,5 +1,8 @@
 import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
-import { resolveExactLineGroupConfigKey, type OpenClawConfig } from "openclaw/plugin-sdk/line-core";
+import {
+  resolveExactLineGroupConfigKey,
+  type OpenClawConfig,
+} from "../../../src/plugin-sdk/line-core.js";
 
 type LineGroupContext = {
   cfg: OpenClawConfig;
