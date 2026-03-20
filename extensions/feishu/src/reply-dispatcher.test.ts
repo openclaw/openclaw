@@ -763,8 +763,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     // Fallback to plain text was used
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
 
-    // Markdown tables were converted before fallback send
-    expect(convertMock).toHaveBeenCalled();
+    // Markdown tables were converted exactly once (inside sendChunkedTextReply)
+    expect(convertMock).toHaveBeenCalledTimes(1);
 
     // Warning was logged
     expect(logMock).toHaveBeenCalledWith(

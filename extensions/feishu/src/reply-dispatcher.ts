@@ -442,9 +442,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               params.runtime.log?.(
                 `feishu[${account.accountId}]: card send failed, falling back to text: ${String(cardError)}`,
               );
-              const fallbackText = core.channel.text.convertMarkdownTables(text, tableMode);
               await sendChunkedTextReply({
-                text: fallbackText,
+                text,
                 useCard: false,
                 infoKind: info?.kind,
                 sendChunk: async ({ chunk, isFirst }) => {
