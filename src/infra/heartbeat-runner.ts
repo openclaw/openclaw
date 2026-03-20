@@ -399,6 +399,7 @@ type HeartbeatPreflight = HeartbeatReasonFlags & {
   session: ReturnType<typeof resolveHeartbeatSession>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   hasTaggedCronEvents: boolean;
+  hasTaggedLocationEvents: boolean;
   shouldInspectPendingEvents: boolean;
   skipReason?: HeartbeatSkipReason;
 };
@@ -430,18 +431,26 @@ async function resolveHeartbeatPreflight(params: {
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
+  const hasTaggedLocationEvents = pendingEventEntries.some((event) =>
+    event.contextKey?.startsWith("location:"),
+  );
   const shouldInspectPendingEvents =
-    reasonFlags.isExecEventReason || reasonFlags.isCronEventReason || hasTaggedCronEvents;
+    reasonFlags.isExecEventReason ||
+    reasonFlags.isCronEventReason ||
+    hasTaggedCronEvents ||
+    hasTaggedLocationEvents;
   const shouldBypassFileGates =
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
     reasonFlags.isWakeReason ||
-    hasTaggedCronEvents;
+    hasTaggedCronEvents ||
+    hasTaggedLocationEvents;
   const basePreflight = {
     ...reasonFlags,
     session,
     pendingEventEntries,
     hasTaggedCronEvents,
+    hasTaggedLocationEvents,
     shouldInspectPendingEvents,
   } satisfies Omit<HeartbeatPreflight, "skipReason">;
 
