@@ -33,6 +33,7 @@ import {
 } from "./bot-content.js";
 import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sender-name.js";
 import { createFeishuClient } from "./client.js";
+import { getChatInfo } from "./chat.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
@@ -54,6 +55,95 @@ export { toMessageResourceType } from "./bot-content.js";
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+// Group name cache keyed by `accountId:chatId` to isolate multi-account deployments.
+// Empty-string sentinel = "lookup failed or returned empty — skip API until TTL expires".
+const groupNameCache = new Map<string, { name: string; expiresAt: number }>();
+const GROUP_NAME_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const GROUP_NAME_CACHE_MAX_SIZE = 500; // hard cap — oldest entries evicted when exceeded
+
+/**
+ * Evict entries to keep the cache within GROUP_NAME_CACHE_MAX_SIZE.
+ * Phase 1: remove all expired entries.
+ * Phase 2: if still over the limit, drop the oldest entries by insertion order
+ *          (Map iterates in insertion order) until we are back within bounds.
+ */
+function evictGroupNameCache(): void {
+  const now = Date.now();
+  for (const [key, val] of groupNameCache) {
+    if (val.expiresAt <= now) {
+      groupNameCache.delete(key);
+    }
+  }
+  if (groupNameCache.size > GROUP_NAME_CACHE_MAX_SIZE) {
+    const excess = groupNameCache.size - GROUP_NAME_CACHE_MAX_SIZE;
+    let removed = 0;
+    for (const key of groupNameCache.keys()) {
+      if (removed >= excess) break;
+      groupNameCache.delete(key);
+      removed++;
+    }
+  }
+}
+
+/**
+ * Write a cache entry, ensuring it moves to the end of insertion order.
+ * Map.set on an existing key preserves original position — we delete first
+ * so refreshed entries are treated as newest and survive Phase 2 eviction.
+ */
+function setCacheEntry(key: string, value: { name: string; expiresAt: number }): void {
+  groupNameCache.delete(key);
+  groupNameCache.set(key, value);
+}
+
+/** Exposed for test isolation — clears all cached group names. */
+export function clearGroupNameCache(): void {
+  groupNameCache.clear();
+}
+
+export async function resolveGroupName(params: {
+  account: ReturnType<typeof resolveFeishuAccount>;
+  chatId: string;
+  log: (...args: unknown[]) => void;
+}): Promise<string | undefined> {
+  const { account, chatId, log } = params;
+  const cacheKey = `${account.accountId}:${chatId}`;
+  const cached = groupNameCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.name || undefined;
+  }
+  try {
+    const client = createFeishuClient(account);
+    const chatInfo = await getChatInfo(client, chatId);
+    const name = chatInfo?.name?.trim();
+    if (name) {
+      setCacheEntry(cacheKey, {
+        name,
+        expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
+      });
+    } else {
+      setCacheEntry(cacheKey, {
+        name: "",
+        expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
+      });
+    }
+  } catch (err) {
+    log(
+      `feishu[${account.accountId}]: getChatInfo failed for ${chatId}: ${String(err)}`,
+    );
+    setCacheEntry(cacheKey, {
+      name: "",
+      expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
+    });
+  }
+  // Read result before eviction to avoid losing the just-written entry
+  const result = groupNameCache.get(cacheKey)?.name || undefined;
+  // Enforce hard cap on cache size
+  if (groupNameCache.size > GROUP_NAME_CACHE_MAX_SIZE) {
+    evictGroupNameCache();
+  }
+  return result;
+}
 export type FeishuMessageEvent = {
   sender: {
     sender_id: {
@@ -883,6 +973,13 @@ export async function handleFeishuMessage(params: {
       return threadContext;
     };
 
+    // Resolve human-readable group name for session labeling.
+    // Placed after group gating so dropped messages never trigger an API call.
+    let groupName: string | undefined;
+    if (isGroup) {
+      groupName = await resolveGroupName({ account, chatId: ctx.chatId, log });
+    }
+
     // --- Shared context builder for dispatch ---
     const buildCtxPayloadForAgent = async (
       agentId: string,
@@ -904,7 +1001,8 @@ export async function handleFeishuMessage(params: {
         SessionKey: agentSessionKey,
         AccountId: agentAccountId,
         ChatType: isGroup ? "group" : "direct",
-        GroupSubject: isGroup ? ctx.chatId : undefined,
+        GroupSubject: isGroup ? (groupName || ctx.chatId) : undefined,
+        ConversationLabel: isGroup && groupName ? groupName : undefined,
         SenderName: ctx.senderName ?? ctx.senderOpenId,
         SenderId: ctx.senderOpenId,
         Provider: "feishu" as const,
