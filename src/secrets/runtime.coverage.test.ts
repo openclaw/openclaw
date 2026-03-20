@@ -8,11 +8,14 @@ import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
 type SecretRegistryEntry = ReturnType<typeof listSecretTargetRegistryEntries>[number];
 
-const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
-  resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
-}));
+const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvidersMock } =
+  vi.hoisted(() => ({
+    resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+    resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+  }));
 
 vi.mock("../plugins/web-search-providers.js", () => ({
+  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
@@ -232,6 +235,8 @@ function buildAuthStoreForTarget(entry: SecretRegistryEntry, envId: string): Aut
 describe("secrets runtime target coverage", () => {
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
+    resolveBundledPluginWebSearchProvidersMock.mockReset();
+    resolvePluginWebSearchProvidersMock.mockReset();
   });
 
   it("handles every openclaw.json registry target when configured as active", async () => {
