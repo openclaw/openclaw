@@ -103,11 +103,7 @@ import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
-import {
-  loadGatewayPlugins,
-  refreshPluginSubagentPolicies,
-  setFallbackGatewayContext,
-} from "./server-plugins.js";
+import { loadGatewayPlugins, setFallbackGatewayContext } from "./server-plugins.js";
 import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
@@ -1279,11 +1275,6 @@ export async function startGatewayServer(
             });
             try {
               await applyHotReload(plan, prepared.config);
-              // Refresh plugin subagent override policies (model allowlists)
-              // AFTER applyHotReload succeeds, so a failed reload does not
-              // leave expanded allowlists from the new config in effect while
-              // the rest of the gateway still runs the old config.
-              refreshPluginSubagentPolicies(prepared.config);
             } catch (err) {
               if (previousSnapshot) {
                 activateSecretsRuntimeSnapshot(previousSnapshot);
