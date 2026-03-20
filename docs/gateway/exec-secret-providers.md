@@ -18,8 +18,8 @@ This page focuses on `source: "exec"` only. For the full SecretRef model and run
 Use `exec` providers when you already have a secrets tool that can return values on demand, such as:
 
 - `op` from 1Password CLI
-- `vault` or a small Vault wrapper
 - `sops -d`
+- `vault` or a small Vault wrapper
 - a custom binary that reads from a local or remote secret store
 
 If a secret already exists as an environment variable or in a local JSON file, prefer `env` or `file` providers instead.
@@ -78,7 +78,7 @@ OpenClaw sends one JSON request on stdin:
 { "protocolVersion": 1, "provider": "vault", "ids": ["providers/openai/apiKey"] }
 ```
 
-The resolver should write JSON to stdout:
+By default, the resolver should write JSON to stdout:
 
 ```json
 { "protocolVersion": 1, "values": { "providers/openai/apiKey": "<openai-api-key>" } }
@@ -96,8 +96,8 @@ Optional per-id failures:
 
 Notes:
 
-- Every requested id must appear in `values` or `errors`.
-- With `jsonOnly: false`, a single-id request may return a plain string instead of JSON.
+- JSON responses must include every requested id in `values` or `errors`.
+- With `jsonOnly: false`, a single-id request may return a plain string on stdout instead of a JSON object.
 - Non-zero exit codes, missing ids, invalid JSON, timeouts, or empty/non-string results fail resolution.
 
 ## Path and symlink safety
@@ -152,6 +152,31 @@ OpenClaw validates the command path before running it.
         args: ["-d", "--extract", '["providers"]["openai"]["apiKey"]', "/path/to/secrets.enc.json"],
         passEnv: ["SOPS_AGE_KEY_FILE"],
         jsonOnly: false,
+      },
+    },
+  },
+}
+```
+
+### Vault
+
+```json5
+{
+  secrets: {
+    providers: {
+      vault_openai: {
+        source: "exec",
+        command: "/usr/local/bin/vault",
+        args: ["kv", "get", "-field=apiKey", "secret/providers/openai"],
+        passEnv: ["HOME", "VAULT_ADDR", "VAULT_TOKEN"],
+        jsonOnly: false,
+      },
+    },
+  },
+  models: {
+    providers: {
+      openai: {
+        apiKey: { source: "exec", provider: "vault_openai", id: "value" },
       },
     },
   },
