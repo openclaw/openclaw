@@ -196,6 +196,16 @@ export class TelegramPollingSession {
     const runner = run(bot, this.opts.runnerOptions);
     this.#activeRunner = runner;
     const fetchAbortController = this.#activeFetchAbort;
+
+    if (this.opts.abortSignal && fetchAbortController) {
+      this.opts.abortSignal.addEventListener(
+        "abort",
+        () => {
+          fetchAbortController.abort();
+        },
+        { once: true },
+      );
+    }
     let stopPromise: Promise<void> | undefined;
     let stalledRestart = false;
     let forceCycleTimer: ReturnType<typeof setTimeout> | undefined;
