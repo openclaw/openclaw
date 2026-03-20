@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/searxng",
+  "version": "2026.3.20",
+  "private": true,
+  "description": "OpenClaw SearXNG web search plugin — no API key required, uses public SearXNG instances",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

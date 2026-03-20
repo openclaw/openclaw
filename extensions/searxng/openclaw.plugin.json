@@ -1,0 +1,29 @@
+{
+  "id": "searxng",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "baseUrl": {
+            "type": "string",
+            "description": "Base URL of your SearXNG instance (e.g. 'http://localhost:8080'). Leave unset to use public instances."
+          },
+          "language": {
+            "type": "string",
+            "description": "Language code for results (e.g. 'pt-PT', 'en-US'). Default: 'en-US'."
+          },
+          "safeSearch": {
+            "type": "string",
+            "enum": ["0", "1", "2"],
+            "description": "SafeSearch level: 0=off, 1=moderate, 2=strict. Default: 1."
+          }
+        }
+      }
+    }
+  }
+}
