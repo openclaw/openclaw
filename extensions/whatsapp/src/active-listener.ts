@@ -30,6 +30,14 @@ export type ActiveWebListener = {
 
 // Use process-global symbol keys to survive bundler code-splitting and loader
 // cache splits without depending on fragile string property names.
+//
+// IMPORTANT: We must read from globalThis at **call time** in every function,
+// not capture into a module-level `const`. Bundlers (rollup/esbuild) may
+// tree-shake the globalThis assignment and replace it with a local
+// `const listeners = new Map()`, which creates a second, disconnected Map
+// when the extension is loaded via jiti at runtime while the bundled dist
+// chunk holds a different Map. Reading from globalThis on every access
+// guarantees all code paths — bundled or jiti-loaded — share the same Map.
 const GLOBAL_LISTENERS_KEY = Symbol.for("openclaw.whatsapp.activeListeners");
 const GLOBAL_CURRENT_KEY = Symbol.for("openclaw.whatsapp.currentListener");
 
@@ -40,10 +48,19 @@ type GlobalWithListeners = typeof globalThis & {
 
 const _global = globalThis as GlobalWithListeners;
 
+// Seed the global slots once (first evaluator wins; subsequent evaluators reuse).
 _global[GLOBAL_LISTENERS_KEY] ??= new Map<string, ActiveWebListener>();
 _global[GLOBAL_CURRENT_KEY] ??= null;
 
-const listeners = _global[GLOBAL_LISTENERS_KEY];
+/**
+ * Always read the listeners Map from globalThis — never capture in a const.
+ * This ensures bundled dist code and jiti-loaded extension code share one Map.
+ */
+function getListeners(): Map<string, ActiveWebListener> {
+  // Re-seed defensively in case a fresh process hasn't run the top-level init.
+  _global[GLOBAL_LISTENERS_KEY] ??= new Map<string, ActiveWebListener>();
+  return _global[GLOBAL_LISTENERS_KEY];
+}
 
 function getCurrentListener(): ActiveWebListener | null {
   return _global[GLOBAL_CURRENT_KEY] ?? null;
@@ -62,7 +79,7 @@ export function requireActiveWebListener(accountId?: string | null): {
   listener: ActiveWebListener;
 } {
   const id = resolveWebAccountId(accountId);
-  const listener = listeners.get(id) ?? null;
+  const listener = getListeners().get(id) ?? null;
   if (!listener) {
     throw new Error(
       `No active WhatsApp Web listener (account: ${id}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`openclaw channels login --channel whatsapp --account ${id}`)}.`,
@@ -89,6 +106,7 @@ export function setActiveWebListener(
         };
 
   const id = resolveWebAccountId(accountId);
+  const listeners = getListeners();
   if (!listener) {
     listeners.delete(id);
   } else {
@@ -101,5 +119,5 @@ export function setActiveWebListener(
 
 export function getActiveWebListener(accountId?: string | null): ActiveWebListener | null {
   const id = resolveWebAccountId(accountId);
-  return listeners.get(id) ?? null;
+  return getListeners().get(id) ?? null;
 }
