@@ -6,7 +6,7 @@
  * This works around Feishu's platform limitation where bot messages
  * do not trigger im.message.receive_v1 events for other bots.
  */
-import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "openclaw/plugin-sdk/feishu";
+import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 
 // --- Account registry ---
