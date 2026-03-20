@@ -61,18 +61,18 @@ const testProfile =
     ? rawTestProfile
     : "normal";
 const isMacMiniProfile = testProfile === "macmini";
-// vmForks is a big win for transform/import heavy suites. Node 24 is stable again
-// for the default unit-fast lane after moving the known flaky files to fork-only
-// isolation, but Node 25+ still falls back to process forks until re-validated.
-// Keep it opt-out via OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
+// Vitest executes Node tests through Vite's SSR/module-runner pipeline, so the
+// shared unit lane still retains transformed ESM/module state even when the
+// tests themselves are not "server rendering" a website. vmForks is faster for
+// transform-heavy local runs, but on CI that retained cache matches the OOM
+// pattern from the heap snapshots. Keep CI on process forks by default, while
+// preserving OPENCLAW_TEST_VM_FORKS=1 as the explicit override/debug escape hatch.
 const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor <= 24 : true;
+const preferVmForksByDefault =
+  !isCI && !isWindows && supportsVmForks && !lowMemLocalHost && testProfile !== "low";
 const useVmForks =
   process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
-  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" &&
-    !isWindows &&
-    supportsVmForks &&
-    !lowMemLocalHost &&
-    (isCI || testProfile !== "low"));
+  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && preferVmForksByDefault);
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
