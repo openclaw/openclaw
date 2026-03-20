@@ -157,4 +157,31 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
+
+  it("allows BR contacts when allowFrom and sender differ only by the ninth digit", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+553598627740"],
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+5535998627740",
+      selfE164: "+5519999835286",
+      senderE164: "+5535998627740",
+      group: false,
+      pushName: "Jordan",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "553598627740@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
 });

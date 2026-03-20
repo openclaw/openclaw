@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isWhatsAppGroupJid, isWhatsAppUserTarget, normalizeWhatsAppTarget } from "./normalize.js";
+import {
+  areEquivalentWhatsAppDirectTargets,
+  expandWhatsAppDirectTargetVariants,
+  isWhatsAppGroupJid,
+  isWhatsAppUserTarget,
+  normalizeWhatsAppTarget,
+} from "./normalize.js";
 
 describe("normalizeWhatsAppTarget", () => {
   it("preserves group JIDs", () => {
@@ -55,6 +61,36 @@ describe("isWhatsAppUserTarget", () => {
     expect(isWhatsAppUserTarget("abc@s.whatsapp.net")).toBe(false);
     expect(isWhatsAppUserTarget("123456789-987654321@g.us")).toBe(false);
     expect(isWhatsAppUserTarget("+1555123")).toBe(false);
+  });
+});
+
+describe("expandWhatsAppDirectTargetVariants", () => {
+  it("treats BR mobile numbers with and without the ninth digit as equivalent", () => {
+    expect(expandWhatsAppDirectTargetVariants("+5535998627740")).toEqual([
+      "+5535998627740",
+      "+553598627740",
+    ]);
+    expect(expandWhatsAppDirectTargetVariants("+553598627740")).toEqual([
+      "+553598627740",
+      "+5535998627740",
+    ]);
+  });
+
+  it("does not invent ninth-digit variants for non-BR numbers or groups", () => {
+    expect(expandWhatsAppDirectTargetVariants("+15551234567")).toEqual(["+15551234567"]);
+    expect(expandWhatsAppDirectTargetVariants("120363401234567890@g.us")).toEqual([
+      "120363401234567890@g.us",
+    ]);
+  });
+});
+
+describe("areEquivalentWhatsAppDirectTargets", () => {
+  it("matches BR ninth-digit variants", () => {
+    expect(areEquivalentWhatsAppDirectTargets("+5535998627740", "+553598627740")).toBe(true);
+  });
+
+  it("does not match unrelated numbers", () => {
+    expect(areEquivalentWhatsAppDirectTargets("+5535998627740", "+5535998627741")).toBe(false);
   });
 });
 

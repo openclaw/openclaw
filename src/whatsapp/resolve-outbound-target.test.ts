@@ -137,6 +137,23 @@ describe("resolveWhatsAppOutboundTarget", () => {
       expectAllowedForTarget({ allowFrom: [PRIMARY_TARGET], mode: "implicit" });
     });
 
+    it("reuses the allowlist's canonical BR variant when ninth-digit forms differ", () => {
+      vi.mocked(normalize.normalizeWhatsAppTarget)
+        .mockReturnValueOnce("+553598627740")
+        .mockReturnValueOnce("+5535998627740");
+      vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
+      vi.mocked(normalize.areEquivalentWhatsAppDirectTargets).mockReturnValueOnce(true);
+
+      expectResolutionOk(
+        {
+          to: "+5535998627740",
+          allowFrom: ["+553598627740"],
+          mode: "implicit",
+        },
+        "+553598627740",
+      );
+    });
+
     it("denies message when target is not in allowList", () => {
       mockNormalizedDirectMessage(PRIMARY_TARGET, SECONDARY_TARGET);
       expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "implicit" });
