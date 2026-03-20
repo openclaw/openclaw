@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { channelTestPrefixes } from "../vitest.channel-paths.mjs";
 import { isUnitConfigTestFile } from "../vitest.unit-paths.mjs";
 import {
@@ -311,6 +312,49 @@ const timedHeavyUnitFiles =
 const unitFastExcludedFiles = [
   ...new Set([...unitBehaviorOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
 ];
+const tempCleanupPaths = new Set();
+const removeTempPath = (targetPath) => {
+  try {
+    fs.rmSync(targetPath, { recursive: true, force: true });
+  } catch {
+    // Best-effort cleanup only.
+  }
+};
+const createVitestConfigWithExtraExcludes = ({ baseConfigPath, extraExcludes, label }) => {
+  if (extraExcludes.length === 0) {
+    return baseConfigPath;
+  }
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-config-"));
+  const configPath = path.join(tempDir, `${label}.mjs`);
+  const baseConfigUrl = pathToFileURL(path.resolve(baseConfigPath)).href;
+  const contents = [
+    'import { defineConfig, mergeConfig } from "vitest/config";',
+    `import baseConfig from ${JSON.stringify(baseConfigUrl)};`,
+    "const baseTest = baseConfig?.test ?? {};",
+    `const extraExclude = ${JSON.stringify(extraExcludes)};`,
+    "export default mergeConfig(",
+    "  baseConfig,",
+    "  defineConfig({",
+    "    test: {",
+    "      ...baseTest,",
+    "      exclude: [...(baseTest.exclude ?? []), ...extraExclude],",
+    "    },",
+    "  }),",
+    ");",
+    "",
+  ].join("\n");
+  fs.writeFileSync(configPath, contents, "utf8");
+  tempCleanupPaths.add(tempDir);
+  return configPath;
+};
+const unitFastConfigPath =
+  isWindows && unitFastExcludedFiles.length > 0
+    ? createVitestConfigWithExtraExcludes({
+        baseConfigPath: "vitest.unit.config.ts",
+        extraExcludes: unitFastExcludedFiles,
+        label: "vitest.unit-fast",
+      })
+    : "vitest.unit.config.ts";
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
 const heavyUnitBuckets = packFilesByDuration(
@@ -331,10 +375,9 @@ const baseRuns = [
             "vitest",
             "run",
             "--config",
-            "vitest.unit.config.ts",
+            unitFastConfigPath,
             `--pool=${useVmForks ? "vmForks" : "forks"}`,
             ...(disableIsolation ? ["--isolate=false"] : []),
-            ...unitFastExcludedFiles.flatMap((file) => ["--exclude", file]),
           ],
         },
         ...(unitBehaviorIsolatedFiles.length > 0
@@ -1112,6 +1155,11 @@ const shutdown = (signal) => {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("exit", () => {
+  for (const targetPath of tempCleanupPaths) {
+    removeTempPath(targetPath);
+  }
+});
 
 if (process.env.OPENCLAW_TEST_LIST_LANES === "1") {
   const entriesToPrint = targetedEntries.length > 0 ? targetedEntries : runs;
