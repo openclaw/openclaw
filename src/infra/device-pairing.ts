@@ -236,6 +236,15 @@ function refreshPendingDevicePairingRequest(
   };
 }
 
+function resolveSupersededPendingSilent(params: {
+  existing: readonly DevicePairingPendingRequest[];
+  incomingSilent: boolean | undefined;
+}): boolean {
+  return Boolean(
+    params.incomingSilent && params.existing.every((pending) => pending.silent === true),
+  );
+}
+
 function buildPendingDevicePairingRequest(params: {
   requestId?: string;
   deviceId: string;
@@ -394,7 +403,15 @@ export async function requestDevicePairing(
       const superseded = buildPendingDevicePairingRequest({
         deviceId,
         isRepair,
-        req,
+        req: {
+          ...req,
+          // Preserve interactive visibility when superseding pending requests:
+          // if any previous pending request was interactive, keep this one interactive.
+          silent: resolveSupersededPendingSilent({
+            existing: pendingForDevice,
+            incomingSilent: req.silent,
+          }),
+        },
       });
       state.pendingById[superseded.requestId] = superseded;
       await persistState(state, baseDir);
