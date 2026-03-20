@@ -214,6 +214,7 @@ Docs: https://docs.openclaw.ai
 - LINE: harden Express webhook parsing to verified raw body (#51202) Thanks @gladiator9797 and @joshavant.
 - Exec: harden host env override handling across gateway and node (#51207) Thanks @gladiator9797 and @joshavant.
 - Voice Call: enforce spoken-output contract and fix stream TTS silence regression (#51500) Thanks @joshavant.
+
 - xAI/models: rename the bundled Grok 4.20 catalog entries to the GA IDs and normalize saved deprecated beta IDs at runtime so existing configs and sessions keep resolving. (#50772) thanks @Jaaneek
 - Plugins/Matrix TTS: send auto-TTS replies as native Matrix voice bubbles instead of generic audio attachments. (#37080) thanks @Matthew19990919.
 - Plugins/discovery: distinguish missing package entry files from package-path escape violations so startup skips absent plugin entry paths without raising false security diagnostics. (#52491) Thanks @hclsys.
