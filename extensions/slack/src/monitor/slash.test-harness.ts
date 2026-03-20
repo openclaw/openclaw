@@ -53,8 +53,6 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
-    recordSessionMetaFromInbound: (...args: unknown[]) =>
-      mocks.recordSessionMetaFromInboundMock(...args),
     resolveStorePath: (...args: unknown[]) => mocks.resolveStorePathMock(...args),
   };
 });

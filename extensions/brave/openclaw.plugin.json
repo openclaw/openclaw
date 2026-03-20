@@ -1,5 +1,8 @@
 {
   "id": "brave",
+  "providerAuthEnvVars": {
+    "brave": ["BRAVE_API_KEY"]
+  },
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Brave Search API Key",
