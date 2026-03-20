@@ -3,8 +3,10 @@ import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "../../browser/control-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
+import { listAgentEntries } from "../agent-scope.js";
 import { syncSkillsToWorkspace } from "../skills.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { requireSandboxBackendFactory } from "./backend.js";
@@ -18,11 +20,24 @@ import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js"
 import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
+function resolveSkipBootstrapForAgent(config: OpenClawConfig | undefined, agentId?: string) {
+  const id = agentId?.trim();
+  if (id && config) {
+    const normalized = normalizeAgentId(id);
+    const entry = listAgentEntries(config).find((a) => normalizeAgentId(a.id) === normalized);
+    if (entry && typeof entry.skipBootstrap === "boolean") {
+      return entry.skipBootstrap;
+    }
+  }
+  return config?.agents?.defaults?.skipBootstrap;
+}
+
 async function ensureSandboxWorkspaceLayout(params: {
   cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
   rawSessionKey: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
+  agentId?: string;
 }): Promise<{
   agentWorkspaceDir: string;
   scopeKey: string;
@@ -44,7 +59,7 @@ async function ensureSandboxWorkspaceLayout(params: {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
       agentWorkspaceDir,
-      params.config?.agents?.defaults?.skipBootstrap,
+      resolveSkipBootstrapForAgent(params.config, params.agentId),
     );
     if (cfg.workspaceAccess !== "rw") {
       try {
@@ -124,6 +139,7 @@ export async function resolveSandboxContext(params: {
     rawSessionKey,
     config: params.config,
     workspaceDir: params.workspaceDir,
+    agentId: resolved.runtime.agentId,
   });
 
   const docker = await resolveSandboxDockerUser({
@@ -228,6 +244,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
     rawSessionKey,
     config: params.config,
     workspaceDir: params.workspaceDir,
+    agentId: resolved.runtime.agentId,
   });
 
   return {

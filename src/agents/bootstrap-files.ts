@@ -1,4 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { listAgentEntries } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -24,6 +26,19 @@ export function makeBootstrapWarn(params: {
     return undefined;
   }
   return (message: string) => params.warn?.(`${message} (sessionKey=${params.sessionLabel})`);
+}
+
+type AgentListEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+
+function findAgentListEntry(
+  config: OpenClawConfig | undefined,
+  agentId: string | undefined,
+): AgentListEntry | undefined {
+  if (!config || typeof agentId !== "string" || !agentId.trim()) {
+    return undefined;
+  }
+  const normalized = normalizeAgentId(agentId);
+  return listAgentEntries(config).find((e) => normalizeAgentId(e.id) === normalized);
 }
 
 function sanitizeBootstrapFiles(
@@ -109,9 +124,10 @@ export async function resolveBootstrapContextForRun(params: {
   contextFiles: EmbeddedContextFile[];
 }> {
   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
+  const agentEntry = findAgentListEntry(params.config, params.agentId);
   const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
-    maxChars: resolveBootstrapMaxChars(params.config),
-    totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
+    maxChars: resolveBootstrapMaxChars(params.config, agentEntry),
+    totalMaxChars: resolveBootstrapTotalMaxChars(params.config, agentEntry),
     warn: params.warn,
   });
   return { bootstrapFiles, contextFiles };

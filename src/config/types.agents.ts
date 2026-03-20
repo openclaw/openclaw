@@ -84,6 +84,12 @@ export type AgentConfig = {
   sandbox?: AgentSandboxConfig;
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */
   params?: Record<string, unknown>;
+  /** Skip workspace bootstrap file seeding for this agent (overrides agents.defaults). */
+  skipBootstrap?: boolean;
+  /** Max chars per injected bootstrap file for this agent (overrides agents.defaults). */
+  bootstrapMaxChars?: number;
+  /** Max total chars across bootstrap files for this agent (overrides agents.defaults). */
+  bootstrapTotalMaxChars?: number;
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;

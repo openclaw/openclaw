@@ -25,6 +25,7 @@ services:
     environment:
       OPENCLAW_CONFIG_DIR: /home/node/.openclaw
       OPENCLAW_LOCAL_PATH_MAP: /home/node/.openclaw/config/runtime-path-map.json
+      OPENCLAW_SHARED_FILES_ROOT: /shared-files
       OPENCLAW_SKIP_CANVAS_HOST: "${OPENCLAW_SKIP_CANVAS_HOST:-1}"
       OPENCLAW_STARTUP_TIMING: "${OPENCLAW_STARTUP_TIMING:-1}"
       KUBECONFIG: /home/node/.kube/config
@@ -64,6 +65,7 @@ services:
     environment:
       OPENCLAW_CONFIG_DIR: /home/node/.openclaw
       OPENCLAW_LOCAL_PATH_MAP: /home/node/.openclaw/config/runtime-path-map.json
+      OPENCLAW_SHARED_FILES_ROOT: /shared-files
       KUBECONFIG: /home/node/.kube/config
 
   qdrant:

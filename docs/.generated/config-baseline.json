@@ -3145,6 +3145,26 @@
       "hasChildren": true
     },
     {
+      "path": "agents.defaults.sandbox.docker.allowedSourceRoots",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.sandbox.docker.allowedSourceRoots.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.sandbox.docker.apparmorProfile",
       "kind": "core",
       "type": "string",
@@ -3805,7 +3825,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "advanced"
+      ],
+      "label": "Skip Bootstrap",
+      "help": "When true, skips automatic creation of workspace bootstrap files (AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md, USER.md, HEARTBEAT.md, BOOTSTRAP.md) when the workspace is first prepared.",
       "hasChildren": false
     },
     {
@@ -4047,6 +4071,34 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.bootstrapMaxChars",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "Bootstrap Max Chars",
+      "help": "Per-agent override for max characters per injected workspace bootstrap file before truncation (overrides agents.defaults.bootstrapMaxChars).",
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.bootstrapTotalMaxChars",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "Bootstrap Total Max Chars",
+      "help": "Per-agent override for max total characters across all injected workspace bootstrap files (overrides agents.defaults.bootstrapTotalMaxChars).",
       "hasChildren": false
     },
     {
@@ -5475,6 +5527,26 @@
       "hasChildren": true
     },
     {
+      "path": "agents.list.*.sandbox.docker.allowedSourceRoots",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.sandbox.docker.allowedSourceRoots.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.sandbox.docker.apparmorProfile",
       "kind": "core",
       "type": "string",
@@ -6153,6 +6225,20 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.skipBootstrap",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Skip Bootstrap",
+      "help": "Per-agent override: when true, skips bootstrap file seeding for this agent's workspace and sandbox copy (overrides agents.defaults.skipBootstrap).",
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.subagents",
       "kind": "core",
       "type": "object",
@@ -6227,6 +6313,16 @@
     },
     {
       "path": "agents.list.*.subagents.thinking",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.thinkingDefault",
       "kind": "core",
       "type": "string",
       "required": false,
@@ -6647,6 +6743,26 @@
       "hasChildren": true
     },
     {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.allowedFirstPositionals",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.tools.exec.safeBinProfiles.*.allowedFirstPositionals.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.tools.exec.safeBinProfiles.*.allowedValueFlags",
       "kind": "core",
       "type": "array",
@@ -6782,7 +6898,37 @@
       "hasChildren": true
     },
     {
+      "path": "agents.list.*.tools.fs.editWorkspaceOnly",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.tools.fs.readWorkspaceOnly",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.tools.fs.workspaceOnly",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.tools.fs.writeWorkspaceOnly",
       "kind": "core",
       "type": "boolean",
       "required": false,
@@ -11734,6 +11880,116 @@
       "hasChildren": false
     },
     {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.lang",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.outputFormat",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.pitch",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.proxy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.rate",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.saveSubtitles",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.timeoutMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.voice",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.volume",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.discord.accounts.*.voice.tts.mode",
       "kind": "channel",
       "type": "string",
@@ -11961,11 +12217,6 @@
       "kind": "channel",
       "type": "string",
       "required": false,
-      "enumValues": [
-        "elevenlabs",
-        "openai",
-        "edge"
-      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -14699,6 +14950,116 @@
       "hasChildren": false
     },
     {
+      "path": "channels.discord.voice.tts.microsoft",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.lang",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.outputFormat",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.pitch",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.proxy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.rate",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.saveSubtitles",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.timeoutMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.voice",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.volume",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.discord.voice.tts.mode",
       "kind": "channel",
       "type": "string",
@@ -14926,11 +15287,6 @@
       "kind": "channel",
       "type": "string",
       "required": false,
-      "enumValues": [
-        "elevenlabs",
-        "openai",
-        "edge"
-      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -43561,6 +43917,116 @@
       "hasChildren": false
     },
     {
+      "path": "messages.tts.microsoft",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "messages.tts.microsoft.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.lang",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.outputFormat",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.pitch",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.proxy",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.rate",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.saveSubtitles",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.timeoutMs",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.voice",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.volume",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "messages.tts.mode",
       "kind": "core",
       "type": "string",
@@ -43786,11 +44252,6 @@
       "kind": "core",
       "type": "string",
       "required": false,
-      "enumValues": [
-        "elevenlabs",
-        "openai",
-        "edge"
-      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -44797,6 +45258,24 @@
       "hasChildren": true
     },
     {
+      "path": "plugins.entries.acpx.config.authPolicy",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "skip",
+        "fail"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Auth Policy",
+      "help": "How acpx should behave when the target ACP adapter requires authentication and no matching credentials are configured.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.acpx.config.command",
       "kind": "plugin",
       "type": "string",
@@ -44835,7 +45314,7 @@
         "advanced"
       ],
       "label": "Expected acpx Version",
-      "help": "Exact version to enforce (for example 0.1.16) or \"any\" to skip strict version matching.",
+      "help": "Exact version to enforce (for example 0.2.0) or \"any\" to skip strict version matching.",
       "hasChildren": false
     },
     {
@@ -46145,6 +46624,75 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.elevenlabs",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/elevenlabs-speech",
+      "help": "OpenClaw ElevenLabs speech plugin (plugin: elevenlabs)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.elevenlabs.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/elevenlabs-speech Config",
+      "help": "Plugin-defined config payload for elevenlabs.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.elevenlabs.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/elevenlabs-speech",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.elevenlabs.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.elevenlabs.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.feishu",
       "kind": "plugin",
       "type": "object",
@@ -46766,7 +47314,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.kimi-coding",
+      "path": "plugins.entries.kimi",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46775,12 +47323,12 @@
       "tags": [
         "advanced"
       ],
-      "label": "@openclaw/kimi-coding-provider",
-      "help": "OpenClaw Kimi Coding provider plugin (plugin: kimi-coding)",
+      "label": "@openclaw/kimi-provider",
+      "help": "OpenClaw Kimi provider plugin (plugin: kimi)",
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.kimi-coding.config",
+      "path": "plugins.entries.kimi.config",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46789,12 +47337,12 @@
       "tags": [
         "advanced"
       ],
-      "label": "@openclaw/kimi-coding-provider Config",
-      "help": "Plugin-defined config payload for kimi-coding.",
+      "label": "@openclaw/kimi-provider Config",
+      "help": "Plugin-defined config payload for kimi.",
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.kimi-coding.enabled",
+      "path": "plugins.entries.kimi.enabled",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -46803,11 +47351,11 @@
       "tags": [
         "advanced"
       ],
-      "label": "Enable @openclaw/kimi-coding-provider",
+      "label": "Enable @openclaw/kimi-provider",
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.kimi-coding.hooks",
+      "path": "plugins.entries.kimi.hooks",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46821,7 +47369,7 @@
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.kimi-coding.hooks.allowPromptInjection",
+      "path": "plugins.entries.kimi.hooks.allowPromptInjection",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -47504,6 +48052,75 @@
     },
     {
       "path": "plugins.entries.memory-lancedb.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/microsoft-speech",
+      "help": "OpenClaw Microsoft speech plugin (plugin: microsoft)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/microsoft-speech Config",
+      "help": "Plugin-defined config payload for microsoft.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/microsoft-speech",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft.hooks.allowPromptInjection",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -51184,11 +51801,6 @@
       "kind": "plugin",
       "type": "string",
       "required": false,
-      "enumValues": [
-        "openai",
-        "elevenlabs",
-        "edge"
-      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [
@@ -51196,7 +51808,7 @@
         "media"
       ],
       "label": "TTS Provider Override",
-      "help": "Deep-merges with messages.tts (Edge is ignored for calls).",
+      "help": "Deep-merges with messages.tts (Microsoft is ignored for calls).",
       "hasChildren": false
     },
     {
@@ -54099,6 +54711,21 @@
       "hasChildren": false
     },
     {
+      "path": "tools.agentToAgent.sessionScope",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage",
+        "tools"
+      ],
+      "label": "Agent-to-Agent Session Scope",
+      "help": "Optional cross-agent session-target restriction for session tools: \"all\" preserves current behavior, while \"main_only\" limits cross-agent access to each allowed agent's main session only.",
+      "hasChildren": false
+    },
+    {
       "path": "tools.allow",
       "kind": "core",
       "type": "array",
@@ -54564,6 +55191,26 @@
       "hasChildren": true
     },
     {
+      "path": "tools.exec.safeBinProfiles.*.allowedFirstPositionals",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.exec.safeBinProfiles.*.allowedFirstPositionals.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "tools.exec.safeBinProfiles.*.allowedValueFlags",
       "kind": "core",
       "type": "array",
@@ -54712,6 +55359,34 @@
       "hasChildren": true
     },
     {
+      "path": "tools.fs.editWorkspaceOnly",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Workspace-only Edit Tool",
+      "help": "Restrict only the edit tool to the workspace directory. Use this when an agent may read broadly but should only modify files in its own workspace.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.fs.readWorkspaceOnly",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Workspace-only Read Tool",
+      "help": "Restrict only the read tool to the workspace directory. Use this when an agent needs broader read access than write/edit or vice versa.",
+      "hasChildren": false
+    },
+    {
       "path": "tools.fs.workspaceOnly",
       "kind": "core",
       "type": "boolean",
@@ -54723,6 +55398,20 @@
       ],
       "label": "Workspace-only FS tools",
       "help": "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.fs.writeWorkspaceOnly",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Workspace-only Write Tool",
+      "help": "Restrict only the write tool to the workspace directory. Use this when an agent may read broadly but should only create files in its own workspace.",
       "hasChildren": false
     },
     {
@@ -57712,7 +58401,7 @@
         "tools"
       ],
       "label": "Session Tools Visibility",
-      "help": "Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. (\"tree\" default = current session + spawned subagent sessions; \"self\" = only current; \"agent\" = any session in the current agent id; \"all\" = any session; cross-agent still requires tools.agentToAgent).",
+      "help": "Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. (\"tree\" default = current session + spawned subagent sessions; \"self\" = only current; \"agent\" = any session in the current agent id; \"all\" = any session; cross-agent still requires tools.agentToAgent and may be further limited by tools.agentToAgent.sessionScope).",
       "hasChildren": false
     },
     {

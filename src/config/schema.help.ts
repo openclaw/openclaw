@@ -208,6 +208,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
   "agents.list[].skills":
     "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
+  "agents.list.*.skipBootstrap":
+    "Per-agent override: when true, skips bootstrap file seeding for this agent's workspace and sandbox copy (overrides agents.defaults.skipBootstrap).",
+  "agents.list[].skipBootstrap":
+    "Per-agent override: when true, skips bootstrap file seeding for this agent's workspace and sandbox copy (overrides agents.defaults.skipBootstrap).",
+  "agents.list.*.bootstrapMaxChars":
+    "Per-agent override for max characters per injected workspace bootstrap file before truncation (overrides agents.defaults.bootstrapMaxChars).",
+  "agents.list[].bootstrapMaxChars":
+    "Per-agent override for max characters per injected workspace bootstrap file before truncation (overrides agents.defaults.bootstrapMaxChars).",
+  "agents.list.*.bootstrapTotalMaxChars":
+    "Per-agent override for max total characters across all injected workspace bootstrap files (overrides agents.defaults.bootstrapTotalMaxChars).",
+  "agents.list[].bootstrapTotalMaxChars":
+    "Per-agent override for max total characters across all injected workspace bootstrap files (overrides agents.defaults.bootstrapTotalMaxChars).",
   agents:
     "Agent runtime configuration root covering defaults and explicit agent entries used for routing and execution context. Keep this section explicit so model/tool behavior stays predictable across multi-agent workflows.",
   "agents.defaults":
@@ -787,6 +799,8 @@ export const FIELD_HELP: Record<string, string> = {
   "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
   "agents.defaults.workspace":
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
+  "agents.defaults.skipBootstrap":
+    "When true, skips automatic creation of workspace bootstrap files (AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md, USER.md, HEARTBEAT.md, BOOTSTRAP.md) when the workspace is first prepared.",
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":

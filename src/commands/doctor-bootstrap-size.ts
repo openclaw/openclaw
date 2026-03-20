@@ -1,4 +1,8 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import {
   buildBootstrapInjectionStats,
   analyzeBootstrapBudget,
@@ -9,6 +13,7 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "../agents/pi-embedded-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { note } from "../terminal/note.js";
 
 function formatInt(value: number): string {
@@ -31,12 +36,17 @@ function formatCauses(causes: Array<"per-file-limit" | "total-limit">): string {
 }
 
 export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  const bootstrapMaxChars = resolveBootstrapMaxChars(cfg);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg);
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, defaultAgentId);
+  const bootstrapAgentEntry = listAgentEntries(cfg).find(
+    (e) => normalizeAgentId(e.id) === defaultAgentId,
+  );
+  const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, bootstrapAgentEntry);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg, bootstrapAgentEntry);
   const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: cfg,
+    agentId: defaultAgentId,
   });
   const stats = buildBootstrapInjectionStats({
     bootstrapFiles,
@@ -90,10 +100,14 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
     lines.push("");
   }
   if (needsPerFileTip) {
-    lines.push("- Tip: tune `agents.defaults.bootstrapMaxChars` for per-file limits.");
+    lines.push(
+      "- Tip: tune `agents.defaults.bootstrapMaxChars` for per-file limits (or `agents.list[].bootstrapMaxChars` per agent).",
+    );
   }
   if (needsTotalTip) {
-    lines.push("- Tip: tune `agents.defaults.bootstrapTotalMaxChars` for total-budget limits.");
+    lines.push(
+      "- Tip: tune `agents.defaults.bootstrapTotalMaxChars` for total-budget limits (or `agents.list[].bootstrapTotalMaxChars` per agent).",
+    );
   }
 
   note(lines.join("\n"), "Bootstrap file size");

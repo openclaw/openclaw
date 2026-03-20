@@ -96,7 +96,19 @@ type TrimBootstrapResult = {
   originalLength: number;
 };
 
-export function resolveBootstrapMaxChars(cfg?: OpenClawConfig): number {
+type BootstrapCharOverrideSource = {
+  bootstrapMaxChars?: number;
+  bootstrapTotalMaxChars?: number;
+};
+
+export function resolveBootstrapMaxChars(
+  cfg?: OpenClawConfig,
+  agentEntry?: BootstrapCharOverrideSource | null,
+): number {
+  const perAgent = agentEntry?.bootstrapMaxChars;
+  if (typeof perAgent === "number" && Number.isFinite(perAgent) && perAgent > 0) {
+    return Math.floor(perAgent);
+  }
   const raw = cfg?.agents?.defaults?.bootstrapMaxChars;
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.floor(raw);
@@ -104,7 +116,14 @@ export function resolveBootstrapMaxChars(cfg?: OpenClawConfig): number {
   return DEFAULT_BOOTSTRAP_MAX_CHARS;
 }
 
-export function resolveBootstrapTotalMaxChars(cfg?: OpenClawConfig): number {
+export function resolveBootstrapTotalMaxChars(
+  cfg?: OpenClawConfig,
+  agentEntry?: BootstrapCharOverrideSource | null,
+): number {
+  const perAgent = agentEntry?.bootstrapTotalMaxChars;
+  if (typeof perAgent === "number" && Number.isFinite(perAgent) && perAgent > 0) {
+    return Math.floor(perAgent);
+  }
   const raw = cfg?.agents?.defaults?.bootstrapTotalMaxChars;
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.floor(raw);
@@ -197,7 +216,11 @@ export async function ensureSessionHeader(params: {
 
 export function buildBootstrapContextFiles(
   files: WorkspaceBootstrapFile[],
-  opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
+  opts?: {
+    warn?: (message: string) => void;
+    maxChars?: number;
+    totalMaxChars?: number;
+  },
 ): EmbeddedContextFile[] {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
   const totalMaxChars = Math.max(

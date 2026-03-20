@@ -8,8 +8,8 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
-import { resolveSessionAgentIds } from "./agent-scope.js";
+import { normalizeAgentId, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { listAgentEntries, resolveSessionAgentIds } from "./agent-scope.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapInjectionStats,
@@ -113,15 +113,27 @@ export async function runCliAgent(params: {
     .join("\n");
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
+  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  const bootstrapAgentEntry = listAgentEntries(params.config ?? {}).find(
+    (e) => normalizeAgentId(e.id) === sessionAgentId,
+  );
   const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
-    warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+    agentId: sessionAgentId,
+    warn: makeBootstrapWarn({
+      sessionLabel,
+      warn: (message) => log.warn(message),
+    }),
   });
-  const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
+  const bootstrapMaxChars = resolveBootstrapMaxChars(params.config, bootstrapAgentEntry);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config, bootstrapAgentEntry);
   const bootstrapAnalysis = analyzeBootstrapBudget({
     files: buildBootstrapInjectionStats({
       bootstrapFiles,
@@ -136,11 +148,6 @@ export async function runCliAgent(params: {
     mode: bootstrapPromptWarningMode,
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
-  });
-  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
   });
   const heartbeatPrompt =
     sessionAgentId === defaultAgentId
@@ -358,9 +365,13 @@ export async function runCliAgent(params: {
                 "It may have been waiting for interactive input or an approval prompt.",
                 "For Claude Code, prefer --permission-mode bypassPermissions --print.",
               ].join(" ");
-              enqueueSystemEvent(stallNotice, { sessionKey: params.sessionKey });
+              enqueueSystemEvent(stallNotice, {
+                sessionKey: params.sessionKey,
+              });
               requestHeartbeatNow(
-                scopedHeartbeatWakeOptions(params.sessionKey, { reason: "cli:watchdog:stall" }),
+                scopedHeartbeatWakeOptions(params.sessionKey, {
+                  reason: "cli:watchdog:stall",
+                }),
               );
             }
             throw new FailoverError(timeoutReason, {

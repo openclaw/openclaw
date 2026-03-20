@@ -22,8 +22,16 @@ const makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstra
 
 const createLargeBootstrapFiles = (): WorkspaceBootstrapFile[] => [
   makeFile({ name: "AGENTS.md", content: "a".repeat(10_000) }),
-  makeFile({ name: "SOUL.md", path: "/tmp/SOUL.md", content: "b".repeat(10_000) }),
-  makeFile({ name: "USER.md", path: "/tmp/USER.md", content: "c".repeat(10_000) }),
+  makeFile({
+    name: "SOUL.md",
+    path: "/tmp/SOUL.md",
+    content: "b".repeat(10_000),
+  }),
+  makeFile({
+    name: "USER.md",
+    path: "/tmp/USER.md",
+    content: "c".repeat(10_000),
+  }),
 ];
 describe("buildBootstrapContextFiles", () => {
   it("keeps missing markers", () => {
@@ -88,7 +96,11 @@ describe("buildBootstrapContextFiles", () => {
   it("enforces strict total cap even when truncation markers are present", () => {
     const files = [
       makeFile({ name: "AGENTS.md", content: "a".repeat(1_000) }),
-      makeFile({ name: "SOUL.md", path: "/tmp/SOUL.md", content: "b".repeat(1_000) }),
+      makeFile({
+        name: "SOUL.md",
+        path: "/tmp/SOUL.md",
+        content: "b".repeat(1_000),
+      }),
     ];
     const result = buildBootstrapContextFiles(files, {
       maxChars: 100,
@@ -194,6 +206,24 @@ describe("bootstrap limit resolvers", () => {
       } as OpenClawConfig;
       expect(resolver.resolve(cfg)).toBe(resolver.defaultValue);
     }
+  });
+
+  it("prefer per-agent entry over defaults", () => {
+    const cfg = {
+      agents: {
+        defaults: { bootstrapMaxChars: 111, bootstrapTotalMaxChars: 222 },
+        list: [
+          {
+            id: "leaf",
+            bootstrapMaxChars: 12000,
+            bootstrapTotalMaxChars: 20000,
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const entry = cfg.agents?.list?.[0];
+    expect(resolveBootstrapMaxChars(cfg, entry)).toBe(12000);
+    expect(resolveBootstrapTotalMaxChars(cfg, entry)).toBe(20000);
   });
 });
 

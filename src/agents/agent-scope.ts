@@ -39,6 +39,9 @@ type ResolvedAgentConfig = {
   subagents?: AgentEntry["subagents"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
+  skipBootstrap?: boolean;
+  bootstrapMaxChars?: number;
+  bootstrapTotalMaxChars?: number;
 };
 
 let defaultAgentWarned = false;
@@ -141,6 +144,16 @@ export function resolveAgentConfig(
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
     sandbox: entry.sandbox,
     tools: entry.tools,
+    skipBootstrap: typeof entry.skipBootstrap === "boolean" ? entry.skipBootstrap : undefined,
+    bootstrapMaxChars:
+      typeof entry.bootstrapMaxChars === "number" && Number.isFinite(entry.bootstrapMaxChars)
+        ? entry.bootstrapMaxChars
+        : undefined,
+    bootstrapTotalMaxChars:
+      typeof entry.bootstrapTotalMaxChars === "number" &&
+      Number.isFinite(entry.bootstrapTotalMaxChars)
+        ? entry.bootstrapTotalMaxChars
+        : undefined,
   };
 }
 

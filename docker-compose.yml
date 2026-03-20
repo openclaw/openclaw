@@ -11,6 +11,7 @@ services:
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       OPENCLAW_LOCAL_PATH_MAP: /home/node/.openclaw/config/runtime-path-map.json
+      OPENCLAW_SHARED_FILES_ROOT: /shared-files
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
@@ -18,6 +19,7 @@ services:
     volumes:
       - ${OPENCLAW_CONFIG_DIR:-../../..}:/home/node/.openclaw
       - ${OPENCLAW_SHARED_WORKSPACE_HOST:-../..}:/shared-workspace
+      - ${OPENCLAW_SHARED_FILES_HOST:-../../../shared-files}:/shared-files
       - ${OPENCLAW_AGENT_HOME_TONY_HOST:-../../../workspace-tony}:/agent-homes/tony
       - ${OPENCLAW_AGENT_HOME_BOBBY_DIGITAL_HOST:-../../../workspace-bobby-digital}:/agent-homes/bobby-digital
       - ${OPENCLAW_AGENT_HOME_ANGELA_HOST:-../../../workspace-angela}:/agent-homes/angela
@@ -78,6 +80,7 @@ services:
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       OPENCLAW_LOCAL_PATH_MAP: /home/node/.openclaw/config/runtime-path-map.json
+      OPENCLAW_SHARED_FILES_ROOT: /shared-files
       BROWSER: echo
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
@@ -86,6 +89,7 @@ services:
     volumes:
       - ${OPENCLAW_CONFIG_DIR:-../../..}:/home/node/.openclaw
       - ${OPENCLAW_SHARED_WORKSPACE_HOST:-../..}:/shared-workspace
+      - ${OPENCLAW_SHARED_FILES_HOST:-../../../shared-files}:/shared-files
       - ${OPENCLAW_AGENT_HOME_TONY_HOST:-../../../workspace-tony}:/agent-homes/tony
       - ${OPENCLAW_AGENT_HOME_BOBBY_DIGITAL_HOST:-../../../workspace-bobby-digital}:/agent-homes/bobby-digital
       - ${OPENCLAW_AGENT_HOME_ANGELA_HOST:-../../../workspace-angela}:/agent-homes/angela

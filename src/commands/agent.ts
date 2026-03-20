@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 const log = createSubsystemLogger("commands/agent");
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveAgentRuntimeConfig,
@@ -644,9 +645,12 @@ async function prepareAgentCommandExecution(
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
+  const resolvedBootstrapAgent = resolveAgentConfig(cfg, sessionAgentId);
+  const skipBootstrapForWorkspace =
+    resolvedBootstrapAgent?.skipBootstrap ?? cfg.agents?.defaults?.skipBootstrap;
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+    ensureBootstrapFiles: !skipBootstrapForWorkspace,
   });
   const workspaceDir = workspace.dir;
   const acpManager = getAcpSessionManager();

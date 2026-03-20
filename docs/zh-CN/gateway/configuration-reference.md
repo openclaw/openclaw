@@ -789,6 +789,8 @@ IRC 由扩展支持，并配置在 `channels.irc` 下。
 
 禁用自动创建工作区引导文件（`AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`、`HEARTBEAT.md`、`BOOTSTRAP.md`）。
 
+可按智能体覆盖：`agents.list[].skipBootstrap`（见下文 [按智能体的引导配置](#per-agent-bootstrap-agentslist-zh)）。
+
 ```json5
 {
   agents: { defaults: { skipBootstrap: true } },
@@ -799,6 +801,8 @@ IRC 由扩展支持，并配置在 `channels.irc` 下。
 
 单个工作区引导文件在截断前的最大字符数。默认：`20000`。
 
+可按智能体覆盖：`agents.list[].bootstrapMaxChars`。
+
 ```json5
 {
   agents: { defaults: { bootstrapMaxChars: 20000 } },
@@ -808,6 +812,8 @@ IRC 由扩展支持，并配置在 `channels.irc` 下。
 ### `agents.defaults.bootstrapTotalMaxChars`
 
 所有工作区引导文件注入时的最大总字符数。默认：`150000`。
+
+可按智能体覆盖：`agents.list[].bootstrapTotalMaxChars`。
 
 ```json5
 {
@@ -1411,6 +1417,40 @@ scripts/sandbox-browser-setup.sh   # 可选的浏览器镜像
 - `identity` 会派生默认值：从 `emoji` 派生 `ackReaction`，从 `name`/`emoji` 派生 `mentionPatterns`。
 - `subagents.allowAgents`：`sessions_spawn` 的智能体 ID allowlist（`["*"]` = 任意；默认：仅同一智能体）。
 - 沙箱继承保护：若请求方会话处于沙箱中，`sessions_spawn` 会拒绝那些将以非沙箱方式运行的目标。
+
+### 按智能体的引导配置（`agents.list[]`）
+
+<a id="per-agent-bootstrap-agentslist-zh"></a>
+
+对于**会话解析得到的智能体 ID**，以下可选字段会覆盖对应的 `agents.defaults.*`（并作用于该智能体的引导上下文注入，以及工作区/沙箱工作区的引导文件准备）：
+
+- **`skipBootstrap`**：为 `true` 时，跳过在智能体工作区（以及会话处于沙箱时在沙箱工作区）创建/复制引导用 Markdown 文件。适合主要依赖 skills、不需要根目录引导文件的子智能体。
+- **`bootstrapMaxChars`**：构建注入上下文时，每个引导文件在截断前的最大字符数。
+- **`bootstrapTotalMaxChars`**：所有引导文件注入字符总数的封顶值。
+
+```json5
+{
+  agents: {
+    defaults: {
+      bootstrapMaxChars: 25000,
+      bootstrapTotalMaxChars: 50000,
+    },
+    list: [
+      {
+        id: "orchestrator",
+        default: true,
+        // 继承上面的 defaults
+      },
+      {
+        id: "leaf-worker",
+        skipBootstrap: true,
+        bootstrapMaxChars: 12000,
+        bootstrapTotalMaxChars: 20000,
+      },
+    ],
+  },
+}
+```
 
 ---
 

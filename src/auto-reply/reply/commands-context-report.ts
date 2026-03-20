@@ -1,3 +1,4 @@
+import { listAgentEntries, resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
 import {
   resolveBootstrapMaxChars,
@@ -5,6 +6,7 @@ import {
 } from "../../agents/pi-embedded-helpers.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -50,8 +52,16 @@ async function resolveContextReport(
     return existing;
   }
 
-  const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg);
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+    agentId: params.agentId,
+  });
+  const bootstrapAgentEntry = listAgentEntries(params.cfg).find(
+    (e) => normalizeAgentId(e.id) === sessionAgentId,
+  );
+  const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg, bootstrapAgentEntry);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg, bootstrapAgentEntry);
   const { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime } =
     await resolveCommandsSystemPromptBundle(params);
 

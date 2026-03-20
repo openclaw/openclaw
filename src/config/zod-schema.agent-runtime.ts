@@ -835,6 +835,9 @@ export const AgentEntrySchema = z
         z.literal("adaptive"),
       ])
       .optional(),
+    skipBootstrap: z.boolean().optional(),
+    bootstrapMaxChars: z.number().int().positive().optional(),
+    bootstrapTotalMaxChars: z.number().int().positive().optional(),
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
   })

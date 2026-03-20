@@ -782,6 +782,8 @@ Optional repository root shown in the system prompt's Runtime line. If unset, Op
 
 Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`).
 
+Per-agent override: `agents.list[].skipBootstrap` (see [Per-agent bootstrap](#per-agent-bootstrap-agentslist) below).
+
 ```json5
 {
   agents: { defaults: { skipBootstrap: true } },
@@ -792,6 +794,8 @@ Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`
 
 Max characters per workspace bootstrap file before truncation. Default: `20000`.
 
+Per-agent override: `agents.list[].bootstrapMaxChars`.
+
 ```json5
 {
   agents: { defaults: { bootstrapMaxChars: 20000 } },
@@ -801,6 +805,8 @@ Max characters per workspace bootstrap file before truncation. Default: `20000`.
 ### `agents.defaults.bootstrapTotalMaxChars`
 
 Max total characters injected across all workspace bootstrap files. Default: `150000`.
+
+Per-agent override: `agents.list[].bootstrapTotalMaxChars`.
 
 ```json5
 {
@@ -1404,6 +1410,40 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
+
+### Per-agent bootstrap (`agents.list[]`)
+
+<a id="per-agent-bootstrap-agentslist"></a>
+
+For the **session’s resolved agent id**, these optional fields override the matching `agents.defaults.*` values (and apply to bootstrap injection and workspace/sandbox seeding for that agent):
+
+- **`skipBootstrap`**: when `true`, skips creating/copying bootstrap markdown files into the agent workspace (and into the sandbox workspace when the session is sandboxed). Useful for leaf workers that should rely on skills only.
+- **`bootstrapMaxChars`**: max characters per bootstrap file before truncation when building injected context.
+- **`bootstrapTotalMaxChars`**: cap on total injected bootstrap characters across all files.
+
+```json5
+{
+  agents: {
+    defaults: {
+      bootstrapMaxChars: 25000,
+      bootstrapTotalMaxChars: 50000,
+    },
+    list: [
+      {
+        id: "orchestrator",
+        default: true,
+        // inherits defaults above
+      },
+      {
+        id: "leaf-worker",
+        skipBootstrap: true,
+        bootstrapMaxChars: 12000,
+        bootstrapTotalMaxChars: 20000,
+      },
+    ],
+  },
+}
+```
 
 ---
 
