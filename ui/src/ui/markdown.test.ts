@@ -42,6 +42,15 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("Click to enlarge");
   });
 
+  it("renders Mermaid fences case-insensitively", () => {
+    const html = toSanitizedMarkdownHtml(
+      ["```Mermaid", "flowchart TD", "A --> B", "```"].join("\n"),
+    );
+
+    expect(html).toContain('class="mermaid-block"');
+    expect(html).toContain('class="language-mermaid"');
+  });
+
   it("flattens remote markdown images into alt text", () => {
     const html = toSanitizedMarkdownHtml("![Alt text](https://example.com/image.png)");
     expect(html).not.toContain("<img");

@@ -36,6 +36,10 @@ type LifecycleHost = {
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStream: string | null;
+  settings?: {
+    chatShowThinking?: boolean;
+    chatShowToolCalls?: boolean;
+  };
   logsAutoFollow: boolean;
   logsAtBottom: boolean;
   logsEntries: unknown[];
@@ -89,13 +93,20 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
   if (host.tab === "chat" && host.chatManualRefreshInFlight) {
     return;
   }
+  const previousSettings = changed.get("settings") as LifecycleHost["settings"] | undefined;
+  const chatRenderSettingsChanged =
+    changed.has("settings") &&
+    !!previousSettings &&
+    (previousSettings.chatShowThinking !== host.settings?.chatShowThinking ||
+      previousSettings.chatShowToolCalls !== host.settings?.chatShowToolCalls);
   if (
     host.tab === "chat" &&
     (changed.has("chatMessages") ||
       changed.has("chatToolMessages") ||
       changed.has("chatStream") ||
       changed.has("chatLoading") ||
-      changed.has("tab"))
+      changed.has("tab") ||
+      chatRenderSettingsChanged)
   ) {
     const forcedByTab = changed.has("tab");
     const forcedByLoad =

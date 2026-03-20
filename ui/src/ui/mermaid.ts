@@ -15,6 +15,15 @@ const mermaidSanitizeOptions = {
   HTML_INTEGRATION_POINTS: { foreignobject: true },
 };
 
+function setMermaidRenderError(renderTarget: HTMLElement, message: string) {
+  renderTarget.removeAttribute("role");
+  renderTarget.removeAttribute("aria-label");
+  renderTarget.removeAttribute("tabindex");
+  renderTarget.removeAttribute("title");
+  renderTarget.setAttribute("aria-live", "polite");
+  renderTarget.textContent = message;
+}
+
 async function loadMermaidApi(): Promise<MermaidApi> {
   if (!mermaidApiPromise) {
     mermaidApiPromise = import("mermaid")
@@ -152,8 +161,10 @@ async function renderMermaidBlocks(root: ParentNode): Promise<void> {
     for (const block of blocks) {
       const renderTarget = block.querySelector<HTMLElement>(".mermaid-block__render");
       if (renderTarget) {
-        renderTarget.textContent =
-          "Mermaid render failed to load. Reload the page or expand source to inspect diagram text.";
+        setMermaidRenderError(
+          renderTarget,
+          "Mermaid render failed to load. Reload the page or expand source to inspect diagram text.",
+        );
       }
       block.dataset.mermaidStatus = "error";
     }
@@ -177,7 +188,10 @@ async function renderMermaidBlocks(root: ParentNode): Promise<void> {
       block.dataset.mermaidStatus = "ready";
     } catch (err) {
       console.warn("[markdown] mermaid render failed", err);
-      renderTarget.textContent = "Mermaid render failed. Expand source to inspect diagram text.";
+      setMermaidRenderError(
+        renderTarget,
+        "Mermaid render failed. Expand source to inspect diagram text.",
+      );
       block.dataset.mermaidStatus = "error";
     }
   }
