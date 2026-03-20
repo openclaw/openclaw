@@ -51,6 +51,13 @@ describe("node-host sanitizeEnv", () => {
       expect(env.BASH_ENV).toBeUndefined();
     });
   });
+
+  it("preserves inherited non-portable Windows-style env keys", () => {
+    withEnv({ "ProgramFiles(x86)": "C:\\Program Files (x86)" }, () => {
+      const env = sanitizeEnv(undefined);
+      expect(env["ProgramFiles(x86)"]).toBe("C:\\Program Files (x86)");
+    });
+  });
 });
 
 describe("node-host output decoding", () => {
