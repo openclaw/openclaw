@@ -46,8 +46,15 @@ export type AgentCommandOpts = {
   to?: string;
   sessionId?: string;
   sessionKey?: string;
+  /** Optional explicit session transcript file path. When provided, overrides
+   * the file path derived from sessionId/sessionKey. */
+  sessionFile?: string;
   thinking?: string;
   thinkingOnce?: string;
+  /** Reasoning level override ("on" | "off" | "stream"). Passed through to the system prompt
+   * so programmatic callers (e.g. closing-turn hook) can match the live session's
+   * Reasoning line and hit Anthropic's prompt cache. */
+  reasoning?: string;
   verbose?: string;
   json?: boolean;
   timeout?: string;

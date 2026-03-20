@@ -45,11 +45,11 @@ When you run `/new` or `/reset`:
 }
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | boolean | true | Enable/disable the hook |
-| `timeoutSeconds` | number | 120 | Hard timeout for the closing turn agent |
-| `model` | string | (agent default) | Model override for the closing turn |
+| Option           | Type    | Default         | Description                             |
+| ---------------- | ------- | --------------- | --------------------------------------- |
+| `enabled`        | boolean | true            | Enable/disable the hook                 |
+| `timeoutSeconds` | number  | 120             | Hard timeout for the closing turn agent |
+| `model`          | string  | (agent default) | Model override for the closing turn     |
 
 ## Disabling
 

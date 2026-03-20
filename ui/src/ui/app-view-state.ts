@@ -366,10 +366,10 @@ export type AppViewState = {
     setPassword: (next: string) => void;
     setSessionKey: (next: string) => void;
     chatModelCatalog: Array<{ id: string; name: string; provider: string }>;
-  chatModelCatalogLoading: boolean;
-  handleLoadModelCatalog: () => Promise<void>;
-  handleChatModelChange: (model: string | null) => Promise<void>;
-  setChatMessage: (next: string) => void;
+    chatModelCatalogLoading: boolean;
+    handleLoadModelCatalog: () => Promise<void>;
+    handleChatModelChange: (model: string | null) => Promise<void>;
+    setChatMessage: (next: string) => void;
     handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
     handleAbortChat: () => Promise<void>;
     removeQueuedMessage: (id: string) => void;

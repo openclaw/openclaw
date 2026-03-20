@@ -3,7 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-
+import {
+  abortEmbeddedPiRun,
+  isEmbeddedPiRunActive,
+  waitForEmbeddedPiRunEnd,
+} from "../../agents/pi-embedded-runner/runs.js";
+import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -970,7 +975,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       reason: "patch",
     });
   },
-  "sessions.reset": async ({ params, respond, context }) => {
+  "sessions.reset": async ({ params, respond, context: _context }) => {
     if (!assertValidParams(params, validateSessionsResetParams, "sessions.reset", respond)) {
       return;
     }

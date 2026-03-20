@@ -141,3 +141,5 @@ changelog/fragments/
 
 # Local scratch workspace
 .tmp/
+dist.bak/
+squash-editor.py
