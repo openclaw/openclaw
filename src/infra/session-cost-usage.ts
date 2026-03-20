@@ -54,7 +54,7 @@ export type {
 } from "./session-cost-usage.types.js";
 
 /** Matches reset archive filenames: `<sessionId>.jsonl.reset.<ISO-timestamp>` */
-const RESET_ARCHIVE_RE = /\.jsonl\.reset\.\d{4}-\d{2}-\d{2}T[\d\-]+\.\d+Z$/;
+const RESET_ARCHIVE_RE = /\.jsonl\.reset\.\d{4}-\d{2}-\d{2}T[\d\-:]+\.\d+Z$/;
 
 /**
  * Returns true for both regular transcript files (`.jsonl`) and reset archives
@@ -475,6 +475,7 @@ export async function discoverAllSessions(params?: {
       sessionFile: filePath,
       mtime: stats.mtimeMs,
       firstUserMessage,
+      isResetArchive: RESET_ARCHIVE_RE.test(entry.name),
     });
   }
 

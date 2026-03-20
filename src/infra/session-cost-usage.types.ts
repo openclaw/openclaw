@@ -143,6 +143,8 @@ export type DiscoveredSession = {
   sessionFile: string;
   mtime: number;
   firstUserMessage?: string;
+  /** True when this entry is a reset archive (`*.jsonl.reset.<timestamp>`), not the active transcript. */
+  isResetArchive?: boolean;
 };
 
 export type SessionUsageTimePoint = SharedSessionUsageTimePoint;
