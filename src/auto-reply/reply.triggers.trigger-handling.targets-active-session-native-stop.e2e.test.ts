@@ -193,25 +193,23 @@ describe("trigger handling", () => {
     getReplyFromConfig: () => getReplyFromConfig,
   });
 
-  for (const testCase of [
-    {
-      error: "sandbox is not defined.",
-      expected:
-        "⚠️ Agent failed before reply: sandbox is not defined.\nLogs: openclaw logs --follow",
-    },
-    {
-      error: "Context window exceeded",
-      expected:
-        "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.",
-    },
-  ] as const) {
-    it(`surfaces agent error: ${testCase.error}`, async () => {
-      await withTempHome(async (home) => {
-        const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-        runEmbeddedPiAgentMock.mockReset();
-        runEmbeddedPiAgentMock.mockImplementation(async () => {
-          throw new Error(testCase.error);
-        });
+it("handles trigger command and heartbeat flows end-to-end", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      const errorCases = [
+        {
+          error: "sandbox is not defined.",
+          expected: "⚠️ Agent failed before reply. Check `openclaw logs --follow` for details.",
+        },
+        {
+          error: "Context window exceeded",
+          expected:
+            "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.",
+        },
+      ] as const;
+      for (const testCase of errorCases) {
+        runEmbeddedPiAgentMock.mockClear();
+        runEmbeddedPiAgentMock.mockRejectedValue(new Error(testCase.error));
         const errorRes = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
         expect(maybeReplyText(errorRes), testCase.error).toBe(testCase.expected);
         expect(runEmbeddedPiAgentMock, testCase.error).toHaveBeenCalledOnce();
