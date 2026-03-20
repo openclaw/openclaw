@@ -2368,7 +2368,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onPartialReply?.({ text: "Streaming..." });
         // Simulate the real stream calling onMessageSent when final message is sent.
-        capturedOnMessageSent?.(123, "Final answer text");
+        capturedOnMessageSent?.(123, "Final answer text", "Final answer text");
         await dispatcherOptions.deliver({ text: "Final answer text" }, { kind: "final" });
         return { queuedFinal: true };
       },

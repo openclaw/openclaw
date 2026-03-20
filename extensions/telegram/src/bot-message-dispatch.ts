@@ -210,7 +210,7 @@ export const dispatchTelegramMessage = async ({
   const createDraftLane = (
     laneName: LaneName,
     enabled: boolean,
-    onMessageSent?: (messageId: number, text: string) => void,
+    onMessageSent?: (messageId: number, renderedText: string, rawText: string) => void,
   ): DraftLaneState => {
     const stream = enabled
       ? createTelegramDraftStream({
@@ -252,7 +252,7 @@ export const dispatchTelegramMessage = async ({
 
   // Emit message:sent hook when streaming reply is delivered via draft stream.
   const sessionKeyForStreamHooks = ctxPayload.SessionKey ?? route.sessionKey;
-  const streamOnMessageSent = (messageId: number, text: string) => {
+  const streamOnMessageSent = (messageId: number, renderedText: string, rawText: string) => {
     const hookRunner = getGlobalHookRunner();
     const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
     emitMessageSentHooks({
@@ -261,7 +261,7 @@ export const dispatchTelegramMessage = async ({
       sessionKeyForInternalHooks: sessionKeyForStreamHooks,
       chatId: String(chatId),
       accountId: route.accountId,
-      content: text,
+      content: rawText,
       success: true,
       messageId,
       isGroup,

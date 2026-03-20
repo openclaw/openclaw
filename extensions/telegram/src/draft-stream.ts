@@ -109,7 +109,7 @@ export function createTelegramDraftStream(params: {
   log?: (message: string) => void;
   warn?: (message: string) => void;
   /** Called after a message is successfully sent to Telegram (with messageId and text). */
-  onMessageSent?: (messageId: number, text: string) => void;
+  onMessageSent?: (messageId: number, renderedText: string, rawText: string) => void;
 }): TelegramDraftStream {
   const maxChars = Math.min(
     params.maxChars ?? TELEGRAM_STREAM_MAX_CHARS,
@@ -154,6 +154,7 @@ export function createTelegramDraftStream(params: {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
     sendGeneration: number;
+    rawText: string;
   };
   const sendRenderedMessageWithThreadFallback = async (sendArgs: {
     renderedText: string;
@@ -197,6 +198,7 @@ export function createTelegramDraftStream(params: {
     renderedText,
     renderedParseMode,
     sendGeneration,
+    rawText,
   }: PreviewSendParams): Promise<boolean> => {
     if (typeof streamMessageId === "number") {
       if (renderedParseMode) {
@@ -242,7 +244,7 @@ export function createTelegramDraftStream(params: {
       return true;
     }
     streamMessageId = normalizedMessageId;
-    params.onMessageSent?.(normalizedMessageId, renderedText);
+    params.onMessageSent?.(normalizedMessageId, renderedText, rawText);
     return true;
   };
   const sendDraftTransportPreview = async ({
@@ -312,6 +314,7 @@ export function createTelegramDraftStream(params: {
             renderedText,
             renderedParseMode,
             sendGeneration,
+            rawText: trimmed,
           });
         } catch (err) {
           if (!shouldFallbackFromDraftTransport(err)) {
@@ -326,6 +329,7 @@ export function createTelegramDraftStream(params: {
             renderedText,
             renderedParseMode,
             sendGeneration,
+            rawText: trimmed,
           });
         }
       } else {
@@ -333,6 +337,7 @@ export function createTelegramDraftStream(params: {
           renderedText,
           renderedParseMode,
           sendGeneration,
+          rawText: trimmed,
         });
       }
       if (sent) {
@@ -428,7 +433,7 @@ export function createTelegramDraftStream(params: {
             // Best-effort cleanup; draft clear failure is cosmetic.
           }
         }
-        params.onMessageSent?.(streamMessageId, renderedText);
+        params.onMessageSent?.(streamMessageId, renderedText, lastDeliveredText);
         return streamMessageId;
       }
     } catch (err) {
