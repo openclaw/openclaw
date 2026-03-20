@@ -116,7 +116,20 @@ ensure_control_ui_allowed_origins() {
 
   local allowed_origin_json
   local current_allowed_origins
-  allowed_origin_json="$(printf '["http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT")"
+  # Mirror buildDefaultControlUiAllowedOrigins: always seed both localhost and 127.0.0.1.
+  allowed_origin_json="$(printf '["http://localhost:%s","http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT" "$OPENCLAW_GATEWAY_PORT")"
+  if [[ "${OPENCLAW_GATEWAY_BIND}" == "custom" ]]; then
+    local custom_bind_host
+    custom_bind_host="$(
+      docker compose "${COMPOSE_ARGS[@]}" -f "$BRIDGE_OVERRIDE_FILE" run --rm --no-deps openclaw-cli \
+        config get gateway.customBindHost 2>/dev/null || true
+    )"
+    custom_bind_host="${custom_bind_host//$'\r'/}"
+    if [[ -n "$custom_bind_host" && "$custom_bind_host" != "null" ]]; then
+      allowed_origin_json="$(printf '["http://localhost:%s","http://127.0.0.1:%s","http://%s:%s"]' \
+        "$OPENCLAW_GATEWAY_PORT" "$OPENCLAW_GATEWAY_PORT" "$custom_bind_host" "$OPENCLAW_GATEWAY_PORT")"
+    fi
+  fi
   current_allowed_origins="$(
     docker compose "${COMPOSE_ARGS[@]}" -f "$BRIDGE_OVERRIDE_FILE" run --rm --no-deps openclaw-cli \
       config get gateway.controlUi.allowedOrigins 2>/dev/null || true
