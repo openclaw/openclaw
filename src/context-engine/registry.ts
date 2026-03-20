@@ -26,6 +26,7 @@ const SESSION_KEY_COMPAT_METHODS = [
 const LEGACY_COMPAT_PARAMS = ["sessionKey", "prompt"] as const;
 const LEGACY_COMPAT_METHOD_KEYS = {
   bootstrap: ["sessionKey"],
+  maintain: ["sessionKey"],
   ingest: ["sessionKey"],
   ingestBatch: ["sessionKey"],
   afterTurn: ["sessionKey"],
