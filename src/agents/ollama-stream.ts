@@ -334,6 +334,60 @@ function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
 
 // ── Response conversion ─────────────────────────────────────────────────────
 
+/**
+ * Attempt to recover structured tool calls from model text output.
+ *
+ * Some smaller local models (e.g. Qwen3.5-9B) understand tool definitions but
+ * emit the call as text instead of a proper `tool_calls` array.  Common
+ * patterns include `<tool_call>{ ... }</tool_call>` blocks and bare JSON
+ * objects with `name` + `arguments` keys.
+ */
+export function recoverToolCallsFromText(text: string): OllamaToolCall[] {
+  const recovered: OllamaToolCall[] = [];
+
+  // Pattern 1: <tool_call>{ "name": "...", "arguments": { ... } }</tool_call>
+  const tagRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi;
+  let tagMatch: RegExpExecArray | null;
+  while ((tagMatch = tagRegex.exec(text)) !== null) {
+    const parsed = tryParseToolCallJson(tagMatch[1]!);
+    if (parsed) {
+      recovered.push(parsed);
+    }
+  }
+  if (recovered.length > 0) {
+    return recovered;
+  }
+
+  // Pattern 2: ```json\n{"name": "...", "arguments": {...}}\n```
+  const codeBlockRegex = /```(?:json)?\s*\n?\s*(\{[\s\S]*?\})\s*\n?\s*```/gi;
+  let codeMatch: RegExpExecArray | null;
+  while ((codeMatch = codeBlockRegex.exec(text)) !== null) {
+    const parsed = tryParseToolCallJson(codeMatch[1]!);
+    if (parsed) {
+      recovered.push(parsed);
+    }
+  }
+
+  return recovered;
+}
+
+function tryParseToolCallJson(raw: string): OllamaToolCall | null {
+  try {
+    const obj = JSON.parse(raw.trim()) as Record<string, unknown>;
+    const name = obj.name ?? (obj.function as Record<string, unknown> | undefined)?.name;
+    const args =
+      obj.arguments ??
+      obj.parameters ??
+      (obj.function as Record<string, unknown> | undefined)?.arguments;
+    if (typeof name === "string" && name && args && typeof args === "object") {
+      return { function: { name, arguments: args as Record<string, unknown> } };
+    }
+  } catch {
+    // Not valid JSON – skip.
+  }
+  return null;
+}
+
 export function buildAssistantMessage(
   response: OllamaChatResponse,
   modelInfo: { api: string; provider: string; id: string },
@@ -344,11 +398,27 @@ export function buildAssistantMessage(
   // `reasoning` with an empty `content`. Fall back so replies are not dropped.
   const text =
     response.message.content || response.message.thinking || response.message.reasoning || "";
+
+  let toolCalls = response.message.tool_calls;
+
+  // Fallback: if the model emitted no structured tool_calls but embedded
+  // tool-call-like JSON in its text output, try to recover them.  This helps
+  // smaller local models (e.g. Qwen3.5-9B) that understand tools semantically
+  // but lack native tool_call output support.
+  if ((!toolCalls || toolCalls.length === 0) && text) {
+    const recovered = recoverToolCallsFromText(text);
+    if (recovered.length > 0) {
+      toolCalls = recovered;
+      log.info(
+        `Recovered ${recovered.length} tool call(s) from text output for model ${modelInfo.id}`,
+      );
+    }
+  }
+
   if (text) {
     content.push({ type: "text", text });
   }
 
-  const toolCalls = response.message.tool_calls;
   if (toolCalls && toolCalls.length > 0) {
     for (const tc of toolCalls) {
       content.push({
@@ -434,6 +504,7 @@ function resolveOllamaModelHeaders(model: {
 export function createOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
+  modelOptions?: Record<string, unknown>,
 ): StreamFn {
   const chatUrl = resolveOllamaChatUrl(baseUrl);
 
@@ -449,9 +520,19 @@ export function createOllamaStreamFn(
 
         const ollamaTools = extractOllamaTools(context.tools);
 
-        // Ollama defaults to num_ctx=4096 which is too small for large
-        // system prompts + many tool definitions. Use model's contextWindow.
-        const ollamaOptions: Record<string, unknown> = { num_ctx: model.contextWindow ?? 65536 };
+        // Merge user-specified model options (from openclaw.json
+        // `models.providers.*.models[].options`) as a base, then layer on
+        // computed values so contextWindow / temperature / maxTokens always win.
+        const userNumCtx =
+          modelOptions &&
+          typeof modelOptions.num_ctx === "number" &&
+          Number.isFinite(modelOptions.num_ctx)
+            ? modelOptions.num_ctx
+            : undefined;
+        const ollamaOptions: Record<string, unknown> = {
+          ...(modelOptions ?? {}),
+          num_ctx: model.contextWindow ?? userNumCtx ?? 65536,
+        };
         if (typeof options?.temperature === "number") {
           ollamaOptions.temperature = options.temperature;
         }
@@ -569,7 +650,7 @@ export function createOllamaStreamFn(
 }
 
 export function createConfiguredOllamaStreamFn(params: {
-  model: { baseUrl?: string; headers?: unknown };
+  model: { baseUrl?: string; headers?: unknown; options?: Record<string, unknown> };
   providerBaseUrl?: string;
 }): StreamFn {
   const modelBaseUrl = typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
@@ -579,5 +660,6 @@ export function createConfiguredOllamaStreamFn(params: {
       providerBaseUrl: params.providerBaseUrl,
     }),
     resolveOllamaModelHeaders(params.model),
+    params.model.options,
   );
 }

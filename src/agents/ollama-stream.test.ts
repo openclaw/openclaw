@@ -4,6 +4,7 @@ import {
   createOllamaStreamFn,
   convertToOllamaMessages,
   buildAssistantMessage,
+  recoverToolCallsFromText,
   parseNdjsonStream,
   resolveOllamaBaseUrlForRun,
 } from "./ollama-stream.js";
@@ -181,6 +182,99 @@ describe("buildAssistantMessage", () => {
       cacheWrite: 0,
       total: 0,
     });
+  });
+
+  it("recovers tool calls from <tool_call> tags in text when tool_calls is empty", () => {
+    const response = {
+      model: "qwen3.5:9b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          'I\'ll save that for you.\n<tool_call>\n{"name": "write_file", "arguments": {"path": "/tmp/note.md", "content": "hello"}}\n</tool_call>',
+      },
+      done: true,
+      prompt_eval_count: 50,
+      eval_count: 30,
+    };
+    const result = buildAssistantMessage(response, {
+      api: "ollama",
+      provider: "ollama",
+      id: "qwen3.5:9b",
+    });
+    expect(result.stopReason).toBe("toolUse");
+    const toolCalls = result.content.filter((c) => c.type === "toolCall");
+    expect(toolCalls.length).toBe(1);
+    const tc = toolCalls[0] as { name: string; arguments: Record<string, unknown> };
+    expect(tc.name).toBe("write_file");
+    expect(tc.arguments).toEqual({ path: "/tmp/note.md", content: "hello" });
+  });
+
+  it("does not recover tool calls when proper tool_calls exist", () => {
+    const response = {
+      model: "qwen3.5:9b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: '<tool_call>{"name": "ghost", "arguments": {}}</tool_call>',
+        tool_calls: [{ function: { name: "bash", arguments: { command: "ls" } } }],
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    const toolCalls = result.content.filter((c) => c.type === "toolCall");
+    expect(toolCalls.length).toBe(1);
+    expect((toolCalls[0] as { name: string }).name).toBe("bash");
+  });
+});
+
+describe("recoverToolCallsFromText", () => {
+  it("extracts tool calls from <tool_call> XML tags", () => {
+    const text =
+      'Sure!\n<tool_call>\n{"name": "bash", "arguments": {"command": "ls"}}\n</tool_call>';
+    const result = recoverToolCallsFromText(text);
+    expect(result).toEqual([{ function: { name: "bash", arguments: { command: "ls" } } }]);
+  });
+
+  it("extracts tool calls from JSON code blocks", () => {
+    const text =
+      'I\'ll run that.\n```json\n{"name": "write_file", "arguments": {"path": "a.txt", "content": "hi"}}\n```';
+    const result = recoverToolCallsFromText(text);
+    expect(result).toEqual([
+      { function: { name: "write_file", arguments: { path: "a.txt", content: "hi" } } },
+    ]);
+  });
+
+  it("handles function-wrapped format", () => {
+    const text =
+      '<tool_call>{"function": {"name": "bash", "arguments": {"command": "pwd"}}}</tool_call>';
+    const result = recoverToolCallsFromText(text);
+    expect(result).toEqual([{ function: { name: "bash", arguments: { command: "pwd" } } }]);
+  });
+
+  it("handles parameters key instead of arguments", () => {
+    const text = '<tool_call>{"name": "read", "parameters": {"path": "/tmp/x"}}</tool_call>';
+    const result = recoverToolCallsFromText(text);
+    expect(result).toEqual([{ function: { name: "read", arguments: { path: "/tmp/x" } } }]);
+  });
+
+  it("returns empty for plain text without tool patterns", () => {
+    expect(recoverToolCallsFromText("Just a normal reply.")).toEqual([]);
+  });
+
+  it("returns empty for malformed JSON inside tags", () => {
+    expect(recoverToolCallsFromText("<tool_call>not json</tool_call>")).toEqual([]);
+  });
+
+  it("extracts multiple tool calls from text", () => {
+    const text = [
+      '<tool_call>{"name": "bash", "arguments": {"command": "ls"}}</tool_call>',
+      '<tool_call>{"name": "read", "arguments": {"path": "a.txt"}}</tool_call>',
+    ].join("\n");
+    const result = recoverToolCallsFromText(text);
+    expect(result.length).toBe(2);
+    expect(result[0]!.function.name).toBe("bash");
+    expect(result[1]!.function.name).toBe("read");
   });
 });
 
@@ -481,6 +575,66 @@ describe("createOllamaStreamFn", () => {
         expect(requestInit.headers).toMatchObject({
           Authorization: "Bearer real-token",
         });
+      },
+    );
+  });
+
+  it("merges user-specified model options into Ollama request", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434", undefined, {
+          num_ctx: 16384,
+          top_p: 0.9,
+        });
+        const stream = await Promise.resolve(
+          streamFn(
+            { id: "qwen3.5:9b", api: "ollama", provider: "ollama" } as never,
+            { messages: [{ role: "user", content: "hi" }] } as never,
+            {} as never,
+          ),
+        );
+        await collectStreamEvents(stream);
+
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const body = JSON.parse(requestInit.body as string) as {
+          options: Record<string, unknown>;
+        };
+        // num_ctx defaults to 65536 because model.contextWindow is undefined
+        expect(body.options.num_ctx).toBe(65536);
+        // user-specified top_p is preserved
+        expect(body.options.top_p).toBe(0.9);
+      },
+    );
+  });
+
+  it("uses model options num_ctx when contextWindow is not set", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434", undefined, {
+          num_ctx: 8192,
+        });
+        const stream = await Promise.resolve(
+          streamFn(
+            { id: "qwen3.5:9b", api: "ollama", provider: "ollama" } as never,
+            { messages: [{ role: "user", content: "hi" }] } as never,
+            {} as never,
+          ),
+        );
+        await collectStreamEvents(stream);
+
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const body = JSON.parse(requestInit.body as string) as {
+          options: Record<string, unknown>;
+        };
+        // model.contextWindow is undefined, so options.num_ctx (8192) should be used
+        expect(body.options.num_ctx).toBe(8192);
       },
     );
   });

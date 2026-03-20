@@ -1194,12 +1194,21 @@ export async function runEmbeddedAttempt(
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
+      const contextGuardOptionsNumCtx =
+        params.model.options &&
+        typeof params.model.options === "object" &&
+        typeof (params.model.options as Record<string, unknown>).num_ctx === "number"
+          ? ((params.model.options as Record<string, unknown>).num_ctx as number)
+          : undefined;
       removeToolResultContextGuard = installToolResultContextGuard({
         agent: activeSession.agent,
         contextWindowTokens: Math.max(
           1,
           Math.floor(
-            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+            params.model.contextWindow ??
+              contextGuardOptionsNumCtx ??
+              params.model.maxTokens ??
+              DEFAULT_CONTEXT_TOKENS,
           ),
         ),
       });
@@ -1265,10 +1274,19 @@ export async function runEmbeddedAttempt(
         providerId: providerIdForNumCtx,
       });
       if (shouldInjectNumCtx) {
+        const modelOptionsNumCtx =
+          params.model.options &&
+          typeof params.model.options === "object" &&
+          typeof (params.model.options as Record<string, unknown>).num_ctx === "number"
+            ? ((params.model.options as Record<string, unknown>).num_ctx as number)
+            : undefined;
         const numCtx = Math.max(
           1,
           Math.floor(
-            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+            params.model.contextWindow ??
+              modelOptionsNumCtx ??
+              params.model.maxTokens ??
+              DEFAULT_CONTEXT_TOKENS,
           ),
         );
         activeSession.agent.streamFn = wrapOllamaCompatNumCtx(activeSession.agent.streamFn, numCtx);
