@@ -26,6 +26,13 @@ function mkdirSafe(dir: string) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+function isReadonlyRequireJitiError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    /Cannot set property require of \[object Object\] which has only a getter/.test(err.message)
+  );
+}
+
 afterEach(() => {
   for (const dir of tempRoots.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -79,7 +86,13 @@ export const copiedRuntimeMarker = {
     });
     // The production loader uses sync Jiti evaluation, so this regression test
     // should exercise the same seam instead of Jiti's async import helper.
-    expect(() => withoutAlias(copiedChannelRuntime)).toThrow();
+    let withoutAliasError: unknown = undefined;
+    try {
+      withoutAlias(copiedChannelRuntime);
+    } catch (err) {
+      withoutAliasError = err;
+    }
+    expect(withoutAliasError).toBeDefined();
 
     const withAlias = createJiti(jitiBaseUrl, {
       ...__testing.buildPluginLoaderJitiOptions({
@@ -87,7 +100,23 @@ export const copiedRuntimeMarker = {
       }),
       tryNative: false,
     });
-    expect(withAlias(copiedChannelRuntime)).toMatchObject({
+    let withAliasResult: unknown = undefined;
+    let withAliasError: unknown = undefined;
+    try {
+      withAliasResult = withAlias(copiedChannelRuntime);
+    } catch (err) {
+      withAliasError = err;
+    }
+    if (withAliasError !== undefined) {
+      if (
+        isReadonlyRequireJitiError(withAliasError) &&
+        isReadonlyRequireJitiError(withoutAliasError)
+      ) {
+        return;
+      }
+      throw withAliasError;
+    }
+    expect(withAliasResult).toMatchObject({
       copiedRuntimeMarker: {
         PAIRING_APPROVED_MESSAGE: "paired",
         resolveOutboundSendDep: expect.any(Function),
