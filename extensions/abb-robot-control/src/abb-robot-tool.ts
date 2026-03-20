@@ -86,6 +86,10 @@ export function createABBRobotTool(pluginConfig: Record<string, unknown>): AnyAg
             "dance_two_points", "dance_template",
             // Motion memory
             "get_motion_memory", "reset_motion_memory",
+            "get_event_log_categories",
+            "get_rapid_variable",
+            "get_io_signals",
+            "list_rapid_modules",
           ],
           description: "The action to perform.",
         },
@@ -125,6 +129,9 @@ export function createABBRobotTool(pluginConfig: Record<string, unknown>): AnyAg
         template: { type: "string", description: "Dance template: wave | bounce | sway | twist" },
         amplitude: { type: "number", description: "Template amplitude scale 0.1-2.0 (default: 1.0)" },
         beats: { type: "number", description: "Template beats mapped to repeat count (default: 8)" },
+        // New actions
+        var_name: { type: "string", description: "RAPID variable name" },
+        name_filter: { type: "string", description: "IO signal name filter substring" },
       },
       required: ["action"],
     },

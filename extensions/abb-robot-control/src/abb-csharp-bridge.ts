@@ -32,7 +32,7 @@ export class ABBCSharpBridge extends EventEmitter {
     this._initBridge();
   }
 
-  // ── Init ───────────────────────────────────────────────────────────────────
+  // ── Init ─────────────────────────────────────────────────────────────────────────────
 
   private _initBridge(): void {
     const dllPath = path.join(__dirname, "ABBBridge.dll");
@@ -55,6 +55,12 @@ export class ABBCSharpBridge extends EventEmitter {
       "StopRapid",
       "ResetProgramPointer",
       "MoveToJoints",
+      "ExecuteRapidProgram",
+      "SetMotors",
+      "GetRapidVariable",
+      "GetIOSignals",
+      "GetEventLogCategories",
+      "ListRapidVariables",
     ];
 
     for (const methodName of methods) {
@@ -76,7 +82,7 @@ export class ABBCSharpBridge extends EventEmitter {
     return fn(payload, true) as Promise<T>;
   }
 
-  // ── Connection ─────────────────────────────────────────────────────────────
+  // ── Connection ─────────────────────────────────────────────────────────────────────
 
   async connect(host: string): Promise<BridgeResult> {
     const result = await this._call<BridgeResult>("Connect", { host });
@@ -97,13 +103,13 @@ export class ABBCSharpBridge extends EventEmitter {
     return result;
   }
 
-  // ── Discovery ──────────────────────────────────────────────────────────────
+  // ── Discovery ────────────────────────────────────────────────────────────────────
 
   async scanControllers(): Promise<BridgeResult> {
     return this._call("ScanControllers", {});
   }
 
-  // ── Status & Info ──────────────────────────────────────────────────────────
+  // ── Status & Info ──────────────────────────────────────────────────────────────────
 
   async getStatus(): Promise<BridgeResult> {
     return this._call("GetStatus", {});
@@ -117,7 +123,7 @@ export class ABBCSharpBridge extends EventEmitter {
     return this._call("GetServiceInfo", {});
   }
 
-  // ── Speed ──────────────────────────────────────────────────────────────────
+  // ── Speed ──────────────────────────────────────────────────────────────────────────
 
   async getSpeedRatio(): Promise<BridgeResult> {
     return this._call("GetSpeedRatio", {});
@@ -127,7 +133,7 @@ export class ABBCSharpBridge extends EventEmitter {
     return this._call("SetSpeedRatio", { speed });
   }
 
-  // ── Position ───────────────────────────────────────────────────────────────
+  // ── Position ───────────────────────────────────────────────────────────────────────
 
   async getJointPositions(): Promise<number[]> {
     const result = await this._call<BridgeResult>("GetJointPositions", {});
@@ -139,13 +145,13 @@ export class ABBCSharpBridge extends EventEmitter {
     return this._call("GetWorldPosition", {});
   }
 
-  // ── Event Log ──────────────────────────────────────────────────────────────
+  // ── Event Log ──────────────────────────────────────────────────────────────────────
 
   async getEventLogEntries(categoryId: number = 0, limit: number = 20): Promise<BridgeResult> {
     return this._call("GetEventLogEntries", { categoryId, limit });
   }
 
-  // ── Tasks & Modules ────────────────────────────────────────────────────────
+  // ── Tasks & Modules ──────────────────────────────────────────────────────────────────
 
   async listTasks(): Promise<BridgeResult> {
     return this._call("ListTasks", {});
@@ -159,7 +165,7 @@ export class ABBCSharpBridge extends EventEmitter {
     return this._call("ResetProgramPointer", { taskName });
   }
 
-  // ── RAPID ──────────────────────────────────────────────────────────────────
+  // ── RAPID ─────────────────────────────────────────────────────────────────────────────
 
   async loadRapidProgram(code: string, allowRealExecution: boolean = false): Promise<BridgeResult> {
     return this._call("LoadRapidProgram", { code, allowRealExecution });
@@ -173,7 +179,7 @@ export class ABBCSharpBridge extends EventEmitter {
     return this._call("StopRapid", {});
   }
 
-  // ── Motion ─────────────────────────────────────────────────────────────────
+  // ── Motion ───────────────────────────────────────────────────────────────────────────
 
   async moveToJoints(
     joints: number[],
@@ -183,7 +189,47 @@ export class ABBCSharpBridge extends EventEmitter {
     return this._call("MoveToJoints", { joints, speed, zone });
   }
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  /**
+   * High-level: load + reset pointer + start + wait for completion.
+   * Maps to C# ExecuteRapidProgram which calls ExecuteRapidProgramWait internally.
+   */
+  async executeRapidProgram(
+    code: string,
+    moduleName: string = "MainModule",
+    allowRealExecution: boolean = true
+  ): Promise<BridgeResult> {
+    return this._call("ExecuteRapidProgram", { code, moduleName, allowRealExecution });
+  }
+
+  /**
+   * Set motors ON or OFF.
+   * Note: may fail on real controllers with DefaultUser credentials.
+   */
+  async setMotors(state: "ON" | "OFF"): Promise<BridgeResult> {
+    return this._call("SetMotors", { state });
+  }
+
+
+  // ── IO & RAPID Variables ──────────────────────────────────────────────────────────────────────
+
+  async getEventLogCategories(): Promise<BridgeResult> {
+    return this._call("GetEventLogCategories", {});
+  }
+
+  async getRapidVariable(taskName: string, varName: string, moduleName: string = ""): Promise<BridgeResult> {
+    return this._call("GetRapidVariable", { taskName, varName, moduleName });
+  }
+
+  async getIOSignals(nameFilter: string = "", limit: number = 100): Promise<BridgeResult> {
+    return this._call("GetIOSignals", { nameFilter, limit });
+  }
+
+  async listRapidVariables(taskName: string = "T_ROB1", moduleName: string = "", limit: number = 50): Promise<BridgeResult> {
+    return this._call("ListRapidVariables", { taskName, moduleName, limit });
+  }
+
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────────────
 
   isConnected(): boolean {
     return this._connected;

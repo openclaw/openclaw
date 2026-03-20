@@ -1,4 +1,4 @@
-/**
+﻿/**
  * abb-controller.ts
  * ABB Robot Controller — TypeScript facade over ABBCSharpBridge.
  *
@@ -201,23 +201,17 @@ export class ABBController extends EventEmitter {
   }
 
   /**
-   * Execute a RAPID program end-to-end:
-   * load → reset pointer → start → wait for completion (event-driven in C#).
-   * This is the recommended path for agent-driven motion.
+   * Execute a RAPID program end-to-end via C# ExecuteRapidProgram
+   * (load → reset pointer → start → event-driven wait for completion).
    */
   async executeRapidProgram(
     code: string,
-    _moduleName: string = "MainModule",
+    moduleName: string = "MainModule",
     allowRealExecution: boolean = true
   ): Promise<void> {
     this._ensureConnected();
-    // ABBBridge.MoveToJoints calls ExecuteRapidProgramWait internally;
-    // for raw RAPID we use the load+start sequence which C# manages atomically.
-    const r = await this.bridge.loadRapidProgram(code, allowRealExecution);
-    if (!r.success) throw new Error(String(r.error ?? "executeRapidProgram/load failed"));
-    // LoadRapidProgram in C# already loads, resets pointer, and is ready to start.
-    const r2 = await this.bridge.startRapid(allowRealExecution);
-    if (!r2.success) throw new Error(String(r2.error ?? "executeRapidProgram/start failed"));
+    const r = await this.bridge.executeRapidProgram(code, moduleName, allowRealExecution);
+    if (!r.success) throw new Error(String(r.error ?? "executeRapidProgram failed"));
   }
 
   // ── Motion ─────────────────────────────────────────────────────────────────
@@ -236,14 +230,36 @@ export class ABBController extends EventEmitter {
     if (!r.success) throw new Error(String(r.error ?? "moveToJoints failed"));
   }
 
-  /** Alias kept for backward compatibility with abb-robot-tool-actions.ts */
-  async setMotors(_state: "ON" | "OFF"): Promise<void> {
-    // ABB PC SDK does not expose motor state toggle via DefaultUser in most configurations.
-    // Raise a clear error rather than silently failing.
-    throw new Error(
-      "setMotors is not supported via PC SDK DefaultUser credentials. " +
-      "Switch motor state from the controller pendant or FlexPendant."
-    );
+  /** Set motors ON or OFF. Requires appropriate user grant on real controllers. */
+  async setMotors(state: "ON" | "OFF"): Promise<void> {
+    this._ensureConnected();
+    const r = await this.bridge.setMotors(state);
+    if (!r.success) throw new Error(String(r.error ?? "setMotors failed"));
+  }
+
+
+  /** Get event log category summaries (categories 0-5). */
+  async getEventLogCategories(): Promise<any> {
+    this._ensureConnected();
+    return this.bridge.getEventLogCategories();
+  }
+
+  /** Read a RAPID variable value from a task/module. */
+  async getRapidVariable(taskName: string, varName: string, moduleName: string = ""): Promise<any> {
+    this._ensureConnected();
+    return this.bridge.getRapidVariable(taskName, varName, moduleName);
+  }
+
+  /** List IO signals from the controller IOSystem. */
+  async getIOSignals(nameFilter: string = "", limit: number = 100): Promise<any> {
+    this._ensureConnected();
+    return this.bridge.getIOSignals(nameFilter, limit);
+  }
+
+  /** List RAPID module names in a task. */
+  async listRapidVariables(taskName: string = "T_ROB1", moduleName: string = "", limit: number = 50): Promise<any> {
+    this._ensureConnected();
+    return this.bridge.listRapidVariables(taskName, moduleName, limit);
   }
 
   // ── RAPID code generation helpers ─────────────────────────────────────────

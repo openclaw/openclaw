@@ -1,13 +1,24 @@
 ---
 name: abb-robot-virtual-control
 description: >
-  Virtual ABB viewer operation skill. Use only for 3D kinematic viewer and
-  ws-bridge simulation workflows. No physical robot operations.
+  Virtual ABB viewer operation skill. Use ONLY for the 3D kinematic viewer via
+  ws-bridge simulation. For RobotStudio or physical robot control, use
+  abb-robot-real-control instead — RobotStudio uses the real PC SDK plugin.
 ---
 
 # ABB Virtual Control Skill
 
 Use tool `abb_robot_virtual` only.
+
+## Important: RobotStudio vs Virtual Viewer
+
+This skill is for the **OpenClaw 3D kinematic viewer** (ws-bridge), NOT for RobotStudio.
+
+| Target | Plugin to use |
+|--------|---------------|
+| Physical ABB robot | `abb_robot_real` |
+| ABB RobotStudio | `abb_robot_real` (same PC SDK interface) |
+| OpenClaw 3D viewer (ws-bridge) | `abb_robot_virtual` (this skill) |
 
 ## Required Environment
 
@@ -34,5 +45,6 @@ Use tool `abb_robot_virtual` only.
 
 ## Notes
 
-- This skill is simulation-only.
-- If movement is not visible, verify bridge connection and model loading first.
+- This skill is for the 3D viewer simulation only — no physical robot operations.
+- If movement is not visible, verify ws-bridge connection and model loading first.
+- For RobotStudio, use `abb_robot_real` — it connects via ABB PC SDK just like a real robot.

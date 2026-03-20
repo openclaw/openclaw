@@ -594,5 +594,61 @@ export async function handleAction(
     } catch (err) { return errorResult(`dance_template failed: ${String(err)}`); }
   }
 
+
+  if (action === "get_event_log_categories") {
+    if (!controller?.isConnected()) return errorResult("Not connected");
+    try {
+      const result = await controller.getEventLogCategories() as any;
+      if (!result.success) return errorResult(String(result.error ?? "get_event_log_categories failed"));
+      const lines = (result.categories as any[]).map(
+        (c: any) => `  cat[${c.categoryId}] ${c.name}: ${c.count} entries`
+      );
+      return { content: [{ type: "text" as const, text: `Event Log Categories:
+${lines.join("\n")}` }], details: result };
+    } catch (err) { return errorResult(`get_event_log_categories failed: ${String(err)}`); }
+  }
+
+  if (action === "get_rapid_variable") {
+    if (!controller?.isConnected()) return errorResult("Not connected");
+    const taskName  = String(params["task_name"]   ?? params["taskName"]   ?? "T_ROB1");
+    const varName   = String(params["var_name"]    ?? params["varName"]    ?? "");
+    const moduleName = String(params["module_name"] ?? params["moduleName"] ?? "");
+    if (!varName) return errorResult("var_name is required");
+    try {
+      const result = await controller.getRapidVariable(taskName, varName, moduleName) as any;
+      if (!result.success) return errorResult(String(result.error ?? "get_rapid_variable failed"));
+      return { content: [{ type: "text" as const, text: `${result.varName} (${result.dataType}) = ${result.value}` }], details: result };
+    } catch (err) { return errorResult(`get_rapid_variable failed: ${String(err)}`); }
+  }
+
+  if (action === "get_io_signals") {
+    if (!controller?.isConnected()) return errorResult("Not connected");
+    const nameFilter = String(params["name_filter"] ?? params["nameFilter"] ?? "");
+    const limit = Math.max(1, Math.min(500, Number(params["limit"] ?? 100)));
+    try {
+      const result = await controller.getIOSignals(nameFilter, limit) as any;
+      if (!result.success) return errorResult(String(result.error ?? "get_io_signals failed"));
+      const lines = (result.signals as any[]).map(
+        (s: any) => `  [${s.type}] ${s.name} = ${s.value}${s.unit ? " " + s.unit : ""}`
+      );
+      return { content: [{ type: "text" as const, text: `IO Signals (${result.count}):
+${lines.join("\n")}` }], details: result };
+    } catch (err) { return errorResult(`get_io_signals failed: ${String(err)}`); }
+  }
+
+  if (action === "list_rapid_modules") {
+    if (!controller?.isConnected()) return errorResult("Not connected");
+    const taskName   = String(params["task_name"]   ?? params["taskName"]   ?? "T_ROB1");
+    const moduleName = String(params["module_name"] ?? params["moduleName"] ?? "");
+    const limit = Math.max(1, Math.min(200, Number(params["limit"] ?? 50)));
+    try {
+      const result = await controller.listRapidVariables(taskName, moduleName, limit) as any;
+      if (!result.success) return errorResult(String(result.error ?? "list_rapid_modules failed"));
+      const lines = (result.variables as any[]).map((v: any) => `  • ${v.moduleName} [${v.taskName}]`);
+      return { content: [{ type: "text" as const, text: `RAPID Modules (${result.count}):
+${lines.join("\n")}` }], details: result };
+    } catch (err) { return errorResult(`list_rapid_modules failed: ${String(err)}`); }
+  }
+
   return errorResult(`Unknown action: "${action}"`);
 } 

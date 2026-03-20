@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -354,7 +354,7 @@ public class ABBBridge
 
             await System.Threading.Tasks.Task.Run(() =>
             {
-                using (Mastership m = Mastership.Request(controller))
+                using (Mastership m = RequestMastershipWithRetry(controller.Rapid))
                 {
                     var task = controller.Rapid.GetTask("T_ROB1");
 
@@ -403,7 +403,7 @@ public class ABBBridge
             bool allowRealExecution = CoerceBool(GetInputValue(input, "allowRealExecution"), false);
             EnsureRapidControlAccess(allowRealExecution);
 
-            using (Mastership m = Mastership.Request(controller))
+            using (Mastership m = RequestMastershipWithRetry(controller.Rapid))
             {
                 StartResult result = controller.Rapid.Start(RegainMode.Continue, ExecutionMode.Continuous, ExecutionCycle.Once);
                 if (result != StartResult.Ok)
@@ -427,7 +427,7 @@ public class ABBBridge
             if (!isConnected || controller == null) return new { success = false, error = "Not connected" };
 
             EnsureRapidControlGrant();
-            using (Mastership m = Mastership.Request(controller))
+            using (Mastership m = RequestMastershipWithRetry(controller.Rapid))
             {
                 controller.Rapid.GetTask("T_ROB1").Stop(StopMode.Immediate);
             }
@@ -643,7 +643,7 @@ public class ABBBridge
             string taskName = CoerceString(GetInputValue(input, "taskName"), "T_ROB1");
 
             EnsureRapidControlGrant();
-            using (Mastership m = Mastership.Request(controller))
+            using (Mastership m = RequestMastershipWithRetry(controller.Rapid))
             {
                 Task t = controller.Rapid.GetTask(taskName);
                 t.ResetProgramPointer();
@@ -700,7 +700,8 @@ public class ABBBridge
     }
 
     /// <summary>
-    /// 事件驱动的执行等待方案
+    /// Event-driven RAPID execution using unique module name to avoid name collisions.
+    /// Flow: upload unique-named module -> Add load -> reset PP -> start -> wait -> delete module.
     /// </summary>
     private async System.Threading.Tasks.Task ExecuteRapidProgramWait(string rapidCode, string moduleName)
     {
@@ -708,61 +709,145 @@ public class ABBBridge
         EnsureRapidControlAccess(true);
 
         var task = controller.Rapid.GetTask("T_ROB1");
-        string tempFile = CreateTempRapidFile(rapidCode, moduleName, out string fileName);
-        string remotePath = $"{fileName}";
+
+        // Use a unique module name to avoid collision with existing MainModule.
+        string uniqueModuleName = "AgentMod_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        string uniqueCode = RenameModuleInCode(rapidCode, uniqueModuleName);
+        string fileName = uniqueModuleName + ".mod";
+        string tempFile = Path.Combine(Path.GetTempPath(), fileName);
+        File.WriteAllText(tempFile, uniqueCode);
+        string remotePath = fileName;
 
         var tcs = new TaskCompletionSource<bool>();
-
-        // CS0246 & CS1061 修复：正确的事件类型和属性读取
-        EventHandler<ExecutionStatusChangedEventArgs> statusChangedHandler = (sender, e) =>
+        EventHandler<ExecutionStatusChangedEventArgs> statusChangedHandler = null;
+        statusChangedHandler = (sender, e) =>
         {
-            // 通过获取最新的 task 状态，判断是否真正停机
             if (task.ExecutionStatus == TaskExecutionStatus.Stopped)
-            {
                 tcs.TrySetResult(true);
-            }
         };
 
         try
         {
             await System.Threading.Tasks.Task.Run(() =>
             {
-                using (Mastership m = Mastership.Request(controller))
-                {
-                    controller.FileSystem.PutFile(tempFile, remotePath, true);
-                    bool loaded = task.LoadModuleFromFile(remotePath, RapidLoadMode.Replace);
-                    if (!loaded) throw new InvalidOperationException("Failed to load RAPID module.");
-                    
-                    task.ResetProgramPointer();
-       
-                    // 订阅事件后再启动，注意事件挂载在 controller.Rapid 上
-                    controller.Rapid.ExecutionStatusChanged += statusChangedHandler;
-                    task.Start();
+                controller.FileSystem.PutFile(tempFile, remotePath, true);
 
-                    // 补丁：检查是否瞬间执行完成
-                    if (task.ExecutionStatus == TaskExecutionStatus.Stopped)
+                using (Mastership m = RequestMastershipWithRetry(controller.Rapid))
+                {
+                    // Stop if running before loading
+                    if (task.ExecutionStatus == TaskExecutionStatus.Running)
                     {
-                       tcs.TrySetResult(true);
+                        controller.Rapid.Stop(StopMode.Immediate);
+                        Thread.Sleep(400);
                     }
+                    // Use Add mode with unique name 鈥?no collision possible
+                    bool loaded = task.LoadModuleFromFile(remotePath, RapidLoadMode.Add);
+                    if (!loaded) throw new InvalidOperationException($"Failed to load module {uniqueModuleName}.");
+                    task.ResetProgramPointer();
                 }
             });
 
-            // 增加 30 秒超时机制，防止死锁
-            using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+            controller.Rapid.ExecutionStatusChanged += statusChangedHandler;
+
+            await System.Threading.Tasks.Task.Run(() =>
             {
-                using (cts.Token.Register(() => tcs.TrySetCanceled()))
+                using (Mastership m = RequestMastershipWithRetry(controller.Rapid))
                 {
-                    await tcs.Task;
+                    StartResult result = controller.Rapid.Start(
+                        RegainMode.Continue, ExecutionMode.Continuous, ExecutionCycle.Once);
+                    if (result != StartResult.Ok)
+                        result = controller.Rapid.Start(
+                            RegainMode.Regain, ExecutionMode.Continuous, ExecutionCycle.Once);
+                    if (result != StartResult.Ok)
+                        throw new InvalidOperationException($"RAPID start failed: {result}");
                 }
+                if (task.ExecutionStatus == TaskExecutionStatus.Stopped)
+                    tcs.TrySetResult(true);
+            });
+
+            using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60)))
+            using (cts.Token.Register(() => tcs.TrySetCanceled()))
+            {
+                await tcs.Task;
             }
         }
         finally
         {
-            // 清理事件注册
             controller.Rapid.ExecutionStatusChanged -= statusChangedHandler;
             TryDeleteTempFile(tempFile);
             try { controller.FileSystem.RemoveFile(remotePath); } catch { }
+            // Delete the temp module from controller to keep T_ROB1 clean
+            try
+            {
+                using (Mastership m = RequestMastershipWithRetry(controller.Rapid))
+                {
+                    var mod = task.GetModule(uniqueModuleName);
+                    if (mod != null) mod.Delete();
+                }
+            }
+            catch { }
         }
+    }
+
+    /// <summary>
+    /// Rename the MODULE declaration in RAPID code to a new name.
+    /// </summary>
+    private static string RenameModuleInCode(string code, string newModuleName)
+    {
+        // Replace MODULE <anything> with MODULE <newName>
+        return Regex.Replace(code.TrimStart(),
+            @"(?i)^MODULE\s+\w+",
+            "MODULE " + newModuleName,
+            RegexOptions.Multiline);
+    }
+
+    /// <summary>
+    /// Execute RAPID program end-to-end (load + reset pointer + start + wait).
+    /// This is the recommended high-level entry point for agent-driven motion.
+    /// </summary>
+    public async System.Threading.Tasks.Task<dynamic> ExecuteRapidProgram(dynamic input)
+    {
+        try
+        {
+            if (!isConnected || controller == null) return new { success = false, error = "Not connected" };
+
+            string code        = CoerceString(GetInputValue(input, "code"));
+            if (string.IsNullOrWhiteSpace(code))
+                code = CoerceString(GetInputValue(input, "rapid_code"));
+            if (string.IsNullOrWhiteSpace(code))
+                return new { success = false, error = "code (or rapid_code) parameter is required" };
+
+            string moduleName        = CoerceString(GetInputValue(input, "moduleName"), "MainModule");
+            bool   allowRealExecution = CoerceBool(GetInputValue(input, "allowRealExecution"), true);
+
+            await ExecuteRapidProgramWait(code, moduleName);
+            return new { success = true, moduleName };
+        }
+        catch (Exception ex) { return new { success = false, error = ex.Message }; }
+    }
+
+    /// <summary>
+    /// Set motors ON or OFF.
+    /// Note: PCSDK 2025 DefaultUser does not support motor state toggling via API.
+    /// Returns a clear error; toggle motors from the controller pendant or FlexPendant.
+    /// </summary>
+    public async System.Threading.Tasks.Task<dynamic> SetMotors(dynamic input)
+    {
+        try
+        {
+            if (!isConnected || controller == null) return new { success = false, error = "Not connected" };
+            string state = CoerceString(GetInputValue(input, "state"), "ON").Trim().ToUpperInvariant();
+            // PCSDK 2025 does not expose motor on/off via DefaultUser credentials.
+            // Return a descriptive error so agents know to use pendant/FlexPendant.
+            return new
+            {
+                success = false,
+                error = "SetMotors is not supported via PC SDK DefaultUser credentials. Toggle motor state from the controller pendant or FlexPendant.",
+                requestedState = state,
+                motorState = controller.State.ToString()
+            };
+        }
+        catch (Exception ex) { return new { success = false, error = ex.Message }; }
     }
 
     /// <summary>
@@ -770,11 +855,15 @@ public class ABBBridge
     /// </summary>
     private string GenerateMoveJointsCode(double[] joints, double speed, string zone)
     {
-        string jointsStr = string.Join(", ", joints);
+        string jointsStr = string.Join(", ", joints.Select(j => j.ToString("0.####", CultureInfo.InvariantCulture)));
         string speedStr = FormatSpeedDataLiteral(speed);
         return $@"MODULE MainModule
   PROC main()
-    MoveAbsJ [[{jointsStr}], [9E9, 9E9, 9E9, 9E9, 9E9, 9E9]], {speedStr}, {zone}, tool0;
+    ConfJ \Off;
+    ConfL \Off;
+    VAR jointtarget jt := [[{jointsStr}],[9E+09,9E+09,9E+09,9E+09,9E+09,9E+09]];
+    MoveAbsJ jt, {speedStr}, {zone}, tool0;
+    Stop;
   ENDPROC
 ENDMODULE";
     }
@@ -919,4 +1008,365 @@ ENDMODULE";
         try { if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath)) File.Delete(filePath); } catch { }
     }
 
+
+    /// <summary>
+
+    /// Read a RAPID variable value from the specified task and module.
+
+    /// </summary>
+
+    public async System.Threading.Tasks.Task<dynamic> GetRapidVariable(dynamic input)
+
+    {
+
+        try
+
+        {
+
+            if (!isConnected || controller == null) return new { success = false, error = "Not connected" };
+
+            string taskName   = CoerceString(GetInputValue(input, "taskName"),   "T_ROB1");
+
+            string moduleName = CoerceString(GetInputValue(input, "moduleName"),  "");
+
+            string varName    = CoerceString(GetInputValue(input, "varName"),     "");
+
+            if (string.IsNullOrWhiteSpace(varName))
+
+                return new { success = false, error = "varName is required" };
+
+
+
+            var task = controller.Rapid.GetTask(taskName);
+
+            RapidData rd = string.IsNullOrWhiteSpace(moduleName)
+
+                ? task.GetRapidData(varName)
+
+                : task.GetRapidData(moduleName, varName);
+
+
+
+            if (rd == null)
+
+                return new { success = false, error = $"Variable '{varName}' not found in task '{taskName}'" };
+
+
+
+            return new { success = true, taskName, moduleName, varName, value = rd.Value.ToString(), dataType = rd.RapidType };
+
+        }
+
+        catch (Exception ex) { return new { success = false, error = ex.Message }; }
+
+    }
+
+
+
+    /// <summary>
+
+    /// Set a RAPID variable value in the specified task and module.
+
+    /// </summary>
+
+    public async System.Threading.Tasks.Task<dynamic> SetRapidVariable(dynamic input)
+
+    {
+
+        try
+
+        {
+
+            if (!isConnected || controller == null) return new { success = false, error = "Not connected" };
+
+            string taskName   = CoerceString(GetInputValue(input, "taskName"),   "T_ROB1");
+
+            string moduleName = CoerceString(GetInputValue(input, "moduleName"),  "");
+
+            string varName    = CoerceString(GetInputValue(input, "varName"),     "");
+
+            string value      = CoerceString(GetInputValue(input, "value"),       "");
+
+            if (string.IsNullOrWhiteSpace(varName))  return new { success = false, error = "varName is required" };
+
+            if (string.IsNullOrWhiteSpace(value))    return new { success = false, error = "value is required" };
+
+
+
+            var task = controller.Rapid.GetTask(taskName);
+
+            RapidData rd = string.IsNullOrWhiteSpace(moduleName)
+
+                ? task.GetRapidData(varName)
+
+                : task.GetRapidData(moduleName, varName);
+
+
+
+            if (rd == null)
+
+                return new { success = false, error = $"Variable '{varName}' not found" };
+
+
+
+
+
+
+
+
+
+
+
+            using (Mastership m = RequestMastershipWithRetry(controller.Rapid)) { rd.StringValue = value; }
+
+
+
+
+
+
+
+
+
+            return new { success = true, taskName, moduleName, varName, value };
+
+        }
+
+        catch (Exception ex) { return new { success = false, error = ex.Message }; }
+
+    }
+
+
+
+    /// <summary>
+
+    /// Get all IO signals from the controller IOSystem.
+
+    /// </summary>
+
+    public async System.Threading.Tasks.Task<dynamic> GetIOSignals(dynamic input)
+
+    {
+
+        try
+
+        {
+
+            if (!isConnected || controller == null) return new { success = false, error = "Not connected" };
+
+            string nameFilter = CoerceString(GetInputValue(input, "nameFilter"), "");
+
+            int limit = (int)Math.Max(1, Math.Min(500, CoerceDouble(GetInputValue(input, "limit"), 100)));
+
+
+
+            var signals = await System.Threading.Tasks.Task.Run(() =>
+
+            {
+
+                var result = new System.Collections.Generic.List<object>();
+
+                foreach (ABB.Robotics.Controllers.IOSystemDomain.Signal sig in controller.IOSystem.GetSignals(ABB.Robotics.Controllers.IOSystemDomain.IOFilterTypes.All))
+
+                {
+
+                    if (!string.IsNullOrWhiteSpace(nameFilter) &&
+
+                        sig.Name.IndexOf(nameFilter, StringComparison.OrdinalIgnoreCase) < 0)
+
+                        continue;
+
+                    result.Add(new
+
+                    {
+
+                        name  = sig.Name,
+
+                        type  = sig.Type.ToString(),
+
+                        value = sig.State.Value.ToString(),
+
+                        unit  = sig.Unit ?? ""
+
+                    });
+
+                    if (result.Count >= limit) break;
+
+                }
+
+                return result;
+
+            });
+
+
+
+            return new { success = true, count = signals.Count, signals };
+
+        }
+
+        catch (Exception ex) { return new { success = false, error = ex.Message }; }
+
+    }
+
+
+
+    /// <summary>
+
+    /// Set a digital IO signal value.
+
+    /// </summary>
+
+    public async System.Threading.Tasks.Task<dynamic> SetIOSignal(dynamic input)
+
+    {
+
+        try
+
+        {
+
+            if (!isConnected || controller == null) return new { success = false, error = "Not connected" };
+
+            string signalName = CoerceString(GetInputValue(input, "signalName"), "");
+
+            string value      = CoerceString(GetInputValue(input, "value"), "0");
+
+            if (string.IsNullOrWhiteSpace(signalName))
+
+                return new { success = false, error = "signalName is required" };
+
+
+
+            ABB.Robotics.Controllers.IOSystemDomain.Signal sig = controller.IOSystem.GetSignal(signalName);
+
+            if (sig == null)
+
+                return new { success = false, error = $"Signal '{signalName}' not found" };
+
+
+
+
+
+
+
+
+
+
+
+            double numVal; if (!double.TryParse(value, out numVal)) numVal = value == "1" || value.ToLower() == "true" ? 1.0 : 0.0;
+            sig.Value = (float)numVal;
+
+
+
+
+
+            return new { success = true, signalName, value };
+
+        }
+
+        catch (Exception ex) { return new { success = false, error = ex.Message }; }
+
+    }
+
+
+
+    /// <summary>
+
+    /// Get all event log categories and entry counts.
+
+    /// </summary>
+
+    public async System.Threading.Tasks.Task<dynamic> GetEventLogCategories(dynamic input)
+
+    {
+
+        try
+
+        {
+
+            if (!isConnected || controller == null) return new { success = false, error = "Not connected" };
+
+            var categories = new System.Collections.Generic.List<object>();
+
+            // Standard ABB event log categories: 0=Common,1=Operational,2=System,3=HW,4=Program,5=Motion
+
+            for (int catId = 0; catId <= 5; catId++)
+
+            {
+
+                try
+
+                {
+
+                    EventLogCategory cat = controller.EventLog.GetCategory(catId);
+
+                    if (cat != null)
+
+                    {
+
+                        categories.Add(new { categoryId = catId, name = cat.LocalizedName, count = cat.Messages.Count });
+
+                    }
+
+                }
+
+                catch { }
+
+            }
+
+            return new { success = true, categories };
+
+        }
+
+        catch (Exception ex) { return new { success = false, error = ex.Message }; }
+
+    }
+
+
+
+    /// <summary>
+
+    /// <summary>List module names in a RAPID task.</summary>
+    public async System.Threading.Tasks.Task<dynamic> ListRapidVariables(dynamic input)
+    {
+        try
+        {
+            if (!isConnected || controller == null) return new { success = false, error = "Not connected" };
+            string taskName   = CoerceString(GetInputValue(input, "taskName"), "T_ROB1");
+            string moduleName = CoerceString(GetInputValue(input, "moduleName"), "");
+            int limit = (int)Math.Max(1, Math.Min(200, CoerceDouble(GetInputValue(input, "limit"), 50)));
+            var task = controller.Rapid.GetTask(taskName);
+            var variables = new System.Collections.Generic.List<object>();
+            Module[] allMods = task.GetModules();
+            foreach (Module mod in allMods)
+            {
+                if (!string.IsNullOrWhiteSpace(moduleName) &&
+                    !string.Equals(mod.Name, moduleName, StringComparison.OrdinalIgnoreCase)) continue;
+                variables.Add(new { moduleName = mod.Name, taskName });
+                if (variables.Count >= limit) break;
+            }
+            return new { success = true, taskName, count = variables.Count, variables };
+        }
+        catch (Exception ex) { return new { success = false, error = ex.Message }; }
+    }
+
+    /// <summary>
+    /// Request mastership with retry loop 鈥?RobotStudio virtual controllers periodically hold mastership.
+    /// Retries up to maxAttempts times with delayMs between attempts.
+    /// </summary>
+    private static Mastership RequestMastershipWithRetry(ABB.Robotics.Controllers.IMastershipResource resource, int maxAttempts = 20, int delayMs = 300)
+    {
+        Exception lastEx = null;
+        for (int i = 0; i < maxAttempts; i++)
+        {
+            try { return Mastership.Request(resource); }
+            catch (Exception ex)
+            {
+                lastEx = ex;
+                Thread.Sleep(delayMs);
+            }
+        }
+        throw new InvalidOperationException(
+            $"Cannot acquire mastership after {maxAttempts} attempts ({maxAttempts * delayMs / 1000.0:F1}s). " +
+            "If RobotStudio is open, click Request Write Access in the RAPID editor, or close RobotStudio FlexPendant view. " +
+            $"Last error: {lastEx?.Message}");
+    }
 }
