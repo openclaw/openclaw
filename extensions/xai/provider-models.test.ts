@@ -16,8 +16,21 @@ describe("xai provider models", () => {
     });
   });
 
+  it("publishes Grok 4.20 reasoning and non-reasoning models", () => {
+    expect(resolveXaiCatalogEntry("grok-4.20-reasoning")).toMatchObject({
+      id: "grok-4.20-reasoning",
+      reasoning: true,
+      contextWindow: 2_000_000,
+    });
+    expect(resolveXaiCatalogEntry("grok-4.20-non-reasoning")).toMatchObject({
+      id: "grok-4.20-non-reasoning",
+      reasoning: false,
+      contextWindow: 2_000_000,
+    });
+  });
+
   it("marks current Grok families as modern while excluding multi-agent ids", () => {
-    expect(isModernXaiModel("grok-4.20-experimental-beta-0304-reasoning")).toBe(true);
+    expect(isModernXaiModel("grok-4.20-reasoning")).toBe(true);
     expect(isModernXaiModel("grok-code-fast-1")).toBe(true);
     expect(isModernXaiModel("grok-3-mini-fast")).toBe(false);
     expect(isModernXaiModel("grok-4.20-multi-agent-experimental-beta-0304")).toBe(false);
@@ -40,7 +53,7 @@ describe("xai provider models", () => {
       providerId: "xai",
       ctx: {
         provider: "xai",
-        modelId: "grok-4.20-experimental-beta-0304-reasoning",
+        modelId: "grok-4.20-reasoning",
         modelRegistry: { find: () => null } as never,
         providerConfig: {
           api: "openai-completions",
@@ -59,7 +72,7 @@ describe("xai provider models", () => {
     });
     expect(grok420).toMatchObject({
       provider: "xai",
-      id: "grok-4.20-experimental-beta-0304-reasoning",
+      id: "grok-4.20-reasoning",
       api: "openai-completions",
       baseUrl: "https://api.x.ai/v1",
       reasoning: true,

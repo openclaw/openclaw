@@ -1,3 +1,4 @@
+import { normalizeXaiModelId } from "openclaw/plugin-sdk/provider-models";
 import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
 
 export const XAI_WEB_SEARCH_ENDPOINT = "https://api.x.ai/v1/responses";
@@ -79,7 +80,7 @@ export function resolveXaiSearchConfig(searchConfig?: Record<string, unknown>): 
 export function resolveXaiWebSearchModel(searchConfig?: Record<string, unknown>): string {
   const config = resolveXaiSearchConfig(searchConfig);
   return typeof config.model === "string" && config.model.trim()
-    ? config.model.trim()
+    ? normalizeXaiModelId(config.model.trim())
     : XAI_DEFAULT_WEB_SEARCH_MODEL;
 }
 

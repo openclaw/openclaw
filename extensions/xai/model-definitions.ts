@@ -59,14 +59,14 @@ const XAI_MODEL_CATALOG = [
     contextWindow: XAI_LARGE_CONTEXT_WINDOW,
   },
   {
-    id: "grok-4.20-experimental-beta-0304-reasoning",
-    name: "Grok 4.20 Experimental Beta 0304 (Reasoning)",
+    id: "grok-4.20-reasoning",
+    name: "Grok 4.20 (Reasoning)",
     reasoning: true,
     contextWindow: XAI_LARGE_CONTEXT_WINDOW,
   },
   {
-    id: "grok-4.20-experimental-beta-0304-non-reasoning",
-    name: "Grok 4.20 Experimental Beta 0304 (Non-Reasoning)",
+    id: "grok-4.20-non-reasoning",
+    name: "Grok 4.20 (Non-Reasoning)",
     reasoning: false,
     contextWindow: XAI_LARGE_CONTEXT_WINDOW,
   },
