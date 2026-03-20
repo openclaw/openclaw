@@ -1,5 +1,8 @@
 {
   "id": "baidu",
+  "providerAuthEnvVars": {
+    "brave": ["BAIDU_SEARCH_API_KEY"]
+  },
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Baidu Search API Key",
