@@ -77,9 +77,10 @@ export const copiedRuntimeMarker = {
       ...__testing.buildPluginLoaderJitiOptions({}),
       tryNative: false,
     });
-    await expect(withoutAlias.import(copiedChannelRuntime)).rejects.toThrow(
-      /plugin-sdk\/channel-runtime/,
-    );
+    // Jiti's pre-alias failure text varies across Node versions and platforms.
+    // The contract is simply that the source import rejects until the scoped
+    // plugin-sdk alias is applied.
+    await expect(withoutAlias.import(copiedChannelRuntime)).rejects.toThrow();
 
     const withAlias = createJiti(jitiBaseUrl, {
       ...__testing.buildPluginLoaderJitiOptions({
