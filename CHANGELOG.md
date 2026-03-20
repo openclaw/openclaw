@@ -141,6 +141,7 @@ Docs: https://docs.openclaw.ai
 - Stabilize plugin loader and Docker extension smoke (#50058) Thanks @joshavant.
 - Telegram: stabilize pairing/session/forum routing and reply formatting tests (#50155) Thanks @joshavant.
 - Hardening: refresh stale device pairing requests and pending metadata (#50695) Thanks @smaeljaish771 and @joshavant.
+- Gateway: harden OpenResponses file-context escaping (#50782) Thanks @YLChen-007 and @joshavant.
 
 ### Fixes
 
