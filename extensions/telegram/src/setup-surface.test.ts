@@ -38,7 +38,7 @@ describe("telegramSetupWizard.finalize", () => {
       "Telegram DM access warning",
     );
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining('openclaw config set channels.telegram.allowFrom "[YOUR_USER_ID]"'),
+      expect.stringContaining(`openclaw config set channels.telegram.allowFrom '["YOUR_USER_ID"]'`),
       "Telegram DM access warning",
     );
   });
@@ -67,7 +67,7 @@ describe("telegramSetupWizard.finalize", () => {
     );
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining(
-        'openclaw config set channels.telegram.accounts.alerts.allowFrom "[YOUR_USER_ID]"',
+        `openclaw config set channels.telegram.accounts.alerts.allowFrom '["YOUR_USER_ID"]'`,
       ),
       "Telegram DM access warning",
     );
