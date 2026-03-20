@@ -187,6 +187,9 @@ describe("buildAssistantMessage", () => {
     // Ollama (and some OpenAI-compat layers) can return arguments as a JSON
     // string instead of a plain object.  buildAssistantMessage must normalise
     // them so downstream tool-call round-trips don't break.
+    // Use `as unknown as Parameters<typeof buildAssistantMessage>[0]` to model
+    // the real-world Ollama quirk where `arguments` arrives as a JSON string
+    // instead of an object — exactly the runtime scenario this test exercises.
     const response = {
       model: "qwen3:32b",
       created_at: "2026-01-01T00:00:00Z",
@@ -203,7 +206,7 @@ describe("buildAssistantMessage", () => {
         ],
       },
       done: true,
-    };
+    } as unknown as Parameters<typeof buildAssistantMessage>[0];
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("toolUse");
     const toolCall = result.content[0] as {
