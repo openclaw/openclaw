@@ -792,16 +792,27 @@ export async function runCronIsolatedAgentTurn(params: {
   const hasErrorPayload = payloads.some((payload) => payload?.isError === true);
   const runLevelError = finalRunResult.meta?.error;
   const lastErrorPayloadIndex = payloads.findLastIndex((payload) => payload?.isError === true);
+  const hasSuccessfulPayloadBeforeLastError =
+    !runLevelError &&
+    lastErrorPayloadIndex >= 0 &&
+    payloads
+      .slice(0, lastErrorPayloadIndex)
+      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
   const hasSuccessfulPayloadAfterLastError =
     !runLevelError &&
     lastErrorPayloadIndex >= 0 &&
     payloads
       .slice(lastErrorPayloadIndex + 1)
       .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
-  // Tool wrappers can emit transient/false-positive error payloads before a valid final
-  // assistant payload.  Only treat payload errors as recoverable when (a) the run itself
-  // did not report a model/context-level error and (b) a non-error payload follows.
-  const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
+  // Tool wrappers can emit transient/false-positive error payloads before OR after a valid
+  // assistant payload.  Common pattern: LLM uses a tool, tool fails, LLM retries and
+  // succeeds — the error warning is appended at the end by payloads.ts but the real content
+  // was already emitted earlier.  Treat payload errors as recoverable when (a) the run itself
+  // did not report a model/context-level error and (b) a non-error payload exists before OR
+  // after the last error payload.
+  const hasRecoveredFromError =
+    hasSuccessfulPayloadBeforeLastError || hasSuccessfulPayloadAfterLastError;
+  const hasFatalErrorPayload = hasErrorPayload && !hasRecoveredFromError;
   const lastErrorPayloadText = [...payloads]
     .toReversed()
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
