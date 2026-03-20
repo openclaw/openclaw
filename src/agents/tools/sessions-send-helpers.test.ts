@@ -1,100 +1,46 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
+import { describe, expect, it } from "vitest";
+import {
+  buildAgentToAgentMessageContext,
+  buildAgentToAgentReplyContext,
+} from "./sessions-send-helpers.js";
 
-describe("resolveAnnounceTargetFromKey", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "discord",
-          source: "test",
-          plugin: {
-            id: "discord",
-            meta: {
-              id: "discord",
-              label: "Discord",
-              selectionLabel: "Discord",
-              docsPath: "/channels/discord",
-              blurb: "Discord test stub.",
-            },
-            capabilities: { chatTypes: ["direct", "channel", "thread"] },
-            messaging: {
-              resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
-            },
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-            },
-          },
-        },
-        {
-          pluginId: "slack",
-          source: "test",
-          plugin: {
-            id: "slack",
-            meta: {
-              id: "slack",
-              label: "Slack",
-              selectionLabel: "Slack",
-              docsPath: "/channels/slack",
-              blurb: "Slack test stub.",
-            },
-            capabilities: { chatTypes: ["direct", "channel", "thread"] },
-            messaging: {
-              resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
-            },
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-            },
-          },
-        },
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: {
-            id: "telegram",
-            meta: {
-              id: "telegram",
-              label: "Telegram",
-              selectionLabel: "Telegram",
-              docsPath: "/channels/telegram",
-              blurb: "Telegram test stub.",
-            },
-            capabilities: { chatTypes: ["direct", "group", "thread"] },
-            messaging: {
-              normalizeTarget: (raw: string) => raw.replace(/^group:/, ""),
-            },
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-            },
-          },
-        },
-      ]),
+describe("sessions_send helper prompts", () => {
+  it("includes explicit private-delivery flags in sender reply guidance", () => {
+    const prompt = buildAgentToAgentMessageContext({
+      requesterSessionKey: "agent:main:main",
+      requesterChannel: "main",
+      targetSessionKey: "agent:target:discord:group:123",
+    });
+
+    expect(prompt).toContain(
+      'use sessions_send targeting agent:main:main with deliveryMode: "private"',
     );
+    expect(prompt).toContain("announce: false for legacy clients");
   });
 
-  it("lets plugins own session-derived target shapes", () => {
-    expect(resolveAnnounceTargetFromKey("agent:main:discord:group:dev")).toEqual({
-      channel: "discord",
-      to: "channel:dev",
-      threadId: undefined,
+  it("shows sender-session continuation guidance only on target ping-pong turns", () => {
+    const requesterTurnPrompt = buildAgentToAgentReplyContext({
+      requesterSessionKey: "agent:main:main",
+      requesterChannel: "main",
+      targetSessionKey: "agent:target:discord:group:123",
+      targetChannel: "discord",
+      currentRole: "requester",
+      turn: 1,
+      maxTurns: 5,
     });
-    expect(resolveAnnounceTargetFromKey("agent:main:slack:group:C123")).toEqual({
-      channel: "slack",
-      to: "channel:C123",
-      threadId: undefined,
-    });
-  });
+    expect(requesterTurnPrompt).not.toContain('deliveryMode: "private"');
 
-  it("keeps generic topic extraction and plugin normalization for other channels", () => {
-    expect(resolveAnnounceTargetFromKey("agent:main:telegram:group:-100123:topic:99")).toEqual({
-      channel: "telegram",
-      to: "-100123",
-      threadId: "99",
+    const targetTurnPrompt = buildAgentToAgentReplyContext({
+      requesterSessionKey: "agent:main:main",
+      requesterChannel: "main",
+      targetSessionKey: "agent:target:discord:group:123",
+      targetChannel: "discord",
+      currentRole: "target",
+      turn: 2,
+      maxTurns: 5,
     });
+    expect(targetTurnPrompt).toContain(
+      'use sessions_send targeting agent:main:main with deliveryMode: "private"',
+    );
   });
 });
