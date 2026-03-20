@@ -4,7 +4,9 @@ import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatAssistantErrorText,
+  getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
+  isRawApiErrorPayload,
 } from "./pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
@@ -157,5 +159,16 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
     );
+  });
+});
+
+describe("raw API error payload helpers", () => {
+  it("recognizes provider-prefixed JSON payloads for observation fingerprints", () => {
+    const raw =
+      'Ollama API error: {"type":"error","error":{"type":"server_error","message":"Boom"},"request_id":"req_123"}';
+
+    expect(isRawApiErrorPayload(raw)).toBe(true);
+    expect(getApiErrorPayloadFingerprint(raw)).toContain("server_error");
+    expect(getApiErrorPayloadFingerprint(raw)).toContain("req_123");
   });
 });

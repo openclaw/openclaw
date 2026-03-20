@@ -1062,7 +1062,7 @@ export function renderConfig(props: ConfigProps) {
                     }
                     <div class="field config-raw-field">
                       <span style="display:flex;align-items:center;gap:8px;">
-                        Raw JSON5
+                        Raw config (JSON/JSON5)
                         ${
                           sensitiveCount > 0
                             ? html`
@@ -1087,7 +1087,7 @@ export function renderConfig(props: ConfigProps) {
                       </span>
                       <textarea
                         class="${blurred ? "config-raw-redacted" : ""}"
-                        placeholder=${blurred ? REDACTED_PLACEHOLDER : "Raw JSON5 config"}
+                        placeholder=${blurred ? REDACTED_PLACEHOLDER : "Raw config (JSON/JSON5)"}
                         .value=${blurred ? "" : props.raw}
                         ?readonly=${blurred}
                         @input=${(e: Event) => {

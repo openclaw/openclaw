@@ -7,6 +7,7 @@ export {
   setTopLevelChannelDmPolicyWithAllowFrom,
   splitSetupEntries,
 } from "./setup.js";
+export { formatDocsLink } from "../terminal/links.js";
 export type { ChannelSetupAdapter, ChannelSetupDmPolicy, ChannelSetupWizard } from "./setup.js";
 export {
   listLineAccountIds,

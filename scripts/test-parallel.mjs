@@ -15,6 +15,7 @@ import {
   resolveTestRunExitCode,
 } from "./test-parallel-utils.mjs";
 import {
+  dedupeFilesPreserveOrder,
   loadUnitMemoryHotspotManifest,
   loadTestRunnerBehavior,
   loadUnitTimingManifest,
@@ -81,18 +82,18 @@ const testProfile =
     ? rawTestProfile
     : "normal";
 const isMacMiniProfile = testProfile === "macmini";
-// vmForks is a big win for transform/import heavy suites. Node 24 is stable again
-// for the default unit-fast lane after moving the known flaky files to fork-only
-// isolation, but Node 25+ still falls back to process forks until re-validated.
-// Keep it opt-out via OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
+// Vitest executes Node tests through Vite's SSR/module-runner pipeline, so the
+// shared unit lane still retains transformed ESM/module state even when the
+// tests themselves are not "server rendering" a website. vmForks can win in
+// ideal transform-heavy cases, but for this repo we measured higher aggregate
+// CPU load and fatal heap OOMs on memory-constrained dev machines and CI when
+// unit-fast stayed on vmForks. Keep forks as the default unless that evidence
+// is re-run and replaced:
+// PR: https://github.com/openclaw/openclaw/pull/51145
+// OOM evidence: https://github.com/openclaw/openclaw/pull/51145#issuecomment-4099663958
+// Preserve OPENCLAW_TEST_VM_FORKS=1 as the explicit override/debug escape hatch.
 const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor <= 24 : true;
-const useVmForks =
-  process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
-  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" &&
-    !isWindows &&
-    supportsVmForks &&
-    !lowMemLocalHost &&
-    (isCI || testProfile !== "low"));
+const useVmForks = process.env.OPENCLAW_TEST_VM_FORKS === "1" && supportsVmForks;
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
@@ -287,8 +288,6 @@ const parseEnvNumber = (name, fallback) => {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
-const shardedCi = isCI && shardCount > 1;
-const shardedLinuxCi = shardedCi && !isWindows && !isMacOS;
 const allKnownUnitFiles = allKnownTestFiles.filter((file) => {
   return isUnitConfigTestFile(file);
 });
@@ -347,18 +346,46 @@ const { memoryHeavyFiles: memoryHeavyUnitFiles, timedHeavyFiles: timedHeavyUnitF
         memoryHeavyFiles: [],
         timedHeavyFiles: [],
       };
+const unitSingletonBatchFiles = dedupeFilesPreserveOrder(
+  unitSingletonIsolatedFiles,
+  new Set(unitBehaviorIsolatedFiles),
+);
+const unitMemorySingletonFiles = dedupeFilesPreserveOrder(
+  memoryHeavyUnitFiles,
+  new Set([...unitBehaviorOverrideSet, ...unitSingletonBatchFiles]),
+);
 const unitSchedulingOverrideSet = new Set([...unitBehaviorOverrideSet, ...memoryHeavyUnitFiles]);
 const unitFastExcludedFiles = [
   ...new Set([...unitSchedulingOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
 ];
-const unitAutoSingletonFiles = [
-  ...new Set([...unitSingletonIsolatedFiles, ...memoryHeavyUnitFiles]),
-];
-// Sharded Linux CI still sees the broadest heap retention in the shared unit-fast lane. Prefer
-// process forks there so the workers release memory more aggressively between files.
-const unitFastPool = useVmForks && !shardedLinuxCi ? "vmForks" : "forks";
+const defaultSingletonBatchLaneCount =
+  testProfile === "serial"
+    ? 0
+    : unitSingletonBatchFiles.length === 0
+      ? 0
+      : isCI
+        ? Math.ceil(unitSingletonBatchFiles.length / 6)
+        : highMemLocalHost
+          ? Math.ceil(unitSingletonBatchFiles.length / 8)
+          : lowMemLocalHost
+            ? Math.ceil(unitSingletonBatchFiles.length / 12)
+            : Math.ceil(unitSingletonBatchFiles.length / 10);
+const singletonBatchLaneCount =
+  unitSingletonBatchFiles.length === 0
+    ? 0
+    : Math.min(
+        unitSingletonBatchFiles.length,
+        Math.max(
+          1,
+          parseEnvNumber("OPENCLAW_TEST_SINGLETON_ISOLATED_LANES", defaultSingletonBatchLaneCount),
+        ),
+      );
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
+const unitSingletonBuckets =
+  singletonBatchLaneCount > 0
+    ? packFilesByDuration(unitSingletonBatchFiles, singletonBatchLaneCount, estimateUnitDurationMs)
+    : [];
 const unitFastExcludedFileSet = new Set(unitFastExcludedFiles);
 const unitFastCandidateFiles = allKnownUnitFiles.filter(
   (file) => !unitFastExcludedFileSet.has(file),
@@ -392,7 +419,7 @@ const unitFastEntries = unitFastBuckets
       "run",
       "--config",
       "vitest.unit.config.ts",
-      `--pool=${unitFastPool}`,
+      `--pool=${useVmForks ? "vmForks" : "forks"}`,
       ...(disableIsolation ? ["--isolate=false"] : []),
     ],
   }));
@@ -403,6 +430,11 @@ const heavyUnitBuckets = packFilesByDuration(
 );
 const unitHeavyEntries = heavyUnitBuckets.map((files, index) => ({
   name: `unit-heavy-${String(index + 1)}`,
+  args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
+}));
+const unitSingletonEntries = unitSingletonBuckets.map((files, index) => ({
+  name:
+    unitSingletonBuckets.length === 1 ? "unit-singleton" : `unit-singleton-${String(index + 1)}`,
   args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
 }));
 const baseRuns = [
@@ -425,7 +457,8 @@ const baseRuns = [
             ]
           : []),
         ...unitHeavyEntries,
-        ...unitAutoSingletonFiles.map((file) => ({
+        ...unitSingletonEntries,
+        ...unitMemorySingletonFiles.map((file) => ({
           name: `${path.basename(file, ".test.ts")}-isolated`,
           args: [
             "vitest",
@@ -754,50 +787,26 @@ const defaultWorkerBudget =
                   extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
                   gateway: 1,
                 };
-const shardedCiWorkerBudget =
-  shardedCi && !isMacOS
-    ? {
-        // Sharded Linux/Windows CI runs already divide the file set, so a smaller worker
-        // fan-out keeps vmFork/fork heaps under control without penalizing local runs.
-        unit: 2,
-        unitIsolated: 1,
-        extensions: 2,
-        gateway: 1,
-      }
-    : null;
 
 // Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.
-// On sharded Linux/Windows CI, cap worker fan-out to avoid unit-fast heap blowups while still
-// keeping enough concurrency to finish quickly. Non-sharded CI keeps Vitest defaults.
+// In CI on linux/windows, prefer Vitest defaults to avoid cross-test interference from lower worker counts.
 const maxWorkersForRun = (name) => {
   if (resolvedOverride) {
     return resolvedOverride;
   }
-  if (shardedLinuxCi && name.startsWith("unit-fast")) {
+  if (name === "unit-singleton" || name.startsWith("unit-singleton-")) {
+    return 1;
+  }
+  if (isCI && !isMacOS) {
+    return null;
+  }
+  if (isCI && isMacOS) {
     return 1;
   }
   if (name.endsWith("-threads") || name.endsWith("-vmforks")) {
     return 1;
   }
   if (name.endsWith("-isolated") && name !== "unit-isolated") {
-    return 1;
-  }
-  if (isCI && !isMacOS) {
-    if (shardedCiWorkerBudget) {
-      if (name === "unit-isolated" || name.startsWith("unit-heavy-")) {
-        return shardedCiWorkerBudget.unitIsolated;
-      }
-      if (name === "extensions") {
-        return shardedCiWorkerBudget.extensions;
-      }
-      if (name === "gateway") {
-        return shardedCiWorkerBudget.gateway;
-      }
-      return shardedCiWorkerBudget.unit;
-    }
-    return null;
-  }
-  if (isCI && isMacOS) {
     return 1;
   }
   if (name === "unit-isolated" || name.startsWith("unit-heavy-")) {
@@ -1299,7 +1308,7 @@ if (serialPrefixRuns.length > 0) {
   const failedMacMiniParallel = await runEntriesWithLimit(
     deferredEntries,
     passthroughOptionArgs,
-    isMacMiniProfile ? 3 : topLevelParallelLimit,
+    3,
   );
   if (failedMacMiniParallel !== undefined) {
     process.exit(failedMacMiniParallel);

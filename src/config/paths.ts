@@ -99,7 +99,7 @@ function resolveUserPath(
 export const STATE_DIR = resolveStateDir();
 
 /**
- * Config file path (JSON5).
+ * Config file path (JSON or JSON5).
  * Can be overridden via OPENCLAW_CONFIG_PATH.
  * Default: ~/.openclaw/openclaw.json (or $OPENCLAW_STATE_DIR/openclaw.json)
  */

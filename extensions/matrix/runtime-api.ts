@@ -3,3 +3,4 @@
 // matrix-js-sdk during plain runtime-api import.
 export * from "./src/auth-precedence.js";
 export * from "./helper-api.js";
+export * from "./thread-bindings-runtime.js";

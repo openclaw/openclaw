@@ -29,11 +29,14 @@ describe("plugin extension import boundary inventory", () => {
     );
   });
 
-  it("ignores plugin-sdk boundary shims by scope", async () => {
+  it("ignores boundary shims by scope", async () => {
     const inventory = await collectPluginExtensionImportBoundaryInventory();
 
     expect(inventory.some((entry) => entry.file.startsWith("src/plugin-sdk/"))).toBe(false);
     expect(inventory.some((entry) => entry.file.startsWith("src/plugin-sdk-internal/"))).toBe(
+      false,
+    );
+    expect(inventory.some((entry) => entry.file.startsWith("src/plugins/runtime/runtime-"))).toBe(
       false,
     );
   });
