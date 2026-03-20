@@ -160,6 +160,12 @@ export type TelegramAccountConfig = {
   /** @deprecated Legacy key; migrated automatically to `streaming`. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
+  /**
+   * Batch window (ms) for document files sent in quick succession by the same sender.
+   * Telegram sends documents as individual messages (no media_group_id), so this buffer
+   * collects them into a single agent turn. Set to 0 to disable. Default: 1500.
+   */
+  documentBatchWindowMs?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
   /** Retry policy for outbound Telegram API calls. */
