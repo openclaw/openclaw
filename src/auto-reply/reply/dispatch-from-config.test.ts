@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.js";
+import type {
+  PluginHookBeforeDispatchResult,
+  PluginTargetedInboundClaimOutcome,
+} from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -35,14 +38,16 @@ const hookMocks = vi.hoisted(() => ({
     }>,
   },
   runner: {
-    hasHooks: vi.fn(() => false),
+    hasHooks: vi.fn<(hookName?: string) => boolean>(() => false),
     runInboundClaim: vi.fn(async () => undefined),
     runInboundClaimForPlugin: vi.fn(async () => undefined),
     runInboundClaimForPluginOutcome: vi.fn<() => Promise<PluginTargetedInboundClaimOutcome>>(
       async () => ({ status: "no_handler" as const }),
     ),
     runMessageReceived: vi.fn(async () => {}),
-    runBeforeDispatch: vi.fn(async () => undefined),
+    runBeforeDispatch: vi.fn<
+      (_event: unknown, _ctx: unknown) => Promise<PluginHookBeforeDispatchResult | undefined>
+    >(async () => undefined),
   },
 }));
 const internalHookMocks = vi.hoisted(() => ({
@@ -2730,7 +2735,9 @@ describe("dispatchReplyFromConfig", () => {
 describe("before_dispatch hook", () => {
   it("skips model dispatch when hook returns handled", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "before_dispatch");
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "before_dispatch",
+    );
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({
       handled: true,
       text: "Blocked by plugin",
@@ -2754,7 +2761,9 @@ describe("before_dispatch hook", () => {
 
   it("silently short-circuits when hook returns handled without text", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "before_dispatch");
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "before_dispatch",
+    );
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true });
     const dispatcher = createDispatcher();
     const ctx = {
@@ -2775,7 +2784,9 @@ describe("before_dispatch hook", () => {
 
   it("continues default dispatch when hook returns not handled", async () => {
     setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "before_dispatch");
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "before_dispatch",
+    );
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: false });
     const dispatcher = createDispatcher();
     const ctx = {
