@@ -273,6 +273,21 @@ describe("gateway sessions patch", () => {
     expect(entry.modelOverride).toBe("claude-sonnet-4-6");
   });
 
+  test.each([
+    { name: "list", model: "list" },
+    { name: "LIST (uppercase)", model: "LIST" },
+    { name: "List (mixed case)", model: "List" },
+    { name: "status", model: "status" },
+    { name: "STATUS (uppercase)", model: "STATUS" },
+    { name: "Status (mixed case)", model: "Status" },
+  ])("rejects model command alias '$name' as invalid model", async ({ model }) => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, model },
+    });
+    expectPatchError(result, `invalid model`);
+    expectPatchError(result, `command alias`);
+  });
+
   test("sets spawnDepth for subagent sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({

@@ -389,6 +389,11 @@ export async function applySessionsPatchToStore(params: {
       if (!trimmed) {
         return invalid("invalid model: empty");
       }
+      if (trimmed.toLowerCase() === "list" || trimmed.toLowerCase() === "status") {
+        return invalid(
+          `invalid model: "${trimmed}" is a command alias, not a model. Use /models list or /model status in chat instead.`,
+        );
+      }
       if (!params.loadGatewayModelCatalog) {
         return {
           ok: false,
