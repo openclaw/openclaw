@@ -7,7 +7,7 @@ import {
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import { normalizeGoogleModelId } from "../agents/models-config.providers.js";
+import { normalizeGoogleModelId, normalizeXaiModelId } from "../agents/models-config.providers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
@@ -154,6 +154,9 @@ function canonicalizeOpenRouterLookupId(id: string): string {
   }
   if (provider === "google") {
     model = normalizeGoogleModelId(model);
+  }
+  if (provider === "x-ai") {
+    model = normalizeXaiModelId(model);
   }
   return `${provider}/${model}`;
 }

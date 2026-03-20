@@ -34,8 +34,7 @@ OpenClaw now includes these xAI model families out of the box:
 - `grok-4`, `grok-4-0709`
 - `grok-4-fast-reasoning`, `grok-4-fast-non-reasoning`
 - `grok-4-1-fast-reasoning`, `grok-4-1-fast-non-reasoning`
-- `grok-4.20-experimental-beta-0304-reasoning`
-- `grok-4.20-experimental-beta-0304-non-reasoning`
+- `grok-4.20-reasoning`, `grok-4.20-non-reasoning`
 - `grok-code-fast-1`
 
 The plugin also forward-resolves newer `grok-4*` and `grok-code-fast*` ids when
