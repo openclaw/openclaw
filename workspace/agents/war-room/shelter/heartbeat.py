@@ -913,6 +913,29 @@ def main():
     state["last_run"] = now.isoformat()
     _save_beat_state(state)
 
+    # ── 寫工作到共享佇列（讓其他 session 的 pulse 領取）──
+    try:
+        from shelter.pulse import enqueue
+
+        # 有待審提案 → 推到佇列
+        try:
+            from shelter.core.phase1_evolution import review
+            pending = review()
+            if pending:
+                enqueue("evolve_proposal_review", {"count": len(pending)}, priority=3)
+        except Exception:
+            pass
+
+        # Threads 未回覆多 → 推到佇列
+        threads_unreplied = perception_result.get("threads", {}).get("unreplied", 0)
+        if threads_unreplied > 20:
+            enqueue("threads_reply", {"unreplied": threads_unreplied}, priority=4)
+
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
     # ── Lifecycle GC (every 72 beats = ~6h at 5-min ticks) ──
     if beat_n % 72 == 0:
         _lifecycle_gc()
