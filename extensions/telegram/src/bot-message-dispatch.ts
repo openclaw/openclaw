@@ -510,7 +510,7 @@ export const dispatchTelegramMessage = async ({
       deliveryState.markDelivered();
     },
     // Emit message:sent hooks for preview-finalized/retained paths that bypass sendPayload.
-    onPreviewDelivered: (content) => {
+    onPreviewDelivered: (content, messageId) => {
       const hookRunner = getGlobalHookRunner();
       const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
       emitMessageSentHooks({
@@ -521,6 +521,7 @@ export const dispatchTelegramMessage = async ({
         accountId: deliveryBaseOptions.accountId,
         content,
         success: true,
+        messageId,
         isGroup: deliveryBaseOptions.mirrorIsGroup,
         groupId: deliveryBaseOptions.mirrorGroupId,
       });

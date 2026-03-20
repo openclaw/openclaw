@@ -84,7 +84,7 @@ type CreateLaneTextDelivererParams = {
   log: (message: string) => void;
   markDelivered: () => void;
   /** Called when a preview-finalized or preview-retained path delivers without sendPayload. */
-  onPreviewDelivered?: (content: string) => void;
+  onPreviewDelivered?: (content: string, messageId?: number) => void;
 };
 
 type DeliverLaneTextParams = {
@@ -191,10 +191,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     lane: DraftLaneState;
     laneName: LaneName;
     text: string;
-  }): Promise<boolean> => {
+  }): Promise<number | undefined> => {
     const stream = args.lane.stream;
     if (!stream || !isDraftPreviewLane(args.lane)) {
-      return false;
+      return undefined;
     }
     // Draft previews have no message_id to edit; materialize the final text
     // into a real message and treat that as the finalized delivery.
@@ -204,11 +204,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       params.log(
         `telegram: ${args.laneName} draft preview materialize produced no message id; falling back to standard send`,
       );
-      return false;
+      return undefined;
     }
     args.lane.lastPartialText = args.text;
     params.markDelivered();
-    return true;
+    return materializedMessageId;
   };
 
   const tryEditPreviewMessage = async (args: {
@@ -429,12 +429,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         previewTextSnapshot: archivedPreview.textSnapshot,
       });
       if (finalized === "edited") {
-        params.onPreviewDelivered?.(text);
+        params.onPreviewDelivered?.(text, archivedPreview.messageId);
         return "preview-finalized";
       }
       if (finalized === "retained") {
         params.retainPreviewOnCleanupByLane.answer = true;
-        params.onPreviewDelivered?.(text);
+        params.onPreviewDelivered?.(text, archivedPreview.messageId);
         return "preview-retained";
       }
     }
@@ -503,17 +503,18 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           }
         }
         if (canMaterializeDraftFinal(lane, previewButtons)) {
-          const materialized = await tryMaterializeDraftPreviewForFinal({
+          const materializedMessageId = await tryMaterializeDraftPreviewForFinal({
             lane,
             laneName,
             text,
           });
-          if (materialized) {
+          if (typeof materializedMessageId === "number") {
             markActivePreviewComplete(laneName);
-            params.onPreviewDelivered?.(text);
+            params.onPreviewDelivered?.(text, materializedMessageId);
             return "preview-finalized";
           }
         }
+        const previewMessageId = lane.stream?.messageId();
         const finalized = await tryUpdatePreviewForLane({
           lane,
           laneName,
@@ -525,12 +526,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         });
         if (finalized === "edited") {
           markActivePreviewComplete(laneName);
-          params.onPreviewDelivered?.(text);
+          params.onPreviewDelivered?.(text, previewMessageId ?? lane.stream?.messageId());
           return "preview-finalized";
         }
         if (finalized === "retained") {
           markActivePreviewComplete(laneName);
-          params.onPreviewDelivered?.(text);
+          params.onPreviewDelivered?.(text, previewMessageId ?? lane.stream?.messageId());
           return "preview-retained";
         }
       } else if (!hasMedia && !payload.isError && text.length > params.draftMaxChars) {

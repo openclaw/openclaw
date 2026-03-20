@@ -564,7 +564,7 @@ describe("createLaneTextDeliverer", () => {
     const result = await deliverFinalAnswer(harness, HELLO_FINAL);
 
     expect(result).toBe("preview-finalized");
-    expect(harness.onPreviewDelivered).toHaveBeenCalledWith(HELLO_FINAL);
+    expect(harness.onPreviewDelivered).toHaveBeenCalledWith(HELLO_FINAL, 999);
   });
 
   it("calls onPreviewDelivered when preview is retained on ambiguous error", async () => {
@@ -574,7 +574,7 @@ describe("createLaneTextDeliverer", () => {
     const result = await deliverFinalAnswer(harness, HELLO_FINAL);
 
     expect(result).toBe("preview-retained");
-    expect(harness.onPreviewDelivered).toHaveBeenCalledWith(HELLO_FINAL);
+    expect(harness.onPreviewDelivered).toHaveBeenCalledWith(HELLO_FINAL, 999);
   });
 
   it("calls onPreviewDelivered when DM draft preview is materialized", async () => {
@@ -595,7 +595,7 @@ describe("createLaneTextDeliverer", () => {
     });
 
     expect(result).toBe("preview-finalized");
-    expect(harness.onPreviewDelivered).toHaveBeenCalledWith("Hello final");
+    expect(harness.onPreviewDelivered).toHaveBeenCalledWith("Hello final", 321);
   });
 
   it("calls onPreviewDelivered when archived preview is finalized", async () => {
@@ -605,7 +605,7 @@ describe("createLaneTextDeliverer", () => {
     const result = await deliverFinalAnswer(harness, HELLO_FINAL);
 
     expect(result).toBe("preview-finalized");
-    expect(harness.onPreviewDelivered).toHaveBeenCalledWith(HELLO_FINAL);
+    expect(harness.onPreviewDelivered).toHaveBeenCalledWith(HELLO_FINAL, 5555);
   });
 
   it("does not call onPreviewDelivered when falling back to sendPayload", async () => {
