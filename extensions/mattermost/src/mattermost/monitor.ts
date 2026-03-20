@@ -1738,16 +1738,31 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         // the reply pipeline produces no final payload (e.g. messaging-tool sends that
         // are suppressed, or empty/heartbeat responses). Without this, onPartialReply
         // can create a Mattermost post that is never deleted or patched with final text.
-        if (streamMessageId && blockStreamingClient) {
+        //
+        // We must also handle the race where the first preview POST is still in flight
+        // (patchSending=true, streamMessageId=null): stopPatchInterval() prevents new
+        // ticks, and the async cleanup waits for patchSending to clear so it can capture
+        // the messageId that the in-flight send will set.
+        if ((streamMessageId || patchSending) && blockStreamingClient) {
           stopPatchInterval();
-          const orphanId = streamMessageId;
-          streamMessageId = null;
           pendingPatchText = "";
           lastSentText = "";
-          patchSending = false;
-          void deleteMattermostPost(blockStreamingClient, orphanId).catch(() => {
-            // Best-effort — the run is already complete.
-          });
+          const client = blockStreamingClient;
+          void (async () => {
+            // Wait for any in-flight send/patch to settle so we get the final messageId.
+            const deadline = Date.now() + 3000;
+            while (patchSending && Date.now() < deadline) {
+              await new Promise((r) => setTimeout(r, 50));
+            }
+            patchSending = false;
+            const orphanId = streamMessageId;
+            streamMessageId = null;
+            if (orphanId) {
+              await deleteMattermostPost(client, orphanId).catch(() => {
+                // Best-effort — the run is already complete.
+              });
+            }
+          })();
         }
       },
       run: () =>
