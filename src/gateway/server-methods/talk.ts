@@ -69,7 +69,13 @@ function resolveTalkVoiceId(
   if (!aliases) {
     return requested;
   }
-  return aliases[normalizeAliasKey(requested)] ?? requested;
+  const normalizedRequested = normalizeAliasKey(requested);
+  for (const [alias, voiceId] of Object.entries(aliases)) {
+    if (normalizeAliasKey(alias) === normalizedRequested) {
+      return voiceId;
+    }
+  }
+  return requested;
 }
 
 function readTalkVoiceSettings(
@@ -189,6 +195,7 @@ function buildTalkSpeakOverrides(
 ): TtsDirectiveOverrides {
   const voiceId = resolveTalkVoiceId(providerConfig, trimString(params.voiceId));
   const modelId = trimString(params.modelId);
+  const outputFormat = trimString(params.outputFormat);
   const speed = finiteNumber(params.speed);
   const seed = finiteNumber(params.seed);
   const normalize = normalizeTextNormalization(params.normalize);
@@ -212,6 +219,7 @@ function buildTalkSpeakOverrides(
     overrides.elevenlabs = {
       ...(voiceId == null ? {} : { voiceId }),
       ...(modelId == null ? {} : { modelId }),
+      ...(outputFormat == null ? {} : { outputFormat }),
       ...(seed == null ? {} : { seed }),
       ...(normalize == null ? {} : { applyTextNormalization: normalize }),
       ...(language == null ? {} : { languageCode: language }),
@@ -230,7 +238,10 @@ function buildTalkSpeakOverrides(
   }
 
   if (provider === "microsoft") {
-    overrides.microsoft = voiceId == null ? undefined : { voice: voiceId };
+    overrides.microsoft = {
+      ...(voiceId == null ? {} : { voice: voiceId }),
+      ...(outputFormat == null ? {} : { outputFormat }),
+    };
   }
 
   return overrides;
