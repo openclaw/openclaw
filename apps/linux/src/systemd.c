@@ -30,6 +30,26 @@ static guint properties_changed_signal_id = 0;
 static void fetch_unit_properties(void);
 extern void systemd_refresh(void);
 
+static gboolean is_gateway_unit(const gchar *filename, const gchar *contents) {
+    if (!contents) return FALSE;
+    
+    // 1. We still generally want it to be an OpenClaw managed/marked unit
+    gboolean has_marker = (strstr(contents, "OPENCLAW_SERVICE_MARKER=openclaw") != NULL);
+    
+    // 2. Must be a gateway (explicit kind marker or legacy/default filename pattern)
+    gboolean is_gateway = FALSE;
+    if (strstr(contents, "OPENCLAW_SERVICE_KIND=gateway")) {
+        is_gateway = TRUE;
+    } else if (filename && g_str_has_prefix(filename, "openclaw-gateway")) {
+        // Fallback for older units or manual installs missing the KIND marker
+        is_gateway = TRUE;
+    }
+    
+    // If it has the new kind marker, that implies it's ours.
+    // If it only has the general marker, it MUST match the gateway prefix to filter out node services.
+    return (is_gateway && (has_marker || strstr(contents, "OPENCLAW_SERVICE_KIND=gateway")));
+}
+
 static gboolean check_system_scope_units(void) {
     const gchar *paths[] = {"/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"};
     for (size_t i = 0; i < G_N_ELEMENTS(paths); i++) {
@@ -41,7 +61,7 @@ static gboolean check_system_scope_units(void) {
                 g_autofree gchar *filepath = g_build_filename(paths[i], filename, NULL);
                 gchar *contents = NULL;
                 if (g_file_get_contents(filepath, &contents, NULL, NULL)) {
-                    if (strstr(contents, "OPENCLAW_SERVICE_MARKER=openclaw")) {
+                    if (is_gateway_unit(filename, contents)) {
                         g_free(contents);
                         g_dir_close(dir);
                         return TRUE;
@@ -85,7 +105,7 @@ static const gchar* discover_canonical_unit_name(void) {
         g_autofree gchar *filepath = g_build_filename(systemd_user_dir, filename, NULL);
         gchar *contents = NULL;
         if (g_file_get_contents(filepath, &contents, NULL, NULL)) {
-            if (strstr(contents, "OPENCLAW_SERVICE_MARKER=openclaw")) {
+            if (is_gateway_unit(filename, contents)) {
                 g_ptr_array_add(marked_units, g_strdup(filename));
             }
             g_free(contents);
