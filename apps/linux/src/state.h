@@ -16,6 +16,7 @@
 
 typedef enum {
     STATE_NOT_INSTALLED,
+    STATE_SYSTEM_UNSUPPORTED,
     STATE_STOPPED,
     STATE_STARTING,
     STATE_STOPPING,
@@ -27,6 +28,7 @@ typedef enum {
 
 typedef struct {
     gboolean installed;
+    gboolean system_installed_unsupported;
     gboolean active;
     gboolean activating;
     gboolean deactivating;
@@ -74,6 +76,7 @@ void state_update_probe(ProbeState *probe_state);
 
 AppState state_get_current(void);
 const char* state_get_current_string(void);
+guint64 state_get_health_generation(void);
 
 SystemdState* state_get_systemd(void);
 HealthState* state_get_health(void);

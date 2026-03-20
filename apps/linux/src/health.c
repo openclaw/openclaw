@@ -174,7 +174,12 @@ static GSubprocess *spawn_gateway_subprocess(const gchar *subcommand, GError **e
 }
 
 static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, gpointer user_data) {
-    (void)user_data;
+    guint64 launch_gen = 0;
+    if (user_data) {
+        launch_gen = *(guint64 *)user_data;
+        g_free(user_data);
+    }
+    
     GSubprocess *subprocess = G_SUBPROCESS(source_object);
     g_autoptr(GError) error = NULL;
     gchar *stdout_buf = NULL;
@@ -183,6 +188,12 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
     g_subprocess_communicate_utf8_finish(subprocess, res, &stdout_buf, &stderr_buf, &error);
     
     state_set_health_in_flight(FALSE);
+    
+    if (launch_gen != state_get_health_generation()) {
+        g_free(stdout_buf);
+        g_free(stderr_buf);
+        return;
+    }
     
     if (error || !g_subprocess_get_if_exited(subprocess) || g_subprocess_get_exit_status(subprocess) != 0) {
         HealthState hs = {0};
@@ -286,13 +297,21 @@ void health_probe_gateway(void) {
         return;
     }
     
+    guint64 *launch_gen = g_new(guint64, 1);
+    *launch_gen = state_get_health_generation();
+    
     state_set_health_in_flight(TRUE);
-    g_subprocess_communicate_utf8_async(subprocess, NULL, NULL, on_health_probe_finished, NULL);
+    g_subprocess_communicate_utf8_async(subprocess, NULL, NULL, on_health_probe_finished, launch_gen);
     g_object_unref(subprocess);
 }
 
 static void on_deep_probe_finished(GObject *source_object, GAsyncResult *res, gpointer user_data) {
-    (void)user_data;
+    guint64 launch_gen = 0;
+    if (user_data) {
+        launch_gen = *(guint64 *)user_data;
+        g_free(user_data);
+    }
+    
     GSubprocess *subprocess = G_SUBPROCESS(source_object);
     g_autoptr(GError) error = NULL;
     gchar *stdout_buf = NULL;
@@ -301,6 +320,12 @@ static void on_deep_probe_finished(GObject *source_object, GAsyncResult *res, gp
     g_subprocess_communicate_utf8_finish(subprocess, res, &stdout_buf, &stderr_buf, &error);
     
     state_set_probe_in_flight(FALSE);
+    
+    if (launch_gen != state_get_health_generation()) {
+        g_free(stdout_buf);
+        g_free(stderr_buf);
+        return;
+    }
     
     ProbeState ps = {0};
     ps.ran = TRUE;
@@ -369,7 +394,10 @@ void health_run_deep_probe(void) {
         return;
     }
     
+    guint64 *launch_gen = g_new(guint64, 1);
+    *launch_gen = state_get_health_generation();
+    
     state_set_probe_in_flight(TRUE);
-    g_subprocess_communicate_utf8_async(subprocess, NULL, NULL, on_deep_probe_finished, NULL);
+    g_subprocess_communicate_utf8_async(subprocess, NULL, NULL, on_deep_probe_finished, launch_gen);
     g_object_unref(subprocess);
 }

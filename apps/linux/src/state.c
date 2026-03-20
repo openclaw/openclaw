@@ -18,6 +18,7 @@ static AppState current_state = STATE_NOT_INSTALLED;
 static SystemdState current_sys_state = {0};
 static HealthState current_health_state = {0};
 static ProbeState current_probe_state = {0};
+static guint64 current_health_generation = 0;
 static gboolean initial_hydration_done = FALSE;
 
 static AppState compute_state(void) {
@@ -26,7 +27,12 @@ static AppState compute_state(void) {
     // 2. `gateway status --json` output (health lane)
     // The deep probe lane is intentionally excluded from the main tray truth
     // to avoid false negatives from network timeouts.
-    if (!current_sys_state.installed) return STATE_NOT_INSTALLED;
+    if (!current_sys_state.installed) {
+        if (current_sys_state.system_installed_unsupported) {
+            return STATE_SYSTEM_UNSUPPORTED;
+        }
+        return STATE_NOT_INSTALLED;
+    }
     if (current_sys_state.failed) return STATE_ERROR;
     if (current_sys_state.activating) return STATE_STARTING;
     if (current_sys_state.deactivating) return STATE_STOPPING;
@@ -99,6 +105,7 @@ void state_update_systemd(SystemdState *sys_state) {
         // Reset the health snapshot explicitly on the relevant systemd transition
         // so the state model has a clear freshness boundary.
         current_health_state.last_updated = 0;
+        current_health_generation++;
     }
     
     trigger_updates(compute_state());
@@ -158,6 +165,7 @@ AppState state_get_current(void) {
 const char* state_get_current_string(void) {
     switch (current_state) {
         case STATE_NOT_INSTALLED: return "Not Installed";
+        case STATE_SYSTEM_UNSUPPORTED: return "System Service (Unsupported)";
         case STATE_STOPPED: return "Stopped";
         case STATE_STARTING: return "Starting";
         case STATE_STOPPING: return "Stopping";
@@ -171,6 +179,10 @@ const char* state_get_current_string(void) {
 
 SystemdState* state_get_systemd(void) {
     return &current_sys_state;
+}
+
+guint64 state_get_health_generation(void) {
+    return current_health_generation;
 }
 
 HealthState* state_get_health(void) {

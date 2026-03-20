@@ -30,6 +30,31 @@ static guint properties_changed_signal_id = 0;
 static void fetch_unit_properties(void);
 extern void systemd_refresh(void);
 
+static gboolean check_system_scope_units(void) {
+    const gchar *paths[] = {"/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"};
+    for (size_t i = 0; i < G_N_ELEMENTS(paths); i++) {
+        GDir *dir = g_dir_open(paths[i], 0, NULL);
+        if (!dir) continue;
+        const gchar *filename;
+        while ((filename = g_dir_read_name(dir)) != NULL) {
+            if (g_str_has_suffix(filename, ".service")) {
+                g_autofree gchar *filepath = g_build_filename(paths[i], filename, NULL);
+                gchar *contents = NULL;
+                if (g_file_get_contents(filepath, &contents, NULL, NULL)) {
+                    if (strstr(contents, "OPENCLAW_SERVICE_MARKER=openclaw")) {
+                        g_free(contents);
+                        g_dir_close(dir);
+                        return TRUE;
+                    }
+                    g_free(contents);
+                }
+            }
+        }
+        g_dir_close(dir);
+    }
+    return FALSE;
+}
+
 static gint sort_marked_units(gconstpointer a, gconstpointer b) {
     return g_strcmp0(*(const gchar **)a, *(const gchar **)b);
 }
@@ -437,6 +462,9 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
     if (!result) {
         // Failed to get file state -> assume not installed
         SystemdState sys_state = {0};
+        if (check_system_scope_units()) {
+            sys_state.system_installed_unsupported = TRUE;
+        }
         state_update_systemd(&sys_state);
         return;
     }
