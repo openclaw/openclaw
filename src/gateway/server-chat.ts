@@ -710,7 +710,7 @@ export function createAgentEventHandler({
               : { ...eventForClients, data };
           })()
         : agentPayload;
-    if (evt.seq !== last + 1) {
+    if (last > 0 && evt.seq !== last + 1) {
       broadcast("agent", {
         runId: eventRunId,
         stream: "error",
