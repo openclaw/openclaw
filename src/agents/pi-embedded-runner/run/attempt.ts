@@ -2334,6 +2334,7 @@ export async function runEmbeddedAttempt(
       activeSession.agent.streamFn = wrapStreamFnSanitizeMalformedToolCalls(
         activeSession.agent.streamFn,
         allowedToolNames,
+        transcriptPolicy,
       );
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
         activeSession.agent.streamFn,
