@@ -69,13 +69,6 @@ function createHandlerHarness() {
         dispatchReplyFromConfig: vi
           .fn()
           .mockResolvedValue({ queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } }),
-        withReplyDispatcher: vi.fn().mockImplementation(async ({ run, onSettled }) => {
-          try {
-            return await run();
-          } finally {
-            await onSettled?.();
-          }
-        }),
       },
       commands: {
         shouldHandleTextCommands: vi.fn().mockReturnValue(true),
