@@ -60,6 +60,17 @@ describe("isPidAlive", () => {
     });
   });
 
+  it("handles macOS zombie detection without crashing", async () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    // On macOS, verify that isPidAlive works and doesn't throw
+    // Real zombie processes are hard to create in tests, so we just
+    // verify the code path executes without error
+    expect(() => isPidAlive(process.pid)).not.toThrow();
+    expect(typeof isPidAlive(process.pid)).toBe("boolean");
+  });
+
   it("treats unreadable linux proc status as non-zombie when kill succeeds", async () => {
     const readFileSyncSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation(() => {
       throw new Error("no proc status");
