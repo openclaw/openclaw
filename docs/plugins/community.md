@@ -18,37 +18,45 @@ openclaw plugins install <npm-spec>
 
 ## Listed plugins
 
-<CardGroup cols={1}>
-  <Card title="DingTalk" href="https://github.com/largezhou/openclaw-dingtalk">
+<AccordionGroup>
+  <Accordion title="DingTalk — Enterprise robot integration via Stream mode">
     Enterprise robot integration using Stream mode. Supports text, images, and
     file messages via any DingTalk client.
+
+    - **npm:** `@largezhou/ddingtalk`
+    - **repo:** [github.com/largezhou/openclaw-dingtalk](https://github.com/largezhou/openclaw-dingtalk)
 
     ```bash
     openclaw plugins install @largezhou/ddingtalk
     ```
 
-  </Card>
+  </Accordion>
 
-  <Card title="QQbot" href="https://github.com/sliverp/qqbot">
-    Connect to QQ via the QQ Bot API. Supports private chats, group mentions,
-    channel messages, and rich media including voice, images, videos, and files.
+  <Accordion title="QQbot — Connect to QQ via the QQ Bot API">
+    Supports private chats, group mentions, channel messages, and rich media
+    including voice, images, videos, and files.
+
+    - **npm:** `@sliverp/qqbot`
+    - **repo:** [github.com/sliverp/qqbot](https://github.com/sliverp/qqbot)
 
     ```bash
     openclaw plugins install @sliverp/qqbot
     ```
 
-  </Card>
+  </Accordion>
 
-  <Card title="WeChat" href="https://github.com/icesword0760/openclaw-wechat">
-    Connect to WeChat personal accounts via WeChatPadPro (iPad protocol).
+  <Accordion title="WeChat — Personal accounts via WeChatPadPro (iPad protocol)">
     Supports text, image, and file exchange with keyword-triggered conversations.
+
+    - **npm:** `@icesword760/openclaw-wechat`
+    - **repo:** [github.com/icesword0760/openclaw-wechat](https://github.com/icesword0760/openclaw-wechat)
 
     ```bash
     openclaw plugins install @icesword760/openclaw-wechat
     ```
 
-  </Card>
-</CardGroup>
+  </Accordion>
+</AccordionGroup>
 
 ## Submit your plugin
 
