@@ -974,6 +974,9 @@ Compatibility note:
   helper is only needed by a bundled extension, keep it behind the extension's
   local `api.js` or `runtime-api.js` seam instead of promoting it into
   `openclaw/plugin-sdk/<extension>`.
+- Channel-branded bundled bars such as `feishu`, `googlechat`, `irc`, `line`,
+  `nostr`, `twitch`, and `zalo` stay private unless they are explicitly added
+  back to the public contract.
 - Capability-specific subpaths such as `image-generation`,
   `media-understanding`, and `speech` exist because bundled/native plugins use
   them today. Their presence does not by itself mean every exported helper is a
