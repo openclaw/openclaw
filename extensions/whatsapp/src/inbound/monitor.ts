@@ -157,8 +157,9 @@ export async function monitorWebInbox(options: {
    * Mirrors WPPConnect's getPnLidEntry API.
    */
   const lookupPnLidEntry = async (phoneOrLid: string): Promise<PnLidEntryResult | null> => {
-    // Check if it's a LID format (e.g. "123@lid")
-    const isLid = /@\/?lid$/i.test(phoneOrLid);
+    // Check if it's a LID format (e.g. "123@lid" or "123@hosted.lid")
+    // Mirrors the pattern used in resolveJidToE164 for consistency
+    const isLid = /(@lid|@hosted\.lid)$/i.test(phoneOrLid);
     // Check if it's a phone JID format (e.g. "123@s.whatsapp.net")
     const isPhoneJid = /@\/?s\.whatsapp\.net$/i.test(phoneOrLid);
 

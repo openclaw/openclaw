@@ -323,6 +323,27 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("lookupPnLidEntry handles @hosted.lid format", async () => {
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage);
+    const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
+    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce("555:0@s.whatsapp.net");
+
+    const result = await listener.lookupPnLidEntry("444@hosted.lid");
+
+    expect(getPNForLID).toHaveBeenCalledWith("444@hosted.lid");
+    expect(result).toEqual({
+      lid: "444@hosted.lid",
+      phoneNumber: "+555",
+      contact: undefined,
+    });
+
+    await listener.close();
+  });
+
   it("lookupPnLidEntry handles phone JID input", async () => {
     const onMessage = vi.fn(async () => {
       return;
