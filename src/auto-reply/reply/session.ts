@@ -561,8 +561,9 @@ export async function initSessionState(params: {
   // When a session is auto-reset (idle timeout or daily reset), emit a
   // session:reset internal hook so the session-memory hook can persist
   // the outgoing session context — just as it does for manual /new and /reset.
-  // This MUST fire before archiveSessionTranscripts() so the handler can still
-  // read the original transcript file (which archival renames).
+  // Note: this is fire-and-forget; if archival renames the transcript before
+  // the handler reads it, getRecentSessionContentWithResetFallback() will
+  // locate it via the .reset.* sibling naming convention.
   if (isNewSession && !resetTriggered && previousSessionEntry) {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const autoResetEvent = createInternalHookEvent("session", "reset", sessionKey, {
