@@ -231,3 +231,18 @@ export function packFilesByDuration(files, bucketCount, estimateDurationMs) {
 
   return buckets.map((bucket) => bucket.files).filter((bucket) => bucket.length > 0);
 }
+
+export function dedupeFilesPreserveOrder(files, exclude = new Set()) {
+  const result = [];
+  const seen = new Set();
+
+  for (const file of files) {
+    if (exclude.has(file) || seen.has(file)) {
+      continue;
+    }
+    seen.add(file);
+    result.push(file);
+  }
+
+  return result;
+}

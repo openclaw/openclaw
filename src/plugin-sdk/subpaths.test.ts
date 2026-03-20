@@ -16,7 +16,9 @@ import * as imessageSdk from "openclaw/plugin-sdk/imessage";
 import * as imessageCoreSdk from "openclaw/plugin-sdk/imessage-core";
 import * as lazyRuntimeSdk from "openclaw/plugin-sdk/lazy-runtime";
 import * as ollamaSetupSdk from "openclaw/plugin-sdk/ollama-setup";
+import * as providerAuthSdk from "openclaw/plugin-sdk/provider-auth";
 import * as providerModelsSdk from "openclaw/plugin-sdk/provider-models";
+import * as providerOauthSdk from "openclaw/plugin-sdk/provider-oauth";
 import * as providerSetupSdk from "openclaw/plugin-sdk/provider-setup";
 import * as replyPayloadSdk from "openclaw/plugin-sdk/reply-payload";
 import * as routingSdk from "openclaw/plugin-sdk/routing";
@@ -56,10 +58,18 @@ const allowlistEditSdk = await import("openclaw/plugin-sdk/allowlist-config-edit
 
 describe("plugin-sdk subpath exports", () => {
   it("keeps the curated public list free of internal implementation subpaths", () => {
+    expect(pluginSdkSubpaths).not.toContain("acpx");
     expect(pluginSdkSubpaths).not.toContain("compat");
+    expect(pluginSdkSubpaths).not.toContain("device-pair");
+    expect(pluginSdkSubpaths).not.toContain("google");
+    expect(pluginSdkSubpaths).not.toContain("lobster");
     expect(pluginSdkSubpaths).not.toContain("pairing-access");
+    expect(pluginSdkSubpaths).not.toContain("qwen-portal-auth");
     expect(pluginSdkSubpaths).not.toContain("reply-prefix");
+    expect(pluginSdkSubpaths).not.toContain("signal-core");
+    expect(pluginSdkSubpaths).not.toContain("synology-chat");
     expect(pluginSdkSubpaths).not.toContain("typing");
+    expect(pluginSdkSubpaths).not.toContain("zai");
     expect(pluginSdkSubpaths).not.toContain("provider-model-definitions");
   });
 
@@ -89,6 +99,13 @@ describe("plugin-sdk subpath exports", () => {
 
   it("exports account helper builders from the dedicated subpath", () => {
     expect(typeof accountHelpersSdk.createAccountListHelpers).toBe("function");
+  });
+
+  it("exports device bootstrap helpers from the dedicated subpath", async () => {
+    const deviceBootstrapSdk = await import("openclaw/plugin-sdk/device-bootstrap");
+    expect(typeof deviceBootstrapSdk.approveDevicePairing).toBe("function");
+    expect(typeof deviceBootstrapSdk.issueDeviceBootstrapToken).toBe("function");
+    expect(typeof deviceBootstrapSdk.listDevicePairing).toBe("function");
   });
 
   it("exports allowlist edit helpers from the dedicated subpath", () => {
@@ -139,6 +156,14 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof providerSetupSdk.discoverOpenAICompatibleSelfHostedProvider).toBe("function");
   });
 
+  it("exports oauth helpers from the dedicated provider oauth subpath", () => {
+    expect(typeof providerOauthSdk.buildOauthProviderAuthResult).toBe("function");
+    expect(typeof providerOauthSdk.generatePkceVerifierChallenge).toBe("function");
+    expect(typeof providerOauthSdk.toFormUrlEncoded).toBe("function");
+    expect("buildOauthProviderAuthResult" in asExports(coreSdk)).toBe(false);
+    expect("buildOauthProviderAuthResult" in asExports(providerAuthSdk)).toBe(false);
+  });
+
   it("keeps provider models focused on shared provider primitives", () => {
     expect(typeof providerModelsSdk.applyOpenAIConfig).toBe("function");
     expect(typeof providerModelsSdk.buildKilocodeModelDefinition).toBe("function");
@@ -187,8 +212,11 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("exports webhook ingress helpers from the dedicated subpath", () => {
+    expect(typeof webhookIngressSdk.registerPluginHttpRoute).toBe("function");
     expect(typeof webhookIngressSdk.resolveWebhookPath).toBe("function");
+    expect(typeof webhookIngressSdk.readRequestBodyWithLimit).toBe("function");
     expect(typeof webhookIngressSdk.readJsonWebhookBodyOrReject).toBe("function");
+    expect(typeof webhookIngressSdk.requestBodyErrorToText).toBe("function");
     expect(typeof webhookIngressSdk.withResolvedWebhookRequestPipeline).toBe("function");
   });
 
