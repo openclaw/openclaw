@@ -1,0 +1,93 @@
+services:
+  openclaw-gateway:
+    container_name: openclaw-gateway
+    image: openclaw-tony:local
+    # root required: mounts /var/run/docker.sock for sub-agent sandbox management;
+    # also allows direct /Users/franco/.openclaw path binding without remapping to /home/node.
+    user: root
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - node
+      - openclaw.mjs
+      - gateway
+      - --bind
+      - ${OPENCLAW_GATEWAY_BIND:-lan}
+      - --port
+      - ${OPENCLAW_GATEWAY_PORT:-18789}
+    env_file:
+      - path: ~/.openclaw/.env
+        required: false
+      - path: .env.local.runtime
+        required: false
+      - path: .env
+        required: false
+    environment:
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_LOCAL_PATH_MAP: /home/node/.openclaw/config/runtime-path-map.json
+      OPENCLAW_SKIP_CANVAS_HOST: "${OPENCLAW_SKIP_CANVAS_HOST:-1}"
+      OPENCLAW_STARTUP_TIMING: "${OPENCLAW_STARTUP_TIMING:-1}"
+      KUBECONFIG: /home/node/.kube/config
+      NODE_OPTIONS: "--max-old-space-size=1536 --trace-warnings"
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+          cpus: "2.0"
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${OPENCLAW_KUBE_DIR:-~/.kube}:/home/node/.kube:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 120s
+
+  openclaw-cli:
+    env_file:
+      - path: ~/.openclaw/.env
+        required: false
+      - path: .env.local.runtime
+        required: false
+      - path: .env
+        required: false
+    environment:
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_LOCAL_PATH_MAP: /home/node/.openclaw/config/runtime-path-map.json
+      KUBECONFIG: /home/node/.kube/config
+
+  qdrant:
+    image: ${OPENCLAW_QDRANT_IMAGE:-qdrant/qdrant:v1.17.0}
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -lc
+        - "exec 3<>/dev/tcp/127.0.0.1/6333 && printf 'GET /readyz HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && timeout 2 cat <&3 | head -n 1 | grep -q '200'"
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  qdrant_data:
+    driver: local
