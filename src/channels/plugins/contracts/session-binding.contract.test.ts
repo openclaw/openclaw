@@ -22,12 +22,12 @@ vi.mock("../../../../extensions/matrix/src/matrix/send.js", async () => {
   };
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   discordThreadBindingTesting.resetThreadBindingsForTests();
   feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
   resetMatrixThreadBindingsForTests();
-  telegramThreadBindingTesting.resetTelegramThreadBindingsForTests();
+  await telegramThreadBindingTesting.resetTelegramThreadBindingsForTests();
 });
 
 for (const entry of sessionBindingContractRegistry) {
