@@ -205,7 +205,7 @@ Example:
     remoteCdpHandshakeTimeoutMs: 4000,
     profiles: {
       browserless: {
-        cdpUrl: "https://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
+        cdpUrl: "wss://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
         color: "#00AA00",
       },
     },
