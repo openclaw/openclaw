@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./config.js";
 
@@ -41,6 +42,16 @@ async function writePluginFixture(params: {
     JSON.stringify(manifest, null, 2),
     "utf-8",
   );
+}
+
+async function writeMalformedPluginFixture(params: { dir: string }) {
+  await mkdirSafe(params.dir);
+  await fs.writeFile(
+    path.join(params.dir, "index.js"),
+    'export default { id: "broken-plugin", register() {} };\n',
+    "utf-8",
+  );
+  await fs.writeFile(path.join(params.dir, "openclaw.plugin.json"), "{", "utf-8");
 }
 
 async function writeBundleFixture(params: {
@@ -175,6 +186,7 @@ describe("config plugin validation", () => {
       schema: voiceCallManifest.configSchema,
     });
     clearPluginManifestRegistryCache();
+    clearPluginDiscoveryCache();
     // Warm the plugin manifest cache once so path-based validations can reuse
     // parsed manifests across test cases.
     validateInSuite({
@@ -196,6 +208,7 @@ describe("config plugin validation", () => {
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
     clearPluginManifestRegistryCache();
+    clearPluginDiscoveryCache();
   });
 
   it("reports missing plugin refs across load paths, entries, and allowlist surfaces", async () => {
@@ -511,16 +524,40 @@ describe("config plugin validation", () => {
   });
 
   it("accepts built-in hook mapping channels without local channel config", async () => {
+    const malformedAutoPluginDir = path.join(suiteHome, ".openclaw", "extensions", "broken-plugin");
+    await writeMalformedPluginFixture({ dir: malformedAutoPluginDir });
+    clearPluginManifestRegistryCache();
+    clearPluginDiscoveryCache();
+    try {
+      const res = validateInSuite({
+        agents: { list: [{ id: "pi" }] },
+        hooks: {
+          mappings: [{ channel: "discord" }],
+        },
+      });
+      expect(res.ok).toBe(true);
+    } finally {
+      await fs.rm(malformedAutoPluginDir, { recursive: true, force: true });
+      clearPluginManifestRegistryCache();
+      clearPluginDiscoveryCache();
+    }
+  });
+
+  it("accepts enabled plugin hook mapping channels without channel config", async () => {
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       hooks: {
-        mappings: [{ channel: "discord" }],
+        mappings: [{ channel: "bluebubbles" }],
+      },
+      plugins: {
+        load: { paths: [bluebubblesPluginDir] },
+        entries: { "bluebubbles-plugin": { enabled: true } },
       },
     });
     expect(res.ok).toBe(true);
   });
 
-  it("accepts discovered plugin hook mapping channels without channel config", async () => {
+  it("rejects disabled plugin hook mapping channels", async () => {
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       hooks: {
@@ -528,7 +565,13 @@ describe("config plugin validation", () => {
       },
       plugins: { enabled: false, load: { paths: [bluebubblesPluginDir] } },
     });
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues).toContainEqual({
+        path: "hooks.mappings.0.channel",
+        message: "unknown hook mapping channel: bluebubbles",
+      });
+    }
   });
 
   it("rejects unknown heartbeat targets", async () => {
