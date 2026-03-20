@@ -884,6 +884,9 @@ export async function runEmbeddedPiAgent(
         let authRetryPending = false;
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
+        // Hoisted so the retry-limit error path can detect rate-limit exhaustion
+        // and throw FailoverError instead of returning a terminal error response.
+        let lastFailoverReason: FailoverReason | null = null;
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
             const message =
@@ -894,6 +897,22 @@ export async function runEmbeddedPiAgent(
                 `provider=${provider}/${modelId} attempts=${runLoopIterations} ` +
                 `maxAttempts=${MAX_RUN_LOOP_ITERATIONS}`,
             );
+            // When retries were exhausted due to a failover-worthy reason
+            // (rate_limit, overloaded, auth, billing) and model fallback is
+            // configured, throw FailoverError so the outer fallback loop can
+            // try the next model instead of surfacing a terminal error.
+            if (fallbackConfigured && lastFailoverReason) {
+              const status = resolveFailoverStatus(lastFailoverReason);
+              log.warn(
+                `[run-retry-limit] triggering model fallback: reason=${lastFailoverReason} status=${status}`,
+              );
+              throw new FailoverError(message, {
+                reason: lastFailoverReason,
+                provider,
+                model: modelId,
+                status,
+              });
+            }
             return {
               payloads: [
                 {
@@ -1406,6 +1425,7 @@ export async function runEmbeddedPiAgent(
             ) {
               logPromptFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
+              lastFailoverReason = promptFailoverReason;
               continue;
             }
             const fallbackThinking = pickFallbackThinkingLevel({
@@ -1538,6 +1558,7 @@ export async function runEmbeddedPiAgent(
             if (rotated) {
               logAssistantFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
+              lastFailoverReason = assistantFailoverReason;
               continue;
             }
 
