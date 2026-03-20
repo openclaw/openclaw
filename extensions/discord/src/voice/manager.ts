@@ -254,16 +254,14 @@ export class DiscordVoiceManager {
     }
   >();
 
-  constructor(
-    params: {
-      client: Client;
-      cfg: OpenClawConfig;
-      discordConfig: DiscordAccountConfig;
-      accountId: string;
-      runtime: RuntimeEnv;
-      botUserId?: string;
-    },
-  ) {
+  constructor(params: {
+    client: Client;
+    cfg: OpenClawConfig;
+    discordConfig: DiscordAccountConfig;
+    accountId: string;
+    runtime: RuntimeEnv;
+    botUserId?: string;
+  }) {
     this.params = params;
     this.botUserId = params.botUserId;
     this.voiceEnabled = params.discordConfig.voice?.enabled !== false;
