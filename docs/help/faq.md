@@ -2013,7 +2013,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     **For tool-enabled or untrusted-input agents:** prioritize model strength over cost.
     **For routine/low-stakes chat:** use cheaper fallback models and route by agent role.
 
-    MiniMax M2.5 has its own docs: [MiniMax](/providers/minimax) and
+    MiniMax has its own docs: [MiniMax](/providers/minimax) and
     [Local models](/gateway/local-models).
 
     Rule of thumb: use the **best model you can afford** for high-stakes work, and a cheaper
@@ -2146,7 +2146,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
-  <Accordion title='Why do I see "Unknown model: minimax/MiniMax-M2.5"?'>
+  <Accordion title='Why do I see "Unknown model: minimax/MiniMax-M2.7"?'>
     This means the **provider isn't configured** (no MiniMax provider config or auth
     profile was found), so the model can't be resolved. A fix for this detection is
     in **2026.1.12** (unreleased at the time of writing).
@@ -2156,7 +2156,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     1. Upgrade to **2026.1.12** (or run from source `main`), then restart the gateway.
     2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
        exists in env/auth profiles so the provider can be injected.
-    3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.5` or
+    3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.7`,
+       `minimax/MiniMax-M2.7-highspeed`, `minimax/MiniMax-M2.5`, or
        `minimax/MiniMax-M2.5-highspeed`.
     4. Run:
 
@@ -2181,9 +2182,9 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
       env: { MINIMAX_API_KEY: "sk-...", OPENAI_API_KEY: "sk-..." },
       agents: {
         defaults: {
-          model: { primary: "minimax/MiniMax-M2.5" },
+          model: { primary: "minimax/MiniMax-M2.7" },
           models: {
-            "minimax/MiniMax-M2.5": { alias: "minimax" },
+            "minimax/MiniMax-M2.7": { alias: "minimax" },
             "openai/gpt-5.2": { alias: "gpt" },
           },
         },
