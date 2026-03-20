@@ -7,13 +7,14 @@ const ANSI_ESCAPE_PATTERN = new RegExp(
   `${ESCAPE}(?:\\][^${BELL}]*(?:${BELL}|${ESCAPE}\\\\)|\\[[0-?]*[ -/]*[@-~]|[@-Z\\\\-_])`,
   "g",
 );
+const GITHUB_ACTIONS_LOG_PREFIX_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+/u;
 
 const COMPLETED_TEST_FILE_LINE_PATTERN =
   /(?<file>(?:src|extensions|test|ui)\/\S+?\.(?:live\.test|e2e\.test|test)\.ts)\s+\(.*\)\s+(?<duration>\d+(?:\.\d+)?)(?<unit>ms|s)\s*$/;
 const MEMORY_TRACE_SUMMARY_PATTERN =
-  /^\[test-parallel\]\[mem\] summary (?<lane>\S+) files=(?<files>\d+) peak=(?<peak>[0-9]+(?:\.[0-9]+)?(?:GiB|MiB|KiB)) totalDelta=(?<totalDelta>[+-][0-9]+(?:\.[0-9]+)?(?:GiB|MiB|KiB)) peakAt=(?<peakAt>\S+) top=(?<top>.*)$/u;
+  /^\[test-parallel\]\[mem\] summary (?<lane>\S+) files=(?<files>\d+) peak=(?<peak>[0-9]+(?:\.[0-9]+)?(?:GiB|MiB|KiB)) totalDelta=(?<totalDelta>[+-]?[0-9]+(?:\.[0-9]+)?(?:GiB|MiB|KiB)) peakAt=(?<peakAt>\S+) top=(?<top>.*)$/u;
 const MEMORY_TRACE_TOP_ENTRY_PATTERN =
-  /^(?<file>(?:src|extensions|test|ui)\/\S+?\.(?:live\.test|e2e\.test|test)\.ts):(?<delta>[+-][0-9]+(?:\.[0-9]+)?(?:GiB|MiB|KiB))$/u;
+  /^(?<file>(?:src|extensions|test|ui)\/\S+?\.(?:live\.test|e2e\.test|test)\.ts):(?<delta>[+-]?[0-9]+(?:\.[0-9]+)?(?:GiB|MiB|KiB))$/u;
 
 const PS_COLUMNS = ["pid=", "ppid=", "rss=", "comm="];
 
@@ -44,9 +45,14 @@ function stripAnsi(text) {
   return text.replaceAll(ANSI_ESCAPE_PATTERN, "");
 }
 
+function normalizeLogLine(line) {
+  return line.replace(GITHUB_ACTIONS_LOG_PREFIX_PATTERN, "");
+}
+
 export function parseCompletedTestFileLines(text) {
   return stripAnsi(text)
     .split(/\r?\n/u)
+    .map((line) => normalizeLogLine(line))
     .map((line) => {
       const match = line.match(COMPLETED_TEST_FILE_LINE_PATTERN);
       if (!match?.groups) {
@@ -63,6 +69,7 @@ export function parseCompletedTestFileLines(text) {
 export function parseMemoryTraceSummaryLines(text) {
   return stripAnsi(text)
     .split(/\r?\n/u)
+    .map((line) => normalizeLogLine(line))
     .map((line) => {
       const match = line.match(MEMORY_TRACE_SUMMARY_PATTERN);
       if (!match?.groups) {
