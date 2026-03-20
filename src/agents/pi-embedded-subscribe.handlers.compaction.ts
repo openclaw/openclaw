@@ -131,19 +131,74 @@ export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   return nextEntry?.compactionCount;
 }
 
+function parseMessageTimestamp(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
 function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedPiSubscribeContext): void {
   const messages = ctx.params.session.messages;
   if (!Array.isArray(messages)) {
     return;
   }
-  for (const message of messages) {
+
+  // Find the latest compactionSummary message to determine the cutoff point.
+  // Only assistant messages older than (or at the same position as) the latest
+  // compaction should have their usage zeroed out.  Messages produced after the
+  // compaction contain fresh, accurate usage data and must be left untouched so
+  // the TUI "📚 Context" counter reflects the real post-compaction token count.
+  let latestCompactionSummaryIndex = -1;
+  let latestCompactionTimestamp: number | null = null;
+  for (let i = 0; i < messages.length; i += 1) {
+    const entry = messages[i] as { role?: unknown; timestamp?: unknown } | undefined;
+    if (entry?.role !== "compactionSummary") {
+      continue;
+    }
+    latestCompactionSummaryIndex = i;
+    latestCompactionTimestamp = parseMessageTimestamp(entry.timestamp ?? null);
+  }
+
+  if (latestCompactionSummaryIndex === -1) {
+    // No compaction summary found — nothing to clear.
+    return;
+  }
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
     if (!message || typeof message !== "object") {
       continue;
     }
-    const candidate = message as { role?: unknown; usage?: unknown };
+    const candidate = message as { role?: unknown; usage?: unknown; timestamp?: unknown };
     if (candidate.role !== "assistant") {
       continue;
     }
+    if (!candidate.usage || typeof candidate.usage !== "object") {
+      continue;
+    }
+
+    // A message is considered stale (pre-compaction) if:
+    //   1. Its timestamp is <= the latest compaction summary timestamp, OR
+    //   2. Its array index is before the compaction summary (legacy fallback for
+    //      messages without timestamps).
+    const messageTimestamp = parseMessageTimestamp(candidate.timestamp);
+    const staleByTimestamp =
+      latestCompactionTimestamp !== null &&
+      messageTimestamp !== null &&
+      messageTimestamp <= latestCompactionTimestamp;
+    const staleByLegacyOrdering = i < latestCompactionSummaryIndex;
+
+    if (!staleByTimestamp && !staleByLegacyOrdering) {
+      // Post-compaction message — preserve its accurate usage data.
+      continue;
+    }
+
     // pi-coding-agent expects assistant usage to exist when computing context usage.
     // Reset stale snapshots to zeros instead of deleting the field.
     candidate.usage = makeZeroUsageSnapshot();
