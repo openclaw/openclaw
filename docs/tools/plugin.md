@@ -68,7 +68,7 @@ These are published to npm and installed with `openclaw plugins install`:
 | Plugin          | Package                | Docs                               |
 | --------------- | ---------------------- | ---------------------------------- |
 | Matrix          | `@openclaw/matrix`     | [Matrix](/channels/matrix)         |
-| Microsoft Teams | `@openclaw/msteams`    | [MS Teams](/channels/msteams)      |
+| Microsoft Teams | `@openclaw/msteams`    | [Microsoft Teams](/channels/msteams) |
 | Nostr           | `@openclaw/nostr`      | [Nostr](/channels/nostr)           |
 | Voice Call      | `@openclaw/voice-call` | [Voice Call](/plugins/voice-call)  |
 | Zalo            | `@openclaw/zalo`       | [Zalo](/channels/zalo)             |
