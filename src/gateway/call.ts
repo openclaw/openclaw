@@ -802,6 +802,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
+    let requestInFlight = false;
     const stop = (err?: Error, value?: T) => {
       if (settled) {
         return;
@@ -840,14 +841,17 @@ async function executeGatewayRequestWithScopes<T>(params: {
             methods: hello.features?.methods,
             attemptedMethod: opts.method,
           });
+          requestInFlight = true;
           const result = await client.request<T>(opts.method, opts.params, {
             expectFinal: opts.expectFinal,
             timeoutMs: opts.timeoutMs,
           });
+          requestInFlight = false;
           ignoreClose = true;
           stop(undefined, result);
           client.stop();
         } catch (err) {
+          requestInFlight = false;
           ignoreClose = true;
           client.stop();
           stop(err as Error);
@@ -857,9 +861,22 @@ async function executeGatewayRequestWithScopes<T>(params: {
         if (settled || ignoreClose) {
           return;
         }
-        ignoreClose = true;
-        client.stop();
-        stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
+        const failOnClose = () => {
+          if (settled || ignoreClose) {
+            return;
+          }
+          ignoreClose = true;
+          client.stop();
+          stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
+        };
+        if (requestInFlight) {
+          // A request can resolve and then immediately trigger a normal close in
+          // the same turn; defer close handling so the successful response wins.
+          const closeTimer = setTimeout(failOnClose, 0);
+          closeTimer.unref?.();
+          return;
+        }
+        failOnClose();
       },
     });
 
