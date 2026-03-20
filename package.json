@@ -189,6 +189,10 @@
       "types": "./dist/plugin-sdk/discord-core.d.ts",
       "default": "./dist/plugin-sdk/discord-core.js"
     },
+    "./plugin-sdk/feishu": {
+      "types": "./dist/plugin-sdk/feishu.d.ts",
+      "default": "./dist/plugin-sdk/feishu.js"
+    },
     "./plugin-sdk/matrix": {
       "types": "./dist/plugin-sdk/matrix.d.ts",
       "default": "./dist/plugin-sdk/matrix.js"

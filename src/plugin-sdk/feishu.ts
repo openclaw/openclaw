@@ -78,7 +78,11 @@ export {
   buildRuntimeAccountStatusSnapshot,
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
-export { withTempDownloadPath } from "./temp-path.js";
+export {
+  buildAgentWorkspaceArtifactPath,
+  resolveAgentWorkspaceOutputPath,
+  withTempDownloadPath,
+} from "./temp-path.js";
 export {
   buildFeishuConversationId,
   parseFeishuConversationId,

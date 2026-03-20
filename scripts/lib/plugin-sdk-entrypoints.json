@@ -37,6 +37,7 @@
   "telegram-core",
   "discord",
   "discord-core",
+  "feishu",
   "matrix",
   "slack",
   "slack-core",
