@@ -510,6 +510,27 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts built-in hook mapping channels without local channel config", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      hooks: {
+        mappings: [{ channel: "discord" }],
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts discovered plugin hook mapping channels without channel config", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      hooks: {
+        mappings: [{ channel: "bluebubbles" }],
+      },
+      plugins: { enabled: false, load: { paths: [bluebubblesPluginDir] } },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects unknown heartbeat targets", async () => {
     const res = validateInSuite({
       agents: {

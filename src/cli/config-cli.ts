@@ -15,7 +15,7 @@ import {
   type SecretRef,
   type SecretRefSource,
 } from "../config/types.secrets.js";
-import { validateConfigObjectRaw } from "../config/validation.js";
+import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -920,7 +920,7 @@ function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInD
 }
 
 function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError[] {
-  const validated = validateConfigObjectRaw(config);
+  const validated = validateConfigObjectRawWithPlugins(config);
   if (validated.ok) {
     return [];
   }

@@ -514,6 +514,54 @@ function validateConfigObjectWithPluginsBase(
     }
   }
 
+  const allowedHookChannels = new Set<string>(["last"]);
+  for (const channelId of CHANNEL_IDS) {
+    allowedHookChannels.add(channelId.toLowerCase());
+  }
+  const { registry: hookChannelRegistry } = ensureRegistry();
+  for (const record of hookChannelRegistry.plugins) {
+    for (const channelId of record.channels) {
+      const normalized = channelId.trim().toLowerCase();
+      if (normalized) {
+        allowedHookChannels.add(normalized);
+      }
+    }
+  }
+
+  const validateHookMappingChannel = (channel: unknown, path: string) => {
+    if (channel === undefined) {
+      return;
+    }
+    if (typeof channel !== "string") {
+      issues.push({ path, message: "hooks.mappings[].channel must be a string" });
+      return;
+    }
+    const trimmed = channel.trim();
+    if (!trimmed) {
+      issues.push({ path, message: "hooks.mappings[].channel must not be empty" });
+      return;
+    }
+    const normalized = normalizeChatChannelId(trimmed) ?? trimmed.toLowerCase();
+    if (normalized === "last") {
+      return;
+    }
+    if (!allowedHookChannels.has(normalized)) {
+      issues.push({ path, message: `unknown hook mapping channel: ${trimmed}` });
+    }
+  };
+
+  if (Array.isArray(config.hooks?.mappings)) {
+    for (const [index, mapping] of config.hooks.mappings.entries()) {
+      if (!mapping || typeof mapping !== "object") {
+        continue;
+      }
+      validateHookMappingChannel(
+        (mapping as { channel?: unknown }).channel,
+        `hooks.mappings.${index}.channel`,
+      );
+    }
+  }
+
   if (!hasExplicitPluginsConfig) {
     if (issues.length > 0) {
       return { ok: false, issues, warnings };

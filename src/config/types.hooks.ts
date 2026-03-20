@@ -1,3 +1,6 @@
+import type { ChannelId } from "../channels/plugins/types.js";
+import type { InstallRecordBase } from "./types.installs.js";
+
 export type HookMappingMatch = {
   path?: string;
   source?: string;
@@ -22,17 +25,7 @@ export type HookMappingConfig = {
   deliver?: boolean;
   /** DANGEROUS: Disable external content safety wrapping for this hook. */
   allowUnsafeExternalContent?: boolean;
-  channel?:
-    | "last"
-    | "whatsapp"
-    | "telegram"
-    | "discord"
-    | "irc"
-    | "googlechat"
-    | "slack"
-    | "signal"
-    | "imessage"
-    | "msteams";
+  channel?: ChannelId | "last";
   to?: string;
   /** Override model for this hook (provider/model or alias). */
   model?: string;
@@ -139,4 +132,3 @@ export type HooksConfig = {
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
 };
-import type { InstallRecordBase } from "./types.installs.js";

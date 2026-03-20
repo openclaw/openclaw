@@ -613,6 +613,29 @@ describe("config cli", () => {
       );
     });
 
+    it("rejects invalid hook mapping channels in JSON dry-run mode", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "hooks.mappings[0].channel",
+          '"not-a-real-channel"',
+          "--strict-json",
+          "--dry-run",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("unknown hook mapping channel: not-a-real-channel"),
+      );
+    });
+
     it("logs a dry-run note when value mode performs no validation checks", async () => {
       const resolved: OpenClawConfig = {
         gateway: { port: 18789 },
