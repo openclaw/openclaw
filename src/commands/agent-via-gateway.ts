@@ -1,4 +1,5 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { routeLogsToStderr } from "../logging.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -179,6 +180,11 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
 }
 
 export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
+  // When --json is set, route all logs to stderr so only the JSON result appears on stdout.
+  if (opts.json) {
+    routeLogsToStderr();
+  }
+
   const localOpts = {
     ...opts,
     agentId: opts.agent,
