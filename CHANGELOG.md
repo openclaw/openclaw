@@ -184,6 +184,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/plugins: share plugin interactive callback routing and plugin bind approval state across duplicate module graphs so Telegram Codex picker buttons and plugin bind approvals no longer fall through to normal inbound message routing. (#50722) Thanks @huntharo.
 - Agents/compaction: add an opt-in post-compaction session JSONL truncation step that drops summarized transcript entries while preserving the retained branch tail and live session metadata. (#41021) thanks @thirumaleshp.
 - Telegram/routing: fail loud when `message send` targets an unknown non-default Telegram `accountId`, instead of silently falling back to the channel-level bot token and sending through the wrong bot. (#50853) Thanks @hclsys.
+- Web search: align onboarding, configure, and finalize with plugin-owned provider contracts, including disabled-provider recovery, config-aware credential hooks, and runtime-visible summaries. (#50935) Thanks @gumadeiras.
 
 ### Breaking
 

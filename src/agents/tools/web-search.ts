@@ -29,7 +29,6 @@ export function createWebSearchTool(options?: {
 
 export const __testing = {
   SEARCH_CACHE,
-  resolveSearchProvider: (
-    search?: NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"],
-  ) => resolveWebSearchProviderId({ search }),
+  resolveSearchProvider: (search?: Parameters<typeof resolveWebSearchProviderId>[0]["search"]) =>
+    resolveWebSearchProviderId({ search }),
 };
