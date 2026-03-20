@@ -1,2 +1,2 @@
-export { deliverReplies, emitMessageSentHooks } from "./delivery.replies.js";
+export { deliverReplies, emitInternalMessageSentHook } from "./delivery.replies.js";
 export { resolveMedia } from "./delivery.resolve-media.js";
