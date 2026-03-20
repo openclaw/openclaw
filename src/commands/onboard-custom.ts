@@ -233,12 +233,16 @@ function buildOpenAiHeaders(apiKey: string) {
   return headers;
 }
 
-function buildAnthropicHeaders(apiKey: string) {
+function buildAnthropicHeaders(apiKey: string, authHeader = false) {
   const headers: Record<string, string> = {
     "anthropic-version": "2023-06-01",
   };
   if (apiKey) {
-    headers["x-api-key"] = apiKey;
+    if (authHeader) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    } else {
+      headers["x-api-key"] = apiKey;
+    }
   }
   return headers;
 }
@@ -357,6 +361,7 @@ async function requestAnthropicVerification(params: {
   baseUrl: string;
   apiKey: string;
   modelId: string;
+  authHeader?: boolean;
 }): Promise<VerificationResult> {
   // Use a base URL with /v1 injected for this raw fetch only. The rest of the app uses the
   // Anthropic client, which appends /v1 itself; config should store the base URL
@@ -371,7 +376,7 @@ async function requestAnthropicVerification(params: {
   });
   return await requestVerification({
     endpoint,
-    headers: buildAnthropicHeaders(params.apiKey),
+    headers: buildAnthropicHeaders(params.apiKey, params.authHeader === true),
     body: {
       model: params.modelId,
       max_tokens: 1,
@@ -749,7 +754,18 @@ export async function promptCustomApiConfig(params: {
     const verifySpinner = prompter.progress("Verifying...");
     const result =
       compatibility === "anthropic"
-        ? await requestAnthropicVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
+        ? await requestAnthropicVerification({
+            baseUrl,
+            apiKey: resolvedApiKey,
+            modelId,
+            authHeader:
+              Object.values(config.models?.providers ?? {}).some(
+                (provider) =>
+                  provider?.api === "anthropic-messages" &&
+                  provider?.baseUrl === baseUrl &&
+                  provider?.authHeader === true,
+              ) || false,
+          })
         : await requestOpenAiVerification({ baseUrl, apiKey: resolvedApiKey, modelId });
     if (result.ok) {
       verifySpinner.stop("Verification successful.");

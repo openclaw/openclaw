@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFastModeParam } from "../fast-mode.js";
 import {
   requiresOpenAiCompatibleAnthropicToolPayload,
@@ -312,6 +313,41 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
           }
         }
         return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
+function shouldUseAnthropicAuthorizationHeader(
+  cfg: OpenClawConfig | undefined,
+  provider: unknown,
+): boolean {
+  if (typeof provider !== "string" || !provider.trim()) {
+    return false;
+  }
+  return cfg?.models?.providers?.[provider]?.authHeader === true;
+}
+
+export function createAnthropicAuthHeaderWrapper(
+  baseStreamFn: StreamFn | undefined,
+  cfg: OpenClawConfig | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (
+      model.api !== "anthropic-messages" ||
+      !shouldUseAnthropicAuthorizationHeader(cfg, model.provider) ||
+      !options?.apiKey
+    ) {
+      return underlying(model, context, options);
+    }
+
+    return underlying(model, context, {
+      ...options,
+      headers: {
+        ...options.headers,
+        Authorization: `Bearer ${options.apiKey}`,
+        "x-api-key": null as unknown as string,
       },
     });
   };

@@ -1470,6 +1470,80 @@ describe("applyExtraParamsToAgent", () => {
     expect(headers).toEqual({ "X-Custom": "1" });
   });
 
+  it("uses Authorization header for anthropic-compatible custom providers when authHeader is enabled", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      models: {
+        providers: {
+          "ai-in-one": {
+            baseUrl: "https://ai.leessmin.com",
+            api: "anthropic-messages",
+            authHeader: true,
+            models: [],
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "ai-in-one", "claude-opus-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "ai-in-one",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-proxy-test",
+      headers: { "anthropic-version": "2023-06-01", "x-api-key": "stale", "X-Custom": "1" },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toEqual({
+      "anthropic-version": "2023-06-01",
+      Authorization: "Bearer sk-proxy-test",
+      "x-api-key": null,
+      "X-Custom": "1",
+    });
+  });
+
+  it("does not add Authorization header for anthropic-compatible custom providers when authHeader is disabled", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      models: {
+        providers: {
+          "ai-in-one": {
+            baseUrl: "https://ai.leessmin.com",
+            api: "anthropic-messages",
+            models: [],
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "ai-in-one", "claude-opus-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "ai-in-one",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-proxy-test",
+      headers: { "anthropic-version": "2023-06-01", "x-api-key": "stale", "X-Custom": "1" },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toEqual({
+      "anthropic-version": "2023-06-01",
+      "x-api-key": "stale",
+      "X-Custom": "1",
+    });
+  });
+
   it("skips context1m beta for OAuth tokens but preserves OAuth-required betas", () => {
     const calls: Array<SimpleStreamOptions | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {

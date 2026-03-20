@@ -242,6 +242,26 @@ describe("promptCustomApiConfig", () => {
     expect(JSON.parse(secondCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
   });
 
+  it("uses x-api-key for anthropic verification probes by default", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com", "test-key", "detected-model", "custom", "alias"],
+      select: ["plaintext", "anthropic"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(prompter);
+
+    const firstCall = fetchMock.mock.calls[0]?.[1] as
+      | { headers?: Record<string, string>; body?: string }
+      | undefined;
+    expect(firstCall?.headers).toEqual({
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "x-api-key": "test-key",
+    });
+    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
+  });
+
   it("re-prompts base url when unknown detection fails", async () => {
     const prompter = createTestPrompter({
       text: [
@@ -383,6 +403,46 @@ describe("promptCustomApiConfig", () => {
 });
 
 describe("applyCustomApiConfig", () => {
+  it("preserves authHeader for anthropic custom providers when re-verifying", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com", "test-key", "detected-model", "custom", "alias"],
+      select: ["plaintext", "anthropic"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(prompter, {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.com",
+            api: "anthropic-messages",
+            authHeader: true,
+            models: [
+              {
+                id: "detected-model",
+                name: "Detected",
+                contextWindow: 131072,
+                maxTokens: 4096,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                reasoning: false,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const firstCall = fetchMock.mock.calls[0]?.[1] as
+      | { headers?: Record<string, string> }
+      | undefined;
+    expect(firstCall?.headers).toEqual({
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      Authorization: "Bearer test-key",
+    });
+  });
+
   it.each([
     {
       name: "uses hard-min context window for newly added custom models",
