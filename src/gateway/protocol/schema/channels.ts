@@ -21,6 +21,7 @@ export const TalkSpeakParamsSchema = Type.Object(
     text: NonEmptyString,
     voiceId: Type.Optional(Type.String()),
     modelId: Type.Optional(Type.String()),
+    outputFormat: Type.Optional(Type.String()),
     speed: Type.Optional(Type.Number()),
     stability: Type.Optional(Type.Number()),
     similarity: Type.Optional(Type.Number()),
