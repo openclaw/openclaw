@@ -125,7 +125,7 @@ export const icons = {
     <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg>
   `,
   arrowDown: html`
-    <svg viewBox="0 0 24 24">
+    <svg viewBox="0 0 24 24" fill="none">
       <path d="M12 5v14" />
       <path d="m19 12-7 7-7-7" />
     </svg>
