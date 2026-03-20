@@ -1278,13 +1278,14 @@ async function agentCommandInternal(
     }
 
     const usage = result.meta.agentMeta?.usage;
-    if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
-      const input = usage.input ?? 0;
-      const output = usage.output ?? 0;
-      const cacheRead = usage.cacheRead ?? 0;
-      const cacheWrite = usage.cacheWrite ?? 0;
+    const lastCallUsage = result.meta.agentMeta?.lastCallUsage;
+    if (isDiagnosticsEnabled(cfg) && (hasNonzeroUsage(usage) || lastCallUsage)) {
+      const input = usage?.input ?? 0;
+      const output = usage?.output ?? 0;
+      const cacheRead = usage?.cacheRead ?? 0;
+      const cacheWrite = usage?.cacheWrite ?? 0;
       const promptTokens = input + cacheRead + cacheWrite;
-      const totalTokens = usage.total ?? promptTokens + output;
+      const totalTokens = usage?.total ?? promptTokens + output;
       const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
       const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? model;
       const contextTokensUsed =
@@ -1299,6 +1300,9 @@ async function agentCommandInternal(
         usage,
         cost: resolveModelCostConfig({ provider: providerUsed, model: modelUsed, config: cfg }),
       });
+      const lastCallTotal =
+        lastCallUsage?.total ??
+        (lastCallUsage ? (lastCallUsage.input ?? 0) + (lastCallUsage.output ?? 0) : undefined);
       emitDiagnosticEvent({
         type: "model.usage",
         sessionKey: sessionKey ?? sessionId,
@@ -1314,10 +1318,10 @@ async function agentCommandInternal(
           promptTokens,
           total: totalTokens,
         },
-        lastCallUsage: result.meta.agentMeta?.lastCallUsage,
+        lastCallUsage,
         context: {
           limit: contextTokensUsed,
-          used: totalTokens,
+          used: lastCallTotal ?? totalTokens,
         },
         costUsd,
         durationMs: Date.now() - startedAt,
