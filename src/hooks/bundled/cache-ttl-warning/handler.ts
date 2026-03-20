@@ -12,10 +12,7 @@
 import { routeReply } from "../../../auto-reply/reply/route-reply.js";
 import { loadConfig } from "../../../config/config.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import {
-  deleteMessageTelegram,
-  resolveTelegramToken,
-} from "../../../plugin-sdk-internal/telegram.js";
+import { deleteMessageTelegram, resolveTelegramToken } from "../../../plugin-sdk/telegram.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 
