@@ -248,6 +248,7 @@ const AUTOMATION_SECTION_KEYS = [
 const INFRASTRUCTURE_SECTION_KEYS = [
   "gateway",
   "web",
+  "security",
   "browser",
   "nodeHost",
   "canvasHost",
