@@ -1,8 +1,8 @@
 import { Routes } from "discord-api-types/v10";
-import { resolveThreadBindingConversationIdFromBindingId } from "openclaw/plugin-sdk/channel-runtime";
 import { getRuntimeConfigSnapshot, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   registerSessionBindingAdapter,
+  resolveThreadBindingConversationIdFromBindingId,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
   type SessionBindingRecord,

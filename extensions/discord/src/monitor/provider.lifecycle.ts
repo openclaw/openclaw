@@ -1,6 +1,6 @@
 import type { Client } from "@buape/carbon";
 import type { GatewayPlugin } from "@buape/carbon/gateway";
-import { createArmableStallWatchdog } from "openclaw/plugin-sdk/channel-runtime";
+import { createArmableStallWatchdog } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";

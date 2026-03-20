@@ -1,5 +1,5 @@
+import { buildMentionRegexes, normalizeMentionText } from "openclaw/plugin-sdk/channel-inbound";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { buildMentionRegexes, normalizeMentionText } from "openclaw/plugin-sdk/reply-runtime";
 import { isSelfChatMode, jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import type { WebInboundMsg } from "./types.js";
 
