@@ -17,6 +17,7 @@ import { signalPlugin } from "../../../extensions/signal/index.js";
 import { signalSetupPlugin } from "../../../extensions/signal/setup-entry.js";
 import { slackPlugin } from "../../../extensions/slack/index.js";
 import { slackSetupPlugin } from "../../../extensions/slack/setup-entry.js";
+import { smsPlugin } from "../../../extensions/sms/index.js";
 import { synologyChatPlugin } from "../../../extensions/synology-chat/index.js";
 import { telegramPlugin, setTelegramRuntime } from "../../../extensions/telegram/index.js";
 import { telegramSetupPlugin } from "../../../extensions/telegram/setup-entry.js";
@@ -42,6 +43,7 @@ export const bundledChannelPlugins = [
   nostrPlugin,
   signalPlugin,
   slackPlugin,
+  smsPlugin,
   synologyChatPlugin,
   telegramPlugin,
   tlonPlugin,
