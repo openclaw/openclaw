@@ -2143,6 +2143,27 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.context_management).toEqual([{ type: "compaction", compact_threshold: 12_345 }]);
   });
 
+  it("strips store from payload for openai-completions providers with supportsStore=false (#51058)", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "cerebras",
+      applyModelId: "llama3.1-8b",
+      model: {
+        api: "openai-completions",
+        provider: "cerebras",
+        id: "llama3.1-8b",
+        name: "llama3.1-8b",
+        baseUrl: "https://api.cerebras.ai/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 8_192,
+        compat: { supportsStore: false },
+      } as unknown as Model<"openai-completions">,
+    });
+    expect(payload).not.toHaveProperty("store");
+  });
+
   it("auto-injects OpenAI Responses context_management compaction for direct OpenAI models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",

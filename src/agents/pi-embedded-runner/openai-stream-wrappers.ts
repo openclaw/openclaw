@@ -148,10 +148,9 @@ function shouldStripResponsesStore(
   if (forceStore) {
     return false;
   }
-  if (typeof model.api !== "string") {
-    return false;
-  }
-  return OPENAI_RESPONSES_APIS.has(model.api) && model.compat?.supportsStore === false;
+  // Strip store for ANY API type when the model declares supportsStore=false.
+  // Providers like Cerebras reject unknown parameters including `store` (#51058).
+  return model.compat?.supportsStore === false;
 }
 
 function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unknown }): boolean {
