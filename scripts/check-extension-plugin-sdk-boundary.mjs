@@ -110,6 +110,10 @@ function resolveExtensionRoot(filePath) {
   return `${segments[0]}/${segments[1]}`;
 }
 
+function isRuntimeApiFile(filePath) {
+  return normalizePath(filePath).endsWith("/runtime-api.ts");
+}
+
 function classifyReason(mode, kind, resolvedPath, specifier) {
   const verb =
     kind === "export"
@@ -170,6 +174,11 @@ function collectFromSourceFile(mode, sourceFile, filePath) {
     const resolvedPath = resolveSpecifier(specifier, filePath);
     if (mode === "relative-outside-package") {
       if (!specifier.startsWith(".") || !resolvedPath || !extensionRoot) {
+        return;
+      }
+      if (isRuntimeApiFile(filePath) && resolvedPath.startsWith("src/plugin-sdk/")) {
+        // Bundled extensions use private runtime barrels to bridge into focused plugin-sdk
+        // facades without widening the public npm export surface for those channels.
         return;
       }
       if (resolvedPath === extensionRoot || resolvedPath.startsWith(`${extensionRoot}/`)) {
