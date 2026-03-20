@@ -791,6 +791,7 @@ function mergeCronDelivery(
     accountId: existing?.accountId,
     bestEffort: existing?.bestEffort,
     failureDestination: existing?.failureDestination,
+    additionalTargets: existing?.additionalTargets,
   };
 
   if (typeof patch.mode === "string") {
@@ -840,6 +841,11 @@ function mergeCronDelivery(
       }
       next.failureDestination = nextFd;
     }
+  }
+  if ("additionalTargets" in patch) {
+    next.additionalTargets = Array.isArray(patch.additionalTargets)
+      ? patch.additionalTargets
+      : undefined;
   }
 
   return next;
