@@ -461,6 +461,7 @@ export const dispatchTelegramMessage = async ({
     chunkMode,
     linkPreview: telegramCfg.linkPreview,
     replyQuoteText,
+    fallbackReplyToId: draftReplyToMessageId,
   };
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPayload => {

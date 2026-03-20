@@ -586,6 +586,13 @@ export async function deliverReplies(params: {
   replyQuoteText?: string;
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
+  /**
+   * Fallback reply-to message id used when the individual reply payload does
+   * not carry its own replyToId. This is typically the trigger message id so
+   * that replyToMode "all" / "first" can thread the response back to the
+   * user's original message in group/forum topic chats.
+   */
+  fallbackReplyToId?: number;
 }): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
@@ -649,7 +656,9 @@ export async function deliverReplies(params: {
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
       const replyToId =
-        params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+        params.replyToMode === "off"
+          ? undefined
+          : (resolveTelegramReplyId(reply.replyToId) ?? params.fallbackReplyToId);
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const shouldPinFirstMessage = telegramData?.pin === true;
       const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
