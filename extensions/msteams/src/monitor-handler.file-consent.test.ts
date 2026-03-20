@@ -42,6 +42,8 @@ function createDeps(): MSTeamsMessageHandlerDeps {
   const adapter: MSTeamsAdapter = {
     continueConversation: async () => {},
     process: async () => {},
+    updateActivity: async () => {},
+    deleteActivity: async () => {},
   };
   const conversationStore: MSTeamsConversationStore = {
     upsert: async () => {},
@@ -82,6 +84,8 @@ function createActivityHandler(): MSTeamsActivityHandler {
   handler = {
     onMessage: () => handler,
     onMembersAdded: () => handler,
+    onReactionsAdded: () => handler,
+    onReactionsRemoved: () => handler,
     run: async () => {},
   };
   return handler;
