@@ -76,37 +76,47 @@ public struct OpenClawChatView: View {
                         .padding(.horizontal, Layout.outerPaddingHorizontal)
                         .frame(maxHeight: .infinity)
 
-                    // Draggable divider
-                    Rectangle()
-                        .fill(Color.primary.opacity(0.12))
-                        .frame(height: 1)
-                        .padding(.vertical, 3)
-                        .frame(height: 8)
-                        .contentShape(Rectangle())
-                        #if os(macOS)
-                        .onHover { inside in
-                            if inside {
-                                NSCursor.resizeUpDown.push()
-                            } else {
-                                NSCursor.pop()
+                    // Draggable resize handle
+                    ZStack {
+                        // Background hit area
+                        Color.clear
+                            .frame(height: 12)
+                            .contentShape(Rectangle())
+                        // Visual grab bar (three dots)
+                        HStack(spacing: 2) {
+                            ForEach(0..<3, id: \.self) { _ in
+                                Circle()
+                                    .fill(Color.primary.opacity(0.25))
+                                    .frame(width: 4, height: 4)
                             }
                         }
-                        #endif
-                        .gesture(
-                            DragGesture(minimumDistance: 1)
-                                .onChanged { value in
-                                    if self.composerDragStart == nil {
-                                        self.composerDragStart = self.composerHeight
-                                    }
-                                    let minH: CGFloat = 60
-                                    let maxH: CGFloat = geo.size.height * 0.6
-                                    let proposed = (self.composerDragStart ?? self.composerHeight) - value.translation.height
-                                    self.composerHeight = min(maxH, max(minH, proposed))
+                    }
+                    .frame(height: 12)
+                    .frame(maxWidth: .infinity)
+                    #if os(macOS)
+                    .onHover { inside in
+                        if inside {
+                            NSCursor.resizeUpDown.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+                    #endif
+                    .gesture(
+                        DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                            .onChanged { value in
+                                if self.composerDragStart == nil {
+                                    self.composerDragStart = self.composerHeight
                                 }
-                                .onEnded { _ in
-                                    self.composerDragStart = nil
-                                }
-                        )
+                                let minH: CGFloat = 60
+                                let maxH: CGFloat = geo.size.height * 0.6
+                                let proposed = (self.composerDragStart ?? self.composerHeight) - value.translation.height
+                                self.composerHeight = min(maxH, max(minH, proposed))
+                            }
+                            .onEnded { _ in
+                                self.composerDragStart = nil
+                            }
+                    )
 
                     OpenClawChatComposer(
                         viewModel: self.viewModel,
