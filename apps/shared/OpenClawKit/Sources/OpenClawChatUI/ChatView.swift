@@ -71,10 +71,15 @@ public struct OpenClawChatView: View {
             }
 
             GeometryReader { geo in
+                let handleH: CGFloat = 15
+                let padV = Layout.outerPaddingVertical * 2
+                let listH = max(100, geo.size.height - padV - handleH - self.composerHeight)
+
                 VStack(spacing: 0) {
                     self.messageList
                         .padding(.horizontal, Layout.outerPaddingHorizontal)
-                        .frame(maxHeight: .infinity)
+                        .frame(height: listH)
+                        .clipped()
 
                     // ── Resize handle ──
                     VStack(spacing: 0) {
@@ -91,7 +96,7 @@ public struct OpenClawChatView: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: 14)
                     }
-                    .frame(height: 15)
+                    .frame(height: handleH)
                     .contentShape(Rectangle())
                     #if os(macOS)
                     .onHover { inside in
@@ -105,7 +110,7 @@ public struct OpenClawChatView: View {
                                     self.composerDragStart = self.composerHeight
                                 }
                                 let minH: CGFloat = 80
-                                let maxH: CGFloat = geo.size.height * 0.65
+                                let maxH: CGFloat = geo.size.height - padV - handleH - 100
                                 let proposed = (self.composerDragStart ?? 150) - value.translation.height
                                 self.composerHeight = min(maxH, max(minH, proposed))
                             }
@@ -120,7 +125,7 @@ public struct OpenClawChatView: View {
                         style: self.style,
                         showsSessionSwitcher: self.showsSessionSwitcher)
                         .padding(.horizontal, Layout.composerPaddingHorizontal)
-                        .frame(minHeight: self.composerHeight, maxHeight: self.composerHeight)
+                        .frame(height: self.composerHeight)
                 }
                 .padding(.vertical, Layout.outerPaddingVertical)
             }
