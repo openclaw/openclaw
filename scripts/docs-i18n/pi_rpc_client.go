@@ -89,9 +89,9 @@ func startDocsPiClient(ctx context.Context, options docsPiClientOptions) (*docsP
 	}
 	process.Env = append(os.Environ(), fmt.Sprintf("PI_CODING_AGENT_DIR=%s", agentDir))
 
-	// CERA: pipes are acquired sequentially -- if a later pipe call or
+	// FIX: pipes are acquired sequentially -- if a later pipe call or
 	// Start() fails, earlier pipes must be closed to avoid leaking file
-	// descriptors. Track acquired pipes for cleanup on partial failure.
+	// descriptors. Close acquired pipes on each failure path below.
 	stdin, err := process.StdinPipe()
 	if err != nil {
 		return nil, err
