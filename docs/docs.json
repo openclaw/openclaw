@@ -65,6 +65,10 @@
       "destination": "/install/raspberry-pi"
     },
     {
+      "source": "/plugins/building-extensions",
+      "destination": "/plugins/building-plugins"
+    },
+    {
       "source": "/brave-search",
       "destination": "/tools/brave-search"
     },
@@ -1015,7 +1019,7 @@
             ]
           },
           {
-            "tab": "Tools",
+            "tab": "Tools & Plugins",
             "groups": [
               {
                 "group": "Overview",
@@ -1024,23 +1028,20 @@
               {
                 "group": "Built-in tools",
                 "pages": [
-                  "tools/apply-patch",
-                  "tools/brave-search",
-                  "tools/btw",
-                  "tools/diffs",
-                  "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
+                  "tools/elevated",
+                  "tools/apply-patch",
+                  "tools/web",
+                  "tools/brave-search",
                   "tools/firecrawl",
                   "tools/tavily",
-                  "tools/llm-task",
-                  "tools/lobster",
-                  "tools/loop-detection",
-                  "tools/pdf",
                   "tools/perplexity-search",
+                  "tools/pdf",
                   "tools/reactions",
                   "tools/thinking",
-                  "tools/web"
+                  "tools/loop-detection",
+                  "tools/btw"
                 ]
               },
               {
@@ -1062,21 +1063,10 @@
                 ]
               },
               {
-                "group": "Skills",
-                "pages": [
-                  "tools/creating-skills",
-                  "tools/slash-commands",
-                  "tools/skills",
-                  "tools/skills-config",
-                  "tools/clawhub",
-                  "tools/plugin",
-                  "prose"
-                ]
-              },
-              {
                 "group": "Plugins",
                 "pages": [
-                  "plugins/building-extensions",
+                  "tools/plugin",
+                  "plugins/building-plugins",
                   "plugins/sdk-migration",
                   "plugins/architecture",
                   "plugins/community",
@@ -1085,6 +1075,21 @@
                   "plugins/agent-tools",
                   "tools/capability-cookbook"
                 ]
+              },
+              {
+                "group": "Skills",
+                "pages": [
+                  "tools/skills",
+                  "tools/creating-skills",
+                  "tools/skills-config",
+                  "tools/slash-commands",
+                  "tools/clawhub",
+                  "prose"
+                ]
+              },
+              {
+                "group": "Plugin tools",
+                "pages": ["tools/diffs", "tools/llm-task", "tools/lobster"]
               },
               {
                 "group": "Automation",

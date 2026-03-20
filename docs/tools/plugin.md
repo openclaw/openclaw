@@ -1,13 +1,14 @@
 ---
-summary: "OpenClaw plugins/extensions: discovery, config, and safety"
+summary: "OpenClaw plugins: install, configure, and manage plugins that extend the gateway"
 read_when:
-  - Adding or modifying plugins/extensions
-  - Documenting plugin install or load rules
+  - Installing or configuring plugins
+  - Understanding plugin discovery and load rules
   - Working with Codex/Claude-compatible plugin bundles
 title: "Plugins"
+sidebarTitle: "Install and Configure"
 ---
 
-# Plugins (Extensions)
+# Plugins
 
 ## Quick start
 
@@ -329,7 +330,7 @@ See [Plugin manifest](/plugins/manifest) for the manifest file format.
 - [Plugin architecture and internals](/plugins/architecture) -- capability model,
   ownership model, contracts, load pipeline, runtime helpers, and developer API
   reference
-- [Building extensions](/plugins/building-extensions)
+- [Building plugins](/plugins/building-plugins)
 - [Plugin bundles](/plugins/bundles)
 - [Plugin manifest](/plugins/manifest)
 - [Plugin agent tools](/plugins/agent-tools)
