@@ -60,6 +60,7 @@ export type CronRunTelemetry = {
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
+  deliveryError?: string;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   summary?: string;

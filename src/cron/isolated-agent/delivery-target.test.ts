@@ -265,6 +265,32 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBe("thread-2");
   });
 
+  it("parses telegram slash topic targets into chatId + threadId", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "-1001234567890/77",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("-1001234567890");
+    expect(result.threadId).toBe(77);
+  });
+
+  it("parses prefixed telegram topic targets into chatId + threadId", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "telegram:group:-1001234567890:topic:77",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("-1001234567890");
+    expect(result.threadId).toBe(77);
+  });
+
   it("uses single configured channel when neither explicit nor session channel exists", async () => {
     setMainSessionEntry(undefined);
 

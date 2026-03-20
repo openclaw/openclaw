@@ -298,6 +298,7 @@ export function applyJobResult(
   result: {
     status: CronRunStatus;
     error?: string;
+    deliveryError?: string;
     delivered?: boolean;
     startedAt: number;
     endedAt: number;
@@ -331,7 +332,7 @@ export function applyJobResult(
   const deliveryStatus = resolveDeliveryStatus({ job, delivered: result.delivered });
   job.state.lastDeliveryStatus = deliveryStatus;
   job.state.lastDeliveryError =
-    deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
+    deliveryStatus === "not-delivered" ? (result.deliveryError ?? result.error) : undefined;
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable.
@@ -491,6 +492,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   const shouldDelete = applyJobResult(state, job, {
     status: result.status,
     error: result.error,
+    deliveryError: result.deliveryError,
     delivered: result.delivered,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
@@ -933,6 +935,7 @@ async function runStartupCatchupCandidate(
       jobId: candidate.jobId,
       status: result.status,
       error: result.error,
+      deliveryError: result.deliveryError,
       summary: result.summary,
       delivered: result.delivered,
       sessionId: result.sessionId,
@@ -1143,6 +1146,7 @@ export async function executeJobCore(
   return {
     status: res.status,
     error: res.error,
+    deliveryError: res.deliveryError,
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
@@ -1187,6 +1191,7 @@ export async function executeJob(
   const shouldDelete = applyJobResult(state, job, {
     status: coreResult.status,
     error: coreResult.error,
+    deliveryError: coreResult.deliveryError,
     delivered: coreResult.delivered,
     startedAt,
     endedAt,

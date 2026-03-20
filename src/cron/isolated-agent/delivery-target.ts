@@ -1,6 +1,34 @@
 import { resolveWhatsAppAccount } from "openclaw/plugin-sdk/whatsapp";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+
+/**
+ * Pre-parse well-known forum/topic target formats from a delivery `to` string.
+ * Returns the base chatId and extracted threadId when a topic format is detected.
+ *
+ * Handles these Telegram forum topic formats before plugin bootstrapping:
+ *   - `-1001234567890/77`                       (legacy slash)
+ *   - `-1001234567890:topic:77`                 (explicit topic marker)
+ *   - `telegram:-1001234567890/77`              (prefixed slash)
+ *   - `telegram:group:-1001234567890:topic:77`  (fully-qualified)
+ */
+function extractForumTopicFromTarget(to: string): { to: string; threadId: number } | null {
+  const stripped = to.replace(/^telegram:group:/, "").replace(/^telegram:/, "");
+
+  // chatId:topic:topicId
+  const topicMatch = /^(-?\d+):topic:(\d+)$/.exec(stripped);
+  if (topicMatch) {
+    return { to: topicMatch[1], threadId: parseInt(topicMatch[2], 10) };
+  }
+
+  // chatId/topicId (legacy slash)
+  const slashMatch = /^(-?\d+)\/(\d+)$/.exec(stripped);
+  if (slashMatch) {
+    return { to: slashMatch[1], threadId: parseInt(slashMatch[2], 10) };
+  }
+
+  return null;
+}
 import {
   loadSessionStore,
   resolveAgentMainSessionKey,
@@ -49,7 +77,12 @@ export async function resolveDeliveryTarget(
   },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
-  const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
+  const rawTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
+  // Pre-parse forum/topic formats (e.g. telegram:-GROUP/TOPIC, telegram:group:-GROUP:topic:TOPIC)
+  // before plugin bootstrapping so threadId is always extracted regardless of plugin load state.
+  const preParseResult = rawTo ? extractForumTopicFromTarget(rawTo) : null;
+  const explicitTo = preParseResult ? preParseResult.to : rawTo;
+  const preExtractedThreadId = preParseResult?.threadId;
   const allowMismatchedLastTo = requestedChannel === "last";
 
   const sessionCfg = cfg.session;
@@ -67,7 +100,9 @@ export async function resolveDeliveryTarget(
     entry: main,
     requestedChannel,
     explicitTo,
+    explicitThreadId: preExtractedThreadId,
     allowMismatchedLastTo,
+    cfg,
   });
 
   let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
@@ -93,9 +128,11 @@ export async function resolveDeliveryTarget(
         entry: main,
         requestedChannel,
         explicitTo,
+        explicitThreadId: preExtractedThreadId,
         fallbackChannel,
         allowMismatchedLastTo,
         mode: preliminary.mode,
+        cfg,
       })
     : preliminary;
 
