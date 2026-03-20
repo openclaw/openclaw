@@ -1,11 +1,18 @@
 import { DisconnectReason } from "@whiskeysockets/baileys";
-import { formatCliCommand } from "../../../src/cli/command-format.js";
-import { loadConfig } from "../../../src/config/config.js";
-import { danger, info, success } from "../../../src/globals.js";
-import { logInfo } from "../../../src/logger.js";
-import { defaultRuntime, type RuntimeEnv } from "../../../src/runtime.js";
+import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { danger, info, success } from "openclaw/plugin-sdk/runtime-env";
+import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { logInfo } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
-import { createWaSocket, formatError, logoutWeb, waitForWaConnection } from "./session.js";
+import {
+  createWaSocket,
+  formatError,
+  getStatusCode,
+  logoutWeb,
+  waitForCredsSaveQueueWithTimeout,
+  waitForWaConnection,
+} from "./session.js";
 
 export async function loginWeb(
   verbose: boolean,
@@ -24,20 +31,17 @@ export async function loginWeb(
     await wait(sock);
     console.log(success("✅ Linked! Credentials saved for future sends."));
   } catch (err) {
-    const code =
-      (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode ??
-      (err as { output?: { statusCode?: number } })?.output?.statusCode;
+    const code = getStatusCode(err);
     if (code === 515) {
       console.log(
-        info(
-          "WhatsApp asked for a restart after pairing (code 515); creds are saved. Restarting connection once…",
-        ),
+        info("WhatsApp asked for a restart after pairing (code 515); waiting for creds to save…"),
       );
       try {
         sock.ws?.close();
       } catch {
         // ignore
       }
+      await waitForCredsSaveQueueWithTimeout(account.authDir);
       const retry = await createWaSocket(false, verbose, {
         authDir: account.authDir,
       });

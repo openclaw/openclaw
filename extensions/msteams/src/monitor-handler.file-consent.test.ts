@@ -1,5 +1,5 @@
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/msteams";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import {
@@ -42,6 +42,8 @@ function createDeps(): MSTeamsMessageHandlerDeps {
   const adapter: MSTeamsAdapter = {
     continueConversation: async () => {},
     process: async () => {},
+    updateActivity: async () => {},
+    deleteActivity: async () => {},
   };
   const conversationStore: MSTeamsConversationStore = {
     upsert: async () => {},
@@ -82,6 +84,8 @@ function createActivityHandler(): MSTeamsActivityHandler {
   handler = {
     onMessage: () => handler,
     onMembersAdded: () => handler,
+    onReactionsAdded: () => handler,
+    onReactionsRemoved: () => handler,
     run: async () => {},
   };
   return handler;

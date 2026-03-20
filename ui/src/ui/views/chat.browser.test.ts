@@ -31,7 +31,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
       ts: 0,
       path: "",
       count: 1,
-      defaults: { model: "gpt-5", contextTokens: null },
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
       sessions: [
         {
           key: "main",

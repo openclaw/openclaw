@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import { Type } from "@sinclair/typebox";
 import OpenAI from "openai";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/memory-lancedb";
+import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
   MEMORY_CATEGORIES,
@@ -289,7 +289,7 @@ export function detectCategory(text: string): MemoryCategory {
 // Plugin Definition
 // ============================================================================
 
-const memoryPlugin = {
+export default definePluginEntry({
   id: "memory-lancedb",
   name: "Memory (LanceDB)",
   description: "LanceDB-backed long-term memory with auto-recall/capture",
@@ -673,6 +673,4 @@ const memoryPlugin = {
       },
     });
   },
-};
-
-export default memoryPlugin;
+});

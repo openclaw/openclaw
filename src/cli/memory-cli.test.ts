@@ -2,15 +2,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const getMemorySearchManager = vi.fn();
-const loadConfig = vi.fn(() => ({}));
-const resolveDefaultAgentId = vi.fn(() => "main");
-const resolveCommandSecretRefsViaGateway = vi.fn(async ({ config }: { config: unknown }) => ({
-  resolvedConfig: config,
-  diagnostics: [] as string[],
-}));
+const getMemorySearchManager = vi.hoisted(() => vi.fn());
+const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
+const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
+const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
+  vi.fn(async ({ config }: { config: unknown }) => ({
+    resolvedConfig: config,
+    diagnostics: [] as string[],
+  })),
+);
 
 vi.mock("../memory/index.js", () => ({
   getMemorySearchManager,
@@ -39,10 +41,18 @@ beforeAll(async () => {
   ({ isVerbose, setVerbose } = await import("../globals.js"));
 });
 
+beforeEach(() => {
+  getMemorySearchManager.mockReset();
+  loadConfig.mockReset().mockReturnValue({});
+  resolveDefaultAgentId.mockReset().mockReturnValue("main");
+  resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
+    resolvedConfig: config,
+    diagnostics: [] as string[],
+  }));
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
-  getMemorySearchManager.mockClear();
-  resolveCommandSecretRefsViaGateway.mockClear();
   process.exitCode = undefined;
   setVerbose(false);
 });

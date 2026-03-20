@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mattermostPlugin } from "../../../extensions/mattermost/src/channel.js";
-import { discordOutbound } from "../../channels/plugins/outbound/discord.js";
-import { imessageOutbound } from "../../channels/plugins/outbound/imessage.js";
-import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
-import { slackOutbound } from "../../channels/plugins/outbound/slack.js";
-import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
-import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
+import {
+  discordOutbound,
+  imessageOutbound,
+  signalOutbound,
+  slackOutbound,
+  telegramOutbound,
+  whatsappOutbound,
+} from "../../../test/channel-outbounds.js";
+import type {
+  ChannelMessagingAdapter,
+  ChannelOutboundAdapter,
+  ChannelPlugin,
+  ChannelThreadingAdapter,
+} from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -25,13 +31,22 @@ const mocks = vi.hoisted(() => ({
   sendMessageSlack: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
   sendMessageTelegram: vi.fn(async () => ({ messageId: "m1", chatId: "c1" })),
   sendMessageWhatsApp: vi.fn(async () => ({ messageId: "m1", toJid: "jid" })),
-  sendMessageMattermost: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
+  sendMessageMattermost: vi.fn(async (..._args: unknown[]) => ({
+    messageId: "m1",
+    channelId: "c1",
+  })),
   deliverOutboundPayloads: vi.fn(),
 }));
 
-vi.mock("../../../extensions/discord/src/send.js", () => ({
-  sendMessageDiscord: mocks.sendMessageDiscord,
-}));
+vi.mock("../../../extensions/discord/src/send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../extensions/discord/src/send.js")>();
+  return {
+    ...actual,
+    sendMessageDiscord: mocks.sendMessageDiscord,
+    sendPollDiscord: mocks.sendMessageDiscord,
+    sendWebhookMessageDiscord: vi.fn(),
+  };
+});
 vi.mock("../../../extensions/imessage/src/send.js", () => ({
   sendMessageIMessage: mocks.sendMessageIMessage,
 }));
@@ -41,20 +56,16 @@ vi.mock("../../../extensions/signal/src/send.js", () => ({
 vi.mock("../../../extensions/slack/src/send.js", () => ({
   sendMessageSlack: mocks.sendMessageSlack,
 }));
-vi.mock("../../../extensions/telegram/src/send.js", () => ({
-  sendMessageTelegram: mocks.sendMessageTelegram,
-}));
-vi.mock("../../../extensions/telegram/src/send.js", () => ({
-  sendMessageTelegram: mocks.sendMessageTelegram,
-}));
+vi.mock("../../../extensions/telegram/src/send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../extensions/telegram/src/send.js")>();
+  return {
+    ...actual,
+    sendMessageTelegram: mocks.sendMessageTelegram,
+  };
+});
 vi.mock("../../../extensions/whatsapp/src/send.js", () => ({
   sendMessageWhatsApp: mocks.sendMessageWhatsApp,
   sendPollWhatsApp: mocks.sendMessageWhatsApp,
-}));
-vi.mock("../../../extensions/discord/src/send.js", () => ({
-  sendMessageDiscord: mocks.sendMessageDiscord,
-  sendPollDiscord: mocks.sendMessageDiscord,
-  sendWebhookMessageDiscord: vi.fn(),
 }));
 vi.mock("../../../extensions/mattermost/src/mattermost/send.js", () => ({
   sendMessageMattermost: mocks.sendMessageMattermost,
@@ -81,11 +92,22 @@ const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry =>
   typedHooks: [],
   commands: [],
   channels,
+  channelSetups: channels.map((entry) => ({
+    pluginId: entry.pluginId,
+    plugin: entry.plugin,
+    source: entry.source,
+    enabled: true,
+  })),
   providers: [],
+  speechProviders: [],
+  mediaUnderstandingProviders: [],
+  imageGenerationProviders: [],
+  webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
+  conversationBindingResolvedHandlers: [],
   diagnostics: [],
 });
 
@@ -117,6 +139,47 @@ const createMSTeamsPlugin = (params: { outbound: ChannelOutboundAdapter }): Chan
   },
   outbound: params.outbound,
 });
+
+const slackMessaging: ChannelMessagingAdapter = {
+  enableInteractiveReplies: ({ cfg }) =>
+    (cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } } | undefined)
+      ?.capabilities?.interactiveReplies === true,
+  hasStructuredReplyPayload: ({ payload }) => {
+    const blocks = (payload.channelData?.slack as { blocks?: unknown } | undefined)?.blocks;
+    if (typeof blocks === "string") {
+      return blocks.trim().length > 0;
+    }
+    return Array.isArray(blocks) && blocks.length > 0;
+  },
+};
+
+const slackThreading: ChannelThreadingAdapter = {
+  resolveReplyTransport: ({ threadId, replyToId }) => ({
+    replyToId: replyToId ?? (threadId != null && threadId !== "" ? String(threadId) : undefined),
+    threadId: null,
+  }),
+};
+
+const mattermostOutbound: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  sendText: async ({ to, text, cfg, accountId, replyToId, threadId }) => {
+    const result = await mocks.sendMessageMattermost(to, text, {
+      cfg,
+      accountId: accountId ?? undefined,
+      replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
+    });
+    return { channel: "mattermost", ...result };
+  },
+  sendMedia: async ({ to, text, cfg, accountId, replyToId, threadId, mediaUrl }) => {
+    const result = await mocks.sendMessageMattermost(to, text, {
+      cfg,
+      accountId: accountId ?? undefined,
+      replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
+      mediaUrl,
+    });
+    return { channel: "mattermost", ...result };
+  },
+};
 
 async function expectSlackNoSend(
   payload: Parameters<typeof routeReply>[0]["payload"],
@@ -287,7 +350,7 @@ describe("routeReply", () => {
   });
 
   it("passes thread id to Telegram sends", async () => {
-    mocks.sendMessageTelegram.mockClear();
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
     await routeReply({
       payload: { text: "hi" },
       channel: "telegram",
@@ -295,10 +358,12 @@ describe("routeReply", () => {
       threadId: 42,
       cfg: {} as never,
     });
-    expect(mocks.sendMessageTelegram).toHaveBeenCalledWith(
-      "telegram:123",
-      "hi",
-      expect.objectContaining({ messageThreadId: 42 }),
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:123",
+        threadId: 42,
+      }),
     );
   });
 
@@ -333,17 +398,19 @@ describe("routeReply", () => {
   });
 
   it("passes replyToId to Telegram sends", async () => {
-    mocks.sendMessageTelegram.mockClear();
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
     await routeReply({
       payload: { text: "hi", replyToId: "123" },
       channel: "telegram",
       to: "telegram:123",
       cfg: {} as never,
     });
-    expect(mocks.sendMessageTelegram).toHaveBeenCalledWith(
-      "telegram:123",
-      "hi",
-      expect.objectContaining({ replyToMessageId: 123 }),
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:123",
+        replyToId: "123",
+      }),
     );
   });
 
@@ -533,7 +600,11 @@ const defaultRegistry = createTestRegistry([
   },
   {
     pluginId: "slack",
-    plugin: createOutboundTestPlugin({ id: "slack", outbound: slackOutbound, label: "Slack" }),
+    plugin: {
+      ...createOutboundTestPlugin({ id: "slack", outbound: slackOutbound, label: "Slack" }),
+      messaging: slackMessaging,
+      threading: slackThreading,
+    },
     source: "test",
   },
   {
@@ -573,7 +644,11 @@ const defaultRegistry = createTestRegistry([
   },
   {
     pluginId: "mattermost",
-    plugin: mattermostPlugin,
+    plugin: createOutboundTestPlugin({
+      id: "mattermost",
+      outbound: mattermostOutbound,
+      label: "Mattermost",
+    }),
     source: "test",
   },
 ]);

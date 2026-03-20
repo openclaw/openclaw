@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.fn();
 const convertHeicToJpegMock = vi.fn();
@@ -24,13 +24,11 @@ let fetchWithGuard: typeof import("./input-files.js").fetchWithGuard;
 let extractImageContentFromSource: typeof import("./input-files.js").extractImageContentFromSource;
 let extractFileContentFromSource: typeof import("./input-files.js").extractFileContentFromSource;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
+  vi.clearAllMocks();
   ({ fetchWithGuard, extractImageContentFromSource, extractFileContentFromSource } =
     await import("./input-files.js"));
-});
-
-beforeEach(() => {
-  vi.clearAllMocks();
 });
 
 describe("HEIC input image normalization", () => {

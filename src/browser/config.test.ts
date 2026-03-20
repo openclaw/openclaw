@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 
@@ -26,6 +27,7 @@ describe("browser config", () => {
     expect(user?.driver).toBe("existing-session");
     expect(user?.cdpPort).toBe(0);
     expect(user?.cdpUrl).toBe("");
+    expect(user?.userDataDir).toBeUndefined();
     // chrome-relay is no longer auto-created
     expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
@@ -188,13 +190,6 @@ describe("browser config", () => {
     expect(profile?.cdpIsLoopback).toBe(true);
   });
 
-  it("trims relayBindHost when configured", () => {
-    const resolved = resolveBrowserConfig({
-      relayBindHost: " 0.0.0.0 ",
-    });
-    expect(resolved.relayBindHost).toBe("0.0.0.0");
-  });
-
   it("rejects unsupported protocols", () => {
     expect(() => resolveBrowserConfig({ cdpUrl: "ftp://127.0.0.1:18791" })).toThrow(
       "must be http(s) or ws(s)",
@@ -282,14 +277,33 @@ describe("browser config", () => {
     expect(profile?.cdpPort).toBe(0);
     expect(profile?.cdpUrl).toBe("");
     expect(profile?.cdpIsLoopback).toBe(true);
+    expect(profile?.userDataDir).toBeUndefined();
     expect(profile?.color).toBe("#00AA00");
+  });
+
+  it("expands tilde-prefixed userDataDir for existing-session profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        brave: {
+          driver: "existing-session",
+          attachOnly: true,
+          userDataDir: "~/Library/Application Support/BraveSoftware/Brave-Browser",
+          color: "#FB542B",
+        },
+      },
+    });
+
+    const profile = resolveProfile(resolved, "brave");
+    expect(profile?.driver).toBe("existing-session");
+    expect(profile?.userDataDir).toBe(
+      resolveUserPath("~/Library/Application Support/BraveSoftware/Brave-Browser"),
+    );
   });
 
   it("sets usesChromeMcp only for existing-session profiles", () => {
     const resolved = resolveBrowserConfig({
       profiles: {
         "chrome-live": { driver: "existing-session", attachOnly: true, color: "#00AA00" },
-        relay: { driver: "extension", cdpUrl: "http://127.0.0.1:18792", color: "#0066CC" },
         work: { cdpPort: 18801, color: "#0066CC" },
       },
     });
@@ -299,9 +313,6 @@ describe("browser config", () => {
 
     const managed = resolveProfile(resolved, "openclaw")!;
     expect(getBrowserProfileCapabilities(managed).usesChromeMcp).toBe(false);
-
-    const extension = resolveProfile(resolved, "relay")!;
-    expect(getBrowserProfileCapabilities(extension).usesChromeMcp).toBe(false);
 
     const work = resolveProfile(resolved, "work")!;
     expect(getBrowserProfileCapabilities(work).usesChromeMcp).toBe(false);

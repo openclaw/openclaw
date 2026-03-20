@@ -8,6 +8,7 @@ import {
   buildConfiguredAcpSessionKey,
   normalizeText,
   type ConfiguredAcpBindingSpec,
+  type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.types.js";
 import { readAcpSessionEntry } from "./runtime/session-meta.js";
 
@@ -96,7 +97,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logVerbose(
-      `acp-persistent-binding: failed ensuring ${params.spec.channel}:${params.spec.accountId}:${params.spec.conversationId} -> ${sessionKey}: ${message}`,
+      `acp-configured-binding: failed ensuring ${params.spec.channel}:${params.spec.accountId}:${params.spec.conversationId} -> ${sessionKey}: ${message}`,
     );
     return {
       ok: false,
@@ -104,6 +105,26 @@ export async function ensureConfiguredAcpBindingSession(params: {
       error: message,
     };
   }
+}
+
+export async function ensureConfiguredAcpBindingReady(params: {
+  cfg: OpenClawConfig;
+  configuredBinding: ResolvedConfiguredAcpBinding | null;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!params.configuredBinding) {
+    return { ok: true };
+  }
+  const ensured = await ensureConfiguredAcpBindingSession({
+    cfg: params.cfg,
+    spec: params.configuredBinding.spec,
+  });
+  if (ensured.ok) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    error: ensured.error ?? "unknown error",
+  };
 }
 
 export async function resetAcpSessionInPlace(params: {
@@ -119,14 +140,17 @@ export async function resetAcpSessionInPlace(params: {
     };
   }
 
-  const configuredBinding = resolveConfiguredAcpBindingSpecBySessionKey({
-    cfg: params.cfg,
-    sessionKey,
-  });
   const meta = readAcpSessionEntry({
     cfg: params.cfg,
     sessionKey,
   })?.acp;
+  const configuredBinding =
+    !meta || !normalizeText(meta.agent)
+      ? resolveConfiguredAcpBindingSpecBySessionKey({
+          cfg: params.cfg,
+          sessionKey,
+        })
+      : null;
   if (!meta) {
     if (configuredBinding) {
       const ensured = await ensureConfiguredAcpBindingSession({
@@ -189,7 +213,7 @@ export async function resetAcpSessionInPlace(params: {
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logVerbose(`acp-persistent-binding: failed reset for ${sessionKey}: ${message}`);
+    logVerbose(`acp-configured-binding: failed reset for ${sessionKey}: ${message}`);
     return {
       ok: false,
       error: message,

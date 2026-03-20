@@ -1,14 +1,14 @@
-import { normalizeGroupActivation } from "../../../../../src/auto-reply/group-activation.js";
-import type { loadConfig } from "../../../../../src/config/config.js";
+import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
-} from "../../../../../src/config/group-policy.js";
+} from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
   resolveGroupSessionKey,
   resolveStorePath,
-} from "../../../../../src/config/sessions.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import { normalizeGroupActivation } from "openclaw/plugin-sdk/reply-runtime";
 
 export function resolveGroupPolicyFor(cfg: ReturnType<typeof loadConfig>, conversationId: string) {
   const groupId = resolveGroupSessionKey({

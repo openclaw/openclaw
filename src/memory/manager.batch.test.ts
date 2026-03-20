@@ -4,21 +4,15 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useFastShortTimeouts } from "../../test/helpers/fast-short-timeouts.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
-import "./test-runtime-mocks.js";
+
+type MemoryIndexManager = import("./index.js").MemoryIndexManager;
+type MemoryIndexModule = typeof import("./index.js");
 
 const embedBatch = vi.fn(async (_texts: string[]) => [] as number[][]);
 const embedQuery = vi.fn(async () => [0.5, 0.5, 0.5]);
-
-vi.mock("./embeddings.js", () => ({
-  createEmbeddingProvider: async () =>
-    createOpenAIEmbeddingProviderMock({
-      embedQuery,
-      embedBatch,
-    }),
-}));
+let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
 
 describe("memory indexing with OpenAI batches", () => {
   let fixtureRoot: string;
@@ -118,6 +112,17 @@ describe("memory indexing with OpenAI batches", () => {
   }
 
   beforeAll(async () => {
+    vi.resetModules();
+    vi.doMock("./embeddings.js", () => ({
+      createEmbeddingProvider: async () =>
+        createOpenAIEmbeddingProviderMock({
+          embedQuery,
+          embedBatch,
+        }),
+    }));
+    await import("./test-runtime-mocks.js");
+    ({ getMemorySearchManager } = await import("./index.js"));
+
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-batch-"));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");

@@ -1,6 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import { createEmptyPluginRegistry } from "./registry.js";
+import {
+  pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginHttpRouteRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "./runtime.js";
 
 function expectRouteRegistrationDenied(params: {
   replaceExisting: boolean;
@@ -38,6 +44,11 @@ function expectRouteRegistrationDenied(params: {
 }
 
 describe("registerPluginHttpRoute", () => {
+  afterEach(() => {
+    releasePinnedPluginHttpRouteRegistry();
+    resetPluginRuntimeStateForTest();
+  });
+
   it("registers route and unregisters it", () => {
     const registry = createEmptyPluginRegistry();
     const handler = vi.fn();
@@ -163,5 +174,27 @@ describe("registerPluginHttpRoute", () => {
 
     unregister();
     expect(registry.httpRoutes).toHaveLength(1);
+  });
+
+  it("uses the pinned route registry when the active registry changes later", () => {
+    const startupRegistry = createEmptyPluginRegistry();
+    const laterActiveRegistry = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginHttpRouteRegistry(startupRegistry);
+    setActivePluginRegistry(laterActiveRegistry);
+
+    const unregister = registerPluginHttpRoute({
+      path: "/bluebubbles-webhook",
+      auth: "plugin",
+      handler: vi.fn(),
+    });
+
+    expect(startupRegistry.httpRoutes).toHaveLength(1);
+    expect(startupRegistry.httpRoutes[0]?.path).toBe("/bluebubbles-webhook");
+    expect(laterActiveRegistry.httpRoutes).toHaveLength(0);
+
+    unregister();
+    expect(startupRegistry.httpRoutes).toHaveLength(0);
   });
 });

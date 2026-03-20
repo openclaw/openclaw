@@ -1,27 +1,53 @@
+import fs from "node:fs";
 import { defineConfig } from "vitest/config";
 import baseConfig from "./vitest.config.ts";
+import {
+  unitTestAdditionalExcludePatterns,
+  unitTestIncludePatterns,
+} from "./vitest.unit-paths.mjs";
 
 const base = baseConfig as unknown as Record<string, unknown>;
 const baseTest = (baseConfig as { test?: { include?: string[]; exclude?: string[] } }).test ?? {};
-const include = (
-  baseTest.include ?? ["src/**/*.test.ts", "extensions/**/*.test.ts", "test/format-error.test.ts"]
-).filter((pattern) => !pattern.includes("extensions/"));
 const exclude = baseTest.exclude ?? [];
+function loadPatternListFile(filePath: string, label: string): string[] {
+  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new TypeError(`${label} must point to a JSON array: ${filePath}`);
+  }
+  return parsed.filter((value): value is string => typeof value === "string" && value.length > 0);
+}
+
+export function loadIncludePatternsFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): string[] | null {
+  const includeFile = env.OPENCLAW_VITEST_INCLUDE_FILE?.trim();
+  if (!includeFile) {
+    return null;
+  }
+  return loadPatternListFile(includeFile, "OPENCLAW_VITEST_INCLUDE_FILE");
+}
+
+export function loadExtraExcludePatternsFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  const extraExcludeFile = env.OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE?.trim();
+  if (!extraExcludeFile) {
+    return [];
+  }
+  return loadPatternListFile(extraExcludeFile, "OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE");
+}
 
 export default defineConfig({
   ...base,
   test: {
     ...baseTest,
-    include,
+    include: loadIncludePatternsFromEnv() ?? unitTestIncludePatterns,
     exclude: [
-      ...exclude,
-      "src/gateway/**",
-      "extensions/**",
-      "src/browser/**",
-      "src/line/**",
-      "src/agents/**",
-      "src/auto-reply/**",
-      "src/commands/**",
+      ...new Set([
+        ...exclude,
+        ...unitTestAdditionalExcludePatterns,
+        ...loadExtraExcludePatternsFromEnv(),
+      ]),
     ],
   },
 });

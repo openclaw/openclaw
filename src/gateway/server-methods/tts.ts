@@ -1,4 +1,5 @@
 import { loadConfig } from "../../config/config.js";
+import { listSpeechProviders, normalizeSpeechProviderId } from "../../tts/provider-registry.js";
 import {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
@@ -26,9 +27,9 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const prefsPath = resolveTtsPrefsPath(config);
       const provider = getTtsProvider(config, prefsPath);
       const autoMode = resolveTtsAutoMode({ config, prefsPath });
-      const fallbackProviders = resolveTtsProviderOrder(provider)
+      const fallbackProviders = resolveTtsProviderOrder(provider, cfg)
         .slice(1)
-        .filter((candidate) => isTtsProviderConfigured(config, candidate));
+        .filter((candidate) => isTtsProviderConfigured(config, candidate, cfg));
       respond(true, {
         enabled: isTtsEnabled(config, prefsPath),
         auto: autoMode,
@@ -38,7 +39,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         prefsPath,
         hasOpenAIKey: Boolean(resolveTtsApiKey(config, "openai")),
         hasElevenLabsKey: Boolean(resolveTtsApiKey(config, "elevenlabs")),
-        edgeEnabled: isTtsProviderConfigured(config, "edge"),
+        microsoftEnabled: isTtsProviderConfigured(config, "microsoft", cfg),
       });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
@@ -99,20 +100,23 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
   },
   "tts.setProvider": async ({ params, respond }) => {
-    const provider = typeof params.provider === "string" ? params.provider.trim() : "";
-    if (provider !== "openai" && provider !== "elevenlabs" && provider !== "edge") {
+    const provider = normalizeSpeechProviderId(
+      typeof params.provider === "string" ? params.provider.trim() : "",
+    );
+    const cfg = loadConfig();
+    const knownProviders = new Set(listSpeechProviders(cfg).map((entry) => entry.id));
+    if (!provider || !knownProviders.has(provider)) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "Invalid provider. Use openai, elevenlabs, or edge.",
+          "Invalid provider. Use a registered TTS provider id such as openai, elevenlabs, or microsoft.",
         ),
       );
       return;
     }
     try {
-      const cfg = loadConfig();
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       setTtsProvider(prefsPath, provider);
@@ -127,27 +131,19 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       respond(true, {
-        providers: [
-          {
-            id: "openai",
-            name: "OpenAI",
-            configured: Boolean(resolveTtsApiKey(config, "openai")),
-            models: [...OPENAI_TTS_MODELS],
-            voices: [...OPENAI_TTS_VOICES],
-          },
-          {
-            id: "elevenlabs",
-            name: "ElevenLabs",
-            configured: Boolean(resolveTtsApiKey(config, "elevenlabs")),
-            models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_monolingual_v1"],
-          },
-          {
-            id: "edge",
-            name: "Edge TTS",
-            configured: isTtsProviderConfigured(config, "edge"),
-            models: [],
-          },
-        ],
+        providers: listSpeechProviders(cfg).map((provider) => ({
+          id: provider.id,
+          name: provider.label,
+          configured: provider.isConfigured({ cfg, config }),
+          models:
+            provider.id === "openai" && provider.models == null
+              ? [...OPENAI_TTS_MODELS]
+              : [...(provider.models ?? [])],
+          voices:
+            provider.id === "openai" && provider.voices == null
+              ? [...OPENAI_TTS_VOICES]
+              : [...(provider.voices ?? [])],
+        })),
         active: getTtsProvider(config, prefsPath),
       });
     } catch (err) {
