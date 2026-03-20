@@ -4,6 +4,7 @@ import {
   ensureAuthProfileStore,
   isProfileInCooldown,
   resolveAuthProfileOrder,
+  suggestOAuthProfileIdForLegacyDefault,
 } from "../auth-profiles.js";
 import { normalizeProviderId } from "../model-selection.js";
 
@@ -85,20 +86,100 @@ export async function resolveSessionAuthProfileOverride(params: {
     return undefined;
   }
 
+  const resolveCanonicalProfile = (profileId: string | undefined): string | undefined => {
+    if (!profileId) {
+      return undefined;
+    }
+    const legacyEntry = store.profiles[profileId];
+    if (legacyEntry?.type !== "oauth") {
+      return profileId;
+    }
+    const legacyHasIdentity =
+      (typeof legacyEntry.email === "string" && legacyEntry.email.trim().length > 0) ||
+      (typeof legacyEntry.accountId === "string" && legacyEntry.accountId.length > 0);
+    const matchesLegacyIdentity = (candidateId: string) => {
+      const entry = store.profiles[candidateId];
+      if (entry?.type !== "oauth") {
+        return false;
+      }
+      const legacyEmail = typeof legacyEntry.email === "string" ? legacyEntry.email.trim() : "";
+      const candidateEmail = typeof entry.email === "string" ? entry.email.trim() : "";
+      const legacyAccountId =
+        typeof legacyEntry.accountId === "string" ? legacyEntry.accountId.trim() : "";
+      const candidateAccountId = typeof entry.accountId === "string" ? entry.accountId.trim() : "";
+      const hasEmailOnBoth = legacyEmail.length > 0 && candidateEmail.length > 0;
+      const hasAccountOnBoth = legacyAccountId.length > 0 && candidateAccountId.length > 0;
+      const sameEmail = hasEmailOnBoth && legacyEmail === candidateEmail;
+      const sameAccount = hasAccountOnBoth && legacyAccountId === candidateAccountId;
+      if (hasEmailOnBoth && hasAccountOnBoth) {
+        return sameEmail && sameAccount;
+      }
+      return sameEmail || sameAccount;
+    };
+    const suggested = suggestOAuthProfileIdForLegacyDefault({
+      cfg,
+      store,
+      provider,
+      legacyProfileId: profileId,
+    });
+    const candidate = suggested && suggested !== profileId ? suggested : undefined;
+    if (
+      candidate &&
+      order.includes(candidate) &&
+      !isProfileInCooldown(store, candidate) &&
+      (!legacyHasIdentity || matchesLegacyIdentity(candidate))
+    ) {
+      return candidate;
+    }
+    if (profileId.endsWith(":default")) {
+      const fallback = order.find((candidateId) => {
+        if (candidateId === profileId || isProfileInCooldown(store, candidateId)) {
+          return false;
+        }
+        if (candidateId.endsWith(":default")) {
+          return false;
+        }
+        const entry = store.profiles[candidateId];
+        if (entry?.type !== "oauth") {
+          return false;
+        }
+        if (matchesLegacyIdentity(candidateId)) {
+          return true;
+        }
+        if (legacyHasIdentity) {
+          return false;
+        }
+        // Compatibility fallback: only when legacy default has no usable identity.
+        return true;
+      });
+      if (fallback) {
+        return fallback;
+      }
+    }
+    return profileId;
+  };
+
   const pickFirstAvailable = () =>
     order.find((profileId) => !isProfileInCooldown(store, profileId)) ?? order[0];
-  const pickNextAvailable = (active: string) => {
+  const pickNextAvailableWithCanonicalProgress = (active: string) => {
     const startIndex = order.indexOf(active);
     if (startIndex < 0) {
       return pickFirstAvailable();
     }
+    const activeCanonical = resolveCanonicalProfile(active);
+    let firstAvailable: string | undefined;
     for (let offset = 1; offset <= order.length; offset += 1) {
       const candidate = order[(startIndex + offset) % order.length];
-      if (!isProfileInCooldown(store, candidate)) {
+      if (isProfileInCooldown(store, candidate)) {
+        continue;
+      }
+      firstAvailable ??= candidate;
+      const candidateCanonical = resolveCanonicalProfile(candidate);
+      if (candidateCanonical && candidateCanonical !== activeCanonical) {
         return candidate;
       }
     }
-    return order[startIndex] ?? order[0];
+    return firstAvailable ?? order[startIndex] ?? order[0];
   };
 
   const compactionCount = sessionEntry.compactionCount ?? 0;
@@ -118,13 +199,15 @@ export async function resolveSessionAuthProfileOverride(params: {
     return current;
   }
 
-  let next = current;
+  let next = resolveCanonicalProfile(current);
   if (isNewSession) {
-    next = current ? pickNextAvailable(current) : pickFirstAvailable();
+    next = current ? pickNextAvailableWithCanonicalProgress(next ?? current) : pickFirstAvailable();
+    next = resolveCanonicalProfile(next);
   } else if (current && compactionCount > storedCompaction) {
-    next = pickNextAvailable(current);
-  } else if (!current || isProfileInCooldown(store, current)) {
-    next = pickFirstAvailable();
+    next = pickNextAvailableWithCanonicalProgress(next ?? current);
+    next = resolveCanonicalProfile(next);
+  } else if (!next || isProfileInCooldown(store, next)) {
+    next = resolveCanonicalProfile(pickFirstAvailable());
   }
 
   if (!next) {
