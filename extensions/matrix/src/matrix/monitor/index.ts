@@ -25,6 +25,7 @@ import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
+import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 
@@ -136,15 +137,29 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   setActiveMatrixClient(client, auth.accountId);
   let cleanedUp = false;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
+  const inboundDeduper = await createMatrixInboundEventDeduper({
+    auth,
+    env: process.env,
+  });
+  const inFlightRoomMessages = new Set<Promise<void>>();
+  const waitForInFlightRoomMessages = async () => {
+    while (inFlightRoomMessages.size > 0) {
+      await Promise.allSettled(Array.from(inFlightRoomMessages));
+    }
+  };
   const cleanup = async () => {
     if (cleanedUp) {
       return;
     }
     cleanedUp = true;
     try {
+      client.stopSyncWithoutPersist();
+      await client.drainPendingDecryptions("matrix monitor shutdown");
+      await waitForInFlightRoomMessages();
       threadBindingManager?.stop();
-    } finally {
+      await inboundDeduper.stop();
       await releaseSharedClientInstance(client, "persist");
+    } finally {
       setActiveMatrixClient(null, auth.accountId);
     }
   };
@@ -219,11 +234,19 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     startupMs,
     startupGraceMs,
     dropPreStartupMessages,
+    inboundDeduper,
     directTracker,
     getRoomInfo,
     getMemberDisplayName,
     needsRoomAliasesForConfig,
   });
+  const trackRoomMessage = (roomId: string, event: Parameters<typeof handleRoomMessage>[1]) => {
+    const task = Promise.resolve(handleRoomMessage(roomId, event)).finally(() => {
+      inFlightRoomMessages.delete(task);
+    });
+    inFlightRoomMessages.add(task);
+    return task;
+  };
 
   try {
     threadBindingManager = await createMatrixThreadBindingManager({
@@ -249,7 +272,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       warnedCryptoMissingRooms,
       logger,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
-      onRoomMessage: handleRoomMessage,
+      onRoomMessage: trackRoomMessage,
     });
 
     // Register Matrix thread bindings before the client starts syncing so threaded

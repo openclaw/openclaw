@@ -684,6 +684,52 @@ describe("MatrixClient event bridge", () => {
     expect(delivered).toEqual(["m.room.message"]);
   });
 
+  it("can drain pending decrypt retries after sync stops", async () => {
+    vi.useFakeTimers();
+    const client = new MatrixClient("https://matrix.example.org", "token");
+    const delivered: string[] = [];
+
+    client.on("room.message", (_roomId, event) => {
+      delivered.push(event.type);
+    });
+
+    const encrypted = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$event",
+      sender: "@alice:example.org",
+      type: "m.room.encrypted",
+      ts: Date.now(),
+      content: {},
+      decryptionFailure: true,
+    });
+    const decrypted = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$event",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      ts: Date.now(),
+      content: {
+        msgtype: "m.text",
+        body: "hello",
+      },
+    });
+
+    matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {
+      encrypted.emit("decrypted", decrypted);
+    });
+
+    await client.start();
+    matrixJsClient.emit("event", encrypted);
+    encrypted.emit("decrypted", encrypted, new Error("missing room key"));
+
+    client.stopSyncWithoutPersist();
+    await client.drainPendingDecryptions("test shutdown");
+
+    expect(matrixJsClient.stopClient).toHaveBeenCalledTimes(1);
+    expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(1);
+    expect(delivered).toEqual(["m.room.message"]);
+  });
+
   it("retries failed decryptions immediately on crypto key update signals", async () => {
     vi.useFakeTimers();
     const client = new MatrixClient("https://matrix.example.org", "token", undefined, undefined, {
