@@ -37,3 +37,4 @@ export * from "../infra/system-message.ts";
 export * from "../infra/tmp-openclaw-dir.js";
 export * from "../infra/transport-ready.js";
 export * from "../infra/wsl.ts";
+export * from "./ssrf-policy.js";

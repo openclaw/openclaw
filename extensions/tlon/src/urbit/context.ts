@@ -1,4 +1,5 @@
 import type { SsrFPolicy } from "../../api.js";
+export { ssrfPolicyFromAllowPrivateNetwork } from "openclaw/plugin-sdk/infra-runtime";
 import { validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 
@@ -38,12 +39,6 @@ export function getUrbitContext(url: string, ship?: string): UrbitContext {
     hostname: validated.hostname,
     ship: normalizeUrbitShip(ship, validated.hostname),
   };
-}
-
-export function ssrfPolicyFromAllowPrivateNetwork(
-  allowPrivateNetwork: boolean | null | undefined,
-): SsrFPolicy | undefined {
-  return allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
 }
 
 /**

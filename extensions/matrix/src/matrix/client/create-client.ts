@@ -1,6 +1,7 @@
 import fs from "node:fs";
+import type { SsrFPolicy } from "../../runtime-api.js";
 import { MatrixClient } from "../sdk.js";
-import { validateMatrixHomeserverUrl } from "./config.js";
+import { resolveValidatedMatrixHomeserverUrl } from "./config.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import {
   maybeMigrateLegacyStorage,
@@ -19,10 +20,14 @@ export async function createMatrixClient(params: {
   initialSyncLimit?: number;
   accountId?: string | null;
   autoBootstrapCrypto?: boolean;
+  allowPrivateNetwork?: boolean;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<MatrixClient> {
   ensureMatrixSdkLoggingConfigured();
   const env = process.env;
-  const homeserver = validateMatrixHomeserverUrl(params.homeserver);
+  const homeserver = await resolveValidatedMatrixHomeserverUrl(params.homeserver, {
+    allowPrivateNetwork: params.allowPrivateNetwork,
+  });
   const userId = params.userId?.trim() || "unknown";
   const matrixClientUserId = params.userId?.trim() || undefined;
 
@@ -62,5 +67,6 @@ export async function createMatrixClient(params: {
     idbSnapshotPath: storagePaths.idbSnapshotPath,
     cryptoDatabasePrefix,
     autoBootstrapCrypto: params.autoBootstrapCrypto,
+    ssrfPolicy: params.ssrfPolicy,
   });
 }
