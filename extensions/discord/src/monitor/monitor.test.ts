@@ -23,6 +23,7 @@ import {
   createAgentComponentButton,
   createAgentSelectMenu,
   createDiscordComponentButton,
+  createDiscordComponentStringSelect,
   createDiscordComponentModal,
 } from "./agent-components.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
@@ -394,6 +395,31 @@ describe("discord component interactions", () => {
     return { interaction, defer, reply };
   };
 
+  const createComponentSelectInteraction = (
+    overrides: Partial<StringSelectMenuInteraction> = {},
+  ) => {
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const defer = vi.fn().mockResolvedValue(undefined);
+    const rest = {
+      get: vi.fn().mockResolvedValue({ type: ChannelType.DM }),
+      post: vi.fn().mockResolvedValue({}),
+      patch: vi.fn().mockResolvedValue({}),
+      delete: vi.fn().mockResolvedValue(undefined),
+    };
+    const interaction = {
+      rawData: { channel_id: "dm-channel", id: "interaction-select-1" },
+      user: { id: "123456789", username: "AgentUser", discriminator: "0001" },
+      customId: "occomp:cid=sel_1",
+      message: { id: "msg-1" },
+      values: ["alpha"],
+      client: { rest },
+      defer,
+      reply,
+      ...overrides,
+    } as unknown as StringSelectMenuInteraction;
+    return { interaction, defer, reply };
+  };
+
   const createModalInteraction = (overrides: Partial<ModalInteraction> = {}) => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const acknowledge = vi.fn().mockResolvedValue(undefined);
@@ -530,6 +556,35 @@ describe("discord component interactions", () => {
 
     expect(reply).toHaveBeenCalledWith({ content: "✓" });
     expect(lastDispatchCtx?.BodyForAgent).toBe("/codex_resume --browse-projects");
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves selected values for select fallback when no plugin handler matches", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        {
+          id: "sel_1",
+          kind: "select",
+          label: "Pick",
+          messageId: "msg-1",
+          sessionKey: "session-1",
+          agentId: "agent-1",
+          accountId: "default",
+          callbackData: "/codex_resume",
+          selectType: "string",
+          options: [{ value: "alpha", label: "Alpha" }],
+        },
+      ],
+      modals: [],
+    });
+
+    const select = createDiscordComponentStringSelect(createComponentContext());
+    const { interaction, reply } = createComponentSelectInteraction();
+
+    await select.run(interaction, { cid: "sel_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(lastDispatchCtx?.BodyForAgent).toBe('Selected Alpha from "Pick".');
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
   });
 

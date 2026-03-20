@@ -614,10 +614,11 @@ async function handleDiscordComponentEvent(params: {
       return;
     }
   }
-  // Preserve explicit callback payloads for the built-in fallback path so
-  // Discord behaves like Telegram when buttons carry synthetic command text.
+  // Preserve explicit callback payloads for button fallbacks so Discord
+  // behaves like Telegram when buttons carry synthetic command text. Select
+  // fallbacks still need their chosen values in the synthesized event text.
   const eventText =
-    consumed.callbackData?.trim() ||
+    (consumed.kind === "button" ? consumed.callbackData?.trim() : undefined) ||
     formatDiscordComponentEventText({
       kind: consumed.kind === "select" ? "select" : "button",
       label: consumed.label,
