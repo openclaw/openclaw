@@ -5,6 +5,7 @@ Sophia's workspace files and deployment config for running on OpenClaw.
 ## Files
 
 - `SOUL.md` — Sophia's immutable identity. Never modified after deployment.
+- `IDENTITY.md` — Sophia's self-description: name, vibe, theme, emoji.
 - `USER.md` — Per-user profile. Sophia updates this as she learns about you.
 - `AGENTS.md` — Full behavioral instructions: communication style, WhatsApp rules, tool policies, heartbeat tasks, memory lifecycle.
 - `MEMORY.md` — Long-term memory. Sophia writes to this over time.
@@ -12,11 +13,14 @@ Sophia's workspace files and deployment config for running on OpenClaw.
 - `memory/heartbeat-state.json` — Tracks last check timestamps.
 - `openclaw.render.json` — Sanitized config template for Render deployment (no API keys).
 
+`IDENTITY.md` is about Sophia. `USER.md` is about Davide.
+
 ## Deploy to Render
 
 ### Step 1 — Deploy from this fork
 
 Go to:
+
 ```
 https://render.com/deploy?repo=https://github.com/davidelaverga/openclaw
 ```
@@ -46,6 +50,7 @@ mkdir -p /data/.openclaw/sophia/memory
 
 # Copy workspace files from the container (repo files are baked into the image)
 cp /app/sophia/SOUL.md /data/.openclaw/sophia/
+cp /app/sophia/IDENTITY.md /data/.openclaw/sophia/
 cp /app/sophia/USER.md /data/.openclaw/sophia/
 cp /app/sophia/AGENTS.md /data/.openclaw/sophia/
 cp /app/sophia/MEMORY.md /data/.openclaw/sophia/
@@ -110,6 +115,7 @@ Sophia should respond in character. Check **Render Dashboard → Logs** for real
 ## What persists across redeploys
 
 Everything under `/data/` survives:
+
 - `/data/.openclaw/openclaw.json` — your config
 - `/data/.openclaw/sophia/` — all workspace and memory files
 - `/data/.openclaw/credentials/` — WhatsApp session (no re-scan needed)
@@ -118,5 +124,6 @@ Everything under `/data/` survives:
 ## Updating workspace files
 
 Two options:
+
 1. **Quick edits**: Edit directly in Render Shell on `/data/.openclaw/sophia/`
 2. **Version-controlled**: Update files in this repo, redeploy, then re-copy from `/app/sophia/` to `/data/.openclaw/sophia/` (be careful not to overwrite MEMORY.md or USER.md if Sophia has updated them)

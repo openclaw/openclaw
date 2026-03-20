@@ -88,6 +88,7 @@ docs/.local/
 tmp/
 IDENTITY.md
 USER.md
+!sophia/IDENTITY.md
 .tgz
 .idea
 
