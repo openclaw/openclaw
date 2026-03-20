@@ -1476,7 +1476,7 @@ describe("applyExtraParamsToAgent", () => {
       models: {
         providers: {
           "ai-in-one": {
-            baseUrl: "https://ai.leessmin.com",
+            baseUrl: "https://proxy.example.com",
             api: "anthropic-messages",
             authHeader: true,
             models: [],
@@ -1514,7 +1514,7 @@ describe("applyExtraParamsToAgent", () => {
       models: {
         providers: {
           "ai-in-one": {
-            baseUrl: "https://ai.leessmin.com",
+            baseUrl: "https://proxy.example.com",
             api: "anthropic-messages",
             models: [],
           },
