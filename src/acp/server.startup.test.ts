@@ -156,6 +156,7 @@ describe("serveAcpGateway startup", () => {
   beforeEach(() => {
     mockState.gateways.length = 0;
     mockState.gatewayAuth.length = 0;
+    mockState.gatewayDeviceIdentity.length = 0;
     mockState.agentSideConnectionCtor.mockReset();
     mockState.agentStart.mockReset();
     mockState.resolveGatewayConnectionAuth.mockReset();
@@ -256,7 +257,6 @@ describe("serveAcpGateway startup", () => {
     const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
 
     try {
-      mockState.gatewayDeviceIdentity.length = 0;
       const servePromise = serveAcpGateway({ noDeviceIdentity: true });
       await Promise.resolve();
 
@@ -275,7 +275,6 @@ describe("serveAcpGateway startup", () => {
     const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
 
     try {
-      mockState.gatewayDeviceIdentity.length = 0;
       const servePromise = serveAcpGateway({ noDeviceIdentity: false });
       await Promise.resolve();
 
