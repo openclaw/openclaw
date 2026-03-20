@@ -45,10 +45,10 @@ Use this format when adding entries:
 
 ## Listed plugins
 
-- **QQbot** — The Openclaw channel plugin for QQ, supports uploading and downloading of text, voice, images, videos and files, and supports multiple accounts and OpenClaw status display. You can connect your Openclaw via PC, Mac, Pad, Phone  anywhere and anytime.
+- **QQbot** — Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group mentions, channel messages, and rich media including voice, images, videos, and files.
   npm: `@sliverp/qqbot`
   repo: `https://github.com/sliverp/qqbot`
-  install: `openclaw plugins install @sliverp/qqbot@latest`
+  install: `openclaw plugins install @sliverp/qqbot`
 
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
