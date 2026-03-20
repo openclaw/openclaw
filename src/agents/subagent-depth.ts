@@ -11,6 +11,14 @@ type SessionDepthEntry = {
   spawnedBy?: unknown;
 };
 
+function parseSessionDepthStore(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return JSON5.parse(raw);
+  }
+}
+
 function normalizeSpawnDepth(value: unknown): number | undefined {
   if (typeof value === "number") {
     return Number.isInteger(value) && value >= 0 ? value : undefined;
@@ -37,7 +45,7 @@ function normalizeSessionKey(value: unknown): string | undefined {
 function readSessionStore(storePath: string): Record<string, SessionDepthEntry> {
   try {
     const raw = fs.readFileSync(storePath, "utf-8");
-    const parsed = JSON5.parse(raw);
+    const parsed = parseSessionDepthStore(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as Record<string, SessionDepthEntry>;
     }
