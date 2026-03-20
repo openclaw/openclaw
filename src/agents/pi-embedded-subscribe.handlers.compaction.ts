@@ -165,11 +165,6 @@ function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedPiSubscribeConte
     latestCompactionTimestamp = parseMessageTimestamp(entry.timestamp ?? null);
   }
 
-  if (latestCompactionSummaryIndex === -1) {
-    // No compaction summary found — nothing to clear.
-    return;
-  }
-
   for (let i = 0; i < messages.length; i += 1) {
     const message = messages[i];
     if (!message || typeof message !== "object") {
@@ -183,20 +178,24 @@ function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedPiSubscribeConte
       continue;
     }
 
-    // A message is considered stale (pre-compaction) if:
-    //   1. Its timestamp is <= the latest compaction summary timestamp, OR
-    //   2. Its array index is before the compaction summary (legacy fallback for
-    //      messages without timestamps).
-    const messageTimestamp = parseMessageTimestamp(candidate.timestamp);
-    const staleByTimestamp =
-      latestCompactionTimestamp !== null &&
-      messageTimestamp !== null &&
-      messageTimestamp <= latestCompactionTimestamp;
-    const staleByLegacyOrdering = i < latestCompactionSummaryIndex;
+    // When a compactionSummary exists, only zero out messages that pre-date it.
+    // Messages produced after the compaction contain fresh, accurate usage data
+    // and must be left untouched so the TUI "📚 Context" counter stays correct.
+    // When no compactionSummary exists (e.g. legacy sessions or in-progress
+    // compaction without a recorded summary), fall back to zeroing all assistant
+    // usage to preserve the original behaviour (#50795).
+    if (latestCompactionSummaryIndex !== -1) {
+      const messageTimestamp = parseMessageTimestamp(candidate.timestamp);
+      const staleByTimestamp =
+        latestCompactionTimestamp !== null &&
+        messageTimestamp !== null &&
+        messageTimestamp <= latestCompactionTimestamp;
+      const staleByLegacyOrdering = i < latestCompactionSummaryIndex;
 
-    if (!staleByTimestamp && !staleByLegacyOrdering) {
-      // Post-compaction message — preserve its accurate usage data.
-      continue;
+      if (!staleByTimestamp && !staleByLegacyOrdering) {
+        // Post-compaction message — preserve its accurate usage data.
+        continue;
+      }
     }
 
     // pi-coding-agent expects assistant usage to exist when computing context usage.
