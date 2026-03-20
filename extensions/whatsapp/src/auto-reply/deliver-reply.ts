@@ -32,6 +32,46 @@ const STANDARD_RETRY: RetryStrategy = { maxAttempts: 3, baseMs: 500, factor: 1 }
 const MIN_DISCONNECT_RETRY_BUDGET_MS = 62_000;
 const MIN_DISCONNECT_BASE_MS = 2_000;
 
+function mergeAbortSignals(
+  a?: AbortSignal,
+  b?: AbortSignal,
+): { signal?: AbortSignal; dispose: () => void } {
+  if (!a && !b) {
+    return { signal: undefined, dispose: () => {} };
+  }
+  if (!a) {
+    return { signal: b, dispose: () => {} };
+  }
+  if (!b) {
+    return { signal: a, dispose: () => {} };
+  }
+  const controller = new AbortController();
+  const abortFrom = (source: AbortSignal) => {
+    if (!controller.signal.aborted) {
+      controller.abort(source.reason);
+    }
+  };
+  if (a.aborted) {
+    abortFrom(a);
+    return { signal: controller.signal, dispose: () => {} };
+  }
+  if (b.aborted) {
+    abortFrom(b);
+    return { signal: controller.signal, dispose: () => {} };
+  }
+  const onAbortA = () => abortFrom(a);
+  const onAbortB = () => abortFrom(b);
+  a.addEventListener("abort", onAbortA, { once: true });
+  b.addEventListener("abort", onAbortB, { once: true });
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      a.removeEventListener("abort", onAbortA);
+      b.removeEventListener("abort", onAbortB);
+    },
+  };
+}
+
 function resolveReconnectPolicy(msg: WebInboundMsg): ReconnectPolicy {
   const initialMs = Math.max(
     250,
@@ -159,12 +199,15 @@ export async function deliverWebReply(params: {
         const isDisconnect = /closed|reset|timed\s*out|disconnect|no active socket/i.test(errText);
         const isReconnectGap = /no active socket|reconnection in progress/i.test(errText);
         const useDisconnectWindow = isReconnectGap || msg.disconnectRetryWindowActive?.() === true;
-        const isLast = attempt >= maxAttempts;
-        if (!isDisconnect || isLast) {
+        if (isReconnectGap && msg.shouldRetryDisconnect?.() === false) {
           throw err;
         }
-
-        if (isReconnectGap && msg.shouldRetryDisconnect?.() === false) {
+        const shouldExtendDisconnectRetries = strategy === STANDARD && useDisconnectWindow;
+        if (shouldExtendDisconnectRetries) {
+          maxAttempts = DISCONNECT.maxAttempts;
+        }
+        const isLast = attempt >= maxAttempts;
+        if (!isDisconnect || isLast) {
           throw err;
         }
 
@@ -176,21 +219,27 @@ export async function deliverWebReply(params: {
                 Math.round(strategy.baseMs * Math.pow(strategy.factor, attempt - 2)),
               );
 
-        if (strategy === STANDARD && useDisconnectWindow) {
+        if (shouldExtendDisconnectRetries) {
           strategy = DISCONNECT;
-          maxAttempts = DISCONNECT.maxAttempts;
         }
 
         logVerbose(
           `Retrying ${label} to ${msg.from} after failure (${attempt}/${maxAttempts}) in ${backoffMs}ms: ${errText}`,
         );
+        const wakeSignal = msg.disconnectRetryWakeSignal?.();
+        const mergedSleepAbort = mergeAbortSignals(msg.disconnectRetryAbortSignal, wakeSignal);
         try {
-          await sleepWithAbort(backoffMs, msg.disconnectRetryAbortSignal);
+          await sleepWithAbort(backoffMs, mergedSleepAbort.signal);
         } catch (sleepErr) {
           if (msg.disconnectRetryAbortSignal?.aborted || msg.shouldRetryDisconnect?.() === false) {
             throw err;
           }
+          if (wakeSignal?.aborted) {
+            continue;
+          }
           throw sleepErr;
+        } finally {
+          mergedSleepAbort.dispose();
         }
       }
     }

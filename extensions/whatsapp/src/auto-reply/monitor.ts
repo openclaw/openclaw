@@ -149,6 +149,7 @@ export async function monitorWebChannel(
   let shouldRetryDisconnect = keepAlive;
   let disconnectRetryWindowActive = false;
   const disconnectRetryAbortController = new AbortController();
+  let disconnectRetryWakeController = new AbortController();
   if (abortSignal) {
     if (abortSignal.aborted) {
       disconnectRetryAbortController.abort();
@@ -158,10 +159,17 @@ export async function monitorWebChannel(
       });
     }
   }
+  const pulseDisconnectRetryWakeSignal = () => {
+    if (!disconnectRetryWakeController.signal.aborted) {
+      disconnectRetryWakeController.abort();
+    }
+    disconnectRetryWakeController = new AbortController();
+  };
   const stopDisconnectRetries = () => {
     shouldRetryDisconnect = false;
     disconnectRetryWindowActive = false;
     disconnectRetryAbortController.abort();
+    pulseDisconnectRetryWakeSignal();
   };
 
   while (true) {
@@ -227,6 +235,7 @@ export async function monitorWebChannel(
       disconnectRetryWindowActive: () => disconnectRetryWindowActive,
       disconnectRetryPolicy: reconnectPolicy,
       disconnectRetryAbortSignal: disconnectRetryAbortController.signal,
+      disconnectRetryWakeSignal: () => disconnectRetryWakeController.signal,
       onMessage: async (msg: WebInboundMsg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();
@@ -237,6 +246,7 @@ export async function monitorWebChannel(
         await onMessage(msg);
       },
     });
+    pulseDisconnectRetryWakeSignal();
     disconnectRetryWindowActive = false;
 
     Object.assign(status, createConnectedChannelStatusPatch());

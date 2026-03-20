@@ -41,6 +41,7 @@ export type WebInboundMessage = {
   disconnectRetryWindowActive?: () => boolean;
   disconnectRetryPolicy?: ReconnectPolicy;
   disconnectRetryAbortSignal?: AbortSignal;
+  disconnectRetryWakeSignal?: () => AbortSignal | undefined;
   mediaPath?: string;
   mediaType?: string;
   mediaFileName?: string;

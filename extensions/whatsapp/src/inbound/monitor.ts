@@ -48,6 +48,8 @@ export async function monitorWebInbox(options: {
   disconnectRetryPolicy?: ReconnectPolicy;
   /** Abort signal for in-flight reply retries when monitor shutdown becomes terminal. */
   disconnectRetryAbortSignal?: AbortSignal;
+  /** Signal that aborts sleeping retries once a replacement socket is ready. */
+  disconnectRetryWakeSignal?: () => AbortSignal | undefined;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -412,6 +414,7 @@ export async function monitorWebInbox(options: {
       disconnectRetryWindowActive: options.disconnectRetryWindowActive,
       disconnectRetryPolicy: options.disconnectRetryPolicy,
       disconnectRetryAbortSignal: options.disconnectRetryAbortSignal,
+      disconnectRetryWakeSignal: options.disconnectRetryWakeSignal,
       mediaPath: enriched.mediaPath,
       mediaType: enriched.mediaType,
       mediaFileName: enriched.mediaFileName,
