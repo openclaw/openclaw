@@ -31,7 +31,10 @@ import {
   composeSplitTurnInstructions,
   resolveCompactionInstructions,
 } from "./compaction-instructions.js";
-import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
+import {
+  getCompactionSafeguardRuntime,
+  setCompactionSafeguardCancelReason,
+} from "./compaction-safeguard-runtime.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
 
@@ -783,6 +786,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const hasRealTurnPrefix = preparation.turnPrefixMessages.some((message, index, messages) =>
       isRealConversationMessage(message, messages, index),
     );
+    setCompactionSafeguardCancelReason(ctx.sessionManager, undefined);
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
       // When there are no summarizable messages AND no real turn-prefix content,
       // cancelling compaction leaves context unchanged but the SDK re-triggers
@@ -840,6 +844,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "was not called and model was not passed through runtime registry.",
         );
       }
+      setCompactionSafeguardCancelReason(
+        ctx.sessionManager,
+        "Compaction safeguard could not resolve a summarization model.",
+      );
       return { cancel: true };
     }
 
@@ -847,6 +855,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     if (!apiKey) {
       log.warn(
         "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
+      );
+      setCompactionSafeguardCancelReason(
+        ctx.sessionManager,
+        `Compaction safeguard could not resolve an API key for ${model.provider}/${model.id}.`,
       );
       return { cancel: true };
     }
@@ -1103,10 +1115,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       log.warn(
-        `Compaction summarization failed; cancelling compaction to preserve history: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Compaction summarization failed; cancelling compaction to preserve history: ${message}`,
+      );
+      setCompactionSafeguardCancelReason(
+        ctx.sessionManager,
+        `Compaction safeguard could not summarize the session: ${message}`,
       );
       return { cancel: true };
     }
