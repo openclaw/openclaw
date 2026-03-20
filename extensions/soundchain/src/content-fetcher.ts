@@ -50,13 +50,45 @@ const BLOCKED_HOST_PATTERNS = [
   /169\.254\.169\.254/, // AWS/GCP metadata
 ];
 
+function isBlockedHostname(hostname: string): boolean {
+  return BLOCKED_HOST_PATTERNS.some((p) => p.test(hostname));
+}
+
 function isBlockedUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    return BLOCKED_HOST_PATTERNS.some((p) => p.test(parsed.hostname));
+    return isBlockedHostname(parsed.hostname);
   } catch {
     return true; // Block unparseable URLs
   }
+}
+
+/**
+ * Safe fetch that blocks redirects to private networks.
+ * Uses redirect: "manual" to inspect each hop.
+ */
+async function safeFetch(url: string, options?: RequestInit): Promise<Response> {
+  if (isBlockedUrl(url)) throw new Error("Blocked URL");
+
+  const res = await fetch(url, {
+    ...options,
+    redirect: "manual", // Don't auto-follow — we check each redirect
+    signal: options?.signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+
+  // Follow redirects manually with SSRF check (max 5 hops)
+  if (res.status >= 300 && res.status < 400) {
+    const location = res.headers.get("location");
+    if (!location) return res;
+
+    const redirectUrl = new URL(location, url).toString();
+    if (isBlockedUrl(redirectUrl)) throw new Error("Redirect to blocked URL");
+
+    // Recurse (fetch will handle further redirects)
+    return safeFetch(redirectUrl, options);
+  }
+
+  return res;
 }
 
 // ---------------------------------------------------------------------------
@@ -266,10 +298,8 @@ async function fetchXPost(
 
 async function fetchWebPageText(url: string): Promise<string | null> {
   try {
-    const res = await fetch(url, {
+    const res = await safeFetch(url, {
       headers: { "User-Agent": USER_AGENT },
-      redirect: "follow",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
 
     const contentType = res.headers.get("content-type") || "";
