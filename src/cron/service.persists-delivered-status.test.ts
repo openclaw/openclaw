@@ -151,9 +151,25 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastDeliveryError).toBeUndefined();
   });
 
-  it("persists lastDelivered=false when isolated job explicitly reports not delivered", async () => {
+  it("persists lastDelivered=false as not-requested when delivery is not configured", async () => {
+    // When delivery.mode is "none" (not requested), delivered=false should resolve to
+    // "not-requested" rather than "not-delivered" since no delivery was ever attempted.
     const updated = await runIsolatedJobAndReadState({
       job: buildIsolatedAgentTurnJob("delivered-false"),
+      delivered: false,
+    });
+    expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastDelivered).toBe(false);
+    expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
+    expect(updated?.state.lastDeliveryError).toBeUndefined();
+  });
+
+  it("persists lastDelivered=false as not-delivered when delivery IS configured", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: {
+        ...buildIsolatedAgentTurnJob("delivered-false-with-config"),
+        delivery: { mode: "announce", channel: "discord", to: "channel:123" },
+      },
       delivered: false,
     });
     expectSuccessfulCronRun(updated);
