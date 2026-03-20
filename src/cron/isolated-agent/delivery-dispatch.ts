@@ -1,5 +1,5 @@
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -522,7 +522,7 @@ export async function dispatchCronDelivery(
       hadDescendants &&
       synthesizedText.trim() === initialSynthesizedText &&
       isLikelyInterimCronMessage(initialSynthesizedText) &&
-      initialSynthesizedText.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase()
+      !isSilentReplyText(initialSynthesizedText, SILENT_REPLY_TOKEN)
     ) {
       // Descendants existed but no post-orchestration synthesis arrived AND
       // no descendant fallback reply was available. Suppress stale parent
@@ -537,12 +537,13 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
-    if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
+    if (isSilentReplyText(synthesizedText, SILENT_REPLY_TOKEN)) {
       return params.withRunSession({
         status: "ok",
         summary,
         outputText,
-        delivered: true,
+        delivered: false,
+        deliveryAttempted: true,
         ...params.telemetry,
       });
     }

@@ -407,6 +407,24 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("skips announce when the agent reply is whitespace-padded NO_REPLY", async () => {
+    await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
+      mockAgentPayloads([{ text: "  NO_REPLY \n" }]);
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(false);
+      expect(res.deliveryAttempted).toBe(true);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
+  });
+
   it("fails when structured direct delivery fails and best-effort is disabled", async () => {
     await expectStructuredTelegramFailure({
       payload: { text: "hello from cron", mediaUrl: "https://example.com/img.png" },
