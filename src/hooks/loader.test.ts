@@ -349,6 +349,81 @@ describe("loader", () => {
       await expectNoCommandHookRegistration(createLegacyHandlerConfig());
     });
 
+    it("logs a clear warning and continues when a legacy handler module is missing", async () => {
+      // Enable warn-level console output so log.warn is captured
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warn = loggingState.rawConsole?.warn;
+      expect(warn).toBeTypeOf("function");
+
+      // Create one valid handler and one that points to a non-existent file
+      const validHandlerPath = await writeHandlerModule("valid-handler.js");
+      const cfg = createEnabledHooksConfig([
+        {
+          event: "session:compact:after",
+          module: "./does-not-exist.js",
+        },
+        {
+          event: "command:new",
+          module: path.basename(validHandlerPath),
+        },
+      ]);
+
+      const count = await loadInternalHooks(cfg, tmpDir);
+
+      // Valid hook still loaded
+      expect(count).toBe(1);
+      expect(getRegisteredEventKeys()).toContain("command:new");
+
+      // Warning includes event name, module path, and error code
+      const warnMessages = (warn as ReturnType<typeof vi.fn>).mock.calls
+        .map((call) => String(call[0] ?? ""))
+        .join("\n");
+      expect(warnMessages).toContain("session:compact:after");
+      expect(warnMessages).toContain("does-not-exist.js");
+      expect(warnMessages).toContain("Skipping");
+    });
+
+    it("logs a clear warning when a directory-based hook import fails", async () => {
+      // Enable warn-level console output so log.warn is captured
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warn = loggingState.rawConsole?.warn;
+      expect(warn).toBeTypeOf("function");
+
+      // Create a hook directory with valid HOOK.md but a handler that fails to import
+      const hookDir = path.join(tmpDir, "hooks", "broken-hook");
+      await fs.mkdir(hookDir, { recursive: true });
+      await fs.writeFile(
+        path.join(hookDir, "HOOK.md"),
+        [
+          "---",
+          "name: broken-hook",
+          "description: broken hook test",
+          'metadata: {"openclaw":{"events":["message:received"]}}',
+          "---",
+          "",
+          "# Broken Hook",
+        ].join("\n"),
+        "utf-8",
+      );
+      // Handler that imports a non-existent module (will throw MODULE_NOT_FOUND)
+      await fs.writeFile(
+        path.join(hookDir, "handler.js"),
+        'import nonExistent from "./this-module-does-not-exist.js";\nexport default async function() {}',
+        "utf-8",
+      );
+
+      const cfg = createEnabledHooksConfig();
+
+      await loadInternalHooks(cfg, tmpDir);
+
+      const warnMessages = (warn as ReturnType<typeof vi.fn>).mock.calls
+        .map((call) => String(call[0] ?? ""))
+        .join("\n");
+      expect(warnMessages).toContain("broken-hook");
+      expect(warnMessages).toContain("failed to load");
+      expect(warnMessages).toContain("Skipping");
+    });
+
     it("sanitizes control characters in loader error logs", async () => {
       const error = loggingState.rawConsole?.error;
       expect(error).toBeTypeOf("function");
