@@ -756,12 +756,9 @@ class TalkModeManager(
       }
     val suffix = resolveGatewayAudioSuffix(speech)
     val tempFile =
-      withContext(Dispatchers.IO) {
-        File.createTempFile("tts_", suffix, context.cacheDir).apply {
-          writeBytes(audioBytes)
-        }
-      }
+      withContext(Dispatchers.IO) { File.createTempFile("tts_", suffix, context.cacheDir) }
     try {
+      withContext(Dispatchers.IO) { tempFile.writeBytes(audioBytes) }
       val player = MediaPlayer()
       this.player = player
       val finished = CompletableDeferred<Unit>()
