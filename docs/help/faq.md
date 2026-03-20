@@ -2149,7 +2149,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   <Accordion title='Why do I see "Unknown model: minimax/MiniMax-M2.7"?'>
     This means the **provider isn't configured** (no MiniMax provider config or auth
     profile was found), so the model can't be resolved. A fix for this detection is
-    in **2026.1.12** (unreleased at the time of writing).
+    shipped in **2026.1.12**.
 
     Fix checklist:
 
