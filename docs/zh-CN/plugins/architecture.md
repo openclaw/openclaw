@@ -474,4 +474,4 @@ api.registerMediaUnderstandingProvider({
 4. **注册供应商实现** — 供应商插件然后向能力注册其后端
 5. **添加契约覆盖** — 添加测试以随时间保持所有权和注册形状显式
 
-具体清单见 [Capability Cookbook](/zh-CN/tools/capability-cookbook)。
+具体清单见 [Capability Cookbook](/tools/capability-cookbook)。
