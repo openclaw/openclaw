@@ -12,8 +12,9 @@ import {
   persistInlineDirectives,
 } from "./directive-handling.js";
 import { resolveCurrentDirectiveLevels } from "./directive-handling.levels.js";
+import { resolveModelSelectionFromDirective } from "./directive-handling.model.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
-import type { createModelSelectionState } from "./model-selection.js";
+import { resolveContextTokens, type createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -33,6 +34,7 @@ export type ApplyDirectiveResult =
         cap?: number;
         dropPolicy?: InlineDirectives["dropPolicy"];
       };
+      perMessageAuthProfileId?: string;
     };
 
 export async function applyInlineDirectiveOverrides(params: {
@@ -102,6 +104,7 @@ export async function applyInlineDirectiveOverrides(params: {
   let { directives } = params;
   let { provider, model } = params;
   let { contextTokens } = params;
+  let perMessageAuthProfileId: string | undefined;
   const directiveModelState = {
     allowedModelKeys: modelState.allowedModelKeys,
     allowedModelCatalog: modelState.allowedModelCatalog,
@@ -247,6 +250,41 @@ export async function applyInlineDirectiveOverrides(params: {
     model = fastLane.model;
   }
 
+  if (directives.oneShotModelDirective && command.isAuthorizedSender) {
+    const oneShotModelResolution = resolveModelSelectionFromDirective({
+      directives: {
+        ...clearInlineDirectives(directives.cleaned),
+        hasModelDirective: true,
+        rawModelDirective: directives.oneShotModelDirective,
+        rawModelProfile: directives.oneShotModelProfile,
+      },
+      cfg,
+      agentDir,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+      allowedModelKeys: directiveModelState.allowedModelKeys,
+      allowedModelCatalog: directiveModelState.allowedModelCatalog,
+      provider,
+    });
+    if (oneShotModelResolution.errorText) {
+      typing.cleanup();
+      return {
+        kind: "reply",
+        reply: { text: oneShotModelResolution.errorText },
+      };
+    }
+    if (oneShotModelResolution.modelSelection) {
+      provider = oneShotModelResolution.modelSelection.provider;
+      model = oneShotModelResolution.modelSelection.model;
+      contextTokens = resolveContextTokens({
+        agentCfg,
+        model,
+      });
+      perMessageAuthProfileId = oneShotModelResolution.profileOverride;
+    }
+  }
+
   const persisted = await persistInlineDirectives({
     directives,
     effectiveModelDirective,
@@ -292,5 +330,6 @@ export async function applyInlineDirectiveOverrides(params: {
     directiveAck,
     perMessageQueueMode,
     perMessageQueueOptions,
+    perMessageAuthProfileId,
   };
 }
