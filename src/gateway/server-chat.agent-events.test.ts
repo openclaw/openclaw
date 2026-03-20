@@ -838,7 +838,7 @@ describe("agent event handler", () => {
     expect(nodePayload.runId).toBe("run-fallback-client");
   });
 
-  it("suppresses chat and node session events for non-control-UI-visible runs", () => {
+  it("suppresses chat, agent, and node session events for non-control-UI-visible runs", () => {
     const { broadcast, nodeSendToSession, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-hidden",
     });
@@ -858,6 +858,10 @@ describe("agent event handler", () => {
     emitLifecycleEnd(handler, "run-hidden", 2);
 
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    // Agent events must also be suppressed so Control UI does not
+    // render debug messages for runs originating from external channels.
+    const agentBroadcastCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
+    expect(agentBroadcastCalls).toHaveLength(0);
     expect(nodeSendToSession).not.toHaveBeenCalled();
   });
 

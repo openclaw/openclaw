@@ -710,7 +710,7 @@ export function createAgentEventHandler({
               : { ...eventForClients, data };
           })()
         : agentPayload;
-    if (last > 0 && evt.seq !== last + 1) {
+    if (last > 0 && evt.seq !== last + 1 && isControlUiVisible) {
       broadcast("agent", {
         runId: eventRunId,
         stream: "error",
@@ -744,13 +744,13 @@ export function createAgentEventHandler({
       // not know the runId in advance, so they cannot register as run-scoped
       // tool recipients. Mirror tool lifecycle onto a session-scoped event so
       // they can render live pending tool cards without polling history.
-      if (sessionKey) {
+      if (isControlUiVisible && sessionKey) {
         const sessionSubscribers = sessionEventSubscribers.getAll();
         if (sessionSubscribers.size > 0) {
           broadcastToConnIds("session.tool", toolPayload, sessionSubscribers, { dropIfSlow: true });
         }
       }
-    } else {
+    } else if (isControlUiVisible) {
       broadcast("agent", agentPayload);
     }
 
