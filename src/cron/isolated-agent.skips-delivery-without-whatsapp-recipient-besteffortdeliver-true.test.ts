@@ -420,7 +420,25 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("does not mark NO_REPLY output as delivered when no direct send occurs", async () => {
+  it("skips announce when the agent reply is whitespace-padded NO_REPLY", async () => {
+    await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
+      mockAgentPayloads([{ text: "  NO_REPLY \n" }]);
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(false);
+      expect(res.deliveryAttempted).toBe(true);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
+  });
+
+  it("skips announce when the agent reply is exact NO_REPLY", async () => {
     await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
       mockAgentPayloads([{ text: "NO_REPLY" }]);
       const res = await runTelegramAnnounceTurn({
@@ -432,6 +450,7 @@ describe("runCronIsolatedAgentTurn", () => {
 
       expect(res.status).toBe("ok");
       expect(res.delivered).toBe(false);
+      expect(res.deliveryAttempted).toBe(true);
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
@@ -459,6 +478,7 @@ describe("runCronIsolatedAgentTurn", () => {
 
       expect(res.status).toBe("ok");
       expect(res.delivered).toBe(false);
+      expect(res.deliveryAttempted).toBe(true);
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(callGateway).toHaveBeenCalledWith(
@@ -473,7 +493,6 @@ describe("runCronIsolatedAgentTurn", () => {
       );
     });
   });
-
   it("fails when structured direct delivery fails and best-effort is disabled", async () => {
     await expectStructuredTelegramFailure({
       payload: { text: "hello from cron", mediaUrl: "https://example.com/img.png" },

@@ -18,6 +18,8 @@ Tip: run `openclaw cron --help` for the full command surface.
 
 Note: isolated `cron add` jobs default to `--announce` delivery. Use `--no-deliver` to keep
 output internal. `--deliver` remains as a deprecated alias for `--announce`.
+When an announced isolated run replies with exact `NO_REPLY` (after trimming), OpenClaw suppresses
+the outbound delivery.
 
 Note: cron-owned isolated runs expect a plain-text summary and the runner owns
 the final send path. `--no-deliver` keeps the run internal; it does not hand
