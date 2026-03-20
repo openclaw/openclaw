@@ -5,6 +5,7 @@ import {
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
 import type { ImageContent } from "../../agents/command/types.js";
+import { modelSupportsVision } from "../../agents/model-catalog.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
@@ -145,37 +146,48 @@ export async function getReplyFromConfig(
 
     // If the model supports vision natively, read image attachments and pass them directly
     // to the agent instead of relying on OCR text extraction.
-    if (!isFastTestEnv && !resolvedOpts?.images) {
+    if (!resolvedOpts?.images) {
       const attachments = normalizeAttachments(finalized);
       const imageAttachments = attachments.filter(isImageAttachment);
       if (imageAttachments.length > 0) {
-        const images: ImageContent[] = [];
-        const cache = createMediaAttachmentCache(attachments, {
-          localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx: finalized }),
-        });
-        for (const attachment of imageAttachments) {
-          if (attachment.index === undefined) {
-            continue;
+        // Check if the model supports vision before loading images
+        const catalog = await import("../../agents/model-catalog.js").then((m) =>
+          m.loadModelCatalog({ config: cfg }),
+        );
+        const modelEntry = catalog.find(
+          (entry) =>
+            entry.provider.toLowerCase() === provider.toLowerCase() &&
+            entry.id.toLowerCase() === model.toLowerCase(),
+        );
+        if (modelSupportsVision(modelEntry)) {
+          const images: ImageContent[] = [];
+          const cache = createMediaAttachmentCache(attachments, {
+            localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx: finalized }),
+          });
+          for (const attachment of imageAttachments) {
+            if (attachment.index === undefined) {
+              continue;
+            }
+            try {
+              const pathResult = await cache.getPath({
+                attachmentIndex: attachment.index,
+                timeoutMs: 10000,
+              });
+              const fs = await import("node:fs/promises");
+              const buffer = await fs.readFile(pathResult.path);
+              // Use bare base64 without data: URI prefix (chat-attachments.ts strips the prefix)
+              images.push({
+                type: "image",
+                data: buffer.toString("base64"),
+                mimeType: attachment.mime ?? "image/jpeg",
+              });
+            } catch {
+              // Skip images that can't be read
+            }
           }
-          try {
-            const pathResult = await cache.getPath({
-              attachmentIndex: attachment.index,
-              timeoutMs: 10000,
-            });
-            const fs = await import("node:fs/promises");
-            const buffer = await fs.readFile(pathResult.path);
-            const mimeType = attachment.mime ?? "image/jpeg";
-            images.push({
-              type: "image",
-              data: `data:${mimeType};base64,${buffer.toString("base64")}`,
-              mimeType,
-            });
-          } catch {
-            // Skip images that can't be read
+          if (images.length > 0) {
+            resolvedOpts = { ...resolvedOpts, images };
           }
-        }
-        if (images.length > 0) {
-          resolvedOpts = { ...resolvedOpts, images };
         }
       }
     }
