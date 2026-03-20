@@ -200,7 +200,19 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
     channel = parts[0]?.trim().toLowerCase() as CronMessageChannel;
   }
 
-  const delivery: CronDelivery = { mode: "announce", to: peerId };
+  const marker = parts[markerIndex];
+  const isDm = marker === "direct" || marker === "dm";
+
+  // Channels like Mattermost, Slack, Discord, and Matrix require a "user:"
+  // prefix on DM delivery targets to distinguish user IDs from channel IDs.
+  // Without the prefix these channels treat bare IDs as channel targets,
+  // which causes 403 errors on delivery.  Telegram and WhatsApp use
+  // unambiguous numeric/phone identifiers and must NOT be prefixed.
+  const CHANNELS_REQUIRING_USER_PREFIX = new Set(["mattermost", "slack", "discord", "matrix"]);
+  const needsUserPrefix = isDm && channel != null && CHANNELS_REQUIRING_USER_PREFIX.has(channel);
+  const to = needsUserPrefix ? `user:${peerId}` : peerId;
+
+  const delivery: CronDelivery = { mode: "announce", to };
   if (channel) {
     delivery.channel = channel;
   }
