@@ -96,6 +96,24 @@ describe("oag-delivery-watchdog", () => {
       expect(mockEmitOagEvent).not.toHaveBeenCalled();
     });
 
+    it("ignores rate limit errors", async () => {
+      const { startDeliveryWatchdog } = await import("./oag-delivery-watchdog.js");
+
+      startDeliveryWatchdog();
+
+      await triggerInternalHook(
+        createInternalHookEvent("message", "sent", "test-session", {
+          to: "user123",
+          content: "test",
+          success: false,
+          error: "rate limit exceeded",
+          channelId: "telegram",
+        }),
+      );
+
+      expect(mockEmitOagEvent).not.toHaveBeenCalled();
+    });
+
     it("can be disabled via config", async () => {
       const { startDeliveryWatchdog } = await import("./oag-delivery-watchdog.js");
 
@@ -151,6 +169,51 @@ describe("oag-delivery-watchdog", () => {
     });
   });
 
+  describe("duplicate registration prevention", () => {
+    it("does not register duplicate handler on second start", async () => {
+      const { startDeliveryWatchdog, isDeliveryWatchdogRunning } =
+        await import("./oag-delivery-watchdog.js");
+
+      const cleanup1 = startDeliveryWatchdog();
+      expect(isDeliveryWatchdogRunning()).toBe(true);
+
+      // Second start should not register a new handler
+      const cleanup2 = startDeliveryWatchdog();
+      expect(isDeliveryWatchdogRunning()).toBe(true);
+
+      // Trigger once
+      await triggerInternalHook(
+        createInternalHookEvent("message", "sent", "test-session", {
+          to: "user123",
+          content: "test",
+          success: false,
+          error: "Bad Request: message is too long",
+          channelId: "telegram",
+        }),
+      );
+
+      // Should only emit once (not twice from duplicate handler)
+      expect(mockEmitOagEvent).toHaveBeenCalledTimes(1);
+
+      cleanup1();
+      cleanup2();
+    });
+
+    it("isDeliveryWatchdogRunning returns correct state", async () => {
+      const { startDeliveryWatchdog, isDeliveryWatchdogRunning, resetDeliveryWatchdog } =
+        await import("./oag-delivery-watchdog.js");
+
+      resetDeliveryWatchdog();
+      expect(isDeliveryWatchdogRunning()).toBe(false);
+
+      const cleanup = startDeliveryWatchdog();
+      expect(isDeliveryWatchdogRunning()).toBe(true);
+
+      cleanup();
+      expect(isDeliveryWatchdogRunning()).toBe(false);
+    });
+  });
+
   describe("channel text limits", () => {
     it("returns default channel text limits", async () => {
       const { getDefaultChannelTextLimits } = await import("./oag-delivery-watchdog.js");
@@ -162,6 +225,8 @@ describe("oag-delivery-watchdog", () => {
       expect(limits.slack).toBe(4000);
       expect(limits.irc).toBe(350);
       expect(limits.line).toBe(5000);
+      expect(limits.googlechat).toBe(4000);
+      expect(limits.msteams).toBe(4000);
     });
 
     it("supports custom channel text limits", async () => {
@@ -235,6 +300,24 @@ describe("oag-delivery-watchdog", () => {
       );
     });
 
+    it("does not match generic forbidden string", async () => {
+      const { startDeliveryWatchdog } = await import("./oag-delivery-watchdog.js");
+
+      startDeliveryWatchdog();
+
+      await triggerInternalHook(
+        createInternalHookEvent("message", "sent", "test-session", {
+          to: "user123",
+          content: "test",
+          success: false,
+          error: "access forbidden for this resource",
+          channelId: "telegram",
+        }),
+      );
+
+      expect(mockEmitOagEvent).not.toHaveBeenCalled();
+    });
+
     it("supports additional error patterns", async () => {
       const { startDeliveryWatchdog } = await import("./oag-delivery-watchdog.js");
 
@@ -259,6 +342,17 @@ describe("oag-delivery-watchdog", () => {
           error: "custom error pattern occurred",
         }),
       );
+    });
+
+    it("ignores invalid regex patterns gracefully", async () => {
+      const { startDeliveryWatchdog } = await import("./oag-delivery-watchdog.js");
+
+      // Should not throw on invalid regex
+      expect(() =>
+        startDeliveryWatchdog({
+          additionalErrorPatterns: ["[invalid(regex"],
+        }),
+      ).not.toThrow();
     });
   });
 
@@ -355,6 +449,68 @@ describe("oag-delivery-watchdog", () => {
           },
         }),
       );
+    });
+  });
+
+  describe("context extraction", () => {
+    it("includes additional context in anomaly event", async () => {
+      const { startDeliveryWatchdog } = await import("./oag-delivery-watchdog.js");
+
+      startDeliveryWatchdog();
+
+      await triggerInternalHook(
+        createInternalHookEvent("message", "sent", "test-session", {
+          to: "user123",
+          content: "test",
+          success: false,
+          error: "Bad Request: chat not found",
+          channelId: "telegram",
+          accountId: "account-456",
+          conversationId: "conv-789",
+          messageId: "msg-001",
+          isGroup: true,
+          groupId: "group-123",
+        }),
+      );
+
+      expect(mockEmitOagEvent).toHaveBeenCalledWith(
+        "anomaly_detected",
+        expect.objectContaining({
+          accountId: "account-456",
+          conversationId: "conv-789",
+          messageId: "msg-001",
+          groupId: "group-123",
+          isGroup: true,
+        }),
+      );
+    });
+  });
+
+  describe("deep merge config", () => {
+    it("deep merges channelTextLimits on update", async () => {
+      const { startDeliveryWatchdog, updateDeliveryWatchdogConfig, getChannelTextLimits } =
+        await import("./oag-delivery-watchdog.js");
+
+      startDeliveryWatchdog({
+        channelTextLimits: {
+          telegram: 3000,
+          discord: 1800,
+        },
+      });
+
+      // Update should merge, not replace
+      updateDeliveryWatchdogConfig({
+        channelTextLimits: {
+          telegram: 2500,
+          slack: 3500,
+        },
+      });
+
+      const limits = getChannelTextLimits();
+
+      expect(limits.telegram).toBe(2500); // Updated
+      expect(limits.discord).toBe(1800); // Preserved
+      expect(limits.slack).toBe(3500); // Added
     });
   });
 });
