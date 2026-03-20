@@ -1,0 +1,27 @@
+{
+  "id": "eternal-ai",
+  "providers": ["eternal-ai"],
+  "providerAuthEnvVars": {
+    "eternal-ai": ["ETERNAL_AI_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "eternal-ai",
+      "method": "api-key",
+      "choiceId": "eternal-ai-api-key",
+      "choiceLabel": "Eternal AI API key",
+      "groupId": "eternal-ai",
+      "groupLabel": "Eternal AI",
+      "groupHint": "Uncensored and Private AI",
+      "optionKey": "eternalAiApiKey",
+      "cliFlag": "--eternal-ai-api-key",
+      "cliOption": "--eternal-ai-api-key <key>",
+      "cliDescription": "Eternal AI API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -326,6 +326,8 @@ importers:
 
   extensions/elevenlabs: {}
 
+  extensions/eternal-ai: {}
+
   extensions/fal: {}
 
   extensions/feishu:

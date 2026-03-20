@@ -201,6 +201,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/diagnostics-otel/**"
+"extensions: eternal-ai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/eternal-ai/**"
 "extensions: llm-task":
   - changed-files:
       - any-glob-to-any-file:
