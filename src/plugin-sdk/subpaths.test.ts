@@ -34,6 +34,7 @@ import type {
   PluginRuntime as CorePluginRuntime,
 } from "openclaw/plugin-sdk/core";
 import * as directoryRuntimeSdk from "openclaw/plugin-sdk/directory-runtime";
+import * as feishuSdk from "openclaw/plugin-sdk/feishu";
 import * as infraRuntimeSdk from "openclaw/plugin-sdk/infra-runtime";
 import * as lazyRuntimeSdk from "openclaw/plugin-sdk/lazy-runtime";
 import * as matrixRuntimeSharedSdk from "openclaw/plugin-sdk/matrix-runtime-shared";
@@ -97,8 +98,6 @@ describe("plugin-sdk subpath exports", () => {
     expect(pluginSdkSubpaths).not.toContain("bluebubbles");
     expect(pluginSdkSubpaths).not.toContain("compat");
     expect(pluginSdkSubpaths).not.toContain("device-pair");
-    expect(pluginSdkSubpaths).not.toContain("discord");
-    expect(pluginSdkSubpaths).not.toContain("feishu");
     expect(pluginSdkSubpaths).not.toContain("google");
     expect(pluginSdkSubpaths).not.toContain("googlechat");
     expect(pluginSdkSubpaths).not.toContain("imessage");
@@ -238,6 +237,12 @@ describe("plugin-sdk subpath exports", () => {
   it("exports infra runtime helpers from the dedicated subpath", () => {
     expect(typeof infraRuntimeSdk.createRuntimeOutboundDelegates).toBe("function");
     expect(typeof infraRuntimeSdk.resolveOutboundSendDep).toBe("function");
+  });
+
+  it("exports feishu helpers from the dedicated subpath", () => {
+    expect(typeof feishuSdk.buildAgentWorkspaceArtifactPath).toBe("function");
+    expect(typeof feishuSdk.resolveAgentWorkspaceOutputPath).toBe("function");
+    expect(typeof feishuSdk.withTempDownloadPath).toBe("function");
   });
 
   it("exports channel runtime helpers from the dedicated subpath", () => {

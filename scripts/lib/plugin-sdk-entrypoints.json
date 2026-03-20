@@ -38,6 +38,7 @@
   "process-runtime",
   "windows-spawn",
   "acp-runtime",
+  "feishu",
   "lazy-runtime",
   "testing",
   "account-helpers",

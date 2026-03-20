@@ -193,6 +193,10 @@
       "types": "./dist/plugin-sdk/acp-runtime.d.ts",
       "default": "./dist/plugin-sdk/acp-runtime.js"
     },
+    "./plugin-sdk/feishu": {
+      "types": "./dist/plugin-sdk/feishu.d.ts",
+      "default": "./dist/plugin-sdk/feishu.js"
+    },
     "./plugin-sdk/lazy-runtime": {
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
       "default": "./dist/plugin-sdk/lazy-runtime.js"
