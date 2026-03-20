@@ -1,29 +1,35 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
-import { __testing as runtimeTesting } from "../../web-search/runtime.js";
-import type { AnyAgentTool } from "./common.js";
 import {
-  __testing as coreTesting,
-  createWebSearchTool as createWebSearchToolCore,
-} from "./web-search-core.js";
+  resolveWebSearchDefinition,
+  resolveWebSearchProviderId,
+} from "../../web-search/runtime.js";
+import type { AnyAgentTool } from "./common.js";
+import { jsonResult } from "./common.js";
+import { SEARCH_CACHE } from "./web-search-provider-common.js";
 
 export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
 }): AnyAgentTool | null {
-  return createWebSearchToolCore(options);
+  const resolved = resolveWebSearchDefinition(options);
+  if (!resolved) {
+    return null;
+  }
+
+  return {
+    label: "Web Search",
+    name: "web_search",
+    description: resolved.definition.description,
+    parameters: resolved.definition.parameters,
+    execute: async (_toolCallId, args) => jsonResult(await resolved.definition.execute(args)),
+  };
 }
 
 export const __testing = {
-  ...coreTesting,
+  SEARCH_CACHE,
   resolveSearchProvider: (
-    search?: OpenClawConfig["tools"] extends infer Tools
-      ? Tools extends { web?: infer Web }
-        ? Web extends { search?: infer Search }
-          ? Search
-          : undefined
-        : undefined
-      : undefined,
-  ) => runtimeTesting.resolveWebSearchProviderId({ search }),
+    search?: NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"],
+  ) => resolveWebSearchProviderId({ search }),
 };

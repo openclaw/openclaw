@@ -256,7 +256,7 @@ Enable with `tools.loopDetection.enabled: true` (default is `false`).
 
 ### `web_search`
 
-Search the web using Brave, Firecrawl, Gemini, Grok, Kimi, or Perplexity.
+Search the web using Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily.
 
 Core parameters:
 
@@ -402,7 +402,7 @@ Notes:
 
 ### `image_generate`
 
-Generate one or more images with the configured image-generation model.
+Generate one or more images with the configured or inferred image-generation model.
 
 Core parameters:
 
@@ -416,13 +416,29 @@ Core parameters:
 
 Notes:
 
-- Only available when `agents.defaults.imageGenerationModel` is configured.
+- Available when `agents.defaults.imageGenerationModel` is configured, or when OpenClaw can infer a compatible image-generation default from your enabled providers plus available auth.
+- Explicit `agents.defaults.imageGenerationModel` still wins over any inferred default.
 - Use `action: "list"` to inspect registered providers, default models, supported model ids, sizes, resolutions, and edit support.
 - Returns local `MEDIA:<path>` lines so channels can deliver the generated files directly.
 - Uses the image-generation model directly (independent of the main chat model).
-- Google-backed flows support reference-image edits plus explicit `1K|2K|4K` resolution hints.
+- Google-backed flows, including `google/gemini-3-pro-image-preview` for the native Nano Banana-style path, support reference-image edits plus explicit `1K|2K|4K` resolution hints.
 - When editing and `resolution` is omitted, OpenClaw infers a draft/final resolution from the input image size.
-- This is the built-in replacement for the old sample `nano-banana-pro` skill workflow. Use `agents.defaults.imageGenerationModel`, not `skills.entries`, for stock image generation.
+- This is the built-in replacement for the old `nano-banana-pro` skill workflow. Use `agents.defaults.imageGenerationModel`, not `skills.entries`, for stock image generation.
+
+Native example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "google/gemini-3-pro-image-preview", // native Nano Banana path
+        fallbacks: ["fal/fal-ai/flux/dev"],
+      },
+    },
+  },
+}
+```
 
 ### `pdf`
 
@@ -432,12 +448,12 @@ For full behavior, limits, config, and examples, see [PDF tool](/tools/pdf).
 
 ### `message`
 
-Send messages and channel actions across Discord/Google Chat/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams.
+Send messages and channel actions across Discord/Google Chat/Slack/Telegram/WhatsApp/Signal/iMessage/Microsoft Teams.
 
 Core actions:
 
-- `send` (text + optional media; MS Teams also supports `card` for Adaptive Cards)
-- `poll` (WhatsApp/Discord/MS Teams polls)
+- `send` (text + optional media; Microsoft Teams also supports `card` for Adaptive Cards)
+- `poll` (WhatsApp/Discord/Microsoft Teams polls)
 - `react` / `reactions` / `read` / `edit` / `delete`
 - `pin` / `unpin` / `list-pins`
 - `permissions`
@@ -455,7 +471,7 @@ Core actions:
 Notes:
 
 - `send` routes WhatsApp via the Gateway; other channels go direct.
-- `poll` uses the Gateway for WhatsApp and MS Teams; Discord polls go direct.
+- `poll` uses the Gateway for WhatsApp and Microsoft Teams; Discord polls go direct.
 - When a message tool call is bound to an active chat session, sends are constrained to that session’s target to avoid cross-context leaks.
 
 ### `cron`

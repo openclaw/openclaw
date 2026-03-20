@@ -8,7 +8,7 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
   },
   {
     pattern: /["']openclaw\/plugin-sdk\/test-utils["']/,
-    hint: "Use openclaw/plugin-sdk/testing for the public extension test seam.",
+    hint: "Use openclaw/plugin-sdk/testing for the public extension test surface.",
   },
   {
     pattern: /["']openclaw\/plugin-sdk\/compat["']/,
@@ -20,7 +20,7 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
   },
   {
     pattern: /["'](?:\.\.\/)+(?:src\/test-utils\/)[^"']+["']/,
-    hint: "Use test/helpers/extensions/* for repo-only helpers, or openclaw/plugin-sdk/testing for public seams.",
+    hint: "Use test/helpers/extensions/* for repo-only helpers, or openclaw/plugin-sdk/testing for public surfaces.",
   },
   {
     pattern: /["'](?:\.\.\/)+(?:src\/plugins\/types\.js)["']/,
@@ -81,7 +81,7 @@ function main() {
 
   if (offenders.length > 0) {
     console.error(
-      "Extension test files must stay on extension test bridges or public plugin-sdk seams.",
+      "Extension test files must stay on extension test bridges or public plugin-sdk surfaces.",
     );
     for (const offender of offenders.toSorted((a, b) => a.file.localeCompare(b.file))) {
       const relative = path.relative(process.cwd(), offender.file) || offender.file;

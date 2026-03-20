@@ -1,7 +1,3 @@
-import { sequentialize } from "@grammyjs/runner";
-import { apiThrottler } from "@grammyjs/transformer-throttler";
-import type { ApiClientOptions } from "grammy";
-import { Bot } from "grammy";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
@@ -14,7 +10,6 @@ import {
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -28,6 +23,7 @@ import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramAccount } from "./accounts.js";
+import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
@@ -37,8 +33,9 @@ import {
   resolveTelegramUpdateId,
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
+import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
-import { resolveTelegramTransport } from "./fetch.js";
+import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
 import { tagTelegramNetworkError } from "./network-errors.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
@@ -65,9 +62,30 @@ export type TelegramBotOptions = {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
   };
+  /** Pre-resolved Telegram transport to reuse across bot instances. If not provided, creates a new one. */
+  telegramTransport?: TelegramTransport;
+  telegramDeps?: TelegramBotDeps;
 };
 
 export { getTelegramSequentialKey };
+
+type TelegramBotRuntime = {
+  Bot: typeof Bot;
+  sequentialize: typeof sequentialize;
+  apiThrottler: typeof apiThrottler;
+};
+
+const DEFAULT_TELEGRAM_BOT_RUNTIME: TelegramBotRuntime = {
+  Bot,
+  sequentialize,
+  apiThrottler,
+};
+
+let telegramBotRuntimeForTest: TelegramBotRuntime | undefined;
+
+export function setTelegramBotRuntimeForTest(runtime?: TelegramBotRuntime): void {
+  telegramBotRuntimeForTest = runtime;
+}
 
 type TelegramFetchInput = Parameters<NonNullable<ApiClientOptions["fetch"]>>[0];
 type TelegramFetchInit = Parameters<NonNullable<ApiClientOptions["fetch"]>>[1];
@@ -103,8 +121,10 @@ function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
 }
 
 export function createTelegramBot(opts: TelegramBotOptions) {
+  const botRuntime = telegramBotRuntimeForTest ?? DEFAULT_TELEGRAM_BOT_RUNTIME;
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
-  const cfg = opts.config ?? loadConfig();
+  const telegramDeps = opts.telegramDeps ?? defaultTelegramBotDeps;
+  const cfg = opts.config ?? telegramDeps.loadConfig();
   const account = resolveTelegramAccount({
     cfg,
     accountId: opts.accountId,
@@ -132,9 +152,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     : null;
   const telegramCfg = account.config;
 
-  const telegramTransport = resolveTelegramTransport(opts.proxyFetch, {
-    network: telegramCfg.network,
-  });
+  const telegramTransport =
+    opts.telegramTransport ??
+    resolveTelegramTransport(opts.proxyFetch, {
+      network: telegramCfg.network,
+    });
   const shouldProvideFetch = Boolean(telegramTransport.fetch);
   // grammY's ApiClientOptions types still track `node-fetch` types; Node 22+ global fetch
   // (undici) is structurally compatible at runtime but not assignable in TS.
@@ -216,8 +238,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         }
       : undefined;
 
-  const bot = new Bot(opts.token, client ? { client } : undefined);
-  bot.api.config.use(apiThrottler());
+  const bot = new botRuntime.Bot(opts.token, client ? { client } : undefined);
+  bot.api.config.use(botRuntime.apiThrottler());
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
@@ -292,7 +314,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
   });
 
-  bot.use(sequentialize(getTelegramSequentialKey));
+  bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;
@@ -407,9 +429,23 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       requireMentionOverride: opts.requireMention,
       overrideOrder: "after-config",
     });
+  const loadFreshTelegramAccountConfig = () => {
+    try {
+      return resolveTelegramAccount({
+        cfg: telegramDeps.loadConfig(),
+        accountId: account.accountId,
+      }).config;
+    } catch (error) {
+      logVerbose(
+        `telegram: failed to load fresh config for account ${account.accountId}; using startup snapshot: ${String(error)}`,
+      );
+      return telegramCfg;
+    }
+  };
   const resolveTelegramGroupConfig = (chatId: string | number, messageThreadId?: number) => {
-    const groups = telegramCfg.groups;
-    const direct = telegramCfg.direct;
+    const freshTelegramCfg = loadFreshTelegramAccountConfig();
+    const groups = freshTelegramCfg.groups;
+    const direct = freshTelegramCfg.direct;
     const chatIdStr = String(chatId);
     const isDm = !chatIdStr.startsWith("-");
 
@@ -462,12 +498,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     resolveGroupActivation,
     resolveGroupRequireMention,
     resolveTelegramGroupConfig,
+    loadFreshConfig: () => telegramDeps.loadConfig(),
     sendChatActionHandler,
     runtime,
     replyToMode,
     streamMode,
     textLimit,
     opts,
+    telegramDeps,
   });
 
   registerTelegramNativeCommands({
@@ -488,6 +526,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
     opts,
+    telegramDeps,
   });
 
   registerTelegramHandlers({
@@ -506,6 +545,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     shouldSkipUpdate,
     processMessage,
     logger,
+    telegramDeps,
   });
 
   const originalStop = bot.stop.bind(bot);

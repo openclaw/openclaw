@@ -1,5 +1,5 @@
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
@@ -374,8 +374,7 @@ describe("tts", () => {
       messages: { tts: {} },
     };
 
-    beforeEach(async () => {
-      vi.resetModules();
+    beforeAll(async () => {
       ({ completeSimple: completeSimpleForTest } = await import("@mariozechner/pi-ai"));
       ({ getApiKeyForModel: getApiKeyForModelForTest } = await import("../agents/model-auth.js"));
       ({ resolveModelAsync: resolveModelAsyncForTest } =
@@ -385,6 +384,9 @@ describe("tts", () => {
       const ttsModule = await import("./tts.js");
       summarizeTextForTest = ttsModule._test.summarizeText;
       resolveTtsConfigForTest = ttsModule.resolveTtsConfig;
+    });
+
+    beforeEach(() => {
       vi.mocked(completeSimpleForTest).mockResolvedValue(
         mockAssistantMessage([{ type: "text", text: "Summary" }]),
       );
@@ -596,49 +598,54 @@ describe("tts", () => {
       messages: { tts: {} },
     };
 
-    it("defaults to the official OpenAI endpoint", () => {
-      withEnv({ OPENAI_TTS_BASE_URL: undefined }, () => {
-        const config = resolveTtsConfig(baseCfg);
-        expect(config.openai.baseUrl).toBe("https://api.openai.com/v1");
-      });
-    });
-
-    it("picks up OPENAI_TTS_BASE_URL env var when no config baseUrl is set", () => {
-      withEnv({ OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" }, () => {
-        const config = resolveTtsConfig(baseCfg);
-        expect(config.openai.baseUrl).toBe("http://localhost:8880/v1");
-      });
-    });
-
-    it("config baseUrl takes precedence over env var", () => {
-      const cfg: OpenClawConfig = {
-        ...baseCfg,
-        messages: {
-          tts: { openai: { baseUrl: "http://my-server:9000/v1" } },
+    it("resolves openai.baseUrl from config/env with config precedence and slash trimming", () => {
+      for (const testCase of [
+        {
+          name: "default endpoint",
+          cfg: baseCfg,
+          env: { OPENAI_TTS_BASE_URL: undefined },
+          expected: "https://api.openai.com/v1",
         },
-      };
-      withEnv({ OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" }, () => {
-        const config = resolveTtsConfig(cfg);
-        expect(config.openai.baseUrl).toBe("http://my-server:9000/v1");
-      });
-    });
-
-    it("strips trailing slashes from the resolved baseUrl", () => {
-      const cfg: OpenClawConfig = {
-        ...baseCfg,
-        messages: {
-          tts: { openai: { baseUrl: "http://my-server:9000/v1///" } },
+        {
+          name: "env override",
+          cfg: baseCfg,
+          env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
+          expected: "http://localhost:8880/v1",
         },
-      };
-      const config = resolveTtsConfig(cfg);
-      expect(config.openai.baseUrl).toBe("http://my-server:9000/v1");
-    });
-
-    it("strips trailing slashes from env var baseUrl", () => {
-      withEnv({ OPENAI_TTS_BASE_URL: "http://localhost:8880/v1/" }, () => {
-        const config = resolveTtsConfig(baseCfg);
-        expect(config.openai.baseUrl).toBe("http://localhost:8880/v1");
-      });
+        {
+          name: "config wins over env",
+          cfg: {
+            ...baseCfg,
+            messages: {
+              tts: { openai: { baseUrl: "http://my-server:9000/v1" } },
+            },
+          } as OpenClawConfig,
+          env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
+          expected: "http://my-server:9000/v1",
+        },
+        {
+          name: "config slash trimming",
+          cfg: {
+            ...baseCfg,
+            messages: {
+              tts: { openai: { baseUrl: "http://my-server:9000/v1///" } },
+            },
+          } as OpenClawConfig,
+          env: { OPENAI_TTS_BASE_URL: undefined },
+          expected: "http://my-server:9000/v1",
+        },
+        {
+          name: "env slash trimming",
+          cfg: baseCfg,
+          env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1/" },
+          expected: "http://localhost:8880/v1",
+        },
+      ] as const) {
+        withEnv(testCase.env, () => {
+          const config = resolveTtsConfig(testCase.cfg);
+          expect(config.openai.baseUrl, testCase.name).toBe(testCase.expected);
+        });
+      }
     });
   });
 
@@ -678,12 +685,13 @@ describe("tts", () => {
       });
     }
 
-    it("omits instructions for unsupported speech models", async () => {
-      await expectTelephonyInstructions("tts-1", undefined);
-    });
-
-    it("includes instructions for gpt-4o-mini-tts", async () => {
-      await expectTelephonyInstructions("gpt-4o-mini-tts", "Speak warmly");
+    it("only includes instructions for supported telephony models", async () => {
+      for (const testCase of [
+        { model: "tts-1", expectedInstructions: undefined },
+        { model: "gpt-4o-mini-tts", expectedInstructions: "Speak warmly" },
+      ] as const) {
+        await expectTelephonyInstructions(testCase.model, testCase.expectedInstructions);
+      }
     });
   });
 
@@ -769,31 +777,36 @@ describe("tts", () => {
       }
     });
 
-    it("skips auto-TTS in tagged mode unless a tts tag is present", async () => {
-      await withMockedAutoTtsFetch(async (fetchMock) => {
-        const payload = { text: "Hello world" };
-        const result = await maybeApplyTtsToPayload({
-          payload,
-          cfg: taggedCfg,
-          kind: "final",
-        });
-
-        expect(result).toBe(payload);
-        expect(fetchMock).not.toHaveBeenCalled();
-      });
-    });
-
-    it("runs auto-TTS in tagged mode when tags are present", async () => {
-      await withMockedAutoTtsFetch(async (fetchMock) => {
-        const result = await maybeApplyTtsToPayload({
+    it("respects tagged-mode auto-TTS gating", async () => {
+      for (const testCase of [
+        {
+          name: "plain text is skipped",
+          payload: { text: "Hello world" },
+          expectedFetchCalls: 0,
+          expectSamePayload: true,
+        },
+        {
+          name: "tagged text is synthesized",
           payload: { text: "[[tts:text]]Hello world[[/tts:text]]" },
-          cfg: taggedCfg,
-          kind: "final",
-        });
+          expectedFetchCalls: 1,
+          expectSamePayload: false,
+        },
+      ] as const) {
+        await withMockedAutoTtsFetch(async (fetchMock) => {
+          const result = await maybeApplyTtsToPayload({
+            payload: testCase.payload,
+            cfg: taggedCfg,
+            kind: "final",
+          });
 
-        expect(result.mediaUrl).toBeDefined();
-        expect(fetchMock).toHaveBeenCalledTimes(1);
-      });
+          expect(fetchMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedFetchCalls);
+          if (testCase.expectSamePayload) {
+            expect(result, testCase.name).toBe(testCase.payload);
+          } else {
+            expect(result.mediaUrl, testCase.name).toBeDefined();
+          }
+        });
+      }
     });
   });
 });

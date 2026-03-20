@@ -51,6 +51,7 @@ import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import {
   listAgentIds,
@@ -82,6 +83,7 @@ import {
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
+  parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
@@ -123,6 +125,36 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "fallbackNoticeReason",
   "claudeCliSessionId",
 ];
+
+const OVERRIDE_VALUE_MAX_LENGTH = 256;
+
+function containsControlCharacters(value: string): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0);
+    if (code === undefined) {
+      continue;
+    }
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model"): string {
+  const trimmed = raw.trim();
+  const label = kind === "provider" ? "Provider" : "Model";
+  if (!trimmed) {
+    throw new Error(`${label} override must be non-empty.`);
+  }
+  if (trimmed.length > OVERRIDE_VALUE_MAX_LENGTH) {
+    throw new Error(`${label} override exceeds ${String(OVERRIDE_VALUE_MAX_LENGTH)} characters.`);
+  }
+  if (containsControlCharacters(trimmed)) {
+    throw new Error(`${label} override contains invalid control characters.`);
+  }
+  return trimmed;
+}
 
 async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
   const persisted = await updateSessionStore(params.storePath, (store) => {
@@ -340,7 +372,7 @@ function runAgentAttempt(params: {
   resolvedVerboseLevel: VerboseLevel | undefined;
   agentDir: string;
   onAgentEvent: (evt: { stream: string; data?: Record<string, unknown> }) => void;
-  primaryProvider: string;
+  authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
@@ -388,7 +420,7 @@ function runAgentAttempt(params: {
         params.storePath
       ) {
         log.warn(
-          `CLI session expired, clearing from session store: provider=${params.providerOverride} sessionKey=${params.sessionKey}`,
+          `CLI session expired, clearing from session store: provider=${sanitizeForLog(params.providerOverride)} sessionKey=${params.sessionKey}`,
         );
 
         // Clear the expired session ID from the session store
@@ -452,7 +484,7 @@ function runAgentAttempt(params: {
   }
 
   const authProfileId =
-    params.providerOverride === params.primaryProvider
+    params.providerOverride === params.authProfileProvider
       ? params.sessionEntry?.authProfileOverride
       : undefined;
   return runEmbeddedPiAgent({
@@ -937,7 +969,19 @@ async function agentCommandInternal(
     const hasStoredOverride = Boolean(
       sessionEntry?.modelOverride || sessionEntry?.providerOverride,
     );
-    const needsModelCatalog = hasAllowlist || hasStoredOverride;
+    const explicitProviderOverride =
+      typeof opts.provider === "string"
+        ? normalizeExplicitOverrideInput(opts.provider, "provider")
+        : undefined;
+    const explicitModelOverride =
+      typeof opts.model === "string"
+        ? normalizeExplicitOverrideInput(opts.model, "model")
+        : undefined;
+    const hasExplicitRunOverride = Boolean(explicitProviderOverride || explicitModelOverride);
+    if (hasExplicitRunOverride && opts.allowModelOverride !== true) {
+      throw new Error("Model override is not authorized for this caller.");
+    }
+    const needsModelCatalog = hasAllowlist || hasStoredOverride || hasExplicitRunOverride;
     let allowedModelKeys = new Set<string>();
     let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
     let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null = null;
@@ -1000,13 +1044,38 @@ async function agentCommandInternal(
         model = normalizedStored.model;
       }
     }
+    const providerForAuthProfileValidation = provider;
+    if (hasExplicitRunOverride) {
+      const explicitRef = explicitModelOverride
+        ? explicitProviderOverride
+          ? normalizeModelRef(explicitProviderOverride, explicitModelOverride)
+          : parseModelRef(explicitModelOverride, provider)
+        : explicitProviderOverride
+          ? normalizeModelRef(explicitProviderOverride, model)
+          : null;
+      if (!explicitRef) {
+        throw new Error("Invalid model override.");
+      }
+      const explicitKey = modelKey(explicitRef.provider, explicitRef.model);
+      if (
+        !isCliProvider(explicitRef.provider, cfg) &&
+        !allowAnyModel &&
+        !allowedModelKeys.has(explicitKey)
+      ) {
+        throw new Error(
+          `Model override "${sanitizeForLog(explicitRef.provider)}/${sanitizeForLog(explicitRef.model)}" is not allowed for agent "${sessionAgentId}".`,
+        );
+      }
+      provider = explicitRef.provider;
+      model = explicitRef.model;
+    }
     if (sessionEntry) {
       const authProfileId = sessionEntry.authProfileOverride;
       if (authProfileId) {
         const entry = sessionEntry;
         const store = ensureAuthProfileStore();
         const profile = store.profiles[authProfileId];
-        if (!profile || profile.provider !== provider) {
+        if (!profile || profile.provider !== providerForAuthProfileValidation) {
           if (sessionStore && sessionKey) {
             await clearSessionAuthProfileOverride({
               sessionEntry: entry,
@@ -1068,6 +1137,7 @@ async function agentCommandInternal(
       const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
         sessionKey: sessionKey ?? sessionId,
+        storePath,
         sessionEntry,
         agentId: sessionAgentId,
         threadId: opts.threadId,
@@ -1132,7 +1202,7 @@ async function agentCommandInternal(
             skillsSnapshot,
             resolvedVerboseLevel,
             agentDir,
-            primaryProvider: provider,
+            authProfileProvider: providerForAuthProfileValidation,
             sessionStore,
             storePath,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
@@ -1230,6 +1300,8 @@ export async function agentCommand(
       // Ingress callers must opt into owner semantics explicitly via
       // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
       senderIsOwner: opts.senderIsOwner ?? true,
+      // Local/CLI callers are trusted by default for per-run model overrides.
+      allowModelOverride: opts.allowModelOverride ?? true,
     },
     runtime,
     deps,
@@ -1246,10 +1318,14 @@ export async function agentCommandFromIngress(
     // This keeps network-facing callers from silently picking up the local trusted default.
     throw new Error("senderIsOwner must be explicitly set for ingress agent runs.");
   }
+  if (typeof opts.allowModelOverride !== "boolean") {
+    throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
+  }
   return await agentCommandInternal(
     {
       ...opts,
       senderIsOwner: opts.senderIsOwner,
+      allowModelOverride: opts.allowModelOverride,
     },
     runtime,
     deps,

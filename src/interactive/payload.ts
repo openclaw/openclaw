@@ -160,6 +160,30 @@ export function hasReplyContent(params: {
   );
 }
 
+export function hasReplyPayloadContent(
+  payload: {
+    text?: string | null;
+    mediaUrl?: string | null;
+    mediaUrls?: ReadonlyArray<string | null | undefined>;
+    interactive?: unknown;
+    channelData?: unknown;
+  },
+  options?: {
+    trimText?: boolean;
+    hasChannelData?: boolean;
+    extraContent?: boolean;
+  },
+): boolean {
+  return hasReplyContent({
+    text: options?.trimText ? payload.text?.trim() : payload.text,
+    mediaUrl: payload.mediaUrl,
+    mediaUrls: payload.mediaUrls,
+    interactive: payload.interactive,
+    hasChannelData: options?.hasChannelData ?? hasReplyChannelData(payload.channelData),
+    extraContent: options?.extraContent,
+  });
+}
+
 export function resolveInteractiveTextFallback(params: {
   text?: string;
   interactive?: InteractiveReply;
