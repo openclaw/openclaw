@@ -3,7 +3,6 @@ import { discordOutbound } from "../../../../extensions/discord/src/outbound-ada
 import { whatsappOutbound } from "../../../../extensions/whatsapp/src/outbound-adapter.js";
 import { zaloPlugin } from "../../../../extensions/zalo/src/channel.js";
 import { sendMessageZalo } from "../../../../extensions/zalo/src/send.js";
-import "./../../../../extensions/zalouser/src/accounts.test-mocks.js";
 import { zalouserPlugin } from "../../../../extensions/zalouser/src/channel.js";
 import { setZalouserRuntime } from "../../../../extensions/zalouser/src/runtime.js";
 import { sendMessageZalouser } from "../../../../extensions/zalouser/src/send.js";
@@ -17,6 +16,47 @@ import {
 
 vi.mock("../../../../extensions/zalo/src/send.js", () => ({
   sendMessageZalo: vi.fn().mockResolvedValue({ ok: true, messageId: "zl-1" }),
+}));
+
+// This suite only validates payload adaptation. Keep zalouser's runtime-only
+// ZCA import graph mocked so local contract runs don't depend on native socket
+// deps being resolved through the extension runtime seam.
+vi.mock("../../../../extensions/zalouser/src/accounts.js", () => ({
+  listZalouserAccountIds: vi.fn(() => ["default"]),
+  resolveDefaultZalouserAccountId: vi.fn(() => "default"),
+  resolveZalouserAccountSync: vi.fn(() => ({
+    accountId: "default",
+    profile: "default",
+    name: "test",
+    enabled: true,
+    authenticated: true,
+    config: {},
+  })),
+  getZcaUserInfo: vi.fn(async () => null),
+  checkZcaAuthenticated: vi.fn(async () => false),
+}));
+
+vi.mock("../../../../extensions/zalouser/src/zalo-js.js", () => ({
+  checkZaloAuthenticated: vi.fn(async () => false),
+  getZaloUserInfo: vi.fn(async () => null),
+  listZaloFriendsMatching: vi.fn(async () => []),
+  listZaloGroupMembers: vi.fn(async () => []),
+  listZaloGroupsMatching: vi.fn(async () => []),
+  logoutZaloProfile: vi.fn(async () => {}),
+  resolveZaloAllowFromEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
+    entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
+  ),
+  resolveZaloGroupsByEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
+    entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
+  ),
+  startZaloQrLogin: vi.fn(async () => ({
+    message: "qr pending",
+    qrDataUrl: undefined,
+  })),
+  waitForZaloQrLogin: vi.fn(async () => ({
+    connected: false,
+    message: "login pending",
+  })),
 }));
 
 vi.mock("../../../../extensions/zalouser/src/send.js", () => ({
