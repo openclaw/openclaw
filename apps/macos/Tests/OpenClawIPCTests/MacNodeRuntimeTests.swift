@@ -21,6 +21,32 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @Test func `handle invoke rejects blocked system run env override before execution`() async throws {
+        let runtime = MacNodeRuntime()
+        let params = OpenClawSystemRunParams(
+            command: ["/bin/sh", "-lc", "echo ok"],
+            env: ["CLASSPATH": "/tmp/evil-classpath"])
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(id: "req-2c", command: OpenClawSystemCommand.run.rawValue, paramsJSON: json))
+        #expect(response.ok == false)
+        #expect(response.error?.message.contains("SYSTEM_RUN_DENIED: environment override rejected") == true)
+        #expect(response.error?.message.contains("CLASSPATH") == true)
+    }
+
+    @Test func `handle invoke rejects invalid system run env override key before execution`() async throws {
+        let runtime = MacNodeRuntime()
+        let params = OpenClawSystemRunParams(
+            command: ["/bin/sh", "-lc", "echo ok"],
+            env: ["BAD-KEY": "x"])
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(id: "req-2d", command: OpenClawSystemCommand.run.rawValue, paramsJSON: json))
+        #expect(response.ok == false)
+        #expect(response.error?.message.contains("SYSTEM_RUN_DENIED: environment override rejected") == true)
+        #expect(response.error?.message.contains("BAD-KEY") == true)
+    }
+
     @Test func `handle invoke rejects empty system which`() async throws {
         let runtime = MacNodeRuntime()
         let params = OpenClawSystemWhichParams(bins: [])

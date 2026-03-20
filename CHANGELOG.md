@@ -153,6 +153,7 @@ Docs: https://docs.openclaw.ai
 - Hardening: refresh stale device pairing requests and pending metadata (#50695) Thanks @smaeljaish771 and @joshavant.
 - Gateway: harden OpenResponses file-context escaping (#50782) Thanks @YLChen-007 and @joshavant.
 - LINE: harden Express webhook parsing to verified raw body (#51202) Thanks @gladiator9797 and @joshavant.
+- Exec: harden host env override handling across gateway and node (#51207) Thanks @gladiator9797 and @joshavant.
 - xAI/models: rename the bundled Grok 4.20 catalog entries to the GA IDs and normalize saved deprecated beta IDs at runtime so existing configs and sessions keep resolving. (#50772) thanks @Jaaneek
 
 ### Fixes

@@ -465,6 +465,23 @@ actor MacNodeRuntime {
             ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
             : self.mainSessionKey
         let runId = UUID().uuidString
+        let envOverrideDiagnostics = HostEnvSanitizer.inspectOverrides(
+            overrides: params.env,
+            blockPathOverrides: true)
+        if !envOverrideDiagnostics.blockedKeys.isEmpty || !envOverrideDiagnostics.invalidKeys.isEmpty {
+            var details: [String] = []
+            if !envOverrideDiagnostics.blockedKeys.isEmpty {
+                details.append("blocked override keys: \(envOverrideDiagnostics.blockedKeys.joined(separator: ", "))")
+            }
+            if !envOverrideDiagnostics.invalidKeys.isEmpty {
+                details.append(
+                    "invalid non-portable override keys: \(envOverrideDiagnostics.invalidKeys.joined(separator: ", "))")
+            }
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "SYSTEM_RUN_DENIED: environment override rejected (\(details.joined(separator: "; ")))")
+        }
         let evaluation = await ExecApprovalEvaluator.evaluate(
             command: command,
             rawCommand: params.rawCommand,

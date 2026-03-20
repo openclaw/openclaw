@@ -130,6 +130,22 @@ describe("exec PATH login shell merge", () => {
     expect(shellPathMock).not.toHaveBeenCalled();
   });
 
+  it("fails closed when a blocked runtime override key is requested", async () => {
+    if (isWin) {
+      return;
+    }
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call-blocked-runtime-env", {
+        command: "echo ok",
+        env: { CLASSPATH: "/tmp/evil-classpath" },
+      }),
+    ).rejects.toThrow(
+      /Security Violation: Environment variable 'CLASSPATH' is forbidden during host execution\./,
+    );
+  });
+
   it("does not apply login-shell PATH when probe rejects unregistered absolute SHELL", async () => {
     if (isWin) {
       return;
