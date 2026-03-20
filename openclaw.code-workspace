@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"typescript.reportStyleChecksAsWarnings": false,
+		"typescript.tsdk": "node_modules/typescript/lib",
+		"typescript.experimental.useTsgo": true
+	}
+}
