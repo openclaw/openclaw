@@ -164,6 +164,35 @@ This is a practical baseline config with DM pairing, room allowlist, and E2EE en
 
 ## E2EE setup
 
+## Bot to bot rooms
+
+By default, Matrix messages from other configured OpenClaw Matrix accounts are ignored.
+
+Use `allowBots` when you intentionally want inter-agent Matrix traffic:
+
+```json5
+{
+  channels: {
+    matrix: {
+      allowBots: "mentions", // true | "mentions"
+      groups: {
+        "!roomid:example.org": {
+          requireMention: true,
+        },
+      },
+    },
+  },
+}
+```
+
+- `allowBots: true` accepts messages from other configured Matrix bot accounts in allowed rooms and DMs.
+- `allowBots: "mentions"` accepts those messages only when they visibly mention this bot in rooms. DMs are still allowed.
+- `groups.<room>.allowBots` overrides the account-level setting for one room.
+- OpenClaw still ignores messages from the same Matrix user ID to avoid self-reply loops.
+- Matrix does not expose a native bot flag here; OpenClaw treats "bot-authored" as "sent by another configured Matrix account on this OpenClaw gateway".
+
+Use strict room allowlists and mention requirements when enabling bot-to-bot traffic in shared rooms.
+
 Enable encryption:
 
 ```json5
@@ -580,6 +609,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `name`: optional label for the account.
 - `defaultAccount`: preferred account ID when multiple Matrix accounts are configured.
 - `homeserver`: homeserver URL, for example `https://matrix.example.org`.
+- `allowPrivateNetwork`: allow this Matrix account to connect to private/internal homeservers. Enable this when the homeserver resolves to `localhost`, a LAN/Tailscale IP, or an internal host such as `matrix-synapse`.
 - `userId`: full Matrix user ID, for example `@bot:example.org`.
 - `accessToken`: access token for token-based auth.
 - `password`: password for password-based login.
