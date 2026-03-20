@@ -1030,12 +1030,12 @@
                 "pages": [
                   "tools/plugin",
                   "plugins/building-plugins",
-                  "plugins/sdk-migration",
-                  "plugins/architecture",
                   "plugins/community",
                   "plugins/bundles",
                   "plugins/manifest",
                   "plugins/agent-tools",
+                  "plugins/sdk-migration",
+                  "plugins/architecture",
                   "tools/capability-cookbook"
                 ]
               },
@@ -1071,11 +1071,25 @@
                   "tools/exec-approvals",
                   "tools/elevated",
                   "tools/apply-patch",
-                  "tools/web",
-                  "tools/brave-search",
-                  "tools/firecrawl",
-                  "tools/tavily",
-                  "tools/perplexity-search",
+                  {
+                    "group": "Browser",
+                    "pages": [
+                      "tools/browser",
+                      "tools/browser-login",
+                      "tools/browser-linux-troubleshooting",
+                      "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
+                    ]
+                  },
+                  {
+                    "group": "Web and search",
+                    "pages": [
+                      "tools/web",
+                      "tools/brave-search",
+                      "tools/firecrawl",
+                      "tools/tavily",
+                      "tools/perplexity-search"
+                    ]
+                  },
                   "tools/pdf",
                   "tools/diffs",
                   "tools/llm-task",
@@ -1084,15 +1098,6 @@
                   "tools/thinking",
                   "tools/loop-detection",
                   "tools/btw"
-                ]
-              },
-              {
-                "group": "Browser",
-                "pages": [
-                  "tools/browser",
-                  "tools/browser-login",
-                  "tools/browser-linux-troubleshooting",
-                  "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
                 ]
               },
               {

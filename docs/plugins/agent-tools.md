@@ -1,16 +1,20 @@
 ---
-summary: "Write agent tools in a plugin (schemas, optional tools, allowlists)"
+summary: "Register custom agent tools in a plugin with schemas, optional opt-in, and allowlists"
 read_when:
   - You want to add a new agent tool in a plugin
   - You need to make a tool opt-in via allowlists
-title: "Plugin Agent Tools"
+title: "Registering Tools in Plugins"
+sidebarTitle: "Registering Tools"
 ---
 
-# Plugin agent tools
+# Registering Tools in Plugins
 
-OpenClaw plugins can register **agent tools** (JSON‑schema functions) that are exposed
-to the LLM during agent runs. Tools can be **required** (always available) or
-**optional** (opt‑in).
+Plugins can register **agent tools** — typed functions that the LLM can call
+during agent runs. Tools can be **required** (always available) or
+**optional** (users opt in via allowlists).
+
+See [Building Plugins](/plugins/building-plugins) for the full plugin creation
+guide. This page focuses on the tool registration API.
 
 Agent tools are configured under `tools` in the main config, or per‑agent under
 `agents.list[].tools`. The allowlist/denylist policy controls which tools the agent
