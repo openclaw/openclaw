@@ -365,11 +365,13 @@ const defaultSingletonBatchLaneCount =
       ? 0
       : isCI
         ? Math.ceil(unitSingletonBatchFiles.length / 6)
-        : highMemLocalHost
-          ? Math.ceil(unitSingletonBatchFiles.length / 8)
-          : lowMemLocalHost
-            ? Math.ceil(unitSingletonBatchFiles.length / 12)
-            : Math.ceil(unitSingletonBatchFiles.length / 10);
+        : testProfile === "low" && highMemLocalHost
+          ? Math.ceil(unitSingletonBatchFiles.length / 8) + 1
+          : highMemLocalHost
+            ? Math.ceil(unitSingletonBatchFiles.length / 8)
+            : lowMemLocalHost
+              ? Math.ceil(unitSingletonBatchFiles.length / 12)
+              : Math.ceil(unitSingletonBatchFiles.length / 10);
 const singletonBatchLaneCount =
   unitSingletonBatchFiles.length === 0
     ? 0
