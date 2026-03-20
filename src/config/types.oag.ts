@@ -53,6 +53,26 @@ export type OagConfig = {
     /** Which model to use for OAG diagnosis: "lightweight" (built-in) or "embedded" (user's configured LLM). */
     model?: "lightweight" | "embedded";
   };
+  /**
+   * Delivery watchdog configuration for monitoring message delivery failures.
+   * Detects issues like "message too long" and emits anomaly events.
+   */
+  watchdog?: {
+    /** Enable or disable the delivery watchdog (default: true). */
+    enabled?: boolean;
+    /**
+     * Channel-specific text limits for "message too long" detection.
+     * Key: channel id (e.g., "telegram", "discord").
+     * Value: maximum characters allowed for that channel.
+     * If not specified, uses platform defaults.
+     */
+    channelTextLimits?: Record<string, number>;
+    /**
+     * Additional error patterns to treat as delivery failures.
+     * Patterns are matched against the error message string.
+     */
+    additionalErrorPatterns?: string[];
+  };
   /** Per-channel OAG overrides keyed by channel id (e.g. "telegram", "discord"). */
   channels?: Record<string, Partial<OagConfig>>;
 };
