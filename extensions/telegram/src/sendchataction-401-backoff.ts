@@ -124,6 +124,9 @@ export function createTelegramSendChatActionHandler({
     } catch (error) {
       if (is401Error(error)) {
         consecutive401Failures++;
+        // 401 means the request reached Telegram, so the network is healthy.
+        consecutiveNetworkFailures = 0;
+        networkFailureSignaled = false;
 
         if (consecutive401Failures >= maxConsecutive401) {
           suspended = true;

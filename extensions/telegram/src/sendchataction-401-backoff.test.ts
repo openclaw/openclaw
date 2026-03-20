@@ -208,4 +208,32 @@ describe("createTelegramSendChatActionHandler", () => {
     await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
     expect(onRecoverableNetworkFailure).toHaveBeenCalledTimes(2);
   });
+
+  it("resets the network failure streak when a 401 proves the network is healthy", async () => {
+    const errors = [makeNetworkError(), make401Error(), makeNetworkError()];
+    let callCount = 0;
+    const fn = vi.fn().mockImplementation(async () => {
+      const err = errors[callCount++];
+      if (err) throw err;
+      return true;
+    });
+    const logger = vi.fn();
+    const onRecoverableNetworkFailure = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutiveNetworkFailures: 2,
+      onRecoverableNetworkFailure,
+    });
+
+    // 1st: network error (consecutive = 1)
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+    // 2nd: 401 — request reached Telegram, so network streak resets to 0
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("401");
+    // 3rd: network error again (consecutive = 1, not 2)
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+
+    // Callback should NOT have fired — the 401 broke the streak
+    expect(onRecoverableNetworkFailure).not.toHaveBeenCalled();
+  });
 });
