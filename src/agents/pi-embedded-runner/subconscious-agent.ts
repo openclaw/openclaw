@@ -18,7 +18,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 
 export interface SubconsciousAgent {
-  complete: (prompt: string) => Promise<{ text: string }>;
+  complete: (prompt: string, systemPrompt?: string) => Promise<{ text: string }>;
   autoBootstrapHistory?: boolean;
 }
 
@@ -117,7 +117,7 @@ export function createSubconsciousAgent(opts: SubconsciousAgentOptions): Subcons
   const { model, authStorage, modelRegistry, debug = false } = opts;
 
   return {
-    complete: async (prompt: string) => {
+    complete: async (prompt: string, systemPrompt?: string) => {
       let fullText = "";
       try {
         const key = (await authStorage.getApiKey(model.provider)) as string;
@@ -141,10 +141,16 @@ export function createSubconsciousAgent(opts: SubconsciousAgentOptions): Subcons
           );
         }
 
+        const messages: Array<{ role: string; content: string }> = [];
+        if (systemPrompt?.trim()) {
+          messages.push({ role: "system", content: systemPrompt.trim() });
+        }
+        messages.push({ role: "user", content: prompt });
+
         let stream = streamSimple(
           model,
           {
-            messages: [{ role: "user", content: prompt }],
+            messages,
           } as Context,
           {
             apiKey: key,
@@ -185,7 +191,7 @@ export function createSubconsciousAgent(opts: SubconsciousAgentOptions): Subcons
             stream = streamSimple(
               failoverModel,
               {
-                messages: [{ role: "user", content: prompt }],
+                messages,
               } as Context,
               {
                 apiKey: failoverKey,

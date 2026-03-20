@@ -3,7 +3,7 @@ import { getRelativeTimeDescription } from "../../utils/time-format.js";
 import { GraphService, type MemoryResult } from "./GraphService.js";
 
 export interface LLMClient {
-  complete(prompt: string): Promise<{ text: string | null }>;
+  complete(prompt: string, systemPrompt?: string): Promise<{ text: string | null }>;
 }
 
 export interface RecentMessage {
@@ -59,6 +59,8 @@ export class SubconsciousService {
     // Strip "Conversation info (untrusted metadata)" JSON blocks if present
     const cleanedPrompt = currentPrompt
       .replace(/Conversation info \(untrusted metadata\):\s*```json[\s\S]*?```/g, "")
+      .replace(/Sender \(untrusted metadata\):\s*```json[\s\S]*?```/g, "")
+      .replace(/^🎙️?\s*(?:\(De [^)]+\):)?\s*/m, "")
       .trim();
 
     if (!agent) {
@@ -72,51 +74,68 @@ export class SubconsciousService {
       ];
     }
 
-    const analysisWindow = recentMessages.slice(-20);
-    const historyText =
-      analysisWindow.length > 0
-        ? analysisWindow
-            .map((m) => {
-              let mText = m.text || m.content || "";
-              if (Array.isArray(mText)) {
-                mText = mText.map((p) => (typeof p === "string" ? p : p.text || "")).join(" ");
-              }
-              return `${m.role}: ${String(mText)}`;
-            })
-            .join("\n")
-        : "(No previous context)";
+    const analysisWindow = recentMessages.slice(-8);
 
-    const prompt = `You are the "Subconscious Observer" of an artificial mind.
-Your task: generate 3 short keyword phrases to retrieve relevant past memories from a semantic search index.
-${
-  quickContext?.trim()
-    ? `
-ENTITY REFERENCE (read this ONLY to resolve who people are — never use this as a source for queries):
-${quickContext.trim()}
-`
-    : ""
-}
+    // If no history, skip LLM and use prompt keywords directly
+    if (analysisWindow.length === 0) {
+      this.log(`  👁️ [OBSERVER] No history — using prompt keywords directly.`);
+      const words = cleanedPrompt.split(/\s+/).filter((w) => w.length > 4);
+      return words.length > 0 ? [words.slice(0, 5).join(" ")] : [cleanedPrompt.substring(0, 80)];
+    }
+
+    const historyLines = analysisWindow
+      .map((m) => {
+        let mText = m.text || m.content || "";
+        if (Array.isArray(mText)) {
+          mText = mText.map((p) => (typeof p === "string" ? p : p.text || "")).join(" ");
+        }
+        const raw = String(mText);
+
+        // Extract sender name from Telegram metadata block or MindFace prefix
+        const metaSenderMatch = raw.match(/"name"\s*:\s*"([^"]+)"/);
+        const mindfaceMatch = raw.match(/^🎙️?\s*\(De ([^)]+)\)/);
+        const displayRole =
+          m.role === "assistant" ? "Mind" : (metaSenderMatch?.[1] ?? mindfaceMatch?.[1] ?? m.role);
+
+        // Strip Telegram/MindFace metadata blocks and MindFace prefix
+        const cleaned = raw
+          .replace(/Conversation info \(untrusted metadata\):\s*```json[\s\S]*?```/g, "")
+          .replace(/Sender \(untrusted metadata\):\s*```json[\s\S]*?```/g, "")
+          .replace(/^🎙️?\s*(?:\(De [^)]+\):)?\s*/m, "")
+          .trim();
+        return cleaned ? `${displayRole}: ${cleaned}` : null;
+      })
+      .filter(Boolean) as string[];
+
+    // If everything cleaned away, or only assistant messages (no user input), skip LLM
+    const hasUserTurn =
+      analysisWindow.some((m) => m.role === "user") ||
+      historyLines.some((l) => !l.startsWith("Mind:"));
+    if (historyLines.length === 0 || !hasUserTurn) {
+      this.log(`  👁️ [OBSERVER] History empty or assistant-only — using prompt keywords directly.`);
+      const words = cleanedPrompt.split(/\s+/).filter((w) => w.length > 4);
+      return words.length > 0 ? [words.slice(0, 5).join(" ")] : [cleanedPrompt.substring(0, 80)];
+    }
+
+    const historyText = historyLines.join("\n");
+
+    const userPrompt = `3 short English keyword phrases (2-5 words each) to search past memories. One per line, nothing else.
+
 CONVERSATION:
 ${historyText}
 
 LATEST MESSAGE: "${cleanedPrompt}"
 
-STEP 1 — Entity resolution: identify any pronouns or ambiguous references in the conversation above and resolve them using ENTITY REFERENCE if needed.
-STEP 2 — Generate exactly 3 keyword phrases based ONLY on what is discussed in CONVERSATION and LATEST MESSAGE. Do not generate queries about anything not mentioned there.
-
-RULES for the keyword phrases:
-- 2 to 5 words maximum. No full sentences, no questions.
-- Always in English, regardless of the conversation language.
-- Use specific names, places, events from the conversation.
-- If the latest message is a short reaction ("ok", "yes", "haha"…), use the recent conversation substance instead.
-- Never use abstract phrases like "user interests", "recent topics", or anything from ENTITY REFERENCE that is not also in the conversation.
-
-Respond with exactly 3 keyword phrases, one per line. No numbers, bullets, explanations, or step labels.`;
+Use ONLY names, events, topics from the conversation. If the latest message is a short reaction, use the conversation substance instead. No bullets, no numbers, no explanations.`;
 
     this.log(`  👁️ [OBSERVER] Performing entity resolution and generating search queries...`);
 
+    const glossarySystem = quickContext?.trim()
+      ? `You generate memory search phrases. ONLY output 3 short keyword phrases, one per line. NEVER list, repeat or quote the name reference below.\nName reference: ${quickContext.trim().split("\n").join(" | ")}`
+      : undefined;
+
     try {
-      const response = await agent.complete(prompt);
+      const response = await agent.complete(userPrompt, glossarySystem);
       let rawOutput = (response?.text || "").trim();
 
       rawOutput = this.truncateRepetitive(rawOutput);
@@ -139,6 +158,17 @@ Respond with exactly 3 keyword phrases, one per line. No numbers, bullets, expla
           .replace(/["']/g, "")
           .trim();
         if (clean.length < 3) {
+          continue;
+        }
+        // Discard lines that look like glossary echoes
+        if (
+          // "Name = role" entry format
+          (clean.includes(" = ") && clean.split(" = ").length === 2) ||
+          // Single-line dump with multiple "|" separators
+          (clean.split(" | ").length >= 3 && clean.includes(" = ")) ||
+          // Bare AI name with no other content
+          clean === "Mind Tercero Roldán"
+        ) {
           continue;
         }
 
@@ -302,12 +332,16 @@ Respond with exactly 3 keyword phrases, one per line. No numbers, bullets, expla
 
     for (const { query, facts } of parallelResults) {
       this.log(`    ✅ [GRAPH] Query "${query}": Found ${facts.length} facts.`);
-      const results = [...facts];
-      for (const res of results) {
+      let addedForQuery = 0;
+      for (const res of facts) {
+        if (addedForQuery >= 3) {
+          break;
+        }
         const id = res.message?.uuid || res.uuid || res.content;
         if (id && !seenUris.has(id)) {
           allResults.push(res);
           seenUris.add(id);
+          addedForQuery++;
         }
       }
     }

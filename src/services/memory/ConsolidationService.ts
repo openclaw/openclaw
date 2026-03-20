@@ -83,19 +83,39 @@ export class ConsolidationService {
    */
   async summarizeConversationChunk(
     messages: Array<{ role: string; text: string }>,
-    agent: { complete: (prompt: string) => Promise<{ text?: string | null }> } | undefined,
-    quickContext?: string,
+    agent:
+      | { complete: (prompt: string, systemPrompt?: string) => Promise<{ text?: string | null }> }
+      | undefined,
+    glossaryContext?: string,
   ): Promise<string> {
-    const transcript = messages.map((m) => `[${m.role}]: ${m.text}`).join("\n\n");
+    // Clean Telegram/MindFace metadata from messages and resolve display names
+    const cleanedMessages = messages
+      .map((m) => {
+        let text = m.text;
+        // Extract sender name from Telegram metadata
+        const metaName = text.match(/"name"\s*:\s*"([^"]+)"/)?.[1];
+        const mfName = text.match(/^🎙️?\s*\(De ([^)]+)\)/)?.[1];
+        const displayRole = m.role === "assistant" ? "Mind" : (metaName ?? mfName ?? m.role);
+        text = text
+          .replace(/Conversation info \(untrusted metadata\):\s*```json[\s\S]*?```/g, "")
+          .replace(/Sender \(untrusted metadata\):\s*```json[\s\S]*?```/g, "")
+          .replace(/^🎙️?\s*(?:\(De [^)]+\):)?\s*/m, "")
+          .trim();
+        return { role: displayRole, text };
+      })
+      .filter((m) => m.text.length > 0);
+
+    const transcript = cleanedMessages.map((m) => `[${m.role}]: ${m.text}`).join("\n\n");
 
     if (!agent) {
       return transcript;
     }
 
-    const prompt = `You are a memory extraction assistant. Extract factual statements from a conversation chunk.
+    const systemPrompt = glossaryContext?.trim()
+      ? `You extract memory facts. Use this name reference ONLY to resolve pronouns — never output it: ${glossaryContext.trim().split("\n").join(" | ")}`
+      : undefined;
 
-BACKGROUND (use only to resolve who people are — do NOT extract facts from this):
-${(quickContext ?? "").slice(0, 1500)}
+    const prompt = `You are a memory extraction assistant. Extract factual statements from a conversation chunk.
 
 CONVERSATION:
 ${transcript}
@@ -104,7 +124,6 @@ TASK:
 The LAST message in the conversation is the one being stored as a memory episode.
 Extract 3-6 concise factual statements that capture what is revealed or decided in that last message.
 Use the earlier conversation only for context to understand the last message.
-Use BACKGROUND only to resolve names and pronouns.
 
 Each fact should:
 - Be a complete standalone sentence (subject + verb + object)
@@ -115,7 +134,7 @@ Each fact should:
 Output one fact per line. No bullets, numbers, or explanations.`;
 
     try {
-      const response = await agent.complete(prompt);
+      const response = await agent.complete(prompt, systemPrompt);
       const text = (response?.text ?? "").trim();
       return text.length > 10 ? text : transcript;
     } catch {
@@ -566,8 +585,90 @@ ${newStory}
   }
 
   /**
-   * Generates a structured user profile (QUICK.md, ~1000-2000 chars) from SOUL.md, USER.md, and STORY.md.
-   * Written to quickPath atomically. Fire-and-forget safe to call without awaiting.
+   * Generates a compact name glossary (GLOSSARY.md) from IDENTITY.md, USER.md, and STORY.md.
+   * Format: "Name = brief role or relationship", one per line, 6-12 entries.
+   * Used by the Subconscious Observer as a system message for pronoun resolution during memory search.
+   * Written to glossaryPath atomically. Fire-and-forget safe to call without awaiting.
+   */
+  async generateGlossary(
+    storyPath: string,
+    glossaryPath: string,
+    workspaceDir: string,
+    agent: { complete: (prompt: string) => Promise<{ text?: string | null }> },
+  ): Promise<void> {
+    try {
+      // Skip regeneration if GLOSSARY.md is already newer than STORY.md
+      const [storyMtime, glossaryMtime] = await Promise.all([
+        fs
+          .stat(storyPath)
+          .then((s) => s.mtimeMs)
+          .catch(() => 0),
+        fs
+          .stat(glossaryPath)
+          .then((s) => s.mtimeMs)
+          .catch(() => 0),
+      ]);
+      if (glossaryMtime > 0 && glossaryMtime >= storyMtime) {
+        this.log(`⚡ [MIND] GLOSSARY.md is up to date, skipping regeneration`);
+        return;
+      }
+
+      const [identity, user, story] = await Promise.all([
+        fs.readFile(path.join(workspaceDir, "IDENTITY.md"), "utf-8").catch(() => ""),
+        fs.readFile(path.join(workspaceDir, "USER.md"), "utf-8").catch(() => ""),
+        fs.readFile(storyPath, "utf-8").catch(() => ""),
+      ]);
+
+      if (!identity && !user && !story) {
+        return;
+      }
+
+      const recentStory = extractRecentStorySections(story, 2);
+
+      const prompt = `Extract a compact name glossary from these identity files. Used by an AI to resolve names/pronouns during memory search.
+
+Format: one entry per line:
+Name = brief role or relationship
+
+Rules:
+- Max 12 entries
+- Include people mentioned frequently or central to the user's life, key places, key organizations
+- Skip distant relatives mentioned only once
+- Include places and organizations that appear as recurring topics (cities, companies, projects)
+- No extra text, do not include the AI assistant itself
+
+${identity ? `=== IDENTITY.md ===\n${identity}\n\n` : ""}${user ? `=== USER.md ===\n${user}\n\n` : ""}${recentStory ? `=== STORY.md (recent) ===\n${recentStory}\n\n` : ""}`;
+
+      const response = await agent.complete(prompt);
+      const rawText = response?.text;
+      const text = typeof rawText === "string" ? rawText.trim() : "";
+      if (!text || text.length < 20) {
+        this.log("⚠️ [MIND] GLOSSARY.md generation returned empty/short response, skipping.");
+        return;
+      }
+
+      const lockOptions: FileLockOptions = {
+        retries: { retries: 5, factor: 2, minTimeout: 200, maxTimeout: 5_000, randomize: true },
+        stale: 30_000,
+      };
+
+      await withFileLock(glossaryPath, lockOptions, async () => {
+        const tmpPath = `${glossaryPath}.tmp`;
+        await fs.writeFile(tmpPath, text, "utf-8");
+        await fs.rename(tmpPath, glossaryPath);
+      });
+
+      this.log(`⚡ [MIND] GLOSSARY.md updated (${text.length} chars) at ${glossaryPath}`);
+    } catch (e: unknown) {
+      process.stderr.write(
+        `⚠️ [MIND] GLOSSARY.md generation failed: ${e instanceof Error ? e.message : String(e)}\n`,
+      );
+    }
+  }
+
+  /**
+   * @deprecated Use generateGlossary instead.
+   * Kept for backwards compatibility — delegates to generateGlossary.
    */
   async generateQuickProfile(
     storyPath: string,
@@ -575,73 +676,8 @@ ${newStory}
     workspaceDir: string,
     agent: { complete: (prompt: string) => Promise<{ text?: string | null }> },
   ): Promise<void> {
-    try {
-      // Skip regeneration if QUICK.md is already newer than STORY.md
-      const [storyMtime, quickMtime] = await Promise.all([
-        fs
-          .stat(storyPath)
-          .then((s) => s.mtimeMs)
-          .catch(() => 0),
-        fs
-          .stat(quickPath)
-          .then((s) => s.mtimeMs)
-          .catch(() => 0),
-      ]);
-      if (quickMtime > 0 && quickMtime >= storyMtime) {
-        this.log(`⚡ [MIND] QUICK.md is up to date, skipping regeneration`);
-        return;
-      }
-
-      const [soul, user, story] = await Promise.all([
-        fs.readFile(path.join(workspaceDir, "SOUL.md"), "utf-8").catch(() => ""),
-        fs.readFile(path.join(workspaceDir, "USER.md"), "utf-8").catch(() => ""),
-        fs.readFile(storyPath, "utf-8").catch(() => ""),
-      ]);
-
-      if (!soul && !user && !story) {
-        return;
-      }
-
-      // Extract recent story sections (last 2 days) using date headers; fall back to last 3 sections.
-      const recentStory = extractRecentStorySections(story, 2);
-
-      const prompt = `You are generating QUICK.md, a compact user profile used as fast context for AI memory retrieval.
-
-Based on the materials below, write 3 short structured paragraphs (total 1000-2000 characters):
-
-Paragraph 1 — Identity: Who this person is; personality, core traits, values, tone.
-Paragraph 2 — Life & Relationships: Key relationships, life context, background, emotional landscape.
-Paragraph 3 — Current Focus: Primary projects, interests, goals, and recent activity (derived from the recent story entries below).
-
-Be factual, specific, and dense. No headers, no bullet lists. Pure prose, three paragraphs separated by blank lines.
-
-${soul ? `=== SOUL.md ===\n${soul}\n\n` : ""}${user ? `=== USER.md ===\n${user}\n\n` : ""}${recentStory ? `=== STORY.md (recent entries) ===\n${recentStory}\n\n` : ""}Write the profile (3 paragraphs, 1000-2000 characters total):`;
-
-      const response = await agent.complete(prompt);
-      const rawText = response?.text;
-      const text = typeof rawText === "string" ? rawText.trim() : "";
-      if (!text || text.length < 100) {
-        this.log("⚠️ [MIND] QUICK.md generation returned empty/short response, skipping.");
-        return;
-      }
-
-      const quickLockOptions: FileLockOptions = {
-        retries: { retries: 5, factor: 2, minTimeout: 200, maxTimeout: 5_000, randomize: true },
-        stale: 30_000,
-      };
-
-      await withFileLock(quickPath, quickLockOptions, async () => {
-        const tmpPath = `${quickPath}.tmp`;
-        await fs.writeFile(tmpPath, text, "utf-8");
-        await fs.rename(tmpPath, quickPath);
-      });
-
-      this.log(`⚡ [MIND] QUICK.md updated (${text.length} chars) at ${quickPath}`);
-    } catch (e: unknown) {
-      process.stderr.write(
-        `⚠️ [MIND] QUICK.md generation failed: ${e instanceof Error ? e.message : String(e)}\n`,
-      );
-    }
+    const glossaryPath = quickPath.replace(/QUICK\.md$/, "GLOSSARY.md");
+    return this.generateGlossary(storyPath, glossaryPath, workspaceDir, agent);
   }
 
   /**

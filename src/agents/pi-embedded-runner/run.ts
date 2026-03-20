@@ -831,11 +831,45 @@ export async function runEmbeddedPiAgent(
         try {
           const { isSubagentSessionKey } = await import("../../routing/session-key.js");
           const isSubagent = params.sessionKey ? isSubagentSessionKey(params.sessionKey) : false;
+          // Read recent messages from session file for observer context
+          let recentMessagesForHook: Array<{ role: string; text: string }> = [];
+          if (params.sessionFile) {
+            try {
+              const { readSessionMessages: readMsgs } =
+                await import("../../gateway/session-utils.fs.js");
+              const rawMsgs = readMsgs("", undefined, params.sessionFile) as Array<{
+                role?: string;
+                content?: unknown;
+                text?: string;
+              }>;
+              recentMessagesForHook = rawMsgs
+                .filter((m) => m.role === "user" || m.role === "assistant")
+                .slice(-8)
+                .map((m) => {
+                  let text = "";
+                  if (typeof m.content === "string") {
+                    text = m.content;
+                  } else if (Array.isArray(m.content)) {
+                    text = (m.content as Array<{ type?: string; text?: string }>)
+                      .filter((p) => p.type === "text")
+                      .map((p) => p.text ?? "")
+                      .join(" ");
+                  } else if (typeof m.text === "string") {
+                    text = m.text;
+                  }
+                  return { role: m.role ?? "user", text };
+                });
+            } catch {
+              /* ignore */
+            }
+          }
+
           const messageProcessResult = await hookRunner.runBeforeMessageProcess(
             {
               prompt: params.prompt,
               sessionKey: params.sessionKey,
               sessionFile: params.sessionFile,
+              recentMessages: recentMessagesForHook,
               isSubagent,
               timestamp: new Date().toISOString(),
             },

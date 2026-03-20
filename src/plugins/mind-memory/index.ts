@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { access, copyFile, mkdir, readFile } from "node:fs/promises";
+import fs from "node:fs";
+import { access, copyFile, mkdir, readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,7 @@ import {
 import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
+import { readSessionMessages } from "../../gateway/session-utils.fs.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { LlamaCppCacheService } from "../../infra/LlamaCppCacheService.js";
 import type { OpenClawPluginApi } from "../../plugins/types.js";
@@ -328,9 +330,9 @@ export default function register(api: PluginApi) {
       const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
       const bootstrapSessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
 
-      // Read QUICK.md for observer context
+      // Read GLOSSARY.md for observer context
       const { readFile } = await import("node:fs/promises");
-      const quickContext = await readFile(path.join(narrativeDir, "QUICK.md"), "utf-8").catch(
+      const quickContext = await readFile(path.join(narrativeDir, "GLOSSARY.md"), "utf-8").catch(
         () => undefined,
       );
 
@@ -386,11 +388,144 @@ export default function register(api: PluginApi) {
   });
 
   api.registerGatewayMethod("narrative.searchFacts", async ({ params, respond }) => {
-    const { query } = params as { query: string };
+    const { query, recentMessages, sessionFile } = params as {
+      query?: string;
+      recentMessages?: RecentMessage[];
+      sessionFile?: string;
+    };
     const sessionId = "global_user_memory";
     try {
-      const facts = await graphService.searchFacts(sessionId, query);
-      respond(true, { facts });
+      let searchQuery = query?.trim() ?? "";
+
+      // If no query provided, build recent messages from session file(s)
+      let effectiveRecentMessages = recentMessages;
+      if (!searchQuery && !effectiveRecentMessages?.length && sessionFile) {
+        const sessionsDir = path.dirname(sessionFile);
+
+        const extractMessages = (msgs: unknown[]): RecentMessage[] =>
+          (msgs as Array<{ role?: string; content?: unknown; text?: string }>)
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .map((m) => {
+              let text = "";
+              if (typeof m.content === "string") {
+                text = m.content;
+              } else if (Array.isArray(m.content)) {
+                text = (m.content as Array<{ type?: string; text?: string }>)
+                  .filter((p) => p.type === "text")
+                  .map((p) => p.text ?? "")
+                  .join(" ");
+              } else if (typeof m.text === "string") {
+                text = m.text;
+              }
+              return { role: (m.role ?? "user") as "user" | "assistant", text };
+            });
+
+        const currentMsgs = extractMessages(readSessionMessages("", undefined, sessionFile)).slice(
+          -8,
+        );
+
+        // If current session has few user turns, supplement with the previous session
+        const userTurns = currentMsgs.filter((m) => m.role === "user").length;
+        if (userTurns < 3) {
+          const allFiles = await readdir(sessionsDir).catch(() => [] as string[]);
+          const otherFiles = allFiles
+            .filter((f) => f.endsWith(".jsonl") && path.join(sessionsDir, f) !== sessionFile)
+            .map((f) => ({ f, p: path.join(sessionsDir, f) }))
+            .toSorted((a, b) => {
+              try {
+                return fs.statSync(b.p).mtimeMs - fs.statSync(a.p).mtimeMs;
+              } catch {
+                return 0;
+              }
+            });
+
+          if (otherFiles[0]) {
+            const prevMsgs = extractMessages(
+              readSessionMessages("", undefined, otherFiles[0].p),
+            ).slice(-8);
+            effectiveRecentMessages = [...prevMsgs, ...currentMsgs].slice(-8);
+          } else {
+            effectiveRecentMessages = currentMsgs;
+          }
+        } else {
+          effectiveRecentMessages = currentMsgs;
+        }
+      }
+
+      // If no query provided, generate queries from recent messages using the observer
+      if (!searchQuery && effectiveRecentMessages && effectiveRecentMessages.length > 0) {
+        const agentId = resolveDefaultAgentId(api.config);
+        const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
+        const glossaryContext = await readFile(
+          path.join(narrativeDir, "GLOSSARY.md"),
+          "utf-8",
+        ).catch(() => undefined);
+        const agents = await resolveNarrativeAgents();
+        if (agents) {
+          const queries = await subconscious.generateSeekerQueries(
+            "",
+            effectiveRecentMessages,
+            agents.observerAgent ?? agents.narrativeAgent,
+            glossaryContext,
+          );
+          if (queries.length > 0) {
+            // Get session start time to filter out facts created after this session began
+            let sessionStartMs = Date.now();
+            if (sessionFile) {
+              try {
+                const firstLine = fs
+                  .readFileSync(sessionFile, "utf-8")
+                  .split(/\r?\n/)
+                  .find((l) => l.trim());
+                if (firstLine) {
+                  const parsed = JSON.parse(firstLine);
+                  const ts = parsed?.timestamp ?? parsed?.message?.timestamp;
+                  if (ts) {
+                    sessionStartMs = new Date(ts).getTime();
+                  }
+                }
+              } catch {
+                /* use now */
+              }
+            }
+
+            const results = await Promise.all(
+              queries.map((q) => graphService.searchFacts(sessionId, q).catch(() => [])),
+            );
+            const seen = new Set<string>();
+            const combined = results
+              .flat()
+              .filter((f) => {
+                const key =
+                  (f as { uuid?: string; fact?: string; content?: string }).uuid ??
+                  (f as { fact?: string }).fact ??
+                  (f as { content?: string }).content ??
+                  JSON.stringify(f);
+                if (seen.has(key)) {
+                  return false;
+                }
+                seen.add(key);
+                // Filter out facts timestamped after the session started
+                const fts = (f as { timestamp?: string }).timestamp;
+                if (fts && new Date(fts).getTime() > sessionStartMs) {
+                  return false;
+                }
+                return true;
+              })
+              .slice(0, queries.length * 3);
+            respond(true, { facts: combined, query: queries[0] });
+            return;
+          }
+        }
+      }
+
+      if (!searchQuery) {
+        respond(true, { facts: [] });
+        return;
+      }
+
+      const facts = await graphService.searchFacts(sessionId, searchQuery);
+      respond(true, { facts, query: searchQuery });
     } catch (e: unknown) {
       respond(false, { error: e instanceof Error ? e.message : String(e) });
     }
@@ -924,7 +1059,7 @@ export default function register(api: PluginApi) {
     const memoryDir = config.memoryDir || path.join(workspaceDir, "memory");
     const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
     const storyPath = path.join(narrativeDir, "STORY.md");
-    const quickPath = path.join(narrativeDir, "QUICK.md");
+    const glossaryPath = path.join(narrativeDir, "GLOSSARY.md");
     const summaryPath = path.join(narrativeDir, "SUMMARY.md");
     const sessionsDir = event.sessionFile ? path.dirname(event.sessionFile) : undefined;
 
@@ -948,12 +1083,22 @@ export default function register(api: PluginApi) {
     const modeState = await readModeState(narrativeDir);
     const isIntensive = modeState.mode === "intensive";
 
-    // Read STORY.md, SUMMARY.md and QUICK.md for context injection.
+    // Read STORY.md, SUMMARY.md and GLOSSARY.md for context injection.
     const [storyContent, summaryContent, quickContext] = await Promise.all([
       readFile(storyPath, "utf-8").catch(() => undefined),
       readFile(summaryPath, "utf-8").catch(() => undefined),
-      readFile(quickPath, "utf-8").catch(() => undefined),
+      readFile(glossaryPath, "utf-8").catch(() => undefined),
     ]);
+
+    // If GLOSSARY.md doesn't exist yet, generate it now (first-run bootstrap).
+    if (!quickContext) {
+      const agents = await resolveNarrativeAgents();
+      if (agents) {
+        void consolidator
+          .generateGlossary(storyPath, glossaryPath, workspaceDir, agents.narrativeAgent)
+          .catch(() => {});
+      }
+    }
 
     // In intensive mode: use SUMMARY (fallback to STORY), suppress peripheral files, skip flashbacks.
     if (isIntensive) {
@@ -965,7 +1110,7 @@ export default function register(api: PluginApi) {
             .generateSummary(storyPath, summaryPath, workspaceDir, agents.narrativeAgent)
             .catch(() => {}),
           consolidator
-            .generateQuickProfile(storyPath, quickPath, workspaceDir, agents.narrativeAgent)
+            .generateGlossary(storyPath, glossaryPath, workspaceDir, agents.narrativeAgent)
             .catch(() => {}),
         ]);
       }
@@ -999,7 +1144,7 @@ export default function register(api: PluginApi) {
 
     // Run memory pipeline in parallel:
     // [0] Bootstrap historical episodes into Graphiti (idempotent flag-file check)
-    // [1] Sync global narrative from recent session files (fire-and-forget QUICK.md + SUMMARY regen)
+    // [1] Sync global narrative from recent session files (fire-and-forget GLOSSARY.md + SUMMARY regen)
     // [2] Add current prompt as a graph episode
     // [3] Get flashback resonance for injection
     const [, , , flashbackResult] = await Promise.allSettled([
@@ -1031,7 +1176,7 @@ export default function register(api: PluginApi) {
             .then(() =>
               Promise.all([
                 consolidator
-                  .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
+                  .generateGlossary(storyPath, glossaryPath, workspaceDir, narrativeAgent)
                   .catch(() => {}),
                 consolidator
                   .generateSummary(storyPath, summaryPath, workspaceDir, narrativeAgent)
@@ -1156,7 +1301,7 @@ export default function register(api: PluginApi) {
         const workspaceDir = resolveAgentWorkspaceDir(api.config, agentId);
         const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
         const storyPath = path.join(narrativeDir, "STORY.md");
-        const quickPath = path.join(narrativeDir, "QUICK.md");
+        const glossaryPath = path.join(narrativeDir, "GLOSSARY.md");
         const summaryPath = path.join(narrativeDir, "SUMMARY.md");
 
         // Skip narrative updates during intensive/hyperfocus mode
@@ -1220,10 +1365,10 @@ export default function register(api: PluginApi) {
 
         sendNotify("✅ Mind compaction complete, regenerating profile...");
 
-        // Fire-and-forget QUICK.md + SUMMARY.md regeneration after story sync.
+        // Fire-and-forget GLOSSARY.md + SUMMARY.md regeneration after story sync.
         void Promise.all([
           consolidator
-            .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
+            .generateGlossary(storyPath, glossaryPath, workspaceDir, narrativeAgent)
             .catch(() => {}),
           consolidator
             .generateSummary(storyPath, summaryPath, workspaceDir, narrativeAgent)
@@ -1256,7 +1401,7 @@ export default function register(api: PluginApi) {
         const workspaceDir = resolveAgentWorkspaceDir(api.config, agentId);
         const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
         const storyPath = path.join(narrativeDir, "STORY.md");
-        const quickPath = path.join(narrativeDir, "QUICK.md");
+        const glossaryPath = path.join(narrativeDir, "GLOSSARY.md");
         const summaryPath = path.join(narrativeDir, "SUMMARY.md");
 
         // Skip narrative updates during intensive/hyperfocus mode
@@ -1305,10 +1450,10 @@ export default function register(api: PluginApi) {
 
         sendNotify("✅ Mind narrative updated, regenerating profile...");
 
-        // Fire-and-forget QUICK.md + SUMMARY.md regeneration after story sync.
+        // Fire-and-forget GLOSSARY.md + SUMMARY.md regeneration after story sync.
         void Promise.all([
           consolidator
-            .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
+            .generateGlossary(storyPath, glossaryPath, workspaceDir, narrativeAgent)
             .catch(() => {}),
           consolidator
             .generateSummary(storyPath, summaryPath, workspaceDir, narrativeAgent)
