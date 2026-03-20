@@ -521,6 +521,10 @@ export function createOllamaStreamFn(
           throw new Error("Ollama API stream ended without a final response");
         }
 
+        // Guard against null/undefined message in final response (#51112)
+        if (!finalResponse.message) {
+          finalResponse.message = { role: "assistant", content: "" };
+        }
         finalResponse.message.content = accumulatedContent;
         if (accumulatedToolCalls.length > 0) {
           finalResponse.message.tool_calls = accumulatedToolCalls;

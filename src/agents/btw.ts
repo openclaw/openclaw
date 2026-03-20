@@ -332,8 +332,9 @@ export async function runBtwSideQuestion(
 
     if (event.type === "text_delta") {
       sawTextEvent = true;
-      answerText += event.delta;
-      chunker?.append(event.delta);
+      const delta = event.delta ?? "";
+      answerText += delta;
+      chunker?.append(delta);
       if (chunker && params.resolvedBlockStreamingBreak === "text_end") {
         chunker.drain({ force: false, emit: (chunk) => void emitBlockChunk(chunk) });
       }
@@ -346,7 +347,7 @@ export async function runBtwSideQuestion(
     }
 
     if (event.type === "thinking_delta") {
-      reasoningText += event.delta;
+      reasoningText += event.delta ?? "";
       if (params.resolvedReasoningLevel !== "off") {
         await params.opts?.onReasoningStream?.({ text: reasoningText, isReasoning: true });
       }

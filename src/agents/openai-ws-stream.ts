@@ -472,6 +472,9 @@ export function buildAssistantMessageFromResponse(
         id: toNonEmptyString(item.call_id) ?? `call_${randomUUID()}`,
         name: toolName,
         arguments: (() => {
+          if (item.arguments == null) {
+            return {} as Record<string, unknown>;
+          }
           try {
             return JSON.parse(item.arguments) as Record<string, unknown>;
           } catch {
@@ -885,17 +888,21 @@ export function createOpenAIWebSocketStreamFn(
             reject(new Error(`OpenAI WebSocket error: ${event.message} (code=${event.code})`));
           } else if (event.type === "response.output_text.delta") {
             // Stream partial text updates for responsive UI
-            const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
-              model,
-              content: [{ type: "text", text: event.delta }],
-              stopReason: "stop",
-            });
-            eventStream.push({
-              type: "text_delta",
-              contentIndex: 0,
-              delta: event.delta,
-              partial: partialMsg,
-            });
+            // Guard against null/undefined delta from custom providers (#51112)
+            const delta = event.delta ?? "";
+            if (delta) {
+              const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
+                model,
+                content: [{ type: "text", text: delta }],
+                stopReason: "stop",
+              });
+              eventStream.push({
+                type: "text_delta",
+                contentIndex: 0,
+                delta,
+                partial: partialMsg,
+              });
+            }
           }
         });
       });
