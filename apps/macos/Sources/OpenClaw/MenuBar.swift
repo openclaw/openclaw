@@ -178,9 +178,7 @@ struct OpenClawApp: App {
         self.isMenuPresented = false
         Task { @MainActor in
             let sessionKey = await WebChatManager.shared.preferredSessionKey()
-            WebChatManager.shared.togglePanel(
-                sessionKey: sessionKey,
-                anchorProvider: { [self] in self.statusButtonScreenFrame() })
+            WebChatManager.shared.toggleWindow(sessionKey: sessionKey)
         }
     }
 

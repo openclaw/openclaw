@@ -338,7 +338,12 @@ final class AppState {
 
         if !self.isPreview {
             Task { await VoiceWakeRuntime.shared.refresh(state: self) }
-            Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
+            // Defer TalkModeController init to next run loop iteration to prevent
+            // re-entrant access to AppStateStore.shared during init (#36983).
+            let savedTalkEnabled = self.talkEnabled
+            DispatchQueue.main.async {
+                Task { await TalkModeController.shared.setEnabled(savedTalkEnabled) }
+            }
         }
 
         self.isInitializing = false

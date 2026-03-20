@@ -59,6 +59,21 @@ final class WebChatManager {
         controller.show()
     }
 
+    /// Toggle the chat window (show/hide). Used by menu bar left-click.
+    func toggleWindow(sessionKey: String) {
+        self.closePanel()
+        if let controller = self.windowController, self.windowSessionKey == sessionKey {
+            if controller.isVisible {
+                controller.close()
+                self.onPanelVisibilityChanged?(false)
+                return
+            }
+            controller.show()
+            return
+        }
+        self.show(sessionKey: sessionKey)
+    }
+
     func togglePanel(sessionKey: String, anchorProvider: @escaping () -> NSRect?) {
         if let controller = self.panelController {
             if self.panelSessionKey != sessionKey {
