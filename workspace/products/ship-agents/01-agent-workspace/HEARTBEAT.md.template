@@ -1,0 +1,69 @@
+# HEARTBEAT.md - [AGENT_NAME]
+
+<!--
+  HEARTBEAT.md defines periodic tasks the agent should perform automatically.
+  Think of these as cron jobs for your agent -- things it checks on a schedule
+  without being asked.
+
+  HOW IT WORKS:
+  If this file is empty (or comments only), the agent skips heartbeat checks.
+  Add tasks below to enable periodic behavior.
+
+  WHEN TO USE:
+  - Monitoring dashboards/systems for anomalies
+  - Sending scheduled reports or summaries
+  - Checking for stale data or unanswered requests
+  - Proactive alerts based on thresholds
+
+  WHEN NOT TO USE:
+  - Don't use heartbeat for things that should be event-driven (use triggers instead)
+  - Don't over-schedule -- each heartbeat costs API tokens
+-->
+
+# Periodic Tasks
+
+<!--
+  Format each task with:
+  - schedule: how often (e.g. "every 4 hours", "daily at 09:00", "weekly Monday")
+  - action: what to do
+  - output: where to send results (channel, file, etc.)
+  - condition: optional -- only run if condition is met
+-->
+
+## Task: [TASK_NAME]
+
+- **Schedule:** [e.g. "Every 4 hours during business hours (09:00-18:00)"]
+- **Action:** [e.g. "Check unresolved tickets older than 2 hours, summarize in management channel"]
+- **Output:** [e.g. "Post to #alerts channel" or "Write to daily-report.md"]
+- **Condition:** [e.g. "Only if there are unresolved items" or "Always"]
+
+## Task: [TASK_NAME_2]
+
+- **Schedule:** [e.g. "Daily at 23:00"]
+- **Action:** [e.g. "Generate end-of-day summary of all interactions"]
+- **Output:** [e.g. "Save to memory/YYYY-MM-DD.md"]
+- **Condition:** [e.g. "Always"]
+
+<!--
+  EXAMPLES of useful heartbeat tasks:
+
+  ## Task: Stale Ticket Alert
+  - Schedule: Every 2 hours
+  - Action: Check if any customer request has been unanswered for > 1 hour
+  - Output: Post alert to team channel
+  - Condition: Only if stale tickets exist
+
+  ## Task: Daily Knowledge Update
+  - Schedule: Daily at 02:00
+  - Action: Review today's interactions, extract new FAQ entries and patterns
+  - Output: Update knowledge/faq.md and knowledge/patterns.md
+  - Condition: Always
+
+  ## Task: Weekly Performance Report
+  - Schedule: Every Sunday at 10:00
+  - Action: Compile weekly metrics (response count, resolution rate, common issues)
+  - Output: Post to management channel + save to reports/
+  - Condition: Always
+
+  Delete these examples and add your own tasks above.
+-->

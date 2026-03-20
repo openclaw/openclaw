@@ -1,0 +1,206 @@
+# KNOWLEDGE.md - Knowledge Base Architecture Guide
+
+<!--
+  This file explains HOW to structure your agent's knowledge base.
+  It is NOT a knowledge file itself -- it's the blueprint for creating them.
+
+  Knowledge files live in the `knowledge/` directory alongside SOUL.md.
+  The agent references them during work. They should be:
+  - Structured (tables, numbered lists -- not prose)
+  - Searchable (clear headers, consistent formatting)
+  - Maintained (agent can update them, human reviews periodically)
+-->
+
+## Directory Structure
+
+```
+your-agent/
+  SOUL.md              # Identity and behavior
+  CONSTITUTION.md      # Governance constraints
+  HEARTBEAT.md         # Periodic tasks
+  knowledge/
+    faq.md             # Frequently asked questions + answers
+    templates.md       # Standard response templates
+    patterns.md        # Common scenarios and how to handle them
+    escalation.md      # When and how to escalate
+    [domain].md        # Domain-specific reference data
+    [domain2].md       # More domain-specific data
+  memory/
+    YYYY-MM-DD.md      # Daily memory logs (auto-generated)
+```
+
+---
+
+## Core Knowledge Files
+
+### 1. `knowledge/faq.md` -- Frequently Asked Questions
+
+<!--
+  THE most valuable knowledge file. Structured Q&A the agent can
+  reference and quote. Number each entry for easy reference.
+-->
+
+**Format:**
+
+```markdown
+# FAQ
+
+## Category: [CATEGORY_NAME]
+
+### FAQ-001: [Question as the customer would ask it]
+**Answer:** [Direct answer, no fluff]
+**Notes:** [Edge cases, exceptions, related FAQ numbers]
+
+### FAQ-002: [Question]
+**Answer:** [Answer]
+**Notes:** [Notes]
+```
+
+**Rules:**
+- Number every entry (FAQ-001, FAQ-002, ...) so the agent can cite them
+- Write questions in the customer's language, not internal jargon
+- Keep answers under 3 sentences
+- Cross-reference related FAQs
+
+---
+
+### 2. `knowledge/templates.md` -- Standard Response Templates
+
+<!--
+  Pre-written responses with {variables}. The agent fills in specifics.
+  This ensures consistency across all interactions.
+-->
+
+**Format:**
+
+```markdown
+# Response Templates
+
+## Template: [SCENARIO_NAME]
+**Trigger:** [When to use this template]
+**Template:**
+> [Response text with {variable} placeholders]
+
+**Variables:**
+- {variable1}: [Where to get this value]
+- {variable2}: [Where to get this value]
+```
+
+**Rules:**
+- One template per common scenario
+- Include variable descriptions so the agent knows what to fill in
+- Mark which templates are mandatory vs. suggested
+
+---
+
+### 3. `knowledge/patterns.md` -- Known Patterns & Anti-Patterns
+
+<!--
+  A living document. The agent adds entries when it encounters
+  new patterns. Human reviews periodically to prune/correct.
+-->
+
+**Format:**
+
+```markdown
+# Known Patterns
+
+## Pattern: [PATTERN_NAME]
+**Frequency:** [Common / Occasional / Rare]
+**Signal:** [How to recognize this pattern]
+**Correct handling:** [What to do]
+**Common mistake:** [What NOT to do]
+**Added:** [Date]
+```
+
+**Rules:**
+- Agent should add new patterns when it spots them (see SOUL.md "Self-Improving Knowledge")
+- Human should review new entries weekly
+- Archive patterns that haven't appeared in 30+ days
+
+---
+
+### 4. `knowledge/escalation.md` -- Escalation Procedures
+
+<!--
+  Clear rules for when the agent should hand off to a human.
+  Without this, agents either escalate everything or nothing.
+-->
+
+**Format:**
+
+```markdown
+# Escalation Rules
+
+## Level 1: Agent Handles
+- [Situation types the agent resolves independently]
+
+## Level 2: Agent Handles + Notifies
+- [Situation types where agent resolves but flags for human review]
+- Notify: [who/where]
+
+## Level 3: Immediate Human Handoff
+- [Situation types that require human intervention]
+- Handoff message: "[Standard message to tell user a human will take over]"
+- Notify: [who/where, with what urgency]
+```
+
+---
+
+### 5. `knowledge/[domain].md` -- Domain-Specific Reference
+
+<!--
+  These vary by use case. Examples:
+
+  For customer service:
+  - products.md (product catalog, pricing, specs)
+  - policies.md (return policy, SLA, terms)
+  - team.md (staff roster, schedules, skills)
+
+  For data analysis:
+  - schemas.md (database schemas, table descriptions)
+  - metrics.md (KPI definitions, calculation methods)
+  - sources.md (data sources, access methods, refresh schedules)
+
+  For operations:
+  - runbooks.md (step-by-step procedures for incidents)
+  - contacts.md (on-call roster, vendor contacts)
+  - systems.md (infrastructure inventory, dependencies)
+-->
+
+**General format:**
+
+```markdown
+# [DOMAIN] Reference
+
+## [CATEGORY]
+
+| Field1 | Field2 | Field3 | Notes |
+|--------|--------|--------|-------|
+| ...    | ...    | ...    | ...   |
+```
+
+**Rules:**
+- Use tables over prose (faster for the agent to parse)
+- Include a "last updated" date at the top
+- Keep entries factual -- no opinions or analysis
+
+---
+
+## Knowledge Maintenance
+
+### Agent Updates
+The agent can and should update knowledge files when it discovers:
+- New questions that should be in the FAQ
+- New patterns or anti-patterns
+- Corrections to existing entries
+
+### Human Review
+- Review agent-added entries weekly
+- Prune outdated information monthly
+- Validate accuracy of any auto-generated content
+
+### Versioning
+- Keep knowledge files in version control
+- Major changes should be noted in commit messages
+- If an entry is removed, note why (was it wrong, or just outdated?)

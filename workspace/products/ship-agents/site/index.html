@@ -1,0 +1,1480 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ship AI Agents to Production</title>
+    <meta
+      name="description"
+      content="Production-tested templates and architecture patterns for running AI agents 24/7. 14 files, 8300+ lines. Copy, customize, deploy."
+    />
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      :root {
+        --bg: #0a0a0a;
+        --bg-elevated: #111111;
+        --bg-card: #141414;
+        --border: #222222;
+        --border-highlight: #22c55e;
+        --text: #e5e5e5;
+        --text-dim: #888888;
+        --text-muted: #555555;
+        --accent: #22c55e;
+        --accent-dim: #16a34a;
+        --mono: "SF Mono", "Fira Code", "Cascadia Code", "JetBrains Mono", "Consolas", monospace;
+        --sans:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Helvetica, Arial, sans-serif;
+        --max-w: 800px;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 17px;
+        line-height: 1.7;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* Grid background */
+      body::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-image:
+          linear-gradient(rgba(34, 197, 94, 0.03) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(34, 197, 94, 0.03) 1px, transparent 1px);
+        background-size: 60px 60px;
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      .container {
+        max-width: var(--max-w);
+        margin: 0 auto;
+        padding: 0 24px;
+        position: relative;
+        z-index: 1;
+      }
+
+      /* ---- HERO ---- */
+      .hero {
+        min-height: 90vh;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: 80px 0 60px;
+      }
+
+      .hero h1 {
+        font-family: var(--mono);
+        font-size: clamp(28px, 5vw, 48px);
+        font-weight: 700;
+        line-height: 1.2;
+        margin-bottom: 32px;
+        color: #ffffff;
+      }
+
+      .hero h1 .dim {
+        color: var(--text-dim);
+      }
+
+      .hero-pain {
+        font-size: 18px;
+        color: var(--text-dim);
+        margin-bottom: 40px;
+        max-width: 600px;
+      }
+
+      .hero-pain p {
+        margin-bottom: 16px;
+      }
+      .hero-pain strong {
+        color: var(--text);
+      }
+
+      .hero-cta {
+        display: inline-block;
+        background: var(--accent);
+        color: #000;
+        font-weight: 700;
+        font-size: 16px;
+        padding: 14px 32px;
+        border-radius: 6px;
+        text-decoration: none;
+        transition:
+          background 0.2s,
+          transform 0.15s;
+      }
+      .hero-cta:hover {
+        background: #2ade6a;
+        transform: translateY(-1px);
+      }
+
+      .cursor-blink::after {
+        content: "_";
+        animation: blink 1s step-end infinite;
+        color: var(--accent);
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+
+      /* ---- SECTIONS ---- */
+      section {
+        padding: 80px 0;
+      }
+
+      .section-label {
+        font-family: var(--mono);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 3px;
+        color: var(--accent);
+        margin-bottom: 16px;
+      }
+
+      h2 {
+        font-family: var(--mono);
+        font-size: clamp(22px, 4vw, 32px);
+        font-weight: 700;
+        margin-bottom: 24px;
+        color: #fff;
+      }
+
+      h3 {
+        font-family: var(--mono);
+        font-size: 20px;
+        font-weight: 600;
+        margin-bottom: 12px;
+        color: #fff;
+      }
+
+      /* ---- PROBLEM / TERMINAL BLOCK ---- */
+      .terminal {
+        background: #0c0c0c;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 24px 28px;
+        margin: 32px 0;
+        font-family: var(--mono);
+        font-size: 14px;
+        line-height: 2;
+        overflow-x: auto;
+      }
+
+      .terminal .prompt {
+        color: var(--text-muted);
+      }
+      .terminal .err {
+        color: #ef4444;
+      }
+      .terminal .warn {
+        color: #eab308;
+      }
+      .terminal .ok {
+        color: var(--accent);
+      }
+      .terminal .comment {
+        color: var(--text-muted);
+        font-style: italic;
+      }
+
+      /* ---- SOLUTION ---- */
+      .solution-text {
+        font-size: 18px;
+        color: var(--text-dim);
+        margin-bottom: 24px;
+      }
+
+      .stat-row {
+        display: flex;
+        gap: 32px;
+        flex-wrap: wrap;
+        margin: 40px 0;
+      }
+
+      .stat {
+        text-align: center;
+      }
+
+      .stat-num {
+        font-family: var(--mono);
+        font-size: 36px;
+        font-weight: 700;
+        color: var(--accent);
+        display: block;
+      }
+
+      .stat-label {
+        font-size: 13px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+
+      /* ---- WHAT'S INSIDE CARDS ---- */
+      .cards {
+        display: grid;
+        gap: 20px;
+        margin: 40px 0;
+      }
+
+      .card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 28px;
+        transition:
+          border-color 0.3s,
+          transform 0.2s;
+      }
+
+      .card:hover {
+        border-color: #333;
+        transform: translateY(-2px);
+      }
+
+      .card-icon {
+        font-size: 28px;
+        margin-bottom: 12px;
+        display: block;
+      }
+
+      .card-meta {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-muted);
+        margin-top: 12px;
+      }
+
+      .card p {
+        color: var(--text-dim);
+        font-size: 15px;
+      }
+
+      .card ul {
+        list-style: none;
+        margin-top: 12px;
+      }
+
+      .card ul li {
+        color: var(--text-dim);
+        font-size: 14px;
+        padding: 4px 0;
+        padding-left: 20px;
+        position: relative;
+      }
+
+      .card ul li::before {
+        content: "\2192";
+        position: absolute;
+        left: 0;
+        color: var(--accent);
+      }
+
+      /* ---- PRICING ---- */
+      .pricing-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 20px;
+        margin: 48px 0;
+      }
+
+      @media (max-width: 700px) {
+        .pricing-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .price-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 32px 24px;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+        transition:
+          border-color 0.3s,
+          transform 0.2s;
+      }
+
+      .price-card:hover {
+        transform: translateY(-3px);
+      }
+
+      .price-card.featured {
+        border-color: var(--accent);
+        box-shadow: 0 0 40px rgba(34, 197, 94, 0.08);
+      }
+
+      .price-badge {
+        position: absolute;
+        top: -12px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--accent);
+        color: #000;
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 700;
+        padding: 4px 14px;
+        border-radius: 20px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        white-space: nowrap;
+      }
+
+      .price-tier {
+        font-family: var(--mono);
+        font-size: 14px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin-bottom: 8px;
+      }
+
+      .price-amount {
+        font-family: var(--mono);
+        font-size: 48px;
+        font-weight: 700;
+        color: #fff;
+        margin-bottom: 4px;
+      }
+
+      .price-amount .dollar {
+        font-size: 28px;
+        vertical-align: top;
+        line-height: 1.6;
+        color: var(--text-dim);
+      }
+
+      .price-desc {
+        font-size: 14px;
+        color: var(--text-muted);
+        margin-bottom: 24px;
+        min-height: 40px;
+      }
+
+      .price-features {
+        list-style: none;
+        flex: 1;
+        margin-bottom: 28px;
+      }
+
+      .price-features li {
+        font-size: 14px;
+        color: var(--text-dim);
+        padding: 6px 0;
+        padding-left: 22px;
+        position: relative;
+      }
+
+      .price-features li::before {
+        content: "\2713";
+        position: absolute;
+        left: 0;
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      .price-features li.excluded {
+        color: var(--text-muted);
+        text-decoration: line-through;
+      }
+
+      .price-features li.excluded::before {
+        content: "\2014";
+        color: var(--text-muted);
+      }
+
+      .btn-buy {
+        display: block;
+        width: 100%;
+        padding: 14px;
+        border: none;
+        border-radius: 6px;
+        font-family: var(--mono);
+        font-size: 14px;
+        font-weight: 700;
+        cursor: pointer;
+        transition:
+          background 0.2s,
+          transform 0.15s;
+        text-align: center;
+        text-decoration: none;
+      }
+
+      .btn-buy:hover {
+        transform: translateY(-1px);
+      }
+
+      .btn-buy-default {
+        background: #222;
+        color: var(--text);
+        border: 1px solid var(--border);
+      }
+      .btn-buy-default:hover {
+        background: #2a2a2a;
+      }
+
+      .btn-buy-featured {
+        background: var(--accent);
+        color: #000;
+      }
+      .btn-buy-featured:hover {
+        background: #2ade6a;
+      }
+
+      /* ---- PROOF ---- */
+      .proof-block {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 32px;
+        margin: 32px 0;
+      }
+
+      .proof-block p {
+        color: var(--text-dim);
+        margin-bottom: 16px;
+      }
+
+      .proof-block p:last-child {
+        margin-bottom: 0;
+      }
+
+      /* ---- FAQ ---- */
+      .faq-item {
+        border-bottom: 1px solid var(--border);
+      }
+
+      .faq-q {
+        width: 100%;
+        background: none;
+        border: none;
+        color: #fff;
+        font-family: var(--sans);
+        font-size: 16px;
+        font-weight: 600;
+        text-align: left;
+        padding: 20px 0;
+        cursor: pointer;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .faq-q:hover {
+        color: var(--accent);
+      }
+
+      .faq-arrow {
+        font-size: 18px;
+        transition: transform 0.3s;
+        color: var(--text-muted);
+        flex-shrink: 0;
+        margin-left: 16px;
+      }
+
+      .faq-item.open .faq-arrow {
+        transform: rotate(45deg);
+      }
+
+      .faq-a {
+        max-height: 0;
+        overflow: hidden;
+        transition:
+          max-height 0.3s ease,
+          padding 0.3s ease;
+      }
+
+      .faq-item.open .faq-a {
+        max-height: 300px;
+      }
+
+      .faq-a-inner {
+        padding: 0 0 20px;
+        color: var(--text-dim);
+        font-size: 15px;
+        line-height: 1.7;
+      }
+
+      /* ---- PAYMENT MODAL ---- */
+      .modal-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.85);
+        z-index: 100;
+        justify-content: center;
+        align-items: center;
+      }
+      .modal-overlay.active {
+        display: flex;
+      }
+
+      .modal {
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 40px;
+        max-width: 480px;
+        width: 90%;
+        position: relative;
+        text-align: center;
+      }
+
+      .modal-close {
+        position: absolute;
+        top: 16px;
+        right: 20px;
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        font-size: 24px;
+        cursor: pointer;
+      }
+      .modal-close:hover {
+        color: var(--text);
+      }
+
+      .modal h3 {
+        font-family: var(--mono);
+        color: #fff;
+        margin-bottom: 8px;
+      }
+
+      .modal .modal-price {
+        font-family: var(--mono);
+        font-size: 28px;
+        color: var(--accent);
+        font-weight: 700;
+        margin-bottom: 24px;
+      }
+
+      .modal .wallet-addr {
+        font-family: var(--mono);
+        font-size: 11px;
+        background: #0c0c0c;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 14px;
+        word-break: break-all;
+        color: var(--accent);
+        margin: 16px 0;
+        cursor: pointer;
+        transition: border-color 0.2s;
+      }
+      .wallet-addr:hover {
+        border-color: var(--accent);
+      }
+      .wallet-addr.copied {
+        border-color: var(--accent);
+      }
+
+      .modal .copy-hint {
+        font-size: 12px;
+        color: var(--text-muted);
+        margin-bottom: 20px;
+      }
+
+      .modal .network-badge {
+        display: inline-block;
+        font-family: var(--mono);
+        font-size: 11px;
+        background: #1a1a2e;
+        color: #818cf8;
+        padding: 4px 10px;
+        border-radius: 4px;
+        margin-bottom: 16px;
+      }
+
+      .modal .steps {
+        text-align: left;
+        margin: 24px 0;
+      }
+
+      .modal .steps li {
+        color: var(--text-dim);
+        font-size: 14px;
+        padding: 6px 0;
+        padding-left: 24px;
+        position: relative;
+        list-style: none;
+      }
+
+      .modal .steps li .step-num {
+        position: absolute;
+        left: 0;
+        color: var(--accent);
+        font-family: var(--mono);
+        font-weight: 700;
+      }
+
+      .modal input[type="text"] {
+        width: 100%;
+        background: #0c0c0c;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 12px 14px;
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 13px;
+        margin: 8px 0;
+        outline: none;
+        transition: border-color 0.2s;
+      }
+      .modal input[type="text"]:focus {
+        border-color: var(--accent);
+      }
+      .modal input[type="text"]::placeholder {
+        color: var(--text-muted);
+      }
+
+      .modal .btn-verify {
+        display: block;
+        width: 100%;
+        padding: 14px;
+        background: var(--accent);
+        color: #000;
+        border: none;
+        border-radius: 6px;
+        font-family: var(--mono);
+        font-size: 14px;
+        font-weight: 700;
+        cursor: pointer;
+        margin-top: 16px;
+        transition: background 0.2s;
+      }
+      .modal .btn-verify:hover {
+        background: #2ade6a;
+      }
+      .modal .btn-verify:disabled {
+        background: #333;
+        color: #666;
+        cursor: not-allowed;
+      }
+
+      .modal .verify-status {
+        font-family: var(--mono);
+        font-size: 13px;
+        margin-top: 12px;
+        min-height: 20px;
+      }
+
+      .modal .alt-pay {
+        margin-top: 24px;
+        padding-top: 20px;
+        border-top: 1px solid var(--border);
+        font-size: 13px;
+        color: var(--text-muted);
+      }
+
+      /* ---- FOOTER ---- */
+      footer {
+        border-top: 1px solid var(--border);
+        padding: 48px 0;
+        text-align: center;
+      }
+
+      footer p {
+        color: var(--text-muted);
+        font-size: 14px;
+        margin-bottom: 8px;
+      }
+
+      footer .footer-promise {
+        font-family: var(--mono);
+        font-size: 13px;
+        color: var(--text-dim);
+        letter-spacing: 1px;
+      }
+
+      /* ---- DIVIDER ---- */
+      .divider {
+        border: none;
+        border-top: 1px solid var(--border);
+        margin: 0;
+      }
+
+      /* ---- SCROLL FADE-IN ---- */
+      .reveal {
+        opacity: 0;
+        transform: translateY(20px);
+        transition:
+          opacity 0.6s ease,
+          transform 0.6s ease;
+      }
+      .reveal.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      /* ---- RESPONSIVE ---- */
+      @media (max-width: 600px) {
+        body {
+          font-size: 16px;
+        }
+        .container {
+          padding: 0 16px;
+        }
+        section {
+          padding: 60px 0;
+        }
+        .hero {
+          min-height: 80vh;
+          padding: 60px 0 40px;
+        }
+        .terminal {
+          padding: 16px 18px;
+          font-size: 13px;
+        }
+        .stat-row {
+          gap: 24px;
+        }
+        .proof-block {
+          padding: 24px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- HERO -->
+    <section class="hero">
+      <div class="container">
+        <h1>
+          Your agent works great.<br /><span class="dim"
+            >For 15 minutes<span class="cursor-blink"></span
+          ></span>
+        </h1>
+        <div class="hero-pain">
+          <p>
+            You built something with Claude Code. It was magic. It answered questions, pulled data,
+            wrote reports. You thought: <strong>I could run this in production.</strong>
+          </p>
+          <p>Then reality hit.</p>
+          <p>
+            It hallucinated at 2am. Sent garbage to a real customer. Nobody noticed for 6 hours. It
+            forgot everything from yesterday. Every morning, it's a stranger.
+          </p>
+          <p>You'll spend 3 months figuring this out alone. Or you could skip to the end.</p>
+          <p><strong>You're not running AI agents. You're babysitting them.</strong></p>
+        </div>
+        <a href="#pricing" class="hero-cta">Get the production blueprints &darr;</a>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- PROBLEM -->
+    <section>
+      <div class="container">
+        <div class="reveal">
+          <p class="section-label">The gap nobody talks about</p>
+          <h2>Five ways agents fail in production</h2>
+        </div>
+
+        <div class="terminal reveal">
+          <div>
+            <span class="prompt">$</span> <span class="err">HALLUCINATION</span>
+            <span class="comment"># 2am. Sent garbage to a real customer. 6 hours unnoticed.</span>
+          </div>
+          <div>
+            <span class="prompt">$</span> <span class="err">AMNESIA</span>
+            <span class="comment"
+              ># Forgot everything from yesterday. Every morning, a stranger.</span
+            >
+          </div>
+          <div>
+            <span class="prompt">$</span> <span class="err">CONTEXT_LEAK</span>
+            <span class="comment"># Second agent started leaking first agent's context.</span>
+          </div>
+          <div>
+            <span class="prompt">$</span> <span class="warn">SPAGHETTI_CONFIG</span>
+            <span class="comment"># CLAUDE.md is 200 lines. Add a rule, something breaks.</span>
+          </div>
+          <div>
+            <span class="prompt">$</span> <span class="warn">MANUAL_RESTART</span>
+            <span class="comment"># You check Telegram at midnight. You hope.</span>
+          </div>
+          <br />
+          <div>
+            <span class="prompt">$</span>
+            <span class="ok">STATUS: you need architecture, not more prompts.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SOLUTION -->
+    <section>
+      <div class="container">
+        <div class="reveal">
+          <p class="section-label">The system</p>
+          <h2>There's a system that doesn't break.</h2>
+        </div>
+
+        <div class="reveal">
+          <p class="solution-text">
+            10 agents. Telegram, LINE, Discord. Customer service, data analysis, monitoring,
+            reporting. Running 24/7 for 90+ days.
+          </p>
+          <p class="solution-text">
+            When something crashes at 3am, a daemon detects it, restarts it, and logs what happened.
+            The operator wakes up, reads the log, drinks coffee.
+          </p>
+          <p class="solution-text">
+            When a customer asks a question, the agent doesn't hallucinate. It pulls from a
+            structured knowledge base with 200+ verified entries. If it doesn't know, it says so and
+            escalates.
+          </p>
+          <p class="solution-text">
+            <strong style="color: #fff">This system exists. These are the files it runs on.</strong>
+          </p>
+        </div>
+
+        <div class="stat-row reveal">
+          <div class="stat">
+            <span class="stat-num">10+</span><span class="stat-label">Agents</span>
+          </div>
+          <div class="stat">
+            <span class="stat-num">90+</span><span class="stat-label">Days uptime</span>
+          </div>
+          <div class="stat">
+            <span class="stat-num">2,000+</span><span class="stat-label">Facts processed</span>
+          </div>
+          <div class="stat">
+            <span class="stat-num">24/7</span><span class="stat-label">Unsupervised</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- WHAT'S INSIDE -->
+    <section>
+      <div class="container">
+        <div class="reveal">
+          <p class="section-label">What's inside</p>
+          <h2>14 production files. 8,300+ lines.</h2>
+          <p class="solution-text">
+            Not a course. Not a prompt pack. Not a tutorial that ends at "Hello World."<br /><strong
+              style="color: #fff"
+              >Copy, customize, deploy.</strong
+            >
+          </p>
+        </div>
+
+        <div class="cards">
+          <div class="card reveal">
+            <span class="card-icon">&gt;_</span>
+            <h3>Agent Architecture</h3>
+            <p>The bones. Turn a generic LLM into a consistent, reliable production agent.</p>
+            <ul>
+              <li>SOUL.md &mdash; complete identity system, not "you are a helpful assistant"</li>
+              <li>CONSTITUTION.md &mdash; hard boundaries the agent will never cross</li>
+              <li>HEARTBEAT.md &mdash; self-monitoring before you notice problems</li>
+              <li>KNOWLEDGE.md &mdash; FAQ structure, response templates, escalation tiers</li>
+              <li>2 complete examples &mdash; CS agent + data analyst, ready to run</li>
+            </ul>
+            <p class="card-meta">6 files &middot; the foundation</p>
+          </div>
+
+          <div class="card reveal">
+            <span class="card-icon">&#x2261;</span>
+            <h3>Multi-Agent Orchestration</h3>
+            <p>The nervous system. Run many agents without contamination or chaos.</p>
+            <ul>
+              <li>3 orchestration models &mdash; peer-to-peer, hub-and-spoke, event-driven</li>
+              <li>Identity isolation protocol &mdash; stops Agent A from contaminating Agent B</li>
+              <li>Shared memory patterns &mdash; knowledge sharing without context sharing</li>
+              <li>Adversarial testing checklist included</li>
+            </ul>
+            <p class="card-meta">3 files &middot; the coordination layer</p>
+          </div>
+
+          <div class="card reveal">
+            <span class="card-icon">&#x2665;</span>
+            <h3>Self-Healing Monitoring</h3>
+            <p>The immune system. Observe, diff, act. Budget-aware AI diagnosis at $0.05/day.</p>
+            <ul>
+              <li>Level-triggered reconciliation &mdash; not polling, not guessing</li>
+              <li>Health checks, exponential backoff, flap detection</li>
+              <li>launchd + systemd integration</li>
+              <li>Daemon restarts itself. You read the log over coffee.</li>
+            </ul>
+            <p class="card-meta">1 file &middot; the watchdog</p>
+          </div>
+
+          <div class="card reveal">
+            <span class="card-icon">&#x25C8;</span>
+            <h3>Memory Architecture</h3>
+            <p>The brain. Your agent stops waking up with amnesia.</p>
+            <ul>
+              <li>
+                4-layer memory tower: raw facts &rarr; deduplicated &rarr; patterns &rarr;
+                principles
+              </li>
+              <li>Pruning rules and quality metrics</li>
+              <li>Experience capture &mdash; failures become searchable lessons</li>
+            </ul>
+            <p class="card-meta">1 file &middot; the long-term brain</p>
+          </div>
+        </div>
+
+        <div
+          class="card reveal"
+          style="
+            border-color: var(--accent);
+            background: linear-gradient(135deg, #0f1a0f, var(--bg-card));
+          "
+        >
+          <span class="card-icon" style="color: var(--accent)">&#x2605;</span>
+          <h3 style="color: var(--accent)">The Crown Jewel: CLAUDE.md.production</h3>
+          <p>
+            350 lines. Production-grade. Identity rules, memory management, error handling with
+            severity classification, multi-agent coordination, tool usage guidelines, daily
+            operational cycle, escalation protocol, cost awareness.
+          </p>
+          <p style="color: var(--accent); margin-top: 12px; font-weight: 600">
+            This single file is worth the price.
+          </p>
+          <p class="card-meta">1 file &middot; 350 lines &middot; the master config</p>
+        </div>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- PRICING -->
+    <section id="pricing">
+      <div class="container">
+        <div class="reveal">
+          <p class="section-label">Pricing</p>
+          <h2>Two options. Both include everything.</h2>
+        </div>
+
+        <div
+          class="pricing-grid reveal"
+          style="
+            grid-template-columns: repeat(2, 1fr);
+            max-width: 640px;
+            margin-left: auto;
+            margin-right: auto;
+          "
+        >
+          <!-- Pro -->
+          <div class="price-card featured">
+            <span class="price-badge">Most Popular</span>
+            <p class="price-tier">Pro</p>
+            <p class="price-amount"><span class="dollar">$</span>47</p>
+            <p class="price-desc">The full system. 14 production files.</p>
+            <ul class="price-features">
+              <li>Agent workspace templates (SOUL, CONSTITUTION, HEARTBEAT, KNOWLEDGE)</li>
+              <li>2 complete agent examples</li>
+              <li>Multi-agent orchestration patterns</li>
+              <li>Identity isolation protocol</li>
+              <li>Shared memory architecture</li>
+              <li>Self-healing monitoring blueprint</li>
+              <li>4-layer memory tower</li>
+              <li>Production CLAUDE.md (350 lines)</li>
+              <li>Lifetime updates</li>
+            </ul>
+            <button
+              class="btn-buy btn-buy-featured"
+              data-tier="pro"
+              data-price="47"
+              onclick="checkout('price_pro')"
+            >
+              Get Pro &rarr;
+            </button>
+          </div>
+
+          <!-- Complete -->
+          <div class="price-card">
+            <p class="price-tier">Complete</p>
+            <p class="price-amount"><span class="dollar">$</span>97</p>
+            <p class="price-desc">Everything in Pro + video + bonus.</p>
+            <ul class="price-features">
+              <li>Everything in Pro</li>
+              <li>30-min video walkthrough</li>
+              <li>Live terminal demo of the real system</li>
+              <li>Architecture decisions explained</li>
+              <li>BONUS: 90-day production log analysis (anonymized)</li>
+              <li>Lifetime updates</li>
+            </ul>
+            <button
+              class="btn-buy btn-buy-default"
+              data-tier="complete"
+              data-price="97"
+              onclick="checkout('price_complete')"
+            >
+              Get Complete &rarr;
+            </button>
+          </div>
+        </div>
+
+        <p style="text-align: center; color: var(--text-muted); font-size: 14px; margin-top: 8px">
+          One-time purchase &middot; No subscription &middot; Lifetime updates
+        </p>
+        <p style="text-align: center; color: var(--text-muted); font-size: 14px">
+          You'll spend 3 months learning this the hard way. Or $47.
+        </p>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- PROOF -->
+    <section>
+      <div class="container">
+        <div class="reveal">
+          <p class="section-label">Who built this</p>
+          <h2>Not a weekend project.</h2>
+        </div>
+
+        <div class="proof-block reveal">
+          <p>Someone who got tired of demo agents.</p>
+          <p>
+            Ran <strong style="color: #fff">10+ agents simultaneously</strong> across three
+            messaging platforms. Handled real customers, real data, real consequences. Built a
+            monitoring daemon that hasn't needed manual intervention in 90 days.
+          </p>
+          <p>
+            Processed <strong style="color: #fff">2,000+ atomic facts</strong> through a memory
+            system that distills experience into operational principles.
+          </p>
+          <p style="color: var(--accent); font-weight: 600">Production. Not a hackathon.</p>
+        </div>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- WHO THIS IS FOR -->
+    <section>
+      <div class="container">
+        <div class="reveal">
+          <p class="section-label">Is this for you</p>
+          <h2>Who this is for</h2>
+        </div>
+
+        <div
+          style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 32px"
+          class="reveal"
+        >
+          <div>
+            <h3 style="color: var(--accent); font-size: 16px">Yes</h3>
+            <ul style="list-style: none; margin-top: 12px">
+              <li
+                style="
+                  padding: 6px 0;
+                  padding-left: 22px;
+                  position: relative;
+                  color: var(--text-dim);
+                  font-size: 15px;
+                "
+              >
+                <span style="position: absolute; left: 0; color: var(--accent)">&#10003;</span>
+                Developers using Claude Code who want agents that run unsupervised
+              </li>
+              <li
+                style="
+                  padding: 6px 0;
+                  padding-left: 22px;
+                  position: relative;
+                  color: var(--text-dim);
+                  font-size: 15px;
+                "
+              >
+                <span style="position: absolute; left: 0; color: var(--accent)">&#10003;</span> Tech
+                leads who got the "integrate AI" mandate
+              </li>
+              <li
+                style="
+                  padding: 6px 0;
+                  padding-left: 22px;
+                  position: relative;
+                  color: var(--text-dim);
+                  font-size: 15px;
+                "
+              >
+                <span style="position: absolute; left: 0; color: var(--accent)">&#10003;</span> AI
+                agencies who need reusable frameworks
+              </li>
+              <li
+                style="
+                  padding: 6px 0;
+                  padding-left: 22px;
+                  position: relative;
+                  color: var(--text-dim);
+                  font-size: 15px;
+                "
+              >
+                <span style="position: absolute; left: 0; color: var(--accent)">&#10003;</span> Solo
+                builders who want 10 agents working while they sleep
+              </li>
+            </ul>
+          </div>
+          <div>
+            <h3 style="color: var(--text-muted); font-size: 16px">No</h3>
+            <ul style="list-style: none; margin-top: 12px">
+              <li
+                style="
+                  padding: 6px 0;
+                  padding-left: 22px;
+                  position: relative;
+                  color: var(--text-muted);
+                  font-size: 15px;
+                "
+              >
+                <span style="position: absolute; left: 0">&#10007;</span> Complete beginners (need
+                basic Claude Code experience)
+              </li>
+              <li
+                style="
+                  padding: 6px 0;
+                  padding-left: 22px;
+                  position: relative;
+                  color: var(--text-muted);
+                  font-size: 15px;
+                "
+              >
+                <span style="position: absolute; left: 0">&#10007;</span> Prompt collection seekers
+                (this is architecture)
+              </li>
+              <li
+                style="
+                  padding: 6px 0;
+                  padding-left: 22px;
+                  position: relative;
+                  color: var(--text-muted);
+                  font-size: 15px;
+                "
+              >
+                <span style="position: absolute; left: 0">&#10007;</span> Video lecture seekers
+                (these are files you deploy)
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- FAQ -->
+    <section>
+      <div class="container">
+        <div class="reveal">
+          <p class="section-label">FAQ</p>
+          <h2>Questions</h2>
+        </div>
+
+        <div class="reveal">
+          <div class="faq-item">
+            <button class="faq-q" onclick="toggleFaq(this)">
+              What AI provider does this work with?<span class="faq-arrow">+</span>
+            </button>
+            <div class="faq-a">
+              <div class="faq-a-inner">
+                Designed for Claude Code / Anthropic, but the architecture (memory, orchestration,
+                monitoring) is provider-agnostic. Adaptable to OpenAI, Gemini, or any LLM.
+              </div>
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-q" onclick="toggleFaq(this)">
+              Do I need specific infrastructure?<span class="faq-arrow">+</span>
+            </button>
+            <div class="faq-a">
+              <div class="faq-a-inner">
+                No. The real system runs on a single Mac Mini. Works on any machine &mdash; local,
+                VPS, or cloud. No Kubernetes required.
+              </div>
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-q" onclick="toggleFaq(this)">
+              Is this a framework I install?<span class="faq-arrow">+</span>
+            </button>
+            <div class="faq-a">
+              <div class="faq-a-inner">
+                No. These are files. You copy them into your project and customize. No dependencies,
+                no lock-in, no
+                <code
+                  style="
+                    font-family: var(--mono);
+                    background: #1a1a1a;
+                    padding: 2px 6px;
+                    border-radius: 3px;
+                  "
+                  >npm install</code
+                >.
+              </div>
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-q" onclick="toggleFaq(this)">
+              How is this different from blog posts about Claude Code?<span class="faq-arrow"
+                >+</span
+              >
+            </button>
+            <div class="faq-a">
+              <div class="faq-a-inner">
+                Blog posts tell you <em>what</em>. This gives you <em>how</em> &mdash; the actual
+                files, directory structures, and operational patterns. You could reverse-engineer it
+                from public posts. It would take you months.
+              </div>
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-q" onclick="toggleFaq(this)">
+              What if I'm not using agents for customer service?<span class="faq-arrow">+</span>
+            </button>
+            <div class="faq-a">
+              <div class="faq-a-inner">
+                The examples are CS and data analysis, but the architecture works for any domain.
+                Content moderation, code review, monitoring, reporting &mdash; if it's an agent
+                doing real work, these patterns apply.
+              </div>
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-q" onclick="toggleFaq(this)">
+              Can I use this for client projects?<span class="faq-arrow">+</span>
+            </button>
+            <div class="faq-a">
+              <div class="faq-a-inner">
+                Yes. No attribution required. Build on it, customize it, ship it to clients. That's
+                what it's for.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- FINAL CTA -->
+    <section style="text-align: center; padding: 100px 0">
+      <div class="container reveal">
+        <h2 style="font-size: clamp(24px, 4vw, 36px)">Stop babysitting. Start shipping.</h2>
+        <p style="color: var(--text-dim); font-size: 18px; margin-bottom: 32px">
+          14 production files. Copy, customize, deploy.
+        </p>
+        <a href="#pricing" class="hero-cta">Get the blueprints &rarr;</a>
+        <p
+          style="
+            color: var(--text-muted);
+            font-size: 13px;
+            margin-top: 16px;
+            font-family: var(--mono);
+          "
+        >
+          $47 &middot; one-time &middot; lifetime updates
+        </p>
+      </div>
+    </section>
+
+    <!-- PAYMENT MODAL -->
+    <div class="modal-overlay" id="paymentModal">
+      <div class="modal">
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+        <h3 id="modalTier">Pro</h3>
+        <div class="modal-price" id="modalPrice">47 USDT</div>
+        <span class="network-badge">TRC-20 (TRON)</span>
+
+        <div class="wallet-addr" id="walletAddr" onclick="copyAddress()">
+          TT1rC387qkvfLE1FUAN1bR1jPudAh1qNKz
+        </div>
+        <p class="copy-hint" id="copyHint">click to copy</p>
+
+        <ul class="steps">
+          <li>
+            <span class="step-num">1</span>Send exact amount (USDT TRC-20) to the address above
+          </li>
+          <li><span class="step-num">2</span>Paste your transaction hash below</li>
+          <li><span class="step-num">3</span>We verify on-chain and send your download link</li>
+        </ul>
+
+        <input type="text" id="txHash" placeholder="Paste TX hash here (e.g. a1b2c3d4...)" />
+        <input type="text" id="buyerEmail" placeholder="Your email (for download link)" />
+        <button class="btn-verify" id="verifyBtn" onclick="verifyPayment()">
+          Verify Payment &amp; Get Download
+        </button>
+        <div class="verify-status" id="verifyStatus"></div>
+
+        <div class="alt-pay">
+          Prefer card?
+          <a
+            href="mailto:ship@agent.build?subject=Card%20payment%20request"
+            style="color: var(--accent)"
+            >Email us</a
+          >
+          and we'll set up Stripe.
+        </div>
+      </div>
+    </div>
+
+    <!-- FOOTER -->
+    <footer>
+      <div class="container">
+        <p class="footer-promise">
+          One-time purchase &middot; No subscription &middot; Lifetime updates
+        </p>
+        <p style="margin-top: 16px">&copy; 2026 Ship AI Agents to Production</p>
+      </div>
+    </footer>
+
+    <script>
+      // FAQ accordion
+      function toggleFaq(btn) {
+        const item = btn.parentElement;
+        const wasOpen = item.classList.contains("open");
+        // Close all
+        document.querySelectorAll(".faq-item").forEach((el) => el.classList.remove("open"));
+        // Toggle clicked
+        if (!wasOpen) item.classList.add("open");
+      }
+
+      // Scroll reveal
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              entry.target.classList.add("visible");
+            }
+          });
+        },
+        { threshold: 0.1, rootMargin: "0px 0px -40px 0px" },
+      );
+
+      document.querySelectorAll(".reveal").forEach((el) => observer.observe(el));
+
+      // Payment
+      const PRICES = { price_pro: 47, price_complete: 97 };
+      const TIER_NAMES = { price_pro: "Pro", price_complete: "Complete" };
+      let currentTier = "";
+
+      function checkout(priceId) {
+        currentTier = priceId;
+        document.getElementById("modalTier").textContent = TIER_NAMES[priceId] || "Pro";
+        document.getElementById("modalPrice").textContent = PRICES[priceId] + " USDT";
+        document.getElementById("txHash").value = "";
+        document.getElementById("buyerEmail").value = "";
+        document.getElementById("verifyStatus").textContent = "";
+        document.getElementById("verifyStatus").style.color = "";
+        document.getElementById("paymentModal").classList.add("active");
+        document.body.style.overflow = "hidden";
+      }
+
+      function closeModal() {
+        document.getElementById("paymentModal").classList.remove("active");
+        document.body.style.overflow = "";
+      }
+
+      document.getElementById("paymentModal").addEventListener("click", function (e) {
+        if (e.target === this) closeModal();
+      });
+
+      function copyAddress() {
+        const addr = "TT1rC387qkvfLE1FUAN1bR1jPudAh1qNKz";
+        navigator.clipboard.writeText(addr).then(() => {
+          const hint = document.getElementById("copyHint");
+          const box = document.getElementById("walletAddr");
+          hint.textContent = "copied!";
+          hint.style.color = "#22c55e";
+          box.classList.add("copied");
+          setTimeout(() => {
+            hint.textContent = "click to copy";
+            hint.style.color = "";
+            box.classList.remove("copied");
+          }, 2000);
+        });
+      }
+
+      async function verifyPayment() {
+        const txHash = document.getElementById("txHash").value.trim();
+        const email = document.getElementById("buyerEmail").value.trim();
+        const status = document.getElementById("verifyStatus");
+        const btn = document.getElementById("verifyBtn");
+
+        if (!txHash) {
+          status.textContent = "Please paste your TX hash.";
+          status.style.color = "#ef4444";
+          return;
+        }
+        if (!email || !email.includes("@")) {
+          status.textContent = "Please enter a valid email.";
+          status.style.color = "#ef4444";
+          return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = "Verifying on-chain...";
+        status.textContent = "";
+
+        try {
+          const response = await fetch("/api/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              txHash,
+              email,
+              tier: currentTier,
+              expectedAmount: PRICES[currentTier],
+            }),
+          });
+          const result = await response.json();
+          if (result.verified) {
+            status.textContent = "Payment verified! Check your email for the download link.";
+            status.style.color = "#22c55e";
+            btn.textContent = "Verified!";
+          } else {
+            status.textContent = result.error || "Could not verify. Check TX hash and try again.";
+            status.style.color = "#ef4444";
+            btn.disabled = false;
+            btn.textContent = "Verify Payment & Get Download";
+          }
+        } catch (err) {
+          status.textContent =
+            "Verification service unavailable. Email us with your TX hash: ship@agent.build";
+          status.style.color = "#eab308";
+          btn.disabled = false;
+          btn.textContent = "Verify Payment & Get Download";
+        }
+      }
+    </script>
+  </body>
+</html>
