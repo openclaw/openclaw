@@ -1044,12 +1044,15 @@
       if (!result) {
         return "";
       }
+      if (!Array.isArray(result.content)) {
+        return typeof result.content === "string" ? result.content : "";
+      }
       const textBlocks = result.content.filter((c) => c.type === "text");
       return textBlocks.map((c) => c.text).join("\n");
     };
 
     const getResultImages = () => {
-      if (!result) {
+      if (!result || !Array.isArray(result.content)) {
         return [];
       }
       return result.content.filter((c) => c.type === "image");
@@ -1474,7 +1477,7 @@
               cost.cacheWrite += msg.usage.cost.cacheWrite || 0;
             }
           }
-          toolCalls += msg.content.filter((c) => c.type === "toolCall").length;
+          toolCalls += Array.isArray(msg.content) ? msg.content.filter((c) => c.type === "toolCall").length : 0;
         }
         if (msg.role === "toolResult") {
           toolResults++;
