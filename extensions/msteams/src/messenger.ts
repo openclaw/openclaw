@@ -321,8 +321,10 @@ async function buildActivity(
 
       if (!isPersonal && !isImage && tokenProvider && sharePointSiteId) {
         // Non-image in group chat/channel with SharePoint site configured:
-        // Upload to SharePoint and use native file card attachment
-        const chatId = conversationRef.conversation?.id;
+        // Upload to SharePoint and use native file card attachment.
+        // Use the cached Graph-native chat ID when available — Bot Framework conversation IDs
+        // for personal DMs use a format (e.g. `a:1xxx`) that Graph API rejects.
+        const chatId = conversationRef.graphChatId ?? conversationRef.conversation?.id;
 
         // Upload to SharePoint
         const uploaded = await uploadAndShareSharePoint({
