@@ -240,6 +240,38 @@ describe("setupSearch", () => {
     expect(prompter.text).not.toHaveBeenCalled();
   });
 
+  it("quickstart skips key prompt when canonical plugin config key exists", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        web: {
+          search: {
+            provider: "tavily",
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          tavily: {
+            enabled: true,
+            config: {
+              webSearch: {
+                apiKey: "tvly-existing-key",
+              },
+            },
+          },
+        },
+      },
+    };
+    const { prompter } = createPrompter({ selectValue: "tavily" });
+    const result = await setupSearch(cfg, runtime, prompter, {
+      quickstartDefaults: true,
+    });
+    expect(result.tools?.web?.search?.provider).toBe("tavily");
+    expect(pluginWebSearchApiKey(result, "tavily")).toBe("tvly-existing-key");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(prompter.text).not.toHaveBeenCalled();
+  });
+
   it("quickstart falls through to key prompt when no key and no env var", async () => {
     const original = process.env.XAI_API_KEY;
     delete process.env.XAI_API_KEY;

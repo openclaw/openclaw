@@ -53,7 +53,10 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
     config,
     bundledAllowlistCompat: true,
   }).find((candidate) => candidate.id === provider);
-  return entry?.getCredentialValue(search as Record<string, unknown> | undefined);
+  return (
+    entry?.getConfiguredCredentialValue?.(config) ??
+    entry?.getCredentialValue(search as Record<string, unknown> | undefined)
+  );
 }
 
 /** Returns the plaintext key string, or undefined for SecretRefs/missing. */

@@ -51,11 +51,12 @@ export function createTavilyExtractTool(api: OpenClawPluginApi) {
       }
       const query = readStringParam(rawParams, "query") || undefined;
       const extractDepth = readStringParam(rawParams, "extract_depth") || undefined;
-      const rawChunksPerSource = readNumberParam(rawParams, "chunks_per_source", {
+      const chunksPerSource = readNumberParam(rawParams, "chunks_per_source", {
         integer: true,
       });
-      // Tavily API requires query when chunks_per_source is set.
-      const chunksPerSource = rawChunksPerSource && !query ? undefined : rawChunksPerSource;
+      if (chunksPerSource !== undefined && !query) {
+        throw new Error("tavily_extract requires query when chunks_per_source is set.");
+      }
       const includeImages = rawParams.include_images === true;
 
       return jsonResult(
