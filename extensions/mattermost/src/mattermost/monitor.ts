@@ -1458,6 +1458,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     // Count of turns already posted via streaming (flushed at assistant message boundaries).
     // Used to skip re-delivery of those turns in the final reply array.
     let streamedTurnCount = 0;
+    // Over-limit preview posts waiting to be deleted after their re-delivery succeeds.
+    // Populated by onAssistantMessageStart when finalizeText > textLimit.
+    const pendingOrphanDeletes = new Set<string>();
     const STREAM_PATCH_INTERVAL_MS = 200;
 
     // Edit-in-place streaming is opt-in: only activate when blockStreaming is
@@ -1615,6 +1618,27 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             runtime.log?.(
               `stream-patch skipping already-delivered turn (${streamedTurnCount} remaining)`,
             );
+            // Even though the text was already delivered via streaming, the final
+            // payload may carry media attachments (e.g. TTS audio) that onPartialReply
+            // never receives. Deliver any media now via the normal path (ID=2965091869).
+            const hasMedia = payload.mediaUrls?.length || payload.mediaUrl;
+            if (hasMedia) {
+              await deliverMattermostReplyPayload({
+                core,
+                cfg,
+                payload: { ...payload, text: undefined },
+                to,
+                accountId: account.accountId,
+                agentId: route.agentId,
+                replyToId: resolveMattermostReplyRootId({
+                  threadRootId: effectiveReplyToId,
+                  replyToId: payload.replyToId,
+                }),
+                textLimit,
+                tableMode,
+                sendMessage: sendMessageMattermost,
+              });
+            }
             return;
           }
 
@@ -1792,6 +1816,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             sendMessage: sendMessageMattermost,
           });
           runtime.log?.(`delivered reply to ${to}`);
+          // Clean up any over-limit preview posts that were queued during
+          // onAssistantMessageStart. Now that their re-delivery has succeeded,
+          // it is safe to delete the truncated preview (ID=2965091873).
+          if (pendingOrphanDeletes.size > 0 && blockStreamingClient) {
+            const toDelete = [...pendingOrphanDeletes];
+            pendingOrphanDeletes.clear();
+            for (const orphanId of toDelete) {
+              void deleteMattermostPost(blockStreamingClient, orphanId).catch(() => {});
+            }
+          }
         },
         onError: (err, info) => {
           runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
@@ -1899,14 +1933,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   // which applies proper multi-chunk delivery. The preview post is deleted
                   // so there is no orphaned partial-text post alongside the chunked reply.
                   if (finalizeText.length > textLimit) {
-                    // Defer the preview delete: deliver() runs after this callback
-                    // returns, so deleting immediately would remove the only visible
-                    // copy of this turn if deliverMattermostReplyPayload later fails.
-                    // A short delay gives the delivery path time to succeed first.
-                    const clientRef = blockStreamingClient;
-                    void new Promise<void>((r) => setTimeout(r, 5000)).then(() =>
-                      deleteMattermostPost(clientRef, finalizeId).catch(() => {}),
-                    );
+                    // Queue for deletion after deliver() successfully re-sends
+                    // this turn via deliverMattermostReplyPayload. The fixed
+                    // setTimeout approach was unreliable: tool calls or network
+                    // delays >5s could remove the preview before the replacement
+                    // arrived (ID=2965091873).
+                    pendingOrphanDeletes.add(finalizeId);
                     runtime.log?.(
                       `stream-patch skipping over-limit turn ${finalizeId} (${finalizeText.length} > ${textLimit}), will re-deliver`,
                     );
