@@ -1459,8 +1459,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     // Used to skip re-delivery of those turns in the final reply array.
     let streamedTurnCount = 0;
     // Over-limit preview posts waiting to be deleted after their re-delivery succeeds.
-    // Populated by onAssistantMessageStart when finalizeText > textLimit.
-    const pendingOrphanDeletes = new Set<string>();
+    // FIFO queue: each entry is dequeued and deleted only when the corresponding
+    // turn's re-delivery completes in deliver(), preventing one turn's delivery
+    // from removing another turn's preview (ID=2965255734).
+    const pendingOrphanDeletes: string[] = [];
     const STREAM_PATCH_INTERVAL_MS = 200;
 
     // Edit-in-place streaming is opt-in: only activate when blockStreaming is
@@ -1818,15 +1820,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             sendMessage: sendMessageMattermost,
           });
           runtime.log?.(`delivered reply to ${to}`);
-          // Clean up any over-limit preview posts that were queued during
-          // onAssistantMessageStart. Now that their re-delivery has succeeded,
-          // it is safe to delete the truncated preview (ID=2965091873).
-          if (pendingOrphanDeletes.size > 0 && blockStreamingClient) {
-            const toDelete = [...pendingOrphanDeletes];
-            pendingOrphanDeletes.clear();
-            for (const orphanId of toDelete) {
-              void deleteMattermostPost(blockStreamingClient, orphanId).catch(() => {});
-            }
+          // Dequeue and delete the preview for this specific turn only.
+          // Over-limit turns are enqueued FIFO in onAssistantMessageStart;
+          // dequeuing one-at-a-time ensures turn B's preview is not deleted
+          // by turn A's delivery (ID=2965255734 / ID=2965091873).
+          const orphanToDelete = pendingOrphanDeletes.shift();
+          if (orphanToDelete && blockStreamingClient) {
+            void deleteMattermostPost(blockStreamingClient, orphanToDelete).catch(() => {});
           }
         },
         onError: (err, info) => {
@@ -1940,7 +1940,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     // setTimeout approach was unreliable: tool calls or network
                     // delays >5s could remove the preview before the replacement
                     // arrived (ID=2965091873).
-                    pendingOrphanDeletes.add(finalizeId);
+                    pendingOrphanDeletes.push(finalizeId);
                     runtime.log?.(
                       `stream-patch skipping over-limit turn ${finalizeId} (${finalizeText.length} > ${textLimit}), will re-deliver`,
                     );
