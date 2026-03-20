@@ -1,13 +1,11 @@
 import amazonBedrockPlugin from "../../../extensions/amazon-bedrock/index.js";
 import anthropicPlugin from "../../../extensions/anthropic/index.js";
-import bravePlugin from "../../../extensions/brave/index.js";
 import byteplusPlugin from "../../../extensions/byteplus/index.js";
 import chutesPlugin from "../../../extensions/chutes/index.js";
 import cloudflareAiGatewayPlugin from "../../../extensions/cloudflare-ai-gateway/index.js";
 import copilotProxyPlugin from "../../../extensions/copilot-proxy/index.js";
 import elevenLabsPlugin from "../../../extensions/elevenlabs/index.js";
 import falPlugin from "../../../extensions/fal/index.js";
-import firecrawlPlugin from "../../../extensions/firecrawl/index.js";
 import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
 import googlePlugin from "../../../extensions/google/index.js";
 import huggingFacePlugin from "../../../extensions/huggingface/index.js";
@@ -24,12 +22,10 @@ import openAIPlugin from "../../../extensions/openai/index.js";
 import opencodeGoPlugin from "../../../extensions/opencode-go/index.js";
 import opencodePlugin from "../../../extensions/opencode/index.js";
 import openrouterPlugin from "../../../extensions/openrouter/index.js";
-import perplexityPlugin from "../../../extensions/perplexity/index.js";
 import qianfanPlugin from "../../../extensions/qianfan/index.js";
 import qwenPortalAuthPlugin from "../../../extensions/qwen-portal-auth/index.js";
 import sglangPlugin from "../../../extensions/sglang/index.js";
 import syntheticPlugin from "../../../extensions/synthetic/index.js";
-import tavilyPlugin from "../../../extensions/tavily/index.js";
 import togetherPlugin from "../../../extensions/together/index.js";
 import venicePlugin from "../../../extensions/venice/index.js";
 import vercelAiGatewayPlugin from "../../../extensions/vercel-ai-gateway/index.js";
@@ -38,6 +34,7 @@ import volcenginePlugin from "../../../extensions/volcengine/index.js";
 import xaiPlugin from "../../../extensions/xai/index.js";
 import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
 import zaiPlugin from "../../../extensions/zai/index.js";
+import { bundledWebSearchPluginRegistrations } from "../bundled-web-search-registry.js";
 import { createCapturedPluginRegistration } from "../captured-registration.js";
 import { resolvePluginProviders } from "../providers.js";
 import type {
@@ -78,19 +75,6 @@ type PluginRegistrationContractEntry = {
   webSearchProviderIds: string[];
   toolNames: string[];
 };
-
-export const bundledWebSearchPluginRegistrations: Array<{
-  plugin: RegistrablePlugin;
-  credentialValue: unknown;
-}> = [
-  { plugin: bravePlugin, credentialValue: "BSA-test" },
-  { plugin: firecrawlPlugin, credentialValue: "fc-test" },
-  { plugin: googlePlugin, credentialValue: "AIza-test" },
-  { plugin: moonshotPlugin, credentialValue: "sk-test" },
-  { plugin: perplexityPlugin, credentialValue: "pplx-test" },
-  { plugin: tavilyPlugin, credentialValue: "tvly-test" },
-  { plugin: xaiPlugin, credentialValue: "xai-test" },
-];
 
 const bundledWebSearchPlugins: Array<RegistrablePlugin & { credentialValue: unknown }> =
   bundledWebSearchPluginRegistrations.map(({ plugin, credentialValue }) => ({

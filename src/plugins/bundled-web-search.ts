@@ -1,5 +1,5 @@
+import { bundledWebSearchPluginRegistrations } from "./bundled-web-search-registry.js";
 import { capturePluginRegistration } from "./captured-registration.js";
-import { bundledWebSearchPluginRegistrations } from "./contracts/registry.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
