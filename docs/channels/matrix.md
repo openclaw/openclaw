@@ -589,6 +589,39 @@ Set `defaultAccount` when you want OpenClaw to prefer one named Matrix account f
 If you configure multiple named accounts, set `defaultAccount` or pass `--account <id>` for CLI commands that rely on implicit account selection.
 Pass `--account <id>` to `openclaw matrix verify ...` and `openclaw matrix devices ...` when you want to override that implicit selection for one command.
 
+## Private/LAN homeservers
+
+By default, OpenClaw blocks private/internal Matrix homeservers for SSRF protection unless you
+explicitly opt in per account.
+
+If your homeserver runs on localhost, a LAN/Tailscale IP, or an internal hostname, enable
+`allowPrivateNetwork` for that Matrix account:
+
+```json5
+{
+  channels: {
+    matrix: {
+      homeserver: "http://matrix-synapse:8008",
+      allowPrivateNetwork: true,
+      accessToken: "syt_internal_xxx",
+    },
+  },
+}
+```
+
+CLI setup example:
+
+```bash
+openclaw matrix account add \
+  --account ops \
+  --homeserver http://matrix-synapse:8008 \
+  --allow-private-network \
+  --access-token syt_ops_xxx
+```
+
+This opt-in only allows trusted private/internal targets. Public cleartext homeservers such as
+`http://matrix.example.org:8008` remain blocked. Prefer `https://` whenever possible.
+
 ## Target resolution
 
 Matrix accepts these target forms anywhere OpenClaw asks you for a room or user target:
