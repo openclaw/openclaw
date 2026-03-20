@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../api.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { linePlugin } from "./channel.js";
 import { setLineRuntime } from "./runtime.js";
 

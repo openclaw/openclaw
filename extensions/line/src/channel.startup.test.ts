@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type {
-  ChannelGatewayContext,
   ChannelAccountSnapshot,
-  OpenClawConfig,
-  PluginRuntime,
-  ResolvedLineAccount,
-} from "../api.js";
+  ChannelGatewayContext,
+} from "../../../src/channels/plugins/types.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { ResolvedLineAccount } from "../../../src/line/types.js";
+import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import { linePlugin } from "./channel.js";
 import { setLineRuntime } from "./runtime.js";
 

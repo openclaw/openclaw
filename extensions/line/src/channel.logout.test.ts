@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { ResolvedLineAccount } from "../../../src/line/types.js";
+import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
-import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { setLineRuntime } from "./runtime.js";
 

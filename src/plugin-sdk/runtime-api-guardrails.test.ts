@@ -35,6 +35,10 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { sendMessageIMessage } from "./src/send.js";',
   ],
   "extensions/googlechat/runtime-api.ts": ['export * from "../../src/plugin-sdk/googlechat.js";'],
+  "extensions/line/runtime-api.ts": [
+    'export type { ChannelAccountSnapshot, ChannelGatewayContext, ChannelStatusIssue, ChannelPlugin, OpenClawConfig, ReplyPayload, OpenClawPluginApi, PluginRuntime, LineChannelData, LineConfig, ResolvedLineAccount, CardAction, ListItem, ChannelSetupDmPolicy, ChannelSetupWizard } from "../../src/plugin-sdk/line-core.js";',
+    'export { DEFAULT_ACCOUNT_ID, buildChannelConfigSchema, buildComputedAccountStatusSnapshot, buildTokenChannelStatusSummary, clearAccountEntryFields, createActionCard, createImageCard, createInfoCard, createListCard, createReceiptCard, formatDocsLink, LineConfigSchema, listLineAccountIds, normalizeAccountId, processLineMessage, resolveDefaultLineAccountId, resolveLineAccount, resolveExactLineGroupConfigKey, setSetupChannelEnabled, splitSetupEntries } from "../../src/plugin-sdk/line-core.js";',
+  ],
   "extensions/matrix/runtime-api.ts": [
     'export * from "./src/auth-precedence.js";',
     'export * from "./helper-api.js";',
