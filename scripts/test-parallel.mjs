@@ -267,6 +267,7 @@ const parseEnvNumber = (name, fallback) => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
 const shardedCi = isCI && shardCount > 1;
+const shardedLinuxCi = shardedCi && !isWindows && !isMacOS;
 const allKnownUnitFiles = allKnownTestFiles.filter((file) => {
   return isUnitConfigTestFile(file);
 });
@@ -312,6 +313,9 @@ const timedHeavyUnitFiles =
 const unitFastExcludedFiles = [
   ...new Set([...unitBehaviorOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
 ];
+// Sharded Linux CI still sees the broadest heap retention in the shared unit-fast lane. Prefer
+// process forks there so the workers release memory more aggressively between files.
+const unitFastPool = useVmForks && !shardedLinuxCi ? "vmForks" : "forks";
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
 const heavyUnitBuckets = packFilesByDuration(
@@ -333,7 +337,7 @@ const baseRuns = [
             "run",
             "--config",
             "vitest.unit.config.ts",
-            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            `--pool=${unitFastPool}`,
             ...(disableIsolation ? ["--isolate=false"] : []),
             ...unitFastExcludedFiles.flatMap((file) => ["--exclude", file]),
           ],
@@ -699,6 +703,9 @@ const shardedCiWorkerBudget =
 const maxWorkersForRun = (name) => {
   if (resolvedOverride) {
     return resolvedOverride;
+  }
+  if (shardedLinuxCi && name === "unit-fast") {
+    return 1;
   }
   if (name.endsWith("-threads") || name.endsWith("-vmforks")) {
     return 1;
@@ -1191,7 +1198,10 @@ if (passthroughRequiresSingleRun && passthroughOptionArgs.length > 0) {
   process.exit(2);
 }
 
-if (isMacMiniProfile && targetedEntries.length === 0) {
+const shouldFrontloadUnitFast =
+  targetedEntries.length === 0 && (isMacMiniProfile || shardedLinuxCi);
+
+if (shouldFrontloadUnitFast) {
   const unitFastEntry = parallelRuns.find((entry) => entry.name === "unit-fast");
   if (unitFastEntry) {
     const unitFastCode = await run(unitFastEntry, passthroughOptionArgs);
@@ -1200,13 +1210,13 @@ if (isMacMiniProfile && targetedEntries.length === 0) {
     }
   }
   const deferredEntries = parallelRuns.filter((entry) => entry.name !== "unit-fast");
-  const failedMacMiniParallel = await runEntriesWithLimit(
+  const failedDeferredParallel = await runEntriesWithLimit(
     deferredEntries,
     passthroughOptionArgs,
-    3,
+    isMacMiniProfile ? 3 : topLevelParallelLimit,
   );
-  if (failedMacMiniParallel !== undefined) {
-    process.exit(failedMacMiniParallel);
+  if (failedDeferredParallel !== undefined) {
+    process.exit(failedDeferredParallel);
   }
 } else {
   const failedParallel = await runEntries(parallelRuns, passthroughOptionArgs);

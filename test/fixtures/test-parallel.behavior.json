@@ -278,6 +278,54 @@
       {
         "file": "src/tui/tui.submit-handler.test.ts",
         "reason": "TUI submit handler coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/cron/isolated-agent.uses-last-non-empty-agent-text-as.test.ts",
+        "reason": "Isolated-agent last-non-empty text coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 rerun OOM lane."
+      },
+      {
+        "file": "src/infra/restart.test.ts",
+        "reason": "Restart coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 rerun OOM lane."
+      },
+      {
+        "file": "src/infra/update-runner.test.ts",
+        "reason": "Update runner coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 rerun OOM lane."
+      },
+      {
+        "file": "src/plugins/commands.test.ts",
+        "reason": "Plugin commands coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 rerun OOM lane."
+      },
+      {
+        "file": "src/infra/outbound/message-action-runner.context.test.ts",
+        "reason": "Message action runner context coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 rerun OOM lane."
+      },
+      {
+        "file": "src/cron/service.main-job-passes-heartbeat-target-last.test.ts",
+        "reason": "Cron main-job heartbeat target coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 rerun OOM lane."
+      },
+      {
+        "file": "src/config/schema.help.quality.test.ts",
+        "reason": "Schema help quality coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 rerun OOM lane."
+      },
+      {
+        "file": "src/infra/run-node.test.ts",
+        "reason": "Run-node coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 rerun OOM lane."
+      },
+      {
+        "file": "src/media-understanding/providers/openai/audio.test.ts",
+        "reason": "OpenAI audio provider coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 rerun OOM lane."
+      },
+      {
+        "file": "src/media/fetch.telegram-network.test.ts",
+        "reason": "Telegram network fetch coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 rerun OOM lane."
+      },
+      {
+        "file": "src/channels/plugins/contracts/group-policy.contract.test.ts",
+        "reason": "Group policy contract coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 rerun OOM lane."
+      },
+      {
+        "file": "src/config/sessions/store.pruning.test.ts",
+        "reason": "Session store pruning coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 rerun OOM lane."
       }
     ],
     "threadSingleton": [
