@@ -1,13 +1,7 @@
-import {
-  buildSecretInputSchema,
-  hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-} from "./runtime-api.js";
-
+export type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 export {
   buildSecretInputSchema,
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-};
+} from "openclaw/plugin-sdk/secret-input";

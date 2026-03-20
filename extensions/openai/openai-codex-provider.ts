@@ -1,10 +1,8 @@
-import { getOAuthApiKey } from "@mariozechner/pi-ai/oauth";
 import type {
   ProviderAuthContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
-import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
@@ -18,6 +16,7 @@ import {
   normalizeProviderId,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-models";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-oauth";
 import { createOpenAIAttributionHeadersWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
@@ -142,6 +141,7 @@ function resolveCodexForwardCompatModel(
 
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
+    const { getOAuthApiKey } = await import("./openai-codex-provider.runtime.js");
     const refreshed = await getOAuthApiKey("openai-codex", {
       "openai-codex": cred,
     });

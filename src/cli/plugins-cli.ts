@@ -7,6 +7,7 @@ import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveArchiveKind } from "../infra/archive.js";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
@@ -227,6 +228,56 @@ function createPluginInstallLogger(): { info: (msg: string) => void; warn: (msg:
   };
 }
 
+function extractInstalledNpmPackageName(install: PluginInstallRecord): string | undefined {
+  if (install.source !== "npm") {
+    return undefined;
+  }
+  const resolvedName = install.resolvedName?.trim();
+  if (resolvedName) {
+    return resolvedName;
+  }
+  return (
+    (install.spec ? parseRegistryNpmSpec(install.spec)?.name : undefined) ??
+    (install.resolvedSpec ? parseRegistryNpmSpec(install.resolvedSpec)?.name : undefined)
+  );
+}
+
+function resolvePluginUpdateSelection(params: {
+  installs: Record<string, PluginInstallRecord>;
+  rawId?: string;
+  all?: boolean;
+}): { pluginIds: string[]; specOverrides?: Record<string, string> } {
+  if (params.all) {
+    return { pluginIds: Object.keys(params.installs) };
+  }
+  if (!params.rawId) {
+    return { pluginIds: [] };
+  }
+
+  const parsedSpec = parseRegistryNpmSpec(params.rawId);
+  if (!parsedSpec || parsedSpec.selectorKind === "none") {
+    return { pluginIds: [params.rawId] };
+  }
+
+  const matches = Object.entries(params.installs).filter(([, install]) => {
+    return extractInstalledNpmPackageName(install) === parsedSpec.name;
+  });
+  if (matches.length !== 1) {
+    return { pluginIds: [params.rawId] };
+  }
+
+  const [pluginId] = matches[0];
+  if (!pluginId) {
+    return { pluginIds: [params.rawId] };
+  }
+  return {
+    pluginIds: [pluginId],
+    specOverrides: {
+      [pluginId]: parsedSpec.raw,
+    },
+  };
+}
+
 function logSlotWarnings(warnings: string[]) {
   if (warnings.length === 0) {
     return;
@@ -288,7 +339,7 @@ async function runPluginInstallCommand(params: {
     : null;
   if (shorthand?.ok === false) {
     defaultRuntime.error(shorthand.error);
-    process.exit(1);
+    return defaultRuntime.exit(1);
   }
 
   const raw = shorthand?.ok ? shorthand.plugin : params.raw;
@@ -301,11 +352,11 @@ async function runPluginInstallCommand(params: {
   if (opts.marketplace) {
     if (opts.link) {
       defaultRuntime.error("`--link` is not supported with `--marketplace`.");
-      process.exit(1);
+      return defaultRuntime.exit(1);
     }
     if (opts.pin) {
       defaultRuntime.error("`--pin` is not supported with `--marketplace`.");
-      process.exit(1);
+      return defaultRuntime.exit(1);
     }
 
     const cfg = loadConfig();
@@ -316,7 +367,7 @@ async function runPluginInstallCommand(params: {
     });
     if (!result.ok) {
       defaultRuntime.error(result.error);
-      process.exit(1);
+      return defaultRuntime.exit(1);
     }
 
     clearPluginManifestRegistryCache();
@@ -343,7 +394,7 @@ async function runPluginInstallCommand(params: {
   const fileSpec = resolveFileNpmSpecToLocalPath(raw);
   if (fileSpec && !fileSpec.ok) {
     defaultRuntime.error(fileSpec.error);
-    process.exit(1);
+    return defaultRuntime.exit(1);
   }
   const normalized = fileSpec && fileSpec.ok ? fileSpec.path : raw;
   const resolved = resolveUserPath(normalized);
@@ -356,7 +407,7 @@ async function runPluginInstallCommand(params: {
       const probe = await installPluginFromPath({ path: resolved, dryRun: true });
       if (!probe.ok) {
         defaultRuntime.error(probe.error);
-        process.exit(1);
+        return defaultRuntime.exit(1);
       }
 
       let next: OpenClawConfig = enablePluginInConfig(
@@ -394,7 +445,7 @@ async function runPluginInstallCommand(params: {
     });
     if (!result.ok) {
       defaultRuntime.error(result.error);
-      process.exit(1);
+      return defaultRuntime.exit(1);
     }
     // Plugin CLI registrars may have warmed the manifest registry cache before install;
     // force a rescan so config validation sees the freshly installed plugin.
@@ -420,7 +471,7 @@ async function runPluginInstallCommand(params: {
 
   if (opts.link) {
     defaultRuntime.error("`--link` requires a local path.");
-    process.exit(1);
+    return defaultRuntime.exit(1);
   }
 
   if (
@@ -436,7 +487,7 @@ async function runPluginInstallCommand(params: {
     ])
   ) {
     defaultRuntime.error(`Path not found: ${resolved}`);
-    process.exit(1);
+    return defaultRuntime.exit(1);
   }
 
   const bundledPreNpmPlan = resolveBundledInstallPlanBeforeNpm({
@@ -465,7 +516,7 @@ async function runPluginInstallCommand(params: {
     });
     if (!bundledFallbackPlan) {
       defaultRuntime.error(result.error);
-      process.exit(1);
+      return defaultRuntime.exit(1);
     }
 
     await installBundledPluginSource({
@@ -623,7 +674,7 @@ export function registerPluginsCli(program: Command) {
       if (opts.all) {
         if (id) {
           defaultRuntime.error("Pass either a plugin id or --all, not both.");
-          process.exit(1);
+          return defaultRuntime.exit(1);
         }
         const inspectAll = buildAllPluginInspectReports({
           config: cfg,
@@ -689,7 +740,7 @@ export function registerPluginsCli(program: Command) {
 
       if (!id) {
         defaultRuntime.error("Provide a plugin id or use --all.");
-        process.exit(1);
+        return defaultRuntime.exit(1);
       }
 
       const inspect = buildPluginInspectReport({
@@ -699,7 +750,7 @@ export function registerPluginsCli(program: Command) {
       });
       if (!inspect) {
         defaultRuntime.error(`Plugin not found: ${id}`);
-        process.exit(1);
+        return defaultRuntime.exit(1);
       }
       const install = cfg.plugins?.installs?.[inspect.plugin.id];
 
@@ -905,7 +956,7 @@ export function registerPluginsCli(program: Command) {
         } else {
           defaultRuntime.error(`Plugin not found: ${id}`);
         }
-        process.exit(1);
+        return defaultRuntime.exit(1);
       }
 
       const install = cfg.plugins?.installs?.[pluginId];
@@ -972,7 +1023,7 @@ export function registerPluginsCli(program: Command) {
 
       if (!result.ok) {
         defaultRuntime.error(result.error);
-        process.exit(1);
+        return defaultRuntime.exit(1);
       }
       for (const warning of result.warnings) {
         defaultRuntime.log(theme.warn(warning));
@@ -1032,7 +1083,12 @@ export function registerPluginsCli(program: Command) {
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
       const cfg = loadConfig();
       const installs = cfg.plugins?.installs ?? {};
-      const targets = opts.all ? Object.keys(installs) : id ? [id] : [];
+      const selection = resolvePluginUpdateSelection({
+        installs,
+        rawId: id,
+        all: opts.all,
+      });
+      const targets = selection.pluginIds;
 
       if (targets.length === 0) {
         if (opts.all) {
@@ -1040,12 +1096,13 @@ export function registerPluginsCli(program: Command) {
           return;
         }
         defaultRuntime.error("Provide a plugin id or use --all.");
-        process.exit(1);
+        return defaultRuntime.exit(1);
       }
 
       const result = await updateNpmInstalledPlugins({
         config: cfg,
         pluginIds: targets,
+        specOverrides: selection.specOverrides,
         dryRun: opts.dryRun,
         logger: {
           info: (msg) => defaultRuntime.log(msg),
@@ -1148,7 +1205,7 @@ export function registerPluginsCli(program: Command) {
       });
       if (!result.ok) {
         defaultRuntime.error(result.error);
-        process.exit(1);
+        return defaultRuntime.exit(1);
       }
 
       if (opts.json) {

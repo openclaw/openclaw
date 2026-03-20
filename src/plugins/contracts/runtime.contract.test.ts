@@ -2,10 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import openAIPlugin from "../../../extensions/openai/index.js";
+import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
 import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
 import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
 import type { ProviderRuntimeModel } from "../types.js";
+import { requireProviderContractProvider as requireBundledProviderContractProvider } from "./registry.js";
+
+const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
 const getOAuthApiKeyMock = vi.hoisted(() => vi.fn());
 const refreshQwenPortalCredentialsMock = vi.hoisted(() => vi.fn());
@@ -18,17 +23,13 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
-vi.mock("../../plugin-sdk/qwen-portal-auth.js", async () => {
-  const actual = await vi.importActual<object>("../../plugin-sdk/qwen-portal-auth.js");
+vi.mock("../../../extensions/qwen-portal-auth/refresh.js", async () => {
+  const actual = await vi.importActual<object>("../../../extensions/qwen-portal-auth/refresh.js");
   return {
     ...actual,
     refreshQwenPortalCredentials: refreshQwenPortalCredentialsMock,
   };
 });
-
-let requireBundledProviderContractProvider: typeof import("./registry.js").requireProviderContractProvider;
-let openAIPlugin: (typeof import("../../../extensions/openai/index.js"))["default"];
-let qwenPortalPlugin: (typeof import("../../../extensions/qwen-portal-auth/index.js"))["default"];
 
 function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRuntimeModel, "id">) {
   return {
@@ -72,15 +73,10 @@ function requireProviderContractProvider(providerId: string): ProviderPlugin {
 }
 
 describe("provider runtime contract", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ requireProviderContractProvider: requireBundledProviderContractProvider } =
-      await import("./registry.js"));
-    openAIPlugin = (await import("../../../extensions/openai/index.js")).default;
-    qwenPortalPlugin = (await import("../../../extensions/qwen-portal-auth/index.js")).default;
+  beforeEach(() => {
     getOAuthApiKeyMock.mockReset();
     refreshQwenPortalCredentialsMock.mockReset();
-  });
+  }, CONTRACT_SETUP_TIMEOUT_MS);
 
   describe("anthropic", () => {
     it("owns anthropic 4.6 forward-compat resolution", () => {

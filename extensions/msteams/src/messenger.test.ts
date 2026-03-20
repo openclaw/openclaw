@@ -1,9 +1,9 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk/msteams";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
+import { SILENT_REPLY_TOKEN, type PluginRuntime } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareOneDrive: vi.fn(),
@@ -50,9 +50,14 @@ const runtimeStub: PluginRuntime = createPluginRuntimeMock({
   },
 });
 
+const noopUpdateActivity = async () => {};
+const noopDeleteActivity = async () => {};
+
 const createNoopAdapter = (): MSTeamsAdapter => ({
   continueConversation: async () => {},
   process: async () => {},
+  updateActivity: noopUpdateActivity,
+  deleteActivity: noopDeleteActivity,
 });
 
 const createRecordedSendActivity = (
@@ -81,6 +86,8 @@ const createFallbackAdapter = (proactiveSent: string[]): MSTeamsAdapter => ({
     });
   },
   process: async () => {},
+  updateActivity: noopUpdateActivity,
+  deleteActivity: noopDeleteActivity,
 });
 
 describe("msteams messenger", () => {
@@ -195,6 +202,8 @@ describe("msteams messenger", () => {
           });
         },
         process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
       };
 
       const ids = await sendMSTeamsMessages({
@@ -366,6 +375,8 @@ describe("msteams messenger", () => {
           await logic({ sendActivity: createRecordedSendActivity(attempts, 503) });
         },
         process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
       };
 
       const ids = await sendMSTeamsMessages({

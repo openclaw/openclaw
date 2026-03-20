@@ -1,10 +1,10 @@
-import { ensureAuthProfileStore, listProfilesForProvider } from "openclaw/plugin-sdk/agent-runtime";
-import { QWEN_OAUTH_MARKER } from "openclaw/plugin-sdk/agent-runtime";
-import { loginQwenPortalOAuth } from "./oauth.js";
 import { buildQwenPortalProvider, QWEN_PORTAL_BASE_URL } from "./provider-catalog.js";
 import {
   buildOauthProviderAuthResult,
   definePluginEntry,
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+  QWEN_OAUTH_MARKER,
   refreshQwenPortalCredentials,
   type ProviderAuthContext,
   type ProviderCatalogContext,
@@ -77,6 +77,7 @@ export default definePluginEntry({
           run: async (ctx: ProviderAuthContext) => {
             const progress = ctx.prompter.progress("Starting Qwen OAuth…");
             try {
+              const { loginQwenPortalOAuth } = await import("./oauth.runtime.js");
               const result = await loginQwenPortalOAuth({
                 openUrl: ctx.openUrl,
                 note: ctx.prompter.note,
