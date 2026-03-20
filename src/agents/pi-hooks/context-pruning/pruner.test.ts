@@ -152,6 +152,77 @@ describe("pruneContextMessages", () => {
     ).not.toThrow();
   });
 
+  it("does not crash on toolResult with malformed text block (missing text string)", () => {
+    // Regression: a plugin returning undefined produces {type: "text"} with no text property,
+    // which crashed estimateTextAndImageChars / collectTextSegments / collectPrunableToolResultSegments.
+    // See https://github.com/openclaw/openclaw/issues/34979
+    const malformedToolResult = {
+      role: "toolResult",
+      toolName: "sentinel_control",
+      content: [{ type: "text" }],
+      isError: false,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const messages: AgentMessage[] = [
+      makeUser("remove sentinel"),
+      makeAssistant([
+        { type: "toolCall", toolCallId: "call_1", toolName: "sentinel_control", arguments: {} },
+      ] as unknown as AssistantContentBlock[]),
+      malformedToolResult,
+      makeUser("follow up"),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    expect(() =>
+      pruneContextMessages({
+        messages,
+        settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        ctx: CONTEXT_WINDOW_1M,
+      }),
+    ).not.toThrow();
+  });
+
+  it("does not crash on toolResult with malformed text block during soft-trim (image path)", () => {
+    // The collectPrunableToolResultSegments path is exercised when the tool result
+    // contains image blocks alongside a malformed text block.
+    const malformedToolResult = {
+      role: "toolResult",
+      toolName: "read",
+      content: [{ type: "text" }, { type: "image", data: "img", mimeType: "image/png" }],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const messages: AgentMessage[] = [
+      makeUser("show image"),
+      malformedToolResult,
+      makeAssistant([{ type: "text", text: "here it is" }]),
+    ];
+
+    expect(() =>
+      pruneContextMessages({
+        messages,
+        settings: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+          keepLastAssistants: 1,
+          softTrimRatio: 0,
+          hardClear: {
+            ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+            enabled: false,
+          },
+          softTrim: {
+            maxChars: 5_000,
+            headChars: 2_000,
+            tailChars: 2_000,
+          },
+        },
+        ctx: CONTEXT_WINDOW_1M,
+        isToolPrunable: () => true,
+        contextWindowTokensOverride: 1,
+      }),
+    ).not.toThrow();
+  });
+
   it("handles well-formed thinking blocks correctly", () => {
     const messages: AgentMessage[] = [
       makeUser("hello"),
