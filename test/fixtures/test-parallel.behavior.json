@@ -14,7 +14,7 @@
         "reason": "Mutates process.cwd() and core loader seams."
       },
       {
-        "file": "src/config/doc-baseline.test.ts",
+        "file": "src/config/doc-baseline.integration.test.ts",
         "reason": "Rebuilds bundled config baselines through many channel schema subprocesses; keep out of the shared lane."
       },
       {
@@ -28,7 +28,7 @@
         "reason": "Clean in isolation, but can hang after sharing the broad lane."
       },
       {
-        "file": "src/config/doc-baseline.test.ts",
+        "file": "src/config/doc-baseline.integration.test.ts",
         "reason": "Builds the full bundled config schema graph and is safer outside the shared unit-fast heap."
       },
       {
