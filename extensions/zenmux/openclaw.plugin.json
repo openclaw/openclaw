@@ -1,0 +1,28 @@
+{
+  "id": "zenmux",
+  "enabledByDefault": true,
+  "providers": ["zenmux"],
+  "providerAuthEnvVars": {
+    "zenmux": ["ZENMUX_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "zenmux",
+      "method": "api-key",
+      "choiceId": "zenmux-api-key",
+      "choiceLabel": "ZenMux API key",
+      "groupId": "zenmux",
+      "groupLabel": "ZenMux",
+      "groupHint": "API key",
+      "optionKey": "zenmuxApiKey",
+      "cliFlag": "--zenmux-api-key",
+      "cliOption": "--zenmux-api-key <key>",
+      "cliDescription": "ZenMux API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
