@@ -837,7 +837,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
 
