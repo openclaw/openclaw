@@ -2897,7 +2897,7 @@ export async function runEmbeddedAttempt(
                   messages: contextMessagesSnapshot,
                   messageCount: contextMessagesSnapshot.length,
                   imageCount: imageResult.images.length,
-                  images: imageResult.images,
+                  images: imageResult.images.length > 0 ? structuredClone(imageResult.images) : [],
                   attemptIndex: params.attemptIndex,
                 },
                 hookCtx,
