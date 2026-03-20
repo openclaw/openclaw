@@ -6,9 +6,11 @@ vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
     { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
     { provider: "inferencer", id: "deepseek-v3-4bit-mlx", name: "DeepSeek V3" },
-    { provider: "kimi-coding", id: "k2p5", name: "Kimi K2.5" },
+    { provider: "kimi", id: "kimi-code", name: "Kimi Code" },
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
     { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
+    { provider: "xai", id: "grok-4", name: "Grok 4" },
+    { provider: "xai", id: "grok-4.20-reasoning", name: "Grok 4.20 (Reasoning)" },
   ]),
 }));
 
@@ -222,12 +224,12 @@ describe("createModelSelectionState respects session model override", () => {
     const state = await resolveState(
       makeEntry({
         providerOverride: "kimi-coding",
-        modelOverride: "k2p5",
+        modelOverride: "kimi-code",
       }),
     );
 
-    expect(state.provider).toBe("kimi-coding");
-    expect(state.model).toBe("k2p5");
+    expect(state.provider).toBe("kimi");
+    expect(state.model).toBe("kimi-code");
   });
 
   it("falls back to default when no modelOverride is set", async () => {
@@ -241,8 +243,8 @@ describe("createModelSelectionState respects session model override", () => {
     // From issue #14783: stored override should beat last-used fallback model.
     const state = await resolveState(
       makeEntry({
-        model: "k2p5",
-        modelProvider: "kimi-coding",
+        model: "kimi-code",
+        modelProvider: "kimi",
         contextTokens: 262_000,
         providerOverride: "anthropic",
         modelOverride: "claude-opus-4-5",
@@ -262,6 +264,45 @@ describe("createModelSelectionState respects session model override", () => {
 
     expect(state.provider).toBe(defaultProvider);
     expect(state.model).toBe("deepseek-v3-4bit-mlx");
+  });
+
+  it("normalizes deprecated xai beta session overrides before allowlist checks", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "xai/grok-4",
+          },
+          models: {
+            "xai/grok-4": {},
+            "xai/grok-4.20-experimental-beta-0304-reasoning": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:group:123:topic:99";
+    const sessionEntry = makeEntry({
+      providerOverride: "xai",
+      modelOverride: "grok-4.20-experimental-beta-0304-reasoning",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "xai",
+      defaultModel: "grok-4",
+      provider: "xai",
+      model: "grok-4",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("xai");
+    expect(state.model).toBe("grok-4.20-reasoning");
+    expect(state.resetModelOverride).toBe(false);
   });
 });
 

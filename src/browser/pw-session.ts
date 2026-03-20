@@ -22,10 +22,11 @@ import { getChromeWebSocketUrl } from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import {
   assertBrowserNavigationAllowed,
+  assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import { isExtensionRelayCdpEndpoint, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
 export type BrowserConsoleMessage = {
   type: string;
@@ -364,6 +365,11 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
         return connected;
       } catch (err) {
         lastErr = err;
+        // Don't retry rate-limit errors; retrying worsens the 429.
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes("rate limit")) {
+          break;
+        }
         const delay = 250 + attempt * 250;
         await new Promise((r) => setTimeout(r, delay));
       }
@@ -448,21 +454,6 @@ async function findPageByTargetId(
   cdpUrl?: string,
 ): Promise<Page | null> {
   const pages = await getAllPages(browser);
-  const isExtensionRelay = cdpUrl
-    ? await isExtensionRelayCdpEndpoint(cdpUrl).catch(() => false)
-    : false;
-  if (cdpUrl && isExtensionRelay) {
-    try {
-      const matched = await findPageByTargetIdViaTargetList(pages, targetId, cdpUrl);
-      if (matched) {
-        return matched;
-      }
-    } catch {
-      // Ignore fetch errors and fall through to best-effort single-page fallback.
-    }
-    return pages.length === 1 ? (pages[0] ?? null) : null;
-  }
-
   let resolvedViaCdp = false;
   for (const page of pages) {
     let tid: string | null = null;
@@ -516,9 +507,7 @@ export async function getPageForTargetId(opts: {
   }
   const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
   if (!found) {
-    // Extension relays can block CDP attachment APIs (e.g. Target.attachToBrowserTarget),
-    // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright
-    // only exposes a single Page, use it as a best-effort fallback.
+    // If Playwright only exposes a single Page, use it as a best-effort fallback.
     if (pages.length === 1) {
       return first;
     }
@@ -787,8 +776,13 @@ export async function createPageViaPlaywright(opts: {
       url: targetUrl,
       ...navigationPolicy,
     });
-    await page.goto(targetUrl, { timeout: 30_000 }).catch(() => {
+    const response = await page.goto(targetUrl, { timeout: 30_000 }).catch(() => {
       // Navigation might fail for some URLs, but page is still created
+      return null;
+    });
+    await assertBrowserNavigationRedirectChainAllowed({
+      request: response?.request(),
+      ...navigationPolicy,
     });
     await assertBrowserNavigationResultAllowed({
       url: page.url(),

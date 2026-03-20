@@ -4,8 +4,10 @@ import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
+import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
+import { resolveWindowsCommandShim } from "./windows-command.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -75,19 +77,10 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
  * are handled by resolveNpmArgvForWindows to avoid spawn EINVAL (no direct .cmd).
  */
 function resolveCommand(command: string): string {
-  if (process.platform !== "win32") {
-    return command;
-  }
-  const basename = path.basename(command).toLowerCase();
-  const ext = path.extname(basename);
-  if (ext) {
-    return command;
-  }
-  const cmdCommands = ["pnpm", "yarn"];
-  if (cmdCommands.includes(basename)) {
-    return `${command}.cmd`;
-  }
-  return command;
+  return resolveWindowsCommandShim({
+    command,
+    cmdCommands: ["pnpm", "yarn"],
+  });
 }
 
 export function shouldSpawnWithShell(params: {
@@ -213,7 +206,7 @@ export function resolveCommandEnv(params: {
       resolvedEnv.npm_config_fund = "false";
     }
   }
-  return resolvedEnv;
+  return markOpenClawExecEnv(resolvedEnv);
 }
 
 export async function runCommandWithTimeout(

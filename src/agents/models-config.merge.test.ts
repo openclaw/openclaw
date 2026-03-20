@@ -66,6 +66,42 @@ describe("models-config merge helpers", () => {
     });
   });
 
+  it("preserves implicit provider headers when explicit config adds extra headers", () => {
+    const merged = mergeProviderModels(
+      {
+        baseUrl: "https://api.example.com",
+        api: "anthropic-messages",
+        headers: { "User-Agent": "claude-code/0.1.0" },
+        models: [
+          {
+            id: "kimi-code",
+            name: "Kimi Code",
+            input: ["text", "image"],
+            reasoning: true,
+          },
+        ],
+      } as unknown as ProviderConfig,
+      {
+        baseUrl: "https://api.example.com",
+        api: "anthropic-messages",
+        headers: { "X-Kimi-Tenant": "tenant-a" },
+        models: [
+          {
+            id: "kimi-code",
+            name: "Kimi Code",
+            input: ["text", "image"],
+            reasoning: true,
+          },
+        ],
+      } as unknown as ProviderConfig,
+    );
+
+    expect(merged.headers).toEqual({
+      "User-Agent": "claude-code/0.1.0",
+      "X-Kimi-Tenant": "tenant-a",
+    });
+  });
+
   it("replaces stale baseUrl when model api surface changes", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
@@ -91,5 +127,26 @@ describe("models-config merge helpers", () => {
         baseUrl: "https://config.example/v1",
       }),
     );
+  });
+
+  it("does not preserve stale plaintext apiKey when next entry is a marker", () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        custom: {
+          apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
+          models: [{ id: "model", api: "openai-responses" }],
+        } as ProviderConfig,
+      },
+      existingProviders: {
+        custom: {
+          apiKey: preservedApiKey,
+          models: [{ id: "model", api: "openai-responses" }],
+        } as ExistingProviderConfig,
+      },
+      secretRefManagedProviders: new Set<string>(),
+      explicitBaseUrlProviders: new Set<string>(),
+    });
+
+    expect(merged.custom?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
   });
 });

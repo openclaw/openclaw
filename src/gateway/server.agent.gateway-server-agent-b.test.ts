@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
@@ -58,12 +58,31 @@ const createMSTeamsPlugin = (params?: { aliases?: string[] }): ChannelPlugin => 
   },
 });
 
+const createStubChannelPlugin = (params: {
+  id: ChannelPlugin["id"];
+  label: string;
+}): ChannelPlugin => ({
+  ...createChannelTestPluginBase({
+    id: params.id,
+    label: params.label,
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({}),
+    },
+  }),
+  outbound: {
+    deliveryMode: "direct",
+    sendText: async () => ({ channel: params.id, messageId: "msg-test" }),
+    sendMedia: async () => ({ channel: params.id, messageId: "msg-test" }),
+  },
+});
+
 const emptyRegistry = createRegistry([]);
 const defaultRegistry = createRegistry([
   {
     pluginId: "whatsapp",
     source: "test",
-    plugin: whatsappPlugin,
+    plugin: createStubChannelPlugin({ id: "whatsapp", label: "WhatsApp" }),
   },
 ]);
 
@@ -181,7 +200,7 @@ describe("gateway server agent", () => {
     expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
   });
 
-  test("agent accepts channel aliases (imsg/teams)", async () => {
+  test("agent accepts built-in channel alias (imsg)", async () => {
     const registry = createRegistry([
       {
         pluginId: "msteams",
@@ -204,6 +223,19 @@ describe("gateway server agent", () => {
     });
     expect(resIMessage.ok).toBe(true);
 
+    expectAgentRoutingCall({ channel: "imessage", deliver: true, fromEnd: 1 });
+  });
+
+  test("agent accepts plugin channel alias (teams)", async () => {
+    const registry = createRegistry([
+      {
+        pluginId: "msteams",
+        source: "test",
+        plugin: createMSTeamsPlugin({ aliases: ["teams"] }),
+      },
+    ]);
+    setRegistry(registry);
+
     const resTeams = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
@@ -213,8 +245,6 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-teams",
     });
     expect(resTeams.ok).toBe(true);
-
-    expectAgentRoutingCall({ channel: "imessage", deliver: true, fromEnd: 2 });
     expectAgentRoutingCall({
       channel: "msteams",
       deliver: false,
@@ -287,10 +317,60 @@ describe("gateway server agent", () => {
     await vi.waitFor(() => expect(calls.length).toBeGreaterThan(callsBefore));
     const call = (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>;
     expect(call.message).toBeTypeOf("string");
-    expect(call.message).toContain("Execute your Session Startup sequence now");
+    expect(call.message).toContain("Run your Session Startup sequence");
     expect(call.message).toContain("Current time:");
     expect(typeof call.sessionId).toBe("string");
     expect(call.sessionId).not.toBe("sess-main-before-reset");
+  });
+
+  test("write-scoped callers cannot use sessions.reset directly but can still reset conversations via agent", async () => {
+    await withGatewayServer(async ({ port }) => {
+      await useTempSessionStorePath();
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("missing session store path");
+      }
+
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main-before-write-reset",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const writeWs = new WebSocket(`ws://127.0.0.1:${port}`);
+      trackConnectChallengeNonce(writeWs);
+      await new Promise<void>((resolve) => writeWs.once("open", resolve));
+      await connectOk(writeWs, { scopes: ["operator.write"] });
+
+      const directReset = await rpcReq(writeWs, "sessions.reset", { key: "main" });
+      expect(directReset.ok).toBe(false);
+      expect(directReset.error?.message).toContain("missing scope: operator.admin");
+
+      vi.mocked(agentCommand).mockClear();
+      const viaAgent = await rpcReq(writeWs, "agent", {
+        message: "/reset",
+        sessionKey: "main",
+        idempotencyKey: "idem-agent-write-reset",
+      });
+      expect(viaAgent.ok).toBe(true);
+
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { sessionId?: string }
+      >;
+      expect(store["agent:main:main"]?.sessionId).toBeDefined();
+      expect(store["agent:main:main"]?.sessionId).not.toBe("sess-main-before-write-reset");
+
+      await vi.waitFor(() => expect(vi.mocked(agentCommand)).toHaveBeenCalled());
+      const call = readAgentCommandCall();
+      expect(typeof call.sessionId).toBe("string");
+      expect(call.sessionId).not.toBe("sess-main-before-write-reset");
+
+      writeWs.close();
+    });
   });
 
   test("agent ack response then final response", { timeout: 8000 }, async () => {

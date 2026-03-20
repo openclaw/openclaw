@@ -99,3 +99,24 @@ export function isIrcMutableAllowEntry(raw: string): boolean {
 
   return !normalized.includes("!") && !normalized.includes("@");
 }
+
+export function isZalouserMutableGroupEntry(raw: string): boolean {
+  const text = raw.trim();
+  if (!text || text === "*") {
+    return false;
+  }
+
+  const normalized = text
+    .replace(/^(zalouser|zlu):/i, "")
+    .replace(/^group:/i, "")
+    .trim();
+
+  if (!normalized) {
+    return false;
+  }
+  if (/^\d+$/.test(normalized)) {
+    return false;
+  }
+
+  return !/^g-\S+$/i.test(normalized);
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { imessageOutbound } from "../../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { imessageOutbound } from "./imessage.js";
 
 describe("imessageOutbound", () => {
   const cfg: OpenClawConfig = {
@@ -22,7 +22,7 @@ describe("imessageOutbound", () => {
       text: "hello",
       accountId: "default",
       replyToId: "msg-123",
-      deps: { sendIMessage },
+      deps: { imessage: sendIMessage },
     });
 
     expect(sendIMessage).toHaveBeenCalledWith(
@@ -50,7 +50,7 @@ describe("imessageOutbound", () => {
       mediaLocalRoots: ["/tmp"],
       accountId: "acct-1",
       replyToId: "msg-456",
-      deps: { sendIMessage },
+      deps: { imessage: sendIMessage },
     });
 
     expect(sendIMessage).toHaveBeenCalledWith(

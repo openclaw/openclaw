@@ -11,7 +11,6 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { clearDevicePairing } from "../infra/device-pairing.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
@@ -23,7 +22,13 @@ import {
 } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
-import { isSecureWebSocketUrl } from "./net.js";
+import { isLoopbackHost, isSecureWebSocketUrl } from "./net.js";
+import {
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+  readConnectErrorRecoveryAdvice,
+  type ConnectErrorRecoveryAdvice,
+} from "./protocol/connect-error-details.js";
 import {
   type ConnectParams,
   type EventFrame,
@@ -39,13 +44,44 @@ type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
   expectFinal: boolean;
+  timeout: NodeJS.Timeout | null;
 };
+
+type GatewayClientErrorShape = {
+  code?: string;
+  message?: string;
+  details?: unknown;
+};
+
+type SelectedConnectAuth = {
+  authToken?: string;
+  authBootstrapToken?: string;
+  authDeviceToken?: string;
+  authPassword?: string;
+  signatureToken?: string;
+  resolvedDeviceToken?: string;
+  storedToken?: string;
+};
+
+class GatewayClientRequestError extends Error {
+  readonly gatewayCode: string;
+  readonly details?: unknown;
+
+  constructor(error: GatewayClientErrorShape) {
+    super(error.message ?? "gateway request failed");
+    this.name = "GatewayClientRequestError";
+    this.gatewayCode = error.code ?? "UNAVAILABLE";
+    this.details = error.details;
+  }
+}
 
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
   connectDelayMs?: number;
   tickWatchMinIntervalMs?: number;
+  requestTimeoutMs?: number;
   token?: string;
+  bootstrapToken?: string;
   deviceToken?: string;
   password?: string;
   instanceId?: string;
@@ -61,7 +97,7 @@ export type GatewayClientOptions = {
   commands?: string[];
   permissions?: Record<string, boolean>;
   pathEnv?: string;
-  deviceIdentity?: DeviceIdentity;
+  deviceIdentity?: DeviceIdentity | null;
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
@@ -83,6 +119,15 @@ export function describeGatewayCloseCode(code: number): string | undefined {
   return GATEWAY_CLOSE_CODE_HINTS[code];
 }
 
+const FORCE_STOP_TERMINATE_GRACE_MS = 250;
+const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
+
+type PendingStop = {
+  ws: WebSocket;
+  promise: Promise<void>;
+  resolve: () => void;
+};
+
 export class GatewayClient {
   private ws: WebSocket | null = null;
   private opts: GatewayClientOptions;
@@ -93,16 +138,28 @@ export class GatewayClient {
   private connectNonce: string | null = null;
   private connectSent = false;
   private connectTimer: NodeJS.Timeout | null = null;
+  private pendingDeviceTokenRetry = false;
+  private deviceTokenRetryBudgetUsed = false;
+  private pendingConnectErrorDetailCode: string | null = null;
   // Track last tick to detect silent stalls.
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
   private tickTimer: NodeJS.Timeout | null = null;
+  private readonly requestTimeoutMs: number;
+  private pendingStop: PendingStop | null = null;
 
   constructor(opts: GatewayClientOptions) {
     this.opts = {
       ...opts,
-      deviceIdentity: opts.deviceIdentity ?? loadOrCreateDeviceIdentity(),
+      deviceIdentity:
+        opts.deviceIdentity === null
+          ? undefined
+          : (opts.deviceIdentity ?? loadOrCreateDeviceIdentity()),
     };
+    this.requestTimeoutMs =
+      typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)
+        ? Math.max(1, Math.min(Math.floor(opts.requestTimeoutMs), 2_147_483_647))
+        : 30_000;
   }
 
   start() {
@@ -168,9 +225,10 @@ export class GatewayClient {
         // oxlint-disable-next-line typescript/no-explicit-any
       }) as any;
     }
-    this.ws = new WebSocket(url, wsOptions);
+    const ws = new WebSocket(url, wsOptions);
+    this.ws = ws;
 
-    this.ws.on("open", () => {
+    ws.on("open", () => {
       if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
         const tlsError = this.validateTlsFingerprint();
         if (tlsError) {
@@ -181,10 +239,15 @@ export class GatewayClient {
       }
       this.queueConnect();
     });
-    this.ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
-    this.ws.on("close", (code, reason) => {
+    ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
+    ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
-      this.ws = null;
+      const connectErrorDetailCode = this.pendingConnectErrorDetailCode;
+      this.pendingConnectErrorDetailCode = null;
+      if (this.ws === ws) {
+        this.ws = null;
+      }
+      this.resolvePendingStop(ws);
       // Clear persisted device auth state only when device-token auth was active.
       // Shared token/password failures can return the same close reason but should
       // not erase a valid cached device token.
@@ -199,9 +262,6 @@ export class GatewayClient {
         const role = this.opts.role ?? "operator";
         try {
           clearDeviceAuthToken({ deviceId, role });
-          void clearDevicePairing(deviceId).catch((err) => {
-            logDebug(`failed clearing stale device pairing for device ${deviceId}: ${String(err)}`);
-          });
           logDebug(`cleared stale device-auth token for device ${deviceId}`);
         } catch (err) {
           logDebug(
@@ -210,10 +270,14 @@ export class GatewayClient {
         }
       }
       this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
+      if (this.shouldPauseReconnectAfterAuthFailure(connectErrorDetailCode)) {
+        this.opts.onClose?.(code, reasonText);
+        return;
+      }
       this.scheduleReconnect();
       this.opts.onClose?.(code, reasonText);
     });
-    this.ws.on("error", (err) => {
+    ws.on("error", (err) => {
       logDebug(`gateway client error: ${String(err)}`);
       if (!this.connectSent) {
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
@@ -222,14 +286,93 @@ export class GatewayClient {
   }
 
   stop() {
+    void this.beginStop();
+  }
+
+  async stopAndWait(opts?: { timeoutMs?: number }): Promise<void> {
+    // Some callers need teardown ordering, not just "close requested". Wait for
+    // the socket to close or the terminate fallback to fire.
+    const stopPromise = this.beginStop();
+    if (!stopPromise) {
+      return;
+    }
+    const timeoutMs =
+      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+        ? Math.max(1, Math.floor(opts.timeoutMs))
+        : STOP_AND_WAIT_TIMEOUT_MS;
+    let timeout: NodeJS.Timeout | null = null;
+    try {
+      await Promise.race([
+        stopPromise,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            reject(new Error(`gateway client stop timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+          timeout.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  }
+
+  private beginStop(): Promise<void> | null {
     this.closed = true;
+    this.pendingDeviceTokenRetry = false;
+    this.deviceTokenRetryBudgetUsed = false;
+    this.pendingConnectErrorDetailCode = null;
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
     }
-    this.ws?.close();
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
+    if (this.pendingStop) {
+      this.flushPendingErrors(new Error("gateway client stopped"));
+      return this.pendingStop.promise;
+    }
+    const ws = this.ws;
     this.ws = null;
+    if (ws) {
+      const stopPromise = this.createPendingStop(ws);
+      ws.close();
+      const forceTerminateTimer = setTimeout(() => {
+        try {
+          ws.terminate();
+        } catch {}
+        this.resolvePendingStop(ws);
+      }, FORCE_STOP_TERMINATE_GRACE_MS);
+      forceTerminateTimer.unref?.();
+      this.flushPendingErrors(new Error("gateway client stopped"));
+      return stopPromise;
+    }
     this.flushPendingErrors(new Error("gateway client stopped"));
+    return null;
+  }
+
+  private createPendingStop(ws: WebSocket): Promise<void> {
+    if (this.pendingStop?.ws === ws) {
+      return this.pendingStop.promise;
+    }
+    let resolve!: () => void;
+    const promise = new Promise<void>((res) => {
+      resolve = res;
+    });
+    this.pendingStop = { ws, promise, resolve };
+    return promise;
+  }
+
+  private resolvePendingStop(ws: WebSocket): void {
+    if (this.pendingStop?.ws !== ws) {
+      return;
+    }
+    const { resolve } = this.pendingStop;
+    this.pendingStop = null;
+    resolve();
   }
 
   private sendConnect() {
@@ -248,27 +391,24 @@ export class GatewayClient {
       this.connectTimer = null;
     }
     const role = this.opts.role ?? "operator";
-    const explicitGatewayToken = this.opts.token?.trim() || undefined;
-    const explicitDeviceToken = this.opts.deviceToken?.trim() || undefined;
-    const storedToken = this.opts.deviceIdentity
-      ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
-      : null;
-    // Keep shared gateway credentials explicit. Persisted per-device tokens only
-    // participate when no explicit shared token/password is provided.
-    const resolvedDeviceToken =
-      explicitDeviceToken ??
-      (!(explicitGatewayToken || this.opts.password?.trim())
-        ? (storedToken ?? undefined)
-        : undefined);
-    // Legacy compatibility: keep `auth.token` populated for device-token auth when
-    // no explicit shared token is present.
-    const authToken = explicitGatewayToken ?? resolvedDeviceToken;
-    const authPassword = this.opts.password?.trim() || undefined;
+    const {
+      authToken,
+      authBootstrapToken,
+      authDeviceToken,
+      authPassword,
+      signatureToken,
+      resolvedDeviceToken,
+      storedToken,
+    } = this.selectConnectAuth(role);
+    if (this.pendingDeviceTokenRetry && authDeviceToken) {
+      this.pendingDeviceTokenRetry = false;
+    }
     const auth =
-      authToken || authPassword || resolvedDeviceToken
+      authToken || authBootstrapToken || authPassword || resolvedDeviceToken
         ? {
             token: authToken,
-            deviceToken: resolvedDeviceToken,
+            bootstrapToken: authBootstrapToken,
+            deviceToken: authDeviceToken ?? resolvedDeviceToken,
             password: authPassword,
           }
         : undefined;
@@ -286,7 +426,7 @@ export class GatewayClient {
         role,
         scopes,
         signedAtMs,
-        token: authToken ?? null,
+        token: signatureToken ?? null,
         nonce,
         platform,
         deviceFamily: this.opts.deviceFamily,
@@ -327,6 +467,9 @@ export class GatewayClient {
 
     void this.request<HelloOk>("connect", params)
       .then((helloOk) => {
+        this.pendingDeviceTokenRetry = false;
+        this.deviceTokenRetryBudgetUsed = false;
+        this.pendingConnectErrorDetailCode = null;
         const authInfo = helloOk?.auth;
         if (authInfo?.deviceToken && this.opts.deviceIdentity) {
           storeDeviceAuthToken({
@@ -346,6 +489,19 @@ export class GatewayClient {
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err) => {
+        this.pendingConnectErrorDetailCode =
+          err instanceof GatewayClientRequestError ? readConnectErrorDetailCode(err.details) : null;
+        const shouldRetryWithDeviceToken = this.shouldRetryWithStoredDeviceToken({
+          error: err,
+          explicitGatewayToken: this.opts.token?.trim() || undefined,
+          resolvedDeviceToken,
+          storedToken: storedToken ?? undefined,
+        });
+        if (shouldRetryWithDeviceToken) {
+          this.pendingDeviceTokenRetry = true;
+          this.deviceTokenRetryBudgetUsed = true;
+          this.backoffMs = Math.min(this.backoffMs, 250);
+        }
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
         const msg = `gateway connect failed: ${String(err)}`;
         if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE) {
@@ -355,6 +511,123 @@ export class GatewayClient {
         }
         this.ws?.close(1008, "connect failed");
       });
+  }
+
+  private shouldPauseReconnectAfterAuthFailure(detailCode: string | null): boolean {
+    if (!detailCode) {
+      return false;
+    }
+    if (
+      detailCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING ||
+      detailCode === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID ||
+      detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
+      detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
+      detailCode === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
+      detailCode === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
+      detailCode === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
+      detailCode === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED
+    ) {
+      return true;
+    }
+    if (detailCode !== ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
+      return false;
+    }
+    if (this.pendingDeviceTokenRetry) {
+      return false;
+    }
+    // If the endpoint is not trusted for retry, mismatch is terminal until operator action.
+    if (!this.isTrustedDeviceRetryEndpoint()) {
+      return true;
+    }
+    // Pause mismatch reconnect loops once the one-shot device-token retry is consumed.
+    return this.deviceTokenRetryBudgetUsed;
+  }
+
+  private shouldRetryWithStoredDeviceToken(params: {
+    error: unknown;
+    explicitGatewayToken?: string;
+    storedToken?: string;
+    resolvedDeviceToken?: string;
+  }): boolean {
+    if (this.deviceTokenRetryBudgetUsed) {
+      return false;
+    }
+    if (params.resolvedDeviceToken) {
+      return false;
+    }
+    if (!params.explicitGatewayToken || !params.storedToken) {
+      return false;
+    }
+    if (!this.isTrustedDeviceRetryEndpoint()) {
+      return false;
+    }
+    if (!(params.error instanceof GatewayClientRequestError)) {
+      return false;
+    }
+    const detailCode = readConnectErrorDetailCode(params.error.details);
+    const advice: ConnectErrorRecoveryAdvice = readConnectErrorRecoveryAdvice(params.error.details);
+    const retryWithDeviceTokenRecommended =
+      advice.recommendedNextStep === "retry_with_device_token";
+    return (
+      advice.canRetryWithDeviceToken === true ||
+      retryWithDeviceTokenRecommended ||
+      detailCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
+    );
+  }
+
+  private isTrustedDeviceRetryEndpoint(): boolean {
+    const rawUrl = this.opts.url ?? "ws://127.0.0.1:18789";
+    try {
+      const parsed = new URL(rawUrl);
+      const protocol =
+        parsed.protocol === "https:"
+          ? "wss:"
+          : parsed.protocol === "http:"
+            ? "ws:"
+            : parsed.protocol;
+      if (isLoopbackHost(parsed.hostname)) {
+        return true;
+      }
+      return protocol === "wss:" && Boolean(this.opts.tlsFingerprint?.trim());
+    } catch {
+      return false;
+    }
+  }
+
+  private selectConnectAuth(role: string): SelectedConnectAuth {
+    const explicitGatewayToken = this.opts.token?.trim() || undefined;
+    const explicitBootstrapToken = this.opts.bootstrapToken?.trim() || undefined;
+    const explicitDeviceToken = this.opts.deviceToken?.trim() || undefined;
+    const authPassword = this.opts.password?.trim() || undefined;
+    const storedToken = this.opts.deviceIdentity
+      ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
+      : null;
+    const shouldUseDeviceRetryToken =
+      this.pendingDeviceTokenRetry &&
+      !explicitDeviceToken &&
+      Boolean(explicitGatewayToken) &&
+      Boolean(storedToken) &&
+      this.isTrustedDeviceRetryEndpoint();
+    const resolvedDeviceToken =
+      explicitDeviceToken ??
+      (shouldUseDeviceRetryToken ||
+      (!(explicitGatewayToken || authPassword) && (!explicitBootstrapToken || Boolean(storedToken)))
+        ? (storedToken ?? undefined)
+        : undefined);
+    // Legacy compatibility: keep `auth.token` populated for device-token auth when
+    // no explicit shared token is present.
+    const authToken = explicitGatewayToken ?? resolvedDeviceToken;
+    const authBootstrapToken =
+      !explicitGatewayToken && !resolvedDeviceToken ? explicitBootstrapToken : undefined;
+    return {
+      authToken,
+      authBootstrapToken,
+      authDeviceToken: shouldUseDeviceRetryToken ? (storedToken ?? undefined) : undefined,
+      authPassword,
+      signatureToken: authToken ?? authBootstrapToken ?? undefined,
+      resolvedDeviceToken,
+      storedToken: storedToken ?? undefined,
+    };
   }
 
   private handleMessage(raw: string) {
@@ -399,10 +672,19 @@ export class GatewayClient {
           return;
         }
         this.pending.delete(parsed.id);
+        if (pending.timeout) {
+          clearTimeout(pending.timeout);
+        }
         if (parsed.ok) {
           pending.resolve(parsed.payload);
         } else {
-          pending.reject(new Error(parsed.error?.message ?? "unknown error"));
+          pending.reject(
+            new GatewayClientRequestError({
+              code: parsed.error?.code,
+              message: parsed.error?.message ?? "unknown error",
+              details: parsed.error?.details,
+            }),
+          );
         }
       }
     } catch (err) {
@@ -445,6 +727,9 @@ export class GatewayClient {
 
   private flushPendingErrors(err: Error) {
     for (const [, p] of this.pending) {
+      if (p.timeout) {
+        clearTimeout(p.timeout);
+      }
       p.reject(err);
     }
     this.pending.clear();
@@ -504,7 +789,7 @@ export class GatewayClient {
   async request<T = Record<string, unknown>>(
     method: string,
     params?: unknown,
-    opts?: { expectFinal?: boolean },
+    opts?: { expectFinal?: boolean; timeoutMs?: number | null },
   ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("gateway not connected");
@@ -517,11 +802,27 @@ export class GatewayClient {
       );
     }
     const expectFinal = opts?.expectFinal === true;
+    const timeoutMs =
+      opts?.timeoutMs === null
+        ? null
+        : typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+          ? Math.max(1, Math.min(Math.floor(opts.timeoutMs), 2_147_483_647))
+          : expectFinal
+            ? null
+            : this.requestTimeoutMs;
     const p = new Promise<T>((resolve, reject) => {
+      const timeout =
+        timeoutMs === null
+          ? null
+          : setTimeout(() => {
+              this.pending.delete(id);
+              reject(new Error(`gateway request timeout for ${method}`));
+            }, timeoutMs);
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,
         expectFinal,
+        timeout,
       });
     });
     this.ws.send(JSON.stringify(frame));

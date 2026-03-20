@@ -24,6 +24,12 @@ Scope selection:
 - `--all-agents`: aggregate all configured agent stores
 - `--store <path>`: explicit store path (cannot be combined with `--agent` or `--all-agents`)
 
+`openclaw sessions --all-agents` reads configured agent stores. Gateway and ACP
+session discovery are broader: they also include disk-only stores found under
+the default `agents/` root or a templated `session.store` root. Those
+discovered stores must resolve to regular `sessions.json` files inside the
+agent root; symlinks and out-of-root paths are skipped.
+
 JSON examples:
 
 `openclaw sessions --all-agents --json`:
@@ -40,7 +46,7 @@ JSON examples:
   "activeMinutes": null,
   "sessions": [
     { "agentId": "main", "key": "agent:main:main", "model": "gpt-5" },
-    { "agentId": "work", "key": "agent:work:main", "model": "claude-opus-4-5" }
+    { "agentId": "work", "key": "agent:work:main", "model": "claude-opus-4-6" }
   ]
 }
 ```
@@ -54,7 +60,7 @@ openclaw sessions cleanup --dry-run
 openclaw sessions cleanup --agent work --dry-run
 openclaw sessions cleanup --all-agents --dry-run
 openclaw sessions cleanup --enforce
-openclaw sessions cleanup --enforce --active-key "agent:main:telegram:dm:123"
+openclaw sessions cleanup --enforce --active-key "agent:main:telegram:direct:123"
 openclaw sessions cleanup --json
 ```
 
