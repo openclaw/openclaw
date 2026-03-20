@@ -246,8 +246,10 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
           const autoFollowAll = async () => {
             try {
               const users = await client.getAllUsers();
+              if (aborted) return;
               let followed = 0;
               for (const user of users) {
+                if (aborted) break;
                 if (!user.isFollowed) {
                   try {
                     await client.followUser(user.id);
