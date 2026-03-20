@@ -297,7 +297,7 @@ const defaultHeavyUnitFileLimit =
     : isMacMiniProfile
       ? 90
       : testProfile === "low"
-        ? 32
+        ? 36
         : highMemLocalHost
           ? 80
           : 60;
@@ -307,7 +307,7 @@ const defaultHeavyUnitLaneCount =
     : isMacMiniProfile
       ? 6
       : testProfile === "low"
-        ? 3
+        ? 4
         : highMemLocalHost
           ? 5
           : 4;
@@ -708,7 +708,9 @@ const defaultTopLevelParallelLimit =
   testProfile === "serial"
     ? 1
     : testProfile === "low"
-      ? 2
+      ? lowMemLocalHost
+        ? 2
+        : 3
       : testProfile === "max"
         ? 5
         : highMemLocalHost
