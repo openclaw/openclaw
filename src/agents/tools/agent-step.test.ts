@@ -103,4 +103,59 @@ describe("runAgentStep", () => {
       timeoutMs: 47_000,
     });
   });
+
+  it.each([
+    { timeoutMs: 1, expectedTimeout: "1" },
+    { timeoutMs: 1001, expectedTimeout: "2" },
+  ])(
+    "clamps and rounds target timeout for timeoutMs=$timeoutMs",
+    async ({ timeoutMs, expectedTimeout }) => {
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string };
+        if (request.method === "agent") {
+          return { runId: "run-boundary" };
+        }
+        if (request.method === "agent.wait") {
+          return { status: "ok" };
+        }
+        if (request.method === "chat.history") {
+          return {
+            messages: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "ready" }],
+              },
+            ],
+          };
+        }
+        return {};
+      });
+
+      const result = await runAgentStep({
+        sessionKey: "agent:main:child",
+        message: "hello",
+        extraSystemPrompt: "context",
+        timeoutMs,
+        sourceSessionKey: "agent:main:parent",
+        sourceChannel: "discord",
+      });
+
+      expect(result).toBe("ready");
+      expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({
+        method: "agent",
+        params: {
+          sessionKey: "agent:main:child",
+          timeout: expectedTimeout,
+        },
+      });
+      expect(callGatewayMock.mock.calls[1]?.[0]).toMatchObject({
+        method: "agent.wait",
+        params: {
+          runId: "run-boundary",
+          timeoutMs,
+        },
+        timeoutMs: timeoutMs + 2000,
+      });
+    },
+  );
 });

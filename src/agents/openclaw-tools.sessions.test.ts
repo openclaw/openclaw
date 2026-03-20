@@ -729,6 +729,62 @@ describe("sessions tools", () => {
     });
   });
 
+  it("sessions_send defaults target timeout to 30 seconds when timeoutSeconds is omitted", async () => {
+    const targetKey = "agent:main:discord:channel:default-timeout";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as {
+        method?: string;
+        params?: Record<string, unknown>;
+        timeoutMs?: number;
+      };
+      if (request.method === "sessions.resolve") {
+        return { key: targetKey };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-default", acceptedAt: 321 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-default", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "default-ok" }] }],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "main",
+      agentChannel: "discord",
+      config: permissiveSessionsConfig,
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call7b", {
+      sessionKey: "sess-default-timeout",
+      message: "ping",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      reply: "default-ok",
+    });
+    expect(callGatewayMock.mock.calls[1]?.[0]).toMatchObject({
+      method: "agent",
+      params: { sessionKey: targetKey, timeout: "30" },
+      timeoutMs: 10_000,
+    });
+    expect(callGatewayMock.mock.calls[2]?.[0]).toMatchObject({
+      method: "agent.wait",
+      params: { runId: "run-default", timeoutMs: 30_000 },
+      timeoutMs: 32_000,
+    });
+  });
+
   it("sessions_send runs ping-pong then announces", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
@@ -823,6 +879,9 @@ describe("sessions tools", () => {
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(4);
+    expect(agentCalls.every((call) => (call.params as { timeout?: string }).timeout === "1")).toBe(
+      true,
+    );
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
