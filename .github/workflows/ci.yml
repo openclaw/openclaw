@@ -312,11 +312,8 @@ jobs:
       - name: Strict TS build smoke
         run: pnpm build:strict-smoke
 
-      - name: Enforce safe external URL opening policy
-        run: pnpm lint:ui:no-raw-window-open
-
-  plugin-extension-boundary:
-    name: "plugin-extension-boundary"
+  check-additional:
+    name: "check-additional"
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
@@ -333,67 +330,70 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Run plugin extension boundary guard
+        id: plugin_extension_boundary
+        continue-on-error: true
         run: pnpm run lint:plugins:no-extension-imports
 
-  web-search-provider-boundary:
-    name: "web-search-provider-boundary"
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-
       - name: Run web search provider boundary guard
+        id: web_search_provider_boundary
+        continue-on-error: true
         run: pnpm run lint:web-search-provider-boundaries
 
-  extension-src-outside-plugin-sdk-boundary:
-    name: "extension-src-outside-plugin-sdk-boundary"
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-
       - name: Run extension src boundary guard
+        id: extension_src_outside_plugin_sdk_boundary
+        continue-on-error: true
         run: pnpm run lint:extensions:no-src-outside-plugin-sdk
 
-  extension-plugin-sdk-internal-boundary:
-    name: "extension-plugin-sdk-internal-boundary"
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-
       - name: Run extension plugin-sdk-internal guard
+        id: extension_plugin_sdk_internal_boundary
+        continue-on-error: true
         run: pnpm run lint:extensions:no-plugin-sdk-internal
+
+      - name: Enforce safe external URL opening policy
+        id: no_raw_window_open
+        continue-on-error: true
+        run: pnpm lint:ui:no-raw-window-open
+
+      - name: Run gateway watch regression harness
+        id: gateway_watch_regression
+        continue-on-error: true
+        run: pnpm test:gateway:watch-regression
+
+      - name: Upload gateway watch regression artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gateway-watch-regression
+          path: .local/gateway-watch-regression/
+          retention-days: 7
+
+      - name: Fail if any additional check failed
+        if: always()
+        env:
+          PLUGIN_EXTENSION_BOUNDARY_OUTCOME: ${{ steps.plugin_extension_boundary.outcome }}
+          WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME: ${{ steps.web_search_provider_boundary.outcome }}
+          EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME: ${{ steps.extension_src_outside_plugin_sdk_boundary.outcome }}
+          EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME: ${{ steps.extension_plugin_sdk_internal_boundary.outcome }}
+          NO_RAW_WINDOW_OPEN_OUTCOME: ${{ steps.no_raw_window_open.outcome }}
+          GATEWAY_WATCH_REGRESSION_OUTCOME: ${{ steps.gateway_watch_regression.outcome }}
+        run: |
+          failures=0
+          for result in \
+            "plugin-extension-boundary|$PLUGIN_EXTENSION_BOUNDARY_OUTCOME" \
+            "web-search-provider-boundary|$WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME" \
+            "extension-src-outside-plugin-sdk-boundary|$EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME" \
+            "extension-plugin-sdk-internal-boundary|$EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME" \
+            "lint:ui:no-raw-window-open|$NO_RAW_WINDOW_OPEN_OUTCOME" \
+            "gateway-watch-regression|$GATEWAY_WATCH_REGRESSION_OUTCOME"; do
+            name="${result%%|*}"
+            outcome="${result#*|}"
+            if [ "$outcome" != "success" ]; then
+              echo "::error title=${name} failed::${name} outcome: ${outcome}"
+              failures=1
+            fi
+          done
+
+          exit "$failures"
 
   build-smoke:
     name: "build-smoke"
@@ -426,34 +426,6 @@ jobs:
 
       - name: Check CLI startup memory
         run: pnpm test:startup:memory
-
-  gateway-watch-regression:
-    name: "gateway-watch-regression"
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-
-      - name: Run gateway watch regression harness
-        run: pnpm test:gateway:watch-regression
-
-      - name: Upload gateway watch regression artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: gateway-watch-regression
-          path: .local/gateway-watch-regression/
-          retention-days: 7
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
