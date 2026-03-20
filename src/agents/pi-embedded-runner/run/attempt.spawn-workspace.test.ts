@@ -40,6 +40,7 @@ const hoisted = vi.hoisted(() => {
   }));
   const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
   const initializeGlobalHookRunnerMock = vi.fn();
+  const runContextEngineMaintenanceMock = vi.fn(async (_params?: unknown) => undefined);
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
     branch: vi.fn(),
@@ -57,6 +58,7 @@ const hoisted = vi.hoisted(() => {
     resolveBootstrapContextForRunMock,
     getGlobalHookRunnerMock,
     initializeGlobalHookRunnerMock,
+    runContextEngineMaintenanceMock,
     sessionManager,
   };
 });
@@ -124,6 +126,10 @@ vi.mock("../skills-runtime.js", () => ({
     shouldLoadSkillEntries: false,
     skillEntries: undefined,
   }),
+}));
+
+vi.mock("../context-engine-maintenance.js", () => ({
+  runContextEngineMaintenance: (params: unknown) => hoisted.runContextEngineMaintenanceMock(params),
 }));
 
 vi.mock("../../docs-path.js", () => ({
@@ -300,6 +306,7 @@ function resetEmbeddedAttemptHarness(
     contextFiles: [],
   });
   hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
+  hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();
@@ -851,5 +858,56 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         return params.sessionKey === sessionKey;
       }),
     ).toBe(true);
+  });
+
+  it("skips maintenance when afterTurn fails", async () => {
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+    const afterTurn = vi.fn(async () => {
+      throw new Error("afterTurn failed");
+    });
+
+    const result = await runAttemptWithContextEngine({
+      bootstrap,
+      assemble,
+      afterTurn,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(afterTurn).toHaveBeenCalled();
+    expect(hoisted.runContextEngineMaintenanceMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "turn" }),
+    );
+  });
+
+  it("runs startup maintenance for existing sessions even without bootstrap()", async () => {
+    const { assemble } = createContextEngineBootstrapAndAssemble();
+
+    const result = await runAttemptWithContextEngine({
+      assemble,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(hoisted.runContextEngineMaintenanceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "bootstrap" }),
+    );
+  });
+
+  it("skips maintenance when ingestBatch fails", async () => {
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+    const ingestBatch = vi.fn(async () => {
+      throw new Error("ingestBatch failed");
+    });
+
+    const result = await runAttemptWithContextEngine({
+      bootstrap,
+      assemble,
+      ingestBatch,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(ingestBatch).toHaveBeenCalled();
+    expect(hoisted.runContextEngineMaintenanceMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "turn" }),
+    );
   });
 });
