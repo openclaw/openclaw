@@ -13,6 +13,7 @@ function createHarness(params?: {
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
   activeChatRunId?: string | null;
+  client?: Record<string, unknown>;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
@@ -31,9 +32,10 @@ function createHarness(params?: {
     isConnected: params?.isConnected ?? true,
     sessionInfo: {},
   };
+  const client = { sendChat, resetSession, ...params?.client } as never;
 
   const { handleCommand } = createCommandHandlers({
-    client: { sendChat, resetSession } as never,
+    client,
     chatLog: { addUser, addSystem } as never,
     tui: { requestRender } as never,
     opts: {},
@@ -204,13 +206,18 @@ describe("tui command handlers", () => {
   });
 
   it("handles /model list by opening model selector instead of setting model", async () => {
-    const harness = createHarness();
+    const listModels = vi.fn().mockResolvedValue([
+      { id: "gpt-4", provider: "openai", name: "GPT-4" },
+      { id: "claude-3", provider: "anthropic", name: "Claude 3" },
+    ]);
+    const client = { listModels } as never;
+    const harness = createHarness({ client });
     harness.state.sessionInfo = { modelProvider: "openai", model: "gpt-4" };
-    const { handleCommand, addSystem } = harness;
+    const { handleCommand } = harness;
 
     await handleCommand("/model list");
 
-    expect(addSystem).toHaveBeenCalledWith(expect.stringContaining("model"));
+    expect(listModels).toHaveBeenCalled();
   });
 
   it("handles /model status by showing current model", async () => {
