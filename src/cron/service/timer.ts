@@ -491,7 +491,7 @@ export function applyJobResult(
         job.state.nextRunAtMs = retryAt;
       } else if (typeof effectiveNaturalNextRunAtMs === "number") {
         clearRecurringRetryState(job);
-        job.state.nextRunAtMs = effectiveNaturalNextRunAtMs;
+        job.state.nextRunAtMs = Math.max(effectiveNaturalNextRunAtMs, fallbackNextRunAtMs);
       } else {
         recurringRetryState.naturalNextRunAtMs = undefined;
         clearRecurringRetryState(job);
