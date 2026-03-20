@@ -122,4 +122,26 @@ describe("buildSlackInteractiveBlocks", () => {
     expect(block1.elements?.[0]?.action_id).toBe("openclaw:reply_button:1_0");
     expect(block2.elements?.[0]?.action_id).toBe("openclaw:reply_button:2_0");
   });
+
+  it("maps button style to Block Kit style field", () => {
+    const blocks = buildSlackInteractiveBlocks({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Approve", value: "approve", style: "primary" },
+            { label: "Reject", value: "reject", style: "danger" },
+            { label: "Skip", value: "skip" },
+          ],
+        },
+      ],
+    });
+
+    const buttonBlock = blocks[0] as {
+      elements?: Array<{ value?: string; style?: string }>;
+    };
+    expect(buttonBlock.elements?.[0]?.style).toBe("primary");
+    expect(buttonBlock.elements?.[1]?.style).toBe("danger");
+    expect(buttonBlock.elements?.[2]?.style).toBeUndefined();
+  });
 });

@@ -47,6 +47,9 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
             emoji: true,
           },
           value: button.value,
+          ...(button.style === "primary" || button.style === "danger"
+            ? { style: button.style }
+            : {}),
         })),
       });
       return state;
