@@ -83,7 +83,7 @@ type CreateLaneTextDelivererParams = {
   deletePreviewMessage: (messageId: number) => Promise<void>;
   log: (message: string) => void;
   markDelivered: () => void;
-  /** Called when a preview-finalized or preview-retained path delivers without sendPayload. */
+  /** Called when a preview is successfully finalized without going through sendPayload. */
   onPreviewDelivered?: (content: string, messageId?: number) => void;
 };
 
