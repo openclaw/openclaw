@@ -751,7 +751,16 @@ export function createAgentEventHandler({
         }
       }
     } else {
-      broadcast("agent", agentPayload);
+      // Suppress NO_REPLY tokens from agent assistant events so they never
+      // leak to webchat or other WS subscribers that consume raw agent events.
+      const isSilentAssistant =
+        evt.stream === "assistant" &&
+        typeof evt.data?.text === "string" &&
+        (isSilentReplyText(evt.data.text.trim(), SILENT_REPLY_TOKEN) ||
+          isSilentReplyLeadFragment(evt.data.text));
+      if (!isSilentAssistant) {
+        broadcast("agent", agentPayload);
+      }
     }
 
     const lifecyclePhase =
@@ -760,8 +769,18 @@ export function createAgentEventHandler({
     if (isControlUiVisible && sessionKey) {
       // Send tool events to node/channel subscribers only when verbose is enabled;
       // WS clients already received the event above via broadcastToConnIds.
+      // Also suppress NO_REPLY tokens from assistant events forwarded to
+      // session node/channel subscribers (covers non-ACP session types).
+      const isSilentAgentAssistant =
+        !isToolEvent &&
+        evt.stream === "assistant" &&
+        typeof evt.data?.text === "string" &&
+        (isSilentReplyText(evt.data.text.trim(), SILENT_REPLY_TOKEN) ||
+          isSilentReplyLeadFragment(evt.data.text));
       if (!isToolEvent || toolVerbose !== "off") {
-        nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
+        if (!isSilentAgentAssistant) {
+          nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
+        }
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
