@@ -1019,6 +1019,36 @@ describe("web_search external content wrapping", () => {
     expect(requestUrl.searchParams.get("freshness")).toBe(`2025-06-01to${today}`);
   });
 
+  it("passes date_before-only as freshness range from epoch to Brave llm-context endpoint", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch({
+      title: "Context title",
+      url: "https://example.com/ctx",
+      snippets: ["snippet"],
+    });
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              brave: {
+                mode: "llm-context",
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    await tool?.execute?.("call-1", { query: "test", date_before: "2025-12-31" });
+
+    const requestUrl = new URL(mockFetch.mock.calls[0]?.[0] as string);
+    expect(requestUrl.pathname).toBe("/res/v1/llm/context");
+    expect(requestUrl.searchParams.get("freshness")).toBe("1970-01-01to2025-12-31");
+  });
+
   it("rejects ui_lang in Brave llm-context mode", async () => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
     const mockFetch = installBraveLlmContextFetch({
