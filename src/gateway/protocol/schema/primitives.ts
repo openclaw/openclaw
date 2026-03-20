@@ -5,6 +5,7 @@ import {
   FILE_SECRET_REF_ID_PATTERN,
   SECRET_PROVIDER_ALIAS_PATTERN,
 } from "../../../secrets/ref-contract.js";
+import { INPUT_PROVENANCE_KIND_VALUES } from "../../../sessions/input-provenance.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../../sessions/session-label.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 
@@ -18,6 +19,16 @@ export const SessionLabelString = Type.String({
   minLength: 1,
   maxLength: SESSION_LABEL_MAX_LENGTH,
 });
+export const InputProvenanceSchema = Type.Object(
+  {
+    kind: Type.String({ enum: [...INPUT_PROVENANCE_KIND_VALUES] }),
+    originSessionId: Type.Optional(Type.String()),
+    sourceSessionKey: Type.Optional(Type.String()),
+    sourceChannel: Type.Optional(Type.String()),
+    sourceTool: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
 
 export const GatewayClientIdSchema = Type.Union(
   Object.values(GATEWAY_CLIENT_IDS).map((value) => Type.Literal(value)),

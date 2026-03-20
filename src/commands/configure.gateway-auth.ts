@@ -1,6 +1,9 @@
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
+import { resolveProviderPluginChoice } from "../plugins/provider-wizard.js";
+import { resolvePluginProviders } from "../plugins/providers.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
@@ -29,13 +32,30 @@ function sanitizeTokenValue(value: unknown): string | undefined {
   return trimmed;
 }
 
-const ANTHROPIC_OAUTH_MODEL_KEYS = [
-  "anthropic/claude-sonnet-4-6",
-  "anthropic/claude-opus-4-6",
-  "anthropic/claude-opus-4-5",
-  "anthropic/claude-sonnet-4-5",
-  "anthropic/claude-haiku-4-5",
-];
+function resolveProviderChoiceModelAllowlist(params: {
+  authChoice: string;
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}):
+  | {
+      allowedKeys?: string[];
+      initialSelections?: string[];
+      message?: string;
+    }
+  | undefined {
+  const providers = resolvePluginProviders({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
+  });
+  return resolveProviderPluginChoice({
+    providers,
+    choice: params.authChoice,
+  })?.wizard?.modelAllowlist;
+}
 
 export function buildGatewayAuthConfig(params: {
   existing?: GatewayAuthConfig;
@@ -86,6 +106,7 @@ export async function promptAuthConfig(
       allowKeychainPrompt: false,
     }),
     includeSkip: true,
+    config: cfg,
   });
 
   let next = cfg;
@@ -107,7 +128,13 @@ export async function promptAuthConfig(
       prompter,
       allowKeep: true,
       ignoreAllowlist: true,
-      preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
+      includeProviderPluginSetups: true,
+      preferredProvider: await resolvePreferredProviderForAuthChoice({
+        choice: authChoice,
+        config: next,
+      }),
+      workspaceDir: resolveDefaultAgentWorkspaceDir(),
+      runtime,
     });
     if (modelSelection.config) {
       next = modelSelection.config;
@@ -117,16 +144,19 @@ export async function promptAuthConfig(
     }
   }
 
-  const anthropicOAuth =
-    authChoice === "setup-token" || authChoice === "token" || authChoice === "oauth";
-
   if (authChoice !== "custom-api-key") {
+    const modelAllowlist = resolveProviderChoiceModelAllowlist({
+      authChoice,
+      config: next,
+      workspaceDir: resolveDefaultAgentWorkspaceDir(),
+      env: process.env,
+    });
     const allowlistSelection = await promptModelAllowlist({
       config: next,
       prompter,
-      allowedKeys: anthropicOAuth ? ANTHROPIC_OAUTH_MODEL_KEYS : undefined,
-      initialSelections: anthropicOAuth ? ["anthropic/claude-sonnet-4-6"] : undefined,
-      message: anthropicOAuth ? "Anthropic OAuth models" : undefined,
+      allowedKeys: modelAllowlist?.allowedKeys,
+      initialSelections: modelAllowlist?.initialSelections,
+      message: modelAllowlist?.message,
     });
     if (allowlistSelection.models) {
       next = applyModelAllowlist(next, allowlistSelection.models);

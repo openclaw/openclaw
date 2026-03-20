@@ -81,6 +81,19 @@ export type GatewayConnectionDetails = {
   message: string;
 };
 
+function shouldAttachDeviceIdentityForGatewayCall(params: {
+  url: string;
+  token?: string;
+  password?: string;
+}): boolean {
+  void params;
+  // Shared-auth local calls used to skip device identity as an optimization, but
+  // device-less operator connects now have their self-declared scopes stripped.
+  // Keep identity enabled so local authenticated calls stay device-bound and
+  // retain their least-privilege scopes.
+  return true;
+}
+
 export type ExplicitGatewayAuth = {
   token?: string;
   password?: string;
@@ -314,11 +327,8 @@ async function resolveGatewaySecretInputString(params: {
     value: params.value,
     env: params.env,
     normalize: trimToUndefined,
-    onResolveRefError: (error) => {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`${params.path} secret reference could not be resolved: ${detail}`, {
-        cause: error,
-      });
+    onResolveRefError: () => {
+      throw new GatewaySecretRefUnavailableError(params.path);
     },
   });
   if (!value) {
@@ -818,7 +828,9 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
-      deviceIdentity: loadOrCreateDeviceIdentity(),
+      deviceIdentity: shouldAttachDeviceIdentityForGatewayCall({ url, token, password })
+        ? loadOrCreateDeviceIdentity()
+        : undefined,
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async (hello) => {
@@ -830,6 +842,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
           });
           const result = await client.request<T>(opts.method, opts.params, {
             expectFinal: opts.expectFinal,
+            timeoutMs: opts.timeoutMs,
           });
           ignoreClose = true;
           stop(undefined, result);

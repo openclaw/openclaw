@@ -2,14 +2,14 @@ import {
   DEFAULT_ACCOUNT_ID,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
+  createChannelPairingController,
   dispatchReplyFromConfigWithSettledDispatcher,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  createScopedPairingAccess,
   logInboundDrop,
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
   recordPendingHistoryEntryIfEnabled,
-  resolveControlCommandGate,
+  resolveDualTextControlCommandGate,
   resolveDefaultGroupPolicy,
   isDangerousNameMatchingEnabled,
   readStoreAllowFromForDmPolicy,
@@ -19,7 +19,7 @@ import {
   resolveEffectiveAllowFromLists,
   resolveDmGroupAccessWithLists,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/msteams";
+} from "../../runtime-api.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,
@@ -63,7 +63,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     log,
   } = deps;
   const core = getMSTeamsRuntime();
-  const pairing = createScopedPairingAccess({
+  const pairing = createChannelPairingController({
     core,
     channel: "msteams",
     accountId: DEFAULT_ACCOUNT_ID,
@@ -175,6 +175,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       teamName,
       conversationId,
       channelName,
+      allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
     const senderGroupPolicy = resolveSenderScopedGroupPolicy({
       groupPolicy,
@@ -296,18 +297,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       senderName,
       allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
-    const hasControlCommandInMessage = core.channel.text.hasControlCommand(text, cfg);
-    const commandGate = resolveControlCommandGate({
+    const { commandAuthorized, shouldBlock } = resolveDualTextControlCommandGate({
       useAccessGroups,
-      authorizers: [
-        { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
-        { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
-      ],
-      allowTextCommands: true,
-      hasControlCommand: hasControlCommandInMessage,
+      primaryConfigured: commandDmAllowFrom.length > 0,
+      primaryAllowed: ownerAllowedForCommands,
+      secondaryConfigured: effectiveGroupAllowFrom.length > 0,
+      secondaryAllowed: groupAllowedForCommands,
+      hasControlCommand: core.channel.text.hasControlCommand(text, cfg),
     });
-    const commandAuthorized = commandGate.commandAuthorized;
-    if (commandGate.shouldBlock) {
+    if (shouldBlock) {
       logInboundDrop({
         log: logVerboseMessage,
         channel: "msteams",

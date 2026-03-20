@@ -7,6 +7,7 @@ import type {
   LeaveEvent,
   PostbackEvent,
 } from "@line/bot-sdk";
+import { evaluateMatchedGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   clearHistoryEntriesIfEnabled,
@@ -24,13 +25,12 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 import { danger, logVerbose } from "../globals.js";
-import { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
-import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
+import { createChannelPairingChallengeIssuer } from "../plugin-sdk/channel-pairing.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -245,10 +245,8 @@ async function sendLinePairingReply(params: {
       return "lineUserId";
     }
   })();
-  await issuePairingChallenge({
+  await createChannelPairingChallengeIssuer({
     channel: "line",
-    senderId,
-    senderIdLine: `Your ${idLabel}: ${senderId}`,
     upsertPairingRequest: async ({ id, meta }) =>
       await upsertChannelPairingRequest({
         channel: "line",
@@ -256,6 +254,9 @@ async function sendLinePairingReply(params: {
         accountId: context.account.accountId,
         meta,
       }),
+  })({
+    senderId,
+    senderIdLine: `Your ${idLabel}: ${senderId}`,
     onCreated: () => {
       logVerbose(`line pairing request sender=${senderId}`);
     },

@@ -1,3 +1,4 @@
+import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
@@ -28,34 +29,93 @@ type SendPayloadAdapter = Pick<
   "sendMedia" | "sendText" | "chunker" | "textChunkLimit"
 >;
 
+export function resolvePayloadMediaUrls(payload: SendPayloadContext["payload"]): string[] {
+  return resolveOutboundMediaUrls(payload);
+}
+
+export async function sendPayloadMediaSequence<TResult>(params: {
+  text: string;
+  mediaUrls: readonly string[];
+  send: (input: {
+    text: string;
+    mediaUrl: string;
+    index: number;
+    isFirst: boolean;
+  }) => Promise<TResult>;
+}): Promise<TResult | undefined> {
+  let lastResult: TResult | undefined;
+  for (let i = 0; i < params.mediaUrls.length; i += 1) {
+    const mediaUrl = params.mediaUrls[i];
+    if (!mediaUrl) {
+      continue;
+    }
+    lastResult = await params.send({
+      text: i === 0 ? params.text : "",
+      mediaUrl,
+      index: i,
+      isFirst: i === 0,
+    });
+  }
+  return lastResult;
+}
+
+export async function sendPayloadMediaSequenceOrFallback<TResult>(params: {
+  text: string;
+  mediaUrls: readonly string[];
+  send: (input: {
+    text: string;
+    mediaUrl: string;
+    index: number;
+    isFirst: boolean;
+  }) => Promise<TResult>;
+  fallbackResult: TResult;
+  sendNoMedia?: () => Promise<TResult>;
+}): Promise<TResult> {
+  if (params.mediaUrls.length === 0) {
+    return params.sendNoMedia ? await params.sendNoMedia() : params.fallbackResult;
+  }
+  return (await sendPayloadMediaSequence(params)) ?? params.fallbackResult;
+}
+
+export async function sendPayloadMediaSequenceAndFinalize<TMediaResult, TResult>(params: {
+  text: string;
+  mediaUrls: readonly string[];
+  send: (input: {
+    text: string;
+    mediaUrl: string;
+    index: number;
+    isFirst: boolean;
+  }) => Promise<TMediaResult>;
+  finalize: () => Promise<TResult>;
+}): Promise<TResult> {
+  if (params.mediaUrls.length > 0) {
+    await sendPayloadMediaSequence(params);
+  }
+  return await params.finalize();
+}
+
 export async function sendTextMediaPayload(params: {
   channel: string;
   ctx: SendPayloadContext;
   adapter: SendPayloadAdapter;
 }): Promise<SendPayloadResult> {
   const text = params.ctx.payload.text ?? "";
-  const urls = params.ctx.payload.mediaUrls?.length
-    ? params.ctx.payload.mediaUrls
-    : params.ctx.payload.mediaUrl
-      ? [params.ctx.payload.mediaUrl]
-      : [];
+  const urls = resolvePayloadMediaUrls(params.ctx.payload);
   if (!text && urls.length === 0) {
     return { channel: params.channel, messageId: "" };
   }
   if (urls.length > 0) {
-    let lastResult = await params.adapter.sendMedia!({
-      ...params.ctx,
+    const lastResult = await sendPayloadMediaSequence({
       text,
-      mediaUrl: urls[0],
+      mediaUrls: urls,
+      send: async ({ text, mediaUrl }) =>
+        await params.adapter.sendMedia!({
+          ...params.ctx,
+          text,
+          mediaUrl,
+        }),
     });
-    for (let i = 1; i < urls.length; i++) {
-      lastResult = await params.adapter.sendMedia!({
-        ...params.ctx,
-        text: "",
-        mediaUrl: urls[i],
-      });
-    }
-    return lastResult;
+    return lastResult ?? { channel: params.channel, messageId: "" };
   }
   const limit = params.adapter.textChunkLimit;
   const chunks = limit && params.adapter.chunker ? params.adapter.chunker(text, limit) : [text];

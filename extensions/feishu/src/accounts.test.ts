@@ -9,6 +9,23 @@ import type { FeishuConfig } from "./types.js";
 
 const asConfig = (value: Partial<FeishuConfig>) => value as FeishuConfig;
 
+function makeDefaultAndRouterAccounts() {
+  return {
+    default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
+    "router-d": { appId: "cli_router", appSecret: "secret_router" }, // pragma: allowlist secret
+  };
+}
+
+function expectExplicitDefaultAccountSelection(
+  account: ReturnType<typeof resolveFeishuAccount>,
+  appId: string,
+) {
+  expect(account.accountId).toBe("router-d");
+  expect(account.selectionSource).toBe("explicit-default");
+  expect(account.configured).toBe(true);
+  expect(account.appId).toBe(appId);
+}
+
 function withEnvVar(key: string, value: string | undefined, run: () => void) {
   const prev = process.env[key];
   if (value === undefined) {
@@ -44,10 +61,7 @@ describe("resolveDefaultFeishuAccountId", () => {
       channels: {
         feishu: {
           defaultAccount: "router-d",
-          accounts: {
-            default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
-            "router-d": { appId: "cli_router", appSecret: "secret_router" }, // pragma: allowlist secret
-          },
+          accounts: makeDefaultAndRouterAccounts(),
         },
       },
     };
@@ -241,6 +255,25 @@ describe("resolveFeishuCredentials", () => {
       domain: "feishu",
     });
   });
+
+  it("does not resolve encryptKey SecretRefs outside webhook mode", () => {
+    const creds = resolveFeishuCredentials(
+      asConfig({
+        connectionMode: "websocket",
+        appId: "cli_123",
+        appSecret: "secret_456",
+        encryptKey: { source: "file", provider: "default", id: "path/to/secret" } as never,
+      }),
+    );
+
+    expect(creds).toEqual({
+      appId: "cli_123",
+      appSecret: "secret_456", // pragma: allowlist secret
+      encryptKey: undefined,
+      verificationToken: undefined,
+      domain: "feishu",
+    });
+  });
 });
 
 describe("resolveFeishuAccount", () => {
@@ -259,10 +292,7 @@ describe("resolveFeishuAccount", () => {
     };
 
     const account = resolveFeishuAccount({ cfg: cfg as never, accountId: undefined });
-    expect(account.accountId).toBe("router-d");
-    expect(account.selectionSource).toBe("explicit-default");
-    expect(account.configured).toBe(true);
-    expect(account.appId).toBe("top_level_app");
+    expectExplicitDefaultAccountSelection(account, "top_level_app");
   });
 
   it("uses configured default account when accountId is omitted", () => {
@@ -279,10 +309,7 @@ describe("resolveFeishuAccount", () => {
     };
 
     const account = resolveFeishuAccount({ cfg: cfg as never, accountId: undefined });
-    expect(account.accountId).toBe("router-d");
-    expect(account.selectionSource).toBe("explicit-default");
-    expect(account.configured).toBe(true);
-    expect(account.appId).toBe("cli_router");
+    expectExplicitDefaultAccountSelection(account, "cli_router");
   });
 
   it("keeps explicit accountId selection", () => {
@@ -290,10 +317,7 @@ describe("resolveFeishuAccount", () => {
       channels: {
         feishu: {
           defaultAccount: "router-d",
-          accounts: {
-            default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
-            "router-d": { appId: "cli_router", appSecret: "secret_router" }, // pragma: allowlist secret
-          },
+          accounts: makeDefaultAndRouterAccounts(),
         },
       },
     };
