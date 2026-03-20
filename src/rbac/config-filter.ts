@@ -49,7 +49,18 @@ export function redactConfigForRole(params: {
       result[key] = HIDDEN_PLACEHOLDER;
       continue;
     }
-    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    if (Array.isArray(value)) {
+      result[key] = value.map((item) => {
+        if (item !== null && typeof item === "object" && !Array.isArray(item)) {
+          return redactConfigForRole({
+            config: item as Record<string, unknown>,
+            role,
+            pathPrefix: path,
+          });
+        }
+        return item;
+      });
+    } else if (value !== null && typeof value === "object") {
       result[key] = redactConfigForRole({
         config: value as Record<string, unknown>,
         role,

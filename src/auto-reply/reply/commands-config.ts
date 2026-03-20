@@ -103,7 +103,17 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
       }
       const value = getConfigValueAtPath(parsedBase, parsedPath.path);
       const { value: filtered, hidden } = filterConfigValue({ path: pathRaw, value, role });
-      const rendered = JSON.stringify(filtered ?? null, null, 2);
+      // When the parent path is not sensitive but the value is an object,
+      // redact any nested sensitive fields (e.g. providers.openai.apiKey).
+      const safeValue =
+        !hidden && filtered !== null && typeof filtered === "object" && !Array.isArray(filtered)
+          ? redactConfigForRole({
+              config: filtered as Record<string, unknown>,
+              role,
+              pathPrefix: pathRaw,
+            })
+          : filtered;
+      const rendered = JSON.stringify(safeValue ?? null, null, 2);
       const redactedNote = hidden ? " *(redacted — admin only)*" : "";
       return {
         shouldContinue: false,
