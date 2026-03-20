@@ -10,6 +10,7 @@ import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { createRelationshipIndexPlugin } from "./bundled/relationship-index/index.js";
+import { createSreIncidentFormatPlugin } from "./bundled/sre-incident-format/index.js";
 import { clearPluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
@@ -742,6 +743,21 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       registry,
       seenIds,
       source: "core:relationship-index",
+    });
+  }
+
+  // SRE incident format enforcer — enabled when sre config is present.
+  // Fixes italic labels → bold, blocks progress-only messages.
+  if (cfg.sre) {
+    registerInternalPlugin({
+      config: cfg,
+      createApi,
+      definition: createSreIncidentFormatPlugin(),
+      logger,
+      origin: "bundled",
+      registry,
+      seenIds,
+      source: "core:sre-incident-format",
     });
   }
 
