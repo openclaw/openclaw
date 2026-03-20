@@ -158,21 +158,61 @@ export function closeChatTabsForSession(
   };
 }
 
+export function createGatewayChatTab(params: {
+  sessionKey: string;
+  sessionId: string;
+  channel: string;
+  title?: string;
+}): Tab {
+  return {
+    id: generateTabId(),
+    type: "gateway-chat",
+    title: params.title || "Channel Chat",
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    channel: params.channel,
+  };
+}
+
+export function isGatewayChatTab(tab: Tab | undefined | null): tab is Tab {
+  return tab?.type === "gateway-chat";
+}
+
+export function openOrFocusGatewayChatTab(
+  state: TabState,
+  params: { sessionKey: string; sessionId: string; channel: string; title?: string },
+): TabState {
+  return openTab(state, createGatewayChatTab(params));
+}
+
 export function resolveChatIdentityForTab(tab: Tab | undefined | null): {
   sessionId: string | null;
   subagentKey: string | null;
+  gatewaySessionKey: string | null;
 } {
-  if (!tab || tab.type !== "chat") {
-    return { sessionId: null, subagentKey: null };
+  if (!tab) {
+    return { sessionId: null, subagentKey: null, gatewaySessionKey: null };
+  }
+  if (tab.type === "gateway-chat") {
+    return {
+      sessionId: tab.sessionId ?? null,
+      subagentKey: null,
+      gatewaySessionKey: tab.sessionKey ?? null,
+    };
+  }
+  if (tab.type !== "chat") {
+    return { sessionId: null, subagentKey: null, gatewaySessionKey: null };
   }
   if (tab.sessionKey) {
     return {
       sessionId: tab.parentSessionId ?? null,
       subagentKey: tab.sessionKey,
+      gatewaySessionKey: null,
     };
   }
   return {
     sessionId: tab.sessionId ?? null,
     subagentKey: null,
+    gatewaySessionKey: null,
   };
 }

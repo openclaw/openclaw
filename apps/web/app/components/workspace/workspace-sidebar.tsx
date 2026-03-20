@@ -6,7 +6,7 @@ import { FileManagerTree, type TreeNode } from "./file-manager-tree";
 import { ProfileSwitcher } from "./profile-switcher";
 import { CreateWorkspaceDialog } from "./create-workspace-dialog";
 import { UnicodeSpinner } from "../unicode-spinner";
-import { ChatSessionsSidebar, type WebSession, type SidebarSubagentInfo } from "./chat-sessions-sidebar";
+import { ChatSessionsSidebar, type WebSession, type SidebarSubagentInfo, type SidebarGatewaySession, type SidebarChannelStatus } from "./chat-sessions-sidebar";
 
 /** Shape returned by /api/workspace/suggest-files */
 type SuggestItem = {
@@ -67,6 +67,12 @@ type WorkspaceSidebarProps = {
   onSelectChatSubagent?: (sessionKey: string) => void;
   onDeleteChatSession?: (sessionId: string) => void;
   onRenameChatSession?: (sessionId: string, newTitle: string) => void;
+  chatGatewaySessions?: SidebarGatewaySession[];
+  chatChannelStatuses?: SidebarChannelStatus[];
+  chatActiveGatewaySessionKey?: string | null;
+  onSelectGatewayChatSession?: (sessionKey: string, sessionId: string) => void;
+  chatFileScopedSessions?: WebSession[];
+  chatHeartbeatInfo?: { intervalMs: number; nextDueEstimateMs: number | null } | null;
   /** Which tab is active. Controlled from parent if provided. */
   activeTab?: "files" | "chats";
   onTabChange?: (tab: "files" | "chats") => void;

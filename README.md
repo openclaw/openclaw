@@ -31,7 +31,7 @@
 **Node 22+ required.**
 
 ```bash
-npx denchclaw
+npx denchclaw@latest
 ```
 
 Opens at `localhost:3100` after completing onboarding wizard.
@@ -41,8 +41,8 @@ Opens at `localhost:3100` after completing onboarding wizard.
 ## Commands
 
 ```bash
-npx denchclaw # runs onboarding again for openclaw --profile dench
-npx denchclaw update # updates denchclaw with current settings as is
+npx denchclaw@latest # runs onboarding again for openclaw --profile dench
+npx denchclaw@latest update # updates denchclaw web-runtime with current settings as is
 npx denchclaw restart # restarts denchclaw web server
 npx denchclaw start # starts denchclaw web server
 npx denchclaw stop # stops denchclaw web server

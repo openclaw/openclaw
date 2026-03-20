@@ -43,7 +43,7 @@ import {
   autoDetectViewField,
 } from "@/lib/object-filters";
 import { UnicodeSpinner } from "../components/unicode-spinner";
-import { ChatSessionsSidebar } from "../components/workspace/chat-sessions-sidebar";
+import { ChatSessionsSidebar, type SidebarGatewaySession, type SidebarChannelStatus } from "../components/workspace/chat-sessions-sidebar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -68,6 +68,7 @@ import {
   isChatTab,
   openOrFocusParentChatTab,
   openOrFocusSubagentChatTab,
+  openOrFocusGatewayChatTab,
   resolveChatIdentityForTab,
   syncParentChatTabTitles,
   syncSubagentChatTabTitles,
@@ -218,6 +219,7 @@ type WebSession = {
   createdAt: number;
   updatedAt: number;
   messageCount: number;
+  filePath?: string;
 };
 
 const LEFT_SIDEBAR_MIN = 200;
@@ -455,8 +457,14 @@ function WorkspacePageInner() {
   const [subagents, setSubagents] = useState<SubagentSpawnInfo[]>([]);
   const [activeSubagentKey, setActiveSubagentKey] = useState<string | null>(null);
 
+  // Gateway channel sessions
+  const [gatewaySessions, setGatewaySessions] = useState<SidebarGatewaySession[]>([]);
+  const [channelStatuses, setChannelStatuses] = useState<SidebarChannelStatus[]>([]);
+  const [activeGatewaySessionKey, setActiveGatewaySessionKey] = useState<string | null>(null);
+
   // Cron jobs state
   const [cronJobs, setCronJobs] = useState<CronJob[]>([]);
+  const [heartbeatInfo, setHeartbeatInfo] = useState<{ intervalMs: number; nextDueEstimateMs: number | null } | null>(null);
 
   // Cron URL-backed view state
   const [cronView, setCronView] = useState<import("@/lib/workspace-links").CronDashboardView>("overview");
@@ -538,7 +546,7 @@ function WorkspacePageInner() {
     [tabState],
   );
   const mainChatTabs = useMemo(
-    () => tabState.tabs.filter((tab) => tab.id !== HOME_TAB_ID && isChatTab(tab)),
+    () => tabState.tabs.filter((tab) => tab.id !== HOME_TAB_ID && (tab.type === "chat" || tab.type === "gateway-chat")),
     [tabState.tabs],
   );
 
@@ -572,9 +580,27 @@ function WorkspacePageInner() {
     setTabState((prev) => openOrFocusSubagentChatTab(prev, params));
   }, []);
 
+  const openGatewayChatTab = useCallback((sessionKey: string, sessionId: string, channel?: string, title?: string) => {
+    setActivePath(null);
+    setContent({ kind: "none" });
+    setActiveSessionId(null);
+    setActiveSubagentKey(null);
+    setActiveGatewaySessionKey(sessionKey);
+    setTabState((prev) => openOrFocusGatewayChatTab(prev, {
+      sessionKey,
+      sessionId,
+      channel: channel ?? "unknown",
+      title: title ?? "Channel Chat",
+    }));
+  }, []);
+
   const visibleMainChatTabId = useMemo(() => {
-    if (isChatTab(activeTab)) {
+    if (activeTab.type === "chat" || activeTab.type === "gateway-chat") {
       return activeTab.id;
+    }
+    if (activeGatewaySessionKey) {
+      const matchingGwTab = mainChatTabs.find((tab) => tab.type === "gateway-chat" && tab.sessionKey === activeGatewaySessionKey);
+      if (matchingGwTab) return matchingGwTab.id;
     }
     if (activeSubagentKey) {
       const matchingSubagentTab = mainChatTabs.find((tab) => tab.sessionKey === activeSubagentKey);
@@ -593,15 +619,16 @@ function WorkspacePageInner() {
       if (blankTab) return blankTab.id;
     }
     return mainChatTabs[0]?.id ?? null;
-  }, [activeTab, activeSessionId, activeSubagentKey, mainChatTabs, tabState.activeTabId]);
+  }, [activeTab, activeSessionId, activeSubagentKey, activeGatewaySessionKey, mainChatTabs, tabState.activeTabId]);
 
   useEffect(() => {
-    if (!isChatTab(activeTab)) {
+    if (activeTab.type !== "chat" && activeTab.type !== "gateway-chat") {
       return;
     }
     const identity = resolveChatIdentityForTab(activeTab);
     setActiveSessionId((prev) => prev === identity.sessionId ? prev : identity.sessionId);
     setActiveSubagentKey((prev) => prev === identity.subagentKey ? prev : identity.subagentKey);
+    setActiveGatewaySessionKey((prev) => prev === identity.gatewaySessionKey ? prev : identity.gatewaySessionKey);
   }, [activeTab]);
 
   const setMainChatPanelRef = useCallback((tabId: string, handle: ChatPanelHandle | null) => {
@@ -806,12 +833,16 @@ function WorkspacePageInner() {
   }, [refreshContext]);
 
   // Fetch chat sessions
+  const [fileScopedSessions, setFileScopedSessions] = useState<WebSession[]>([]);
+
   const fetchSessions = useCallback(async () => {
     setSessionsLoading(true);
     try {
-      const res = await fetch("/api/web-sessions");
+      const res = await fetch("/api/web-sessions?includeAll=true");
       const data = await res.json();
-      setSessions(data.sessions ?? []);
+      const all: Array<WebSession & { filePath?: string }> = data.sessions ?? [];
+      setSessions(all.filter((s) => !s.filePath));
+      setFileScopedSessions(all.filter((s) => !!s.filePath));
     } catch {
       // ignore
     } finally {
@@ -826,6 +857,41 @@ function WorkspacePageInner() {
   const refreshSessions = useCallback(() => {
     setSidebarRefreshKey((k) => k + 1);
   }, []);
+
+  // Fetch gateway channel sessions
+  const fetchGatewaySessions = useCallback(async () => {
+    try {
+      const res = await fetch("/api/gateway/sessions");
+      const data = await res.json();
+      const sessions: SidebarGatewaySession[] = (data.sessions ?? []).map(
+        (s: { sessionKey: string; sessionId: string; channel: string; origin?: { label?: string; provider?: string }; updatedAt: number }) => ({
+          sessionKey: s.sessionKey,
+          sessionId: s.sessionId,
+          channel: s.channel,
+          title: s.origin?.label || `${s.channel.charAt(0).toUpperCase() + s.channel.slice(1)} Session`,
+          updatedAt: s.updatedAt,
+          origin: s.origin,
+        }),
+      );
+      setGatewaySessions(sessions);
+    } catch { /* ignore */ }
+  }, []);
+
+  const fetchChannelStatuses = useCallback(async () => {
+    try {
+      const res = await fetch("/api/gateway/channels");
+      const data = await res.json();
+      setChannelStatuses(data.channels ?? []);
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    void fetchGatewaySessions();
+    void fetchChannelStatuses();
+    const gwInterval = setInterval(fetchGatewaySessions, 10_000);
+    const chInterval = setInterval(fetchChannelStatuses, 30_000);
+    return () => { clearInterval(gwInterval); clearInterval(chInterval); };
+  }, [fetchGatewaySessions, fetchChannelStatuses]);
 
   const handleWorkspaceChanged = useCallback(() => {
     resetWorkspaceStateOnSwitch({
@@ -946,6 +1012,7 @@ function WorkspacePageInner() {
       const res = await fetch("/api/cron/jobs");
       const data: CronJobsResponse = await res.json();
       setCronJobs(data.jobs ?? []);
+      if (data.heartbeat) setHeartbeatInfo(data.heartbeat);
     } catch {
       // ignore - cron might not be configured
     }
@@ -2091,7 +2158,7 @@ function WorkspacePageInner() {
   }, [stopParentSession, stopSubagentSession, tabState.tabs]);
 
   // Whether to show the main chat workspace instead of file/object content.
-  const showMainChat = activeTab.type === "chat" || activeTab.id === HOME_TAB_ID || (!activePath || content.kind === "none");
+  const showMainChat = activeTab.type === "chat" || activeTab.type === "gateway-chat" || activeTab.id === HOME_TAB_ID || (!activePath || content.kind === "none");
 
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
@@ -2142,6 +2209,16 @@ function WorkspacePageInner() {
             onSelectChatSubagent={handleSelectSubagent}
             onDeleteChatSession={handleDeleteSession}
             onRenameChatSession={handleRenameSession}
+            chatGatewaySessions={gatewaySessions}
+            chatChannelStatuses={channelStatuses}
+            chatActiveGatewaySessionKey={activeGatewaySessionKey}
+            onSelectGatewayChatSession={(sessionKey, sessionId) => {
+              const gs = gatewaySessions.find((s) => s.sessionKey === sessionKey);
+              openGatewayChatTab(sessionKey, sessionId, gs?.channel, gs?.title);
+              setSidebarOpen(false);
+            }}
+            chatFileScopedSessions={fileScopedSessions}
+            chatHeartbeatInfo={heartbeatInfo}
             activeTab={sidebarTab}
             onTabChange={setSidebarTab}
             mobile
@@ -2203,6 +2280,15 @@ function WorkspacePageInner() {
                 onSelectChatSubagent={handleSelectSubagent}
                 onDeleteChatSession={handleDeleteSession}
                 onRenameChatSession={handleRenameSession}
+                chatGatewaySessions={gatewaySessions}
+                chatChannelStatuses={channelStatuses}
+                chatActiveGatewaySessionKey={activeGatewaySessionKey}
+                onSelectGatewayChatSession={(sessionKey, sessionId) => {
+                  const gs = gatewaySessions.find((s) => s.sessionKey === sessionKey);
+                  openGatewayChatTab(sessionKey, sessionId, gs?.channel, gs?.title);
+                }}
+                chatFileScopedSessions={fileScopedSessions}
+                chatHeartbeatInfo={heartbeatInfo}
                 activeTab={sidebarTab}
                 onTabChange={setSidebarTab}
               />
@@ -2478,7 +2564,8 @@ function WorkspacePageInner() {
                 style={{ background: "var(--color-main-bg)" }}
               >
                 {mainChatTabs.map((tab) => {
-                  const subagent = tab.sessionKey
+                  const isGateway = tab.type === "gateway-chat";
+                  const subagent = !isGateway && tab.sessionKey
                     ? subagents.find((entry) => entry.childSessionKey === tab.sessionKey)
                     : null;
                   const isVisible = tab.id === visibleMainChatTabId;
@@ -2490,20 +2577,23 @@ function WorkspacePageInner() {
                       <ChatPanel
                         ref={(handle) => setMainChatPanelRef(tab.id, handle)}
                         sessionTitle={tab.title}
-                        initialSessionId={tab.sessionKey ? undefined : tab.sessionId ?? undefined}
-                        onActiveSessionChange={tab.sessionKey ? undefined : (id) => handleChatTabSessionChange(tab.id, id)}
-                        onSessionsChange={refreshSessions}
+                        initialSessionId={isGateway ? undefined : (tab.sessionKey ? undefined : tab.sessionId ?? undefined)}
+                        onActiveSessionChange={isGateway || tab.sessionKey ? undefined : (id) => handleChatTabSessionChange(tab.id, id)}
+                        onSessionsChange={isGateway ? undefined : refreshSessions}
                         onSubagentClick={handleSubagentClickFromChat}
                         onFilePathClick={handleFilePathClickFromChat}
-                        onDeleteSession={tab.sessionKey ? undefined : handleDeleteSession}
-                        onRenameSession={tab.sessionKey ? undefined : handleRenameSession}
+                        onDeleteSession={isGateway || tab.sessionKey ? undefined : handleDeleteSession}
+                        onRenameSession={isGateway || tab.sessionKey ? undefined : handleRenameSession}
                         compact={isMobile}
-                        sessionKey={tab.sessionKey ?? undefined}
+                        sessionKey={isGateway ? undefined : (tab.sessionKey ?? undefined)}
                         subagentTask={subagent?.task}
                         subagentLabel={subagent?.label}
-                        onBack={tab.sessionKey ? handleBackFromSubagent : undefined}
+                        onBack={tab.sessionKey && !isGateway ? handleBackFromSubagent : undefined}
                         hideHeaderActions={!isMobile}
                         onRuntimeStateChange={(runtime) => handleChatRuntimeStateChange(tab.id, runtime)}
+                        gatewaySessionKey={isGateway ? tab.sessionKey : undefined}
+                        gatewaySessionId={isGateway ? tab.sessionId : undefined}
+                        gatewayChannel={isGateway ? tab.channel : undefined}
                       />
                     </div>
                   );
@@ -2584,6 +2674,15 @@ function WorkspacePageInner() {
                   onRenameSession={handleRenameSession}
                   onStopSession={(sessionId) => { void stopParentSession(sessionId); }}
                   onStopSubagent={(sessionKey) => { void stopSubagentSession(sessionKey); }}
+                  gatewaySessions={gatewaySessions}
+                  channelStatuses={channelStatuses}
+                  activeGatewaySessionKey={activeGatewaySessionKey}
+                  onSelectGatewaySession={(sessionKey, sessionId) => {
+                    const gs = gatewaySessions.find((s) => s.sessionKey === sessionKey);
+                    openGatewayChatTab(sessionKey, sessionId, gs?.channel, gs?.title);
+                  }}
+                  fileScopedSessions={fileScopedSessions}
+                  heartbeatInfo={heartbeatInfo}
                   embedded
                 />
               </div>
@@ -2649,6 +2748,16 @@ function WorkspacePageInner() {
             onRenameSession={handleRenameSession}
             onStopSession={(sessionId) => { void stopParentSession(sessionId); }}
             onStopSubagent={(sessionKey) => { void stopSubagentSession(sessionKey); }}
+            gatewaySessions={gatewaySessions}
+            channelStatuses={channelStatuses}
+            activeGatewaySessionKey={activeGatewaySessionKey}
+            onSelectGatewaySession={(sessionKey, sessionId) => {
+              const gs = gatewaySessions.find((s) => s.sessionKey === sessionKey);
+              openGatewayChatTab(sessionKey, sessionId, gs?.channel, gs?.title);
+              setMobileChatSessionsOpen(false);
+            }}
+            fileScopedSessions={fileScopedSessions}
+            heartbeatInfo={heartbeatInfo}
             mobile
             width={280}
             onClose={() => setMobileChatSessionsOpen(false)}

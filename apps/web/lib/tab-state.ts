@@ -5,7 +5,7 @@
  * The URL reflects only the active tab's content (backward compatible).
  */
 
-export type TabType = "home" | "file" | "chat" | "app" | "object" | "cron";
+export type TabType = "home" | "file" | "chat" | "app" | "object" | "cron" | "gateway-chat";
 
 export const HOME_TAB_ID = "__home__";
 
@@ -26,6 +26,8 @@ export type Tab = {
   sessionKey?: string;
   parentSessionId?: string;
   pinned?: boolean;
+  /** Channel identifier for gateway-chat tabs (e.g. "telegram", "discord"). */
+  channel?: string;
 };
 
 export type TabState = {

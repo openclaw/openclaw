@@ -829,6 +829,12 @@ type ChatPanelProps = {
 	hideHeaderActions?: boolean;
 	/** Called whenever the panel's runtime state changes. */
 	onRuntimeStateChange?: (state: ChatPanelRuntimeState) => void;
+	/** Gateway session key for channel sessions (telegram, discord, etc.). */
+	gatewaySessionKey?: string;
+	/** Gateway session UUID for loading transcripts. */
+	gatewaySessionId?: string;
+	/** Channel identifier for the gateway session (e.g. "telegram"). */
+	gatewayChannel?: string;
 };
 
 export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
@@ -852,10 +858,14 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			onBack,
 			hideHeaderActions,
 			onRuntimeStateChange,
+			gatewaySessionKey,
+			gatewaySessionId,
+			gatewayChannel: _gatewayChannel,
 		},
 		ref,
 	) {
 		const isSubagentMode = !!subagentSessionKey;
+		const isGatewayMode = !!gatewaySessionKey;
 		const editorRef = useRef<ChatEditorHandle>(null);
 		const [editorEmpty, setEditorEmpty] = useState(true);
 		const [currentSessionId, setCurrentSessionId] = useState<
@@ -1095,11 +1105,15 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				reconnectAbortRef.current = abort;
 
 				try {
-					const streamParam = options?.sessionKey
-						? `sessionKey=${encodeURIComponent(options.sessionKey)}`
-						: `sessionId=${encodeURIComponent(sessionId)}`;
+					const sk = options?.sessionKey;
+					const isGwSession = sk && !sk.includes(":subagent:") && !sk.includes(":web:");
+					const streamUrl = isGwSession
+						? `/api/gateway/chat/stream?sessionKey=${encodeURIComponent(sk)}`
+						: sk
+							? `/api/chat/stream?sessionKey=${encodeURIComponent(sk)}`
+							: `/api/chat/stream?sessionId=${encodeURIComponent(sessionId)}`;
 					const res = await fetch(
-						`/api/chat/stream?${streamParam}`,
+						streamUrl,
 						{ signal: abort.signal },
 					);
 					if (!res.ok || !res.body) {
@@ -1334,7 +1348,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		const initialSessionHandled = useRef(false);
 		const lastInitialSessionRef = useRef<string | null>(null);
 		useEffect(() => {
-			if (filePath || isSubagentMode || !initialSessionId) {
+			if (filePath || isSubagentMode || isGatewayMode || !initialSessionId) {
 				return;
 			}
 			if (initialSessionHandled.current && initialSessionId === lastInitialSessionRef.current) {
@@ -1424,6 +1438,57 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			};
 			// eslint-disable-next-line react-hooks/exhaustive-deps -- stable setters
 		}, [subagentSessionKey, subagentTask, attemptReconnect]);
+
+		// ── Gateway session mode: load transcript + reconnect to active stream ──
+		useEffect(() => {
+			if (!gatewaySessionKey || !gatewaySessionId) return;
+			let cancelled = false;
+
+			reconnectAbortRef.current?.abort();
+			void stop();
+			savedMessageIdsRef.current.clear();
+			setQueuedMessages([]);
+			setLoadingSession(true);
+
+			void (async () => {
+				let baseMessages: Array<{ id: string; role: "user" | "assistant"; parts: UIMessage["parts"] }> = [];
+				try {
+					const res = await fetch(`/api/gateway/sessions/${encodeURIComponent(gatewaySessionId)}`);
+					if (cancelled) return;
+					if (res.ok) {
+						const data = await res.json();
+						const sessionMessages: Array<{
+							id: string;
+							role: "user" | "assistant";
+							content: string;
+							parts?: Array<Record<string, unknown>>;
+						}> = data.messages || [];
+
+						const uiMessages = sessionMessages.map((msg) => {
+							savedMessageIdsRef.current.add(msg.id);
+							return {
+								id: msg.id,
+								role: msg.role,
+								parts: (msg.parts ?? [{ type: "text" as const, text: msg.content }]) as UIMessage["parts"],
+							};
+						});
+						baseMessages = uiMessages;
+						if (!cancelled) setMessages(baseMessages);
+					}
+				} catch { /* ignore */ }
+
+				if (!cancelled) {
+					setLoadingSession(false);
+					await attemptReconnect(gatewaySessionKey, baseMessages, { sessionKey: gatewaySessionKey });
+				}
+			})();
+
+			return () => {
+				cancelled = true;
+				reconnectAbortRef.current?.abort();
+			};
+			// eslint-disable-next-line react-hooks/exhaustive-deps
+		}, [gatewaySessionKey, gatewaySessionId, attemptReconnect]);
 
 		// ── Poll for subagent spawns during active streaming ──
 		const [hasRunningSubagents, setHasRunningSubagents] = useState(false);
@@ -1614,7 +1679,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				}
 
 				let sessionId = currentSessionId;
-				if (!sessionId && !isSubagentMode) {
+				if (!sessionId && !isSubagentMode && !isGatewayMode) {
 					const titleSource =
 						userText || "File attachment";
 					const title =
@@ -1662,7 +1727,28 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				pendingHtmlRef.current = html;
 
 				userScrolledAwayRef.current = false;
-				void sendMessage({ text: messageText });
+
+				if (gatewaySessionKey) {
+					const userMsg = {
+						id: `user-${Date.now()}`,
+						role: "user" as const,
+						parts: [{ type: "text" as const, text: messageText }] as UIMessage["parts"],
+					};
+					setMessages((prev) => [...prev, userMsg]);
+
+					try {
+						const res = await fetch("/api/gateway/chat", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ sessionKey: gatewaySessionKey, message: messageText }),
+						});
+						if (res.ok && res.body) {
+							await attemptReconnect(gatewaySessionKey, [], { sessionKey: gatewaySessionKey });
+						}
+					} catch { /* ignore */ }
+				} else {
+					void sendMessage({ text: messageText });
+				}
 			},
 			[
 				attachedFiles,
@@ -1674,6 +1760,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				filePath,
 				fileContext,
 				sendMessage,
+				gatewaySessionKey,
+				attemptReconnect,
 			],
 		);
 

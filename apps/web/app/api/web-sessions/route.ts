@@ -15,15 +15,19 @@ export const dynamic = "force-dynamic";
 
 /** GET /api/web-sessions — list web chat sessions.
  *  ?filePath=... → returns only sessions scoped to that file.
+ *  ?includeAll=true → returns all sessions (including file-scoped).
  *  No filePath   → returns only global (non-file) sessions. */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const filePath = url.searchParams.get("filePath");
+  const includeAll = url.searchParams.get("includeAll") === "true";
 
   const all = readIndex();
-  const sessions = filePath
-    ? all.filter((s) => s.filePath === filePath)
-    : all.filter((s) => !s.filePath);
+  const sessions = includeAll
+    ? all
+    : filePath
+      ? all.filter((s) => s.filePath === filePath)
+      : all.filter((s) => !s.filePath);
 
   return Response.json({ sessions });
 }
