@@ -387,6 +387,7 @@ export async function resolveMatrixAuth(params?: {
     credentialsWriter ??= await import("../credentials-write.runtime.js");
     return credentialsWriter;
   };
+
   const cached = loadMatrixCredentials(env, accountId);
   const cachedCredentials =
     cached &&
