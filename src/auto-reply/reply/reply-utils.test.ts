@@ -257,6 +257,27 @@ describe("typing controller", () => {
     expect(onReplyStart).not.toHaveBeenCalled();
   });
 
+  it("can keep typing alive indefinitely when TTL is disabled", async () => {
+    vi.useFakeTimers();
+    const onReplyStart = vi.fn();
+    const typing = createTypingController({
+      onReplyStart,
+      typingIntervalSeconds: 1,
+      typingTtlMs: 0,
+    });
+
+    await typing.startTypingLoop();
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onReplyStart).toHaveBeenCalledTimes(6);
+
+    typing.markRunComplete();
+    typing.markDispatchIdle();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(onReplyStart).toHaveBeenCalledTimes(6);
+  });
+
   it("does not restart typing after it has stopped", async () => {
     vi.useFakeTimers();
     const { typing, onReplyStart } = createTestTypingController();

@@ -25,9 +25,12 @@ export type MattermostEventPayload = {
 export type MattermostWebSocketLike = {
   on(event: "open", listener: () => void): void;
   on(event: "message", listener: (data: WebSocket.RawData) => void | Promise<void>): void;
+  on(event: "ping", listener: (data: Buffer) => void): void;
+  on(event: "pong", listener: (data: Buffer) => void): void;
   on(event: "close", listener: (code: number, reason: Buffer) => void): void;
   on(event: "error", listener: (err: unknown) => void): void;
   send(data: string): void;
+  ping(): void;
   close(): void;
   terminate(): void;
 };
@@ -54,6 +57,8 @@ type CreateMattermostConnectOnceOpts = {
   onPosted: (post: MattermostPost, payload: MattermostEventPayload) => Promise<void>;
   onReaction?: (payload: MattermostEventPayload) => Promise<void>;
   webSocketFactory?: MattermostWebSocketFactory;
+  heartbeatIntervalMs?: number;
+  heartbeatTimeoutMs?: number;
 };
 
 export const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) =>
@@ -106,6 +111,62 @@ export function createMattermostConnectOnce(
     const ws = webSocketFactory(opts.wsUrl);
     const onAbort = () => ws.terminate();
     opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
+    const heartbeatIntervalMs = Math.max(1, opts.heartbeatIntervalMs ?? 30_000);
+    const heartbeatTimeoutMs = Math.max(
+      heartbeatIntervalMs * 2,
+      opts.heartbeatTimeoutMs ?? heartbeatIntervalMs * 3,
+    );
+    let lastActivityAt = Date.now();
+    let inFlightHandlerCount = 0;
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+    const noteActivity = () => {
+      lastActivityAt = Date.now();
+    };
+    const cleanupHeartbeat = () => {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    };
+    const startHeartbeat = () => {
+      cleanupHeartbeat();
+      heartbeatTimer = setInterval(() => {
+        const idleMs = Date.now() - lastActivityAt;
+        if (idleMs > heartbeatTimeoutMs && inFlightHandlerCount === 0) {
+          const message = `mattermost websocket heartbeat timed out after ${Math.round(idleMs / 1000)}s`;
+          opts.runtime.error?.(message);
+          opts.statusSink?.({ lastError: message });
+          cleanupHeartbeat();
+          try {
+            ws.terminate();
+          } catch {}
+          return;
+        }
+        try {
+          ws.ping();
+        } catch (err) {
+          const message = `mattermost websocket heartbeat ping failed: ${String(err)}`;
+          opts.runtime.error?.(message);
+          opts.statusSink?.({ lastError: message });
+          cleanupHeartbeat();
+          try {
+            ws.terminate();
+          } catch {}
+        }
+      }, heartbeatIntervalMs);
+      heartbeatTimer.unref?.();
+    };
+
+    const withInFlightHandler = async <T>(handler: () => Promise<T>): Promise<T> => {
+      inFlightHandlerCount++;
+      noteActivity();
+      try {
+        return await handler();
+      } finally {
+        inFlightHandlerCount = Math.max(0, inFlightHandlerCount - 1);
+        noteActivity();
+      }
+    };
 
     try {
       return await new Promise<void>((resolve, reject) => {
@@ -128,6 +189,8 @@ export function createMattermostConnectOnce(
 
         ws.on("open", () => {
           opened = true;
+          noteActivity();
+          startHeartbeat();
           opts.statusSink?.({
             connected: true,
             lastConnectedAt: Date.now(),
@@ -143,6 +206,7 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("message", async (data) => {
+          noteActivity();
           const raw = rawDataToString(data);
           let payload: MattermostEventPayload;
           try {
@@ -156,7 +220,7 @@ export function createMattermostConnectOnce(
               return;
             }
             try {
-              await opts.onReaction(payload);
+              await withInFlightHandler(() => opts.onReaction!(payload));
             } catch (err) {
               opts.runtime.error?.(`mattermost reaction handler failed: ${String(err)}`);
             }
@@ -171,13 +235,22 @@ export function createMattermostConnectOnce(
             return;
           }
           try {
-            await opts.onPosted(parsed.post, parsed.payload);
+            await withInFlightHandler(() => opts.onPosted(parsed.post, parsed.payload));
           } catch (err) {
             opts.runtime.error?.(`mattermost handler failed: ${String(err)}`);
           }
         });
 
+        ws.on("ping", () => {
+          noteActivity();
+        });
+
+        ws.on("pong", () => {
+          noteActivity();
+        });
+
         ws.on("close", (code, reason) => {
+          cleanupHeartbeat();
           const message = reasonToString(reason);
           opts.statusSink?.({
             connected: false,
@@ -195,6 +268,7 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("error", (err) => {
+          cleanupHeartbeat();
           opts.runtime.error?.(`mattermost websocket error: ${String(err)}`);
           opts.statusSink?.({
             lastError: String(err),
@@ -205,6 +279,7 @@ export function createMattermostConnectOnce(
         });
       });
     } finally {
+      cleanupHeartbeat();
       opts.abortSignal?.removeEventListener("abort", onAbort);
     }
   };

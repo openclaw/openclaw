@@ -4,6 +4,7 @@ import { resolveMattermostAccount } from "./accounts.js";
 import {
   evaluateMattermostMentionGate,
   resolveMattermostEffectiveReplyToId,
+  resolveMattermostReplyReferenceId,
   resolveMattermostReplyRootId,
   resolveMattermostThreadSessionContext,
   type MattermostMentionGateInput,
@@ -132,6 +133,16 @@ describe("resolveMattermostReplyRootId with block streaming payloads", () => {
       }),
     ).toBe("inbound-post-for-threading");
   });
+
+  it("keeps direct-message block streaming non-threaded", () => {
+    expect(
+      resolveMattermostReplyRootId({
+        kind: "direct",
+        threadRootId: "thread-root-1",
+        replyToId: "streamed-reply-id",
+      }),
+    ).toBe("streamed-reply-id");
+  });
 });
 
 describe("resolveMattermostReplyRootId", () => {
@@ -154,6 +165,49 @@ describe("resolveMattermostReplyRootId", () => {
 
   it("falls back to undefined when neither reply target is available", () => {
     expect(resolveMattermostReplyRootId({})).toBeUndefined();
+  });
+
+  it("preserves explicit reply targets for direct messages", () => {
+    expect(
+      resolveMattermostReplyRootId({
+        kind: "direct",
+        threadRootId: "thread-root-456",
+        replyToId: "child-post-789",
+      }),
+    ).toBe("child-post-789");
+  });
+
+  it("still ignores implicit thread roots for direct messages", () => {
+    expect(
+      resolveMattermostReplyRootId({
+        kind: "direct",
+        threadRootId: "thread-root-456",
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("resolveMattermostReplyReferenceId", () => {
+  it("keeps direct-message reply references even when threading is disabled", () => {
+    expect(
+      resolveMattermostReplyReferenceId({
+        kind: "direct",
+        threadRootId: "reply-post-123",
+      }),
+    ).toBe("reply-post-123");
+  });
+
+  it("ignores channel thread replies because thread sessions already carry that context", () => {
+    expect(
+      resolveMattermostReplyReferenceId({
+        kind: "channel",
+        threadRootId: "reply-post-123",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when no reply target exists", () => {
+    expect(resolveMattermostReplyReferenceId({})).toBeUndefined();
   });
 });
 
@@ -198,6 +252,17 @@ describe("resolveMattermostEffectiveReplyToId", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("ignores direct-message thread roots from inbound replies", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "all",
+        threadRootId: "thread-root-456",
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("resolveMattermostThreadSessionContext", () => {
@@ -239,6 +304,22 @@ describe("resolveMattermostThreadSessionContext", () => {
         kind: "direct",
         postId: "post-123",
         replyToMode: "all",
+      }),
+    ).toEqual({
+      effectiveReplyToId: undefined,
+      sessionKey: "agent:main:mattermost:default:user-1",
+      parentSessionKey: undefined,
+    });
+  });
+
+  it("does not fork direct-message sessions even when Mattermost sends a thread root", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:user-1",
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "all",
+        threadRootId: "root-456",
       }),
     ).toEqual({
       effectiveReplyToId: undefined,

@@ -138,6 +138,13 @@ export async function fetchMattermostChannel(
   return await client.request<MattermostChannel>(`/channels/${channelId}`);
 }
 
+export async function fetchMattermostPost(
+  client: MattermostClient,
+  postId: string,
+): Promise<MattermostPost> {
+  return await client.request<MattermostPost>(`/posts/${postId}`);
+}
+
 export async function fetchMattermostChannelByName(
   client: MattermostClient,
   teamId: string,
@@ -154,6 +161,10 @@ export async function sendMattermostTyping(
 ): Promise<void> {
   const payload: Record<string, string> = {
     channel_id: params.channelId,
+    // Mattermost webapp sends an explicit empty-string parent_id for root posts.
+    // Omitting the field causes root-channel typing indicators to miss the
+    // channelId+"" key the client uses for display.
+    parent_id: "",
   };
   const parentId = params.parentId?.trim();
   if (parentId) {

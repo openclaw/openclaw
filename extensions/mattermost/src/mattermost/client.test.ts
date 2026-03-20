@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createMattermostClient,
   createMattermostPost,
+  fetchMattermostPost,
   normalizeMattermostBaseUrl,
+  sendMattermostTyping,
   updateMattermostPost,
 } from "./client.js";
 
@@ -244,6 +246,38 @@ describe("createMattermostPost", () => {
 
     const body = JSON.parse(calls[0].init?.body as string);
     expect(body.props).toBeUndefined();
+  });
+});
+
+describe("fetchMattermostPost", () => {
+  it("requests /posts/{id}", async () => {
+    const { client, calls } = createTestClient({ body: { id: "post-1" } });
+    const result = await fetchMattermostPost(client, "post-1");
+
+    expect(result).toEqual({ id: "post-1" });
+    expect(calls[0]?.url).toContain("/posts/post-1");
+  });
+});
+
+describe("sendMattermostTyping", () => {
+  it("sends empty-string parent_id for root channel typing", async () => {
+    const { client, calls } = createTestClient({ body: {} });
+
+    await sendMattermostTyping(client, { channelId: "ch123" });
+
+    const body = JSON.parse(calls[0].init?.body as string);
+    expect(body.channel_id).toBe("ch123");
+    expect(body.parent_id).toBe("");
+  });
+
+  it("preserves thread parent_id when provided", async () => {
+    const { client, calls } = createTestClient({ body: {} });
+
+    await sendMattermostTyping(client, { channelId: "ch123", parentId: "root456" });
+
+    const body = JSON.parse(calls[0].init?.body as string);
+    expect(body.channel_id).toBe("ch123");
+    expect(body.parent_id).toBe("root456");
   });
 });
 

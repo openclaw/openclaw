@@ -10,23 +10,36 @@ import { runWithReconnect } from "./reconnect.js";
 class FakeWebSocket implements MattermostWebSocketLike {
   public readonly sent: string[] = [];
   public closeCalls = 0;
+  public pingCalls = 0;
   public terminateCalls = 0;
   private openListeners: Array<() => void> = [];
   private messageListeners: Array<(data: Buffer) => void | Promise<void>> = [];
+  private pingListeners: Array<(data: Buffer) => void> = [];
+  private pongListeners: Array<(data: Buffer) => void> = [];
   private closeListeners: Array<(code: number, reason: Buffer) => void> = [];
   private errorListeners: Array<(err: unknown) => void> = [];
 
   on(event: "open", listener: () => void): void;
   on(event: "message", listener: (data: Buffer) => void | Promise<void>): void;
+  on(event: "ping", listener: (data: Buffer) => void): void;
+  on(event: "pong", listener: (data: Buffer) => void): void;
   on(event: "close", listener: (code: number, reason: Buffer) => void): void;
   on(event: "error", listener: (err: unknown) => void): void;
-  on(event: "open" | "message" | "close" | "error", listener: unknown): void {
+  on(event: "open" | "message" | "ping" | "pong" | "close" | "error", listener: unknown): void {
     if (event === "open") {
       this.openListeners.push(listener as () => void);
       return;
     }
     if (event === "message") {
       this.messageListeners.push(listener as (data: Buffer) => void | Promise<void>);
+      return;
+    }
+    if (event === "ping") {
+      this.pingListeners.push(listener as (data: Buffer) => void);
+      return;
+    }
+    if (event === "pong") {
+      this.pongListeners.push(listener as (data: Buffer) => void);
       return;
     }
     if (event === "close") {
@@ -38,6 +51,10 @@ class FakeWebSocket implements MattermostWebSocketLike {
 
   send(data: string): void {
     this.sent.push(data);
+  }
+
+  ping(): void {
+    this.pingCalls++;
   }
 
   close(): void {
@@ -57,6 +74,18 @@ class FakeWebSocket implements MattermostWebSocketLike {
   emitMessage(data: Buffer): void {
     for (const listener of this.messageListeners) {
       void listener(data);
+    }
+  }
+
+  emitPing(data = Buffer.alloc(0)): void {
+    for (const listener of this.pingListeners) {
+      listener(data);
+    }
+  }
+
+  emitPong(data = Buffer.alloc(0)): void {
+    for (const listener of this.pongListeners) {
+      listener(data);
     }
   }
 
@@ -228,5 +257,139 @@ describe("mattermost websocket monitor", () => {
       }),
     );
     expect(payload.data?.reaction).toBeDefined();
+  });
+
+  it("terminates stale websocket connections when heartbeat times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new FakeWebSocket();
+      const runtime = testRuntime();
+      const connectOnce = createMattermostConnectOnce({
+        wsUrl: "wss://example.invalid/api/v4/websocket",
+        botToken: "token",
+        runtime,
+        nextSeq: () => 1,
+        onPosted: async () => {},
+        webSocketFactory: () => socket,
+        heartbeatIntervalMs: 1_000,
+        heartbeatTimeoutMs: 1_500,
+      });
+
+      const connected = connectOnce();
+      queueMicrotask(() => {
+        socket.emitOpen();
+      });
+      await vi.runAllTicks();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(socket.pingCalls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(2_100);
+      expect(socket.terminateCalls).toBe(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("mattermost websocket heartbeat timed out"),
+      );
+
+      socket.emitClose(1006, "heartbeat timeout");
+      await connected;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps websocket alive when pong frames arrive", async () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new FakeWebSocket();
+      const connectOnce = createMattermostConnectOnce({
+        wsUrl: "wss://example.invalid/api/v4/websocket",
+        botToken: "token",
+        runtime: testRuntime(),
+        nextSeq: () => 1,
+        onPosted: async () => {},
+        webSocketFactory: () => socket,
+        heartbeatIntervalMs: 1_000,
+        heartbeatTimeoutMs: 1_500,
+      });
+
+      const connected = connectOnce();
+      queueMicrotask(() => {
+        socket.emitOpen();
+      });
+      await vi.runAllTicks();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(socket.pingCalls).toBe(1);
+      socket.emitPong();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(socket.pingCalls).toBe(2);
+      expect(socket.terminateCalls).toBe(0);
+
+      socket.emitClose(1000);
+      await connected;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not terminate while a posted handler is still in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new FakeWebSocket();
+      let resolvePosted: (() => void) | undefined;
+      const onPosted = vi.fn(
+        async () =>
+          await new Promise<void>((resolve) => {
+            resolvePosted = resolve;
+          }),
+      );
+      const runtime = testRuntime();
+      const connectOnce = createMattermostConnectOnce({
+        wsUrl: "wss://example.invalid/api/v4/websocket",
+        botToken: "token",
+        runtime,
+        nextSeq: () => 1,
+        onPosted,
+        webSocketFactory: () => socket,
+        heartbeatIntervalMs: 1_000,
+        heartbeatTimeoutMs: 1_500,
+      });
+
+      const connected = connectOnce();
+      queueMicrotask(() => {
+        socket.emitOpen();
+        socket.emitMessage(
+          Buffer.from(
+            JSON.stringify({
+              event: "posted",
+              data: {
+                post: JSON.stringify({
+                  id: "post-1",
+                  channel_id: "channel-1",
+                  user_id: "user-1",
+                  message: "hello",
+                }),
+              },
+            }),
+          ),
+        );
+      });
+      await vi.runAllTicks();
+      expect(onPosted).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(socket.terminateCalls).toBe(0);
+      expect(runtime.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("mattermost websocket heartbeat timed out"),
+      );
+
+      resolvePosted?.();
+      await vi.runAllTicks();
+      socket.emitClose(1000);
+      await connected;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

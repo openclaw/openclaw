@@ -7,12 +7,14 @@ import {
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -52,6 +54,14 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   }
   const agentSet = new Set(agent);
   return channel.filter((name) => agentSet.has(name));
+}
+
+export function resolveTypingTtlMsForContext(
+  ctx: Pick<MsgContext, "Surface" | "Provider" | "ChatType">,
+): number | undefined {
+  const typingChannel = normalizeMessageChannel(ctx.Surface ?? ctx.Provider);
+  const typingChatType = normalizeChatType(ctx.ChatType);
+  return typingChannel === "mattermost" && typingChatType === "direct" ? 0 : undefined;
 }
 
 export async function getReplyFromConfig(
@@ -118,6 +128,10 @@ export async function getReplyFromConfig(
     onReplyStart: opts?.onReplyStart,
     onCleanup: opts?.onTypingCleanup,
     typingIntervalSeconds,
+    // Mattermost DMs should keep the native typing indicator alive until the run
+    // actually finishes. The client already expires stale typing pulses on its
+    // own, so the generic 2m safety TTL only hides long-running work.
+    typingTtlMs: resolveTypingTtlMsForContext(ctx),
     silentToken: SILENT_REPLY_TOKEN,
     log: defaultRuntime.log,
   });
