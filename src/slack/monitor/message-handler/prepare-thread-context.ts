@@ -127,12 +127,20 @@ export async function resolveSlackThreadContextData(params: {
   });
 
   if (threadHistoryLimit > 0) {
+    // For existing sessions, pass oldest to avoid paginating the full thread.
+    // threadSessionPreviousTimestamp is in ms (Date.now()); Slack uses seconds.
+    const oldest =
+      hasExistingThreadSession && threadSessionPreviousTimestamp
+        ? (threadSessionPreviousTimestamp / 1000).toFixed(6)
+        : undefined;
+
     const threadHistory = await resolveSlackThreadHistory({
       channelId: params.message.channel,
       threadTs: params.threadTs,
       client: params.ctx.app.client,
       currentMessageTs: params.message.ts,
       limit: threadHistoryLimit,
+      oldest,
     });
 
     if (threadHistory.length > 0) {
@@ -163,8 +171,8 @@ export async function resolveSlackThreadContextData(params: {
         );
       }
       for (const historyMsg of threadHistory) {
-        // Avoid self-conditioning on stale assistant status/tool-capability claims
-        // when bootstrapping a new thread session from old thread history.
+        // Avoid self-conditioning on stale assistant status/tool-capability claims.
+        // Applies to both new session bootstrap and existing session refresh.
         if (historyMsg.botId) {
           continue;
         }

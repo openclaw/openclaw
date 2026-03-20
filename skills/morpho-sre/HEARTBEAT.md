@@ -83,6 +83,7 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
   - bold = `*text*`, inline code = `` `text` ``
   - never use Markdown bold `**text**` or Markdown headings
   - all section labels (`*Incident:*`, `*Customer impact:*`, etc.) must use bold (`*Label:*`), never italic (`_Label:_`)
+  - bold formatting self-check: before posting, scan the draft for `_Label:_` patterns and replace with `*Label:*`. Full list: `*Incident:*`, `*Customer impact:*`, `*Affected services:*`, `*Status:*`, `*Evidence:*`, `*Likely cause:*`, `*Mitigation:*`, `*Validate:*`, `*Next:*`, `*Also watching:*`, `*Auto-fix PR:*`, `*Linear:*`, `*Suggested PR:*`, `*Fix PR:*`, `*Context:*`
 - Enrich with BetterStack API context when needed:
   `/home/node/.openclaw/skills/morpho-sre/scripts/betterstack-api.sh GET '/incidents/<id>'`
 - If confidence is high and fix is scoped/reversible, run `autofix-pr.sh` and post PR URL in-thread.
@@ -98,6 +99,8 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - Never lead with routing hints, fingerprint changes, raw section names, signal counts, or `primary/supporting` namespace jargon.
 - Never stream drafts, progress chatter, tool JSON, exec-approval warnings, or command-construction failures into any Slack thread.
 - Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack thread.
+- Content gate anti-patterns — these are ALWAYS progress-only and must NEVER be posted as standalone messages: "Now let me...", "I need to...", "Good —...", "The script...", "Let me check...", "Let me compose...", "There are stale changes...", "The commit was created...", "PR is created. Let me...", "Now I see some issues...", "Honest answer:...". Buffer all intermediate work into the next substantive incident-format reply.
+- Meta-response handling: if a human asks about the bot's own capabilities, model, or environment, fold the answer into the next incident-format reply under a `*Context:*` section — do not send a standalone conversational message.
 - Content gate: before posting any message to an incident thread, verify it starts with the 4-line header and contains at least one `*Evidence:*` fact or `*Mitigation:*` action. If it doesn't, do not send it — buffer all content into a single reply.
 - For recurring indexer freshness alerts on the same workload, answer as one ongoing RCA instead of a fresh transient update.
 - Keep the same 4-line incident header on every follow-up update, not just the first reply in a thread.

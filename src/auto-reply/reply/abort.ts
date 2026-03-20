@@ -92,9 +92,14 @@ const GENERAL_ABORT_PHRASES = [
   "stop please",
 ] as const;
 
-const ABORT_TRIGGERS = new Set<string>([...GENERAL_ABORT_PHRASES, ...THREAD_ABORT_PHRASES]);
-const THREAD_ABORT_TRIGGERS = new Set<string>(THREAD_ABORT_PHRASES);
-const INCIDENT_THREAD_STOP_TRIGGER_SET = new Set<string>(INCIDENT_THREAD_STOP_PHRASES);
+const ABORT_TRIGGERS = new Set<string>([
+  ...GENERAL_ABORT_PHRASES,
+  ...THREAD_ABORT_PHRASES,
+]) as ReadonlySet<string>;
+const THREAD_ABORT_TRIGGERS = new Set<string>(THREAD_ABORT_PHRASES) as ReadonlySet<string>;
+const INCIDENT_THREAD_STOP_TRIGGER_SET = new Set<string>(
+  INCIDENT_THREAD_STOP_PHRASES,
+) as ReadonlySet<string>;
 // String-keyed bounded map: enough for this path, and avoids keeping per-session
 // timers alive. pruneAbortMemory enforces the hard cap.
 const ABORT_MEMORY = new Map<string, boolean>();

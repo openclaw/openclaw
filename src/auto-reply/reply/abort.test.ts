@@ -306,6 +306,21 @@ describe("abort detection", () => {
     expect(isIncidentThreadAbortControlText("please do not do that")).toBe(false);
   });
 
+  it("handles edge cases in incident-thread abort detection", () => {
+    // Multiple spaces — normalizeAbortTriggerText collapses whitespace, then
+    // "stop ignore this thread" matches the stop-prefix regex + thread phrase
+    expect(isIncidentThreadAbortControlText("stop    ignore this thread")).toBe(true);
+    expect(isIncidentThreadAbortControlText("stop,    ignore this thread")).toBe(true);
+    // Mixed case
+    expect(isIncidentThreadAbortControlText("STOP")).toBe(true);
+    expect(isIncidentThreadAbortControlText("Please Stop")).toBe(true);
+    expect(isIncidentThreadAbortControlText("IGNORE THIS THREAD")).toBe(true);
+    // Trailing punctuation
+    expect(isIncidentThreadAbortControlText("stop!")).toBe(true);
+    expect(isIncidentThreadAbortControlText("please stop.")).toBe(true);
+    expect(isIncidentThreadAbortControlText("ignore this thread!")).toBe(true);
+  });
+
   it("rejects oversized abort-control text before normalization", () => {
     const oversized = `${"x".repeat(2050)} please stop`;
     expect(isIncidentThreadAbortControlText(oversized)).toBe(false);
