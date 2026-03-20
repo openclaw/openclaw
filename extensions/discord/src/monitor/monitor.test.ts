@@ -517,6 +517,22 @@ describe("discord component interactions", () => {
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
   });
 
+  it("uses raw callbackData for built-in fallback when no plugin handler matches", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "/codex_resume --browse-projects" })],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction, reply } = createComponentButtonInteraction();
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(lastDispatchCtx?.BodyForAgent).toBe("/codex_resume --browse-projects");
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps reusable buttons active after use", async () => {
     registerDiscordComponentEntries({
       entries: [createButtonEntry({ reusable: true })],

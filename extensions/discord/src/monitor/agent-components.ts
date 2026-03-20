@@ -614,11 +614,15 @@ async function handleDiscordComponentEvent(params: {
       return;
     }
   }
-  const eventText = formatDiscordComponentEventText({
-    kind: consumed.kind === "select" ? "select" : "button",
-    label: consumed.label,
-    values,
-  });
+  // Preserve explicit callback payloads for the built-in fallback path so
+  // Discord behaves like Telegram when buttons carry synthetic command text.
+  const eventText =
+    consumed.callbackData?.trim() ||
+    formatDiscordComponentEventText({
+      kind: consumed.kind === "select" ? "select" : "button",
+      label: consumed.label,
+      values,
+    });
 
   try {
     await params.interaction.reply({ content: "✓", ...replyOpts });
