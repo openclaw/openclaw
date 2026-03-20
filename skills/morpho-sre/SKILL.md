@@ -148,6 +148,22 @@ Every text output you produce becomes a visible message to the user. Intermediat
 - Compare public surfaces: `vaultV2ByAddress`, `vaultV2s` with `address_in`, `vaultV2transactions`.
 - before naming an ingestion/provenance root cause, add one live DB row/provenance fact and one job-path or simulation fact for the affected entity.
 
+## Prime Monorepo App Mapping
+
+All prime/curator/delegate/liquidation/markets frontend apps live in `morpho-org/prime-monorepo` (Turborepo + pnpm workspaces). NOT in `consumer-monorepo` or the archived `morpho-vault-admin`. When a bug report mentions any of these apps, the source repo is always `prime-monorepo`.
+
+| App              | Path                   | Domain                      | Sentry project    |
+| ---------------- | ---------------------- | --------------------------- | ----------------- |
+| Curator App (v1) | `apps/curator-app`     | `curator.morpho.org`        | `curator-app`     |
+| Curator App V2   | `apps/curator-v2-app`  | `curator-v2-app.vercel.app` | `curator-v2-app`  |
+| Curator RPC API  | `apps/curator-rpc-api` | `curator-api.morpho.org`    | —                 |
+| Delegate App     | `apps/delegate-app`    | `delegate.morpho.org`       | `delegate-app`    |
+| Liquidation App  | `apps/liquidation-app` | `liquidation.morpho.org`    | `liquidation-app` |
+| Markets V2 App   | `apps/markets-v2-app`  | `markets-v2-app.vercel.app` | `markets-v2-app`  |
+| UI Showcase      | `apps/ui-app`          | `prime-ui.morpho.dev`       | —                 |
+
+Shared packages: `@repo/web3` (wagmi/viem), `@repo/ui` (components), `@repo/utils`, `@repo/hooks`, `@repo/abis` (contract ABIs), `@repo/viem-extensions`. New utility functions should go in the appropriate `@repo/*` package, not inline in app code.
+
 ## Gotchas
 
 - `ethereum.blocks` uses columns `number` and `time` — NOT `block_number`/`block_time` despite upstream Dune reference docs

@@ -50,6 +50,10 @@ When a doc, script, or config mentions a literal host path:
   `${MORPHO_INFRA_HELM_DIR}/charts/openclaw-sre`
 - Seed skill docs:
   `${OPENCLAW_SRE_REPO_DIR}/skills/morpho-sre`
+- Prime frontend apps (curator, delegate, liquidation, markets):
+  `${OPENCLAW_SRE_REPO_ROOT}/morpho-org/prime-monorepo` or `gh repo view morpho-org/prime-monorepo`
+  Apps: `apps/curator-app`, `apps/curator-v2-app`, `apps/curator-rpc-api`, `apps/delegate-app`, `apps/liquidation-app`, `apps/markets-v2-app`, `apps/ui-app`
+  Shared packages: `packages/web3`, `packages/ui`, `packages/utils`, `packages/hooks`, `packages/abis`
 
 ## Failure Mode
 

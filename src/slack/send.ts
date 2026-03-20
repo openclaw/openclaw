@@ -18,7 +18,7 @@ import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
-import { markdownToSlackMrkdwnChunks } from "./format.js";
+import { enforceIncidentLabelFormat, markdownToSlackMrkdwnChunks } from "./format.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
 
@@ -307,11 +307,11 @@ export async function sendMessageSlack(
     chunkMode === "newline"
       ? chunkMarkdownTextWithMode(trimmedMessage, chunkLimit, chunkMode)
       : [trimmedMessage];
-  const chunks = markdownChunks.flatMap((markdown) =>
-    markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
-  );
+  const chunks = markdownChunks
+    .flatMap((markdown) => markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }))
+    .map(enforceIncidentLabelFormat);
   if (!chunks.length && trimmedMessage) {
-    chunks.push(trimmedMessage);
+    chunks.push(enforceIncidentLabelFormat(trimmedMessage));
   }
   const mediaMaxBytes =
     typeof account.config.mediaMaxMb === "number"

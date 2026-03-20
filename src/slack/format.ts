@@ -128,8 +128,38 @@ export function markdownToSlackMrkdwn(
   return renderMarkdownWithMarkers(ir, buildSlackRenderOptions());
 }
 
+// Incident section labels that must use *bold* not _italic_ in Slack mrkdwn.
+// Applied post-normalization since the Markdown→mrkdwn converter treats *...* as italic.
+const INCIDENT_LABEL_FIX_RE = (() => {
+  const labels = [
+    "Incident",
+    "Customer impact",
+    "Affected services",
+    "Status",
+    "Evidence",
+    "Likely cause",
+    "Mitigation",
+    "Validate",
+    "Next",
+    "Also watching",
+    "Auto-fix PR",
+    "Linear",
+    "Suggested PR",
+    "Fix PR",
+    "Context",
+    "What the PR does",
+  ];
+  const escaped = labels.map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  // `^` with the `m` flag already matches after newlines, so no lookbehind needed.
+  return new RegExp(`^_(${escaped.join("|")}):_`, "gm");
+})();
+
+export function enforceIncidentLabelFormat(text: string): string {
+  return text.replace(INCIDENT_LABEL_FIX_RE, "*$1:*");
+}
+
 export function normalizeSlackOutboundText(markdown: string): string {
-  return markdownToSlackMrkdwn(markdown ?? "");
+  return enforceIncidentLabelFormat(markdownToSlackMrkdwn(markdown ?? ""));
 }
 
 export function markdownToSlackMrkdwnChunks(

@@ -2,26 +2,6 @@ import type { OpenClawPluginDefinition } from "../../types.js";
 
 export const SRE_INCIDENT_FORMAT_PLUGIN_ID = "sre-incident-format";
 
-// Section labels that must use *bold* not _italic_ in incident replies.
-const INCIDENT_LABELS = [
-  "Incident",
-  "Customer impact",
-  "Affected services",
-  "Status",
-  "Evidence",
-  "Likely cause",
-  "Mitigation",
-  "Validate",
-  "Next",
-  "Also watching",
-  "Auto-fix PR",
-  "Linear",
-  "Suggested PR",
-  "Fix PR",
-  "Context",
-  "What the PR does",
-] as const;
-
 // Phrases that indicate a progress-only message (no substantive content).
 const PROGRESS_PREFIXES = [
   "now let me",
@@ -49,26 +29,10 @@ const PROGRESS_PREFIXES = [
   "let me check",
 ] as const;
 
-// Build regex that matches _Label:_ at start of line and replaces with *Label:*
-function buildLabelFixRegex(): RegExp {
-  const escaped = INCIDENT_LABELS.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  // Match _Label:_ at start of line only — incident labels always appear at line start.
-  return new RegExp(`(?:^|(?<=\\n))_(${escaped.join("|")}):_`, "gm");
-}
-
-const LABEL_FIX_RE = buildLabelFixRegex();
-
 // Quick check: does the text contain any incident section label in bold format?
 // Used to distinguish substantive incident replies from progress noise.
-const INCIDENT_LABEL_BOLD_RE = /\*(?:Incident|Evidence|Mitigation|Likely cause|Status):\*/;
-
-/**
- * Replace italic incident section labels with bold equivalents.
- * _Incident:_ → *Incident:*
- */
-export function enforceIncidentLabelFormat(text: string): string {
-  return text.replace(LABEL_FIX_RE, "*$1:*");
-}
+const INCIDENT_LABEL_BOLD_RE =
+  /\*(?:Incident|Customer impact|Affected services|Status|Evidence|Likely cause|Mitigation|Validate|Next|Also watching|Auto-fix PR|Linear|Suggested PR|Fix PR|Context):\*/;
 
 /**
  * Check if a message is progress-only noise (no substantive content).
@@ -96,8 +60,7 @@ export function createSreIncidentFormatPlugin(): OpenClawPluginDefinition {
     id: SRE_INCIDENT_FORMAT_PLUGIN_ID,
     name: "SRE Incident Format Enforcer",
     version: "1.0.0",
-    description:
-      "Enforces bold section labels and blocks progress-only messages in SRE incident threads.",
+    description: "Blocks progress-only messages in SRE incident threads.",
     register(api) {
       api.on("message_sending", (event, ctx) => {
         const content = event.content;
@@ -126,11 +89,9 @@ export function createSreIncidentFormatPlugin(): OpenClawPluginDefinition {
           return { cancel: true };
         }
 
-        // Fix italic labels → bold labels
-        const fixed = enforceIncidentLabelFormat(content);
-        if (fixed !== content) {
-          return { content: fixed };
-        }
+        // Label enforcement is handled post-normalization in src/slack/format.ts
+        // and src/slack/send.ts, not in this hook (the hook runs before the
+        // Markdown→mrkdwn converter which would undo the fix).
 
         return;
       });

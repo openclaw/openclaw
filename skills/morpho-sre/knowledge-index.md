@@ -11,15 +11,16 @@ Runtime model: the container assumes a shared repo root. Start with
 
 ## Source Of Truth By Topic
 
-| Topic                                       | Primary repo/path                                    | Why                                                                            |
-| ------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------ |
-| OpenClaw SRE runtime behavior               | `openclaw-sre/`                                      | Agent runtime, memory, channel behavior, tool wiring                           |
-| OpenClaw SRE deployment + runtime substrate | `openclaw-sre/skills/morpho-sre/`                    | Runtime config defaults, skill payload, incident knowledge, repo ownership     |
-| Infra architecture + ops docs               | `morpho-infra/docs/`                                 | Most operational knowledge already lives here                                  |
-| Infra/service ownership map                 | `openclaw-sre/skills/morpho-sre/repo-ownership.json` | Repo boundaries, validation hints, rollout ownership                           |
-| Seeded incident dossiers                    | `openclaw-sre/skills/morpho-sre/*.md`                | Markdown dossiers baked into the runtime image to bootstrap incident knowledge |
-| Incident dossiers (runtime)                 | `~/.openclaw/state/sre-dossiers/`                    | Runtime-distilled prior incidents for recall, may extend the seeded dossiers   |
-| Session summaries                           | `~/.openclaw/state/sre-index/session-summaries/`     | Recent triage memory                                                           |
+| Topic                                                         | Primary repo/path                                    | Why                                                                                           |
+| ------------------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| OpenClaw SRE runtime behavior                                 | `openclaw-sre/`                                      | Agent runtime, memory, channel behavior, tool wiring                                          |
+| OpenClaw SRE deployment + runtime substrate                   | `openclaw-sre/skills/morpho-sre/`                    | Runtime config defaults, skill payload, incident knowledge, repo ownership                    |
+| Infra architecture + ops docs                                 | `morpho-infra/docs/`                                 | Most operational knowledge already lives here                                                 |
+| Infra/service ownership map                                   | `openclaw-sre/skills/morpho-sre/repo-ownership.json` | Repo boundaries, validation hints, rollout ownership                                          |
+| Prime frontend apps (curator, delegate, liquidation, markets) | `prime-monorepo/apps/*`                              | All prime/curator/delegate/liquidation/markets-v2 frontend apps and shared `@repo/*` packages |
+| Seeded incident dossiers                                      | `openclaw-sre/skills/morpho-sre/*.md`                | Markdown dossiers baked into the runtime image to bootstrap incident knowledge                |
+| Incident dossiers (runtime)                                   | `~/.openclaw/state/sre-dossiers/`                    | Runtime-distilled prior incidents for recall, may extend the seeded dossiers                  |
+| Session summaries                                             | `~/.openclaw/state/sre-index/session-summaries/`     | Recent triage memory                                                                          |
 
 ## Best Entry Points
 
@@ -114,6 +115,8 @@ investigation.
   Start `references/indexer-freshness-playbook.md`, then `morpho-infra/docs/guides/observability-stack-onboarding.md`, then the closest indexing dossier.
 - Consumer app frontend / JS error / replay / conversion drop:
   Start `frontend-project-resolver.sh`, then the matching `posthog-<env>-<project-key>` MCP server, then `sentry-api.sh` / `sentry-cli.sh`, then `morpho-infra/docs/guides/ai-agents-incident-troubleshooting.md`, then `morpho-infra/docs/operations/incident-response.md`.
+- Curator / delegate / liquidation / markets-v2 frontend bug:
+  Start `prime-monorepo/apps/<app>` (see SKILL.md "Prime Monorepo App Mapping" for app→path table), then `frontend-project-resolver.sh`, then matching PostHog/Sentry project, then `morpho-infra/docs/operations/incident-response.md`.
 - Consumer wallet / approval / permit / repay failure:
   Start `consumer-bug-preflight.sh`, then `incident-dossier-consumer-app-offchain-approval-failures-2026-03-12.md`, then matching PostHog/Sentry probes, then Linear / GitHub known-issue search, then Foundry/Tenderly checks.
 - Sentry RPC revert / ABI encoding mismatch / SDK interface regression:

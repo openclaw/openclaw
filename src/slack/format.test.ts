@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { markdownToSlackMrkdwn, normalizeSlackOutboundText } from "./format.js";
+import {
+  enforceIncidentLabelFormat,
+  markdownToSlackMrkdwn,
+  normalizeSlackOutboundText,
+} from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
 describe("markdownToSlackMrkdwn", () => {
@@ -76,5 +80,57 @@ describe("escapeSlackMrkdwn", () => {
 describe("normalizeSlackOutboundText", () => {
   it("normalizes markdown for outbound send/update paths", () => {
     expect(normalizeSlackOutboundText(" **bold** ")).toBe("*bold*");
+  });
+
+  it("enforces bold incident labels after normalization", () => {
+    // Model writes _Incident:_ (Slack italic) → normalizer preserves → enforcer fixes to bold
+    expect(normalizeSlackOutboundText("_Incident:_ crash")).toBe("*Incident:* crash");
+  });
+});
+
+describe("enforceIncidentLabelFormat", () => {
+  it("replaces italic incident labels with bold", () => {
+    const input = `_Incident:_ Server crash
+_Customer impact:_ confirmed
+_Affected services:_ api
+_Status:_ investigating`;
+    const expected = `*Incident:* Server crash
+*Customer impact:* confirmed
+*Affected services:* api
+*Status:* investigating`;
+    expect(enforceIncidentLabelFormat(input)).toBe(expected);
+  });
+
+  it("replaces all known labels", () => {
+    const labels = [
+      "Incident",
+      "Customer impact",
+      "Affected services",
+      "Status",
+      "Evidence",
+      "Likely cause",
+      "Mitigation",
+      "Validate",
+      "Next",
+      "Also watching",
+      "Auto-fix PR",
+      "Linear",
+      "Suggested PR",
+      "Fix PR",
+      "Context",
+      "What the PR does",
+    ];
+    for (const label of labels) {
+      expect(enforceIncidentLabelFormat(`_${label}:_ val`)).toBe(`*${label}:* val`);
+    }
+  });
+
+  it("leaves already-bold labels unchanged", () => {
+    const input = "*Incident:* crash\n*Status:* ok";
+    expect(enforceIncidentLabelFormat(input)).toBe(input);
+  });
+
+  it("leaves non-label italic unchanged", () => {
+    expect(enforceIncidentLabelFormat("_emphasis_ text")).toBe("_emphasis_ text");
   });
 });

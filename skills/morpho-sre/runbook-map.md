@@ -21,6 +21,7 @@ Route symptoms to the highest-signal docs first.
 | Indexer delay / BetterStack indexing latency / stale chain reads | `openclaw-sre/skills/morpho-sre/references/indexer-freshness-playbook.md` | `morpho-infra/docs/guides/observability-stack-onboarding.md`, `morpho-infra/docs/operations/incident-response.md`, `incident-dossier-arbitrum-indexing-throughput-backpressure-2026-03-13.md`                              |
 | Wrong values / stale values / APY spikes / replica drift         | `openclaw-sre/skills/morpho-sre/references/db-data-incident-playbook.md`  | `morpho-infra/docs/operations/kubernetes-database-ops.md`, `morpho-infra/docs/guides/ai-agents-incident-troubleshooting.md`, relevant incident dossier                                                                     |
 | One vault / one address / GraphQL ISE / APY nulls                | `openclaw-sre/skills/morpho-sre/single-vault-graphql-evidence.sh`         | `openclaw-sre/skills/morpho-sre/incident-dossier-blue-api-hyperevm-vault-v2-state-gap-2026-03-12.md`, `openclaw-sre/skills/morpho-sre/references/db-data-incident-playbook.md`, then DB row/provenance + job-path evidence |
+| Curator / delegate / liquidation / markets-v2 frontend bug       | `prime-monorepo/apps/<app>` (see SKILL.md Prime Monorepo App Mapping)     | `frontend-project-resolver.sh`, matching `posthog-<env>-<project-key>` MCP server, `sentry-api.sh`, `sentry-cli.sh`                                                                                                        |
 | Consumer frontend / JS error / replay / conversion drop          | `frontend-project-resolver.sh`                                            | matching `posthog-<env>-<project-key>` MCP server, `sentry-api.sh`, `sentry-cli.sh`, `morpho-infra/docs/guides/ai-agents-incident-troubleshooting.md`, `morpho-infra/docs/operations/incident-response.md`                 |
 | Consumer wallet / approval / permit / repay failure              | `consumer-bug-preflight.sh`                                               | `incident-dossier-consumer-app-offchain-approval-failures-2026-03-12.md`, matching `posthog-<env>-<project-key>` MCP server, `sentry-api.sh`, `sentry-cli.sh`, `linear-ticket-api.sh`, `gh search`, `foundry-evm-debug`    |
 | Sentry RPC revert / ABI mismatch / SDK interface regression      | `incident-dossier-consumer-app-sdk-abi-regression-2026-03-13.md`          | `cast call` / `cast abi-decode` live verification, `foundry-evm-debug` skill, SDK repo commit-range diff, `sentry-api.sh`                                                                                                  |
@@ -39,6 +40,8 @@ Route symptoms to the highest-signal docs first.
   `repo-root-model.md`
 - RCA / eRPC helper scripts:
   `erpc-context.sh`, `rca-provider-codex.sh`, `rca-provider-claude.sh`, `rca-provider-openclaw-agent.sh`
+- Curator / prime frontend apps:
+  `prime-monorepo/` (NOT `consumer-monorepo` or archived `morpho-vault-admin`)
 - Runtime bug in agent behavior:
   `openclaw-sre/`
 - Helm/render/sync issue:
