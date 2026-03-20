@@ -116,8 +116,8 @@ export function sanitizeAgentId(value: string | undefined | null): string {
 }
 
 function normalizeResolvedPeerId(value: string | undefined | null): string | null {
-  const normalized = normalizeAgentId(value);
-  return normalized === DEFAULT_AGENT_ID ? null : normalized;
+  const trimmed = (value ?? "").trim().toLowerCase();
+  return trimmed || null;
 }
 
 export function buildAgentMainSessionKey(params: {

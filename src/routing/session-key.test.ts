@@ -147,7 +147,7 @@ describe("buildAgentPeerSessionKey resolvedPeerId", () => {
     ).toBe("agent:main:direct:employee-123");
   });
 
-  it("falls back to identityLinks when resolvedPeerId normalizes empty", () => {
+  it("falls back to identityLinks when resolvedPeerId is whitespace-only", () => {
     expect(
       buildAgentPeerSessionKey({
         agentId: "main",
@@ -156,8 +156,34 @@ describe("buildAgentPeerSessionKey resolvedPeerId", () => {
         peerId: "U123",
         dmScope: "per-channel-peer",
         identityLinks: { alice: ["slack:U123"] },
-        resolvedPeerId: "!!!",
+        resolvedPeerId: "   ",
       }),
     ).toBe("agent:main:slack:direct:alice");
+  });
+
+  it("preserves email-format canonical peer IDs", () => {
+    expect(
+      buildAgentPeerSessionKey({
+        agentId: "main",
+        channel: "slack",
+        peerKind: "direct",
+        peerId: "U123",
+        dmScope: "per-peer",
+        resolvedPeerId: "john.doe@acme.com",
+      }),
+    ).toBe("agent:main:direct:john.doe@acme.com");
+  });
+
+  it("preserves canonical peer ID 'main' without discarding it", () => {
+    expect(
+      buildAgentPeerSessionKey({
+        agentId: "main",
+        channel: "slack",
+        peerKind: "direct",
+        peerId: "U123",
+        dmScope: "per-peer",
+        resolvedPeerId: "main",
+      }),
+    ).toBe("agent:main:direct:main");
   });
 });
