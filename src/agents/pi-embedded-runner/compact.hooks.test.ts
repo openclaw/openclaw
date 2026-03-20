@@ -649,7 +649,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     );
     const runtimeContext = (
       maintain.mock.calls[0]?.[0] as { runtimeContext?: Record<string, unknown> } | undefined
-    )?.runtimeContext as Record<string, unknown> | undefined;
+    )?.runtimeContext;
     expect(typeof runtimeContext?.rewriteTranscriptEntries).toBe("function");
   });
 
