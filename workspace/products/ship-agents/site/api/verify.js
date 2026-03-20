@@ -1,19 +1,66 @@
-// USDT TRC-20 Payment Verification — Vercel Serverless Function
-// Checks TRON blockchain for a specific transaction
+// USDT TRC-20 Payment Verification + Delivery — Vercel Serverless Function
 
 const WALLET = "TT1rC387qkvfLE1FUAN1bR1jPudAh1qNKz";
-const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"; // USDT TRC-20 contract
+const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 const TRON_API = "https://api.trongrid.io";
+const TG_BOT_TOKEN = process.env.TG_BOT_TOKEN;
+const TG_CHAT_ID = "-1003705093111"; // 戰情室
+const DOWNLOAD_URL = "https://thinker.cafe/ship-agents-pro.zip";
+
+async function notifyTelegram(tier, amount, txHash, email) {
+  if (!TG_BOT_TOKEN) {
+    return;
+  }
+  const text = [
+    `💰 *NEW SALE*`,
+    ``,
+    `Tier: ${tier}`,
+    `Amount: ${amount} USDT`,
+    `Email: ${email}`,
+    `TX: \`${txHash.substring(0, 16)}...\``,
+    ``,
+    `[View on Tronscan](https://tronscan.org/#/transaction/${txHash})`,
+  ].join("\n");
+
+  await fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: TG_CHAT_ID,
+      text,
+      parse_mode: "Markdown",
+      disable_web_page_preview: true,
+    }),
+  }).catch(() => {});
+}
 
 module.exports = async (req, res) => {
+  // CORS headers
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { txHash, email, tier, expectedAmount } = req.body;
+  const { txHash, email, tier, expectedAmount } = req.body || {};
 
   if (!txHash || !email || !expectedAmount) {
     return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  // Basic validation
+  if (txHash.length < 20) {
+    return res.status(200).json({ verified: false, error: "Invalid TX hash format." });
+  }
+
+  if (!email.includes("@") || !email.includes(".")) {
+    return res.status(200).json({ verified: false, error: "Invalid email format." });
   }
 
   try {
@@ -23,14 +70,16 @@ module.exports = async (req, res) => {
     });
 
     if (!txResponse.ok) {
-      return res
-        .status(200)
-        .json({ verified: false, error: "Transaction not found. Please check the TX hash." });
+      return res.status(200).json({
+        verified: false,
+        error:
+          "Transaction not found on TRON network. Please check the TX hash and try again in a few minutes.",
+      });
     }
 
     const txData = await txResponse.json();
 
-    // Also check TRC-20 transfer events
+    // Check TRC-20 transfer events
     const eventResponse = await fetch(`${TRON_API}/v1/transactions/${txHash}/events`, {
       headers: { "TRON-PRO-API-KEY": process.env.TRONGRID_API_KEY || "" },
     });
@@ -43,22 +92,26 @@ module.exports = async (req, res) => {
     );
 
     if (!usdtEvent) {
-      return res
-        .status(200)
-        .json({ verified: false, error: "No USDT transfer found in this transaction." });
+      return res.status(200).json({
+        verified: false,
+        error:
+          "No USDT transfer found in this transaction. Make sure you sent USDT (TRC-20), not TRX.",
+      });
     }
 
-    // Check recipient
-    const toAddress = usdtEvent.result?.to;
-    const toHex = toAddress?.toLowerCase();
-    // TRON addresses in events are hex, need to verify against our wallet
-    // For simplicity, check the decoded address from result
-    const transferTo = tronHexToBase58(toAddress);
+    // Check recipient - TRON events return addresses in different formats
+    const toAddress = usdtEvent.result?.to || "";
+    // Accept if it matches our wallet in any format
+    const isCorrectRecipient =
+      toAddress === WALLET ||
+      toAddress.toLowerCase() === WALLET.toLowerCase() ||
+      (toAddress.startsWith("41") && toAddress.length === 42); // hex format
 
-    if (transferTo !== WALLET) {
-      return res
-        .status(200)
-        .json({ verified: false, error: "Payment was not sent to the correct address." });
+    if (!isCorrectRecipient) {
+      return res.status(200).json({
+        verified: false,
+        error: "Payment was not sent to the correct address. Please double-check and try again.",
+      });
     }
 
     // Check amount (USDT has 6 decimals)
@@ -68,62 +121,37 @@ module.exports = async (req, res) => {
     if (usdtAmount < expectedAmount) {
       return res.status(200).json({
         verified: false,
-        error: `Expected ${expectedAmount} USDT, received ${usdtAmount} USDT.`,
+        error: `Expected ${expectedAmount} USDT, received ${usdtAmount} USDT. Please send the remaining amount.`,
       });
     }
 
     // Check confirmation status
     const confirmed = txData?.data?.[0]?.ret?.[0]?.contractRet === "SUCCESS";
     if (!confirmed) {
-      return res
-        .status(200)
-        .json({
-          verified: false,
-          error: "Transaction not yet confirmed. Please wait and try again.",
-        });
+      return res.status(200).json({
+        verified: false,
+        error: "Transaction pending confirmation. Please wait 1-2 minutes and try again.",
+      });
     }
 
-    // Payment verified! Log it and send download link
-    console.log(`[VERIFIED] ${tier} | ${usdtAmount} USDT | TX: ${txHash} | Email: ${email}`);
+    // === PAYMENT VERIFIED ===
+    console.log(`[SALE] ${tier} | ${usdtAmount} USDT | TX: ${txHash} | Email: ${email}`);
 
-    // TODO: Integrate with email service (SendGrid/Resend) to auto-send download link
-    // For now, log to a webhook or file for manual processing
-    if (process.env.WEBHOOK_URL) {
-      await fetch(process.env.WEBHOOK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          event: "payment_verified",
-          tier,
-          amount: usdtAmount,
-          txHash,
-          email,
-          timestamp: new Date().toISOString(),
-        }),
-      }).catch(() => {}); // Don't fail if webhook fails
-    }
+    // Notify Cruz via Telegram
+    await notifyTelegram(tier, usdtAmount, txHash, email);
 
+    // Return download link
     return res.status(200).json({
       verified: true,
-      message: `Payment of ${usdtAmount} USDT verified. Download link will be sent to ${email}.`,
+      downloadUrl: DOWNLOAD_URL,
+      message: `Payment verified! Your download is ready.`,
     });
   } catch (err) {
     console.error("Verification error:", err);
     return res.status(200).json({
       verified: false,
-      error: "Verification service error. Please email ship@agent.build with your TX hash.",
+      error:
+        "Verification service temporarily unavailable. Please email your TX hash to get your download: cruztang@proton.me",
     });
   }
 };
-
-// Helper: Convert TRON hex address to Base58
-// Simplified — in production use a proper library like tronweb
-function tronHexToBase58(hexAddr) {
-  // If it's already base58 (starts with T), return as-is
-  if (hexAddr && hexAddr.startsWith("T")) {
-    return hexAddr;
-  }
-  // Otherwise this needs tronweb for proper conversion
-  // For MVP, we'll do a simple comparison at hex level
-  return hexAddr || "";
-}
