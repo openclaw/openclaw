@@ -1,3 +1,16 @@
+/**
+ * @module exec
+ * @security
+ * This module is a critical security boundary. All external command execution
+ * flows through here. Key mitigations:
+ *   - Windows cmd.exe metacharacter injection prevention (WINDOWS_UNSAFE_CMD_CHARS_RE)
+ *   - Safe .cmd/.bat resolution to avoid EINVAL/injection via resolveWindowsCommandShim
+ *   - Timeout enforcement on all spawned processes
+ *   - Environment marking via markOpenClawExecEnv for downstream audit
+ *   - Stdin pipe safety (input is written and the stream is ended)
+ *
+ * Any changes to this file MUST be reviewed with security implications in mind.
+ */
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
