@@ -33,6 +33,7 @@ import {
 } from "./bot-content.js";
 import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sender-name.js";
 import { createFeishuClient } from "./client.js";
+import { getChatInfo } from "./chat.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
@@ -54,6 +55,51 @@ export { toMessageResourceType } from "./bot-content.js";
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+// Group name cache keyed by `accountId:chatId` to isolate multi-account deployments.
+// Empty-string sentinel = "lookup failed or returned empty — skip API until TTL expires".
+const groupNameCache = new Map<string, { name: string; expiresAt: number }>();
+const GROUP_NAME_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+export async function resolveGroupName(params: {
+  account: ReturnType<typeof resolveFeishuAccount>;
+  chatId: string;
+  log: (...args: unknown[]) => void;
+}): Promise<string | undefined> {
+  const { account, chatId, log } = params;
+  const cacheKey = `${account.accountId}:${chatId}`;
+  const cached = groupNameCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.name || undefined;
+  }
+  try {
+    const client = createFeishuClient(account);
+    const chatInfo = await getChatInfo(client, chatId);
+    const name = chatInfo?.name?.trim();
+    if (name) {
+      groupNameCache.set(cacheKey, {
+        name,
+        expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
+      });
+      return name;
+    }
+    // Empty/missing name — cache negative result
+    groupNameCache.set(cacheKey, {
+      name: "",
+      expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
+    });
+  } catch (err) {
+    log(
+      `feishu[${account.accountId}]: getChatInfo failed for ${chatId}: ${String(err)}`,
+    );
+    // Cache negative result to avoid hammering the API on repeated failures
+    groupNameCache.set(cacheKey, {
+      name: "",
+      expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
+    });
+  }
+  return undefined;
+}
 export type FeishuMessageEvent = {
   sender: {
     sender_id: {
@@ -318,6 +364,13 @@ export async function handleFeishuMessage(params: {
         permissionErrorForAgent = senderResult.permissionError;
       }
     }
+  }
+
+
+  // Resolve human-readable group name for session labeling
+  let groupName: string | undefined;
+  if (isGroup) {
+    groupName = await resolveGroupName({ account, chatId: ctx.chatId, log });
   }
 
   log(
@@ -904,7 +957,8 @@ export async function handleFeishuMessage(params: {
         SessionKey: agentSessionKey,
         AccountId: agentAccountId,
         ChatType: isGroup ? "group" : "direct",
-        GroupSubject: isGroup ? ctx.chatId : undefined,
+        GroupSubject: isGroup ? (groupName || ctx.chatId) : undefined,
+        ConversationLabel: isGroup && groupName ? groupName : undefined,
         SenderName: ctx.senderName ?? ctx.senderOpenId,
         SenderId: ctx.senderOpenId,
         Provider: "feishu" as const,
