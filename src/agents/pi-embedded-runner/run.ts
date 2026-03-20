@@ -1609,7 +1609,8 @@ export async function runEmbeddedPiAgent(
             !timedOut &&
             !attempt.didSendViaMessagingTool &&
             !attempt.clientToolCall &&
-            !attempt.yieldDetected
+            !attempt.yieldDetected &&
+            !attempt.didSendDeterministicApprovalPrompt
           ) {
             const incompleteStopReason = lastAssistant?.stopReason;
             // Only trigger for non-terminal stop reasons (toolUse, etc.) to
@@ -1625,8 +1626,10 @@ export async function runEmbeddedPiAgent(
                 payloads: [
                   {
                     text:
-                      "⚠️ API rate limit reached mid-turn — the model couldn't generate a response " +
-                      "after tool calls completed. Please try again in a moment.",
+                      incompleteStopReason === "toolUse"
+                        ? "⚠️ API rate limit reached mid-turn — the model couldn't generate a response " +
+                          "after tool calls completed. Please try again in a moment."
+                        : "⚠️ Agent couldn't generate a response after tool calls completed. Please try again.",
                     isError: true,
                   },
                 ],

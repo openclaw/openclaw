@@ -698,15 +698,20 @@ export async function runAgentTurnWithFallback(params: {
   // calls) instead of silently returning an empty response. See #36142.
   // Only applies when the assistant produced no valid (non-error) reply text,
   // so tool-level rate-limit messages don't override a successful turn.
+  // Prioritize metaErrorMsg (raw upstream error) over errorPayloadText to
+  // avoid self-matching on pre-formatted "⚠️" messages from run.ts, and
+  // skip already-formatted payloads so tool-specific 429 errors (e.g.
+  // browser/search tool failures) are preserved rather than overwritten.
   {
     const hasNonErrorContent = runResult?.payloads?.some(
       (p) => !p.isError && (p.text?.trim() || (p.mediaUrls?.length ?? 0) > 0),
     );
     if (!hasNonErrorContent) {
-      const errorPayloadText =
-        runResult?.payloads?.find((p) => p.isError && p.text?.trim())?.text ?? "";
       const metaErrorMsg = finalEmbeddedError?.message ?? "";
-      const errorCandidate = errorPayloadText || metaErrorMsg;
+      const rawErrorPayloadText =
+        runResult?.payloads?.find((p) => p.isError && p.text?.trim() && !p.text.startsWith("⚠️"))
+          ?.text ?? "";
+      const errorCandidate = metaErrorMsg || rawErrorPayloadText;
       if (
         errorCandidate &&
         (isRateLimitErrorMessage(errorCandidate) || isOverloadedErrorMessage(errorCandidate))
