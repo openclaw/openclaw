@@ -25,6 +25,16 @@ export * from "../agents/vllm-defaults.js";
 export * from "../agents/agent-command.js";
 export * from "../tts/tts.js";
 
+// Steer/abort APIs for active agent runs — allows external plugins to inject
+// messages into a streaming run, abort runs, or check run state.
+export {
+  queueEmbeddedPiMessage,
+  abortEmbeddedPiRun,
+  isEmbeddedPiRunActive,
+  isEmbeddedPiRunStreaming,
+  waitForEmbeddedPiRunEnd,
+} from "../agents/pi-embedded-runner/runs.js";
+
 export {
   CLAUDE_CLI_PROFILE_ID,
   CODEX_CLI_PROFILE_ID,
