@@ -103,6 +103,7 @@ async function fetchJson(url: string, options?: RequestInit): Promise<unknown> {
   const res = await fetch(url, {
     ...options,
     headers: { "Content-Type": "application/json", ...options?.headers },
+    signal: options?.signal ?? AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
     throw new Error(`War Room API error ${res.status}: ${res.statusText} (${url})`);

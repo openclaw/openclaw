@@ -286,9 +286,6 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
                 const prevTimestamp = lastSeen.get(chat.id);
                 const currentTimestamp = chat.createdAt ?? "";
 
-                // Update timestamp for this conversation
-                lastSeen.set(chat.id, currentTimestamp);
-
                 // Skip if we've already seen this exact message
                 if (prevTimestamp === currentTimestamp) continue;
 
@@ -316,8 +313,10 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
                   try {
                     ctx.log?.info(`[${account.accountId}] Generating reply for ${sender}...`);
                     const reply = await generateReply(sender, chat.message);
-                    if (aborted) break; // Don't send if shutdown during generation
+                    if (aborted) break;
                     await client.sendMessage(profileId, reply);
+                    // Only update timestamp AFTER successful reply (retry on failure)
+                    lastSeen.set(chat.id, currentTimestamp);
                     ctx.log?.info(
                       `[${account.accountId}] Replied to ${sender}: ${reply.slice(0, 80)}${reply.length > 80 ? "..." : ""}`,
                     );
