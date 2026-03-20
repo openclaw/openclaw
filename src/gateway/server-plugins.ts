@@ -3,7 +3,7 @@ import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveConfiguredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { BUNDLED_ENABLED_BY_DEFAULT, normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
@@ -420,7 +420,11 @@ export function loadGatewayPlugins(params: {
       workspaceDir: params.workspaceDir,
       env: process.env,
     });
-    onlyPluginIds = Array.from(new Set([...enabledEntryIds, ...configuredChannelIds]));
+    onlyPluginIds = Array.from(new Set([
+      ...enabledEntryIds,
+      ...configuredChannelIds,
+      ...BUNDLED_ENABLED_BY_DEFAULT,
+    ]));
     params.log.info(
       `[lightweight] loading only ${onlyPluginIds.length} plugin(s): ${onlyPluginIds.join(", ") || "(none)"}`,
     );
