@@ -169,6 +169,37 @@ describe("createLineWebhookMiddleware", () => {
     expect(processedBody?.events?.[0]?.source?.userId).not.toBe("tampered-user");
   });
 
+  it("uses signed raw buffer body instead of a pre-parsed req.body object", async () => {
+    const onEvents = vi.fn(async (_body: WebhookRequestBody) => {});
+    const rawBodyText = JSON.stringify({
+      events: [{ type: "message", source: { userId: "signed-buffer-user" } }],
+    });
+    const reqBody = {
+      events: [{ type: "message", source: { userId: "tampered-user" } }],
+    };
+    const middleware = createLineWebhookMiddleware({
+      channelSecret: SECRET,
+      onEvents,
+    });
+
+    const req = {
+      headers: { "x-line-signature": sign(rawBodyText, SECRET) },
+      rawBody: Buffer.from(rawBodyText, "utf-8"),
+      body: reqBody,
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const res = createRes();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await middleware(req, res, {} as any);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(onEvents).toHaveBeenCalledTimes(1);
+    const processedBody = onEvents.mock.calls[0]?.[0] as WebhookRequestBody | undefined;
+    expect(processedBody?.events?.[0]?.source?.userId).toBe("signed-buffer-user");
+    expect(processedBody?.events?.[0]?.source?.userId).not.toBe("tampered-user");
+  });
+
   it("rejects invalid signed raw JSON even when req.body is a valid object", async () => {
     const onEvents = vi.fn(async (_body: WebhookRequestBody) => {});
     const rawBody = "not-json";
