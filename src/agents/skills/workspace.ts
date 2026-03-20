@@ -754,6 +754,7 @@ export function loadWorkspaceSkillEntries(
   },
 ): SkillEntry[] {
   const entries = loadSkillEntries(workspaceDir, opts);
+  // Policy filtering needs both config (policy definition) and agentId (scope key).
   if (!opts?.config || !opts.agentId || opts.applyPolicy === false) {
     return entries;
   }
