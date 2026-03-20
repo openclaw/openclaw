@@ -550,6 +550,30 @@
       {
         "file": "src/cli/daemon-cli/install.integration.test.ts",
         "reason": "Daemon install integration coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
+      },
+      {
+        "file": "src/security/windows-acl.test.ts",
+        "reason": "Windows ACL coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/cli/cron-cli.test.ts",
+        "reason": "Cron CLI coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/cron/service.restart-catchup.test.ts",
+        "reason": "Restart catchup cron coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/channels/plugins/contracts/session-binding.contract.test.ts",
+        "reason": "Session binding contract coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/plugins/services.test.ts",
+        "reason": "Plugin services coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
+      },
+      {
+        "file": "src/infra/provider-usage.load.plugin.test.ts",
+        "reason": "Provider usage load plugin coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
       }
     ],
     "threadSingleton": [
