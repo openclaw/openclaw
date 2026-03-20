@@ -134,6 +134,7 @@ describe("runCapability audio auto-detect via auth-profiles", () => {
       expect(runResult).toBeDefined();
       expect(runResult!.decision.outcome).toBe("success");
       expect(runResult!.outputs[0]?.provider).toBe("groq");
+      expect(runResult!.outputs[0]?.model).toBe("whisper-large-v3-turbo");
       expect(runResult!.outputs[0]?.text).toBe("auth-profile-groq");
     } finally {
       cleanupDir(agentDir);
@@ -248,6 +249,66 @@ describe("runCapability audio auto-detect via auth-profiles", () => {
           },
         );
       });
+
+      expect(runResult).toBeDefined();
+      expect(runResult!.decision.outcome).toBe("skipped");
+      expect(runResult!.outputs).toHaveLength(0);
+    } finally {
+      cleanupDir(agentDir);
+    }
+  });
+
+  it("skips expired oauth access-only credentials in auth-profiles", async () => {
+    const agentDir = createAuthProfileDir({
+      "mistral:default": {
+        type: "oauth",
+        provider: "mistral",
+        access: "expired-access-only-token",
+        expires: Date.now() - 1000,
+      },
+    });
+
+    try {
+      let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
+      await withAudioFixture(
+        "openclaw-auth-profile-expired-oauth",
+        async ({ ctx, media, cache }) => {
+          const providerRegistry = buildProviderRegistry({
+            mistral: {
+              id: "mistral",
+              capabilities: ["audio"],
+              transcribeAudio: async () => ({
+                text: "should not reach",
+                model: "voxtral-mini-latest",
+              }),
+            },
+          });
+          const cfg = {} as OpenClawConfig;
+
+          await withEnvAsync(
+            {
+              OPENAI_API_KEY: undefined,
+              GROQ_API_KEY: undefined,
+              DEEPGRAM_API_KEY: undefined,
+              GEMINI_API_KEY: undefined,
+              MISTRAL_API_KEY: undefined,
+              OPENCLAW_AGENT_DIR: agentDir,
+              PI_CODING_AGENT_DIR: agentDir,
+            },
+            async () => {
+              runResult = await runCapability({
+                capability: "audio",
+                cfg,
+                ctx,
+                attachments: cache,
+                media,
+                providerRegistry,
+                agentDir,
+              });
+            },
+          );
+        },
+      );
 
       expect(runResult).toBeDefined();
       expect(runResult!.decision.outcome).toBe("skipped");

@@ -39,6 +39,7 @@ import {
   AUTO_VIDEO_KEY_PROVIDERS,
   DEFAULT_AUDIO_MODELS,
   DEFAULT_IMAGE_MODELS,
+  DEFAULT_VIDEO_MODELS,
 } from "./defaults.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
@@ -357,7 +358,7 @@ function resolveAuthProfileEntry(params: {
       ? DEFAULT_AUDIO_MODELS
       : capability === "image"
         ? DEFAULT_IMAGE_MODELS
-        : {};
+        : DEFAULT_VIDEO_MODELS;
 
   let store;
   try {
@@ -416,7 +417,22 @@ function resolveAuthProfileEntry(params: {
         return true;
       }
       if (cred.type === "oauth") {
-        return Boolean(cred.access?.trim() || cred.refresh?.trim());
+        const hasAccess = Boolean(cred.access?.trim());
+        const hasRefresh = Boolean(cred.refresh?.trim());
+        if (!hasAccess && !hasRefresh) {
+          return false;
+        }
+        if (
+          hasAccess &&
+          !hasRefresh &&
+          typeof cred.expires === "number" &&
+          Number.isFinite(cred.expires) &&
+          cred.expires > 0 &&
+          Date.now() >= cred.expires
+        ) {
+          return false;
+        }
+        return true;
       }
       return false;
     });

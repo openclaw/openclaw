@@ -33,6 +33,7 @@ export const DEFAULT_AUDIO_MODELS: Record<string, string> = {
   deepgram: "nova-3",
   mistral: "voxtral-mini-latest",
 };
+export const DEFAULT_VIDEO_MODELS: Record<string, string> = {};
 
 export const AUTO_AUDIO_KEY_PROVIDERS = [
   "openai",
