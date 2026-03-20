@@ -638,9 +638,173 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     );
   };
 
+  const normalizeLegacyCrossContextMessageConfig = () => {
+    const rawTools = next.tools;
+    if (!isRecord(rawTools)) {
+      return;
+    }
+    const rawMessage = rawTools.message;
+    if (!isRecord(rawMessage) || !("allowCrossContextSend" in rawMessage)) {
+      return;
+    }
+
+    const legacyAllowCrossContextSend = rawMessage.allowCrossContextSend;
+    if (typeof legacyAllowCrossContextSend !== "boolean") {
+      return;
+    }
+
+    const nextMessage = { ...rawMessage };
+    delete nextMessage.allowCrossContextSend;
+
+    if (legacyAllowCrossContextSend) {
+      const rawCrossContext = isRecord(nextMessage.crossContext)
+        ? structuredClone(nextMessage.crossContext)
+        : {};
+      rawCrossContext.allowWithinProvider = true;
+      rawCrossContext.allowAcrossProviders = true;
+      nextMessage.crossContext = rawCrossContext;
+      changes.push(
+        "Moved tools.message.allowCrossContextSend → tools.message.crossContext.allowWithinProvider/allowAcrossProviders (true).",
+      );
+    } else {
+      changes.push(
+        "Removed tools.message.allowCrossContextSend=false (default cross-context policy already matches canonical settings).",
+      );
+    }
+
+    next = {
+      ...next,
+      tools: {
+        ...next.tools,
+        message: nextMessage,
+      },
+    };
+  };
+
+  const mapDeepgramCompatToProviderOptions = (
+    rawCompat: Record<string, unknown>,
+  ): Record<string, string | number | boolean> => {
+    const providerOptions: Record<string, string | number | boolean> = {};
+    if (typeof rawCompat.detectLanguage === "boolean") {
+      providerOptions.detect_language = rawCompat.detectLanguage;
+    }
+    if (typeof rawCompat.punctuate === "boolean") {
+      providerOptions.punctuate = rawCompat.punctuate;
+    }
+    if (typeof rawCompat.smartFormat === "boolean") {
+      providerOptions.smart_format = rawCompat.smartFormat;
+    }
+    return providerOptions;
+  };
+
+  const migrateLegacyDeepgramCompat = (params: {
+    owner: Record<string, unknown>;
+    pathPrefix: string;
+  }): boolean => {
+    const rawCompat = isRecord(params.owner.deepgram)
+      ? structuredClone(params.owner.deepgram)
+      : null;
+    if (!rawCompat) {
+      return false;
+    }
+
+    const compatProviderOptions = mapDeepgramCompatToProviderOptions(rawCompat);
+    const currentProviderOptions = isRecord(params.owner.providerOptions)
+      ? structuredClone(params.owner.providerOptions)
+      : {};
+    const currentDeepgram = isRecord(currentProviderOptions.deepgram)
+      ? structuredClone(currentProviderOptions.deepgram)
+      : {};
+    const mergedDeepgram = { ...compatProviderOptions, ...currentDeepgram };
+
+    delete params.owner.deepgram;
+    currentProviderOptions.deepgram = mergedDeepgram;
+    params.owner.providerOptions = currentProviderOptions;
+
+    const hadCanonicalDeepgram = Object.keys(currentDeepgram).length > 0;
+    changes.push(
+      hadCanonicalDeepgram
+        ? `Merged ${params.pathPrefix}.deepgram → ${params.pathPrefix}.providerOptions.deepgram (filled missing canonical fields from legacy).`
+        : `Moved ${params.pathPrefix}.deepgram → ${params.pathPrefix}.providerOptions.deepgram.`,
+    );
+    return true;
+  };
+
+  const normalizeLegacyMediaProviderOptions = () => {
+    const rawTools = next.tools;
+    if (!isRecord(rawTools)) {
+      return;
+    }
+    const rawMedia = rawTools.media;
+    if (!isRecord(rawMedia)) {
+      return;
+    }
+
+    let mediaChanged = false;
+    const nextMedia = structuredClone(rawMedia);
+    const migrateModelList = (models: unknown, pathPrefix: string): boolean => {
+      if (!Array.isArray(models)) {
+        return false;
+      }
+      let changed = false;
+      for (const [index, entry] of models.entries()) {
+        if (!isRecord(entry)) {
+          continue;
+        }
+        if (
+          migrateLegacyDeepgramCompat({
+            owner: entry,
+            pathPrefix: `${pathPrefix}[${index}]`,
+          })
+        ) {
+          changed = true;
+        }
+      }
+      return changed;
+    };
+
+    for (const capability of ["audio", "image", "video"] as const) {
+      const config = isRecord(nextMedia[capability])
+        ? structuredClone(nextMedia[capability])
+        : null;
+      if (!config) {
+        continue;
+      }
+      let configChanged = false;
+      if (migrateLegacyDeepgramCompat({ owner: config, pathPrefix: `tools.media.${capability}` })) {
+        configChanged = true;
+      }
+      if (migrateModelList(config.models, `tools.media.${capability}.models`)) {
+        configChanged = true;
+      }
+      if (configChanged) {
+        nextMedia[capability] = config;
+        mediaChanged = true;
+      }
+    }
+
+    if (migrateModelList(nextMedia.models, "tools.media.models")) {
+      mediaChanged = true;
+    }
+
+    if (!mediaChanged) {
+      return;
+    }
+
+    next = {
+      ...next,
+      tools: {
+        ...next.tools,
+        media: nextMedia as NonNullable<OpenClawConfig["tools"]>["media"],
+      },
+    };
+  };
+
   normalizeBrowserSsrFPolicyAlias();
   normalizeLegacyNanoBananaSkill();
   normalizeLegacyTalkConfig();
+  normalizeLegacyCrossContextMessageConfig();
+  normalizeLegacyMediaProviderOptions();
 
   const legacyAckReaction = cfg.messages?.ackReaction?.trim();
   const hasWhatsAppConfig = cfg.channels?.whatsapp !== undefined;
