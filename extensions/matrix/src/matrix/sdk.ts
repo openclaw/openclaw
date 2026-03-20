@@ -4,12 +4,14 @@ import { EventEmitter } from "node:events";
 import {
   ClientEvent,
   MatrixEventEvent,
+  Preset,
   createClient as createMatrixJsClient,
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
 } from "matrix-js-sdk";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import type { SsrFPolicy } from "../runtime-api.js";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
 import { FileBackedMatrixSyncStore } from "./client/file-sync-store.js";
 import { createMatrixJsSdkClientLogger } from "./client/logging.js";
@@ -22,7 +24,7 @@ import { MatrixAuthedHttpClient } from "./sdk/http-client.js";
 import { persistIdbToDisk, restoreIdbFromDisk } from "./sdk/idb-persistence.js";
 import { ConsoleLogger, LogService, noop } from "./sdk/logger.js";
 import { MatrixRecoveryKeyStore } from "./sdk/recovery-key-store.js";
-import { type HttpMethod, type QueryParams } from "./sdk/transport.js";
+import { createMatrixGuardedFetch, type HttpMethod, type QueryParams } from "./sdk/transport.js";
 import type {
   MatrixClientEventMap,
   MatrixCryptoBootstrapApi,
@@ -218,9 +220,10 @@ export class MatrixClient {
       idbSnapshotPath?: string;
       cryptoDatabasePrefix?: string;
       autoBootstrapCrypto?: boolean;
+      ssrfPolicy?: SsrFPolicy;
     } = {},
   ) {
-    this.httpClient = new MatrixAuthedHttpClient(homeserver, accessToken);
+    this.httpClient = new MatrixAuthedHttpClient(homeserver, accessToken, opts.ssrfPolicy);
     this.localTimeoutMs = Math.max(1, opts.localTimeoutMs ?? 60_000);
     this.initialSyncLimit = opts.initialSyncLimit;
     this.encryptionEnabled = opts.encryption === true;
@@ -241,6 +244,7 @@ export class MatrixClient {
       deviceId: opts.deviceId,
       logger: createMatrixJsSdkClientLogger("MatrixClient"),
       localTimeoutMs: this.localTimeoutMs,
+      fetchFn: createMatrixGuardedFetch({ ssrfPolicy: opts.ssrfPolicy }),
       store: this.syncStore,
       cryptoCallbacks: cryptoCallbacks as never,
       verificationMethods: [
@@ -349,7 +353,9 @@ export class MatrixClient {
   }
 
   hasPersistedSyncState(): boolean {
-    return this.syncStore?.hasSavedSync() === true;
+    // Only trust restart replay when the previous process completed a final
+    // sync-store persist. A stale cursor can make Matrix re-surface old events.
+    return this.syncStore?.hasSavedSyncFromCleanShutdown() === true;
   }
 
   private async ensureStartedForCryptoControlPlane(): Promise<void> {
@@ -366,6 +372,7 @@ export class MatrixClient {
     }
     this.decryptBridge.stop();
     // Final persist on shutdown
+    this.syncStore?.markCleanShutdown();
     this.stopPersistPromise = Promise.all([
       persistIdbToDisk({
         snapshotPath: this.idbSnapshotPath,
@@ -547,7 +554,7 @@ export class MatrixClient {
     const result = await this.client.createRoom({
       invite: [remoteUserId],
       is_direct: true,
-      preset: "trusted_private_chat",
+      preset: Preset.TrustedPrivateChat,
       initial_state: initialState,
     });
     return result.room_id;
