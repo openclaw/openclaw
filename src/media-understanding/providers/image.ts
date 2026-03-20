@@ -188,9 +188,19 @@ export async function describeImagesWithModel(
   }
 
   const context = buildImageContext(prompt, params.images);
+  const controller = new AbortController();
+  const timeout =
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs) &&
+    params.timeoutMs > 0
+      ? setTimeout(() => controller.abort(), params.timeoutMs)
+      : undefined;
   const message = await complete(model, context, {
     apiKey,
     maxTokens: resolveImageToolMaxTokens(model.maxTokens, params.maxTokens ?? 512),
+    signal: controller.signal,
+  }).finally(() => {
+    clearTimeout(timeout);
   });
   const text = coerceImageAssistantText({
     message,

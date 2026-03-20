@@ -1,12 +1,22 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import OpenAI from "openai";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../src/config/config.js";
+import { loadConfig } from "../../src/config/config.js";
+import { encodePngRgba, fillPixel } from "../../src/media/png-encode.js";
+import type { ResolvedTtsConfig } from "../../src/tts/tts.js";
 import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
 import plugin from "./index.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENAI_PLUGIN_MODEL?.trim() || "gpt-5.4-nano";
+const LIVE_IMAGE_MODEL = process.env.OPENCLAW_LIVE_OPENAI_IMAGE_MODEL?.trim() || "gpt-image-1";
+const LIVE_VISION_MODEL = process.env.OPENCLAW_LIVE_OPENAI_VISION_MODEL?.trim() || "gpt-4.1-mini";
 const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
+const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
 
 function createTemplateModel(modelId: string) {
   switch (modelId) {
@@ -85,6 +95,95 @@ function registerOpenAIPlugin() {
   return { providers, speechProviders, mediaProviders, imageProviders };
 }
 
+function createReferencePng(): Buffer {
+  const width = 96;
+  const height = 96;
+  const buf = Buffer.alloc(width * height * 4, 255);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      fillPixel(buf, x, y, width, 225, 242, 255, 255);
+    }
+  }
+
+  for (let y = 24; y < 72; y += 1) {
+    for (let x = 24; x < 72; x += 1) {
+      fillPixel(buf, x, y, width, 255, 153, 51, 255);
+    }
+  }
+
+  return encodePngRgba(buf, width, height);
+}
+
+function createLiveConfig(): OpenClawConfig {
+  const cfg = loadConfig();
+  return {
+    ...cfg,
+    models: {
+      ...cfg.models,
+      providers: {
+        ...cfg.models?.providers,
+        openai: {
+          ...cfg.models?.providers?.openai,
+          apiKey: OPENAI_API_KEY,
+          baseUrl: "https://api.openai.com/v1",
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function createLiveTtsConfig(): ResolvedTtsConfig {
+  return {
+    auto: "off",
+    mode: "final",
+    provider: "openai",
+    providerSource: "config",
+    modelOverrides: {
+      enabled: true,
+      allowText: true,
+      allowProvider: true,
+      allowVoice: true,
+      allowModelId: true,
+      allowVoiceSettings: true,
+      allowNormalization: true,
+      allowSeed: true,
+    },
+    elevenlabs: {
+      baseUrl: "https://api.elevenlabs.io",
+      voiceId: "",
+      modelId: "eleven_multilingual_v2",
+      voiceSettings: {
+        stability: 0.5,
+        similarityBoost: 0.75,
+        style: 0,
+        useSpeakerBoost: true,
+        speed: 1,
+      },
+    },
+    openai: {
+      apiKey: OPENAI_API_KEY,
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-4o-mini-tts",
+      voice: "alloy",
+    },
+    edge: {
+      enabled: false,
+      voice: "en-US-AriaNeural",
+      lang: "en-US",
+      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+      outputFormatConfigured: false,
+      saveSubtitles: false,
+    },
+    maxTextLength: 4_000,
+    timeoutMs: 30_000,
+  };
+}
+
+async function createTempAgentDir(): Promise<string> {
+  return await fs.mkdtemp(path.join(os.tmpdir(), "openai-plugin-live-"));
+}
+
 describe("openai plugin", () => {
   it("registers the expected provider surfaces", () => {
     const { providers, speechProviders, mediaProviders, imageProviders } = registerOpenAIPlugin();
@@ -155,4 +254,144 @@ describeLive("openai plugin live", () => {
 
     expect(response.output_text.trim()).toMatch(/^OK[.!]?$/);
   }, 30_000);
+
+  it("lists voices and synthesizes audio through the registered speech provider", async () => {
+    const { speechProviders } = registerOpenAIPlugin();
+    const speechProvider =
+      // oxlint-disable-next-line typescript/no-explicit-any
+      speechProviders.find((entry) => (entry as any).id === "openai");
+
+    expect(speechProvider).toBeDefined();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const voices = await (speechProvider as any).listVoices?.({});
+    expect(Array.isArray(voices)).toBe(true);
+    expect(voices.map((voice: { id: string }) => voice.id)).toContain("alloy");
+
+    const cfg = createLiveConfig();
+    const ttsConfig = createLiveTtsConfig();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const audioFile = await (speechProvider as any).synthesize({
+      text: "OpenClaw integration test OK.",
+      cfg,
+      config: ttsConfig,
+      target: "audio-file",
+    });
+    expect(audioFile.outputFormat).toBe("mp3");
+    expect(audioFile.fileExtension).toBe(".mp3");
+    expect(audioFile.audioBuffer.byteLength).toBeGreaterThan(512);
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const telephony = await (speechProvider as any).synthesizeTelephony?.({
+      text: "Telephony check OK.",
+      cfg,
+      config: ttsConfig,
+    });
+    expect(telephony?.outputFormat).toBe("pcm");
+    expect(telephony?.sampleRate).toBe(24_000);
+    expect(telephony?.audioBuffer.byteLength).toBeGreaterThan(512);
+  }, 45_000);
+
+  it("transcribes synthesized speech through the registered media provider", async () => {
+    const { speechProviders, mediaProviders } = registerOpenAIPlugin();
+    const speechProvider =
+      // oxlint-disable-next-line typescript/no-explicit-any
+      speechProviders.find((entry) => (entry as any).id === "openai");
+    const mediaProvider =
+      // oxlint-disable-next-line typescript/no-explicit-any
+      mediaProviders.find((entry) => (entry as any).id === "openai");
+
+    expect(speechProvider).toBeDefined();
+    expect(mediaProvider).toBeDefined();
+
+    const cfg = createLiveConfig();
+    const ttsConfig = createLiveTtsConfig();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const synthesized = await (speechProvider as any).synthesize({
+      text: "OpenClaw integration test OK.",
+      cfg,
+      config: ttsConfig,
+      target: "audio-file",
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const transcription = await (mediaProvider as any).transcribeAudio?.({
+      buffer: synthesized.audioBuffer,
+      fileName: "openai-plugin-live.mp3",
+      mime: "audio/mpeg",
+      apiKey: OPENAI_API_KEY,
+      timeoutMs: 30_000,
+    });
+
+    const text = String(transcription?.text ?? "").toLowerCase();
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).toContain("openclaw");
+    expect(text).toMatch(/\bok\b/);
+  }, 45_000);
+
+  it("generates an image through the registered image provider", async () => {
+    const { imageProviders } = registerOpenAIPlugin();
+    const imageProvider =
+      // oxlint-disable-next-line typescript/no-explicit-any
+      imageProviders.find((entry) => (entry as any).id === "openai");
+
+    expect(imageProvider).toBeDefined();
+
+    const cfg = createLiveConfig();
+    const agentDir = await createTempAgentDir();
+
+    try {
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const generated = await (imageProvider as any).generateImage({
+        provider: "openai",
+        model: LIVE_IMAGE_MODEL,
+        prompt: "Create a minimal flat orange square centered on a white background.",
+        cfg,
+        agentDir,
+        authStore: EMPTY_AUTH_STORE,
+        timeoutMs: 45_000,
+        size: "1024x1024",
+      });
+
+      expect(generated.model).toBe(LIVE_IMAGE_MODEL);
+      expect(generated.images.length).toBeGreaterThan(0);
+      expect(generated.images[0]?.mimeType).toBe("image/png");
+      expect(generated.images[0]?.buffer.byteLength).toBeGreaterThan(1_000);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("describes a deterministic image through the registered media provider", async () => {
+    const { mediaProviders } = registerOpenAIPlugin();
+    const mediaProvider =
+      // oxlint-disable-next-line typescript/no-explicit-any
+      mediaProviders.find((entry) => (entry as any).id === "openai");
+
+    expect(mediaProvider).toBeDefined();
+
+    const cfg = createLiveConfig();
+    const agentDir = await createTempAgentDir();
+
+    try {
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const description = await (mediaProvider as any).describeImage?.({
+        buffer: createReferencePng(),
+        fileName: "reference.png",
+        mime: "image/png",
+        prompt: "Reply with one lowercase word for the dominant center color.",
+        timeoutMs: 30_000,
+        agentDir,
+        cfg,
+        model: LIVE_VISION_MODEL,
+        provider: "openai",
+      });
+
+      expect(String(description?.text ?? "").toLowerCase()).toContain("orange");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
