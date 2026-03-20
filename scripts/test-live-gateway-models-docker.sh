@@ -13,9 +13,24 @@ if [[ -f "$PROFILE_FILE" ]]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
 fi
 
+EXTERNAL_AUTH_MOUNTS=()
+for auth_dir in .claude .codex .minimax .qwen; do
+  host_path="$HOME/$auth_dir"
+  if [[ -d "$host_path" ]]; then
+    EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth/"$auth_dir":ro)
+  fi
+done
+
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
 [ -f "$HOME/.profile" ] && source "$HOME/.profile" || true
+for auth_dir in .claude .codex .minimax .qwen; do
+  if [ -d "/host-auth/$auth_dir" ]; then
+    mkdir -p "$HOME/$auth_dir"
+    cp -R "/host-auth/$auth_dir/." "$HOME/$auth_dir"
+    chmod -R u+rwX "$HOME/$auth_dir" || true
+  fi
+done
 tmp_dir="$(mktemp -d)"
 cleanup() {
   rm -rf "$tmp_dir"
@@ -51,6 +66,7 @@ docker run --rm -t \
   -v "$ROOT_DIR":/src:ro \
   -v "$CONFIG_DIR":/home/node/.openclaw \
   -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace \
+  "${EXTERNAL_AUTH_MOUNTS[@]}" \
   "${PROFILE_MOUNT[@]}" \
   "$LIVE_IMAGE_NAME" \
   -lc "$LIVE_TEST_CMD"

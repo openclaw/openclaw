@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/avian-provider",
+  "version": "2026.3.20",
+  "private": true,
+  "description": "OpenClaw Avian provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { transcribeOpenAiAudio } from "../../../../extensions/openai/media-understanding-provider.js";
 import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
 } from "../audio.test-helpers.js";
-import { transcribeOpenAiCompatibleAudio } from "./audio.js";
 
 installPinnedHostnameTestHooks();
 
-describe("transcribeOpenAiCompatibleAudio", () => {
+describe("transcribeOpenAiAudio", () => {
   it("respects lowercase authorization header overrides", async () => {
     const { fetchFn, getAuthHeader } = createAuthCaptureJsonFetch({ text: "ok" });
 
-    const result = await transcribeOpenAiCompatibleAudio({
+    const result = await transcribeOpenAiAudio({
       buffer: Buffer.from("audio"),
       fileName: "note.mp3",
       apiKey: "test-key",
@@ -28,7 +28,7 @@ describe("transcribeOpenAiCompatibleAudio", () => {
   it("builds the expected request payload", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
 
-    const result = await transcribeOpenAiCompatibleAudio({
+    const result = await transcribeOpenAiAudio({
       buffer: Buffer.from("audio-bytes"),
       fileName: "voice.wav",
       apiKey: "test-key",
@@ -72,7 +72,7 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     const { fetchFn } = createRequestCaptureJsonFetch({});
 
     await expect(
-      transcribeOpenAiCompatibleAudio({
+      transcribeOpenAiAudio({
         buffer: Buffer.from("audio-bytes"),
         fileName: "voice.wav",
         apiKey: "test-key",

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "./zalo-js.test-mocks.js";
 import { zalouserPlugin } from "./channel.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
@@ -14,6 +15,33 @@ vi.mock("./send.js", async (importOriginal) => {
 
 const mockSendMessage = vi.mocked(sendMessageZalouser);
 const mockSendReaction = vi.mocked(sendReactionZalouser);
+
+function getResolveToolPolicy() {
+  const resolveToolPolicy = zalouserPlugin.groups?.resolveToolPolicy;
+  expect(resolveToolPolicy).toBeTypeOf("function");
+  if (!resolveToolPolicy) {
+    throw new Error("resolveToolPolicy unavailable");
+  }
+  return resolveToolPolicy;
+}
+
+function resolveGroupToolPolicy(
+  groups: Record<string, { tools: { allow?: string[]; deny?: string[] } }>,
+  groupId: string,
+) {
+  return getResolveToolPolicy()({
+    cfg: {
+      channels: {
+        zalouser: {
+          groups,
+        },
+      },
+    },
+    accountId: "default",
+    groupId,
+    groupChannel: groupId,
+  });
+}
 
 describe("zalouser outbound", () => {
   beforeEach(() => {
@@ -93,56 +121,21 @@ describe("zalouser channel policies", () => {
   });
 
   it("resolves group tool policy by explicit group id", () => {
-    const resolveToolPolicy = zalouserPlugin.groups?.resolveToolPolicy;
-    expect(resolveToolPolicy).toBeTypeOf("function");
-    if (!resolveToolPolicy) {
-      return;
-    }
-    const policy = resolveToolPolicy({
-      cfg: {
-        channels: {
-          zalouser: {
-            groups: {
-              "123": { tools: { allow: ["search"] } },
-            },
-          },
-        },
-      },
-      accountId: "default",
-      groupId: "123",
-      groupChannel: "123",
-    });
+    const policy = resolveGroupToolPolicy({ "123": { tools: { allow: ["search"] } } }, "123");
     expect(policy).toEqual({ allow: ["search"] });
   });
 
   it("falls back to wildcard group policy", () => {
-    const resolveToolPolicy = zalouserPlugin.groups?.resolveToolPolicy;
-    expect(resolveToolPolicy).toBeTypeOf("function");
-    if (!resolveToolPolicy) {
-      return;
-    }
-    const policy = resolveToolPolicy({
-      cfg: {
-        channels: {
-          zalouser: {
-            groups: {
-              "*": { tools: { deny: ["system.run"] } },
-            },
-          },
-        },
-      },
-      accountId: "default",
-      groupId: "missing",
-      groupChannel: "missing",
-    });
+    const policy = resolveGroupToolPolicy({ "*": { tools: { deny: ["system.run"] } } }, "missing");
     expect(policy).toEqual({ deny: ["system.run"] });
   });
 
   it("handles react action", async () => {
     const actions = zalouserPlugin.actions;
-    expect(actions?.listActions?.({ cfg: { channels: { zalouser: { enabled: true } } } })).toEqual([
-      "react",
-    ]);
+    expect(
+      actions?.describeMessageTool?.({ cfg: { channels: { zalouser: { enabled: true } } } })
+        ?.actions,
+    ).toEqual(["react"]);
     const result = await actions?.handleAction?.({
       channel: "zalouser",
       action: "react",

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
 import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
+import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
@@ -17,6 +19,11 @@ import {
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
+type FakeWrappedStream = {
+  result: () => Promise<unknown>;
+  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
+};
+
 function createOllamaProviderConfig(injectNumCtxForOpenAICompat: boolean): OpenClawConfig {
   return {
     models: {
@@ -30,6 +37,34 @@ function createOllamaProviderConfig(injectNumCtxForOpenAICompat: boolean): OpenC
       },
     },
   };
+}
+
+function createFakeStream(params: {
+  events: unknown[];
+  resultMessage: unknown;
+}): FakeWrappedStream {
+  return {
+    async result() {
+      return params.resultMessage;
+    },
+    [Symbol.asyncIterator]() {
+      return (async function* () {
+        for (const event of params.events) {
+          yield event;
+        }
+      })();
+    },
+  };
+}
+
+async function invokeWrappedTestStream(
+  wrap: (
+    baseFn: (...args: never[]) => unknown,
+  ) => (...args: never[]) => FakeWrappedStream | Promise<FakeWrappedStream>,
+  baseFn: (...args: never[]) => unknown,
+): Promise<FakeWrappedStream> {
+  const wrappedFn = wrap(baseFn);
+  return await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
 }
 
 describe("resolvePromptBuildHookResult", () => {
@@ -129,6 +164,42 @@ describe("composeSystemPromptWithHookContext", () => {
       }),
     ).toBe("append only");
   });
+
+  it("keeps hook-composed system prompt stable when bootstrap warnings only change the user prompt", () => {
+    const baseSystemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "AGENTS.md", content: "Follow AGENTS guidance." }],
+      toolNames: ["read"],
+    });
+    const composedSystemPrompt = composeSystemPromptWithHookContext({
+      baseSystemPrompt,
+      appendSystemContext: "hook system context",
+    });
+    const turns = [
+      {
+        systemPrompt: composedSystemPrompt,
+        prompt: appendBootstrapPromptWarning("hello", ["AGENTS.md: 200 raw -> 0 injected"]),
+      },
+      {
+        systemPrompt: composedSystemPrompt,
+        prompt: appendBootstrapPromptWarning("hello again", []),
+      },
+      {
+        systemPrompt: composedSystemPrompt,
+        prompt: appendBootstrapPromptWarning("hello once more", [
+          "AGENTS.md: 200 raw -> 0 injected",
+        ]),
+      },
+    ];
+
+    expect(turns[0]?.systemPrompt).toBe(turns[1]?.systemPrompt);
+    expect(turns[1]?.systemPrompt).toBe(turns[2]?.systemPrompt);
+    expect(turns[0]?.prompt.startsWith("hello")).toBe(true);
+    expect(turns[1]?.prompt).toBe("hello again");
+    expect(turns[2]?.prompt.startsWith("hello once more")).toBe(true);
+    expect(turns[0]?.prompt).toContain("[Bootstrap truncation warning]");
+    expect(turns[2]?.prompt).toContain("[Bootstrap truncation warning]");
+  });
 });
 
 describe("resolvePromptModeForSession", () => {
@@ -190,30 +261,14 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
   });
 });
 describe("wrapStreamFnTrimToolCallNames", () => {
-  function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
-    result: () => Promise<unknown>;
-    [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
-  } {
-    return {
-      async result() {
-        return params.resultMessage;
-      },
-      [Symbol.asyncIterator]() {
-        return (async function* () {
-          for (const event of params.events) {
-            yield event;
-          }
-        })();
-      },
-    };
-  }
-
   async function invokeWrappedStream(
     baseFn: (...args: never[]) => unknown,
     allowedToolNames?: Set<string>,
   ) {
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, allowedToolNames);
-    return await wrappedFn({} as never, {} as never, {} as never);
+    return await invokeWrappedTestStream(
+      (innerBaseFn) => wrapStreamFnTrimToolCallNames(innerBaseFn as never, allowedToolNames),
+      baseFn,
+    );
   }
 
   function createEventStream(params: {
@@ -702,30 +757,34 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBe("read");
     expect(finalToolCall.id).toBe("call_42");
   });
+
+  it("reassigns duplicate tool call ids within a message to unique fallbacks", async () => {
+    const finalToolCallA = { type: "toolCall", name: " read ", id: "  edit:22  " };
+    const finalToolCallB = { type: "toolCall", name: " write ", id: "edit:22" };
+    const finalMessage = { role: "assistant", content: [finalToolCallA, finalToolCallB] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    await stream.result();
+
+    expect(finalToolCallA.name).toBe("read");
+    expect(finalToolCallB.name).toBe("write");
+    expect(finalToolCallA.id).toBe("edit:22");
+    expect(finalToolCallB.id).toBe("call_auto_1");
+  });
 });
 
 describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
-  function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
-    result: () => Promise<unknown>;
-    [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
-  } {
-    return {
-      async result() {
-        return params.resultMessage;
-      },
-      [Symbol.asyncIterator]() {
-        return (async function* () {
-          for (const event of params.events) {
-            yield event;
-          }
-        })();
-      },
-    };
-  }
-
   async function invokeWrappedStream(baseFn: (...args: never[]) => unknown) {
-    const wrappedFn = wrapStreamFnRepairMalformedToolCallArguments(baseFn as never);
-    return await wrappedFn({} as never, {} as never, {} as never);
+    return await invokeWrappedTestStream(
+      (innerBaseFn) => wrapStreamFnRepairMalformedToolCallArguments(innerBaseFn as never),
+      baseFn,
+    );
   }
 
   it("repairs anthropic-compatible tool arguments when trailing junk follows valid JSON", async () => {
@@ -1188,6 +1247,40 @@ describe("buildAfterTurnRuntimeContext", () => {
       model: "gpt-5.3-codex",
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
+    });
+  });
+
+  it("preserves sender and channel routing context for scoped compaction discovery", () => {
+    const legacy = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        currentChannelId: "C123",
+        currentThreadTs: "thread-9",
+        currentMessageId: "msg-42",
+        authProfileId: "openai:p1",
+        config: {} as OpenClawConfig,
+        skillsSnapshot: undefined,
+        senderIsOwner: true,
+        senderId: "user-123",
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+        extraSystemPrompt: "extra",
+        ownerNumbers: ["+15555550123"],
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(legacy).toMatchObject({
+      senderId: "user-123",
+      currentChannelId: "C123",
+      currentThreadTs: "thread-9",
+      currentMessageId: "msg-42",
     });
   });
 });

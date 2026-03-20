@@ -16,11 +16,7 @@ import { defaultRuntime } from "../runtime.js";
 import { parseMessageWithAttachments } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
-import {
-  loadSessionEntry,
-  pruneLegacyStoreKeys,
-  resolveGatewaySessionStoreTarget,
-} from "./session-utils.js";
+import { loadSessionEntry, migrateAndPruneGatewaySessionStoreKey } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -152,17 +148,12 @@ async function touchSessionStore(params: {
     return;
   }
   await updateSessionStore(storePath, (store) => {
-    const target = resolveGatewaySessionStoreTarget({
+    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
       cfg: params.cfg,
       key: params.sessionKey,
       store,
     });
-    pruneLegacyStoreKeys({
-      store,
-      canonicalKey: target.canonicalKey,
-      candidates: target.storeKeys,
-    });
-    store[params.canonicalKey] = {
+    store[primaryKey] = {
       sessionId: params.sessionId,
       updatedAt: params.now,
       thinkingLevel: params.entry?.thinkingLevel,
@@ -297,16 +288,18 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         sessionId,
         now,
       });
+      const runId = randomUUID();
 
       // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
-      // This maps agent bus events (keyed by sessionId) to chat events (keyed by clientRunId).
-      ctx.addChatRun(sessionId, {
+      // This maps agent bus events (keyed by per-turn runId) to chat events (keyed by clientRunId).
+      ctx.addChatRun(runId, {
         sessionKey: canonicalKey,
         clientRunId: `voice-${randomUUID()}`,
       });
 
       void agentCommandFromIngress(
         {
+          runId,
           message: text,
           sessionId,
           sessionKey: canonicalKey,
@@ -319,6 +312,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
             sourceTool: "gateway.voice.transcript",
           },
           senderIsOwner: false,
+          allowModelOverride: false,
         },
         defaultRuntime,
         ctx.deps,
@@ -412,7 +406,6 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const deliver = deliverRequested && Boolean(channel && to);
       const deliveryChannel = deliver ? channel : undefined;
       const deliveryTo = deliver ? to : undefined;
-
       if (deliverRequested && !deliver) {
         ctx.logGateway.warn(
           `agent delivery disabled node=${nodeId}: missing session delivery route (channel=${channel ?? "-"} to=${to ?? "-"})`,
@@ -438,6 +431,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       void agentCommandFromIngress(
         {
+          runId: sessionId,
           message,
           images,
           sessionId,
@@ -450,6 +444,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
             typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
           messageChannel: "node",
           senderIsOwner: false,
+          allowModelOverride: false,
         },
         defaultRuntime,
         ctx.deps,

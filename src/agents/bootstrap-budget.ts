@@ -330,6 +330,32 @@ export function buildBootstrapPromptWarning(params: {
   };
 }
 
+export function appendBootstrapPromptWarning(
+  prompt: string,
+  warningLines?: string[],
+  options?: {
+    preserveExactPrompt?: string;
+  },
+): string {
+  const normalizedLines = (warningLines ?? []).map((line) => line.trim()).filter(Boolean);
+  if (normalizedLines.length === 0) {
+    return prompt;
+  }
+  if (options?.preserveExactPrompt && prompt === options.preserveExactPrompt) {
+    return prompt;
+  }
+  const warningBlock = [
+    "[Bootstrap truncation warning]",
+    "Some workspace bootstrap files were truncated before injection.",
+    "Treat Project Context as partial and read the relevant files directly if details seem missing.",
+    ...normalizedLines.map((line) => `- ${line}`),
+  ].join("\n");
+  return prompt ? `${prompt}\n\n${warningBlock}` : warningBlock;
+}
+
+// Backward-compatible alias while older callers still import the prepend name.
+export const prependBootstrapPromptWarning = appendBootstrapPromptWarning;
+
 export function buildBootstrapTruncationReportMeta(params: {
   analysis: BootstrapBudgetAnalysis;
   warningMode: BootstrapPromptWarningMode;

@@ -1,38 +1,19 @@
-import type { ChannelAccountSnapshot, ChannelStatusIssue } from "openclaw/plugin-sdk/zalo";
+import {
+  coerceStatusIssueAccountId,
+  readStatusIssueFields,
+} from "openclaw/plugin-sdk/extension-shared";
+import type { ChannelAccountSnapshot, ChannelStatusIssue } from "./runtime-api.js";
 
-type ZaloAccountStatus = {
-  accountId?: unknown;
-  enabled?: unknown;
-  configured?: unknown;
-  dmPolicy?: unknown;
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  Boolean(value && typeof value === "object");
-
-const asString = (value: unknown): string | undefined =>
-  typeof value === "string" ? value : typeof value === "number" ? String(value) : undefined;
-
-function readZaloAccountStatus(value: ChannelAccountSnapshot): ZaloAccountStatus | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  return {
-    accountId: value.accountId,
-    enabled: value.enabled,
-    configured: value.configured,
-    dmPolicy: value.dmPolicy,
-  };
-}
+const ZALO_STATUS_FIELDS = ["accountId", "enabled", "configured", "dmPolicy"] as const;
 
 export function collectZaloStatusIssues(accounts: ChannelAccountSnapshot[]): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];
   for (const entry of accounts) {
-    const account = readZaloAccountStatus(entry);
+    const account = readStatusIssueFields(entry, ZALO_STATUS_FIELDS);
     if (!account) {
       continue;
     }
-    const accountId = asString(account.accountId) ?? "default";
+    const accountId = coerceStatusIssueAccountId(account.accountId) ?? "default";
     const enabled = account.enabled !== false;
     const configured = account.configured === true;
     if (!enabled || !configured) {

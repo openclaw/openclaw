@@ -341,6 +341,13 @@ function makeDefaultEmbeddedResult() {
   };
 }
 
+export function mockRunCronFallbackPassthrough(): void {
+  runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+    const result = await run(provider, model);
+    return { result, provider, model, attempts: [] };
+  });
+}
+
 export function resetRunCronIsolatedAgentTurnHarness(): void {
   vi.clearAllMocks();
 
@@ -356,7 +363,7 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4" });
   resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-4" } });
   resolveHooksGmailModelMock.mockReturnValue(null);
-  resolveThinkingDefaultMock.mockReturnValue(undefined);
+  resolveThinkingDefaultMock.mockReturnValue("off");
   getModelRefStatusMock.mockReturnValue({ allowed: false });
   isCliProviderMock.mockReturnValue(false);
 

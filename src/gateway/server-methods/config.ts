@@ -249,6 +249,9 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
     config: cfg,
     cache: true,
     workspaceDir,
+    runtimeOptions: {
+      allowGatewaySubagentBinding: true,
+    },
     logger: {
       info: () => {},
       warn: () => {},

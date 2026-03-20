@@ -1,0 +1,27 @@
+{
+  "id": "avian",
+  "providers": ["avian"],
+  "providerAuthEnvVars": {
+    "avian": ["AVIAN_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "avian",
+      "method": "api-key",
+      "choiceId": "avian-api-key",
+      "choiceLabel": "Avian API key",
+      "groupId": "avian",
+      "groupLabel": "Avian",
+      "groupHint": "API key",
+      "optionKey": "avianApiKey",
+      "cliFlag": "--avian-api-key",
+      "cliOption": "--avian-api-key <key>",
+      "cliDescription": "Avian API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
