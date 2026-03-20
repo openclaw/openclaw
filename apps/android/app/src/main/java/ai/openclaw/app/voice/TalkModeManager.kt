@@ -723,6 +723,9 @@ class TalkModeManager(
         TalkModeRuntime.validatedLanguage(directive?.language)?.let {
           put("language", JsonPrimitive(it))
         }
+        directive?.outputFormat?.trim()?.takeIf { it.isNotEmpty() }?.let {
+          put("outputFormat", JsonPrimitive(it))
+        }
       }
     val res = session.request("talk.speak", params.toString())
     val root = json.parseToJsonElement(res).asObjectOrNull() ?: error("talk.speak returned invalid JSON")

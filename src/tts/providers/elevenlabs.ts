@@ -72,7 +72,9 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }
-      const outputFormat = req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128";
+      const outputFormat =
+        req.overrides?.elevenlabs?.outputFormat ??
+        (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
       const audioBuffer = await elevenLabsTTS({
         text: req.text,
         apiKey,

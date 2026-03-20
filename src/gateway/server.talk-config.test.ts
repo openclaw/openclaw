@@ -301,4 +301,51 @@ describe("gateway talk.config", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("resolves talk voice aliases case-insensitively and forwards output format", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      talk: {
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            apiKey: "elevenlabs-talk-key", // pragma: allowlist secret
+            voiceId: "voice-default",
+            voiceAliases: {
+              Clawd: "EXAVITQu4vr4xnSDxMaL",
+            },
+          },
+        },
+      },
+    });
+
+    const originalFetch = globalThis.fetch;
+    let fetchUrl: string | undefined;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      fetchUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      return new Response(new Uint8Array([4, 5, 6]), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    try {
+      await withServer(async (ws) => {
+        await connectOperator(ws, ["operator.read", "operator.write"]);
+        const res = await fetchTalkSpeak(ws, {
+          text: "Hello from talk mode.",
+          voiceId: "clawd",
+          outputFormat: "pcm_44100",
+        });
+        expect(res.ok).toBe(true);
+        expect(res.payload?.provider).toBe("elevenlabs");
+        expect(res.payload?.outputFormat).toBe("pcm_44100");
+        expect(res.payload?.audioBase64).toBe(Buffer.from([4, 5, 6]).toString("base64"));
+      });
+
+      expect(fetchMock).toHaveBeenCalled();
+      expect(fetchUrl).toContain("/v1/text-to-speech/EXAVITQu4vr4xnSDxMaL");
+      expect(fetchUrl).toContain("output_format=pcm_44100");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
