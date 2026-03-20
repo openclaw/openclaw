@@ -16,7 +16,7 @@ function makeClient(scopes: string[]): GatewayClient {
       },
       scopes,
     },
-  } as GatewayClient;
+  } as unknown as GatewayClient;
 }
 
 describe("resolveCronCallerOptions", () => {
