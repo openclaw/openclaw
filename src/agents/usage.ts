@@ -88,18 +88,7 @@ export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is Normal
   if (!usage) {
     return false;
   }
-  // Support nested usage object (e.g., Bailian API via OpenAI-compatible mode)
-  const usageObj = (usage as any).usage ?? usage;
-  return [
-    usage.input,
-    usage.output,
-    usage.cacheRead,
-    usage.cacheWrite,
-    usage.total,
-    usageObj.prompt_tokens,
-    usageObj.completion_tokens,
-    usageObj.total_tokens,
-  ].some(
+  return [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.total].some(
     (v) => typeof v === "number" && Number.isFinite(v) && v > 0,
   );
 }
@@ -110,7 +99,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   }
 
   // Support nested usage object (e.g., Bailian API via OpenAI-compatible mode)
-  const usageObj = (raw as any).usage ?? raw;
+  const usageObj = raw.usage ?? raw;
 
   // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
   // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is

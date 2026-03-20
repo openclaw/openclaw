@@ -98,7 +98,7 @@ describe("normalizeUsage", () => {
         total_tokens: 30,
         cached_tokens: 0,
       },
-    } as any);
+    });
     expect(usage).toEqual({
       input: 22,
       output: 8,
@@ -106,26 +106,5 @@ describe("normalizeUsage", () => {
       cacheWrite: undefined,
       total: 30,
     });
-  });
-
-  it("hasNonzeroUsage detects nested usage objects", () => {
-    expect(
-      hasNonzeroUsage({
-        usage: {
-          prompt_tokens: 10,
-          completion_tokens: 5,
-          total_tokens: 15,
-        },
-      } as any),
-    ).toBe(true);
-    expect(
-      hasNonzeroUsage({
-        usage: {
-          prompt_tokens: 0,
-          completion_tokens: 0,
-          total_tokens: 0,
-        },
-      } as any),
-    ).toBe(false);
   });
 });
