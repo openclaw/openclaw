@@ -110,6 +110,42 @@
       {
         "file": "src/memory/manager.readonly-recovery.test.ts",
         "reason": "Readonly recovery coverage exercises sqlite reopen flows and is safer outside shared unit-fast forks."
+      },
+      {
+        "file": "src/channels/plugins/setup-wizard-helpers.test.ts",
+        "reason": "Setup wizard coverage retained the largest shared unit-fast heap spike in the failing Linux shard."
+      },
+      {
+        "file": "src/memory/qmd-manager.test.ts",
+        "reason": "QMD manager coverage retained a large memory graph in the failing Linux shard and is safer in its own fork."
+      },
+      {
+        "file": "src/infra/heartbeat-runner.respects-ackmaxchars-heartbeat-acks.test.ts",
+        "reason": "Heartbeat ack coverage retained a large shared heap spike in the failing Linux shard."
+      },
+      {
+        "file": "src/infra/exec-approval-forwarder.test.ts",
+        "reason": "Exec approval forwarding retained a broad approval/runtime graph in the failing Linux shard."
+      },
+      {
+        "file": "src/context-engine/context-engine.test.ts",
+        "reason": "Context engine coverage retained a large graph in unit-fast and is safer outside the shared lane."
+      },
+      {
+        "file": "src/cli/config-cli.integration.test.ts",
+        "reason": "CLI config integration coverage retained a large shared heap spike in the failing Linux shard."
+      },
+      {
+        "file": "src/cli/config-cli.test.ts",
+        "reason": "CLI config coverage retained a large shared heap spike in the failing Linux shard."
+      },
+      {
+        "file": "src/memory/manager.mistral-provider.test.ts",
+        "reason": "Mistral provider memory coverage retained a large shared heap spike in the failing Linux shard."
+      },
+      {
+        "file": "src/plugins/contracts/auth.contract.test.ts",
+        "reason": "Plugin auth contract coverage retained a large cross-plugin graph in the failing Linux shard."
       }
     ],
     "threadSingleton": [
