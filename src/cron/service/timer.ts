@@ -165,7 +165,14 @@ function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): C
   if (params.delivered === true) {
     return "delivered";
   }
+  // When delivery was never requested (mode: "none" / no delivery config), report
+  // "not-requested" instead of "not-delivered" so lastDeliveryError is not populated
+  // from the agent run error — those are unrelated to delivery.
   if (params.delivered === false) {
+    const plan = resolveCronDeliveryPlan(params.job);
+    if (!plan.requested) {
+      return "not-requested";
+    }
     return "not-delivered";
   }
   return resolveCronDeliveryPlan(params.job).requested ? "unknown" : "not-requested";
