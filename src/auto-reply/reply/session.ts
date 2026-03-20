@@ -598,7 +598,9 @@ export async function initSessionState(params: {
       workspaceDir,
       cfg,
     });
-    void triggerInternalHook(autoResetEvent).catch(() => {});
+    void triggerInternalHook(autoResetEvent).catch((err) => {
+      log.debug("session:reset hook error (auto-reset)", { error: String(err) });
+    });
   }
 
   // Run session plugin hooks (fire-and-forget)
