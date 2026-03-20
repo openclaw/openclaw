@@ -28,6 +28,25 @@ const pnpm = "pnpm";
 const behaviorManifest = loadTestRunnerBehavior();
 const existingFiles = (entries) =>
   entries.map((entry) => entry.file).filter((file) => fs.existsSync(file));
+let tempArtifactDir = null;
+const ensureTempArtifactDir = () => {
+  if (tempArtifactDir === null) {
+    tempArtifactDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-parallel-"));
+  }
+  return tempArtifactDir;
+};
+const writeTempJsonArtifact = (name, value) => {
+  const filePath = path.join(ensureTempArtifactDir(), `${name}.json`);
+  fs.writeFileSync(filePath, `${JSON.stringify(value)}\n`, "utf8");
+  return filePath;
+};
+const cleanupTempArtifacts = () => {
+  if (tempArtifactDir === null) {
+    return;
+  }
+  fs.rmSync(tempArtifactDir, { recursive: true, force: true });
+  tempArtifactDir = null;
+};
 const existingUnitConfigFiles = (entries) => existingFiles(entries).filter(isUnitConfigTestFile);
 const unitBehaviorIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.isolated);
 const unitSingletonIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.singletonIsolated);
@@ -333,6 +352,10 @@ const unitFastExcludedFiles = [
 const unitAutoSingletonFiles = [
   ...new Set([...unitSingletonIsolatedFiles, ...memoryHeavyUnitFiles]),
 ];
+const unitFastExtraExcludeFile =
+  unitFastExcludedFiles.length > 0
+    ? writeTempJsonArtifact("vitest-unit-fast-excludes", unitFastExcludedFiles)
+    : null;
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
 const heavyUnitBuckets = packFilesByDuration(
@@ -349,6 +372,12 @@ const baseRuns = [
     ? [
         {
           name: "unit-fast",
+          env:
+            unitFastExtraExcludeFile === null
+              ? undefined
+              : {
+                  OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE: unitFastExtraExcludeFile,
+                },
           args: [
             "vitest",
             "run",
@@ -356,7 +385,6 @@ const baseRuns = [
             "vitest.unit.config.ts",
             `--pool=${useVmForks ? "vmForks" : "forks"}`,
             ...(disableIsolation ? ["--isolate=false"] : []),
-            ...unitFastExcludedFiles.flatMap((file) => ["--exclude", file]),
           ],
         },
         ...(unitBehaviorIsolatedFiles.length > 0
@@ -982,7 +1010,12 @@ const runOnce = (entry, extraArgs = []) =>
     try {
       child = spawn(pnpm, args, {
         stdio: ["inherit", "pipe", "pipe"],
-        env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: resolvedNodeOptions },
+        env: {
+          ...process.env,
+          ...entry.env,
+          VITEST_GROUP: entry.name,
+          NODE_OPTIONS: resolvedNodeOptions,
+        },
         shell: isWindows,
       });
       captureTreeSample("spawn");
@@ -1134,6 +1167,7 @@ const shutdown = (signal) => {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("exit", cleanupTempArtifacts);
 
 if (process.env.OPENCLAW_TEST_LIST_LANES === "1") {
   const entriesToPrint = targetedEntries.length > 0 ? targetedEntries : runs;
