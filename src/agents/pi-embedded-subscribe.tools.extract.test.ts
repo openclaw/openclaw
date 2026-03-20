@@ -1,13 +1,22 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import { normalizeTelegramMessagingTarget } from "../../extensions/telegram/api.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { extractMessagingToolSend } from "./pi-embedded-subscribe.tools.js";
 
 describe("extractMessagingToolSend", () => {
   beforeEach(() => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram" }),
+            messaging: { normalizeTarget: normalizeTelegramMessagingTarget },
+          },
+          source: "test",
+        },
+      ]),
     );
   });
 
