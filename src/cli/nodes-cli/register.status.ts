@@ -345,8 +345,9 @@ export function registerNodesStatusCommands(nodes: Command) {
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const livePairedNodes = Array.from(liveNodesById.values()).filter((n) => n.paired);
           const totalPairedCount = paired.length > 0 ? paired.length : livePairedNodes.length;
-          const filteredLabel =
-            hasFilters && filteredPaired.length !== totalPairedCount ? ` (of ${totalPairedCount})` : "";
+          const filteredLabel = hasFilters && filteredPaired.length !== totalPairedCount
+            ? ` (of ${totalPairedCount})`
+            : "";
           defaultRuntime.log(
             `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
           );
