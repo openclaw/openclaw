@@ -45,17 +45,6 @@ openclaw plugins install <npm-spec>
 
   </Accordion>
 
-  <Accordion title="WeChat — Personal accounts via WeChatPadPro (iPad protocol)">
-    Supports text, image, and file exchange with keyword-triggered conversations.
-
-    - **npm:** `@icesword760/openclaw-wechat`
-    - **repo:** [github.com/icesword0760/openclaw-wechat](https://github.com/icesword0760/openclaw-wechat)
-
-    ```bash
-    openclaw plugins install @icesword760/openclaw-wechat
-    ```
-
-  </Accordion>
 </AccordionGroup>
 
 ## Submit your plugin
