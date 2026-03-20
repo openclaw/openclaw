@@ -56,6 +56,38 @@ describe("cron store", () => {
     await expect(loadCronStore(store.storePath)).rejects.toThrow(/Failed to parse cron store/i);
   });
 
+  it("accepts JSON5 syntax when loading an existing cron store", async () => {
+    const store = await makeStorePath();
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      `{
+        // hand-edited legacy store
+        version: 1,
+        jobs: [
+          {
+            id: 'job-1',
+            name: 'Job 1',
+            enabled: true,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            schedule: { kind: 'every', everyMs: 60000 },
+            sessionTarget: 'main',
+            wakeMode: 'next-heartbeat',
+            payload: { kind: 'systemEvent', text: 'tick-job-1' },
+            state: {},
+          },
+        ],
+      }`,
+      "utf-8",
+    );
+
+    await expect(loadCronStore(store.storePath)).resolves.toMatchObject({
+      version: 1,
+      jobs: [{ id: "job-1", enabled: true }],
+    });
+  });
+
   it("does not create a backup file when saving unchanged content", async () => {
     const store = await makeStorePath();
     const payload = makeStore("job-1", true);
