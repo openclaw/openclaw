@@ -5,6 +5,7 @@ import {
   type OpenClawConfig,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk";
+import { getAcpSessionManager } from "openclaw/plugin-sdk/acp-runtime";
 import WebSocket from "ws";
 import { getHyperionRuntime, hasHyperionRuntime } from "../../hyperion/src/globals.js";
 import { setActiveNovaConnection } from "./connection.js";
@@ -283,6 +284,27 @@ export async function monitorNovaProvider(opts: MonitorNovaOpts): Promise<void> 
             msgRuntime.error?.(`nova ${info.kind} reply failed: ${String(err)}`);
           },
         });
+
+      // Auto-initialize ACP session if none exists, so messages route to
+      // AgentCore instead of falling through to the embedded Pi agent.
+      const acpSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
+      if (acpSessionKey && msgCfg.acp?.enabled !== false && msgCfg.acp?.backend) {
+        const acpManager = getAcpSessionManager();
+        const resolution = acpManager.resolveSession({ cfg: msgCfg, sessionKey: acpSessionKey });
+        if (resolution.kind === "none") {
+          try {
+            await acpManager.initializeSession({
+              cfg: msgCfg,
+              sessionKey: acpSessionKey,
+              agent: route.agentId ?? "main",
+              mode: "persistent",
+            });
+            logger.info(`nova: auto-initialized ACP session for ${acpSessionKey}`);
+          } catch (err) {
+            logger.warn(`nova: ACP session auto-init failed, falling back to embedded agent: ${String(err)}`);
+          }
+        }
+      }
 
       try {
         const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
