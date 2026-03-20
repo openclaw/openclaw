@@ -72,8 +72,13 @@ export function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: OpenClawConfig;
   eligibility?: SkillEligibilityContext;
+  skipHostEnvironmentCheck?: boolean;
+  targetPlatform?: string;
 }): boolean {
-  const { entry, config, eligibility } = params;
+  const { entry, config, eligibility, skipHostEnvironmentCheck } = params;
+  const targetPlatformRaw =
+    typeof params.targetPlatform === "string" ? params.targetPlatform.trim().toLowerCase() : "";
+  const targetPlatform = targetPlatformRaw || undefined;
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
   const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
@@ -84,20 +89,31 @@ export function shouldIncludeSkill(params: {
   if (!isBundledSkillAllowed(entry, allowBundled)) {
     return false;
   }
+  if (targetPlatform) {
+    const allowedPlatforms = entry.metadata?.os ?? [];
+    if (allowedPlatforms.length > 0 && !allowedPlatforms.includes(targetPlatform)) {
+      return false;
+    }
+  }
+  const hasConfiguredEnv = (envName: string): boolean =>
+    Boolean(
+      skillConfig?.env?.[envName] ||
+      (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
+    );
   return evaluateRuntimeEligibility({
-    os: entry.metadata?.os,
-    remotePlatforms: eligibility?.remote?.platforms,
+    os: targetPlatform ? undefined : entry.metadata?.os,
+    remotePlatforms: skipHostEnvironmentCheck
+      ? targetPlatform
+        ? [targetPlatform]
+        : (eligibility?.remote?.platforms ?? entry.metadata?.os)
+      : eligibility?.remote?.platforms,
     always: entry.metadata?.always,
     requires: entry.metadata?.requires,
-    hasBin: hasBinary,
+    hasBin: skipHostEnvironmentCheck ? () => true : hasBinary,
     hasRemoteBin: eligibility?.remote?.hasBin,
     hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
     hasEnv: (envName) =>
-      Boolean(
-        process.env[envName] ||
-        skillConfig?.env?.[envName] ||
-        (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
-      ),
+      skipHostEnvironmentCheck ? true : Boolean(process.env[envName] || hasConfiguredEnv(envName)),
     isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
   });
 }

@@ -6,7 +6,6 @@ import {
 } from "../../config/config.js";
 import * as skillsModule from "../skills.js";
 import type { SkillSnapshot } from "../skills.js";
-
 const { resolveEmbeddedRunSkillEntries } = await import("./skills-runtime.js");
 
 describe("resolveEmbeddedRunSkillEntries", () => {
@@ -38,7 +37,10 @@ describe("resolveEmbeddedRunSkillEntries", () => {
 
     expect(result.shouldLoadSkillEntries).toBe(true);
     expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledTimes(1);
-    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", { config });
+    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", {
+      config,
+      agentId: undefined,
+    });
   });
 
   it("prefers the active runtime snapshot when caller config still contains SecretRefs", () => {
@@ -77,6 +79,24 @@ describe("resolveEmbeddedRunSkillEntries", () => {
 
     expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", {
       config: runtimeConfig,
+      agentId: undefined,
+    });
+  });
+
+  it("forwards agentId when loading fallback skill entries", () => {
+    resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/tmp/workspace",
+      config: {},
+      agentId: "ops",
+      skillsSnapshot: {
+        prompt: "skills prompt",
+        skills: [],
+      },
+    });
+
+    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", {
+      config: {},
+      agentId: "ops",
     });
   });
 

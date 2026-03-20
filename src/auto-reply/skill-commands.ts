@@ -17,10 +17,12 @@ export {
 export function listSkillCommandsForWorkspace(params: {
   workspaceDir: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   skillFilter?: string[];
 }): SkillCommandSpec[] {
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
     config: params.cfg,
+    agentId: params.agentId,
     skillFilter: params.skillFilter,
     eligibility: { remote: getRemoteSkillEligibility() },
     reservedNames: listReservedChatSlashCommandNames(),
@@ -68,7 +70,10 @@ export function listSkillCommandsForAgents(params: {
   const entries: SkillCommandSpec[] = [];
   // Group by canonical workspace to avoid duplicate registration when multiple
   // agents share the same directory (#5717), while still honoring per-agent filters.
-  const workspaceFilters = new Map<string, { workspaceDir: string; skillFilter?: string[] }>();
+  const workspaceFilters = new Map<
+    string,
+    { workspaceDir: string; skillFilter?: string[]; agentId?: string }
+  >();
   for (const agentId of agentIds) {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     if (!fs.existsSync(workspaceDir)) {
@@ -86,17 +91,22 @@ export function listSkillCommandsForAgents(params: {
     const existing = workspaceFilters.get(canonicalDir);
     if (existing) {
       existing.skillFilter = mergeSkillFilters(existing.skillFilter, skillFilter);
+      if (existing.agentId !== agentId) {
+        existing.agentId = undefined;
+      }
       continue;
     }
     workspaceFilters.set(canonicalDir, {
       workspaceDir,
       skillFilter,
+      agentId,
     });
   }
 
-  for (const { workspaceDir, skillFilter } of workspaceFilters.values()) {
+  for (const { workspaceDir, skillFilter, agentId } of workspaceFilters.values()) {
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       config: params.cfg,
+      agentId,
       skillFilter,
       eligibility: { remote: getRemoteSkillEligibility() },
       reservedNames: used,

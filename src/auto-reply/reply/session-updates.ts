@@ -201,6 +201,14 @@ export async function ensureSkillSnapshot(params: {
     (snapshotVersion > 0 && (existingSnapshot?.version ?? 0) < snapshotVersion) ||
     !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter) ||
     !matchesSkillPolicySnapshot(existingSnapshot?.policy, policySnapshot);
+  const buildSnapshot = () =>
+    buildWorkspaceSkillSnapshot(workspaceDir, {
+      config: cfg,
+      agentId: sessionAgentId,
+      skillFilter,
+      eligibility: { remote: remoteEligibility },
+      snapshotVersion,
+    });
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??
@@ -209,15 +217,7 @@ export async function ensureSkillSnapshot(params: {
         updatedAt: Date.now(),
       };
     const skillSnapshot =
-      isFirstTurnInSession || !current.skillsSnapshot || shouldRefreshSnapshot
-        ? buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            agentId: sessionAgentId,
-            skillFilter,
-            eligibility: { remote: remoteEligibility },
-            snapshotVersion,
-          })
-        : current.skillsSnapshot;
+      !current.skillsSnapshot || shouldRefreshSnapshot ? buildSnapshot() : current.skillsSnapshot;
     nextEntry = {
       ...current,
       sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
@@ -229,24 +229,14 @@ export async function ensureSkillSnapshot(params: {
     systemSent = true;
   }
 
-  const skillsSnapshot = shouldRefreshSnapshot
-    ? buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: cfg,
-        agentId: sessionAgentId,
-        skillFilter,
-        eligibility: { remote: remoteEligibility },
-        snapshotVersion,
-      })
-    : (nextEntry?.skillsSnapshot ??
-      (isFirstTurnInSession
-        ? undefined
-        : buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            agentId: sessionAgentId,
-            skillFilter,
-            eligibility: { remote: remoteEligibility },
-            snapshotVersion,
-          })));
+  const hasFreshSnapshotInEntry =
+    Boolean(nextEntry?.skillsSnapshot) &&
+    (nextEntry?.skillsSnapshot !== existingSnapshot || !shouldRefreshSnapshot);
+  const skillsSnapshot = hasFreshSnapshotInEntry
+    ? nextEntry?.skillsSnapshot
+    : shouldRefreshSnapshot || !nextEntry?.skillsSnapshot
+      ? buildSnapshot()
+      : nextEntry.skillsSnapshot;
   if (
     skillsSnapshot &&
     sessionStore &&

@@ -745,6 +745,10 @@ export async function compactEmbeddedPiSessionDirect(
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
       config: params.config,
+      agentId: resolveSessionAgentId({
+        sessionKey: params.sessionKey,
+        config: params.config,
+      }),
       skillsSnapshot: params.skillsSnapshot,
     });
     restoreSkillEnv = params.skillsSnapshot
