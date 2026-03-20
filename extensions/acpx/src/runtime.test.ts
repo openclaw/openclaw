@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
+import type { AcpRuntimeEvent } from "../runtime-api.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 import {
   cleanupMockRuntimeFixtures,
@@ -689,6 +690,47 @@ describe("AcpxRuntime", () => {
     } finally {
       delete process.env.MOCK_ACPX_ENSURE_EMPTY;
       delete process.env.MOCK_ACPX_NEW_EMPTY;
+    }
+  });
+
+  it("kills the child process when runTurn completes, even if child hangs after emitting done", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture({ queueOwnerTtlSeconds: 180 });
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:hang-test",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    process.env.MOCK_ACPX_PROMPT_HANG = "1";
+    try {
+      const events: AcpRuntimeEvent[] = [];
+      for await (const event of runtime.runTurn({ handle, text: "hang-test" })) {
+        events.push(event);
+      }
+
+      expect(events.some((e) => e.type === "done")).toBe(true);
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const hangEntry = logs.find((e) => e.kind === "prompt-hang");
+      expect(hangEntry).toBeDefined();
+      const pid = hangEntry!.pid as number;
+      expect(pid).toBeGreaterThan(0);
+
+      // Poll until the process is gone — SIGTERM delivery and reaping are async
+      let processStillAlive = true;
+      for (let i = 0; i < 20; i++) {
+        try {
+          process.kill(pid, 0);
+          await new Promise((r) => setTimeout(r, 25));
+        } catch {
+          processStillAlive = false;
+          break;
+        }
+      }
+      expect(processStillAlive).toBe(false);
+    } finally {
+      delete process.env.MOCK_ACPX_PROMPT_HANG;
     }
   });
 });
