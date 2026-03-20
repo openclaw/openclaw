@@ -285,8 +285,8 @@ To reduce costs:
 
 - **Deallocate the VM** when not in use (stops compute billing; disk charges remain). The OpenClaw Gateway will not be reachable while the VM is deallocated — restart it when you need it live again:
   ```bash
-  az vm deallocate -g rg-openclaw -n vm-openclaw
-  az vm start -g rg-openclaw -n vm-openclaw   # restart later
+  az vm deallocate -g "${RG}" -n "${VM_NAME}"
+  az vm start -g "${RG}" -n "${VM_NAME}"   # restart later
   ```
 - **Delete Bastion when not needed** and recreate it when you need SSH access. Bastion is the largest cost component and takes only a few minutes to provision.
 - **Use the Basic Bastion SKU** (~\$38/month) if you only need Portal-based SSH and don't require CLI tunneling (`az network bastion ssh`).
@@ -296,7 +296,7 @@ To reduce costs:
 To delete all resources created by this guide:
 
 ```bash
-az group delete -n rg-openclaw --yes --no-wait
+az group delete -n "${RG}" --yes --no-wait
 ```
 
 This removes the resource group and everything inside it (VM, VNet, NSG, Bastion, public IP).
