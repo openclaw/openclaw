@@ -476,6 +476,9 @@ describe("matrix monitor handler pairing account scope", () => {
     } as MatrixRawEvent);
 
     expect(downloadContent).not.toHaveBeenCalled();
+    expect(getMemberDisplayName).not.toHaveBeenCalled();
+    expect(getRoomInfo).not.toHaveBeenCalled();
+    expect(resolveAgentRoute).not.toHaveBeenCalled();
   });
 
   it("skips poll snapshot fetches for unmentioned group poll responses", async () => {

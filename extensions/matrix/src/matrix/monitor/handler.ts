@@ -553,7 +553,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         !hasExplicitMention &&
         commandAuthorized &&
         hasControlCommandInMessage;
-      const canDetectMention = mentionRegexes.length > 0 || hasExplicitMention;
+      let canDetectMention = mentionRegexes.length > 0 || hasExplicitMention;
       // When there is message text, defer mention drop until after route
       // resolution so agent-level mentionPatterns are checked (#51082).
       // Media-only/poll events have no text - drop them immediately.
@@ -686,6 +686,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
           if (agentMentionResult.wasMentioned) {
             wasMentioned = true;
+            canDetectMention = true;
           }
         }
         if (!wasMentioned) {
