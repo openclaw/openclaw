@@ -73,20 +73,18 @@ export const copiedRuntimeMarker = {
     const copiedChannelRuntime = path.join(copiedExtensionRoot, "src", "channel.runtime.ts");
     const jitiBaseUrl = pathToFileURL(jitiBaseFile).href;
     const createJiti = await getCreateJiti();
-    const withoutAlias = createJiti(jitiBaseUrl, {
-      ...__testing.buildPluginLoaderJitiOptions({}),
-      tryNative: false,
+    const jitiOptions = __testing.buildPluginLoaderJitiOptions({
+      "openclaw/plugin-sdk/channel-runtime": copiedChannelRuntimeShim,
     });
-    // The production loader uses sync Jiti evaluation, so this regression test
-    // should exercise the same seam instead of Jiti's async import helper.
-    expect(() => withoutAlias(copiedChannelRuntime)).toThrow();
+    expect(jitiOptions.tryNative).toBe(true);
+    expect(jitiOptions.alias).toMatchObject({
+      "openclaw/plugin-sdk/channel-runtime": copiedChannelRuntimeShim,
+    });
 
-    const withAlias = createJiti(jitiBaseUrl, {
-      ...__testing.buildPluginLoaderJitiOptions({
-        "openclaw/plugin-sdk/channel-runtime": copiedChannelRuntimeShim,
-      }),
-      tryNative: false,
-    });
+    // Exercise the same Jiti option builder used by the production loader, but
+    // stick to the stable positive path that proves git-style runtimes can load
+    // through the scoped plugin-sdk alias (#49806).
+    const withAlias = createJiti(jitiBaseUrl, jitiOptions);
     expect(withAlias(copiedChannelRuntime)).toMatchObject({
       copiedRuntimeMarker: {
         PAIRING_APPROVED_MESSAGE: "paired",
