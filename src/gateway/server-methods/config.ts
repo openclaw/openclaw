@@ -1,4 +1,4 @@
-import { exec } from "node:child_process";
+import { spawn } from "node:child_process";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
@@ -539,12 +539,19 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const configPath = createConfigIO().configPath;
     const platform = process.platform;
-    const cmd = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open";
-    exec(`${cmd} ${JSON.stringify(configPath)}`, (err) => {
-      if (err) {
-        respond(true, { ok: false, path: configPath, error: err.message }, undefined);
-        return;
-      }
+    // Launch the platform opener without a shell so config paths containing shell metacharacters
+    // cannot trigger command substitution or argument injection.
+    const command =
+      platform === "darwin" ? "open" : platform === "win32" ? "explorer.exe" : "xdg-open";
+    const child = spawn(command, [configPath], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.once("error", (err) => {
+      respond(true, { ok: false, path: configPath, error: err.message }, undefined);
+    });
+    child.once("spawn", () => {
+      child.unref();
       respond(true, { ok: true, path: configPath }, undefined);
     });
   },
