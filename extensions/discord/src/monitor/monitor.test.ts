@@ -908,23 +908,17 @@ describe("discord component interactions", () => {
       modals: [],
     });
     const button = createDiscordComponentButton(createComponentContext());
-    const update = vi.fn().mockResolvedValue(undefined);
+    const acknowledge = vi.fn().mockResolvedValue(undefined);
     const followUp = vi.fn().mockResolvedValue(undefined);
     const interaction = {
       ...(createComponentButtonInteraction().interaction as any),
-      update,
+      acknowledge,
       followUp,
     } as ButtonInteraction;
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: expect.any(String),
-        components: [],
-      }),
-    );
-    expect(followUp).not.toHaveBeenCalled();
+    expect(acknowledge).toHaveBeenCalledTimes(1);
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 });

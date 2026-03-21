@@ -163,37 +163,24 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
   };
   const pluginBindingApproval = parsePluginBindingApprovalCustomId(params.data);
   if (pluginBindingApproval) {
+    try {
+      await respond.acknowledge();
+    } catch {
+      // Interaction may have expired; try to continue anyway.
+    }
     const resolved = await resolvePluginConversationBindingApproval({
       approvalId: pluginBindingApproval.approvalId,
       decision: pluginBindingApproval.decision,
       senderId: params.interactionCtx.userId,
     });
-    try {
-      await respond.clearComponents({
-        text: buildPluginBindingResolvedText(resolved),
-      });
-      return "handled";
-    } catch {
-      try {
-        await respond.acknowledge();
-      } catch {
-        // Interaction may already be acknowledged; continue with best-effort follow-up.
-      }
-    }
-    try {
-      await respond.reply({
-        text: buildPluginBindingResolvedText(resolved),
-        ephemeral: true,
-      });
-    } catch (err) {
-      logError(`discord plugin binding approval: failed to reply: ${String(err)}`);
+    if (resolved.status !== "approved") {
       try {
         await respond.followUp({
           text: buildPluginBindingResolvedText(resolved),
           ephemeral: true,
         });
-      } catch {
-        // Interaction may no longer accept a follow-up.
+      } catch (err) {
+        logError(`discord plugin binding approval: failed to follow up: ${String(err)}`);
       }
     }
     return "handled";
