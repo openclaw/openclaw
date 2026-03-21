@@ -1,13 +1,10 @@
-import fs from "node:fs/promises";
 import {
-  ensureAuthProfileStore,
+  loadAuthProfileStore,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
-  resolveAuthStorePathForDisplay,
-  type AuthProfileCredential,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
+import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   isValidEnvSecretRefId,
@@ -149,54 +146,26 @@ function resolveRefFallbackInput(params: {
 
 async function loadScopedAuthProfileStore(agentDir?: string): Promise<AuthProfileStore> {
   if (!agentDir) {
-    try {
-      const raw = await fs.readFile(resolveAuthStorePathForDisplay(undefined), "utf-8");
-      const parsed = JSON.parse(raw) as AuthProfileStore;
-      return {
-        version: Number(parsed.version ?? 1),
-        profiles: parsed.profiles ?? {},
-        ...(parsed.order ? { order: parsed.order } : {}),
-        ...(parsed.lastGood ? { lastGood: parsed.lastGood } : {}),
-        ...(parsed.usageStats ? { usageStats: parsed.usageStats } : {}),
-      };
-    } catch {
-      return ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
-    }
+    return loadAuthProfileStore();
   }
 
+  const previousOpenClawAgentDir = process.env.OPENCLAW_AGENT_DIR;
+  const previousPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.OPENCLAW_AGENT_DIR = agentDir;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
-    const raw = await fs.readFile(resolveAuthStorePathForDisplay(agentDir), "utf-8");
-    const parsed = JSON.parse(raw) as {
-      version?: number;
-      profiles?: Record<string, unknown>;
-      order?: Record<string, unknown>;
-      lastGood?: Record<string, unknown>;
-      usageStats?: Record<string, unknown>;
-    };
-    const profiles: Record<string, AuthProfileCredential> = {};
-    if (parsed && typeof parsed === "object" && parsed.profiles) {
-      for (const [profileId, profile] of Object.entries(parsed.profiles)) {
-        if (profile && typeof profile === "object") {
-          profiles[profileId] = profile as AuthProfileCredential;
-        }
-      }
+    return loadAuthProfileStore();
+  } finally {
+    if (previousOpenClawAgentDir === undefined) {
+      delete process.env.OPENCLAW_AGENT_DIR;
+    } else {
+      process.env.OPENCLAW_AGENT_DIR = previousOpenClawAgentDir;
     }
-
-    return {
-      version: Number(parsed?.version ?? 1),
-      profiles,
-      ...(parsed?.order && typeof parsed.order === "object"
-        ? { order: parsed.order as Record<string, string[]> }
-        : {}),
-      ...(parsed?.lastGood && typeof parsed.lastGood === "object"
-        ? { lastGood: parsed.lastGood as Record<string, string> }
-        : {}),
-      ...(parsed?.usageStats && typeof parsed.usageStats === "object"
-        ? { usageStats: parsed.usageStats as AuthProfileStore["usageStats"] }
-        : {}),
-    };
-  } catch {
-    return { version: 1, profiles: {} };
+    if (previousPiCodingAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = previousPiCodingAgentDir;
+    }
   }
 }
 
@@ -268,12 +237,16 @@ async function resolveExistingProviderApiKey(params: {
       };
     }
 
-    const configApiKey = getCustomProviderApiKey(params.config, params.provider);
+    const configApiKey = resolveUsableCustomProviderApiKey({
+      cfg: params.config,
+      provider: params.provider,
+      env: process.env,
+    });
     if (configApiKey) {
       return {
-        apiKey: configApiKey,
-        source: "models.json",
-        credential: configApiKey,
+        apiKey: configApiKey.apiKey,
+        source: configApiKey.source,
+        credential: configApiKey.apiKey,
       };
     }
 
