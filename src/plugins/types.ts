@@ -594,6 +594,11 @@ export type ProviderPluginWizardSetup = {
   groupHint?: string;
   methodId?: string;
   /**
+   * Interactive onboarding surfaces where this auth choice should appear.
+   * Defaults to `["text-inference"]` when omitted.
+   */
+  onboardingScopes?: Array<"text-inference" | "image-generation">;
+  /**
    * Optional model-allowlist prompt policy applied after this auth choice is
    * selected in configure/onboarding flows.
    *
