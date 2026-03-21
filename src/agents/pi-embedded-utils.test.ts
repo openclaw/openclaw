@@ -207,6 +207,24 @@ All done.`;
     expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: "2" } });
   });
 
+  it("handles malformed XML with only closing wrapper tag", () => {
+    const text = `<invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
+    expect(toolCall).toMatchObject({
+      type: "toolCall",
+      name: "exec",
+      arguments: { command: "ls" },
+    });
+  });
+
   it("handles multiple invoke blocks within a single MiniMax wrapper", () => {
     const text = `<minimax:tool_call>
   <invoke name="T1"><parameter name="p">1</parameter></invoke>

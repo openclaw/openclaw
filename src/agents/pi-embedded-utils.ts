@@ -10,6 +10,11 @@ export function isAssistantMessage(msg: AgentMessage | undefined): msg is Assist
   return msg?.role === "assistant";
 }
 
+// Share these robust regex patterns across the module.
+const MINIMAX_INVOKE_RE = /<invoke\b([^>]*?)>([\s\S]*?)<\/invoke>/gi;
+const MINIMAX_MARKER_RE = /<\/?minimax:tool_call>/gi;
+const MINIMAX_PARAM_RE = /<parameter\b[^>]*name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
+
 /**
  * Strip malformed Minimax tool invocations that leak into text content.
  */
@@ -18,9 +23,8 @@ export function stripMinimaxToolCallXml(text: string): string {
     return text;
   }
 
-  // Use explicit inline regex to avoid any constant/scope issues.
-  let cleaned = text.replace(/<invoke\b([^>]*?)>([\s\S]*?)<\/invoke>/gi, "");
-  cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
+  let cleaned = text.replace(MINIMAX_INVOKE_RE, "");
+  cleaned = cleaned.replace(MINIMAX_MARKER_RE, "");
 
   return cleaned;
 }
@@ -28,12 +32,16 @@ export function stripMinimaxToolCallXml(text: string): string {
 /**
  * Strip model control tokens leaked into assistant text output.
  */
+const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
+
 export function stripModelSpecialTokens(text: string): string {
   if (!text) {
     return text;
   }
-  // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> variants.
-  const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
+  if (!MODEL_SPECIAL_TOKEN_RE.test(text)) {
+    return text;
+  }
+  MODEL_SPECIAL_TOKEN_RE.lastIndex = 0;
   return text.replace(MODEL_SPECIAL_TOKEN_RE, " ").trim();
 }
 
@@ -275,8 +283,9 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
     const isClose = Boolean(match[1]?.includes("/"));
 
     if (!inThinking && !isClose) {
-      if (index > cursor) {
-        blocks.push({ type: "text", text: text.slice(cursor, index) });
+      const prose = text.slice(cursor, index);
+      if (prose) {
+        blocks.push({ type: "text", text: prose });
       }
       thinkingStart = index + match[0].length;
       inThinking = true;
@@ -297,10 +306,6 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
     blocks.push({ type: "text", text: text.slice(cursor) });
   }
 
-  const hasThinking = blocks.some((b) => b.type === "thinking");
-  if (!hasThinking) {
-    return null;
-  }
   return blocks;
 }
 
@@ -433,7 +438,6 @@ export function parseXmlParameterValue(value: string): unknown {
   }
 
   // Return the full unescaped value without trimming to preserve whitespace
-  // sensitive content like indentation or multiline messages.
   return unescaped;
 }
 
@@ -444,47 +448,44 @@ type MinimaxToolCallSplitBlock =
 /**
  * Split text content into text blocks and toolCall blocks by parsing
  * MiniMax-specific <minimax:tool_call> XML structures.
+ *
+ * This version supports malformed XML that may only have a closing tag
+ * or interleaved text and tags.
  */
 export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[] | null {
   if (!text || !/minimax:tool_call/i.test(text)) {
     return null;
   }
 
-  // Use local explicit regexes.
-  const toolCallRe = /<minimax:tool_call>([\s\S]*?)<\/minimax:tool_call>/gi;
-  const invokeRe = /<invoke\b([^>]*?)>([\s\S]*?)<\/invoke>/gi;
-  const paramRe = /<parameter\b[^>]*name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
+  const combinedRe = new RegExp(
+    `(${MINIMAX_INVOKE_RE.source})|(${MINIMAX_MARKER_RE.source})`,
+    "gi",
+  );
 
   const blocks: MinimaxToolCallSplitBlock[] = [];
   let cursor = 0;
   let hasToolCall = false;
 
-  for (const match of text.matchAll(toolCallRe)) {
+  for (const match of text.matchAll(combinedRe)) {
     const index = match.index ?? 0;
-    const [fullMatch, wrapperBody] = match;
+    const [fullMatch, invokeMatch, attributes, invokeBody] = match;
 
+    // Push preceding text prose
     if (index > cursor) {
-      blocks.push({ type: "text", text: text.slice(cursor, index) });
+      const prose = text.slice(cursor, index);
+      if (prose) {
+        blocks.push({ type: "text", text: prose });
+      }
     }
 
-    let innerCursor = 0;
-    for (const iMatch of wrapperBody.matchAll(invokeRe)) {
-      const iIndex = iMatch.index ?? 0;
-      const [iFullMatch, attributes, invokeBody] = iMatch;
-
-      if (iIndex > innerCursor) {
-        const prose = wrapperBody.slice(innerCursor, iIndex);
-        if (prose) {
-          blocks.push({ type: "text", text: prose });
-        }
-      }
-
+    if (invokeMatch) {
+      // Handle <invoke> block
       const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
       const toolName = nameMatch ? nameMatch[1] : undefined;
 
       if (toolName) {
         const args: Record<string, unknown> = {};
-        for (const pMatch of invokeBody.matchAll(paramRe)) {
+        for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
           const [, pName, pValue] = pMatch;
           args[pName] = parseXmlParameterValue(pValue);
         }
@@ -497,16 +498,9 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
         });
         hasToolCall = true;
       }
-
-      innerCursor = iIndex + iFullMatch.length;
+      // Malformed invokes are discarded by simply advancing cursor past them.
     }
-
-    if (innerCursor < wrapperBody.length) {
-      const remaining = wrapperBody.slice(innerCursor);
-      if (remaining) {
-        blocks.push({ type: "text", text: remaining });
-      }
-    }
+    // MiniMax marker tags (</?minimax:tool_call>) are also discarded by advancing cursor.
 
     cursor = index + fullMatch.length;
   }
@@ -539,6 +533,7 @@ export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void
     }
 
     const type = block.type as string;
+    // Handle both text and thinking blocks as sources for XML tool calls.
     // @ts-expect-error - accessing properties on union type
     const textValue = type === "text" ? block.text : type === "thinking" ? block.thinking : null;
 
