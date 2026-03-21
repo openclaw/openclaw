@@ -648,6 +648,40 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalledWith(123, 17, "Message B partial");
   });
 
+  it("skips stale preview edit retries after forceNewMessage rotates generation", async () => {
+    const api = createMockDraftApi();
+    const preConnectErr = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+    });
+    let releaseRetrySleep: (() => void) | undefined;
+    sleepWithAbort.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          releaseRetrySleep = () => resolve(undefined);
+        }),
+    );
+    const stream = createDraftStream(api, { previewTransport: "message" });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    api.editMessageText.mockRejectedValueOnce(preConnectErr).mockResolvedValueOnce(true);
+    stream.update("Hello again");
+    const firstFlush = stream.flush();
+    void firstFlush.catch(() => {});
+    await vi.waitFor(() => expect(api.editMessageText).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(sleepWithAbort).toHaveBeenCalledTimes(1));
+    expect(api.editMessageText).toHaveBeenNthCalledWith(1, 123, 17, "Hello again");
+
+    stream.forceNewMessage();
+    releaseRetrySleep?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const editsToOldMessage = api.editMessageText.mock.calls.filter((call) => call[1] === 17);
+    expect(editsToOldMessage).toHaveLength(1);
+  });
+
   it("marks sendMayHaveLanded after an ambiguous first preview send failure", async () => {
     const api = createMockDraftApi();
     api.sendMessage.mockRejectedValueOnce(new Error("timeout after Telegram accepted send"));

@@ -285,15 +285,20 @@ export function createTelegramDraftStream(params: {
     if (typeof streamMessageId === "number") {
       const existingMessageId = streamMessageId;
       await retryPreviewPreConnect("message edit", async () => {
+        // forceNewMessage() rotates generations; stale retries must not keep
+        // editing the previous segment's archived preview.
+        if (sendGeneration !== generation) {
+          return;
+        }
         if (renderedParseMode) {
           await params.api.editMessageText(chatId, existingMessageId, renderedText, {
             parse_mode: renderedParseMode,
           });
-          return;
+        } else {
+          await params.api.editMessageText(chatId, existingMessageId, renderedText);
         }
-        await params.api.editMessageText(chatId, existingMessageId, renderedText);
       });
-      return true;
+      return sendGeneration === generation;
     }
     messageSendAttempted = true;
     let sent: Awaited<ReturnType<typeof sendRenderedMessageWithThreadFallback>>["sent"];

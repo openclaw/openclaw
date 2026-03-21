@@ -234,6 +234,37 @@ describe("createTypingCallbacks", () => {
       });
     });
 
+    it("does not restart keepalive when TTL fires during the first start", async () => {
+      await withFakeTimers(async () => {
+        let resolveStart: (() => void) | undefined;
+        const firstStart = new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        });
+        const start = vi
+          .fn<() => Promise<void>>()
+          .mockReturnValueOnce(firstStart)
+          .mockResolvedValue(undefined);
+        const { stop, callbacks } = createTypingHarness({
+          start,
+          maxDurationMs: 10_000,
+        });
+
+        const firstOnReplyStart = callbacks.onReplyStart();
+        await flushMicrotasks();
+        expect(start).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(10_000);
+        await flushMicrotasks();
+        expect(stop).toHaveBeenCalledTimes(1);
+
+        resolveStart?.();
+        await firstOnReplyStart;
+
+        await vi.advanceTimersByTimeAsync(9_000);
+        expect(start).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it("does not auto-stop if idle is called before TTL", async () => {
       await withFakeTimers(async () => {
         const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});

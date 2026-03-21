@@ -81,6 +81,9 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     replyStarted = true;
     startGuard.reset();
     await fireStart();
+    if (closed) {
+      return;
+    }
     if (startGuard.isTripped()) {
       return;
     }
