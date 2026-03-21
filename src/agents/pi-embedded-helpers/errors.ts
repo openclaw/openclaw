@@ -65,6 +65,57 @@ function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   return undefined;
 }
 
+function formatTransportErrorCopy(raw: string): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const lower = raw.toLowerCase();
+
+  if (
+    /\beconnrefused\b/i.test(raw) ||
+    lower.includes("connection refused") ||
+    lower.includes("actively refused")
+  ) {
+    return "LLM request failed: connection refused by the provider endpoint.";
+  }
+
+  if (
+    /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i.test(raw) ||
+    lower.includes("socket hang up") ||
+    lower.includes("connection reset") ||
+    lower.includes("connection aborted")
+  ) {
+    return "LLM request failed: network connection was interrupted.";
+  }
+
+  if (
+    /\benotfound\b|\beai_again\b/i.test(raw) ||
+    lower.includes("getaddrinfo") ||
+    lower.includes("no such host") ||
+    lower.includes("dns")
+  ) {
+    return "LLM request failed: DNS lookup for the provider endpoint failed.";
+  }
+
+  if (
+    /\benetunreach\b|\behostunreach\b|\behostdown\b/i.test(raw) ||
+    lower.includes("network is unreachable") ||
+    lower.includes("host is unreachable")
+  ) {
+    return "LLM request failed: the provider endpoint is unreachable from this host.";
+  }
+
+  if (
+    lower.includes("fetch failed") ||
+    lower.includes("connection error") ||
+    lower.includes("network request failed")
+  ) {
+    return "LLM request failed: network connection error.";
+  }
+
+  return undefined;
+}
+
 function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
@@ -566,6 +617,11 @@ export function formatAssistantErrorText(
     return transientCopy;
   }
 
+  const transportCopy = formatTransportErrorCopy(raw);
+  if (transportCopy) {
+    return transportCopy;
+  }
+
   if (isTimeoutErrorMessage(raw)) {
     return "LLM request timed out.";
   }
@@ -625,6 +681,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
       const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
       if (prefixedCopy) {
         return prefixedCopy;
+      }
+      const transportCopy = formatTransportErrorCopy(trimmed);
+      if (transportCopy) {
+        return transportCopy;
       }
       if (isTimeoutErrorMessage(trimmed)) {
         return "LLM request timed out.";

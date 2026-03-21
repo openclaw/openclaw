@@ -88,6 +88,14 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("returns a transport-specific message for prefixed ECONNREFUSED errors", () => {
+    expect(
+      sanitizeUserFacingText("Error: connect ECONNREFUSED 127.0.0.1:443", {
+        errorContext: true,
+      }),
+    ).toBe("LLM request failed: connection refused by the provider endpoint.");
+  });
+
   it.each([
     {
       input: "Hello there!\n\nHello there!",
