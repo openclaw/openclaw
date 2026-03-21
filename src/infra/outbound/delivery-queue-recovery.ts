@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatErrorMessage } from "../errors.js";
 import {
@@ -7,6 +9,7 @@ import {
   moveToFailed,
   type QueuedDelivery,
   type QueuedDeliveryPayload,
+  resolveQueueDir,
 } from "./delivery-queue-storage.js";
 
 export type RecoverySummary = {
@@ -53,6 +56,41 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /ambiguous .* recipient/i,
   /User .* not in room/i,
 ];
+
+const NO_LISTENER_ERROR_RE = /No active WhatsApp Web listener/i;
+const RECONNECT_QUEUE_TTL_MS = 5 * 60 * 1000;
+const RECONNECT_RECOVERY_BUDGET_MS = 30_000;
+
+const drainInProgress = new Map<string, boolean>();
+
+type DeliverRuntimeModule = typeof import("./deliver-runtime.js");
+
+let deliverRuntimePromise: Promise<DeliverRuntimeModule> | null = null;
+
+function loadDeliverRuntime() {
+  deliverRuntimePromise ??= import("./deliver-runtime.js");
+  return deliverRuntimePromise;
+}
+
+function normalizeQueueAccountId(accountId?: string): string {
+  return (accountId ?? "").trim() || "default";
+}
+
+async function resetReconnectEntry(entry: QueuedDelivery, stateDir?: string): Promise<void> {
+  const filePath = path.join(resolveQueueDir(stateDir), `${entry.id}.json`);
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  const reset: QueuedDelivery = {
+    ...entry,
+    retryCount: 0,
+    lastAttemptAt: undefined,
+    lastError: undefined,
+  };
+  await fs.promises.writeFile(tmp, JSON.stringify(reset, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  await fs.promises.rename(tmp, filePath);
+}
 
 function createEmptyRecoverySummary(): RecoverySummary {
   return {
@@ -141,6 +179,69 @@ export function isEntryEligibleForRecoveryRetry(
 
 export function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
+}
+
+export async function drainReconnectQueue(opts: {
+  accountId: string;
+  cfg: OpenClawConfig;
+  log: RecoveryLogger;
+  stateDir?: string;
+  deliver?: DeliverFn;
+}): Promise<void> {
+  if (drainInProgress.get(opts.accountId)) {
+    opts.log.info(
+      `WhatsApp reconnect drain: already in progress for account ${opts.accountId}, skipping`,
+    );
+    return;
+  }
+
+  drainInProgress.set(opts.accountId, true);
+  try {
+    const pending = await loadPendingDeliveries(opts.stateDir);
+    const now = Date.now();
+    const matchingEntries = pending.filter(
+      (entry) =>
+        entry.channel === "whatsapp" &&
+        normalizeQueueAccountId(entry.accountId) === opts.accountId &&
+        typeof entry.lastError === "string" &&
+        NO_LISTENER_ERROR_RE.test(entry.lastError),
+    );
+    const eligible = matchingEntries.filter(
+      (entry) => entry.retryCount < MAX_RETRIES && now - entry.enqueuedAt < RECONNECT_QUEUE_TTL_MS,
+    );
+    const expired = matchingEntries.filter(
+      (entry) =>
+        entry.retryCount >= MAX_RETRIES || now - entry.enqueuedAt >= RECONNECT_QUEUE_TTL_MS,
+    );
+
+    for (const entry of expired) {
+      await moveToFailed(entry.id, opts.stateDir);
+      opts.log.warn(
+        `WhatsApp reconnect drain: expired entry ${entry.id} (TTL exceeded or max retries)`,
+      );
+    }
+
+    if (eligible.length === 0) {
+      return;
+    }
+
+    opts.log.info(
+      `WhatsApp reconnect drain: ${eligible.length} pending message(s) for account ${opts.accountId}`,
+    );
+
+    await Promise.all(eligible.map((entry) => resetReconnectEntry(entry, opts.stateDir)));
+
+    const deliver = opts.deliver ?? (await loadDeliverRuntime()).deliverOutboundPayloads;
+    await recoverPendingDeliveries({
+      deliver,
+      cfg: opts.cfg,
+      log: opts.log,
+      stateDir: opts.stateDir,
+      maxRecoveryMs: RECONNECT_RECOVERY_BUDGET_MS,
+    });
+  } finally {
+    drainInProgress.delete(opts.accountId);
+  }
 }
 
 /**
