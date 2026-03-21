@@ -1626,6 +1626,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             // the normal path (ID=2965091869, ID=2966838451).
             const hasMedia = payload.mediaUrls?.length || payload.mediaUrl;
             if (hasMedia) {
+              // The streamed preview post already contains the text. Delivering the
+              // full payload (text + media) creates a duplicate caption alongside the
+              // preview. Instead, delete the preview first and then deliver the
+              // complete payload — text + media in a single post (ID=2967028353).
+              // If the preview was already finalized via patchMattermostPost (normal
+              // streamedTurnCount path), its id is not in pendingOrphanDeletes, so
+              // we capture any queued orphan and clear the preview via streaming state.
+              const orphanId =
+                pendingOrphanDeletes.length > 0 ? pendingOrphanDeletes.shift() : null;
+              if (orphanId && blockStreamingClient) {
+                await deleteMattermostPost(blockStreamingClient, orphanId).catch(() => {});
+              }
               await deliverMattermostReplyPayload({
                 core,
                 cfg,
@@ -1805,31 +1817,41 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           }
 
           // Normal delivery — streaming not active or non-final partial.
-          await deliverMattermostReplyPayload({
-            core,
-            cfg,
-            payload,
-            to,
-            accountId: account.accountId,
-            agentId: route.agentId,
-            replyToId: resolveMattermostReplyRootId({
-              threadRootId: effectiveReplyToId,
-              replyToId: payload.replyToId,
-            }),
-            textLimit,
-            tableMode,
-            sendMessage: sendMessageMattermost,
-          });
-          runtime.log?.(`delivered reply to ${to}`);
-          // Dequeue and delete the over-limit preview for this turn — but ONLY
-          // on final payloads that are not skipped-turn re-deliveries. The same
-          // deliver() callback fires for tool summaries and block messages; shifting
-          // unconditionally would consume a queue entry on the wrong payload and
-          // delete a preview before its own final has been re-sent (ID=2965341948).
-          if (isFinal && pendingOrphanDeletes.length > 0 && blockStreamingClient) {
-            const orphanToDelete = pendingOrphanDeletes.shift();
-            if (orphanToDelete) {
-              void deleteMattermostPost(blockStreamingClient, orphanToDelete).catch(() => {});
+          // Track delivery success so pendingOrphanDeletes is only shifted on
+          // confirmed success — a failed resend must not consume the queue entry
+          // or the next successful turn will delete the wrong preview (ID=2967028345).
+          let deliverySucceeded = false;
+          try {
+            await deliverMattermostReplyPayload({
+              core,
+              cfg,
+              payload,
+              to,
+              accountId: account.accountId,
+              agentId: route.agentId,
+              replyToId: resolveMattermostReplyRootId({
+                threadRootId: effectiveReplyToId,
+                replyToId: payload.replyToId,
+              }),
+              textLimit,
+              tableMode,
+              sendMessage: sendMessageMattermost,
+            });
+            deliverySucceeded = true;
+          } finally {
+            if (deliverySucceeded) {
+              runtime.log?.(`delivered reply to ${to}`);
+              // Dequeue and delete the over-limit preview for this turn — but ONLY
+              // on final payloads that are not skipped-turn re-deliveries. The same
+              // deliver() callback fires for tool summaries and block messages; shifting
+              // unconditionally would consume a queue entry on the wrong payload and
+              // delete a preview before its own final has been re-sent (ID=2965341948).
+              if (isFinal && pendingOrphanDeletes.length > 0 && blockStreamingClient) {
+                const orphanToDelete = pendingOrphanDeletes.shift();
+                if (orphanToDelete) {
+                  void deleteMattermostPost(blockStreamingClient, orphanToDelete).catch(() => {});
+                }
+              }
             }
           }
         },
