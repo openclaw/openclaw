@@ -127,10 +127,7 @@ function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
   }
 }
 
-async function shouldMarkTelegramNetworkHealthy(
-  response: unknown,
-  method?: string | null,
-): Promise<boolean> {
+async function shouldMarkTelegramNetworkHealthy(response: unknown): Promise<boolean> {
   if (!response || typeof response !== "object") {
     return false;
   }
@@ -174,9 +171,9 @@ async function shouldMarkTelegramNetworkHealthy(
     return false;
   }
 
-  // getUpdates is the hottest path and can return large payloads; avoid cloning/parsing
-  // every successful long-poll response just to confirm network health.
-  if (method?.toLowerCase() === "getupdates" && typed.status >= 200 && typed.status < 300) {
+  // Success responses already prove transport health; avoid cloning/parsing
+  // response bodies on the hot path.
+  if (typed.status >= 200 && typed.status < 300) {
     return true;
   }
 
@@ -320,7 +317,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const method = extractTelegramApiMethod(input);
       return Promise.resolve(baseFetch(input, init))
         .then(async (response) => {
-          if (await shouldMarkTelegramNetworkHealthy(response, method)) {
+          if (await shouldMarkTelegramNetworkHealthy(response)) {
             noteTelegramNetworkHealthy?.();
           }
           return response;
