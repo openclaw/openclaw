@@ -45,6 +45,8 @@ export function resolveEnvApiKey(
   }
 
   if (normalized === "anthropic-vertex") {
+    // Vertex AI uses GCP credentials (SA JSON or ADC), not API keys.
+    // Return a sentinel so the model resolver still treats this provider as available.
     if (hasAnthropicVertexAvailableAuth(env)) {
       return { apiKey: GCP_VERTEX_CREDENTIALS_MARKER, source: "gcloud adc" };
     }
