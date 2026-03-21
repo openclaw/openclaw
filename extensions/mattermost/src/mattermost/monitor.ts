@@ -1917,9 +1917,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             // Also drain any queued orphan previews that were never re-delivered
             // (aborted run, no-final path). Without this, stale partial preview
             // posts remain in-channel (ID=2969630963).
-            const orphansToDelete = [
-              ...pendingOrphanDeletes.splice(0),
-            ];
+            const orphansToDelete = [...pendingOrphanDeletes.splice(0)];
             for (const id of orphansToDelete) {
               void deleteMattermostPost(client, id).catch(() => {});
             }
