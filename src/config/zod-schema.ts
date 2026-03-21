@@ -857,6 +857,14 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        sessionsList: z
+          .object({
+            usageCacheMaxEntries: z.number().int().positive().optional(),
+            prewarmUsageCache: z.boolean().optional(),
+            prewarmConcurrency: z.number().int().min(1).max(64).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .superRefine((gateway, ctx) => {

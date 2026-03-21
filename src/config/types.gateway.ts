@@ -450,4 +450,25 @@ export type GatewayConfig = {
    * the rolling window expires. Default: 10.
    */
   channelMaxRestartsPerHour?: number;
+  /** Sessions list performance tuning. */
+  sessionsList?: {
+    /**
+     * Maximum number of entries in the in-memory usage cache for transcript reads.
+     * Increase this if you have many sessions and want to avoid re-reading
+     * transcript files on repeated sessions.list calls.
+     * Default: 5000.
+     */
+    usageCacheMaxEntries?: number;
+    /**
+     * Pre-warm the usage cache at gateway startup by reading transcript
+     * files for all sessions that lack stored usage metadata.
+     * Default: false.
+     */
+    prewarmUsageCache?: boolean;
+    /**
+     * Maximum concurrency for the prewarm background task.
+     * Default: 16.
+     */
+    prewarmConcurrency?: number;
+  };
 };

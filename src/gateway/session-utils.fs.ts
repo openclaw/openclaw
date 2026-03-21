@@ -762,6 +762,73 @@ function extractLatestUsageFromTranscriptChunk(
   return snapshot;
 }
 
+type SessionUsageCacheEntry = {
+  result: SessionTranscriptUsageSnapshot | null;
+  mtimeMs: number;
+  size: number;
+};
+
+const sessionUsageCache = new Map<string, SessionUsageCacheEntry>();
+const DEFAULT_SESSION_USAGE_CACHE_MAX_ENTRIES = 5000;
+let configuredSessionUsageCacheMaxEntries: number | undefined;
+
+export function setSessionUsageCacheMaxEntries(value: number | undefined) {
+  configuredSessionUsageCacheMaxEntries =
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  // Trim cache immediately when the limit is lowered so memory is released
+  // on in-process gateway restarts without waiting for new writes.
+  const maxEntries = getSessionUsageCacheMaxEntries();
+  while (sessionUsageCache.size > maxEntries) {
+    const oldestKey = sessionUsageCache.keys().next().value;
+    if (typeof oldestKey !== "string" || !oldestKey) {
+      break;
+    }
+    sessionUsageCache.delete(oldestKey);
+  }
+}
+
+export function getSessionUsageCacheMaxEntries(): number {
+  return configuredSessionUsageCacheMaxEntries ?? DEFAULT_SESSION_USAGE_CACHE_MAX_ENTRIES;
+}
+
+function getCachedSessionUsage(
+  cacheKey: string,
+  stat: fs.Stats,
+): SessionTranscriptUsageSnapshot | null | undefined {
+  const cached = sessionUsageCache.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+  if (cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
+    sessionUsageCache.delete(cacheKey);
+    return undefined;
+  }
+  // LRU bump
+  sessionUsageCache.delete(cacheKey);
+  sessionUsageCache.set(cacheKey, cached);
+  return cached.result;
+}
+
+function setCachedSessionUsage(
+  cacheKey: string,
+  stat: fs.Stats,
+  result: SessionTranscriptUsageSnapshot | null,
+) {
+  sessionUsageCache.set(cacheKey, {
+    result,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+  });
+  const maxEntries = getSessionUsageCacheMaxEntries();
+  while (sessionUsageCache.size > maxEntries) {
+    const oldestKey = sessionUsageCache.keys().next().value;
+    if (typeof oldestKey !== "string" || !oldestKey) {
+      break;
+    }
+    sessionUsageCache.delete(oldestKey);
+  }
+}
+
 export function readLatestSessionUsageFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -773,14 +840,77 @@ export function readLatestSessionUsageFromTranscript(
     return null;
   }
 
-  return withOpenTranscriptFd(filePath, (fd) => {
-    const stat = fs.fstatSync(fd);
-    if (stat.size === 0) {
-      return null;
-    }
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return null;
+  }
+
+  const cached = getCachedSessionUsage(filePath, stat);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  if (stat.size === 0) {
+    setCachedSessionUsage(filePath, stat, null);
+    return null;
+  }
+
+  // Distinguish "file read succeeded but no usage data" (cache the null)
+  // from "transient I/O error" (don't cache). withOpenTranscriptFd returns
+  // null for both cases, so we track success explicitly.
+  let readSucceeded = false;
+  const result = withOpenTranscriptFd(filePath, (fd) => {
     const chunk = fs.readFileSync(fd, "utf-8");
+    readSucceeded = true;
     return extractLatestUsageFromTranscriptChunk(chunk);
   });
+
+  if (readSucceeded) {
+    setCachedSessionUsage(filePath, stat, result);
+  }
+  return result;
+}
+
+export async function readLatestSessionUsageFromTranscriptAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): Promise<SessionTranscriptUsageSnapshot | null> {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.stat(filePath);
+  } catch {
+    return null;
+  }
+
+  const cached = getCachedSessionUsage(filePath, stat);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  if (stat.size === 0) {
+    setCachedSessionUsage(filePath, stat, null);
+    return null;
+  }
+
+  try {
+    const chunk = await fs.promises.readFile(filePath, "utf-8");
+    const result = extractLatestUsageFromTranscriptChunk(chunk);
+    // Cache both non-null results and "no usage data" nulls. Only
+    // skip caching on I/O errors (caught below).
+    setCachedSessionUsage(filePath, stat, result);
+    return result;
+  } catch {
+    return null;
+  }
 }
 
 const PREVIEW_READ_SIZES = [64 * 1024, 256 * 1024, 1024 * 1024];
