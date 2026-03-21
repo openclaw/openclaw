@@ -783,6 +783,27 @@ export function readLatestSessionUsageFromTranscript(
   });
 }
 
+export async function readLatestSessionUsageFromTranscriptAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): Promise<SessionTranscriptUsageSnapshot | null> {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+  try {
+    const chunk = await fs.promises.readFile(filePath, "utf-8");
+    if (!chunk) {
+      return null;
+    }
+    return extractLatestUsageFromTranscriptChunk(chunk);
+  } catch {
+    return null;
+  }
+}
+
 const PREVIEW_READ_SIZES = [64 * 1024, 256 * 1024, 1024 * 1024];
 const PREVIEW_MAX_LINES = 200;
 

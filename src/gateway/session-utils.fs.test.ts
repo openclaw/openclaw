@@ -8,6 +8,7 @@ import {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscript,
+  readLatestSessionUsageFromTranscriptAsync,
   readSessionMessages,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
@@ -697,6 +698,30 @@ describe("readLatestSessionUsageFromTranscript", () => {
       totalTokensFresh: true,
       costUsd: 0.0042,
     });
+  });
+
+  test("supports async usage fallback reads with matching results", async () => {
+    const sessionId = "usage-session-async";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 900,
+            output: 200,
+            cacheRead: 100,
+            cost: { total: 0.0031 },
+          },
+        },
+      },
+    ]);
+
+    await expect(readLatestSessionUsageFromTranscriptAsync(sessionId, storePath)).resolves.toEqual(
+      readLatestSessionUsageFromTranscript(sessionId, storePath),
+    );
   });
 
   test("aggregates assistant usage across the full transcript and keeps the latest context snapshot", () => {
