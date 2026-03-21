@@ -279,4 +279,36 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expectGatewayTermination(6464);
     });
   });
+
+  it("ignores legacy shell gateway port vars once fallback reads the task config", async () => {
+    await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
+      const taskEnv = { ...env, OPENCLAW_STATE_DIR: path.join(tmpDir, "task-state") };
+      const shellEnv = {
+        ...env,
+        OPENCLAW_STATE_DIR: path.join(tmpDir, "shell-state"),
+        OPENCLAW_TASK_SCRIPT: resolveTaskScriptPath(taskEnv),
+        CLAWDBOT_GATEWAY_PORT: "29999",
+      };
+      await writeGatewayScript(taskEnv, GATEWAY_PORT, {
+        includePortEnv: false,
+        includePortFlag: false,
+        extraEnv: { OPENCLAW_STATE_DIR: taskEnv.OPENCLAW_STATE_DIR },
+      });
+      await writeGatewayConfig(taskEnv, GATEWAY_PORT);
+      await writeGatewayConfig(shellEnv, 29999);
+      const stdout = new PassThrough();
+      const envWithoutPort: Record<string, string> = { ...shellEnv };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      pushSuccessfulSchtasksResponses(3);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([7373]);
+      inspectPortUsage
+        .mockResolvedValueOnce(busyPortUsage(7373))
+        .mockResolvedValueOnce(freePortUsage());
+
+      await stopScheduledTask({ env: envWithoutPort, stdout });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expectGatewayTermination(7373);
+    });
+  });
 });
