@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
-import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
+import {
+  detectGlobalInstallManager,
+  detectPackageManager as detectPackageManagerImpl,
+} from "./detect-package-manager.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
 
 export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
@@ -463,11 +466,16 @@ export async function checkUpdateStatus(params: {
     };
   }
 
-  const pm = await detectPackageManager(root);
   const gitRoot = await detectGitRoot(root);
   const isGit = gitRoot && path.resolve(gitRoot) === root;
 
   const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
+
+  // For git installs, detect the repo's build-tool PM (pnpm/bun/npm).
+  // For package installs, detect the actual global installer from the
+  // resolved path — package.json.packageManager reflects the repo's
+  // build tool, not the user's install method (see #51401).
+  const pm = isGit ? await detectPackageManager(root) : detectGlobalInstallManager(root);
   const git = isGit
     ? await checkGitUpdateStatus({
         root,

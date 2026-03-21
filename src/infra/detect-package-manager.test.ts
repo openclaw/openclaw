@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { detectPackageManager } from "./detect-package-manager.js";
+import { detectGlobalInstallManager, detectPackageManager } from "./detect-package-manager.js";
 
 describe("detectPackageManager", () => {
   it("prefers packageManager from package.json when supported", async () => {
@@ -41,5 +41,41 @@ describe("detectPackageManager", () => {
     await fs.writeFile(path.join(root, "package.json"), "{not-json}", "utf8");
 
     await expect(detectPackageManager(root)).resolves.toBeNull();
+  });
+});
+
+describe("detectGlobalInstallManager", () => {
+  it("detects pnpm global install from .pnpm path", () => {
+    expect(
+      detectGlobalInstallManager(
+        "/home/user/.local/share/pnpm/global/5/.pnpm/openclaw@2026.3.13/node_modules/openclaw",
+      ),
+    ).toBe("pnpm");
+  });
+
+  it("detects pnpm global install from pnpm/global path", () => {
+    expect(
+      detectGlobalInstallManager("/home/user/.local/share/pnpm/global/5/node_modules/openclaw"),
+    ).toBe("pnpm");
+  });
+
+  it("detects bun global install from .bun path", () => {
+    expect(detectGlobalInstallManager("/home/user/.bun/install/global/node_modules/openclaw")).toBe(
+      "bun",
+    );
+  });
+
+  it("detects npm global install (default) from Homebrew path", () => {
+    expect(detectGlobalInstallManager("/opt/homebrew/lib/node_modules/openclaw")).toBe("npm");
+  });
+
+  it("detects npm global install from standard global path", () => {
+    expect(detectGlobalInstallManager("/usr/lib/node_modules/openclaw")).toBe("npm");
+  });
+
+  it("detects npm global install from nvm path", () => {
+    expect(
+      detectGlobalInstallManager("/home/user/.nvm/versions/node/v22.0.0/lib/node_modules/openclaw"),
+    ).toBe("npm");
   });
 });
