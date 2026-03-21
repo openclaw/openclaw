@@ -284,14 +284,18 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const agentId = parsed?.agentId ?? state.agentsList?.defaultId ?? "main";
   const agent = list.find((entry) => entry.id === agentId);
   const identity = agent?.identity;
-  const candidate = identity?.avatarUrl ?? identity?.avatar;
-  if (!candidate) {
-    return undefined;
+  // Prefer avatarUrl (which should be a data URL or HTTP URL from backend)
+  // Fall back to avatar only if avatarUrl is not available
+  const avatarUrl = identity?.avatarUrl;
+  if (avatarUrl) {
+    return avatarUrl;
   }
-  if (AVATAR_DATA_RE.test(candidate) || AVATAR_HTTP_RE.test(candidate)) {
-    return candidate;
+  // If avatarUrl is not available, check if avatar is a valid URL
+  const avatar = identity?.avatar;
+  if (avatar && (AVATAR_DATA_RE.test(avatar) || AVATAR_HTTP_RE.test(avatar))) {
+    return avatar;
   }
-  return identity?.avatarUrl;
+  return undefined;
 }
 
 export function renderApp(state: AppViewState) {
