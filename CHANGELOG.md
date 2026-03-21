@@ -55,6 +55,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/context engines: pass the embedded runner `modelId` into context-engine `assemble()` so plugins can adapt context formatting per model. (#47437) thanks @jscianna.
 - Plugins/context engines: add transcript maintenance rewrites for context engines, preserve active-branch transcript metadata during rewrites, and harden overflow-recovery truncation to rewrite sessions under the normal session write lock. (#51191) Thanks @jalehman.
 - Telegram/apiRoot: add per-account custom Bot API endpoint support across send, probe, setup, doctor repair, and inbound media download paths so proxied or self-hosted Telegram deployments work end to end. (#48842) Thanks @Cypherm.
+- Telegram/topics: auto-rename DM forum topics on first message with LLM-generated labels, with per-account and per-DM `autoTopicLabel` overrides. (#51502) Thanks @Lukavyi.
 
 ### Fixes
 
@@ -157,6 +158,7 @@ Docs: https://docs.openclaw.ai
 - Gateway: harden OpenResponses file-context escaping (#50782) Thanks @YLChen-007 and @joshavant.
 - LINE: harden Express webhook parsing to verified raw body (#51202) Thanks @gladiator9797 and @joshavant.
 - Exec: harden host env override handling across gateway and node (#51207) Thanks @gladiator9797 and @joshavant.
+- Voice Call: enforce spoken-output contract and fix stream TTS silence regression (#51500) Thanks @joshavant.
 - xAI/models: rename the bundled Grok 4.20 catalog entries to the GA IDs and normalize saved deprecated beta IDs at runtime so existing configs and sessions keep resolving. (#50772) thanks @Jaaneek
 
 ### Fixes
