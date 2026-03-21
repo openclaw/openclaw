@@ -350,3 +350,91 @@ describe("VoiceCallWebhookServer start idempotency", () => {
     await server.stop();
   });
 });
+
+describe("VoiceCallWebhookServer stream disconnect grace", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("delays auto-end on disconnect and cancels it when stream reconnects within grace window", async () => {
+    const call = createCall(Date.now() - 1_000);
+    call.providerCallId = "CA-stream-1";
+
+    const endCall = vi.fn(async () => ({ success: true }));
+    const speakInitialMessage = vi.fn(async () => {});
+    const getCallByProviderCallId = vi.fn((providerCallId: string) =>
+      providerCallId === "CA-stream-1" ? call : undefined,
+    );
+
+    const manager = {
+      getActiveCalls: () => [call],
+      getCallByProviderCallId,
+      endCall,
+      speakInitialMessage,
+      processEvent: vi.fn(),
+    } as unknown as CallManager;
+
+    let hasStream = true;
+    const twilioProvider = {
+      name: "twilio" as const,
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:test" }),
+      parseWebhookEvent: () => ({ events: [] }),
+      initiateCall: async () => ({ providerCallId: "provider-call", status: "initiated" as const }),
+      hangupCall: async () => {},
+      playTts: async () => {},
+      startListening: async () => {},
+      stopListening: async () => {},
+      getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
+      isValidStreamToken: () => true,
+      registerCallStream: () => {
+        hasStream = true;
+      },
+      unregisterCallStream: () => {
+        hasStream = false;
+      },
+      hasRegisteredStream: () => hasStream,
+      clearTtsQueue: () => {},
+    };
+
+    const config = createConfig({
+      provider: "twilio",
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        openaiApiKey: "test-key",
+      },
+    });
+    const server = new VoiceCallWebhookServer(
+      config,
+      manager,
+      twilioProvider as unknown as VoiceCallProvider,
+    );
+
+    const mediaHandler = server.getMediaStreamHandler() as unknown as {
+      config: {
+        onDisconnect?: (providerCallId: string) => void;
+        onConnect?: (providerCallId: string, streamSid: string) => void;
+      };
+    };
+    expect(mediaHandler).toBeTruthy();
+
+    mediaHandler.config.onDisconnect?.("CA-stream-1");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(endCall).not.toHaveBeenCalled();
+
+    mediaHandler.config.onConnect?.("CA-stream-1", "MZ-reconnect");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(endCall).not.toHaveBeenCalled();
+
+    mediaHandler.config.onDisconnect?.("CA-stream-1");
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(endCall).toHaveBeenCalledTimes(1);
+    expect(endCall).toHaveBeenCalledWith(call.callId);
+
+    await server.stop();
+  });
+});

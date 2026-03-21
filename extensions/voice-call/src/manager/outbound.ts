@@ -248,17 +248,17 @@ export async function speakInitialMessage(
     return;
   }
 
-  // Clear so we don't speak it again if the provider reconnects.
-  if (call.metadata) {
-    delete call.metadata.initialMessage;
-    persistCallRecord(ctx.storePath, call);
-  }
-
   console.log(`[voice-call] Speaking initial message for call ${call.callId} (mode: ${mode})`);
   const result = await speak(ctx, call.callId, initialMessage);
   if (!result.success) {
     console.warn(`[voice-call] Failed to speak initial message: ${result.error}`);
     return;
+  }
+
+  // Clear only after successful playback so transient provider failures can retry.
+  if (call.metadata) {
+    delete call.metadata.initialMessage;
+    persistCallRecord(ctx.storePath, call);
   }
 
   if (mode === "notify") {

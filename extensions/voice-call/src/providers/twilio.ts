@@ -76,6 +76,7 @@ export interface TwilioProviderOptions {
 
 export class TwilioProvider implements VoiceCallProvider {
   readonly name = "twilio" as const;
+  private static readonly TTS_SYNTH_TIMEOUT_MS = 8000;
 
   private readonly accountSid: string;
   private readonly authToken: string;
@@ -170,6 +171,10 @@ export class TwilioProvider implements VoiceCallProvider {
 
   registerCallStream(callSid: string, streamSid: string): void {
     this.callStreamMap.set(callSid, streamSid);
+  }
+
+  hasRegisteredStream(callSid: string): boolean {
+    return this.callStreamMap.has(callSid);
   }
 
   unregisterCallStream(callSid: string): void {
@@ -558,17 +563,25 @@ export class TwilioProvider implements VoiceCallProvider {
   async playTts(input: PlayTtsInput): Promise<void> {
     // Try telephony TTS via media stream first (if configured)
     const streamSid = this.callStreamMap.get(input.providerCallId);
+    const shouldAvoidTwimlFallback = Boolean(streamSid);
+
     if (this.ttsProvider && this.mediaStreamHandler && streamSid) {
       try {
         await this.playTtsViaStream(input.text, streamSid);
         return;
       } catch (err) {
         console.warn(
-          `[voice-call] Telephony TTS failed, falling back to Twilio <Say>:`,
+          `[voice-call] Telephony TTS failed:`,
           err instanceof Error ? err.message : err,
         );
-        // Fall through to TwiML <Say> fallback
+        throw err instanceof Error ? err : new Error(String(err));
       }
+    }
+
+    if (shouldAvoidTwimlFallback) {
+      throw new Error(
+        "Cannot use TwiML fallback while media stream is active; telephony TTS is unavailable",
+      );
     }
 
     // Fall back to TwiML <Say> (may not work on all accounts)
@@ -608,12 +621,40 @@ export class TwilioProvider implements VoiceCallProvider {
     // Stream audio in 20ms chunks (160 bytes at 8kHz mu-law)
     const CHUNK_SIZE = 160;
     const CHUNK_DELAY_MS = 20;
+    const SILENCE_CHUNK = Buffer.alloc(CHUNK_SIZE, 0xff);
 
     const handler = this.mediaStreamHandler;
     const ttsProvider = this.ttsProvider;
     await handler.queueTts(streamSid, async (signal) => {
+      handler.sendAudio(streamSid, SILENCE_CHUNK);
+      const keepAlive = setInterval(() => {
+        if (!signal.aborted) {
+          handler.sendAudio(streamSid, SILENCE_CHUNK);
+        }
+      }, CHUNK_DELAY_MS);
+
       // Generate audio with core TTS (returns mu-law at 8kHz)
-      const muLawAudio = await ttsProvider.synthesizeForTelephony(text);
+      let muLawAudio: Buffer;
+      let synthTimeout: ReturnType<typeof setTimeout> | null = null;
+      try {
+        const synthPromise = ttsProvider.synthesizeForTelephony(text);
+        const timeoutPromise = new Promise<Buffer>((_, reject) => {
+          synthTimeout = setTimeout(() => {
+            reject(
+              new Error(
+                `Telephony TTS synthesis timed out after ${TwilioProvider.TTS_SYNTH_TIMEOUT_MS}ms`,
+              ),
+            );
+          }, TwilioProvider.TTS_SYNTH_TIMEOUT_MS);
+        });
+        muLawAudio = await Promise.race([synthPromise, timeoutPromise]);
+      } finally {
+        if (synthTimeout) {
+          clearTimeout(synthTimeout);
+        }
+        clearInterval(keepAlive);
+      }
+
       for (const chunk of chunkAudio(muLawAudio, CHUNK_SIZE)) {
         if (signal.aborted) {
           break;

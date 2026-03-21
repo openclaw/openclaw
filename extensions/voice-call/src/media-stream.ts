@@ -170,7 +170,11 @@ export class MediaStreamHandler {
       }
     });
 
-    ws.on("close", () => {
+    ws.on("close", (code, reason) => {
+      const reasonText = Buffer.isBuffer(reason) ? reason.toString() : String(reason || "none");
+      console.log(
+        `[MediaStream] WebSocket closed (code: ${code}, reason: ${reasonText || "none"})`,
+      );
       this.clearPendingConnection(ws);
       if (session) {
         this.handleStop(session);

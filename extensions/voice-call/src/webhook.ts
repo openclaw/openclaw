@@ -17,6 +17,7 @@ import type { NormalizedEvent, WebhookContext } from "./types.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
+const STREAM_DISCONNECT_HANGUP_GRACE_MS = 2000;
 
 type WebhookResponsePayload = {
   statusCode: number;
@@ -60,6 +61,8 @@ export class VoiceCallWebhookServer {
 
   /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
+  /** Delayed auto-hangup timers keyed by provider call ID after stream disconnect. */
+  private pendingDisconnectHangups = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     config: VoiceCallConfig,
@@ -85,6 +88,15 @@ export class VoiceCallWebhookServer {
    */
   getMediaStreamHandler(): MediaStreamHandler | null {
     return this.mediaStreamHandler;
+  }
+
+  private clearPendingDisconnectHangup(providerCallId: string): void {
+    const existing = this.pendingDisconnectHangups.get(providerCallId);
+    if (!existing) {
+      return;
+    }
+    clearTimeout(existing);
+    this.pendingDisconnectHangups.delete(providerCallId);
   }
 
   /**
@@ -172,35 +184,48 @@ export class VoiceCallWebhookServer {
       },
       onConnect: (callId, streamSid) => {
         console.log(`[voice-call] Media stream connected: ${callId} -> ${streamSid}`);
+        this.clearPendingDisconnectHangup(callId);
+
         // Register stream with provider for TTS routing
         if (this.provider.name === "twilio") {
           (this.provider as TwilioProvider).registerCallStream(callId, streamSid);
         }
 
-        // Speak initial message if one was provided when call was initiated
-        // Use setTimeout to allow stream setup to complete
-        setTimeout(() => {
-          this.manager.speakInitialMessage(callId).catch((err) => {
-            console.warn(`[voice-call] Failed to speak initial message:`, err);
-          });
-        }, 500);
+        // Speak initial message immediately (no delay) to avoid stream timeout
+        this.manager.speakInitialMessage(callId).catch((err) => {
+          console.warn(`[voice-call] Failed to speak initial message:`, err);
+        });
       },
       onDisconnect: (callId) => {
         console.log(`[voice-call] Media stream disconnected: ${callId}`);
-        // Auto-end call when media stream disconnects to prevent stuck calls.
-        // Without this, calls can remain active indefinitely after the stream closes.
-        const disconnectedCall = this.manager.getCallByProviderCallId(callId);
-        if (disconnectedCall) {
+        if (this.provider.name === "twilio") {
+          (this.provider as TwilioProvider).unregisterCallStream(callId);
+        }
+
+        this.clearPendingDisconnectHangup(callId);
+        const timer = setTimeout(() => {
+          this.pendingDisconnectHangups.delete(callId);
+          const disconnectedCall = this.manager.getCallByProviderCallId(callId);
+          if (!disconnectedCall) {
+            return;
+          }
+
+          if (this.provider.name === "twilio") {
+            const twilio = this.provider as TwilioProvider;
+            if (twilio.hasRegisteredStream(callId)) {
+              return;
+            }
+          }
+
           console.log(
-            `[voice-call] Auto-ending call ${disconnectedCall.callId} on stream disconnect`,
+            `[voice-call] Auto-ending call ${disconnectedCall.callId} after stream disconnect grace`,
           );
           void this.manager.endCall(disconnectedCall.callId).catch((err) => {
             console.warn(`[voice-call] Failed to auto-end call ${disconnectedCall.callId}:`, err);
           });
-        }
-        if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).unregisterCallStream(callId);
-        }
+        }, STREAM_DISCONNECT_HANGUP_GRACE_MS);
+        timer.unref?.();
+        this.pendingDisconnectHangups.set(callId, timer);
       },
     };
 
@@ -274,6 +299,11 @@ export class VoiceCallWebhookServer {
    * Stop the webhook server.
    */
   async stop(): Promise<void> {
+    for (const timer of this.pendingDisconnectHangups.values()) {
+      clearTimeout(timer);
+    }
+    this.pendingDisconnectHangups.clear();
+
     if (this.stopStaleCallReaper) {
       this.stopStaleCallReaper();
       this.stopStaleCallReaper = null;

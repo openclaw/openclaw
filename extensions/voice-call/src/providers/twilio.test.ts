@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
 
@@ -187,5 +187,58 @@ describe("TwilioProvider", () => {
     const event = provider.parseWebhookEvent(ctx).events[0];
     expect(event?.type).toBe("call.speech");
     expect(event?.turnToken).toBe("turn-xyz");
+  });
+
+  it("does not fall back to TwiML when an active stream exists but telephony TTS is unavailable", async () => {
+    const provider = createProvider();
+    provider.registerCallStream("CA-stream", "MZ-stream");
+
+    await expect(
+      provider.playTts({
+        callId: "call-stream",
+        providerCallId: "CA-stream",
+        text: "Hello stream",
+      }),
+    ).rejects.toThrow("Cannot use TwiML fallback while media stream is active");
+  });
+
+  it("times out telephony synthesis in stream mode and does not send completion mark", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = createProvider();
+      provider.registerCallStream("CA-timeout", "MZ-timeout");
+
+      const sendAudio = vi.fn();
+      const sendMark = vi.fn();
+      const mediaStreamHandler = {
+        queueTts: async (
+          _streamSid: string,
+          playFn: (signal: AbortSignal) => Promise<void>,
+        ): Promise<void> => {
+          await playFn(new AbortController().signal);
+        },
+        sendAudio,
+        sendMark,
+      };
+
+      provider.setMediaStreamHandler(mediaStreamHandler as never);
+      provider.setTTSProvider({
+        synthesizeForTelephony: async () => await new Promise<Buffer>(() => {}),
+      });
+
+      const playExpectation = expect(
+        provider.playTts({
+          callId: "call-timeout",
+          providerCallId: "CA-timeout",
+          text: "Timeout me",
+        }),
+      ).rejects.toThrow("Telephony TTS synthesis timed out");
+      await vi.advanceTimersByTimeAsync(8_100);
+      await playExpectation;
+      expect(sendAudio).toHaveBeenCalled();
+      expect(sendMark).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

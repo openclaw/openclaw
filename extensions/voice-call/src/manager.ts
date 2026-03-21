@@ -277,6 +277,20 @@ export class CallManager {
       return;
     }
 
+    // Notify mode should speak as soon as the provider reports "answered".
+    // Conversation mode should only defer when Twilio streaming is enabled,
+    // because stream-connected playback handles first-turn audio in that path.
+    const mode = (call.metadata?.mode as string | undefined) ?? "conversation";
+    if (mode === "conversation") {
+      const shouldWaitForStreamConnect =
+        this.provider?.name === "twilio" && this.config.streaming.enabled;
+      if (shouldWaitForStreamConnect) {
+        return;
+      }
+    } else if (mode !== "notify") {
+      return;
+    }
+
     if (!this.provider || !call.providerCallId) {
       return;
     }
