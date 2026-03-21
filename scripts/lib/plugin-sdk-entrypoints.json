@@ -50,6 +50,7 @@
   "device-bootstrap",
   "diagnostics-otel",
   "diffs",
+  "discord",
   "extension-shared",
   "channel-config-helpers",
   "channel-config-schema",
