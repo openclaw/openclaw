@@ -189,8 +189,8 @@ export function createNodesTool(options?: {
           case "status":
             return jsonResult(await callGatewayTool("node.list", gatewayOpts, {}));
           case "describe": {
-            const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const node = readStringParam(params, "node", { trim: true });
+            const nodeId = await resolveNodeId(gatewayOpts, node, true);
             return jsonResult(await callGatewayTool("node.describe", gatewayOpts, { nodeId }));
           }
           case "pending":
