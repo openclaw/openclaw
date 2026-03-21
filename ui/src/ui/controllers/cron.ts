@@ -288,7 +288,7 @@ export async function loadCronJobsPage(state: CronState, opts?: { append?: boole
       hasMoreRaw: res.hasMore,
       pageCount: jobs.length,
     });
-    state.cronJobsTotal = Math.max(meta.total, state.cronJobs.length);
+    state.cronJobsTotal = append ? Math.max(meta.total, state.cronJobs.length) : meta.total;
     state.cronJobsHasMore = meta.hasMore;
     state.cronJobsNextOffset = meta.nextOffset;
     if (
