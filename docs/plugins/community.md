@@ -49,7 +49,7 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
-- **wecom** — OpenClaw Enterprise WeCom Channel Plugin
-  npm: `@yanhaidao/wecom`
-  repo: `https://github.com/TencentCloud-Lighthouse/wecom`
-  install: `openclaw plugins install @yanhaidao/wecom`
+- **wecom** — OpenClaw Enterprise WeCom Channel Plugin. A bot plugin powered by WeCom AI Bot WebSocket persistent connections. Supports direct messages & group chats, streaming replies, and proactive messaging.
+  npm: `@wecom/wecom-openclaw-plugin`
+  repo: `https://github.com/WecomTeam/wecom-openclaw-plugin`
+  install: `openclaw plugins install @wecom/wecom-openclaw-plugin`
