@@ -312,6 +312,15 @@ jobs:
       - name: Strict TS build smoke
         run: pnpm build:strict-smoke
 
+      - name: Enforce safe external URL opening policy
+        run: pnpm lint:ui:no-raw-window-open
+
+      - name: Enforce max lines of code per file
+        run: node --import tsx scripts/check-ts-max-loc.ts --max 4000
+
+      - name: Enforce circular import ratchet
+        run: node --import tsx scripts/check-circular-imports.ts --root src --max 57
+
   check-additional:
     name: "check-additional"
     needs: [docs-scope, changed-scope]
