@@ -1,3 +1,5 @@
+/* @vitest-environment jsdom */
+
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { SessionsListResult } from "../types.ts";
@@ -28,16 +30,18 @@ function buildProps(result: SessionsListResult): SessionsProps {
     sortDir: "desc",
     page: 0,
     pageSize: 10,
-    actionsOpenKey: null,
+    selectedKeys: new Set<string>(),
     onFiltersChange: () => undefined,
     onSearchChange: () => undefined,
     onSortChange: () => undefined,
     onPageChange: () => undefined,
     onPageSizeChange: () => undefined,
-    onActionsOpenChange: () => undefined,
     onRefresh: () => undefined,
     onPatch: () => undefined,
-    onDelete: () => undefined,
+    onToggleSelect: () => undefined,
+    onSelectPage: () => undefined,
+    onDeselectAll: () => undefined,
+    onDeleteSelected: () => undefined,
   };
 }
 
