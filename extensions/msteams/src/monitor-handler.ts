@@ -150,16 +150,25 @@ async function handleFeedbackInvoke(
 ): Promise<boolean> {
   const activity = context.activity;
   const value = activity.value as
-    | { actionName?: string; replyToId?: string; feedback?: { type?: string; message?: string } }
+    | {
+        actionName?: string;
+        actionValue?: { reaction?: string; feedback?: string };
+        replyToId?: string;
+      }
     | undefined;
 
   if (!value) {
     return false;
   }
 
-  const feedbackType = value.feedback?.type;
-  if (feedbackType !== "like" && feedbackType !== "dislike") {
-    deps.log.debug?.("ignoring non-feedback submitAction", { value });
+  // Teams feedback invoke format: actionName="feedback", actionValue.reaction="like"|"dislike"
+  if (value.actionName !== "feedback") {
+    return false;
+  }
+
+  const reaction = value.actionValue?.reaction;
+  if (reaction !== "like" && reaction !== "dislike") {
+    deps.log.debug?.("ignoring feedback with unknown reaction", { reaction });
     return false;
   }
 
@@ -169,11 +178,21 @@ async function handleFeedbackInvoke(
     return true; // Still consume the invoke
   }
 
+  // Extract user comment from the nested JSON string
+  let userComment: string | undefined;
+  if (value.actionValue?.feedback) {
+    try {
+      const parsed = JSON.parse(value.actionValue.feedback) as { feedbackText?: string };
+      userComment = parsed.feedbackText || undefined;
+    } catch {
+      // Best effort — feedback text is optional
+    }
+  }
+
   const conversationId = activity.conversation?.id ?? "unknown";
   const senderId = activity.from?.aadObjectId ?? activity.from?.id ?? "unknown";
   const messageId = value.replyToId ?? activity.replyToId ?? "unknown";
-  const userComment = value.feedback?.message;
-  const isNegative = feedbackType === "dislike";
+  const isNegative = reaction === "dislike";
 
   const core = getMSTeamsRuntime();
   const route = core.channel.routing.resolveAgentRoute({
@@ -215,40 +234,34 @@ async function handleFeedbackInvoke(
     // Best effort
   }
 
-  // For negative feedback, trigger background reflection
+  // Build conversation reference for proactive messages (ack + reflection follow-up)
+  const conversationRef = {
+    activityId: activity.id,
+    user: {
+      id: activity.from?.id,
+      name: activity.from?.name,
+      aadObjectId: activity.from?.aadObjectId,
+    },
+    agent: activity.recipient
+      ? { id: activity.recipient.id, name: activity.recipient.name }
+      : undefined,
+    bot: activity.recipient
+      ? { id: activity.recipient.id, name: activity.recipient.name }
+      : undefined,
+    conversation: {
+      id: conversationId,
+      conversationType: activity.conversation?.conversationType,
+      tenantId: activity.conversation?.tenantId,
+    },
+    channelId: activity.channelId ?? "msteams",
+    serviceUrl: activity.serviceUrl,
+    locale: activity.locale,
+  };
+
+  // For negative feedback, trigger background reflection (fire-and-forget).
+  // No ack message — the reflection follow-up serves as the acknowledgement.
+  // Sending anything during the invoke handler causes "unable to reach app" errors.
   if (isNegative && msteamsCfg?.feedbackReflection !== false) {
-    // Ack to user
-    try {
-      await context.sendActivity("Thanks for the feedback \u2014 I'll reflect on this.");
-    } catch {
-      // Best effort
-    }
-
-    // Build conversation reference for proactive follow-up
-    const conversationRef = {
-      activityId: activity.id,
-      user: {
-        id: activity.from?.id,
-        name: activity.from?.name,
-        aadObjectId: activity.from?.aadObjectId,
-      },
-      agent: activity.recipient
-        ? { id: activity.recipient.id, name: activity.recipient.name }
-        : undefined,
-      bot: activity.recipient
-        ? { id: activity.recipient.id, name: activity.recipient.name }
-        : undefined,
-      conversation: {
-        id: conversationId,
-        conversationType: activity.conversation?.conversationType,
-        tenantId: activity.conversation?.tenantId,
-      },
-      channelId: activity.channelId ?? "msteams",
-      serviceUrl: activity.serviceUrl,
-      locale: activity.locale,
-    };
-
-    // Fire-and-forget: don't block the invoke response
     runFeedbackReflection({
       cfg: deps.cfg,
       adapter: deps.adapter,
@@ -300,11 +313,13 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         return;
       }
 
-      // Handle feedback invokes (thumbs up/down on AI-generated messages)
+      // Handle feedback invokes (thumbs up/down on AI-generated messages).
+      // Just return after handling — the process() handler sends HTTP 200 automatically.
+      // Do NOT call sendActivity with invokeResponse; our custom adapter would POST
+      // a new activity to Bot Framework instead of responding to the HTTP request.
       if (ctx.activity?.type === "invoke" && ctx.activity?.name === "message/submitAction") {
         const handled = await handleFeedbackInvoke(ctx, deps);
         if (handled) {
-          await ctx.sendActivity({ type: "invokeResponse", value: { status: 200 } });
           return;
         }
       }
