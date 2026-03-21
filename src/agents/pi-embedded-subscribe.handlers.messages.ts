@@ -391,19 +391,29 @@ export function handleMessageEnd(
     // Drain pending media artifacts so they travel with this reply.
     const drained = ctx.drainPendingMediaArtifacts();
     const mergedMediaUrls = [...(mediaUrls ?? []), ...drained.mediaUrls];
-    const mergedAudioAsVoice = audioAsVoice || drained.audioAsVoice;
+    const audioAsVoiceFromDirectives = audioAsVoice;
+    const voiceMediaUrls = drained.voiceMediaUrls;
     // Emit if there's content OR audioAsVoice flag (to propagate the flag).
-    if (
-      hasAssistantVisibleReply({
-        text: cleanedText,
-        mediaUrls: mergedMediaUrls,
-        audioAsVoice: mergedAudioAsVoice,
-      })
-    ) {
+    const shouldEmitStandard = hasAssistantVisibleReply({
+      text: cleanedText,
+      mediaUrls: mergedMediaUrls,
+      audioAsVoice: audioAsVoiceFromDirectives,
+    });
+    if (shouldEmitStandard) {
       emitBlockReplySafely({
         text: cleanedText,
         mediaUrls: mergedMediaUrls.length > 0 ? mergedMediaUrls : undefined,
-        audioAsVoice: mergedAudioAsVoice,
+        audioAsVoice: audioAsVoiceFromDirectives,
+        replyToId,
+        replyToTag,
+        replyToCurrent,
+      });
+    }
+    if (voiceMediaUrls.length > 0 || drained.audioAsVoice) {
+      emitBlockReplySafely({
+        text: shouldEmitStandard ? undefined : cleanedText,
+        mediaUrls: voiceMediaUrls.length > 0 ? voiceMediaUrls : undefined,
+        audioAsVoice: true,
         replyToId,
         replyToTag,
         replyToCurrent,

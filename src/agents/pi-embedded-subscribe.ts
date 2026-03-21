@@ -474,17 +474,25 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   /** Drain all pending media artifacts and clear the buffer. */
-  const drainPendingMediaArtifacts = (): { mediaUrls: string[]; audioAsVoice: boolean } => {
+  const drainPendingMediaArtifacts = (): {
+    mediaUrls: string[];
+    voiceMediaUrls: string[];
+    audioAsVoice: boolean;
+  } => {
     const mediaUrls: string[] = [];
+    const voiceMediaUrls: string[] = [];
     let audioAsVoice = false;
     for (const { artifact } of state.pendingMediaArtifacts) {
-      mediaUrls.push(...resolveMediaArtifactUrls(artifact));
+      const urls = resolveMediaArtifactUrls(artifact);
       if (artifact.audioAsVoice) {
+        voiceMediaUrls.push(...urls);
         audioAsVoice = true;
+      } else {
+        mediaUrls.push(...urls);
       }
     }
     state.pendingMediaArtifacts.length = 0;
-    return { mediaUrls, audioAsVoice };
+    return { mediaUrls, voiceMediaUrls, audioAsVoice };
   };
 
   const emitBlockChunk = (text: string) => {
@@ -535,20 +543,41 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Drain pending media artifacts from tool results and attach to this block reply.
     const drained = drainPendingMediaArtifacts();
     const mergedMediaUrls = [...(mediaUrls ?? []), ...drained.mediaUrls];
-    const mergedAudioAsVoice = audioAsVoice || drained.audioAsVoice;
+    const audioAsVoiceFromDirectives = audioAsVoice;
+    const voiceMediaUrls = drained.voiceMediaUrls;
 
     // Skip empty payloads, but always emit if audioAsVoice is set (to propagate the flag)
-    if (!cleanedText && mergedMediaUrls.length === 0 && !mergedAudioAsVoice) {
+    if (
+      !cleanedText &&
+      mergedMediaUrls.length === 0 &&
+      voiceMediaUrls.length === 0 &&
+      !audioAsVoiceFromDirectives &&
+      !drained.audioAsVoice
+    ) {
       return;
     }
-    emitBlockReplySafely({
-      text: cleanedText,
-      mediaUrls: mergedMediaUrls.length > 0 ? mergedMediaUrls : undefined,
-      audioAsVoice: mergedAudioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
-    });
+    const shouldEmitStandard =
+      Boolean(cleanedText) || mergedMediaUrls.length > 0 || audioAsVoiceFromDirectives;
+    if (shouldEmitStandard) {
+      emitBlockReplySafely({
+        text: cleanedText,
+        mediaUrls: mergedMediaUrls.length > 0 ? mergedMediaUrls : undefined,
+        audioAsVoice: audioAsVoiceFromDirectives,
+        replyToId,
+        replyToTag,
+        replyToCurrent,
+      });
+    }
+    if (voiceMediaUrls.length > 0 || drained.audioAsVoice) {
+      emitBlockReplySafely({
+        text: shouldEmitStandard ? undefined : cleanedText,
+        mediaUrls: voiceMediaUrls.length > 0 ? voiceMediaUrls : undefined,
+        audioAsVoice: true,
+        replyToId,
+        replyToTag,
+        replyToCurrent,
+      });
+    }
   };
 
   const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>
@@ -571,12 +600,20 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Only drain orphaned artifacts at terminal points (agent end), not before
     // tool executions or message resets where later text may still attach them.
     if (opts?.drainOrphanedArtifacts && state.pendingMediaArtifacts.length > 0) {
-      const { mediaUrls: artifactMediaUrls, audioAsVoice: artifactAudioAsVoice } =
-        drainPendingMediaArtifacts();
-      if (artifactMediaUrls.length > 0 || artifactAudioAsVoice) {
+      const {
+        mediaUrls: artifactMediaUrls,
+        voiceMediaUrls: artifactVoiceMediaUrls,
+        audioAsVoice: artifactAudioAsVoice,
+      } = drainPendingMediaArtifacts();
+      if (artifactMediaUrls.length > 0) {
         emitBlockReplySafely({
-          mediaUrls: artifactMediaUrls.length > 0 ? artifactMediaUrls : undefined,
-          audioAsVoice: artifactAudioAsVoice,
+          mediaUrls: artifactMediaUrls,
+        });
+      }
+      if (artifactVoiceMediaUrls.length > 0 || artifactAudioAsVoice) {
+        emitBlockReplySafely({
+          mediaUrls: artifactVoiceMediaUrls.length > 0 ? artifactVoiceMediaUrls : undefined,
+          audioAsVoice: true,
         });
       }
     }

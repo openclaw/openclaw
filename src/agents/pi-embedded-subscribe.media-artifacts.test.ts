@@ -87,6 +87,57 @@ describe("media artifact collect-then-attach", () => {
     expect(mediaReplies[0].audioAsVoice).toBe(true);
   });
 
+  it("keeps voice artifacts separate when mixed with images", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    emit({ type: "tool_execution_start", toolName: "image_generate", toolCallId: "tc-mix-1" });
+    await flush();
+    emit({
+      type: "tool_execution_end",
+      toolName: "image_generate",
+      toolCallId: "tc-mix-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Generated 1 image." }],
+        details: { media: { mediaUrls: ["/tmp/mixed.png"] } },
+      },
+    });
+    await flush();
+
+    emit({ type: "tool_execution_start", toolName: "tts", toolCallId: "tc-mix-2" });
+    await flush();
+    emit({
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-mix-2",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Generated speech audio." }],
+        details: { media: { mediaUrl: "/tmp/mixed.opus", audioAsVoice: true } },
+      },
+    });
+    await flush();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "Here are your outputs." });
+    emitAssistantTextEnd({ emit });
+    await flush();
+
+    const mediaReplies = onBlockReply.mock.calls
+      .map((c: unknown[]) => c[0] as BlockReplyPayload)
+      .filter((p) => p.mediaUrls?.length);
+    const imageReply = mediaReplies.find((p) => p.mediaUrls?.includes("/tmp/mixed.png"));
+    const voiceReply = mediaReplies.find((p) => p.mediaUrls?.includes("/tmp/mixed.opus"));
+
+    expect(imageReply).toBeDefined();
+    expect(imageReply?.audioAsVoice).not.toBe(true);
+    expect(imageReply?.text).toBe("Here are your outputs.");
+
+    expect(voiceReply).toBeDefined();
+    expect(voiceReply?.audioAsVoice).toBe(true);
+  });
+
   it("does not deliver artifacts prematurely on pre-tool flush", async () => {
     const onBlockReply = vi.fn();
     const { emit } = createTextEndBlockReplyHarness({ onBlockReply });

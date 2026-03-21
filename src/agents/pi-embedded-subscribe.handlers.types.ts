@@ -118,7 +118,11 @@ export type EmbeddedPiSubscribeContext = {
     addedDuringMessage: boolean;
     chunkerHasBuffered: boolean;
   }) => void;
-  drainPendingMediaArtifacts: () => { mediaUrls: string[]; audioAsVoice: boolean };
+  drainPendingMediaArtifacts: () => {
+    mediaUrls: string[];
+    voiceMediaUrls: string[];
+    audioAsVoice: boolean;
+  };
   trimMessagingToolSent: () => void;
   ensureCompactionPromise: () => void;
   noteCompactionRetry: () => void;
