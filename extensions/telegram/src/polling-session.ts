@@ -28,9 +28,15 @@ const resolvePollStallThresholdMs = (value: number | undefined): number => {
 };
 
 const resolvePollWatchdogIntervalMs = (pollStallThresholdMs: number): number => {
+  const stallBudgetBeyondLongPollMs = Math.max(
+    1_000,
+    pollStallThresholdMs - TELEGRAM_LONG_POLL_TIMEOUT_MS,
+  );
+  // For low thresholds (60-89s), poll faster than every 30s so configured
+  // recovery windows are not delayed to the next 90s watchdog tick.
   return Math.min(
     POLL_WATCHDOG_INTERVAL_MS,
-    Math.max(1_000, pollStallThresholdMs - TELEGRAM_LONG_POLL_TIMEOUT_MS),
+    Math.max(1_000, Math.floor(stallBudgetBeyondLongPollMs / 2)),
   );
 };
 
