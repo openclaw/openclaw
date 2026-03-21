@@ -1,5 +1,6 @@
 import amazonBedrockPlugin from "../../../extensions/amazon-bedrock/index.js";
 import anthropicPlugin from "../../../extensions/anthropic/index.js";
+import avianPlugin from "../../../extensions/avian/index.js";
 import bravePlugin from "../../../extensions/brave/index.js";
 import byteplusPlugin from "../../../extensions/byteplus/index.js";
 import chutesPlugin from "../../../extensions/chutes/index.js";
@@ -356,6 +357,7 @@ export const imageGenerationProviderContractRegistry: ImageGenerationProviderCon
 const bundledProviderPlugins = dedupePlugins([
   amazonBedrockPlugin,
   anthropicPlugin,
+  avianPlugin,
   byteplusPlugin,
   chutesPlugin,
   cloudflareAiGatewayPlugin,
