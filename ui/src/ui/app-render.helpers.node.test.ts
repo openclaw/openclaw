@@ -287,7 +287,6 @@ describe("isCronSessionKey", () => {
   });
 });
 
-
 describe("buildChatModelOptions", () => {
   it("preserves the active override when it is missing from the catalog", () => {
     expect(
@@ -352,7 +351,6 @@ describe("buildChatModelOptions", () => {
     ).toEqual(["custom/foo", "openai/gpt-5", "anthropic/claude-sonnet"]);
   });
 });
-
 
 describe("rememberResolvedChatModelRecent", () => {
   it("stores the canonical resolved model ref for recent-model tracking", () => {

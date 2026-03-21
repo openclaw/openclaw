@@ -1,4 +1,3 @@
-import { normalizeProviderId } from "../../../src/agents/provider-id.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { buildChatModelOption } from "./chat-model-ref.ts";
 import type { ModelCatalogEntry } from "./types.ts";
@@ -17,6 +16,32 @@ export type RankedChatModelOption = {
 
 const RECENT_CHAT_MODELS_KEY = "openclaw.chat.recentModels";
 const MAX_RECENT_CHAT_MODELS = 8;
+function normalizeProviderId(provider: string): string {
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === "z.ai" || normalized === "z-ai") {
+    return "zai";
+  }
+  if (normalized === "opencode-zen") {
+    return "opencode";
+  }
+  if (normalized === "opencode-go-auth") {
+    return "opencode-go";
+  }
+  if (normalized === "qwen") {
+    return "qwen-portal";
+  }
+  if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding") {
+    return "kimi";
+  }
+  if (normalized === "bedrock" || normalized === "aws-bedrock") {
+    return "amazon-bedrock";
+  }
+  if (normalized === "bytedance" || normalized === "doubao") {
+    return "volcengine";
+  }
+  return normalized;
+}
+
 const BUILTIN_PROVIDER_IDS = new Set([
   "amazon-bedrock",
   "anthropic",
@@ -115,10 +140,7 @@ export function saveRecentChatModels(entries: RecentChatModelEntry[], storage?: 
   if (!target) {
     return;
   }
-  target.setItem(
-    RECENT_CHAT_MODELS_KEY,
-    JSON.stringify(entries.slice(0, MAX_RECENT_CHAT_MODELS)),
-  );
+  target.setItem(RECENT_CHAT_MODELS_KEY, JSON.stringify(entries.slice(0, MAX_RECENT_CHAT_MODELS)));
 }
 
 export function rememberRecentChatModel(value: string, storage?: Storage, now = Date.now()): void {
@@ -135,7 +157,11 @@ export function rememberRecentChatModel(value: string, storage?: Storage, now = 
   saveRecentChatModels(next, storage);
 }
 
-function buildRankedChatModelOption(value: string, label: string, provider?: string): RankedChatModelOption {
+function buildRankedChatModelOption(
+  value: string,
+  label: string,
+  provider?: string,
+): RankedChatModelOption {
   return {
     value,
     label,
@@ -144,7 +170,9 @@ function buildRankedChatModelOption(value: string, label: string, provider?: str
   };
 }
 
-export function createCatalogRankedChatModelOption(entry: ModelCatalogEntry): RankedChatModelOption {
+export function createCatalogRankedChatModelOption(
+  entry: ModelCatalogEntry,
+): RankedChatModelOption {
   const option = buildChatModelOption(entry);
   return buildRankedChatModelOption(option.value, option.label, entry.provider);
 }

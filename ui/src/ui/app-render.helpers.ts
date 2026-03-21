@@ -7,12 +7,6 @@ import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
 import {
-  createChatModelOverride,
-  formatChatModelDisplay,
-  normalizeChatModelOverrideValue,
-  resolveServerChatModelValue,
-} from "./chat-model-ref.ts";
-import {
   createCatalogRankedChatModelOption,
   createSyntheticRankedChatModelOption,
   loadRecentChatModels,
@@ -20,6 +14,12 @@ import {
   rememberRecentChatModel,
   sortRankedChatModelOptions,
 } from "./chat-model-recents.ts";
+import {
+  createChatModelOverride,
+  formatChatModelDisplay,
+  normalizeChatModelOverrideValue,
+  resolveServerChatModelValue,
+} from "./chat-model-ref.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
