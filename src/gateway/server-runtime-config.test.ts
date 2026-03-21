@@ -235,7 +235,7 @@ describe("resolveGatewayRuntimeConfig", () => {
   describe("hooks config error handling", () => {
     it("does not throw when resolveHooksConfig throws, returns hooksConfig=null", async () => {
       // hooks.enabled=true without hooks.token triggers "hooks.enabled requires hooks.token"
-      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const result = await resolveGatewayRuntimeConfig({
         cfg: {
           gateway: { bind: "loopback", auth: { mode: "none" } },
@@ -245,9 +245,7 @@ describe("resolveGatewayRuntimeConfig", () => {
       });
 
       expect(result.hooksConfig).toBeNull();
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to resolve hooks config"),
-      );
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("hooks config failed"));
       consoleSpy.mockRestore();
     });
   });

@@ -115,8 +115,11 @@ export async function resolveGatewayRuntimeConfig(params: {
     hooksConfig = resolveHooksConfig(params.cfg);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[gateway] Failed to resolve hooks config (hooks disabled): ${message}`);
-    // Fall through with hooksConfig = null (same as hooks disabled).
+    // Match the structured logging pattern used by the hot-reload path
+    // (server-reload-handlers.ts). Config validation errors (e.g. missing
+    // hooks.token) are operator mistakes — log at warn so they surface in
+    // the gateway log, not just stderr.
+    console.warn(`[gateway] hooks config failed (hooks disabled): ${message}`);
   }
   const canvasHostEnabled =
     process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;

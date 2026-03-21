@@ -21,6 +21,7 @@ export const __setMaxChatHistoryMessagesBytesForTest = (value?: number) => {
   }
 };
 export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000;
+export const MAX_HANDSHAKE_TIMEOUT_MS = 120_000; // 2 minutes — prevents accidental no-op timeout
 export const getHandshakeTimeoutMs = () => {
   // Allow override via env var (production and test).
   const envKey = process.env.VITEST
@@ -29,7 +30,7 @@ export const getHandshakeTimeoutMs = () => {
   if (envKey) {
     const parsed = Number(envKey);
     if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
+      return Math.min(parsed, MAX_HANDSHAKE_TIMEOUT_MS);
     }
   }
   return DEFAULT_HANDSHAKE_TIMEOUT_MS;

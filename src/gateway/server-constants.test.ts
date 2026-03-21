@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_HANDSHAKE_TIMEOUT_MS, getHandshakeTimeoutMs } from "./server-constants.js";
+import {
+  DEFAULT_HANDSHAKE_TIMEOUT_MS,
+  MAX_HANDSHAKE_TIMEOUT_MS,
+  getHandshakeTimeoutMs,
+} from "./server-constants.js";
 
 describe("getHandshakeTimeoutMs", () => {
   const savedEnv: Record<string, string | undefined> = {};
@@ -53,5 +57,18 @@ describe("getHandshakeTimeoutMs", () => {
 
     setEnv("OPENCLAW_HANDSHAKE_TIMEOUT_MS", "-5000");
     expect(getHandshakeTimeoutMs()).toBe(DEFAULT_HANDSHAKE_TIMEOUT_MS);
+  });
+
+  it("clamps values above MAX_HANDSHAKE_TIMEOUT_MS", () => {
+    setEnv("OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS", undefined);
+    setEnv("OPENCLAW_HANDSHAKE_TIMEOUT_MS", "999999999");
+    expect(getHandshakeTimeoutMs()).toBe(MAX_HANDSHAKE_TIMEOUT_MS);
+    expect(MAX_HANDSHAKE_TIMEOUT_MS).toBe(120_000);
+  });
+
+  it("OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS takes priority under Vitest", () => {
+    setEnv("OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS", "5000");
+    setEnv("OPENCLAW_HANDSHAKE_TIMEOUT_MS", "30000");
+    expect(getHandshakeTimeoutMs()).toBe(5_000);
   });
 });
