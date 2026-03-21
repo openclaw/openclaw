@@ -72,7 +72,7 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect(result!.id).toBe("gpt-5.4-mini");
     expect(result!.name).toBe("gpt-5.4-mini");
     expect((result as unknown as Record<string, unknown>).api).toBe("openai-responses");
-    expect((result as unknown as Record<string, unknown>).input).toEqual(["text"]);
+    expect((result as unknown as Record<string, unknown>).input).toEqual(["text", "image"]);
   });
 
   it("infers reasoning=true for o1/o3 model IDs", () => {

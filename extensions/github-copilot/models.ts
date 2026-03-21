@@ -58,7 +58,9 @@ export function resolveCopilotForwardCompatModel(
     provider: PROVIDER_ID,
     api: "openai-responses",
     reasoning,
-    input: ["text"],
+    // Optimistic: most Copilot models support images, and the API rejects
+    // image payloads for text-only models rather than failing silently.
+    input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_WINDOW,
     maxTokens: DEFAULT_MAX_TOKENS,
