@@ -883,7 +883,8 @@ export async function updateLastRoute(params: {
 }) {
   const { storePath, sessionKey, channel, to, accountId, threadId, ctx } = params;
   return await withSessionStoreLock(storePath, async () => {
-    const store = loadSessionStore(storePath);
+    // Always re-read inside the lock to avoid clobbering concurrent writers.
+    const store = loadSessionStore(storePath, { skipCache: true });
     const resolved = resolveSessionStoreEntry({ store, sessionKey });
     const existing = resolved.existing;
     const now = Date.now();
