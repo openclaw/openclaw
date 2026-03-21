@@ -133,7 +133,7 @@ export const execSchema = Type.Object({
   ),
   ask: Type.Optional(
     Type.String({
-      description: "Exec ask mode (off|on-miss|always).",
+      description: "Exec ask mode (off|log|on-miss|always).",
     }),
   ),
   node: Type.Optional(

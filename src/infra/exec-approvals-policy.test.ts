@@ -22,6 +22,8 @@ describe("exec approvals policy helpers", () => {
     expect(normalizeExecSecurity("unknown")).toBeNull();
 
     expect(normalizeExecAsk(" on-miss ")).toBe("on-miss");
+    expect(normalizeExecAsk("LOG")).toBe("log");
+    expect(normalizeExecAsk(" log ")).toBe("log");
     expect(normalizeExecAsk("ALWAYS")).toBe("always");
     expect(normalizeExecAsk("maybe")).toBeNull();
   });
@@ -36,6 +38,10 @@ describe("exec approvals policy helpers", () => {
     expect(maxAsk("off", "always")).toBe("always");
     expect(maxAsk("on-miss", "off")).toBe("on-miss");
     expect(maxAsk("always", "on-miss")).toBe("always");
+    expect(maxAsk("off", "log")).toBe("log");
+    expect(maxAsk("log", "on-miss")).toBe("on-miss");
+    expect(maxAsk("log", "log")).toBe("log");
+    expect(maxAsk("log", "always")).toBe("always");
   });
 
   it("requiresExecApproval respects ask mode and allowlist satisfaction", () => {
@@ -51,6 +57,20 @@ describe("exec approvals policy helpers", () => {
         ask: "off" as const,
         security: "allowlist" as const,
         analysisOk: true,
+        allowlistSatisfied: false,
+        expected: false,
+      },
+      {
+        ask: "log" as const,
+        security: "allowlist" as const,
+        analysisOk: true,
+        allowlistSatisfied: false,
+        expected: false,
+      },
+      {
+        ask: "log" as const,
+        security: "allowlist" as const,
+        analysisOk: false,
         allowlistSatisfied: false,
         expected: false,
       },

@@ -9,7 +9,7 @@ export * from "./exec-approvals-allowlist.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecSecurity = "deny" | "allowlist" | "full";
-export type ExecAsk = "off" | "on-miss" | "always";
+export type ExecAsk = "off" | "log" | "on-miss" | "always";
 
 export function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = value?.trim().toLowerCase();
@@ -29,7 +29,12 @@ export function normalizeExecSecurity(value?: string | null): ExecSecurity | nul
 
 export function normalizeExecAsk(value?: string | null): ExecAsk | null {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+  if (
+    normalized === "off" ||
+    normalized === "log" ||
+    normalized === "on-miss" ||
+    normalized === "always"
+  ) {
     return normalized;
   }
   return null;
@@ -396,7 +401,7 @@ function normalizeSecurity(value: ExecSecurity | undefined, fallback: ExecSecuri
 }
 
 function normalizeAsk(value: ExecAsk | undefined, fallback: ExecAsk): ExecAsk {
-  if (value === "always" || value === "off" || value === "on-miss") {
+  if (value === "always" || value === "off" || value === "log" || value === "on-miss") {
     return value;
   }
   return fallback;
@@ -550,7 +555,7 @@ export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {
 }
 
 export function maxAsk(a: ExecAsk, b: ExecAsk): ExecAsk {
-  const order: Record<ExecAsk, number> = { off: 0, "on-miss": 1, always: 2 };
+  const order: Record<ExecAsk, number> = { off: 0, log: 1, "on-miss": 2, always: 3 };
   return order[a] >= order[b] ? a : b;
 }
 

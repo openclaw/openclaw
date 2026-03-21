@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-command-display.js";
 import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
@@ -19,6 +20,7 @@ import {
   DEFAULT_PENDING_MAX_OUTPUT,
   applyPathPrepend,
   applyShellPath,
+  emitExecSystemEvent,
   normalizeExecAsk,
   normalizeExecHost,
   normalizeExecSecurity,
@@ -430,6 +432,14 @@ export function createExecTool(
         );
       } else {
         applyPathPrepend(env, defaultPathPrepend);
+      }
+
+      // Log mode: fire-and-forget notification before executing (no approval gate).
+      if (ask === "log") {
+        const { commandText } = resolveExecApprovalCommandDisplay({ command: params.command });
+        emitExecSystemEvent(`🔧 Running: \`${commandText}\``, {
+          sessionKey: notifySessionKey,
+        });
       }
 
       if (host === "node") {
