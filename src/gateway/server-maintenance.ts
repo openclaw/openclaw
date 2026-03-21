@@ -31,6 +31,7 @@ export function startGatewayMaintenanceTimers(params: {
   chatRunState: { abortedRuns: Map<string, number> };
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
+  chatDeltaLastBroadcastLen: Map<string, number>;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -129,6 +130,22 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatRunState.abortedRuns.delete(runId);
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
+    }
+
+    // Sweep orphaned buffers for runs that were never explicitly aborted but have
+    // gone stale (deltaSentAt older than ABORTED_RUN_TTL_MS). These represent stuck
+    // runs where emitChatFinal never fired, causing chatRunState.buffers to leak.
+    for (const [clientRunId, lastSentAt] of params.chatDeltaSentAt) {
+      if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
+        continue;
+      }
+      // Skip if this runId is still tracked as active in abortedRuns
+      if (params.chatRunState.abortedRuns.has(clientRunId)) {
+        continue;
+      }
+      params.chatRunBuffers.delete(clientRunId);
+      params.chatDeltaSentAt.delete(clientRunId);
+      params.chatDeltaLastBroadcastLen.delete(clientRunId);
     }
   }, 60_000);
 

@@ -814,6 +814,7 @@ export async function startGatewayServer(
       chatRunState,
       chatRunBuffers,
       chatDeltaSentAt,
+      chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
       removeChatRun,
       agentRunSeq,
       nodeSendToSession,
