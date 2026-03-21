@@ -6,9 +6,11 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "anthropic/claude-sonnet-4-6"
+        "primary": "anthropic/claude-sonnet-4-6",
+        "fallbacks": ["anthropic/claude-haiku-4-5-20251001"]
       },
       "workspace": "/data/.openclaw/sophia",
+      "userTimezone": "Europe/Rome",
       "memorySearch": {
         "provider": "openai",
         "model": "text-embedding-3-small"
@@ -28,8 +30,34 @@
       }
     ]
   },
+  "tools": {
+    "web": {
+      "search": {
+        "enabled": true,
+        "maxResults": 5,
+        "cacheTtlMinutes": 15
+      },
+      "fetch": {
+        "enabled": true,
+        "maxChars": 50000,
+        "cacheTtlMinutes": 15
+      }
+    }
+  },
+  "hooks": {
+    "enabled": true,
+    "gmail": {
+      "enabled": true
+    }
+  },
+  "skills": {
+    "entries": {
+    }
+  },
   "cron": {
-    "enabled": true
+    "enabled": true,
+    "maxConcurrentRuns": 2,
+    "sessionRetention": "24h"
   },
   "gateway": {
     "mode": "local",
