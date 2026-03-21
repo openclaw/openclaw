@@ -4,7 +4,7 @@ import {
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
   telegramMessageActions,
-} from "../../../extensions/telegram/runtime-api.js";
+} from "../../plugin-sdk/telegram.js";
 import {
   createLazyRuntimeMethodBinder,
   createLazyRuntimeSurface,
