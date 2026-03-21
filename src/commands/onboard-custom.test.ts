@@ -594,6 +594,22 @@ describe("applyCustomApiConfig", () => {
     ).toBeUndefined();
   });
 
+  it("defaults non-azure custom vision-capable models to text+image input", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "claude-sonnet-4-6",
+      compatibility: "openai",
+      apiKey: "key123",
+      providerId: "custom",
+    });
+    const provider = result.config.models?.providers?.custom;
+    const model = provider?.models?.find((m) => m.id === "claude-sonnet-4-6");
+
+    expect(model?.input).toEqual(["text", "image"]);
+    expect(model?.reasoning).toBe(false);
+  });
+
   it("re-onboard preserves user-customized fields for non-azure models", () => {
     const result = applyCustomApiConfig({
       config: {

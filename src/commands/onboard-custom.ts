@@ -53,6 +53,20 @@ function isAzureUrl(baseUrl: string): boolean {
   return isAzureFoundryUrl(baseUrl) || isAzureOpenAiUrl(baseUrl);
 }
 
+function isLikelyVisionModel(modelId: string): boolean {
+  const id = modelId.toLowerCase();
+  return (
+    id.includes("claude") ||
+    id.includes("gpt-4o") ||
+    id.includes("gpt-5") ||
+    id.includes("gemini") ||
+    id.includes("qwen-vl") ||
+    id.includes("vision") ||
+    id.includes("-vl") ||
+    id.endsWith("vl")
+  );
+}
+
 /**
  * Transforms an Azure AI Foundry/OpenAI URL to include the deployment path.
  * Azure requires: https://host/openai/deployments/<model-id>/chat/completions?api-version=2024-xx-xx-preview
@@ -645,6 +659,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const hasModel = existingModels.some((model) => model.id === modelId);
   const isLikelyReasoningModel = isAzure && /\b(o[134]|gpt-([5-9]|\d{2,}))\b/i.test(modelId);
+  const isLikelyVisionCapableModel = isLikelyVisionModel(modelId);
   const nextModel = isAzure
     ? {
         id: modelId,
@@ -663,7 +678,9 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         name: `${modelId} (Custom Provider)`,
         contextWindow: DEFAULT_CONTEXT_WINDOW,
         maxTokens: DEFAULT_MAX_TOKENS,
-        input: ["text"] as ["text"],
+        input: isLikelyVisionCapableModel
+          ? (["text", "image"] as Array<"text" | "image">)
+          : (["text"] as ["text"]),
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         reasoning: false,
       };
