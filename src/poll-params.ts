@@ -69,12 +69,15 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       }
     }
     if (def.kind === "number") {
-      if (typeof value === "number" && Number.isFinite(value)) {
+      // Treat 0 as absent — callers/wrappers often auto-fill numeric fields with 0 as a
+      // default, and a zero-duration poll is not a meaningful poll creation signal.
+      if (typeof value === "number" && Number.isFinite(value) && value !== 0) {
         return true;
       }
       if (typeof value === "string") {
         const trimmed = value.trim();
-        if (trimmed.length > 0 && Number.isFinite(Number(trimmed))) {
+        const parsed = Number(trimmed);
+        if (trimmed.length > 0 && Number.isFinite(parsed) && parsed !== 0) {
           return true;
         }
       }

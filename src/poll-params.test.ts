@@ -23,8 +23,11 @@ describe("poll params", () => {
     },
   );
 
-  it("treats finite numeric poll params as poll creation intent", () => {
-    expect(hasPollCreationParams({ pollDurationHours: 0 })).toBe(true);
+  it("treats finite non-zero numeric poll params as poll creation intent", () => {
+    // 0 is treated as absent — wrappers auto-fill numeric fields with 0 by default
+    expect(hasPollCreationParams({ pollDurationHours: 0 })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationSeconds: 0 })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationSeconds: "0" })).toBe(false);
     expect(hasPollCreationParams({ pollDurationSeconds: 60 })).toBe(true);
     expect(hasPollCreationParams({ pollDurationSeconds: "60" })).toBe(true);
     expect(hasPollCreationParams({ pollDurationSeconds: "1e3" })).toBe(true);
