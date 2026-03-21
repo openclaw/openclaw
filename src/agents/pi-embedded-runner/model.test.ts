@@ -844,7 +844,8 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
       ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
-      api: "openai-responses",
+      // api: "openai-responses" from config is normalized to "openai-codex-responses"
+      // by normalizeCodexTransport when baseUrl is the codex endpoint
       contextWindow: 1_050_000,
       maxTokens: 128_000,
     });
@@ -910,7 +911,6 @@ describe("resolveModel", () => {
         }
         return {
           ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
-          api: "openai-responses",
           input: ["text"],
           contextWindow: 272000,
           maxTokens: 128000,
@@ -924,7 +924,7 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
       ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
-      api: "openai-responses",
+      // api stays "openai-codex-responses" after plugin normalization
       input: ["text"],
       contextWindow: 272000,
       maxTokens: 128000,

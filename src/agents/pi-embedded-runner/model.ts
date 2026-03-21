@@ -304,6 +304,7 @@ function preserveDiscoveredTransportMetadata(params: {
     input: configuredModel?.input ?? discoveredModel.input ?? dynamicModel.input,
     compat: configuredModel?.compat ?? discoveredModel.compat ?? dynamicModel.compat,
     maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens ?? dynamicModel.maxTokens,
+    cost: discoveredModel.cost ?? dynamicModel.cost,
     headers:
       discoveredHeaders || dynamicHeaders
         ? {
