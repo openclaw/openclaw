@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "./zalo-js.test-mocks.js";
 import { zalouserPlugin } from "./channel.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
@@ -131,9 +132,10 @@ describe("zalouser channel policies", () => {
 
   it("handles react action", async () => {
     const actions = zalouserPlugin.actions;
-    expect(actions?.listActions?.({ cfg: { channels: { zalouser: { enabled: true } } } })).toEqual([
-      "react",
-    ]);
+    expect(
+      actions?.describeMessageTool?.({ cfg: { channels: { zalouser: { enabled: true } } } })
+        ?.actions,
+    ).toEqual(["react"]);
     const result = await actions?.handleAction?.({
       channel: "zalouser",
       action: "react",

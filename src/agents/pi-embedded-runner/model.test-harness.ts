@@ -25,12 +25,16 @@ export const OPENAI_CODEX_TEMPLATE_MODEL = {
   maxTokens: 128000,
 };
 
-export function mockOpenAICodexTemplateModel(): void {
+function mockTemplateModel(provider: string, modelId: string, templateModel: unknown): void {
   mockDiscoveredModel({
-    provider: "openai-codex",
-    modelId: "gpt-5.2-codex",
-    templateModel: OPENAI_CODEX_TEMPLATE_MODEL,
+    provider,
+    modelId,
+    templateModel,
   });
+}
+
+export function mockOpenAICodexTemplateModel(): void {
+  mockTemplateModel("openai-codex", "gpt-5.2-codex", OPENAI_CODEX_TEMPLATE_MODEL);
 }
 
 export function buildOpenAICodexForwardCompatExpectation(
@@ -85,19 +89,19 @@ export const GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL = {
 };
 
 export function mockGoogleGeminiCliProTemplateModel(): void {
-  mockDiscoveredModel({
-    provider: "google-gemini-cli",
-    modelId: "gemini-3-pro-preview",
-    templateModel: GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
-  });
+  mockTemplateModel(
+    "google-gemini-cli",
+    "gemini-3-pro-preview",
+    GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
+  );
 }
 
 export function mockGoogleGeminiCliFlashTemplateModel(): void {
-  mockDiscoveredModel({
-    provider: "google-gemini-cli",
-    modelId: "gemini-3-flash-preview",
-    templateModel: GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
-  });
+  mockTemplateModel(
+    "google-gemini-cli",
+    "gemini-3-flash-preview",
+    GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
+  );
 }
 
 export function resetMockDiscoverModels(): void {

@@ -33,10 +33,34 @@ vi.mock("../infra/backoff.js", () => ({
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
 }));
 
-vi.mock("../providers/github-copilot-token.js", () => ({
+vi.mock("../../extensions/github-copilot/token.js", () => ({
   DEFAULT_COPILOT_API_BASE_URL: "https://api.individual.githubcopilot.com",
   resolveCopilotApiToken: (...args: unknown[]) => resolveCopilotApiTokenMock(...args),
 }));
+
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  return {
+    ...actual,
+    prepareProviderRuntimeAuth: async (params: {
+      provider: string;
+      context: { apiKey: string; env: NodeJS.ProcessEnv };
+    }) => {
+      if (params.provider !== "github-copilot") {
+        return undefined;
+      }
+      const token = await resolveCopilotApiTokenMock({
+        githubToken: params.context.apiKey,
+        env: params.context.env,
+      });
+      return {
+        apiKey: token.token,
+        baseUrl: token.baseUrl,
+        expiresAt: token.expiresAt,
+      };
+    },
+  };
+});
 
 vi.mock("./pi-embedded-runner/compact.js", () => ({
   compactEmbeddedPiSessionDirect: vi.fn(async () => {

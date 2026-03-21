@@ -5,6 +5,7 @@ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
+import { applyXaiModelCompat } from "./model-compat.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { findUnsupportedSchemaKeywords } from "./pi-embedded-runner/google.js";
 import { __testing, createOpenClawCodingTools } from "./pi-tools.js";
@@ -449,6 +450,19 @@ describe("createOpenClawCodingTools", () => {
       senderIsOwner: true,
     });
     for (const tool of googleTools) {
+      const violations = findUnsupportedSchemaKeywords(tool.parameters, `${tool.name}.parameters`);
+      expect(violations).toEqual([]);
+    }
+  });
+  it("applies xai model compat for direct Grok tool cleanup", () => {
+    const xaiTools = createOpenClawCodingTools({
+      modelProvider: "xai",
+      modelCompat: applyXaiModelCompat({ compat: {} }).compat,
+      senderIsOwner: true,
+    });
+
+    expect(xaiTools.some((tool) => tool.name === "web_search")).toBe(false);
+    for (const tool of xaiTools) {
       const violations = findUnsupportedSchemaKeywords(tool.parameters, `${tool.name}.parameters`);
       expect(violations).toEqual([]);
     }

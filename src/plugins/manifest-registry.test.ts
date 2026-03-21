@@ -35,12 +35,16 @@ function createPluginCandidate(params: {
   rootDir: string;
   sourceName?: string;
   origin: "bundled" | "global" | "workspace" | "config";
+  format?: "openclaw" | "bundle";
+  bundleFormat?: "codex" | "claude" | "cursor";
 }): PluginCandidate {
   return {
     idHint: params.idHint,
     source: path.join(params.rootDir, params.sourceName ?? "index.ts"),
     rootDir: params.rootDir,
     origin: params.origin,
+    format: params.format,
+    bundleFormat: params.bundleFormat,
   };
 }
 
@@ -195,6 +199,46 @@ describe("loadPluginManifestRegistry", () => {
     ).toBe(true);
   });
 
+  it("preserves provider auth env metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      enabledByDefault: true,
+      providers: ["openai", "openai-codex"],
+      providerAuthEnvVars: {
+        openai: ["OPENAI_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "openai",
+          method: "api-key",
+          choiceId: "openai-api-key",
+          choiceLabel: "OpenAI API key",
+        },
+      ],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
+      openai: ["OPENAI_API_KEY"],
+    });
+    expect(registry.plugins[0]?.enabledByDefault).toBe(true);
+    expect(registry.plugins[0]?.providerAuthChoices).toEqual([
+      {
+        provider: "openai",
+        method: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "OpenAI API key",
+      },
+    ]);
+  });
+
   it("reports bundled plugins as the duplicate winner for auto-discovered globals", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
@@ -221,6 +265,36 @@ describe("loadPluginManifestRegistry", () => {
     expect(
       registry.diagnostics.some((diag) =>
         diag.message.includes("global plugin will be overridden by bundled plugin"),
+      ),
+    ).toBe(true);
+  });
+
+  it("reports bundled plugins as the duplicate winner for workspace duplicates", () => {
+    const bundledDir = makeTempDir();
+    const workspaceDir = makeTempDir();
+    const manifest = { id: "shadowed", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(workspaceDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      candidates: [
+        createPluginCandidate({
+          idHint: "shadowed",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          idHint: "shadowed",
+          rootDir: workspaceDir,
+          origin: "workspace",
+        }),
+      ],
+    });
+
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("workspace plugin will be overridden by bundled plugin"),
       ),
     ).toBe(true);
   });
@@ -278,6 +352,220 @@ describe("loadPluginManifestRegistry", () => {
     ];
 
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+  });
+
+  it("accepts provider-style id hints without warning", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "openai", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "openai-provider",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
+      false,
+    );
+  });
+
+  it("accepts plugin-style id hints without warning", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "brave", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "brave-plugin",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
+      false,
+    );
+  });
+
+  it("accepts sandbox-style id hints without warning", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "openshell", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "openshell-sandbox",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
+      false,
+    );
+  });
+
+  it("still warns for unrelated id hint mismatches", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "openai", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "totally-different",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes(
+          'plugin id mismatch (manifest uses "openai", entry hints "totally-different")',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("loads Codex bundle manifests into the registry", () => {
+    const bundleDir = makeTempDir();
+    mkdirSafe(path.join(bundleDir, ".codex-plugin"));
+    mkdirSafe(path.join(bundleDir, "skills"));
+    fs.writeFileSync(
+      path.join(bundleDir, ".codex-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Sample Bundle",
+        description: "Bundle fixture",
+        skills: "skills",
+        hooks: "hooks",
+      }),
+      "utf-8",
+    );
+    mkdirSafe(path.join(bundleDir, "hooks"));
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "sample-bundle",
+        rootDir: bundleDir,
+        origin: "global",
+        format: "bundle",
+        bundleFormat: "codex",
+      }),
+    ]);
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]).toMatchObject({
+      id: "sample-bundle",
+      format: "bundle",
+      bundleFormat: "codex",
+      hooks: ["hooks"],
+      skills: ["skills"],
+      bundleCapabilities: expect.arrayContaining(["hooks", "skills"]),
+    });
+  });
+
+  it("loads Claude bundle manifests with command roots and settings files", () => {
+    const bundleDir = makeTempDir();
+    mkdirSafe(path.join(bundleDir, ".claude-plugin"));
+    mkdirSafe(path.join(bundleDir, "skill-packs", "starter"));
+    mkdirSafe(path.join(bundleDir, "commands-pack"));
+    fs.writeFileSync(path.join(bundleDir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
+    fs.writeFileSync(
+      path.join(bundleDir, ".claude-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Claude Sample",
+        skills: ["skill-packs/starter"],
+        commands: "commands-pack",
+      }),
+      "utf-8",
+    );
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "claude-sample",
+        rootDir: bundleDir,
+        origin: "global",
+        format: "bundle",
+        bundleFormat: "claude",
+      }),
+    ]);
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]).toMatchObject({
+      id: "claude-sample",
+      format: "bundle",
+      bundleFormat: "claude",
+      skills: ["skill-packs/starter", "commands-pack"],
+      settingsFiles: ["settings.json"],
+      bundleCapabilities: expect.arrayContaining(["skills", "commands", "settings"]),
+    });
+  });
+
+  it("loads manifestless Claude bundles into the registry", () => {
+    const bundleDir = makeTempDir();
+    mkdirSafe(path.join(bundleDir, "commands"));
+    fs.writeFileSync(path.join(bundleDir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "manifestless-claude",
+        rootDir: bundleDir,
+        origin: "global",
+        format: "bundle",
+        bundleFormat: "claude",
+      }),
+    ]);
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]).toMatchObject({
+      format: "bundle",
+      bundleFormat: "claude",
+      skills: ["commands"],
+      settingsFiles: ["settings.json"],
+      bundleCapabilities: expect.arrayContaining(["skills", "commands", "settings"]),
+    });
+  });
+
+  it("loads Cursor bundle manifests into the registry", () => {
+    const bundleDir = makeTempDir();
+    mkdirSafe(path.join(bundleDir, ".cursor-plugin"));
+    mkdirSafe(path.join(bundleDir, "skills"));
+    mkdirSafe(path.join(bundleDir, ".cursor", "commands"));
+    mkdirSafe(path.join(bundleDir, ".cursor", "rules"));
+    fs.writeFileSync(path.join(bundleDir, ".cursor", "hooks.json"), '{"hooks":[]}', "utf-8");
+    fs.writeFileSync(
+      path.join(bundleDir, ".cursor-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Cursor Sample",
+        mcpServers: "./.mcp.json",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(bundleDir, ".mcp.json"), '{"servers":{}}', "utf-8");
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "cursor-sample",
+        rootDir: bundleDir,
+        origin: "global",
+        format: "bundle",
+        bundleFormat: "cursor",
+      }),
+    ]);
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]).toMatchObject({
+      id: "cursor-sample",
+      format: "bundle",
+      bundleFormat: "cursor",
+      skills: ["skills", ".cursor/commands"],
+      bundleCapabilities: expect.arrayContaining([
+        "skills",
+        "commands",
+        "rules",
+        "hooks",
+        "mcpServers",
+      ]),
+    });
   });
 
   it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {

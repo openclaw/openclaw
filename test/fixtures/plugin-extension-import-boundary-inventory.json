@@ -1,0 +1,42 @@
+[
+  {
+    "file": "src/plugins/runtime/runtime-imessage.ts",
+    "line": 5,
+    "kind": "import",
+    "specifier": "../../../extensions/imessage/runtime-api.js",
+    "resolvedPath": "extensions/imessage/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/runtime/runtime-slack-ops.runtime.ts",
+    "line": 10,
+    "kind": "import",
+    "specifier": "../../../extensions/slack/runtime-api.js",
+    "resolvedPath": "extensions/slack/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/runtime/runtime-telegram-ops.runtime.ts",
+    "line": 5,
+    "kind": "import",
+    "specifier": "../../../extensions/telegram/runtime-api.js",
+    "resolvedPath": "extensions/telegram/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/runtime/runtime-telegram-ops.runtime.ts",
+    "line": 16,
+    "kind": "import",
+    "specifier": "../../../extensions/telegram/runtime-api.js",
+    "resolvedPath": "extensions/telegram/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/runtime/runtime-telegram.ts",
+    "line": 7,
+    "kind": "import",
+    "specifier": "../../../extensions/telegram/runtime-api.js",
+    "resolvedPath": "extensions/telegram/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
+  }
+]

@@ -1,37 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as processRuntime from "../../../src/plugin-sdk/process-runtime.js";
+import * as setupRuntime from "../../../src/plugin-sdk/setup.js";
+import * as clientModule from "./client.js";
 import { probeIMessage } from "./probe.js";
 
-const detectBinaryMock = vi.hoisted(() => vi.fn());
-const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
-const createIMessageRpcClientMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../../../src/commands/onboard-helpers.js", () => ({
-  detectBinary: (...args: unknown[]) => detectBinaryMock(...args),
-}));
-
-vi.mock("../../../src/process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
-}));
-
-vi.mock("./client.js", () => ({
-  createIMessageRpcClient: (...args: unknown[]) => createIMessageRpcClientMock(...args),
-}));
-
 beforeEach(() => {
-  detectBinaryMock.mockClear().mockResolvedValue(true);
-  runCommandWithTimeoutMock.mockClear().mockResolvedValue({
+  vi.restoreAllMocks();
+  vi.spyOn(setupRuntime, "detectBinary").mockResolvedValue(true);
+  vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
     stdout: "",
     stderr: 'unknown command "rpc" for "imsg"',
     code: 1,
     signal: null,
     killed: false,
+    termination: "exit",
   });
-  createIMessageRpcClientMock.mockClear();
 });
 
 describe("probeIMessage", () => {
   it("marks unknown rpc subcommand as fatal", async () => {
-    const result = await probeIMessage(1000, { cliPath: "imsg" });
+    const createIMessageRpcClientMock = vi
+      .spyOn(clientModule, "createIMessageRpcClient")
+      .mockResolvedValue({
+        request: vi.fn(),
+        stop: vi.fn(),
+      } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+    const result = await probeIMessage(1000, { cliPath: "imsg-test-rpc" });
     expect(result.ok).toBe(false);
     expect(result.fatal).toBe(true);
     expect(result.error).toMatch(/rpc/i);
