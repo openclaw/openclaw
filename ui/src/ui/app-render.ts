@@ -634,6 +634,7 @@ export function renderApp(state: AppViewState) {
                 cronJobs: state.cronJobs,
                 cronStatus: state.cronStatus,
                 attentionItems: state.attentionItems,
+                sessionHealthSurface: state.healthResult?.sessionHealthSurface ?? null,
                 eventLog: state.eventLog,
                 overviewLogLines: state.overviewLogLines,
                 showGatewayToken: state.overviewShowGatewayToken,

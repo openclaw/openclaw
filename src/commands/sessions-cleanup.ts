@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { promptYesNo } from "../cli/prompt.js";
 import { loadConfig } from "../config/config.js";
 import {
   capEntryCount,
@@ -12,6 +13,21 @@ import {
   type SessionEntry,
   type SessionMaintenanceApplyReport,
 } from "../config/sessions.js";
+import { collectSessionHealth } from "../infra/session-health-collector.js";
+import {
+  executeRemediation,
+  ExecutionRefusalError,
+  renderConfirmationBlock,
+  renderExecutionReportText,
+  resolveActionIdsForTier,
+  validateExecutionRequest,
+} from "../infra/session-health-remediation-executor.js";
+import {
+  buildRemediationPlan,
+  renderRemediationPlanText,
+} from "../infra/session-health-remediation-plan.js";
+import type { RemediationPlan } from "../infra/session-health-remediation-types.js";
+import { V1_MAX_EXECUTION_TIER } from "../infra/session-health-remediation-types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 import {
@@ -40,6 +56,9 @@ export type SessionsCleanupOptions = {
   activeKey?: string;
   json?: boolean;
   fixMissing?: boolean;
+  execute?: string[];
+  executeTier?: string;
+  yes?: boolean;
 };
 
 type SessionCleanupAction =
@@ -252,12 +271,17 @@ function renderStoreDryRunPlan(params: {
     params.runtime.log(`Agent: ${params.summary.agentId}`);
   }
   params.runtime.log(`Session store: ${params.summary.storePath}`);
+  params.runtime.log("");
+  const sectionLabel = "── Maintenance Preview (global age threshold) ──";
+  params.runtime.log(rich ? theme.heading(sectionLabel) : sectionLabel);
   params.runtime.log(`Maintenance mode: ${params.summary.mode}`);
   params.runtime.log(
     `Entries: ${params.summary.beforeCount} -> ${params.summary.afterCount} (remove ${params.summary.beforeCount - params.summary.afterCount})`,
   );
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
-  params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
+  params.runtime.log(
+    `Would prune stale (global age threshold, all classes): ${params.summary.pruned}`,
+  );
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
   if (params.summary.diskBudget) {
     params.runtime.log(
@@ -290,8 +314,181 @@ function renderStoreDryRunPlan(params: {
   }
 }
 
+/**
+ * Attempt to collect a health snapshot and build a remediation plan.
+ * Best-effort: returns null if collection fails (e.g., no config, no disk).
+ * This is intentionally non-blocking for the existing dry-run flow.
+ */
+async function tryBuildRemediationPlanForDryRun(
+  cfg: ReturnType<typeof loadConfig>,
+): Promise<RemediationPlan | null> {
+  try {
+    const snapshot = await collectSessionHealth(cfg);
+    return buildRemediationPlan({ snapshot });
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Execution sub-command (Phase 3C)
+// ---------------------------------------------------------------------------
+
+async function sessionsCleanupExecuteCommand(
+  opts: SessionsCleanupOptions,
+  cfg: ReturnType<typeof loadConfig>,
+  runtime: RuntimeEnv,
+) {
+  const hasExecuteTier = opts.executeTier != null && opts.executeTier !== "";
+
+  try {
+    // 1. Re-collect fresh snapshot and plan
+    const snapshot = await collectSessionHealth(cfg);
+    const freshPlan = buildRemediationPlan({ snapshot });
+
+    // 2. Resolve action IDs
+    let actionIds: string[];
+    if (hasExecuteTier) {
+      const tierNum = Number(opts.executeTier);
+      if (!Number.isInteger(tierNum) || tierNum < 0) {
+        runtime.error(`--execute-tier must be a non-negative integer. Got: '${opts.executeTier}'.`);
+        runtime.exit(1);
+        return;
+      }
+      if (tierNum > V1_MAX_EXECUTION_TIER) {
+        runtime.error(
+          `--execute-tier ${tierNum} is not supported in v1. Maximum: ${V1_MAX_EXECUTION_TIER}.`,
+        );
+        runtime.exit(1);
+        return;
+      }
+      actionIds = resolveActionIdsForTier(tierNum, freshPlan);
+      if (actionIds.length === 0) {
+        if (opts.json) {
+          runtime.log(
+            JSON.stringify(
+              {
+                executedAt: new Date().toISOString(),
+                actions: [],
+                summary: {
+                  executed: 0,
+                  skipped: 0,
+                  failed: 0,
+                  refused: 0,
+                  totalBytesFreed: 0,
+                  storageBefore: snapshot.storage.totalManagedBytes,
+                  storageAfter: snapshot.storage.totalManagedBytes,
+                },
+                message: `No Tier 0–${tierNum} actions in the current plan. Nothing to execute.`,
+              },
+              null,
+              2,
+            ),
+          );
+        } else {
+          runtime.log(`No Tier 0–${tierNum} actions in the current plan. Nothing to execute.`);
+        }
+        return;
+      }
+    } else {
+      actionIds = opts.execute ?? [];
+    }
+
+    // 3. Validate against fresh plan
+    const validation = validateExecutionRequest(actionIds, freshPlan);
+    if (!validation.valid) {
+      runtime.error(validation.error);
+      runtime.exit(1);
+      return;
+    }
+
+    // 4. Show confirmation prompt (suppress human text when --json for clean stdout)
+    if (!opts.json) {
+      const confirmationText = renderConfirmationBlock(validation.actions);
+      runtime.log(confirmationText);
+    }
+
+    if (!opts.yes) {
+      const confirmed = await promptYesNo("Proceed?", false);
+      if (!confirmed) {
+        runtime.log("Aborted.");
+        return;
+      }
+    }
+
+    // 5. Execute
+    const result = await executeRemediation({
+      actionIds,
+      cfg,
+      snapshot,
+    });
+
+    // 6. Report
+    if (opts.json) {
+      runtime.log(JSON.stringify(result, null, 2));
+    } else {
+      runtime.log(renderExecutionReportText(result));
+    }
+  } catch (err) {
+    if (err instanceof ExecutionRefusalError) {
+      runtime.error(err.message);
+      runtime.exit(1);
+      return;
+    }
+    throw err;
+  }
+}
+
 export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runtime: RuntimeEnv) {
   const cfg = loadConfig();
+
+  // -------------------------------------------------------------------------
+  // Flag conflict detection (Phase 3C safety rules)
+  // -------------------------------------------------------------------------
+  const hasExecute = Array.isArray(opts.execute) && opts.execute.length > 0;
+  const hasExecuteTier = opts.executeTier != null && opts.executeTier !== "";
+  const isExecutionMode = hasExecute || hasExecuteTier;
+
+  if (isExecutionMode && opts.dryRun) {
+    runtime.error("--execute and --dry-run are contradictory. Use one or the other.");
+    runtime.exit(1);
+    return;
+  }
+
+  if (isExecutionMode && opts.enforce) {
+    runtime.error(
+      "--execute uses the remediation plan path. --enforce uses legacy maintenance. Choose one.",
+    );
+    runtime.exit(1);
+    return;
+  }
+
+  if (hasExecute && hasExecuteTier) {
+    runtime.error("--execute and --execute-tier are mutually exclusive. Use one or the other.");
+    runtime.exit(1);
+    return;
+  }
+
+  if (isExecutionMode && (opts.agent || opts.allAgents || opts.store)) {
+    runtime.error(
+      "--execute/--execute-tier operates on the default agent store only. " +
+        "--agent, --all-agents, and --store are not supported in execution mode.",
+    );
+    runtime.exit(1);
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // Execution path (Phase 3C)
+  // -------------------------------------------------------------------------
+  if (isExecutionMode) {
+    await sessionsCleanupExecuteCommand(opts, cfg, runtime);
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // Existing dry-run / enforce path
+  // -------------------------------------------------------------------------
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const mode = opts.enforce ? "enforce" : resolveMaintenanceConfig().mode;
   const targets = resolveSessionStoreTargetsOrExit({
@@ -323,23 +520,30 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
   }
 
   if (opts.dryRun) {
+    // Build the remediation plan from a live health snapshot (best-effort).
+    const remediationPlan = await tryBuildRemediationPlanForDryRun(cfg);
+
     if (opts.json) {
       if (previewResults.length === 1) {
-        runtime.log(JSON.stringify(previewResults[0]?.summary ?? {}, null, 2));
+        const payload: Record<string, unknown> = {
+          ...previewResults[0]?.summary,
+        };
+        if (remediationPlan) {
+          payload.remediationPlan = remediationPlan;
+        }
+        runtime.log(JSON.stringify(payload, null, 2));
         return;
       }
-      runtime.log(
-        JSON.stringify(
-          {
-            allAgents: true,
-            mode,
-            dryRun: true,
-            stores: previewResults.map((result) => result.summary),
-          },
-          null,
-          2,
-        ),
-      );
+      const payload: Record<string, unknown> = {
+        allAgents: true,
+        mode,
+        dryRun: true,
+        stores: previewResults.map((result) => result.summary),
+      };
+      if (remediationPlan) {
+        payload.remediationPlan = remediationPlan;
+      }
+      runtime.log(JSON.stringify(payload, null, 2));
       return;
     }
 
@@ -356,6 +560,12 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
         runtime,
         showAgentHeader: previewResults.length > 1,
       });
+    }
+
+    // Append remediation plan report after the existing dry-run output.
+    if (remediationPlan && remediationPlan.summary.totalActions > 0) {
+      runtime.log("");
+      runtime.log(renderRemediationPlanText(remediationPlan));
     }
     return;
   }

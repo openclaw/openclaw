@@ -42,6 +42,10 @@ import {
 } from "../infra/plugin-install-path-warnings.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import {
+  startSessionHealthCollector,
+  type SessionHealthRunner,
+} from "../infra/session-health-runner.js";
+import {
   primeRemoteSkillsCache,
   refreshRemoteBinsForConnectedNodes,
   setSkillsRemoteRegistry,
@@ -992,6 +996,10 @@ export async function startGatewayServer(
       }
     : startHeartbeatRunner({ cfg: cfgAtStart });
 
+  let sessionHealthRunner: SessionHealthRunner = minimalTestGateway
+    ? { stop: () => {}, updateConfig: () => {} }
+    : startSessionHealthCollector({ cfg: cfgAtStart });
+
   const healthCheckMinutes = cfgAtStart.gateway?.channelHealthCheckMinutes;
   const healthCheckDisabled = healthCheckMinutes === 0;
   const staleEventThresholdMinutes = cfgAtStart.gateway?.channelStaleEventThresholdMinutes;
@@ -1226,6 +1234,7 @@ export async function startGatewayServer(
             hooksConfig,
             hookClientIpConfig,
             heartbeatRunner,
+            sessionHealthRunner,
             cronState,
             browserControl,
             channelHealthMonitor,
@@ -1234,6 +1243,9 @@ export async function startGatewayServer(
             hooksConfig = nextState.hooksConfig;
             hookClientIpConfig = nextState.hookClientIpConfig;
             heartbeatRunner = nextState.heartbeatRunner;
+            if (nextState.sessionHealthRunner) {
+              sessionHealthRunner = nextState.sessionHealthRunner;
+            }
             cronState = nextState.cronState;
             cron = cronState.cron;
             cronStorePath = cronState.storePath;
@@ -1307,6 +1319,7 @@ export async function startGatewayServer(
     pluginServices,
     cron,
     heartbeatRunner,
+    sessionHealthRunner,
     updateCheckStop: stopGatewayUpdateCheck,
     nodePresenceTimers,
     broadcast,

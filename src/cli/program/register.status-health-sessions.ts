@@ -170,6 +170,15 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     )
     .option("--active-key <key>", "Protect this session key from budget-eviction")
     .option("--json", "Output JSON", false)
+    .option(
+      "--execute <ids...>",
+      "Execute specific remediation action(s) by ID from a prior --dry-run review",
+    )
+    .option(
+      "--execute-tier <tier>",
+      "Execute all actions in the specified tier (0 or 1). Tier 1 implies Tier 0.",
+    )
+    .option("--yes", "Skip interactive confirmation prompt (still prints the summary)", false)
     .addHelpText(
       "after",
       () =>
@@ -185,6 +194,15 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           [
             "openclaw sessions cleanup --enforce --store ./tmp/sessions.json",
             "Use a specific store.",
+          ],
+          [
+            "openclaw sessions cleanup --execute cleanup-orphaned-tmp-1",
+            "Execute a specific remediation action.",
+          ],
+          ["openclaw sessions cleanup --execute-tier 0", "Execute all Tier 0 (auto-safe) actions."],
+          [
+            "openclaw sessions cleanup --execute-tier 1 --yes --json",
+            "Execute Tier 0 + 1 actions without prompt, JSON output.",
           ],
         ])}`,
     )
@@ -208,6 +226,9 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             fixMissing: Boolean(opts.fixMissing),
             activeKey: opts.activeKey as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
+            execute: opts.execute as string[] | undefined,
+            executeTier: opts.executeTier as string | undefined,
+            yes: Boolean(opts.yes),
           },
           defaultRuntime,
         );

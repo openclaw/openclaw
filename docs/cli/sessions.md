@@ -70,6 +70,7 @@ openclaw sessions cleanup --json
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
   - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) so you can see what would be kept vs removed.
+  - When session health data is available, dry-run also appends a **Remediation Plan** — a tiered report of deeper cleanup opportunities (orphaned temp files, stale archives, index drift, ephemeral session retention). This report is preview-only and never executes any actions. In JSON mode, the plan appears as a `remediationPlan` object in the output.
 - `--enforce`: apply maintenance even when `session.maintenance.mode` is `warn`.
 - `--active-key <key>`: protect a specific active key from disk-budget eviction.
 - `--agent <id>`: run cleanup for one configured agent store.

@@ -91,6 +91,11 @@ Welcome to the lobster tank! 🦞
 
 - Test locally with your OpenClaw instance
 - Run tests: `pnpm build && pnpm check && pnpm test`
+- The pre-commit hook runs per-file lint/format and a repo-wide quality gate (`pnpm check`). To bypass the gate for a known-safe commit (e.g. docs-only, config-only), use:
+  ```
+  OPENCLAW_SKIP_CHECK=1 git commit -m "your message"
+  ```
+  Per-file lint and format still run; only the gate is skipped.
 - For extension/plugin changes, run the fast local lane first:
   - `pnpm test:extension <extension-name>`
   - `pnpm test:extension --list` to see valid extension ids

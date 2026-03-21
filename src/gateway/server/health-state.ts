@@ -2,6 +2,10 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
 import { STATE_DIR, createConfigIO, loadConfig } from "../../config/config.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
+import {
+  readCachedDerivedSurface,
+  readCachedSnapshot,
+} from "../../infra/session-health-collector.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
@@ -71,6 +75,20 @@ export async function refreshGatewayHealthSnapshot(opts?: { probe?: boolean }) {
   if (!healthRefresh) {
     healthRefresh = (async () => {
       const snap = await getHealthSnapshot({ probe: opts?.probe });
+      // Attach cached session health data (produced by periodic collector).
+      // This is zero new computation during the health RPC — reads from cache only.
+      try {
+        const sessionHealth = await readCachedSnapshot();
+        if (sessionHealth) {
+          snap.sessionHealth = sessionHealth;
+        }
+        const sessionHealthSurface = await readCachedDerivedSurface();
+        if (sessionHealthSurface) {
+          snap.sessionHealthSurface = sessionHealthSurface;
+        }
+      } catch {
+        // Session health is best-effort; don't fail the health RPC.
+      }
       healthCache = snap;
       healthVersion += 1;
       if (broadcastHealthUpdate) {

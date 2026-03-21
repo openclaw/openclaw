@@ -70,6 +70,22 @@ export type HealthSummary = {
       age: number | null;
     }>;
   };
+  /**
+   * Optional raw session health snapshot from the periodic session health
+   * collector (Layer A). Populated once the collector has run at least once
+   * after gateway startup.
+   *
+   * This field is additive — existing consumers that don't know about it will
+   * simply ignore it.
+   */
+  sessionHealth?: import("../infra/session-health-types.js").SessionHealthRawSnapshot | null;
+  /**
+   * Optional derived operator-facing health surface (Layer B) with
+   * threshold-based indicators. Populated by the periodic collector after
+   * deriving from the raw snapshot. UI surfaces consume this instead of
+   * inspecting the raw snapshot directly.
+   */
+  sessionHealthSurface?: import("../infra/session-health-types.js").SessionHealthSurface | null;
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;

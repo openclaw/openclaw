@@ -4074,6 +4074,147 @@ details[open] > .ov-expandable-toggle::after {
   }
 }
 
+/* ── Session Health card ─────────────────────────────────── */
+
+.sh-card {
+  margin-top: 18px;
+}
+
+.sh-card .card-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sh-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm, 4px);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.sh-badge.sh-healthy {
+  color: var(--success, #22c55e);
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.sh-badge.sh-warning {
+  color: var(--warning, #eab308);
+  background: rgba(234, 179, 8, 0.1);
+}
+
+.sh-badge.sh-critical {
+  color: var(--danger, #ef4444);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.sh-badge.sh-stale {
+  color: var(--muted);
+  background: var(--bg-hover);
+}
+
+.sh-badge.sh-unknown {
+  color: var(--muted);
+  background: var(--bg-hover);
+}
+
+.sh-summary {
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.sh-indicators {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.sh-indicator {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.sh-indicator.sh-healthy {
+  border-color: var(--border);
+}
+
+.sh-indicator.sh-warning {
+  border-color: var(--warning-subtle, rgba(234, 179, 8, 0.25));
+  background: rgba(234, 179, 8, 0.04);
+}
+
+.sh-indicator.sh-critical {
+  border-color: var(--danger-subtle, rgba(239, 68, 68, 0.25));
+  background: rgba(239, 68, 68, 0.04);
+}
+
+.sh-indicator.sh-stale,
+.sh-indicator.sh-unknown {
+  border-color: var(--border);
+  opacity: 0.7;
+}
+
+.sh-indicator__icon {
+  flex-shrink: 0;
+  width: 18px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.sh-indicator.sh-healthy .sh-indicator__icon {
+  color: var(--success, #22c55e);
+}
+
+.sh-indicator.sh-warning .sh-indicator__icon {
+  color: var(--warning, #eab308);
+}
+
+.sh-indicator.sh-critical .sh-indicator__icon {
+  color: var(--danger, #ef4444);
+}
+
+.sh-indicator__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.sh-indicator__label {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.sh-indicator__summary {
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.sh-indicator__value {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.sh-measured {
+  font-size: 11px;
+  margin-top: 10px;
+  text-align: right;
+}
+
 @media (max-width: 600px) {
   .ov-cards {
     grid-template-columns: repeat(2, 1fr);

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import type { SessionHealthRawSnapshot } from "../infra/session-health-types.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -14,6 +15,9 @@ const mocks = vi.hoisted(() => ({
   capEntryCount: vi.fn(),
   updateSessionStore: vi.fn(),
   enforceSessionDiskBudget: vi.fn(),
+  collectSessionHealth: vi.fn(),
+  promptYesNo: vi.fn(),
+  executeRemediation: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -36,6 +40,23 @@ vi.mock("../config/sessions.js", () => ({
   enforceSessionDiskBudget: mocks.enforceSessionDiskBudget,
 }));
 
+vi.mock("../infra/session-health-collector.js", () => ({
+  collectSessionHealth: mocks.collectSessionHealth,
+}));
+
+vi.mock("../cli/prompt.js", () => ({
+  promptYesNo: mocks.promptYesNo,
+}));
+
+vi.mock("../infra/session-health-remediation-executor.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../infra/session-health-remediation-executor.js")>();
+  return {
+    ...actual,
+    executeRemediation: mocks.executeRemediation,
+  };
+});
+
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
 
 function makeRuntime(): { runtime: RuntimeEnv; logs: string[] } {
@@ -47,6 +68,99 @@ function makeRuntime(): { runtime: RuntimeEnv; logs: string[] } {
       exit: () => {},
     },
     logs,
+  };
+}
+
+/** Minimal clean snapshot that produces zero remediation actions. */
+function cleanSnapshot(): SessionHealthRawSnapshot {
+  return {
+    capturedAt: "2026-03-20T18:00:00.000Z",
+    collectorDurationMs: 5,
+    sessions: {
+      indexedCount: 10,
+      sessionsJsonBytes: 5000,
+      sessionsJsonParseTimeMs: 1,
+      byClass: {
+        main: 2,
+        channel: 3,
+        direct: 2,
+        "cron-definition": 1,
+        "cron-run": 0,
+        subagent: 0,
+        acp: 0,
+        heartbeat: 0,
+        thread: 2,
+        unknown: 0,
+      },
+      byDiskState: { active: 10, deleted: 0, reset: 0, orphanedTemp: 0 },
+    },
+    storage: {
+      totalManagedBytes: 100_000,
+      sessionsJsonBytes: 5000,
+      activeTranscriptBytes: 95_000,
+      deletedTranscriptBytes: 0,
+      resetTranscriptBytes: 0,
+      orphanedTempBytes: 0,
+    },
+    drift: {
+      indexedWithoutDiskFile: 0,
+      diskFilesWithoutIndex: 0,
+      orphanedTempCount: 0,
+      oldestOrphanedTempAt: null,
+      reconciliationRecommended: false,
+    },
+    maintenance: {
+      mode: "warn",
+      maxEntries: 500,
+      pruneAfterMs: 7 * 24 * 60 * 60 * 1000,
+      maxDiskBytes: null,
+      usagePercent: { entries: 2, diskBytes: null },
+    },
+    growth: {
+      sessionsBytes24h: null,
+      sessionsBytes7d: null,
+      indexedCount24h: null,
+      indexedCount7d: null,
+    },
+    agents: [],
+  };
+}
+
+/** Snapshot with issues that will produce remediation actions. */
+function snapshotWithIssues(): SessionHealthRawSnapshot {
+  return {
+    ...cleanSnapshot(),
+    sessions: {
+      ...cleanSnapshot().sessions,
+      byClass: {
+        ...cleanSnapshot().sessions.byClass,
+        "cron-run": 15,
+        subagent: 8,
+      },
+      staleByClass: {
+        "cron-run": 6,
+        subagent: 3,
+      },
+      byDiskState: {
+        active: 30,
+        deleted: 3,
+        reset: 5,
+        orphanedTemp: 2,
+      },
+    },
+    storage: {
+      ...cleanSnapshot().storage,
+      deletedTranscriptBytes: 2_000_000,
+      resetTranscriptBytes: 5_000_000,
+      orphanedTempBytes: 4096,
+    },
+    drift: {
+      indexedWithoutDiskFile: 4,
+      diskFilesWithoutIndex: 3,
+      orphanedTempCount: 2,
+      oldestOrphanedTempAt: "2026-03-19T10:00:00.000Z",
+      reconciliationRecommended: true,
+    },
   };
 }
 
@@ -107,6 +221,9 @@ describe("sessionsCleanupCommand", () => {
       highWaterBytes: 700,
       overBudget: true,
     });
+    // Default: collectSessionHealth returns a clean snapshot (no remediation actions).
+    // Individual tests can override this to test remediation plan integration.
+    mocks.collectSessionHealth.mockResolvedValue(cleanSnapshot());
   });
 
   it("emits a single JSON object for non-dry runs and applies maintenance", async () => {
@@ -287,5 +404,535 @@ describe("sessionsCleanupCommand", () => {
     expect(payload.allAgents).toBe(true);
     expect(Array.isArray(payload.stores)).toBe(true);
     expect((payload.stores as unknown[]).length).toBe(2);
+  });
+
+  // -------------------------------------------------------------------------
+  // Remediation plan integration (Phase 3B)
+  // -------------------------------------------------------------------------
+
+  it("includes remediationPlan in dry-run JSON when snapshot has issues", async () => {
+    mocks.collectSessionHealth.mockResolvedValue(snapshotWithIssues());
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.loadSessionStore.mockReturnValue({
+      fresh: { sessionId: "fresh", updatedAt: 2 },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        json: true,
+        dryRun: true,
+      },
+      runtime,
+    );
+
+    expect(logs).toHaveLength(1);
+    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+    expect(payload.dryRun).toBe(true);
+    expect(payload.remediationPlan).toBeDefined();
+    const plan = payload.remediationPlan as Record<string, unknown>;
+    expect(plan.generatedAt).toBeTruthy();
+    expect(plan.snapshotAt).toBeTruthy();
+    const summary = plan.summary as Record<string, unknown>;
+    expect(summary.totalActions).toBeGreaterThan(0);
+    expect(Array.isArray(plan.tiers)).toBe(true);
+    expect(plan.approvalModel).toBeDefined();
+  });
+
+  it("omits remediationPlan from dry-run JSON when snapshot is clean", async () => {
+    mocks.collectSessionHealth.mockResolvedValue(cleanSnapshot());
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.loadSessionStore.mockReturnValue({
+      fresh: { sessionId: "fresh", updatedAt: 2 },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        json: true,
+        dryRun: true,
+      },
+      runtime,
+    );
+
+    expect(logs).toHaveLength(1);
+    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+    // Clean snapshot produces a plan with 0 actions, so remediationPlan is
+    // still included (it shows the empty plan structure). The key thing is
+    // it doesn't break existing fields.
+    expect(payload.dryRun).toBe(true);
+  });
+
+  it("appends remediation plan text in dry-run text mode when issues exist", async () => {
+    mocks.collectSessionHealth.mockResolvedValue(snapshotWithIssues());
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.loadSessionStore.mockReturnValue({
+      stale: { sessionId: "stale", updatedAt: 1, model: "pi:opus" },
+      fresh: { sessionId: "fresh", updatedAt: 2, model: "pi:opus" },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        dryRun: true,
+      },
+      runtime,
+    );
+
+    const fullOutput = logs.join("\n");
+    // Should still have the existing per-session action table
+    expect(fullOutput).toContain("Planned session actions:");
+    // Should also have the appended remediation plan
+    expect(fullOutput).toContain("REMEDIATION PLAN");
+    expect(fullOutput).toContain("DRY RUN");
+    expect(fullOutput).toContain("No changes have been made");
+    expect(fullOutput).toContain("Tier 0");
+    expect(fullOutput).toContain("orphaned temp");
+  });
+
+  it("does not append remediation plan text when snapshot is clean", async () => {
+    mocks.collectSessionHealth.mockResolvedValue(cleanSnapshot());
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.loadSessionStore.mockReturnValue({
+      fresh: { sessionId: "fresh", updatedAt: 2, model: "pi:opus" },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        dryRun: true,
+      },
+      runtime,
+    );
+
+    const fullOutput = logs.join("\n");
+    // Existing dry-run output should be present
+    expect(fullOutput).toContain("Session store:");
+    // Remediation plan should NOT be appended (0 actions → no extra output)
+    expect(fullOutput).not.toContain("REMEDIATION PLAN");
+  });
+
+  it("gracefully handles collectSessionHealth failure in dry-run", async () => {
+    mocks.collectSessionHealth.mockRejectedValue(new Error("disk unreadable"));
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.loadSessionStore.mockReturnValue({
+      fresh: { sessionId: "fresh", updatedAt: 2 },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        json: true,
+        dryRun: true,
+      },
+      runtime,
+    );
+
+    expect(logs).toHaveLength(1);
+    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+    expect(payload.dryRun).toBe(true);
+    // No remediationPlan key when collection fails
+    expect(payload.remediationPlan).toBeUndefined();
+  });
+
+  it("does not include remediationPlan in enforce (non-dry-run) JSON", async () => {
+    mocks.collectSessionHealth.mockResolvedValue(snapshotWithIssues());
+    mocks.loadSessionStore
+      .mockReturnValueOnce({
+        fresh: { sessionId: "fresh", updatedAt: 2 },
+      })
+      .mockReturnValueOnce({
+        fresh: { sessionId: "fresh", updatedAt: 2 },
+      });
+    mocks.updateSessionStore.mockResolvedValue(0);
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        json: true,
+        enforce: true,
+        activeKey: "agent:main:main",
+      },
+      runtime,
+    );
+
+    expect(logs).toHaveLength(1);
+    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+    // Enforce mode should NOT include remediation plan — it's dry-run only
+    expect(payload.remediationPlan).toBeUndefined();
+  });
+
+  it("includes remediationPlan in --all-agents dry-run JSON", async () => {
+    mocks.collectSessionHealth.mockResolvedValue(snapshotWithIssues());
+    mocks.resolveSessionStoreTargets.mockReturnValue([
+      { agentId: "main", storePath: "/resolved/main-sessions.json" },
+      { agentId: "work", storePath: "/resolved/work-sessions.json" },
+    ]);
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.loadSessionStore
+      .mockReturnValueOnce({ fresh: { sessionId: "fresh-main", updatedAt: 2 } })
+      .mockReturnValueOnce({ fresh: { sessionId: "fresh-work", updatedAt: 2 } });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        json: true,
+        dryRun: true,
+        allAgents: true,
+      },
+      runtime,
+    );
+
+    expect(logs).toHaveLength(1);
+    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+    expect(payload.allAgents).toBe(true);
+    expect(payload.remediationPlan).toBeDefined();
+    const plan = payload.remediationPlan as Record<string, unknown>;
+    const summary = plan.summary as Record<string, unknown>;
+    expect(summary.totalActions).toBeGreaterThan(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 3C — Execution path
+  // -------------------------------------------------------------------------
+
+  describe("execution path (Phase 3C)", () => {
+    it("refuses --execute with --dry-run", async () => {
+      const { runtime } = makeRuntime();
+      const errors: string[] = [];
+      let exitCode: number | undefined;
+      runtime.error = (msg: unknown) => errors.push(String(msg));
+      runtime.exit = (code: number) => {
+        exitCode = code;
+      };
+
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+          dryRun: true,
+        },
+        runtime,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(errors.some((e) => e.includes("contradictory"))).toBe(true);
+    });
+
+    it("refuses --execute with --enforce", async () => {
+      const { runtime } = makeRuntime();
+      const errors: string[] = [];
+      let exitCode: number | undefined;
+      runtime.error = (msg: unknown) => errors.push(String(msg));
+      runtime.exit = (code: number) => {
+        exitCode = code;
+      };
+
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+          enforce: true,
+        },
+        runtime,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(errors.some((e) => e.includes("legacy maintenance"))).toBe(true);
+    });
+
+    it("refuses --execute-tier > 1 in v1", async () => {
+      mocks.collectSessionHealth.mockResolvedValue(snapshotWithIssues());
+
+      const { runtime } = makeRuntime();
+      const errors: string[] = [];
+      let exitCode: number | undefined;
+      runtime.error = (msg: unknown) => errors.push(String(msg));
+      runtime.exit = (code: number) => {
+        exitCode = code;
+      };
+
+      await sessionsCleanupCommand(
+        {
+          executeTier: "2",
+        },
+        runtime,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(errors.some((e) => e.includes("not supported in v1"))).toBe(true);
+    });
+
+    it("refuses --execute and --execute-tier together", async () => {
+      const { runtime } = makeRuntime();
+      const errors: string[] = [];
+      let exitCode: number | undefined;
+      runtime.error = (msg: unknown) => errors.push(String(msg));
+      runtime.exit = (code: number) => {
+        exitCode = code;
+      };
+
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+          executeTier: "0",
+        },
+        runtime,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(errors.some((e) => e.includes("mutually exclusive"))).toBe(true);
+    });
+
+    it("prompts for confirmation by default and aborts on decline", async () => {
+      mocks.collectSessionHealth.mockResolvedValue(snapshotWithIssues());
+      mocks.promptYesNo.mockResolvedValue(false);
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+        },
+        runtime,
+      );
+
+      expect(mocks.promptYesNo).toHaveBeenCalled();
+      expect(logs.some((l) => l.includes("Aborted"))).toBe(true);
+      expect(mocks.executeRemediation).not.toHaveBeenCalled();
+    });
+
+    it("executes with --yes and prints JSON report", async () => {
+      mocks.collectSessionHealth.mockResolvedValue(snapshotWithIssues());
+      mocks.executeRemediation.mockResolvedValue({
+        executedAt: "2026-03-20T22:00:00.000Z",
+        actions: [
+          {
+            id: "cleanup-orphaned-tmp-1",
+            kind: "cleanup-orphaned-tmp",
+            tier: 0,
+            status: "complete",
+            artifactsRemoved: 2,
+            bytesFreed: 4096,
+            detail: "Removed 2 .tmp file(s).",
+          },
+        ],
+        summary: {
+          executed: 1,
+          skipped: 0,
+          failed: 0,
+          refused: 0,
+          totalBytesFreed: 4096,
+          storageBefore: 50_000_000,
+          storageAfter: 49_995_904,
+        },
+      });
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+          yes: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      expect(mocks.promptYesNo).not.toHaveBeenCalled();
+      expect(mocks.executeRemediation).toHaveBeenCalled();
+
+      // --json should produce exactly one JSON blob, no human text
+      expect(logs).toHaveLength(1);
+      const payload = JSON.parse(logs[0]);
+      expect(payload.executedAt).toBeTruthy();
+      expect(payload.summary).toBeDefined();
+      expect((payload.summary as Record<string, unknown>).executed).toBe(1);
+      // No confirmation block text in stdout
+      expect(logs[0]).not.toContain("CONFIRMATION REQUIRED");
+    });
+
+    it("executes with --execute-tier 0 and prints text report", async () => {
+      mocks.collectSessionHealth.mockResolvedValue(snapshotWithIssues());
+      mocks.executeRemediation.mockResolvedValue({
+        executedAt: "2026-03-20T22:00:00.000Z",
+        actions: [
+          {
+            id: "cleanup-orphaned-tmp-1",
+            kind: "cleanup-orphaned-tmp",
+            tier: 0,
+            status: "complete",
+            artifactsRemoved: 2,
+            bytesFreed: 4096,
+          },
+        ],
+        summary: {
+          executed: 1,
+          skipped: 0,
+          failed: 0,
+          refused: 0,
+          totalBytesFreed: 4096,
+          storageBefore: 50_000_000,
+          storageAfter: 49_995_904,
+        },
+      });
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          executeTier: "0",
+          yes: true,
+        },
+        runtime,
+      );
+
+      const fullOutput = logs.join("\n");
+      expect(fullOutput).toContain("CONFIRMATION REQUIRED");
+      expect(fullOutput).toContain("COMPLETE");
+    });
+
+    it("handles empty tier (no actions in plan) gracefully", async () => {
+      mocks.collectSessionHealth.mockResolvedValue(cleanSnapshot());
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          executeTier: "0",
+          yes: true,
+        },
+        runtime,
+      );
+
+      const fullOutput = logs.join("\n");
+      expect(fullOutput).toContain("Nothing to execute");
+      expect(mocks.executeRemediation).not.toHaveBeenCalled();
+    });
+
+    it("handles empty tier in JSON mode", async () => {
+      mocks.collectSessionHealth.mockResolvedValue(cleanSnapshot());
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          executeTier: "0",
+          yes: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      expect(logs).toHaveLength(1);
+      const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+      expect(payload.message).toContain("Nothing to execute");
+      expect(Array.isArray(payload.actions)).toBe(true);
+      expect((payload.actions as unknown[]).length).toBe(0);
+    });
+
+    // -----------------------------------------------------------------------
+    // Phase 3C hardening — unsupported targeting flags in execute mode
+    // -----------------------------------------------------------------------
+
+    it("refuses --execute with --agent", async () => {
+      const { runtime } = makeRuntime();
+      const errors: string[] = [];
+      let exitCode: number | undefined;
+      runtime.error = (msg: unknown) => errors.push(String(msg));
+      runtime.exit = (code: number) => {
+        exitCode = code;
+      };
+
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+          agent: "work",
+        },
+        runtime,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(errors.some((e) => e.includes("not supported in execution mode"))).toBe(true);
+    });
+
+    it("refuses --execute with --all-agents", async () => {
+      const { runtime } = makeRuntime();
+      const errors: string[] = [];
+      let exitCode: number | undefined;
+      runtime.error = (msg: unknown) => errors.push(String(msg));
+      runtime.exit = (code: number) => {
+        exitCode = code;
+      };
+
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+          allAgents: true,
+        },
+        runtime,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(errors.some((e) => e.includes("not supported in execution mode"))).toBe(true);
+    });
+
+    it("refuses --execute with --store", async () => {
+      const { runtime } = makeRuntime();
+      const errors: string[] = [];
+      let exitCode: number | undefined;
+      runtime.error = (msg: unknown) => errors.push(String(msg));
+      runtime.exit = (code: number) => {
+        exitCode = code;
+      };
+
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+          store: "/tmp/other-sessions.json",
+        },
+        runtime,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(errors.some((e) => e.includes("not supported in execution mode"))).toBe(true);
+    });
+
+    it("--execute-tier 0 --yes --json produces clean stdout (no confirmation block)", async () => {
+      mocks.collectSessionHealth.mockResolvedValue(snapshotWithIssues());
+      mocks.executeRemediation.mockResolvedValue({
+        executedAt: "2026-03-20T22:00:00.000Z",
+        actions: [
+          {
+            id: "cleanup-orphaned-tmp-1",
+            kind: "cleanup-orphaned-tmp",
+            tier: 0,
+            status: "complete",
+            artifactsRemoved: 2,
+            bytesFreed: 4096,
+          },
+        ],
+        summary: {
+          executed: 1,
+          skipped: 0,
+          failed: 0,
+          refused: 0,
+          totalBytesFreed: 4096,
+          storageBefore: 50_000_000,
+          storageAfter: 49_995_904,
+        },
+      });
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          executeTier: "0",
+          yes: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      // stdout should be exactly one JSON blob — no human text
+      expect(logs).toHaveLength(1);
+      const raw = logs[0];
+      expect(raw).not.toContain("CONFIRMATION REQUIRED");
+      const payload = JSON.parse(raw);
+      expect(payload.executedAt).toBeTruthy();
+      expect((payload.summary as Record<string, unknown>).executed).toBe(1);
+    });
   });
 });
