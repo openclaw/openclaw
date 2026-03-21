@@ -124,6 +124,7 @@ function createLazy<T>(loader: () => Promise<T>): () => T | null {
 const lazyAgents = createLazy(() => import("./views/agents.ts"));
 const lazyChannels = createLazy(() => import("./views/channels.ts"));
 const lazyCron = createLazy(() => import("./views/cron.ts"));
+const lazyTasks = createLazy(() => import("./views/task-board.ts"));
 const lazyDebug = createLazy(() => import("./views/debug.ts"));
 const lazyInstances = createLazy(() => import("./views/instances.ts"));
 const lazyLogs = createLazy(() => import("./views/logs.ts"));
@@ -662,6 +663,20 @@ export function renderApp(state: AppViewState) {
                 onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
                 onRefreshLogs: () => state.loadOverview(),
               })
+            : nothing
+        }
+
+        ${
+          state.tab === "tasks"
+            ? lazyRender(lazyTasks, (m) =>
+                m.renderTaskBoard({
+                  loading: state.taskBoardLoading,
+                  error: state.taskBoardError,
+                  cards: state.taskBoardCards,
+                  lastLoadedAt: state.taskBoardLastLoadedAt,
+                  onRefresh: () => state.loadTaskBoard(),
+                }),
+              )
             : nothing
         }
 

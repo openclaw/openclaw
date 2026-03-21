@@ -32,6 +32,7 @@ import {
   type Tab,
 } from "./navigation.ts";
 import { saveSettings, type UiSettings } from "./storage.ts";
+import { loadTaskBoard } from "./task-board/service.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
 import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type { AgentsListResult, AttentionItem } from "./types.ts";
@@ -228,6 +229,9 @@ export async function refreshActiveTab(host: SettingsHost) {
   }
   if (host.tab === "sessions") {
     await loadSessions(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "tasks") {
+    await loadTaskBoard(host as unknown as Parameters<typeof loadTaskBoard>[0]);
   }
   if (host.tab === "cron") {
     await loadCron(host);
