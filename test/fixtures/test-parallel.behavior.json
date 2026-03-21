@@ -390,6 +390,10 @@
         "reason": "Terminates cleanly under threads, but not process forks on this host."
       },
       {
+        "file": "src/infra/outbound/message-action-runner.context.test.ts",
+        "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
         "file": "src/tts/tts.test.ts",
         "reason": "Terminates cleanly under threads, but not process forks on this host."
       }
