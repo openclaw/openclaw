@@ -105,8 +105,22 @@ describe("runDaemonRestart health checks", () => {
     runPostRestartCheck?: boolean;
   } = {}) {
     runServiceRestart.mockImplementation(
-      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
-        await params.onNotLoaded?.();
+      async (
+        params: RestartParams & {
+          onNotLoaded?: (ctx: {
+            json: boolean;
+            stdout: NodeJS.WriteStream;
+            fail: (msg: string) => void;
+          }) => Promise<unknown>;
+        },
+      ) => {
+        await params.onNotLoaded?.({
+          json: false,
+          stdout: process.stdout,
+          fail: (msg: string) => {
+            throw new Error(msg);
+          },
+        });
         if (runPostRestartCheck) {
           await params.postRestartCheck?.({
             json: Boolean(params.opts?.json),

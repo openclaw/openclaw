@@ -202,17 +202,6 @@ export async function runServiceStart(params: {
   if (loaded === null) {
     return;
   }
-  if (!loaded) {
-    await handleServiceNotLoaded({
-      serviceNoun: params.serviceNoun,
-      service: params.service,
-      loaded,
-      renderStartHints: params.renderStartHints,
-      json,
-      emit,
-    });
-    return;
-  }
   // Pre-flight config validation (#35862)
   {
     const configError = await getConfigValidationError();
@@ -240,6 +229,18 @@ export async function runServiceStart(params: {
       return;
     }
   } catch (err) {
+    if (!loaded) {
+      // Re-bootstrap failed (plist does not exist) — service was never installed.
+      await handleServiceNotLoaded({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        loaded,
+        renderStartHints: params.renderStartHints,
+        json,
+        emit,
+      });
+      return;
+    }
     const hints = params.renderStartHints();
     fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
     return;

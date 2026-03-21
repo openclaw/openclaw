@@ -163,12 +163,20 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     renderStartHints: renderGatewayServiceStartHints,
     opts,
     checkTokenDrift: true,
-    onNotLoaded: async () => {
+    onNotLoaded: async ({ stdout }) => {
       const handled = await restartGatewayWithoutServiceManager(restartPort);
       if (handled) {
         restartedWithoutServiceManager = true;
+        return handled;
       }
-      return handled;
+      // The service was stopped (bootout'd) but the plist may still exist on disk.
+      // service.restart() handles this by re-bootstrapping from the existing plist.
+      try {
+        await service.restart({ env: process.env, stdout });
+        return { result: "restarted" as const };
+      } catch {
+        return null;
+      }
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       if (restartedWithoutServiceManager) {

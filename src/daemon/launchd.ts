@@ -564,7 +564,12 @@ export async function restartLaunchAgent({
     return { outcome: "completed" };
   }
 
-  if (!isLaunchctlNotLoaded(start)) {
+  // Determine if kickstart failed because the service is not registered with launchd.
+  // Some macOS versions produce no stderr on kickstart-of-unregistered-service, so
+  // fall back to a `launchctl print` probe when the error text is inconclusive.
+  const notRegistered =
+    isLaunchctlNotLoaded(start) || !(await isLaunchAgentLoaded({ env: serviceEnv }));
+  if (!notRegistered) {
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
 
