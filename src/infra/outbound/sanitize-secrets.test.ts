@@ -64,6 +64,13 @@ describe("sanitizeSecrets — known prefixes", () => {
     expect(result.redacted).toBe(false);
   });
 
+  it("redacts secrets embedded after = sign", () => {
+    const result = sanitizeSecrets("TOKEN=ghp_abc123XYZ456789abcdef", emptyIndex);
+    expect(result.redacted).toBe(true);
+    expect(result.text).toContain("TOKEN=");
+    expect(result.text).not.toContain("ghp_abc123XYZ456789abcdef");
+  });
+
   it("preserves surrounding text", () => {
     const result = sanitizeSecrets(
       "Done. NEXTAUTH_SECRET = ghp_abc123XYZ456789abcdef stored for Rosie.",

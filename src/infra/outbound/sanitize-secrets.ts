@@ -72,7 +72,7 @@ function isHighEntropyToken(token: string): boolean {
 // Named credential index — match configured credential values to names
 // ---------------------------------------------------------------------------
 
-type CredentialIndex = Map<string, string>; // value → name
+export type CredentialIndex = Map<string, string>; // value → name
 
 /**
  * Build an index of known credential values from the gateway config.
@@ -145,7 +145,9 @@ function toReferenceHandle(value: string, credIndex: CredentialIndex): string {
  */
 function tokenize(text: string): Array<{ token: string; sep: string }> {
   const result: Array<{ token: string; sep: string }> = [];
-  const re = /([^\s,;|]+)([\s,;|]*)/g;
+  // Split on whitespace and common delimiters including '=' so that
+  // key=value pairs like `TOKEN=ghp_abc123` surface the value as a token.
+  const re = /([^\s,;|=]+)([\s,;|=]*)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     result.push({ token: m[1], sep: m[2] });
