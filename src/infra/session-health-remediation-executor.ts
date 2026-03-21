@@ -16,6 +16,17 @@
  * - No Tier 2 or Tier 3 execution
  * - Refuses unknown or resolved action IDs
  * - All v1 actions are idempotent
+ *
+ * v1 scope limitation — default agent only:
+ * The collector scans ALL configured agents and merges counts into one
+ * snapshot. The plan is therefore derived across all agents. However, the
+ * executor resolves a single `sessionsDir` via `resolveDefaultAgentId()`.
+ * This means v1 execution only touches files belonging to the default agent.
+ * Files in other agents' session directories may appear in the plan's
+ * estimated counts but will not be acted on by the executor. The executor
+ * re-discovers files at execution time, so it will naturally skip/report
+ * fewer artifacts than the plan estimated when cross-agent items are involved.
+ * Multi-agent execution is a future enhancement (tracked in the plan).
  */
 
 import fs from "node:fs/promises";
@@ -198,7 +209,11 @@ export async function executeRemediation(
     return 0; // preserve plan order within tier
   });
 
-  // 5. Resolve sessions directory and store for file operations
+  // 5. Resolve sessions directory and store for file operations.
+  //    v1 limitation: executor operates on the default agent only. The plan
+  //    may include counts from other agents' directories, but execution
+  //    only touches files in this single sessionsDir. Re-discovery at
+  //    execution time ensures we never act on stale/mismatched counts.
   const agentId = resolveDefaultAgentId(cfg);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const sessionsDir = path.dirname(storePath);
@@ -271,6 +286,7 @@ export async function executeRemediation(
     executedAt: new Date().toISOString(),
     actions: results,
     summary,
+    agentScope: agentId,
   };
 }
 

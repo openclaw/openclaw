@@ -118,6 +118,21 @@ export type SessionHealthRawSnapshot = {
 
   storage: SessionHealthStorageBreakdown;
 
+  /**
+   * Counts of .deleted and .reset files that are past the retention
+   * window (pruneAfterMs). These allow the plan builder to report
+   * honest affectedCounts rather than using the total disk-state counts,
+   * which may include files still within retention.
+   *
+   * Added in the count-honesty fixup pass.
+   */
+  staleArtifacts?: {
+    staleDeletedCount: number;
+    staleDeletedBytes: number;
+    staleResetCount: number;
+    staleResetBytes: number;
+  };
+
   drift: SessionHealthDrift;
 
   maintenance: SessionHealthMaintenance;

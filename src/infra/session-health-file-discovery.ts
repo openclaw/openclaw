@@ -91,6 +91,12 @@ export async function discoverOrphanedTmpFiles(sessionsDir: string): Promise<Dis
  * These are "orphan transcripts" — files that exist on disk but aren't
  * referenced by any session in the store.
  *
+ * Filename assumption: transcript files are named `${sessionId}.jsonl`.
+ * This holds for all current OpenClaw session types. If a future session
+ * type uses `sessionFile` overrides to decouple filename from sessionId,
+ * this mapping would need to be updated. The same assumption exists in
+ * the collector's drift detection (session-health-collector.ts).
+ *
  * @param sessionsDir - The sessions directory to scan
  * @param indexedSessionIds - Set of sessionIds referenced by the store
  */
@@ -106,6 +112,7 @@ export async function discoverOrphanTranscripts(
     if (!f.name.endsWith(".jsonl")) {
       return false;
     }
+    // Assumption: filename == sessionId + ".jsonl" (see doc comment above)
     const sessionId = f.name.replace(/\.jsonl$/, "");
     return !indexedSessionIds.has(sessionId);
   });

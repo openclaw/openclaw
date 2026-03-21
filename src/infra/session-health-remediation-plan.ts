@@ -105,21 +105,35 @@ function estimateOrphanTranscriptBytes(snapshot: SessionHealthRawSnapshot): numb
 function buildArchiveStaleDeletedTranscripts(
   snapshot: SessionHealthRawSnapshot,
 ): RemediationAction | null {
-  const { storage, sessions } = snapshot;
+  const { storage, sessions, staleArtifacts } = snapshot;
   if (sessions.byDiskState.deleted === 0 || storage.deletedTranscriptBytes === 0) {
     return null;
   }
+
+  // Use retention-filtered counts when available (honest count of files
+  // actually past the retention window). Fall back to total disk-state counts
+  // for snapshots collected before the staleArtifacts field was added.
+  const staleCount = staleArtifacts?.staleDeletedCount ?? sessions.byDiskState.deleted;
+  const staleBytes = staleArtifacts?.staleDeletedBytes ?? storage.deletedTranscriptBytes;
+
+  if (staleCount === 0) {
+    return null; // All .deleted files are still within retention
+  }
+
+  const withinRetention = sessions.byDiskState.deleted - staleCount;
+  const retentionNote =
+    withinRetention > 0 ? ` (${withinRetention} more within retention window, not affected)` : "";
 
   return {
     id: nextActionId("archive-stale-deleted-transcripts"),
     kind: "archive-stale-deleted-transcripts",
     tier: 1,
     label: "Purge aged .deleted transcript archives",
-    description: `Permanently remove ${sessions.byDiskState.deleted} .deleted transcript file(s) (${formatBytes(storage.deletedTranscriptBytes)}) that have exceeded the archive retention window (${formatMs(snapshot.maintenance.pruneAfterMs)}). These are already soft-deleted session transcripts kept as safety backups; the original sessions were previously removed from the index.`,
+    description: `Permanently remove ${staleCount} .deleted transcript file(s) (${formatBytes(staleBytes)}) that have exceeded the archive retention window (${formatMs(snapshot.maintenance.pruneAfterMs)})${retentionNote}. These are already soft-deleted session transcripts kept as safety backups; the original sessions were previously removed from the index.`,
     reason: "Stale .deleted transcript archives consuming storage beyond retention window",
     estimatedImpact: {
-      affectedCount: sessions.byDiskState.deleted,
-      estimatedBytes: storage.deletedTranscriptBytes,
+      affectedCount: staleCount,
+      estimatedBytes: staleBytes,
       affectedClasses: [],
     },
     reversible: false, // These are already the archived version — no further backup exists
@@ -130,25 +144,38 @@ function buildArchiveStaleDeletedTranscripts(
 function buildArchiveStaleResetTranscripts(
   snapshot: SessionHealthRawSnapshot,
 ): RemediationAction | null {
-  const { storage, sessions } = snapshot;
+  const { storage, sessions, staleArtifacts } = snapshot;
   if (sessions.byDiskState.reset === 0 || storage.resetTranscriptBytes === 0) {
     return null;
   }
 
+  // Use retention-filtered counts when available (honest count of files
+  // actually past the retention window). Fall back to total disk-state counts
+  // for snapshots collected before the staleArtifacts field was added.
+  const staleCount = staleArtifacts?.staleResetCount ?? sessions.byDiskState.reset;
+  const staleBytes = staleArtifacts?.staleResetBytes ?? storage.resetTranscriptBytes;
+
+  if (staleCount === 0) {
+    return null; // All .reset files are still within retention
+  }
+
   const totalBytes = storage.totalManagedBytes;
-  const resetPct =
-    totalBytes > 0 ? ((storage.resetTranscriptBytes / totalBytes) * 100).toFixed(0) : "0";
+  const resetPct = totalBytes > 0 ? ((staleBytes / totalBytes) * 100).toFixed(0) : "0";
+
+  const withinRetention = sessions.byDiskState.reset - staleCount;
+  const retentionNote =
+    withinRetention > 0 ? ` (${withinRetention} more within retention window, not affected)` : "";
 
   return {
     id: nextActionId("archive-stale-reset-transcripts"),
     kind: "archive-stale-reset-transcripts",
     tier: 1,
     label: "Purge aged .reset transcript archives",
-    description: `Permanently remove ${sessions.byDiskState.reset} .reset transcript archive(s) consuming ${formatBytes(storage.resetTranscriptBytes)} (${resetPct}% of total managed storage). These are already archived session-reset snapshots retained for recovery and now recommended for final purge.`,
+    description: `Permanently remove ${staleCount} .reset transcript archive(s) consuming ${formatBytes(staleBytes)} (${resetPct}% of total managed storage)${retentionNote}. These are already archived session-reset snapshots retained for recovery and now recommended for final purge.`,
     reason: "Aged .reset transcript archives are the dominant storage consumer",
     estimatedImpact: {
-      affectedCount: sessions.byDiskState.reset,
-      estimatedBytes: storage.resetTranscriptBytes,
+      affectedCount: staleCount,
+      estimatedBytes: staleBytes,
       affectedClasses: [],
     },
     reversible: false, // These are already the archived version — no further backup exists

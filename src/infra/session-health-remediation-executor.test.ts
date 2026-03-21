@@ -69,6 +69,12 @@ function baseSnapshot(overrides?: Partial<SessionHealthRawSnapshot>): SessionHea
       resetTranscriptBytes: 20 * 1024 * 1024,
       orphanedTempBytes: 12700,
     },
+    staleArtifacts: {
+      staleDeletedCount: 3,
+      staleDeletedBytes: 3 * 1024 * 1024,
+      staleResetCount: 7,
+      staleResetBytes: 14 * 1024 * 1024,
+    },
     drift: {
       indexedWithoutDiskFile: 0,
       diskFilesWithoutIndex: 3,

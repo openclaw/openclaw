@@ -316,6 +316,13 @@ export type ExecutionResult = {
   executedAt: string;
   actions: ActionExecutionResult[];
   summary: ExecutionSummary;
+
+  /**
+   * v1: executor only operates on the default agent's session directory.
+   * The plan may include cross-agent counts; this field makes the actual
+   * execution scope explicit for programmatic consumers.
+   */
+  agentScope?: string;
 };
 
 /**

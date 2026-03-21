@@ -157,12 +157,20 @@ function emptyDiskStateCounts(): DiskStateCounts {
 // Per-agent collection
 // ---------------------------------------------------------------------------
 
+type StaleArtifactCounts = {
+  staleDeletedCount: number;
+  staleDeletedBytes: number;
+  staleResetCount: number;
+  staleResetBytes: number;
+};
+
 type AgentCollectionResult = {
   breakdown: SessionHealthAgentBreakdown;
   byDiskState: DiskStateCounts;
   storage: SessionHealthStorageBreakdown;
   drift: SessionHealthDrift;
   staleByClass: Partial<SessionHealthClassCounts>;
+  staleArtifacts: StaleArtifactCounts;
   parseTimeMs: number | null;
 };
 
@@ -256,11 +264,35 @@ async function collectForAgent(params: {
     }
   }
 
-  // 5. Drift detection
+  // 5. Compute retention-filtered stale artifact counts for .deleted and .reset files.
+  //    These allow the plan builder to report honest affectedCounts rather than
+  //    using total disk-state counts, which may include files still within retention.
+  const retentionMs = resolveMaintenanceConfig().pruneAfterMs;
+  const now2 = Date.now();
+  const staleArtifacts: StaleArtifactCounts = {
+    staleDeletedCount: 0,
+    staleDeletedBytes: 0,
+    staleResetCount: 0,
+    staleResetBytes: 0,
+  };
+  for (const file of files) {
+    const state = classifyDiskArtifact(file.name);
+    if (state === "deleted" && now2 - file.mtimeMs > retentionMs) {
+      staleArtifacts.staleDeletedCount++;
+      staleArtifacts.staleDeletedBytes += file.size;
+    } else if (state === "reset" && now2 - file.mtimeMs > retentionMs) {
+      staleArtifacts.staleResetCount++;
+      staleArtifacts.staleResetBytes += file.size;
+    }
+  }
+
+  // 6. Drift detection
   // Compare index keys against active disk files.
   // Note: session entries store a sessionId that maps to a .jsonl file.
-  // We do a simplified check: for each store key, see if any active .jsonl exists.
-  // Precise sessionId → filename mapping varies, so we count mismatches loosely.
+  // Assumption: the transcript filename is always `${sessionId}.jsonl`.
+  // This holds for all current OpenClaw session types. If sessionFile overrides
+  // are ever used, this mapping would need updating. See also the same assumption
+  // in session-health-file-discovery.ts discoverOrphanTranscripts().
   let indexedWithoutDiskFile = 0;
   const indexedSessionIds = new Set<string>();
 
@@ -319,6 +351,7 @@ async function collectForAgent(params: {
     storage,
     drift,
     staleByClass,
+    staleArtifacts,
     parseTimeMs,
   };
 }
@@ -369,12 +402,19 @@ export async function collectSessionHealth(
     reconciliationRecommended: false,
   };
   const mergedStaleByClass: Partial<SessionHealthClassCounts> = {};
+  const mergedStaleArtifacts: StaleArtifactCounts = {
+    staleDeletedCount: 0,
+    staleDeletedBytes: 0,
+    staleResetCount: 0,
+    staleResetBytes: 0,
+  };
   let totalIndexed = 0;
   let totalSessionsJsonBytes = 0;
   let bestParseTimeMs: number | null = null;
 
   for (const result of agentResults) {
-    const { breakdown, byDiskState, storage, drift, staleByClass, parseTimeMs } = result;
+    const { breakdown, byDiskState, storage, drift, staleByClass, staleArtifacts, parseTimeMs } =
+      result;
     totalIndexed += breakdown.indexedCount;
     totalSessionsJsonBytes += storage.sessionsJsonBytes;
 
@@ -390,6 +430,12 @@ export async function collectSessionHealth(
           (mergedStaleByClass[cls as SessionHealthClass] ?? 0) + count;
       }
     }
+
+    // Merge stale artifact counts (retention-filtered .deleted/.reset)
+    mergedStaleArtifacts.staleDeletedCount += staleArtifacts.staleDeletedCount;
+    mergedStaleArtifacts.staleDeletedBytes += staleArtifacts.staleDeletedBytes;
+    mergedStaleArtifacts.staleResetCount += staleArtifacts.staleResetCount;
+    mergedStaleArtifacts.staleResetBytes += staleArtifacts.staleResetBytes;
 
     // Merge disk state counts
     for (const [state, count] of Object.entries(byDiskState)) {
@@ -456,6 +502,10 @@ export async function collectSessionHealth(
       byDiskState: mergedDiskState,
     },
     storage: mergedStorage,
+    staleArtifacts:
+      mergedStaleArtifacts.staleDeletedCount > 0 || mergedStaleArtifacts.staleResetCount > 0
+        ? mergedStaleArtifacts
+        : undefined,
     drift: mergedDrift,
     maintenance: {
       mode: maintenance.mode,

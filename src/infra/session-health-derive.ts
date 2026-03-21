@@ -333,6 +333,14 @@ export function deriveStalestOrphan(snapshot: SessionHealthRawSnapshot): Session
  * Derive the overall level from all indicators.
  * Uses worst-case: critical > warning > unknown > healthy.
  * `stale_data` overrides everything when the snapshot is too old.
+ *
+ * TODO: When the collector stalls, the surface permanently shows `stale_data`
+ * and hides the last-known indicator levels. A future improvement could
+ * preserve the last-good indicator data alongside the stale_data override
+ * so operators can still see what the indicators looked like before the
+ * collector stopped. This is a UX honesty gap, not a correctness bug — the
+ * current behavior is safe (it signals "don't trust this data") but not
+ * maximally informative.
  */
 function deriveOverallLevel(
   indicators: SessionHealthIndicator[],

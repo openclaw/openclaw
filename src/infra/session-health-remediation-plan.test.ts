@@ -63,6 +63,14 @@ function baseSnapshot(overrides?: Partial<SessionHealthRawSnapshot>): SessionHea
       resetTranscriptBytes: 20 * 1024 * 1024,
       orphanedTempBytes: 0,
     },
+    // staleArtifacts: retention-filtered counts for .deleted/.reset files.
+    // 3 of 5 deleted and 7 of 10 reset files are past retention.
+    staleArtifacts: {
+      staleDeletedCount: 3,
+      staleDeletedBytes: 3 * 1024 * 1024,
+      staleResetCount: 7,
+      staleResetBytes: 14 * 1024 * 1024,
+    },
     drift: {
       indexedWithoutDiskFile: 0,
       diskFilesWithoutIndex: 0,
@@ -209,7 +217,7 @@ describe("Tier 1: archive actions", () => {
     expect(action?.estimatedImpact.affectedCount).toBe(5);
   });
 
-  it("proposes stale deleted transcript cleanup when present", () => {
+  it("proposes stale deleted transcript cleanup using retention-filtered count", () => {
     const snapshot = baseSnapshot();
     const plan = buildRemediationPlan({ snapshot });
     const action = plan.tiers
@@ -217,10 +225,14 @@ describe("Tier 1: archive actions", () => {
       .find((a) => a.kind === "archive-stale-deleted-transcripts");
     expect(action).toBeDefined();
     expect(action?.tier).toBe(1);
-    expect(action?.estimatedImpact.affectedCount).toBe(5); // 5 deleted files
+    // Uses staleArtifacts.staleDeletedCount (3), NOT total byDiskState.deleted (5)
+    expect(action?.estimatedImpact.affectedCount).toBe(3);
+    expect(action?.estimatedImpact.estimatedBytes).toBe(3 * 1024 * 1024);
+    // Description should mention files within retention
+    expect(action?.description).toContain("2 more within retention");
   });
 
-  it("proposes stale reset transcript cleanup when present", () => {
+  it("proposes stale reset transcript cleanup using retention-filtered count", () => {
     const snapshot = baseSnapshot();
     const plan = buildRemediationPlan({ snapshot });
     const action = plan.tiers
@@ -228,6 +240,11 @@ describe("Tier 1: archive actions", () => {
       .find((a) => a.kind === "archive-stale-reset-transcripts");
     expect(action).toBeDefined();
     expect(action?.tier).toBe(1);
+    // Uses staleArtifacts.staleResetCount (7), NOT total byDiskState.reset (10)
+    expect(action?.estimatedImpact.affectedCount).toBe(7);
+    expect(action?.estimatedImpact.estimatedBytes).toBe(14 * 1024 * 1024);
+    // Description should mention files within retention
+    expect(action?.description).toContain("3 more within retention");
   });
 });
 
@@ -305,6 +322,43 @@ describe("Tier 2: index-mutating actions", () => {
       .flatMap((t) => t.actions)
       .find((a) => a.kind === "prune-stale-heartbeats");
     expect(action).toBeUndefined();
+  });
+
+  it("falls back to total disk-state counts when staleArtifacts is missing", () => {
+    const snapshot = baseSnapshot({
+      staleArtifacts: undefined, // Simulate older snapshot without this field
+    });
+    const plan = buildRemediationPlan({ snapshot });
+    const deletedAction = plan.tiers
+      .flatMap((t) => t.actions)
+      .find((a) => a.kind === "archive-stale-deleted-transcripts");
+    expect(deletedAction).toBeDefined();
+    // Falls back to byDiskState.deleted (5)
+    expect(deletedAction?.estimatedImpact.affectedCount).toBe(5);
+
+    const resetAction = plan.tiers
+      .flatMap((t) => t.actions)
+      .find((a) => a.kind === "archive-stale-reset-transcripts");
+    expect(resetAction).toBeDefined();
+    // Falls back to byDiskState.reset (10)
+    expect(resetAction?.estimatedImpact.affectedCount).toBe(10);
+  });
+
+  it("omits stale deleted action when all files are within retention", () => {
+    const snapshot = baseSnapshot({
+      staleArtifacts: {
+        staleDeletedCount: 0,
+        staleDeletedBytes: 0,
+        staleResetCount: 7,
+        staleResetBytes: 14 * 1024 * 1024,
+      },
+    });
+    const plan = buildRemediationPlan({ snapshot });
+    const deletedAction = plan.tiers
+      .flatMap((t) => t.actions)
+      .find((a) => a.kind === "archive-stale-deleted-transcripts");
+    // All .deleted files are within retention, so no action should be proposed
+    expect(deletedAction).toBeUndefined();
   });
 
   it("does not propose pruning when staleByClass is missing", () => {
