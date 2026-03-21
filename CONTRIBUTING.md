@@ -146,7 +146,7 @@ Please include in your PR:
 - [ ] Note the degree of testing (untested / lightly tested / fully tested)
 - [ ] Include prompts or session logs if possible (super helpful!)
 - [ ] Confirm you understand what the code does
-- [ ] If you have access to Codex, run `codex review --base origin/main` locally and address the findings before asking for review
+- [ ] If you have access to Codex, run `codex review --base origin/main` locally, address the findings before asking for review, and note any major changes in your PR description. 
 - [ ] Resolve or reply to bot review conversations after you address them
 
 AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for. If you are using an LLM coding agent, instruct it to resolve bot review conversations it has addressed instead of leaving them for maintainers.
