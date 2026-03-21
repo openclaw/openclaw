@@ -266,7 +266,12 @@ function formatEntry(entry) {
   return `${entry.file}:${entry.line} [${entry.kind}] ${entry.reason} (${entry.specifier} -> ${entry.resolvedPath})`;
 }
 
-export async function main(argv = process.argv.slice(2)) {
+function writeLine(stream, text) {
+  stream.write(`${text}\n`);
+}
+
+export async function runPluginExtensionImportBoundaryCheck(argv = process.argv.slice(2), io) {
+  const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
   const json = argv.includes("--json");
   const actual = await collectPluginExtensionImportBoundaryInventory();
   const expected = await readExpectedInventory();
@@ -274,33 +279,43 @@ export async function main(argv = process.argv.slice(2)) {
   const matchesBaseline = missing.length === 0 && unexpected.length === 0;
 
   if (json) {
-    process.stdout.write(`${JSON.stringify(actual, null, 2)}\n`);
+    writeLine(streams.stdout, JSON.stringify(actual, null, 2));
   } else {
-    console.log(formatInventoryHuman(actual));
-    console.log(
+    writeLine(streams.stdout, formatInventoryHuman(actual));
+    writeLine(
+      streams.stdout,
       matchesBaseline
         ? `Baseline matches (${actual.length} entries).`
         : `Baseline mismatch (${unexpected.length} unexpected, ${missing.length} missing).`,
     );
     if (!matchesBaseline) {
       if (unexpected.length > 0) {
-        console.error("Unexpected entries:");
+        writeLine(streams.stderr, "Unexpected entries:");
         for (const entry of unexpected) {
-          console.error(`- ${formatEntry(entry)}`);
+          writeLine(streams.stderr, `- ${formatEntry(entry)}`);
         }
       }
       if (missing.length > 0) {
-        console.error("Missing baseline entries:");
+        writeLine(streams.stderr, "Missing baseline entries:");
         for (const entry of missing) {
-          console.error(`- ${formatEntry(entry)}`);
+          writeLine(streams.stderr, `- ${formatEntry(entry)}`);
         }
       }
     }
   }
 
   if (!matchesBaseline) {
-    process.exit(1);
+    return 1;
   }
+  return 0;
+}
+
+export async function main(argv = process.argv.slice(2), io) {
+  const exitCode = await runPluginExtensionImportBoundaryCheck(argv, io);
+  if (!io && exitCode !== 0) {
+    process.exit(exitCode);
+  }
+  return exitCode;
 }
 
 runAsScript(import.meta.url, main);
