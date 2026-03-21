@@ -144,7 +144,20 @@ export async function getReplyFromConfig(
   let provider = defaultProvider;
   let model = defaultModel;
   let hasResolvedHeartbeatModelOverride = false;
-  if (opts?.isHeartbeat) {
+  // Handle modelOverride from Gateway (e.g., image model when images detected)
+  let hasAppliedImageModelOverride = false;
+  if (opts?.modelOverride?.trim()) {
+    const modelRef = resolveModelRefFromString({
+      raw: opts.modelOverride.trim(),
+      defaultProvider,
+      aliasIndex,
+    });
+    if (modelRef) {
+      provider = modelRef.ref.provider;
+      model = modelRef.ref.model;
+      hasAppliedImageModelOverride = true;
+    }
+  } else if (opts?.isHeartbeat) {
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
     // fall back to the global defaults heartbeat model for backward compatibility.
     const heartbeatRaw =
@@ -307,6 +320,7 @@ export async function getReplyFromConfig(
     provider,
     model,
     hasResolvedHeartbeatModelOverride,
+    hasAppliedImageModelOverride,
     typing,
     opts: resolvedOpts,
     skillFilter: mergedSkillFilter,

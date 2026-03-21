@@ -128,6 +128,8 @@ export async function resolveReplyDirectives(params: {
   provider: string;
   model: string;
   hasResolvedHeartbeatModelOverride: boolean;
+  /** True when images triggered a model switch to imageModel. */
+  hasAppliedImageModelOverride?: boolean;
   typing: TypingController;
   opts?: GetReplyOptions;
   skillFilter?: string[];
@@ -444,6 +446,7 @@ export async function resolveReplyDirectives(params: {
     model,
     hasModelDirective: directives.hasModelDirective,
     hasResolvedHeartbeatModelOverride,
+    hasAppliedImageModelOverride: params.hasAppliedImageModelOverride,
   });
   logDirectiveStage(
     "model-selection-state",

@@ -28,6 +28,10 @@ export type GetReplyOptions = {
   abortSignal?: AbortSignal;
   /** Optional inbound images (used for webchat attachments). */
   images?: ImageContent[];
+  /** Model override for this run (e.g., image model when images detected). */
+  modelOverride?: string;
+  /** If true, session model override should be skipped (images triggered model switch). */
+  hasAppliedImageModelOverride?: boolean;
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;
   onReplyStart?: () => Promise<void> | void;

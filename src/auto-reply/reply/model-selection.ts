@@ -302,6 +302,9 @@ export async function createModelSelectionState(params: {
   /** True when heartbeat.model was explicitly resolved for this run.
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
   hasResolvedHeartbeatModelOverride?: boolean;
+  /** True when images triggered a model switch to imageModel.
+   *  In that case, skip session-stored overrides so the image model wins. */
+  hasAppliedImageModelOverride?: boolean;
 }): Promise<ModelSelectionState> {
   const timingEnabled = shouldLogModelSelectionTiming();
   const startMs = timingEnabled ? Date.now() : 0;
@@ -413,9 +416,12 @@ export async function createModelSelectionState(params: {
     parentSessionKey,
   });
   // Skip stored session model override only when an explicit heartbeat.model
-  // was resolved. Heartbeat runs without heartbeat.model should still inherit
+  // was resolved, or when images triggered a model switch to imageModel.
+  // Heartbeat runs without heartbeat.model should still inherit
   // the regular session/parent model override behavior.
-  const skipStoredOverride = params.hasResolvedHeartbeatModelOverride === true;
+  const skipStoredOverride =
+    params.hasResolvedHeartbeatModelOverride === true ||
+    params.hasAppliedImageModelOverride === true;
   if (storedOverride?.model && !skipStoredOverride) {
     const normalizedStoredOverride = normalizeModelRef(
       storedOverride.provider || defaultProvider,

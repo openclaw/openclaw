@@ -1303,6 +1303,20 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+
+    // When images are detected, switch to the configured image model.
+    // This ensures non-vision models don't fail when users send images via Dashboard.
+    let imageModelOverride: string | undefined;
+    if (parsedImages.length > 0) {
+      const imageModelPrimary = cfg.agents?.defaults?.imageModel?.primary?.trim();
+      if (imageModelPrimary) {
+        imageModelOverride = imageModelPrimary;
+        context.logGateway.debug(
+          `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}`,
+        );
+      }
+    }
+
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
@@ -1526,6 +1540,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           runId: clientRunId,
           abortSignal: abortController.signal,
           images: parsedImages.length > 0 ? parsedImages : undefined,
+          modelOverride: imageModelOverride,
+          hasAppliedImageModelOverride: imageModelOverride !== undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
             void emitUserTranscriptUpdate();
