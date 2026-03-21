@@ -27,8 +27,7 @@ import {
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 
-const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
-const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
+const BRAVE_DEFAULT_BASE_URL = "https://api.search.brave.com";
 const BRAVE_SEARCH_LANG_CODES = new Set([
   "ar",
   "eu",
@@ -94,6 +93,7 @@ const BRAVE_UI_LANG_LOCALE = /^([a-z]{2})-([a-z]{2})$/i;
 
 type BraveConfig = {
   mode?: string;
+  baseUrl?: string;
 };
 
 type BraveSearchResult = {
@@ -209,6 +209,7 @@ async function runBraveLlmContextSearch(params: {
   country?: string;
   search_lang?: string;
   freshness?: string;
+  baseUrl?: string;
 }): Promise<{
   results: Array<{
     url: string;
@@ -218,7 +219,8 @@ async function runBraveLlmContextSearch(params: {
   }>;
   sources?: BraveLlmContextResponse["sources"];
 }> {
-  const url = new URL(BRAVE_LLM_CONTEXT_ENDPOINT);
+  const base = params.baseUrl || BRAVE_DEFAULT_BASE_URL;
+  const url = new URL(base + "/res/v1/llm/context");
   url.searchParams.set("q", params.query);
   if (params.country) {
     url.searchParams.set("country", params.country);
@@ -265,8 +267,10 @@ async function runBraveWebSearch(params: {
   freshness?: string;
   dateAfter?: string;
   dateBefore?: string;
+  baseUrl?: string;
 }): Promise<Array<Record<string, unknown>>> {
-  const url = new URL(BRAVE_SEARCH_ENDPOINT);
+  const base = params.baseUrl || BRAVE_DEFAULT_BASE_URL;
+  const url = new URL(base + "/res/v1/web/search");
   url.searchParams.set("q", params.query);
   url.searchParams.set("count", String(params.count));
   if (params.country) {
@@ -531,6 +535,7 @@ function createBraveToolDefinition(
           country: country ?? undefined,
           search_lang: normalizedLanguage.search_lang,
           freshness,
+          baseUrl: braveConfig.baseUrl,
         });
         const payload = {
           query,
@@ -567,6 +572,7 @@ function createBraveToolDefinition(
         freshness,
         dateAfter,
         dateBefore,
+        baseUrl: braveConfig.baseUrl,
       });
       const payload = {
         query,
