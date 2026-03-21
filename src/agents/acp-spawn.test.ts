@@ -716,6 +716,9 @@ describe("spawnAcpDirect", () => {
       expect.objectContaining({
         parentSessionKey: "agent:main:subagent:parent",
         agentId: "codex",
+        replyChannel: "discord",
+        replyTo: "channel:parent-channel",
+        replyAccountId: "default",
         logPath: "/tmp/sess-main.acp-stream.jsonl",
         emitStartNotice: false,
       }),

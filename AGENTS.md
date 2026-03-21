@@ -178,6 +178,14 @@
 
 - If `git branch -d/-D <branch>` is policy-blocked, delete the local ref directly: `git update-ref -d refs/heads/<branch>`.
 - Bulk PR close/reopen safety: if a close action would affect more than 5 PRs, first ask for explicit user confirmation with the exact PR count and target scope/query.
+- After merging a PR into `origin/main`, do not stop at the remote merge. If the user expects the live app or bot to run the new code, you MUST also:
+  - fast-forward local `main` to `origin/main`
+  - verify which checkout path the runtime actually launches from
+  - switch that runtime checkout back to `main` if it drifted to another branch
+  - restart the runtime from that checkout
+  - print proof lines for branch, runtime checkout path, command path, pid, and RPC/listener health
+- Reason: remote `main`, local `main`, and the actual running checkout are three different things. A PR can be merged correctly while the live bot still runs stale code from another branch or worktree.
+- For branch/worktree hygiene and anti-footgun checks, see `docs/debug/worktree-branch-survival.md`.
 - Fork maintenance update policy: keep auto-updates disabled (`openclaw config set update.auto.enabled false`).
 - Fork maintenance update policy: disable startup update checks (`openclaw config set update.checkOnStart false`).
 - Fork maintenance update policy: do not use `openclaw update` for fork maintenance; use explicit git sync commands (`git fetch upstream --prune`, `git rebase upstream/main`).

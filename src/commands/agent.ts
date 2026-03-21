@@ -44,6 +44,7 @@ import { normalizeSpawnedRunMetadata } from "../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { normalizeReplyPayload } from "../auto-reply/reply/normalize-reply.js";
+import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.js";
 import {
   formatThinkingLevels,
   formatXHighModelHint,
@@ -81,7 +82,7 @@ import {
 } from "../infra/agent-events.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
@@ -509,7 +510,6 @@ async function prepareAgentCommandExecution(
   if (!message.trim()) {
     throw new Error("Message (--message) is required");
   }
-  const body = prependInternalEventContext(message, opts.internalEvents);
   if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
@@ -619,6 +619,21 @@ async function prepareAgentCommandExecution(
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
+  const isGroupSession =
+    sessionEntryRaw?.chatType === "group" || sessionEntryRaw?.chatType === "channel";
+  const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(cfg.session?.mainKey);
+  // ACP wakeups queue child output as system events before they resume the parent
+  // turn. Draining here makes sure the parent actually sees the child result.
+  const eventsBlock = sessionKey
+    ? await drainFormattedSystemEvents({
+        cfg,
+        sessionKey,
+        isMainSession,
+        isNewSession,
+      })
+    : undefined;
+  const bodyBase = eventsBlock ? `${eventsBlock}\n\n${message}` : message;
+  const body = prependInternalEventContext(bodyBase, opts.internalEvents);
   const sessionAgentId =
     agentIdOverride ??
     resolveSessionAgentId({
