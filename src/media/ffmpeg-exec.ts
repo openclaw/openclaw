@@ -8,6 +8,10 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+function isEnoent(err: unknown): boolean {
+  return err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT";
+}
+
 export type MediaExecOptions = {
   timeoutMs?: number;
   maxBufferBytes?: number;
@@ -24,21 +28,41 @@ function resolveExecOptions(
 }
 
 export async function runFfprobe(args: string[], options?: MediaExecOptions): Promise<string> {
-  const { stdout } = await execFileAsync(
-    "ffprobe",
-    args,
-    resolveExecOptions(MEDIA_FFPROBE_TIMEOUT_MS, options),
-  );
-  return stdout.toString();
+  try {
+    const { stdout } = await execFileAsync(
+      "ffprobe",
+      args,
+      resolveExecOptions(MEDIA_FFPROBE_TIMEOUT_MS, options),
+    );
+    return stdout.toString();
+  } catch (err) {
+    if (isEnoent(err)) {
+      throw new Error(
+        "Cannot process audio: ffprobe is not installed. Install ffmpeg to enable audio transcription.",
+        { cause: err },
+      );
+    }
+    throw err;
+  }
 }
 
 export async function runFfmpeg(args: string[], options?: MediaExecOptions): Promise<string> {
-  const { stdout } = await execFileAsync(
-    "ffmpeg",
-    args,
-    resolveExecOptions(MEDIA_FFMPEG_TIMEOUT_MS, options),
-  );
-  return stdout.toString();
+  try {
+    const { stdout } = await execFileAsync(
+      "ffmpeg",
+      args,
+      resolveExecOptions(MEDIA_FFMPEG_TIMEOUT_MS, options),
+    );
+    return stdout.toString();
+  } catch (err) {
+    if (isEnoent(err)) {
+      throw new Error(
+        "Cannot process audio: ffmpeg is not installed. Install ffmpeg to enable audio transcription.",
+        { cause: err },
+      );
+    }
+    throw err;
+  }
 }
 
 export function parseFfprobeCsvFields(stdout: string, maxFields: number): string[] {
