@@ -79,6 +79,7 @@ describe("provider wizard boundaries", () => {
             choiceLabel: "OpenAI API key",
             groupId: "openai",
             groupLabel: "OpenAI",
+            onboardingScopes: ["text-inference"],
           },
           run: vi.fn(),
         },
@@ -92,6 +93,7 @@ describe("provider wizard boundaries", () => {
         label: "OpenAI API key",
         groupId: "openai",
         groupLabel: "OpenAI",
+        onboardingScopes: ["text-inference"],
       },
     ]);
     expect(
@@ -104,6 +106,39 @@ describe("provider wizard boundaries", () => {
       method: provider.auth[0],
       wizard: provider.auth[0]?.wizard,
     });
+  });
+
+  it("preserves onboarding scopes on wizard options", () => {
+    const provider = makeProvider({
+      id: "fal",
+      label: "fal",
+      auth: [
+        {
+          id: "api-key",
+          label: "fal API key",
+          kind: "api_key",
+          wizard: {
+            choiceId: "fal-api-key",
+            choiceLabel: "fal API key",
+            groupId: "fal",
+            groupLabel: "fal",
+            onboardingScopes: ["image-generation"],
+          },
+          run: vi.fn(),
+        },
+      ],
+    });
+    resolvePluginProviders.mockReturnValue([provider]);
+
+    expect(resolveProviderWizardOptions({})).toEqual([
+      {
+        value: "fal-api-key",
+        label: "fal API key",
+        groupId: "fal",
+        groupLabel: "fal",
+        onboardingScopes: ["image-generation"],
+      },
+    ]);
   });
 
   it("returns method wizard metadata for canonical choices", () => {
