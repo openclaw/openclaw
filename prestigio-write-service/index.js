@@ -1,4 +1,5 @@
 const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -23,6 +24,8 @@ const ACTION_FIELDS = {
   'rename-item': ['item_id', 'sidemark'],
   'mark-received': ['item_id'],
   'mark-not-received': ['item_id'],
+  'set-order-item-production-field': ['item_id', 'field', 'value', 'confirmed', 'confirm_digest'],
+  'set-item-spec-field': ['item_id', 'spec_id', 'field', 'value', 'confirmed', 'confirm_digest'],
   'apply-credit': ['order_item_id', 'xero_contact_id', 'xero_invoice_id', 'amount', 'description', 'source_context', 'reference', 'requested_at'],
   'search-xero-invoices': ['search', 'contact_id', 'invoice_number', 'statuses', 'requested_at'],
   'search-xero-quotes': ['search', 'contact_id', 'quote_number', 'statuses', 'requested_at'],
@@ -33,6 +36,36 @@ const ACTION_FIELDS = {
   'email-invoice': ['invoice_id', 'requested_at'],
   'send-invoice-email': ['invoiceId', 'xeroInvoiceId', 'xeroInvoiceNumber', 'ccEmails', 'recipientOverrideEmails', 'requested_at']
 };
+
+const CONFIRMABLE_ACTIONS = ['set-order-item-production-field', 'set-item-spec-field'];
+
+function computeConfirmDigest(action, params) {
+  const secret =
+    process.env.STITCH_SERVICE_KEY
+    || process.env.SUPABASE_SERVICE_ROLE_KEY
+    || process.env.SUPABASE_SERVICE_KEY;
+  let canonical;
+
+  if (action === 'set-order-item-production-field') {
+    canonical = `${action}:${params.item_id}:${params.field}:${JSON.stringify(params.value)}`;
+  } else if (action === 'set-item-spec-field') {
+    canonical = `${action}:${params.item_id}:${params.spec_id}:${params.field}:${JSON.stringify(params.value)}`;
+  } else {
+    return null;
+  }
+
+  return crypto.createHmac('sha256', secret).update(canonical).digest('base64url');
+}
+
+function buildConfirmSummary(action, params) {
+  if (action === 'set-order-item-production-field') {
+    return `Set ${params.field} to ${JSON.stringify(params.value)} on item ${params.item_id}`;
+  }
+  if (action === 'set-item-spec-field') {
+    return `Set ${params.field} to ${JSON.stringify(params.value)} on spec ${params.spec_id} (item ${params.item_id})`;
+  }
+  return `${action} on ${params.item_id}`;
+}
 
 // --- Write response atomically ---
 function writeResponse(data) {
@@ -110,6 +143,30 @@ function checkForRequest() {
     for (const key of allowedFields) {
       if (request[key] !== undefined) {
         fields[key] = request[key];
+      }
+    }
+
+    if (CONFIRMABLE_ACTIONS.includes(action)) {
+      if (!fields.confirmed) {
+        const digest = computeConfirmDigest(action, fields);
+        writeResponse({
+          success: false,
+          requires_confirmation: true,
+          action: action,
+          summary: buildConfirmSummary(action, fields),
+          confirm_digest: digest
+        });
+        return;
+      }
+
+      const expected = computeConfirmDigest(action, fields);
+      if (fields.confirm_digest !== expected) {
+        writeResponse({
+          success: false,
+          error: 'DIGEST_MISMATCH',
+          message: 'Confirmation digest does not match. The payload may have changed.'
+        });
+        return;
       }
     }
 
