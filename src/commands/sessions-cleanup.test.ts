@@ -740,7 +740,7 @@ describe("sessionsCleanupCommand", () => {
 
       // --json should produce exactly one JSON blob, no human text
       expect(logs).toHaveLength(1);
-      const payload = JSON.parse(logs[0]!) as Record<string, unknown>;
+      const payload = JSON.parse(logs[0]);
       expect(payload.executedAt).toBeTruthy();
       expect(payload.summary).toBeDefined();
       expect((payload.summary as Record<string, unknown>).executed).toBe(1);
@@ -928,9 +928,9 @@ describe("sessionsCleanupCommand", () => {
 
       // stdout should be exactly one JSON blob — no human text
       expect(logs).toHaveLength(1);
-      const raw = logs[0]!;
+      const raw = logs[0];
       expect(raw).not.toContain("CONFIRMATION REQUIRED");
-      const payload = JSON.parse(raw) as Record<string, unknown>;
+      const payload = JSON.parse(raw);
       expect(payload.executedAt).toBeTruthy();
       expect((payload.summary as Record<string, unknown>).executed).toBe(1);
     });
