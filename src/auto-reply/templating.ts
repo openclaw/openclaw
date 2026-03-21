@@ -1,4 +1,4 @@
-import type { StickerMetadata } from "openclaw/plugin-sdk/telegram";
+import type { StickerMetadata } from "../../extensions/telegram/api.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type {
   MediaUnderstandingDecision,
