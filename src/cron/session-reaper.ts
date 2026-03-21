@@ -14,7 +14,11 @@ import {
 } from "../config/sessions.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import {
+  isCronRunSessionKey,
+  isSubagentSessionKey,
+  isAcpSessionKey,
+} from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
 
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
@@ -84,15 +88,22 @@ export async function sweepCronRunSessions(params: {
     await updateSessionStore(storePath, (store) => {
       const cutoff = now - retentionMs;
       for (const key of Object.keys(store)) {
-        if (!isCronRunSessionKey(key)) {
+        const isCronRun = isCronRunSessionKey(key);
+        const isEphemeral = isCronRun || isSubagentSessionKey(key) || isAcpSessionKey(key);
+        if (!isEphemeral) {
           continue;
         }
         const entry = store[key];
         if (!entry) {
           continue;
         }
-        const updatedAt = entry.updatedAt ?? 0;
-        if (updatedAt < cutoff) {
+        // For subagent/ACP sessions, only prune completed sessions (endedAt set).
+        // Running sessions (no endedAt) are skipped to avoid killing active work.
+        if (!isCronRun && !entry.endedAt) {
+          continue;
+        }
+        const ageRef = isCronRun ? (entry.updatedAt ?? 0) : (entry.endedAt ?? entry.updatedAt ?? 0);
+        if (ageRef < cutoff) {
           if (!prunedSessions.has(entry.sessionId) || entry.sessionFile) {
             prunedSessions.set(entry.sessionId, entry.sessionFile);
           }

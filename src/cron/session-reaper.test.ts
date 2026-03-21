@@ -228,6 +228,77 @@ describe("sweepCronRunSessions", () => {
     expect(r2.swept).toBe(false);
   });
 
+  it("prunes completed subagent sessions past retention", async () => {
+    const now = Date.now();
+    const store: Record<string, { sessionId: string; updatedAt: number; endedAt?: number }> = {
+      "agent:main:subagent:completed-old": {
+        sessionId: "sub-old",
+        updatedAt: now - 30 * 3_600_000,
+        endedAt: now - 26 * 3_600_000, // completed 26h ago — expired
+      },
+      "agent:main:subagent:completed-recent": {
+        sessionId: "sub-recent",
+        updatedAt: now - 2 * 3_600_000,
+        endedAt: now - 1 * 3_600_000, // completed 1h ago — not expired
+      },
+      "agent:main:subagent:still-running": {
+        sessionId: "sub-running",
+        updatedAt: now - 30 * 3_600_000, // old but no endedAt — still running
+      },
+      "agent:main:telegram:dm:123": {
+        sessionId: "regular-session",
+        updatedAt: now - 100 * 3_600_000, // old but not ephemeral
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.swept).toBe(true);
+    expect(result.pruned).toBe(1);
+
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated["agent:main:subagent:completed-old"]).toBeUndefined();
+    expect(updated["agent:main:subagent:completed-recent"]).toBeDefined();
+    expect(updated["agent:main:subagent:still-running"]).toBeDefined();
+    expect(updated["agent:main:telegram:dm:123"]).toBeDefined();
+  });
+
+  it("prunes completed ACP sessions past retention", async () => {
+    const now = Date.now();
+    const store: Record<string, { sessionId: string; updatedAt: number; endedAt?: number }> = {
+      "agent:main:acp:old-task": {
+        sessionId: "acp-old",
+        updatedAt: now - 30 * 3_600_000,
+        endedAt: now - 26 * 3_600_000,
+      },
+      "agent:main:acp:running-task": {
+        sessionId: "acp-running",
+        updatedAt: now - 30 * 3_600_000,
+        // no endedAt — still running
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(1);
+
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated["agent:main:acp:old-task"]).toBeUndefined();
+    expect(updated["agent:main:acp:running-task"]).toBeDefined();
+  });
+
   it("throttles per store path", async () => {
     const now = Date.now();
     const otherPath = path.join(tmpDir, "sessions-other.json");
