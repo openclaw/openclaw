@@ -27,7 +27,11 @@ import {
   toPluginMessageContext,
   toPluginMessageSentEvent,
 } from "../../hooks/message-hook-mappers.js";
-import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import {
+  hasReplyChannelData,
+  hasReplyContent,
+  hasReplyPayloadContent,
+} from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
