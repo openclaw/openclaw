@@ -20,6 +20,7 @@ export type ProviderWizardOption = {
   groupId: string;
   groupLabel: string;
   groupHint?: string;
+  onboardingScopes?: Array<"text-inference" | "image-generation">;
 };
 
 export type ProviderModelPickerEntry = {
@@ -88,6 +89,7 @@ function buildSetupOptionForMethod(params: {
     groupId: normalizedGroupId,
     groupLabel: params.wizard.groupLabel?.trim() || params.provider.label,
     groupHint: params.wizard.groupHint?.trim(),
+    ...(params.wizard.onboardingScopes ? { onboardingScopes: params.wizard.onboardingScopes } : {}),
   };
 }
 
