@@ -1,33 +1,40 @@
-import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
+import {
+  ensureConfiguredBindingRouteReady,
+  resolveConfiguredBindingRoute,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
+import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import {
   buildAgentMediaPayload,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
-  createScopedPairingAccess,
+  createChannelPairingController,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
-  issuePairingChallenge,
   normalizeAgentId,
   recordPendingHistoryEntryIfEnabled,
   resolveAgentOutboundIdentity,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/feishu";
-import {
-  ensureConfiguredAcpRouteReady,
-  resolveConfiguredAcpRoute,
-} from "../../../src/acp/persistent-bindings.route.js";
-import { getSessionBindingService } from "../../../src/infra/outbound/session-binding-service.js";
-import { deriveLastRoutePolicy } from "../../../src/routing/resolve-route.js";
-import { resolveAgentIdFromSessionKey } from "../../../src/routing/session-key.js";
+} from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
+import {
+  checkBotMentioned,
+  normalizeFeishuCommandProbeBody,
+  normalizeMentions,
+  parseMergeForwardContent,
+  parseMessageContent,
+  resolveFeishuGroupSession,
+  resolveFeishuMediaList,
+  toMessageResourceType,
+} from "./bot-content.js";
+import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sender-name.js";
 import { createFeishuClient } from "./client.js";
-import { buildFeishuConversationId } from "./conversation-id.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
-import { normalizeFeishuExternalKey } from "./external-keys.js";
-import { downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
 import {
   resolveFeishuGroupConfig,
@@ -35,154 +42,18 @@ import {
   resolveFeishuAllowlistMatch,
   isFeishuGroupAllowed,
 } from "./policy.js";
-import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
-import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
+import type { FeishuMessageContext } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
-// --- Permission error extraction ---
-// Extract permission grant URL from Feishu API error response.
-type PermissionError = {
-  code: number;
-  message: string;
-  grantUrl?: string;
-};
-
-const IGNORED_PERMISSION_SCOPE_TOKENS = ["contact:contact.base:readonly"];
-
-// Feishu API sometimes returns incorrect scope names in permission error
-// responses (e.g. "contact:contact.base:readonly" instead of the valid
-// "contact:user.base:readonly"). This map corrects known mismatches.
-const FEISHU_SCOPE_CORRECTIONS: Record<string, string> = {
-  "contact:contact.base:readonly": "contact:user.base:readonly",
-};
-
-function correctFeishuScopeInUrl(url: string): string {
-  let corrected = url;
-  for (const [wrong, right] of Object.entries(FEISHU_SCOPE_CORRECTIONS)) {
-    corrected = corrected.replaceAll(encodeURIComponent(wrong), encodeURIComponent(right));
-    corrected = corrected.replaceAll(wrong, right);
-  }
-  return corrected;
-}
-
-function shouldSuppressPermissionErrorNotice(permissionError: PermissionError): boolean {
-  const message = permissionError.message.toLowerCase();
-  return IGNORED_PERMISSION_SCOPE_TOKENS.some((token) => message.includes(token));
-}
-
-function extractPermissionError(err: unknown): PermissionError | null {
-  if (!err || typeof err !== "object") return null;
-
-  // Axios error structure: err.response.data contains the Feishu error
-  const axiosErr = err as { response?: { data?: unknown } };
-  const data = axiosErr.response?.data;
-  if (!data || typeof data !== "object") return null;
-
-  const feishuErr = data as {
-    code?: number;
-    msg?: string;
-    error?: { permission_violations?: Array<{ uri?: string }> };
-  };
-
-  // Feishu permission error code: 99991672
-  if (feishuErr.code !== 99991672) return null;
-
-  // Extract the grant URL from the error message (contains the direct link)
-  const msg = feishuErr.msg ?? "";
-  const urlMatch = msg.match(/https:\/\/[^\s,]+\/app\/[^\s,]+/);
-  const grantUrl = urlMatch?.[0] ? correctFeishuScopeInUrl(urlMatch[0]) : undefined;
-
-  return {
-    code: feishuErr.code,
-    message: msg,
-    grantUrl,
-  };
-}
-
-// --- Sender name resolution (so the agent can distinguish who is speaking in group chats) ---
-// Cache display names by sender id (open_id/user_id) to avoid an API call on every message.
-const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
-const senderNameCache = new Map<string, { name: string; expireAt: number }>();
+export { toMessageResourceType } from "./bot-content.js";
 
 // Cache permission errors to avoid spamming the user with repeated notifications.
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
-
-type SenderNameResult = {
-  name?: string;
-  permissionError?: PermissionError;
-};
-
-function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "union_id" {
-  const trimmed = senderId.trim();
-  if (trimmed.startsWith("ou_")) {
-    return "open_id";
-  }
-  if (trimmed.startsWith("on_")) {
-    return "union_id";
-  }
-  return "user_id";
-}
-
-async function resolveFeishuSenderName(params: {
-  account: ResolvedFeishuAccount;
-  senderId: string;
-  log: (...args: any[]) => void;
-}): Promise<SenderNameResult> {
-  const { account, senderId, log } = params;
-  if (!account.configured) return {};
-
-  const normalizedSenderId = senderId.trim();
-  if (!normalizedSenderId) return {};
-
-  const cached = senderNameCache.get(normalizedSenderId);
-  const now = Date.now();
-  if (cached && cached.expireAt > now) return { name: cached.name };
-
-  try {
-    const client = createFeishuClient(account);
-    const userIdType = resolveSenderLookupIdType(normalizedSenderId);
-
-    // contact/v3/users/:user_id?user_id_type=<open_id|user_id|union_id>
-    const res: any = await client.contact.user.get({
-      path: { user_id: normalizedSenderId },
-      params: { user_id_type: userIdType },
-    });
-
-    const name: string | undefined =
-      res?.data?.user?.name ||
-      res?.data?.user?.display_name ||
-      res?.data?.user?.nickname ||
-      res?.data?.user?.en_name;
-
-    if (name && typeof name === "string") {
-      senderNameCache.set(normalizedSenderId, { name, expireAt: now + SENDER_NAME_TTL_MS });
-      return { name };
-    }
-
-    return {};
-  } catch (err) {
-    // Check if this is a permission error
-    const permErr = extractPermissionError(err);
-    if (permErr) {
-      if (shouldSuppressPermissionErrorNotice(permErr)) {
-        log(`feishu: ignoring stale permission scope error: ${permErr.message}`);
-        return {};
-      }
-      log(`feishu: permission error resolving sender name: code=${permErr.code}`);
-      return { permissionError: permErr };
-    }
-
-    // Best-effort. Don't fail message handling if name lookup fails.
-    log(`feishu: failed to resolve sender name for ${normalizedSenderId}: ${String(err)}`);
-    return {};
-  }
-}
-
 export type FeishuMessageEvent = {
   sender: {
     sender_id: {
@@ -226,546 +97,6 @@ export type FeishuBotAddedEvent = {
   external: boolean;
   operator_tenant_key?: string;
 };
-
-type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
-
-type ResolvedFeishuGroupSession = {
-  peerId: string;
-  parentPeer: { kind: "group"; id: string } | null;
-  groupSessionScope: GroupSessionScope;
-  replyInThread: boolean;
-  threadReply: boolean;
-};
-
-function resolveFeishuGroupSession(params: {
-  chatId: string;
-  senderOpenId: string;
-  messageId: string;
-  rootId?: string;
-  threadId?: string;
-  groupConfig?: {
-    groupSessionScope?: GroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-    replyInThread?: "enabled" | "disabled";
-  };
-  feishuCfg?: {
-    groupSessionScope?: GroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-    replyInThread?: "enabled" | "disabled";
-  };
-}): ResolvedFeishuGroupSession {
-  const { chatId, senderOpenId, messageId, rootId, threadId, groupConfig, feishuCfg } = params;
-
-  const normalizedThreadId = threadId?.trim();
-  const normalizedRootId = rootId?.trim();
-  const threadReply = Boolean(normalizedThreadId || normalizedRootId);
-  const replyInThread =
-    (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled" ||
-    threadReply;
-
-  const legacyTopicSessionMode =
-    groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
-  const groupSessionScope: GroupSessionScope =
-    groupConfig?.groupSessionScope ??
-    feishuCfg?.groupSessionScope ??
-    (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
-
-  // Keep topic session keys stable across the "first turn creates thread" flow:
-  // first turn may only have message_id, while the next turn carries root_id/thread_id.
-  // Prefer root_id first so both turns stay on the same peer key.
-  const topicScope =
-    groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender"
-      ? (normalizedRootId ?? normalizedThreadId ?? (replyInThread ? messageId : null))
-      : null;
-
-  let peerId = chatId;
-  switch (groupSessionScope) {
-    case "group_sender":
-      peerId = buildFeishuConversationId({
-        chatId,
-        scope: "group_sender",
-        senderOpenId,
-      });
-      break;
-    case "group_topic":
-      peerId = topicScope
-        ? buildFeishuConversationId({
-            chatId,
-            scope: "group_topic",
-            topicId: topicScope,
-          })
-        : chatId;
-      break;
-    case "group_topic_sender":
-      peerId = topicScope
-        ? buildFeishuConversationId({
-            chatId,
-            scope: "group_topic_sender",
-            topicId: topicScope,
-            senderOpenId,
-          })
-        : buildFeishuConversationId({
-            chatId,
-            scope: "group_sender",
-            senderOpenId,
-          });
-      break;
-    case "group":
-    default:
-      peerId = chatId;
-      break;
-  }
-
-  const parentPeer =
-    topicScope &&
-    (groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender")
-      ? {
-          kind: "group" as const,
-          id: chatId,
-        }
-      : null;
-
-  return {
-    peerId,
-    parentPeer,
-    groupSessionScope,
-    replyInThread,
-    threadReply,
-  };
-}
-
-function parseMessageContent(content: string, messageType: string): string {
-  if (messageType === "post") {
-    // Extract text content from rich text post
-    const { textContent } = parsePostContent(content);
-    return textContent;
-  }
-
-  try {
-    const parsed = JSON.parse(content);
-    if (messageType === "text") {
-      return parsed.text || "";
-    }
-    if (messageType === "share_chat") {
-      // Preserve available summary text for merged/forwarded chat messages.
-      if (parsed && typeof parsed === "object") {
-        const share = parsed as {
-          body?: unknown;
-          summary?: unknown;
-          share_chat_id?: unknown;
-        };
-        if (typeof share.body === "string" && share.body.trim().length > 0) {
-          return share.body.trim();
-        }
-        if (typeof share.summary === "string" && share.summary.trim().length > 0) {
-          return share.summary.trim();
-        }
-        if (typeof share.share_chat_id === "string" && share.share_chat_id.trim().length > 0) {
-          return `[Forwarded message: ${share.share_chat_id.trim()}]`;
-        }
-      }
-      return "[Forwarded message]";
-    }
-    if (messageType === "merge_forward") {
-      // Return placeholder; actual content fetched asynchronously in handleFeishuMessage
-      return "[Merged and Forwarded Message - loading...]";
-    }
-    return content;
-  } catch {
-    return content;
-  }
-}
-
-/**
- * Parse merge_forward message content and fetch sub-messages.
- * Returns formatted text content of all sub-messages.
- */
-function parseMergeForwardContent(params: {
-  content: string;
-  log?: (...args: any[]) => void;
-}): string {
-  const { content, log } = params;
-  const maxMessages = 50;
-
-  // For merge_forward, the API returns all sub-messages in items array
-  // with upper_message_id pointing to the merge_forward message.
-  // The 'content' parameter here is actually the full API response items array as JSON.
-  log?.(`feishu: parsing merge_forward sub-messages from API response`);
-
-  let items: Array<{
-    message_id?: string;
-    msg_type?: string;
-    body?: { content?: string };
-    sender?: { id?: string };
-    upper_message_id?: string;
-    create_time?: string;
-  }>;
-
-  try {
-    items = JSON.parse(content);
-  } catch {
-    log?.(`feishu: merge_forward items parse failed`);
-    return "[Merged and Forwarded Message - parse error]";
-  }
-
-  if (!Array.isArray(items) || items.length === 0) {
-    return "[Merged and Forwarded Message - no sub-messages]";
-  }
-
-  // Filter to only sub-messages (those with upper_message_id, skip the merge_forward container itself)
-  const subMessages = items.filter((item) => item.upper_message_id);
-
-  if (subMessages.length === 0) {
-    return "[Merged and Forwarded Message - no sub-messages found]";
-  }
-
-  log?.(`feishu: merge_forward contains ${subMessages.length} sub-messages`);
-
-  // Sort by create_time
-  subMessages.sort((a, b) => {
-    const timeA = parseInt(a.create_time || "0", 10);
-    const timeB = parseInt(b.create_time || "0", 10);
-    return timeA - timeB;
-  });
-
-  // Format output
-  const lines: string[] = ["[Merged and Forwarded Messages]"];
-  const limitedMessages = subMessages.slice(0, maxMessages);
-
-  for (const item of limitedMessages) {
-    const msgContent = item.body?.content || "";
-    const msgType = item.msg_type || "text";
-    const formatted = formatSubMessageContent(msgContent, msgType);
-    lines.push(`- ${formatted}`);
-  }
-
-  if (subMessages.length > maxMessages) {
-    lines.push(`... and ${subMessages.length - maxMessages} more messages`);
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * Format sub-message content based on message type.
- */
-function formatSubMessageContent(content: string, contentType: string): string {
-  try {
-    const parsed = JSON.parse(content);
-    switch (contentType) {
-      case "text":
-        return parsed.text || content;
-      case "post": {
-        const { textContent } = parsePostContent(content);
-        return textContent;
-      }
-      case "image":
-        return "[Image]";
-      case "file":
-        return `[File: ${parsed.file_name || "unknown"}]`;
-      case "audio":
-        return "[Audio]";
-      case "video":
-        return "[Video]";
-      case "sticker":
-        return "[Sticker]";
-      case "merge_forward":
-        return "[Nested Merged Forward]";
-      default:
-        return `[${contentType}]`;
-    }
-  } catch {
-    return content;
-  }
-}
-
-function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
-  if (!botOpenId) return false;
-  // Check for @all (@_all in Feishu) — treat as mentioning every bot
-  const rawContent = event.message.content ?? "";
-  if (rawContent.includes("@_all")) return true;
-  const mentions = event.message.mentions ?? [];
-  if (mentions.length > 0) {
-    // Rely on Feishu mention IDs; display names can vary by alias/context.
-    return mentions.some((m) => m.id.open_id === botOpenId);
-  }
-  // Post (rich text) messages may have empty message.mentions when they contain docs/paste
-  if (event.message.message_type === "post") {
-    const { mentionedOpenIds } = parsePostContent(event.message.content);
-    return mentionedOpenIds.some((id) => id === botOpenId);
-  }
-  return false;
-}
-
-function normalizeMentions(
-  text: string,
-  mentions?: FeishuMessageEvent["message"]["mentions"],
-  botStripId?: string,
-): string {
-  if (!mentions || mentions.length === 0) return text;
-
-  const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  let result = text;
-
-  for (const mention of mentions) {
-    const mentionId = mention.id.open_id;
-    const replacement =
-      botStripId && mentionId === botStripId
-        ? ""
-        : mentionId
-          ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
-          : `@${mention.name}`;
-
-    result = result.replace(new RegExp(escaped(mention.key), "g"), () => replacement).trim();
-  }
-
-  return result;
-}
-
-function normalizeFeishuCommandProbeBody(text: string): string {
-  if (!text) {
-    return "";
-  }
-  return text
-    .replace(/<at\b[^>]*>[^<]*<\/at>/giu, " ")
-    .replace(/(^|\s)@[^/\s]+(?=\s|$|\/)/gu, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/**
- * Parse media keys from message content based on message type.
- */
-function parseMediaKeys(
-  content: string,
-  messageType: string,
-): {
-  imageKey?: string;
-  fileKey?: string;
-  fileName?: string;
-} {
-  try {
-    const parsed = JSON.parse(content);
-    const imageKey = normalizeFeishuExternalKey(parsed.image_key);
-    const fileKey = normalizeFeishuExternalKey(parsed.file_key);
-    switch (messageType) {
-      case "image":
-        return { imageKey, fileName: parsed.file_name };
-      case "file":
-        return { fileKey, fileName: parsed.file_name };
-      case "audio":
-        return { fileKey, fileName: parsed.file_name };
-      case "video":
-      case "media":
-        // Video/media has both file_key (video) and image_key (thumbnail)
-        return { fileKey, imageKey, fileName: parsed.file_name };
-      case "sticker":
-        return { fileKey, fileName: parsed.file_name };
-      default:
-        return {};
-    }
-  } catch {
-    return {};
-  }
-}
-
-/**
- * Map Feishu message type to messageResource.get resource type.
- * Feishu messageResource API supports only: image | file.
- */
-export function toMessageResourceType(messageType: string): "image" | "file" {
-  return messageType === "image" ? "image" : "file";
-}
-
-/**
- * Infer placeholder text based on message type.
- */
-function inferPlaceholder(messageType: string): string {
-  switch (messageType) {
-    case "image":
-      return "<media:image>";
-    case "file":
-      return "<media:document>";
-    case "audio":
-      return "<media:audio>";
-    case "video":
-    case "media":
-      return "<media:video>";
-    case "sticker":
-      return "<media:sticker>";
-    default:
-      return "<media:document>";
-  }
-}
-
-/**
- * Resolve media from a Feishu message, downloading and saving to disk.
- * Similar to Discord's resolveMediaList().
- */
-async function resolveFeishuMediaList(params: {
-  cfg: ClawdbotConfig;
-  messageId: string;
-  messageType: string;
-  content: string;
-  maxBytes: number;
-  log?: (msg: string) => void;
-  accountId?: string;
-}): Promise<FeishuMediaInfo[]> {
-  const { cfg, messageId, messageType, content, maxBytes, log, accountId } = params;
-
-  // Only process media message types (including post for embedded images)
-  const mediaTypes = ["image", "file", "audio", "video", "media", "sticker", "post"];
-  if (!mediaTypes.includes(messageType)) {
-    return [];
-  }
-
-  const out: FeishuMediaInfo[] = [];
-  const core = getFeishuRuntime();
-
-  // Handle post (rich text) messages with embedded images/media.
-  if (messageType === "post") {
-    const { imageKeys, mediaKeys: postMediaKeys } = parsePostContent(content);
-    if (imageKeys.length === 0 && postMediaKeys.length === 0) {
-      return [];
-    }
-
-    if (imageKeys.length > 0) {
-      log?.(`feishu: post message contains ${imageKeys.length} embedded image(s)`);
-    }
-    if (postMediaKeys.length > 0) {
-      log?.(`feishu: post message contains ${postMediaKeys.length} embedded media file(s)`);
-    }
-
-    for (const imageKey of imageKeys) {
-      try {
-        // Embedded images in post use messageResource API with image_key as file_key
-        const result = await downloadMessageResourceFeishu({
-          cfg,
-          messageId,
-          fileKey: imageKey,
-          type: "image",
-          accountId,
-        });
-
-        let contentType = result.contentType;
-        if (!contentType) {
-          contentType = await core.media.detectMime({ buffer: result.buffer });
-        }
-
-        const saved = await core.channel.media.saveMediaBuffer(
-          result.buffer,
-          contentType,
-          "inbound",
-          maxBytes,
-        );
-
-        out.push({
-          path: saved.path,
-          contentType: saved.contentType,
-          placeholder: "<media:image>",
-        });
-
-        log?.(`feishu: downloaded embedded image ${imageKey}, saved to ${saved.path}`);
-      } catch (err) {
-        log?.(`feishu: failed to download embedded image ${imageKey}: ${String(err)}`);
-      }
-    }
-
-    for (const media of postMediaKeys) {
-      try {
-        const result = await downloadMessageResourceFeishu({
-          cfg,
-          messageId,
-          fileKey: media.fileKey,
-          type: "file",
-          accountId,
-        });
-
-        let contentType = result.contentType;
-        if (!contentType) {
-          contentType = await core.media.detectMime({ buffer: result.buffer });
-        }
-
-        const saved = await core.channel.media.saveMediaBuffer(
-          result.buffer,
-          contentType,
-          "inbound",
-          maxBytes,
-        );
-
-        out.push({
-          path: saved.path,
-          contentType: saved.contentType,
-          placeholder: "<media:video>",
-        });
-
-        log?.(`feishu: downloaded embedded media ${media.fileKey}, saved to ${saved.path}`);
-      } catch (err) {
-        log?.(`feishu: failed to download embedded media ${media.fileKey}: ${String(err)}`);
-      }
-    }
-
-    return out;
-  }
-
-  // Handle other media types
-  const mediaKeys = parseMediaKeys(content, messageType);
-  if (!mediaKeys.imageKey && !mediaKeys.fileKey) {
-    return [];
-  }
-
-  try {
-    let buffer: Buffer;
-    let contentType: string | undefined;
-    let fileName: string | undefined;
-
-    // For message media, always use messageResource API
-    // The image.get API is only for images uploaded via im/v1/images, not for message attachments
-    const fileKey = mediaKeys.fileKey || mediaKeys.imageKey;
-    if (!fileKey) {
-      return [];
-    }
-
-    const resourceType = toMessageResourceType(messageType);
-    const result = await downloadMessageResourceFeishu({
-      cfg,
-      messageId,
-      fileKey,
-      type: resourceType,
-      accountId,
-    });
-    buffer = result.buffer;
-    contentType = result.contentType;
-    fileName = result.fileName || mediaKeys.fileName;
-
-    // Detect mime type if not provided
-    if (!contentType) {
-      contentType = await core.media.detectMime({ buffer });
-    }
-
-    // Save to disk using core's saveMediaBuffer
-    const saved = await core.channel.media.saveMediaBuffer(
-      buffer,
-      contentType,
-      "inbound",
-      maxBytes,
-      fileName,
-    );
-
-    out.push({
-      path: saved.path,
-      contentType: saved.contentType,
-      placeholder: inferPlaceholder(messageType),
-    });
-
-    log?.(`feishu: downloaded ${messageType} media, saved to ${saved.path}`);
-  } catch (err) {
-    log?.(`feishu: failed to download ${messageType} media: ${String(err)}`);
-  }
-
-  return out;
-}
 
 // --- Broadcast support ---
 // Resolve broadcast agent list for a given peer (group) ID.
@@ -848,7 +179,7 @@ export function buildFeishuAgentBody(params: {
     "content" | "senderName" | "senderOpenId" | "mentionTargets" | "messageId" | "hasAnyMention"
   >;
   quotedContent?: string;
-  permissionErrorForAgent?: PermissionError;
+  permissionErrorForAgent?: FeishuPermissionError;
   botOpenId?: string;
 }): string {
   const { ctx, quotedContent, permissionErrorForAgent, botOpenId } = params;
@@ -967,7 +298,7 @@ export async function handleFeishuMessage(params: {
 
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
   // Optimization: skip if disabled to save API quota (Feishu free tier limit).
-  let permissionErrorForAgent: PermissionError | undefined;
+  let permissionErrorForAgent: FeishuPermissionError | undefined;
   if (feishuCfg?.resolveSenderNames ?? true) {
     const senderResult = await resolveFeishuSenderName({
       account,
@@ -1113,7 +444,7 @@ export async function handleFeishuMessage(params: {
 
   try {
     const core = getFeishuRuntime();
-    const pairing = createScopedPairingAccess({
+    const pairing = createChannelPairingController({
       core,
       channel: "feishu",
       accountId: account.accountId,
@@ -1139,12 +470,10 @@ export async function handleFeishuMessage(params: {
 
     if (isDirect && dmPolicy !== "open" && !dmAllowed) {
       if (dmPolicy === "pairing") {
-        await issuePairingChallenge({
-          channel: "feishu",
+        await pairing.issueChallenge({
           senderId: ctx.senderOpenId,
           senderIdLine: `Your Feishu user id: ${ctx.senderOpenId}`,
           meta: { name: ctx.senderName },
-          upsertPairingRequest: pairing.upsertPairingRequest,
           onCreated: () => {
             log(`feishu[${account.accountId}]: pairing request sender=${ctx.senderOpenId}`);
           },
@@ -1251,15 +580,17 @@ export async function handleFeishuMessage(params: {
     const parentConversationId = isGroup ? (parentPeer?.id ?? ctx.chatId) : undefined;
     let configuredBinding = null;
     if (feishuAcpConversationSupported) {
-      const configuredRoute = resolveConfiguredAcpRoute({
+      const configuredRoute = resolveConfiguredBindingRoute({
         cfg: effectiveCfg,
         route,
-        channel: "feishu",
-        accountId: account.accountId,
-        conversationId: currentConversationId,
-        parentConversationId,
+        conversation: {
+          channel: "feishu",
+          accountId: account.accountId,
+          conversationId: currentConversationId,
+          parentConversationId,
+        },
       });
-      configuredBinding = configuredRoute.configuredBinding;
+      configuredBinding = configuredRoute.bindingResolution;
       route = configuredRoute.route;
 
       // Bound Feishu conversations intentionally require an exact live conversation-id match.
@@ -1292,9 +623,9 @@ export async function handleFeishuMessage(params: {
     }
 
     if (configuredBinding) {
-      const ensured = await ensureConfiguredAcpRouteReady({
+      const ensured = await ensureConfiguredBindingRouteReady({
         cfg: effectiveCfg,
-        configuredBinding,
+        bindingResolution: configuredBinding,
       });
       if (!ensured.ok) {
         const replyTargetMessageId =

@@ -8,6 +8,8 @@ export type { RuntimeLogger };
 export type SubagentRunParams = {
   sessionKey: string;
   message: string;
+  provider?: string;
+  model?: string;
   extraSystemPrompt?: string;
   lane?: string;
   deliver?: boolean;

@@ -1,4 +1,66 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
+import type { ModelCompatConfig } from "../config/types.models.js";
+
+export const XAI_TOOL_SCHEMA_PROFILE = "xai";
+export const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
+
+function extractModelCompat(
+  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
+): ModelCompatConfig | undefined {
+  if (!modelOrCompat || typeof modelOrCompat !== "object") {
+    return undefined;
+  }
+  if ("compat" in modelOrCompat) {
+    const compat = (modelOrCompat as { compat?: unknown }).compat;
+    return compat && typeof compat === "object" ? (compat as ModelCompatConfig) : undefined;
+  }
+  return modelOrCompat as ModelCompatConfig;
+}
+
+export function applyModelCompatPatch<T extends { compat?: ModelCompatConfig }>(
+  model: T,
+  patch: ModelCompatConfig,
+): T {
+  const nextCompat = { ...model.compat, ...patch };
+  if (
+    model.compat &&
+    Object.entries(patch).every(
+      ([key, value]) => model.compat?.[key as keyof ModelCompatConfig] === value,
+    )
+  ) {
+    return model;
+  }
+  return {
+    ...model,
+    compat: nextCompat,
+  };
+}
+
+export function applyXaiModelCompat<T extends { compat?: ModelCompatConfig }>(model: T): T {
+  return applyModelCompatPatch(model, {
+    toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
+    nativeWebSearchTool: true,
+    toolCallArgumentsEncoding: HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
+  });
+}
+
+export function usesXaiToolSchemaProfile(
+  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
+): boolean {
+  return extractModelCompat(modelOrCompat)?.toolSchemaProfile === XAI_TOOL_SCHEMA_PROFILE;
+}
+
+export function hasNativeWebSearchTool(
+  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
+): boolean {
+  return extractModelCompat(modelOrCompat)?.nativeWebSearchTool === true;
+}
+
+export function resolveToolCallArgumentsEncoding(
+  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
+): ModelCompatConfig["toolCallArgumentsEncoding"] | undefined {
+  return extractModelCompat(modelOrCompat)?.toolCallArgumentsEncoding;
+}
 
 function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-completions"> {
   return model.api === "openai-completions";

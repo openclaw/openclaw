@@ -198,6 +198,23 @@ function buildFileInstallResult(pluginId: string, targetFile: string): InstallPl
   };
 }
 
+function buildDirectoryInstallResult(params: {
+  pluginId: string;
+  targetDir: string;
+  manifestName?: string;
+  version?: string;
+  extensions: string[];
+}): InstallPluginResult {
+  return {
+    ok: true,
+    pluginId: params.pluginId,
+    targetDir: params.targetDir,
+    manifestName: params.manifestName,
+    version: params.version,
+    extensions: params.extensions,
+  };
+}
+
 type PackageInstallCommonParams = {
   extensionsDir?: string;
   timeoutMs?: number;
@@ -232,6 +249,80 @@ function pickFileInstallCommonParams(params: FileInstallCommonParams): FileInsta
     mode: params.mode,
     dryRun: params.dryRun,
   };
+}
+
+async function installPluginDirectoryIntoExtensions(params: {
+  sourceDir: string;
+  pluginId: string;
+  manifestName?: string;
+  version?: string;
+  extensions: string[];
+  extensionsDir?: string;
+  logger: PluginInstallLogger;
+  timeoutMs: number;
+  mode: "install" | "update";
+  dryRun: boolean;
+  copyErrorPrefix: string;
+  hasDeps: boolean;
+  depsLogMessage: string;
+  afterCopy?: (installedDir: string) => Promise<void>;
+  nameEncoder?: (pluginId: string) => string;
+}): Promise<InstallPluginResult> {
+  const extensionsDir = params.extensionsDir
+    ? resolveUserPath(params.extensionsDir)
+    : path.join(CONFIG_DIR, "extensions");
+  const targetDirResult = await resolveCanonicalInstallTarget({
+    baseDir: extensionsDir,
+    id: params.pluginId,
+    invalidNameMessage: "invalid plugin name: path traversal detected",
+    boundaryLabel: "extensions directory",
+    nameEncoder: params.nameEncoder,
+  });
+  if (!targetDirResult.ok) {
+    return { ok: false, error: targetDirResult.error };
+  }
+  const targetDir = targetDirResult.targetDir;
+  const availability = await ensureInstallTargetAvailable({
+    mode: params.mode,
+    targetDir,
+    alreadyExistsError: `plugin already exists: ${targetDir} (delete it first)`,
+  });
+  if (!availability.ok) {
+    return availability;
+  }
+
+  if (params.dryRun) {
+    return buildDirectoryInstallResult({
+      pluginId: params.pluginId,
+      targetDir,
+      manifestName: params.manifestName,
+      version: params.version,
+      extensions: params.extensions,
+    });
+  }
+
+  const installRes = await installPackageDir({
+    sourceDir: params.sourceDir,
+    targetDir,
+    mode: params.mode,
+    timeoutMs: params.timeoutMs,
+    logger: params.logger,
+    copyErrorPrefix: params.copyErrorPrefix,
+    hasDeps: params.hasDeps,
+    depsLogMessage: params.depsLogMessage,
+    afterCopy: params.afterCopy,
+  });
+  if (!installRes.ok) {
+    return installRes;
+  }
+
+  return buildDirectoryInstallResult({
+    pluginId: params.pluginId,
+    targetDir,
+    manifestName: params.manifestName,
+    version: params.version,
+    extensions: params.extensions,
+  });
 }
 
 export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string): string {
@@ -308,61 +399,21 @@ async function installBundleFromSourceDir(
     );
   }
 
-  const extensionsDir = params.extensionsDir
-    ? resolveUserPath(params.extensionsDir)
-    : path.join(CONFIG_DIR, "extensions");
-  const targetDirResult = await resolveCanonicalInstallTarget({
-    baseDir: extensionsDir,
-    id: pluginId,
-    invalidNameMessage: "invalid plugin name: path traversal detected",
-    boundaryLabel: "extensions directory",
-  });
-  if (!targetDirResult.ok) {
-    return { ok: false, error: targetDirResult.error };
-  }
-  const targetDir = targetDirResult.targetDir;
-  const availability = await ensureInstallTargetAvailable({
-    mode,
-    targetDir,
-    alreadyExistsError: `plugin already exists: ${targetDir} (delete it first)`,
-  });
-  if (!availability.ok) {
-    return availability;
-  }
-
-  if (dryRun) {
-    return {
-      ok: true,
-      pluginId,
-      targetDir,
-      manifestName: manifestRes.manifest.name,
-      version: manifestRes.manifest.version,
-      extensions: [],
-    };
-  }
-
-  const installRes = await installPackageDir({
+  return await installPluginDirectoryIntoExtensions({
     sourceDir: params.sourceDir,
-    targetDir,
-    mode,
-    timeoutMs,
+    pluginId,
+    manifestName: manifestRes.manifest.name,
+    version: manifestRes.manifest.version,
+    extensions: [],
+    extensionsDir: params.extensionsDir,
     logger,
+    timeoutMs,
+    mode,
+    dryRun,
     copyErrorPrefix: "failed to copy plugin bundle",
     hasDeps: false,
     depsLogMessage: "",
   });
-  if (!installRes.ok) {
-    return installRes;
-  }
-
-  return {
-    ok: true,
-    pluginId,
-    targetDir,
-    manifestName: manifestRes.manifest.name,
-    version: manifestRes.manifest.version,
-    extensions: [],
-  };
 }
 
 async function installPluginFromSourceDir(
@@ -514,51 +565,22 @@ async function installPluginFromPackageDir(
     );
   }
 
-  const extensionsDir = params.extensionsDir
-    ? resolveUserPath(params.extensionsDir)
-    : path.join(CONFIG_DIR, "extensions");
-  const targetDirResult = await resolveCanonicalInstallTarget({
-    baseDir: extensionsDir,
-    id: pluginId,
-    invalidNameMessage: "invalid plugin name: path traversal detected",
-    boundaryLabel: "extensions directory",
-    nameEncoder: encodePluginInstallDirName,
-  });
-  if (!targetDirResult.ok) {
-    return { ok: false, error: targetDirResult.error };
-  }
-  const targetDir = targetDirResult.targetDir;
-  const availability = await ensureInstallTargetAvailable({
-    mode,
-    targetDir,
-    alreadyExistsError: `plugin already exists: ${targetDir} (delete it first)`,
-  });
-  if (!availability.ok) {
-    return availability;
-  }
-
-  if (dryRun) {
-    return {
-      ok: true,
-      pluginId,
-      targetDir,
-      manifestName: pkgName || undefined,
-      version: typeof manifest.version === "string" ? manifest.version : undefined,
-      extensions,
-    };
-  }
-
   const deps = manifest.dependencies ?? {};
-  const hasDeps = Object.keys(deps).length > 0;
-  const installRes = await installPackageDir({
+  return await installPluginDirectoryIntoExtensions({
     sourceDir: params.packageDir,
-    targetDir,
-    mode,
-    timeoutMs,
+    pluginId,
+    manifestName: pkgName || undefined,
+    version: typeof manifest.version === "string" ? manifest.version : undefined,
+    extensions,
+    extensionsDir: params.extensionsDir,
     logger,
+    timeoutMs,
+    mode,
+    dryRun,
     copyErrorPrefix: "failed to copy plugin",
-    hasDeps,
+    hasDeps: Object.keys(deps).length > 0,
     depsLogMessage: "Installing plugin dependencies…",
+    nameEncoder: encodePluginInstallDirName,
     afterCopy: async (installedDir) => {
       for (const entry of extensions) {
         const resolvedEntry = path.resolve(installedDir, entry);
@@ -572,18 +594,6 @@ async function installPluginFromPackageDir(
       }
     },
   });
-  if (!installRes.ok) {
-    return installRes;
-  }
-
-  return {
-    ok: true,
-    pluginId,
-    targetDir,
-    manifestName: pkgName || undefined,
-    version: typeof manifest.version === "string" ? manifest.version : undefined,
-    extensions,
-  };
 }
 
 export async function installPluginFromArchive(

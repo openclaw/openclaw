@@ -950,6 +950,35 @@ export default function (api) {
 }
 ```
 
+如果你的引擎**并不拥有**压缩算法，仍然要实现 `compact()`，并显式委托给运行时：
+
+```ts
+import { delegateCompactionToRuntime } from "openclaw/plugin-sdk";
+
+export default function (api) {
+  api.registerContextEngine("my-memory-engine", () => ({
+    info: {
+      id: "my-memory-engine",
+      name: "My Memory Engine",
+      ownsCompaction: false,
+    },
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    async compact(params) {
+      return await delegateCompactionToRuntime(params);
+    },
+  }));
+}
+```
+
+`ownsCompaction: false` 不会自动回退到 legacy 压缩路径。
+只要该引擎处于激活状态，它自己的 `compact()` 仍然会处理 `/compact`
+和溢出恢复。
+
 然后在配置中启用它：
 
 ```json5

@@ -1,13 +1,37 @@
 import fs from "node:fs";
 import path from "node:path";
-import { defineConfig } from "tsdown";
+import { defineConfig, type UserConfig } from "tsdown";
+import { shouldBuildBundledCluster } from "./scripts/lib/optional-bundled-clusters.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
+
+type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
+type InputOptionsArg = InputOptionsFactory extends (
+  options: infer Options,
+  format: infer _Format,
+  context: infer _Context,
+) => infer _Return
+  ? Options
+  : never;
+type InputOptionsReturn = InputOptionsFactory extends (
+  options: infer _Options,
+  format: infer _Format,
+  context: infer _Context,
+) => infer Return
+  ? Return
+  : never;
+type OnLogFunction = InputOptionsArg extends { onLog?: infer OnLog } ? NonNullable<OnLog> : never;
 
 const env = {
   NODE_ENV: "production",
 };
 
-function buildInputOptions(options: { onLog?: unknown; [key: string]: unknown }) {
+const SUPPRESSED_EVAL_WARNING_PATHS = [
+  "@protobufjs/inquire/index.js",
+  "bottleneck/lib/IORedisConnection.js",
+  "bottleneck/lib/RedisConnection.js",
+] as const;
+
+function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
   }
@@ -27,16 +51,13 @@ function buildInputOptions(options: { onLog?: unknown; [key: string]: unknown })
       return false;
     }
     const haystack = [log.message, log.id, log.importer].filter(Boolean).join("\n");
-    return haystack.includes("@protobufjs/inquire/index.js");
+    return SUPPRESSED_EVAL_WARNING_PATHS.some((path) => haystack.includes(path));
   }
 
   return {
     ...options,
-    onLog(
-      level: string,
-      log: { code?: string; message?: string; id?: string; importer?: string },
-      defaultHandler: (level: string, log: { code?: string }) => void,
-    ) {
+    onLog(...args: Parameters<OnLogFunction>) {
+      const [level, log, defaultHandler] = args;
       if (isSuppressedLog(log)) {
         return;
       }
@@ -49,7 +70,7 @@ function buildInputOptions(options: { onLog?: unknown; [key: string]: unknown })
   };
 }
 
-function nodeBuildConfig(config: Record<string, unknown>) {
+function nodeBuildConfig(config: UserConfig): UserConfig {
   return {
     ...config,
     env,
@@ -65,6 +86,9 @@ function listBundledPluginBuildEntries(): Record<string, string> {
 
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory()) {
+      continue;
+    }
+    if (!shouldBuildBundledCluster(dirent.name, process.env)) {
       continue;
     }
 
@@ -112,52 +136,77 @@ function listBundledPluginBuildEntries(): Record<string, string> {
 
 const bundledPluginBuildEntries = listBundledPluginBuildEntries();
 
+function buildBundledHookEntries(): Record<string, string> {
+  const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
+  const entries: Record<string, string> = {};
+
+  if (!fs.existsSync(hooksRoot)) {
+    return entries;
+  }
+
+  for (const dirent of fs.readdirSync(hooksRoot, { withFileTypes: true })) {
+    if (!dirent.isDirectory()) {
+      continue;
+    }
+
+    const hookName = dirent.name;
+    const handlerPath = path.join(hooksRoot, hookName, "handler.ts");
+    if (!fs.existsSync(handlerPath)) {
+      continue;
+    }
+
+    entries[`bundled/${hookName}/handler`] = handlerPath;
+  }
+
+  return entries;
+}
+
+const bundledHookEntries = buildBundledHookEntries();
+
 function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
     entry: "src/entry.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
-    "infra/warning-filter": "src/infra/warning-filter.ts",
     extensionAPI: "src/extensionAPI.ts",
-    // Keep sync lazy-runtime channel modules as concrete dist files.
-    "channels/plugins/agent-tools/whatsapp-login":
-      "src/channels/plugins/agent-tools/whatsapp-login.ts",
-    "channels/plugins/actions/discord": "src/channels/plugins/actions/discord.ts",
-    "channels/plugins/actions/signal": "src/channels/plugins/actions/signal.ts",
-    "channels/plugins/actions/telegram": "src/channels/plugins/actions/telegram.ts",
+    "infra/warning-filter": "src/infra/warning-filter.ts",
     "telegram/audit": "extensions/telegram/src/audit.ts",
     "telegram/token": "extensions/telegram/src/token.ts",
     "line/accounts": "src/line/accounts.ts",
     "line/send": "src/line/send.ts",
     "line/template-messages": "src/line/template-messages.ts",
+    "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
+    "plugins/runtime/index": "src/plugins/runtime/index.ts",
+    "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
   };
 }
 
 const coreDistEntries = buildCoreDistEntries();
 
+function buildUnifiedDistEntries(): Record<string, string> {
+  return {
+    ...coreDistEntries,
+    // Internal compat artifact for the root-alias.cjs lazy loader.
+    "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
+    ...Object.fromEntries(
+      Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
+        `plugin-sdk/${entry}`,
+        source,
+      ]),
+    ),
+    ...bundledPluginBuildEntries,
+    ...bundledHookEntries,
+  };
+}
+
 export default defineConfig([
   nodeBuildConfig({
-    // Build the root dist entrypoints together so they can share hashed chunks
-    // instead of emitting near-identical copies across separate builds.
-    entry: coreDistEntries,
-  }),
-  nodeBuildConfig({
-    // Bundle all plugin-sdk entries in a single build so the bundler can share
-    // common chunks instead of duplicating them per entry (~712MB heap saved).
-    entry: buildPluginSdkEntrySources(),
-    outDir: "dist/plugin-sdk",
-  }),
-  nodeBuildConfig({
-    // Bundle bundled plugin entrypoints so built gateway startup can load JS
-    // directly from dist/extensions instead of transpiling extensions/*.ts via Jiti.
-    entry: bundledPluginBuildEntries,
-    outDir: "dist",
+    // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
+    // and bundled hooks in one graph so runtime singletons are emitted once.
+    entry: buildUnifiedDistEntries(),
     deps: {
       neverBundle: ["@lancedb/lancedb"],
     },
-  }),
-  nodeBuildConfig({
-    entry: ["src/hooks/bundled/*/handler.ts", "src/hooks/llm-slug-generator.ts"],
   }),
 ]);

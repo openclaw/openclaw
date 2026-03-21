@@ -1,20 +1,16 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import {
-  buildDoubaoCodingProvider,
-  buildDoubaoProvider,
-} from "../../src/agents/models-config.providers.static.js";
-import { ensureModelAllowlistEntry } from "../../src/commands/model-allowlist.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
+import { buildDoubaoCodingProvider, buildDoubaoProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "volcengine";
 const VOLCENGINE_DEFAULT_MODEL_REF = "volcengine-plan/ark-code-latest";
 
-const volcenginePlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Volcengine Provider",
   description: "Bundled Volcengine provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Volcengine",
@@ -63,6 +59,4 @@ const volcenginePlugin = {
       },
     });
   },
-};
-
-export default volcenginePlugin;
+});

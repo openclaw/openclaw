@@ -1,9 +1,9 @@
-import { issuePairingChallenge } from "../../../../src/pairing/pairing-challenge.js";
-import { upsertChannelPairingRequest } from "../../../../src/pairing/pairing-store.js";
+import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
-} from "../../../../src/security/dm-policy-shared.js";
+} from "openclaw/plugin-sdk/security-runtime";
 import { isSignalSenderAllowed, type SignalSender } from "../identity.js";
 
 type SignalDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
@@ -62,11 +62,8 @@ export async function handleSignalDirectMessageAccess(params: {
     return false;
   }
   if (params.dmPolicy === "pairing") {
-    await issuePairingChallenge({
+    await createChannelPairingChallengeIssuer({
       channel: "signal",
-      senderId: params.senderId,
-      senderIdLine: params.senderIdLine,
-      meta: { name: params.senderName },
       upsertPairingRequest: async ({ id, meta }) =>
         await upsertChannelPairingRequest({
           channel: "signal",
@@ -74,6 +71,10 @@ export async function handleSignalDirectMessageAccess(params: {
           accountId: params.accountId,
           meta,
         }),
+    })({
+      senderId: params.senderId,
+      senderIdLine: params.senderIdLine,
+      meta: { name: params.senderName },
       sendPairingReply: params.sendPairingReply,
       onCreated: () => {
         params.log(`signal pairing request sender=${params.senderId}`);

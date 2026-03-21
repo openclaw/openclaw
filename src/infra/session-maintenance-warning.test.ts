@@ -15,28 +15,9 @@ const mocks = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
 }));
 
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveSessionAgentId: mocks.resolveSessionAgentId,
-}));
+type SessionMaintenanceWarningModule = typeof import("./session-maintenance-warning.js");
 
-vi.mock("../utils/message-channel.js", () => ({
-  normalizeMessageChannel: mocks.normalizeMessageChannel,
-  isDeliverableMessageChannel: mocks.isDeliverableMessageChannel,
-}));
-
-vi.mock("./outbound/targets.js", () => ({
-  resolveSessionDeliveryTarget: mocks.resolveSessionDeliveryTarget,
-}));
-
-vi.mock("./outbound/deliver.js", () => ({
-  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
-}));
-
-vi.mock("./system-events.js", () => ({
-  enqueueSystemEvent: mocks.enqueueSystemEvent,
-}));
-
-const { deliverSessionMaintenanceWarning } = await import("./session-maintenance-warning.js");
+let deliverSessionMaintenanceWarning: SessionMaintenanceWarningModule["deliverSessionMaintenanceWarning"];
 
 function createParams(
   overrides: Partial<Parameters<typeof deliverSessionMaintenanceWarning>[0]> = {},
@@ -62,17 +43,35 @@ describe("deliverSessionMaintenanceWarning", () => {
   let prevVitest: string | undefined;
   let prevNodeEnv: string | undefined;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     prevVitest = process.env.VITEST;
     prevNodeEnv = process.env.NODE_ENV;
     delete process.env.VITEST;
     process.env.NODE_ENV = "development";
+    vi.resetModules();
     mocks.resolveSessionAgentId.mockClear();
     mocks.resolveSessionDeliveryTarget.mockClear();
     mocks.normalizeMessageChannel.mockClear();
     mocks.isDeliverableMessageChannel.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
     mocks.enqueueSystemEvent.mockClear();
+    vi.doMock("../agents/agent-scope.js", () => ({
+      resolveSessionAgentId: mocks.resolveSessionAgentId,
+    }));
+    vi.doMock("../utils/message-channel.js", () => ({
+      normalizeMessageChannel: mocks.normalizeMessageChannel,
+      isDeliverableMessageChannel: mocks.isDeliverableMessageChannel,
+    }));
+    vi.doMock("./outbound/targets.js", () => ({
+      resolveSessionDeliveryTarget: mocks.resolveSessionDeliveryTarget,
+    }));
+    vi.doMock("./outbound/deliver.js", () => ({
+      deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+    }));
+    vi.doMock("./system-events.js", () => ({
+      enqueueSystemEvent: mocks.enqueueSystemEvent,
+    }));
+    ({ deliverSessionMaintenanceWarning } = await import("./session-maintenance-warning.js"));
   });
 
   afterEach(() => {

@@ -453,6 +453,56 @@ function buildChatCommands(): ChatCommandDefinition[] {
       formatArgs: COMMAND_ARG_FORMATTERS.config,
     }),
     defineChatCommand({
+      key: "mcp",
+      nativeName: "mcp",
+      description: "Show or set OpenClaw MCP servers.",
+      textAlias: "/mcp",
+      category: "management",
+      args: [
+        {
+          name: "action",
+          description: "show | get | set | unset",
+          type: "string",
+          choices: ["show", "get", "set", "unset"],
+        },
+        {
+          name: "path",
+          description: "MCP server name",
+          type: "string",
+        },
+        {
+          name: "value",
+          description: "JSON config for set",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsParsing: "none",
+      formatArgs: COMMAND_ARG_FORMATTERS.mcp,
+    }),
+    defineChatCommand({
+      key: "plugins",
+      nativeName: "plugins",
+      description: "List, show, enable, or disable plugins.",
+      textAliases: ["/plugins", "/plugin"],
+      category: "management",
+      args: [
+        {
+          name: "action",
+          description: "list | show | get | enable | disable",
+          type: "string",
+          choices: ["list", "show", "get", "enable", "disable"],
+        },
+        {
+          name: "path",
+          description: "Plugin id or name",
+          type: "string",
+        },
+      ],
+      argsParsing: "none",
+      formatArgs: COMMAND_ARG_FORMATTERS.plugins,
+    }),
+    defineChatCommand({
       key: "debug",
       nativeName: "debug",
       description: "Set runtime debug overrides.",

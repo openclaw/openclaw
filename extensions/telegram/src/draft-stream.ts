@@ -1,6 +1,6 @@
 import type { Bot } from "grammy";
-import { createFinalizableDraftLifecycle } from "../../../src/channels/draft-stream-controls.js";
-import { resolveGlobalSingleton } from "../../../src/shared/global-singleton.js";
+import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 
@@ -28,11 +28,17 @@ type TelegramSendMessageDraft = (
  */
 const TELEGRAM_DRAFT_STREAM_STATE_KEY = Symbol.for("openclaw.telegramDraftStreamState");
 
-const draftStreamState = resolveGlobalSingleton(TELEGRAM_DRAFT_STREAM_STATE_KEY, () => ({
-  nextDraftId: 0,
-}));
+let draftStreamState: { nextDraftId: number } | undefined;
+
+function getDraftStreamState(): { nextDraftId: number } {
+  draftStreamState ??= resolveGlobalSingleton(TELEGRAM_DRAFT_STREAM_STATE_KEY, () => ({
+    nextDraftId: 0,
+  }));
+  return draftStreamState;
+}
 
 function allocateTelegramDraftId(): number {
+  const draftStreamState = getDraftStreamState();
   draftStreamState.nextDraftId =
     draftStreamState.nextDraftId >= TELEGRAM_DRAFT_ID_MAX ? 1 : draftStreamState.nextDraftId + 1;
   return draftStreamState.nextDraftId;
@@ -454,6 +460,6 @@ export function createTelegramDraftStream(params: {
 
 export const __testing = {
   resetTelegramDraftStreamForTests() {
-    draftStreamState.nextDraftId = 0;
+    getDraftStreamState().nextDraftId = 0;
   },
 };

@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { resolveStorePath, updateSessionStore } from "../../../../src/config/sessions.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveStorePath, updateSessionStore } from "openclaw/plugin-sdk/config-runtime";
 
 /**
  * Marks every session entry in the store whose key contains {@link threadId}

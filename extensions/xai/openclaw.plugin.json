@@ -19,9 +19,40 @@
       "cliDescription": "xAI API key"
     }
   ],
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Grok Search API Key",
+      "help": "xAI API key for Grok web search (fallback: XAI_API_KEY env var).",
+      "sensitive": true
+    },
+    "webSearch.model": {
+      "label": "Grok Search Model",
+      "help": "Grok model override for web search."
+    },
+    "webSearch.inlineCitations": {
+      "label": "Inline Citations",
+      "help": "Include inline markdown citations in Grok responses."
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "model": {
+            "type": "string"
+          },
+          "inlineCitations": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
   }
 }
