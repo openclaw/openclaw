@@ -1462,17 +1462,20 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(secondCall?.customInstructions).toContain("latest_user_ask_not_reflected");
   });
 
-  it("keeps last successful summary when a quality retry call fails", async () => {
+  it("preserves split-turn and recent-turn suffixes when retry fallback is capped", async () => {
     mockSummarizeInStages.mockReset();
+    const oversizedHistorySummary = "history detail ".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+    const splitTurnPrefixSummary = "split-turn prefix context that must survive capping";
     mockSummarizeInStages
-      .mockResolvedValueOnce("short summary missing headings")
+      .mockResolvedValueOnce(oversizedHistorySummary)
+      .mockResolvedValueOnce(splitTurnPrefixSummary)
       .mockRejectedValueOnce(new Error("retry transient failure"));
 
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, {
       model,
-      recentTurnsPreserve: 0,
+      recentTurnsPreserve: 1,
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 1,
     });
@@ -1488,8 +1491,16 @@ describe("compaction-safeguard recent-turn preservation", () => {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
           { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          { role: "user", content: "latest ask status", timestamp: 3 },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "latest assistant reply" }],
+            timestamp: 4,
+          } as unknown as AgentMessage,
         ],
-        turnPrefixMessages: [],
+        turnPrefixMessages: [
+          { role: "user", content: "prefix request that was split out", timestamp: 0 },
+        ],
         firstKeptEntryId: "entry-1",
         tokensBefore: 1_500,
         fileOps: {
@@ -1499,7 +1510,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
         },
         settings: { reserveTokens: 4_000 },
         previousSummary: undefined,
-        isSplitTurn: false,
+        isSplitTurn: true,
       },
       customInstructions: "",
       signal: new AbortController().signal,
@@ -1511,8 +1522,15 @@ describe("compaction-safeguard recent-turn preservation", () => {
     };
 
     expect(result.cancel).not.toBe(true);
-    expect(result.compaction?.summary).toContain("short summary missing headings");
-    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const summary = result.compaction?.summary ?? "";
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain(SUMMARY_TRUNCATED_MARKER);
+    expect(summary).toContain("**Turn Context (split turn):**");
+    expect(summary).toContain(splitTurnPrefixSummary);
+    expect(summary).toContain("## Recent turns preserved verbatim");
+    expect(summary).toContain("latest ask status");
+    expect(summary).toContain("latest assistant reply");
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(3);
   });
 
   it("keeps required headings when all turns are preserved and history is carried forward", async () => {

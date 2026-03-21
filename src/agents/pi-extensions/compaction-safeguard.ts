@@ -961,7 +961,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       let summary = "";
       let lastHistorySummary = "";
       let lastSplitTurnSection = "";
-      let usedLastSuccessfulSummary = false;
       let currentInstructions = structuredInstructions;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
       let lastSuccessfulSummary: string | null = null;
@@ -1023,7 +1022,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 }`,
             );
             summary = lastSuccessfulSummary;
-            usedLastSuccessfulSummary = true;
             break;
           }
           throw attemptError;
@@ -1086,18 +1084,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         fullReservedSuffix && !/^\s/.test(fullReservedSuffix)
           ? `\n\n${fullReservedSuffix}`
           : fullReservedSuffix;
-      const bodyToCap = usedLastSuccessfulSummary ? summary : lastHistorySummary;
-      const suffixToUse = usedLastSuccessfulSummary
-        ? (() => {
-            const diag = appendSummarySection(
-              appendSummarySection("", toolFailureSection),
-              fileOpsSummary,
-            );
-            const withWk = appendSummarySection(diag, workspaceContext);
-            return withWk && !/^\s/.test(withWk) ? `\n\n${withWk}` : withWk;
-          })()
-        : normalizedSuffix;
-      summary = capCompactionSummaryPreservingSuffix(bodyToCap, suffixToUse ?? "");
+      const bodyToCap = lastHistorySummary || summary;
+      summary = capCompactionSummaryPreservingSuffix(bodyToCap, normalizedSuffix ?? "");
 
       return {
         compaction: {
