@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchRemoteMedia } from "./fetch.js";
+import {
+  fetchRemoteMedia,
+  isMediaFetchError,
+  MediaFetchError,
+  SAFE_MEDIA_FETCH_ERROR_MESSAGE,
+} from "./fetch.js";
 
 function makeStream(chunks: Uint8Array[]) {
   return new ReadableStream<Uint8Array>({
@@ -152,5 +157,45 @@ describe("fetchRemoteMedia", () => {
       }),
     ).rejects.toThrow(/private|internal|blocked/i);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("isMediaFetchError", () => {
+  it("returns true for a MediaFetchError instance", () => {
+    const err = new MediaFetchError(
+      "fetch_failed",
+      "Failed to fetch media from https://example.com",
+    );
+    expect(isMediaFetchError(err)).toBe(true);
+  });
+
+  it("returns true when MediaFetchError is in the cause chain", () => {
+    const cause = new MediaFetchError("http_error", "HTTP 500");
+    const wrapper = new Error("loadWebMedia failed", { cause });
+    expect(isMediaFetchError(wrapper)).toBe(true);
+  });
+
+  it("returns false for a generic Error", () => {
+    expect(isMediaFetchError(new Error("something else"))).toBe(false);
+  });
+
+  it("returns false for non-Error values", () => {
+    expect(isMediaFetchError(null)).toBe(false);
+    expect(isMediaFetchError("string error")).toBe(false);
+    expect(isMediaFetchError(undefined)).toBe(false);
+  });
+
+  it("detects errors whose message contains MediaFetchError name", () => {
+    const err = new Error("MediaFetchError: Failed to fetch media from ...");
+    expect(isMediaFetchError(err)).toBe(true);
+  });
+});
+
+describe("SAFE_MEDIA_FETCH_ERROR_MESSAGE", () => {
+  it("does not contain PII patterns", () => {
+    expect(SAFE_MEDIA_FETCH_ERROR_MESSAGE).not.toMatch(/@g\.us/);
+    expect(SAFE_MEDIA_FETCH_ERROR_MESSAGE).not.toMatch(/\+\d{10,}/);
+    expect(SAFE_MEDIA_FETCH_ERROR_MESSAGE).not.toMatch(/\/home\//);
+    expect(SAFE_MEDIA_FETCH_ERROR_MESSAGE).toContain("Media failed");
   });
 });

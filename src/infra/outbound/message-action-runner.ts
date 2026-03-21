@@ -15,6 +15,7 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { hasInteractiveReplyBlocks, hasReplyPayloadContent } from "../../interactive/payload.js";
+import { isMediaFetchError, SAFE_MEDIA_FETCH_ERROR_MESSAGE } from "../../media/fetch.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
@@ -368,11 +369,12 @@ async function handleBroadcastAction(
         if (isAbortError(err)) {
           throw err;
         }
+        const rawError = err instanceof Error ? err.message : String(err);
         results.push({
           channel: targetChannel,
           to: target,
           ok: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: isMediaFetchError(err) ? SAFE_MEDIA_FETCH_ERROR_MESSAGE : rawError,
         });
       }
     }

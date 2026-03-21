@@ -4,7 +4,9 @@ import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents
 import { readStringParam } from "../../agents/tools/common.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { logVerbose } from "../../globals.js";
 import { createRootScopedReadFile } from "../../infra/fs-safe.js";
+import { isMediaFetchError, SAFE_MEDIA_FETCH_ERROR_MESSAGE } from "../../media/fetch.js";
 import { extensionForMime } from "../../media/mime.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
@@ -181,10 +183,21 @@ async function hydrateAttachmentPayload(params: {
       channel: params.channel,
       accountId: params.accountId,
     });
-    const media = await loadWebMedia(
-      mediaSource,
-      buildAttachmentMediaLoadOptions({ policy: params.mediaPolicy, maxBytes }),
-    );
+    let media;
+    try {
+      media = await loadWebMedia(
+        mediaSource,
+        buildAttachmentMediaLoadOptions({ policy: params.mediaPolicy, maxBytes }),
+      );
+    } catch (err) {
+      if (isMediaFetchError(err)) {
+        logVerbose(
+          `Media fetch failed (sanitized): ${err instanceof Error ? err.message : String(err)}`,
+        );
+        throw new Error(SAFE_MEDIA_FETCH_ERROR_MESSAGE);
+      }
+      throw err;
+    }
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {
       params.args.contentType = media.contentType;
