@@ -22,8 +22,6 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-ada-002": 8191,
 };
 
-export const DEFAULT_OPENAI_EMBEDDING_MODEL = OPENAI_DEFAULT_EMBEDDING_MODEL;
-
 export function normalizeOpenAiModel(model: string): string {
   return normalizeEmbeddingModelWithPrefixes({
     model,
