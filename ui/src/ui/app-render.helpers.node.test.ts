@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildChatModelOptions,
   isCronSessionKey,
   parseSessionKey,
   resolveSessionDisplayName,
@@ -282,5 +283,72 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+
+describe("buildChatModelOptions", () => {
+  it("preserves the active override when it is missing from the catalog", () => {
+    expect(
+      buildChatModelOptions(
+        [{ id: "gpt-5", name: "GPT-5", provider: "openai" }],
+        "custom/missing-model",
+        "",
+      ).map((entry) => entry.value),
+    ).toContain("custom/missing-model");
+  });
+
+  it("prioritizes recent models from localStorage and ignores stale recent entries", () => {
+    const previousWindow = globalThis.window;
+    const storage = {
+      getItem: () =>
+        JSON.stringify([
+          { value: "anthropic/claude-sonnet", usedAt: 200 },
+          { value: "missing/old-model", usedAt: 100 },
+        ]),
+      setItem: () => undefined,
+      removeItem: () => undefined,
+      clear: () => undefined,
+      key: () => null,
+      length: 1,
+    } as unknown as Storage;
+
+    Object.defineProperty(globalThis, "window", {
+      value: { localStorage: storage },
+      configurable: true,
+    });
+
+    try {
+      expect(
+        buildChatModelOptions(
+          [
+            { id: "gpt-5", name: "GPT-5", provider: "openai" },
+            { id: "foo", name: "Foo", provider: "custom" },
+            { id: "claude-sonnet", name: "Claude Sonnet", provider: "anthropic" },
+          ],
+          "",
+          "",
+        ).map((entry) => entry.value),
+      ).toEqual(["anthropic/claude-sonnet", "custom/foo", "openai/gpt-5"]);
+    } finally {
+      Object.defineProperty(globalThis, "window", {
+        value: previousWindow,
+        configurable: true,
+      });
+    }
+  });
+
+  it("orders custom-provider models before built-ins when no recents are stored", () => {
+    expect(
+      buildChatModelOptions(
+        [
+          { id: "gpt-5", name: "GPT-5", provider: "openai" },
+          { id: "foo", name: "Foo", provider: "custom" },
+          { id: "claude-sonnet", name: "Claude Sonnet", provider: "anthropic" },
+        ],
+        "",
+        "",
+      ).map((entry) => entry.value),
+    ).toEqual(["custom/foo", "openai/gpt-5", "anthropic/claude-sonnet"]);
   });
 });
