@@ -124,6 +124,9 @@ export function parseTtsDirectives(
   const warnings: string[] = [];
   let cleanedText = text;
   let hasDirective = false;
+  // Deferred: generic `model=` value resolved after all tokens so
+  // `provider=` order within a directive block doesn't matter.
+  let pendingGenericModel: string | undefined;
 
   const blockRegex = /\[\[tts:text\]\]([\s\S]*?)\[\[\/tts:text\]\]/gi;
   cleanedText = cleanedText.replace(blockRegex, (_match, inner: string) => {
@@ -216,29 +219,9 @@ export function parseTtsDirectives(
                 warnings.push(`invalid MiniMax model "${rawValue}"`);
               }
             } else {
-              // Generic model= — honor explicit provider if already set in
-              // this directive block, otherwise infer from model name.
-              if (overrides.provider === "openai") {
-                if (isValidOpenAIModel(rawValue, openaiBaseUrl)) {
-                  overrides.openai = { ...overrides.openai, model: rawValue };
-                } else {
-                  warnings.push(`invalid OpenAI model "${rawValue}"`);
-                }
-              } else if (overrides.provider === "elevenlabs") {
-                overrides.elevenlabs = { ...overrides.elevenlabs, modelId: rawValue };
-              } else if (overrides.provider === "minimax") {
-                if (isValidMinimaxModel(rawValue)) {
-                  overrides.minimax = { ...overrides.minimax, model: rawValue };
-                } else {
-                  warnings.push(`invalid MiniMax model "${rawValue}"`);
-                }
-              } else if (isValidMinimaxModel(rawValue)) {
-                overrides.minimax = { ...overrides.minimax, model: rawValue };
-              } else if (isValidOpenAIModel(rawValue, openaiBaseUrl)) {
-                overrides.openai = { ...overrides.openai, model: rawValue };
-              } else {
-                overrides.elevenlabs = { ...overrides.elevenlabs, modelId: rawValue };
-              }
+              // Generic model= — defer until all tokens are parsed so
+              // provider= order within the directive doesn't matter.
+              pendingGenericModel = rawValue;
             }
             break;
           case "stability":
@@ -428,6 +411,32 @@ export function parseTtsDirectives(
     }
     return "";
   });
+
+  // Resolve deferred generic model= now that provider= (if any) is known.
+  if (pendingGenericModel != null && policy.allowModelId) {
+    const m = pendingGenericModel;
+    if (overrides.provider === "openai") {
+      if (isValidOpenAIModel(m, openaiBaseUrl)) {
+        overrides.openai = { ...overrides.openai, model: m };
+      } else {
+        warnings.push(`invalid OpenAI model "${m}"`);
+      }
+    } else if (overrides.provider === "elevenlabs") {
+      overrides.elevenlabs = { ...overrides.elevenlabs, modelId: m };
+    } else if (overrides.provider === "minimax") {
+      if (isValidMinimaxModel(m)) {
+        overrides.minimax = { ...overrides.minimax, model: m };
+      } else {
+        warnings.push(`invalid MiniMax model "${m}"`);
+      }
+    } else if (isValidMinimaxModel(m)) {
+      overrides.minimax = { ...overrides.minimax, model: m };
+    } else if (isValidOpenAIModel(m, openaiBaseUrl)) {
+      overrides.openai = { ...overrides.openai, model: m };
+    } else {
+      overrides.elevenlabs = { ...overrides.elevenlabs, modelId: m };
+    }
+  }
 
   return {
     cleanedText,

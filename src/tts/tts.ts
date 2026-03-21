@@ -38,10 +38,6 @@ import {
 import type { SpeechVoiceOption } from "./provider-types.js";
 import {
   DEFAULT_MINIMAX_BASE_URL,
-  OPENAI_DEFAULT_TTS_MODEL as DEFAULT_OPENAI_MODEL,
-  OPENAI_DEFAULT_TTS_VOICE as DEFAULT_OPENAI_VOICE,
-} from "../providers/openai-defaults.js";
-import {
   DEFAULT_OPENAI_BASE_URL,
   isValidMinimaxModel,
   isValidOpenAIModel,

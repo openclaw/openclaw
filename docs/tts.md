@@ -9,13 +9,14 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, Microsoft, or OpenAI.
+OpenClaw can convert outbound replies into audio using ElevenLabs, Microsoft, MiniMax, or OpenAI.
 It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
 - **ElevenLabs** (primary or fallback provider)
 - **Microsoft** (primary or fallback provider; current bundled implementation uses `node-edge-tts`, default when no API keys)
+- **MiniMax** (primary or fallback provider; high-quality multilingual voices with emotion control)
 - **OpenAI** (primary or fallback provider; also used for summaries)
 
 ### Microsoft speech notes
@@ -33,9 +34,10 @@ or ElevenLabs.
 
 ## Optional keys
 
-If you want OpenAI or ElevenLabs:
+If you want MiniMax, OpenAI, or ElevenLabs:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
+- `MINIMAX_API_KEY`
 - `OPENAI_API_KEY`
 
 Microsoft speech does **not** require an API key. If no API keys are found,
@@ -52,6 +54,7 @@ so that provider must also be authenticated if you enable summaries.
 - [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
+- [MiniMax Text to Speech](https://platform.minimaxi.com/document/T2A%20V2)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
 
@@ -114,6 +117,30 @@ Full schema is in [Gateway configuration](/gateway/configuration).
           useSpeakerBoost: true,
           speed: 1.0,
         },
+      },
+    },
+  },
+}
+```
+
+### MiniMax primary with expressive voice
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "minimax",
+      minimax: {
+        apiKey: "minimax_api_key",
+        baseUrl: "https://api.minimax.io",
+        model: "speech-2.8-hd",
+        voiceId: "English_expressive_narrator",
+        speed: 1.0,
+        vol: 1.0,
+        pitch: 0,
+        emotion: "happy",
+        languageBoost: "en",
       },
     },
   },
@@ -207,9 +234,9 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: speech provider id such as `"elevenlabs"`, `"microsoft"`, or `"openai"` (fallback is automatic).
+- `provider`: speech provider id such as `"elevenlabs"`, `"microsoft"`, `"minimax"`, or `"openai"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
-  otherwise `microsoft`.
+  then `minimax` (if key), otherwise `microsoft`.
 - Legacy `provider: "edge"` still works and is normalized to `microsoft`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
@@ -218,7 +245,7 @@ Then run:
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
-- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
+- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `MINIMAX_API_KEY`, `OPENAI_API_KEY`).
 - `elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `openai.baseUrl`: override the OpenAI TTS endpoint.
   - Resolution order: `messages.tts.openai.baseUrl` -> `OPENAI_TTS_BASE_URL` -> `https://api.openai.com/v1`
@@ -230,6 +257,14 @@ Then run:
 - `elevenlabs.applyTextNormalization`: `auto|on|off`
 - `elevenlabs.languageCode`: 2-letter ISO 639-1 (e.g. `en`, `de`)
 - `elevenlabs.seed`: integer `0..4294967295` (best-effort determinism)
+- `minimax.baseUrl`: override MiniMax API base URL (default `https://api.minimax.io`).
+- `minimax.model`: MiniMax model id (e.g. `speech-2.8-hd`, `speech-2.8-turbo`).
+- `minimax.voiceId`: MiniMax voice id (e.g. `English_expressive_narrator`, `English_radiant_girl`).
+- `minimax.speed`: playback speed (default `1.0`).
+- `minimax.vol`: volume level (default `1.0`).
+- `minimax.pitch`: pitch adjustment (default `0`).
+- `minimax.emotion`: emotional tone (`happy`, `sad`, `angry`, `fearful`, `disgusted`, `surprised`, `calm`, `fluent`, `whisper`).
+- `minimax.languageBoost`: language boost hint (e.g. `en`, `zh`).
 - `microsoft.enabled`: allow Microsoft speech usage (default `true`; no API key).
 - `microsoft.voice`: Microsoft neural voice name (e.g. `en-US-MichelleNeural`).
 - `microsoft.lang`: language code (e.g. `en-US`).
@@ -264,7 +299,7 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (registered speech provider id, for example `openai`, `elevenlabs`, or `microsoft`; requires `allowProvider: true`)
+- `provider` (registered speech provider id, for example `openai`, `elevenlabs`, `minimax`, or `microsoft`; requires `allowProvider: true`)
 - `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
 - `model` (OpenAI TTS model or ElevenLabs model id)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
