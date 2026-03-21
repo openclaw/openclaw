@@ -59,7 +59,7 @@ export function parseColorMarkup(content: string): Segment[] {
   // pattern like \[([^\]]+)\] would match any bracket token — e.g. [Q1] —
   // and cause it to consume a later real closing tag ([/red]), silently
   // corrupting the surrounding styled spans.  Restricting the opening tag to
-  // the set of recognised colour/style names prevents that: [Q1] does not
+  // the set of recognized color/style names prevents that: [Q1] does not
   // match the tag alternative and each of its characters falls through to the
   // plain-text alternatives instead.
   //
