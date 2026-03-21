@@ -149,6 +149,26 @@ describe("resolvePluginTools optional tools", () => {
     expect(registry.diagnostics[0]?.message).toContain("plugin tool name conflict");
   });
 
+  it("rejects normalized tool name collisions with core tools", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "demo",
+        optional: false,
+        source: "/tmp/demo.js",
+        factory: () => makeTool("BASH"),
+      },
+    ]);
+
+    const tools = resolvePluginTools({
+      context: createContext() as never,
+      existingToolNames: new Set(["exec"]),
+    });
+
+    expect(tools).toHaveLength(0);
+    expect(registry.diagnostics).toHaveLength(1);
+    expect(registry.diagnostics[0]?.message).toContain("plugin tool name conflict");
+  });
+
   it("suppresses conflict diagnostics when requested", () => {
     const registry = setMultiToolRegistry();
     const tools = resolveWithConflictingCoreName({ suppressNameConflicts: true });

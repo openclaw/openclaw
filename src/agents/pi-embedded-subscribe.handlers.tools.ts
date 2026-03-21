@@ -32,6 +32,7 @@ type ToolStartRecord = {
 
 /** Track tool execution start data for after_tool_call hook. */
 const toolStartData = new Map<string, ToolStartRecord>();
+const MAX_PENDING_MEDIA_ARTIFACTS = 200;
 
 function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
@@ -232,6 +233,12 @@ async function emitToolResultOutput(params: {
     const artifact = extractToolMediaArtifact(toolName, result);
     if (artifact) {
       ctx.state.pendingMediaArtifacts.push({ toolName, artifact });
+      if (ctx.state.pendingMediaArtifacts.length > MAX_PENDING_MEDIA_ARTIFACTS) {
+        ctx.state.pendingMediaArtifacts.splice(
+          0,
+          ctx.state.pendingMediaArtifacts.length - MAX_PENDING_MEDIA_ARTIFACTS,
+        );
+      }
     }
   }
 

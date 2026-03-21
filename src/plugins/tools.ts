@@ -120,8 +120,15 @@ export function resolvePluginTools(params: {
       continue;
     }
     const nameSet = new Set<string>();
+    const nameSetNormalized = new Set<string>();
     for (const tool of list) {
-      if (nameSet.has(tool.name) || existing.has(tool.name)) {
+      const normalizedToolName = normalizeToolName(tool.name);
+      if (
+        nameSet.has(tool.name) ||
+        existing.has(tool.name) ||
+        nameSetNormalized.has(normalizedToolName) ||
+        existingNormalized.has(normalizedToolName)
+      ) {
         const message = `plugin tool name conflict (${entry.pluginId}): ${tool.name}`;
         if (!params.suppressNameConflicts) {
           log.error(message);
@@ -135,7 +142,9 @@ export function resolvePluginTools(params: {
         continue;
       }
       nameSet.add(tool.name);
+      nameSetNormalized.add(normalizedToolName);
       existing.add(tool.name);
+      existingNormalized.add(normalizedToolName);
       pluginToolMeta.set(tool, {
         pluginId: entry.pluginId,
         optional: entry.optional,
