@@ -8,7 +8,6 @@ import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
-import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
@@ -19,6 +18,7 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
+import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
@@ -327,9 +327,8 @@ export function handleMessageEnd(
   // emitting the assistant update, which prevents downstream tool execution from
   // being signalled. See: https://github.com/openclaw/openclaw/issues/13603
   const hasToolCalls =
-    extractToolCallsFromAssistant(
-      assistantMessage as Extract<AgentMessage, { role: "assistant" }>,
-    ).length > 0;
+    extractToolCallsFromAssistant(assistantMessage as Extract<AgentMessage, { role: "assistant" }>)
+      .length > 0;
 
   if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia || hasToolCalls)) {
     const data = buildAssistantStreamData({
