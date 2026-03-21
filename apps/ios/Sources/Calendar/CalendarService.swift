@@ -3,11 +3,36 @@ import Foundation
 import OpenClawKit
 
 final class CalendarService: CalendarServicing {
+    private final class PermissionRequestBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Bool, Never>?
+        private var hasResumed = false
+
+        func install(_ continuation: CheckedContinuation<Bool, Never>) {
+            self.lock.lock()
+            self.continuation = continuation
+            self.lock.unlock()
+        }
+
+        func resume(_ value: Bool) {
+            self.lock.lock()
+            guard !self.hasResumed else {
+                self.lock.unlock()
+                return
+            }
+            self.hasResumed = true
+            let continuation = self.continuation
+            self.continuation = nil
+            self.lock.unlock()
+            continuation?.resume(returning: value)
+        }
+    }
+
     func events(params: OpenClawCalendarEventsParams) async throws -> OpenClawCalendarEventsPayload {
         let store = EKEventStore()
         let status = EKEventStore.authorizationStatus(for: .event)
         let authorized: Bool
-        if status == .notDetermined {
+        if status == .notDetermined || status == .writeOnly {
             authorized = await Self.requestEventAccess(store: store)
         } else {
             authorized = EventKitAuthorization.allowsRead(status: status)
@@ -106,34 +131,46 @@ final class CalendarService: CalendarServicing {
     }
 
     private static func requestEventAccess(store: EKEventStore) async -> Bool {
-        if #available(iOS 17.0, *) {
-            return await withCheckedContinuation { continuation in
+        await self.awaitPermissionRequest { completion in
+            if #available(iOS 17.0, *) {
                 store.requestFullAccessToEvents { granted, _ in
-                    continuation.resume(returning: granted)
+                    completion(granted)
                 }
-            }
-        }
-
-        return await withCheckedContinuation { continuation in
-            store.requestAccess(to: .event) { granted, _ in
-                continuation.resume(returning: granted)
+            } else {
+                store.requestAccess(to: .event) { granted, _ in
+                    completion(granted)
+                }
             }
         }
     }
 
     private static func requestWriteOnlyEventAccess(store: EKEventStore) async -> Bool {
-        if #available(iOS 17.0, *) {
-            return await withCheckedContinuation { continuation in
+        await self.awaitPermissionRequest { completion in
+            if #available(iOS 17.0, *) {
                 store.requestWriteOnlyAccessToEvents { granted, _ in
-                    continuation.resume(returning: granted)
+                    completion(granted)
+                }
+            } else {
+                store.requestAccess(to: .event) { granted, _ in
+                    completion(granted)
                 }
             }
         }
+    }
 
-        return await withCheckedContinuation { continuation in
-            store.requestAccess(to: .event) { granted, _ in
-                continuation.resume(returning: granted)
+    private static func awaitPermissionRequest(
+        _ start: @escaping (@Sendable @escaping (Bool) -> Void) -> Void) async -> Bool
+    {
+        let box = PermissionRequestBox()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                box.install(continuation)
+                start { granted in
+                    box.resume(granted)
+                }
             }
+        } onCancel: {
+            box.resume(false)
         }
     }
 
