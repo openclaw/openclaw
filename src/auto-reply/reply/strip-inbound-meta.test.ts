@@ -146,6 +146,38 @@ Hello`;
   });
 });
 
+describe("user-message separator stripping", () => {
+  it("strips separator after metadata removal", () => {
+    const input = `${CONV_BLOCK}\n\n---openclaw:user-msg---\nHello world`;
+    expect(stripInboundMetadata(input)).toBe("Hello world");
+  });
+
+  it("strips separator with multiple metadata blocks", () => {
+    const input = `${CONV_BLOCK}\n\n${SENDER_BLOCK}\n\n---openclaw:user-msg---\nHello world`;
+    expect(stripInboundMetadata(input)).toBe("Hello world");
+  });
+
+  it("preserves separator when no metadata blocks are present", () => {
+    const input = `---openclaw:user-msg---\nHello world`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("preserves user content starting with --- when it is not the separator", () => {
+    const input = `${CONV_BLOCK}\n\n---\nSome regular content`;
+    expect(stripInboundMetadata(input)).toBe("---\nSome regular content");
+  });
+
+  it("preserves separator-like start when sentinel is present but no metadata block was stripped", () => {
+    const input = `---openclaw:user-msg---\nHello\n\nSee Conversation info (untrusted metadata): in the docs`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("preserves legacy messages where user text starts with markdown hr", () => {
+    const input = `${CONV_BLOCK}\n\n---\n**User Message:**\nLegacy user content`;
+    expect(stripInboundMetadata(input)).toBe("---\n**User Message:**\nLegacy user content");
+  });
+});
+
 describe("extractInboundSenderLabel", () => {
   it("returns the sender label block when present", () => {
     const input = `${CONV_BLOCK}\n\n${SENDER_BLOCK}\n\nHello from user`;

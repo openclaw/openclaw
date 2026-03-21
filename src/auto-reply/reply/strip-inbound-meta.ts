@@ -139,6 +139,7 @@ export function stripInboundMetadata(text: string): string {
   const result: string[] = [];
   let inMetaBlock = false;
   let inFencedJson = false;
+  let didStripMetadata = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -158,6 +159,7 @@ export function stripInboundMetadata(text: string): string {
       }
       inMetaBlock = true;
       inFencedJson = false;
+      didStripMetadata = true;
       continue;
     }
 
@@ -184,7 +186,18 @@ export function stripInboundMetadata(text: string): string {
     result.push(line);
   }
 
-  return result.join("\n").replace(/^\n+/, "").replace(/\n+$/, "");
+  const joined = result.join("\n").replace(/^\n+/, "").replace(/\n+$/, "");
+  return didStripMetadata ? stripUserMessageSeparator(joined) : joined;
+}
+
+/**
+ * Removes the `---openclaw:user-msg---` separator injected between metadata
+ * and user content.  Called after metadata blocks have already been stripped so
+ * the separator (if any) is now a leading artefact in the remaining text.
+ * The marker is unique to post-upgrade messages and cannot appear in legacy data.
+ */
+function stripUserMessageSeparator(text: string): string {
+  return text.replace(/^[\t ]*---openclaw:user-msg---[\t ]*\n?/, "");
 }
 
 export function stripLeadingInboundMetadata(text: string): string {
@@ -232,7 +245,7 @@ export function stripLeadingInboundMetadata(text: string): string {
   }
 
   const strippedRemainder = stripTrailingUntrustedContextSuffix(lines.slice(index));
-  return strippedRemainder.join("\n");
+  return stripUserMessageSeparator(strippedRemainder.join("\n"));
 }
 
 export function extractInboundSenderLabel(text: string): string | null {
