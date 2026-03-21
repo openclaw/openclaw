@@ -598,6 +598,33 @@ describe("createOllamaStreamFn", () => {
       },
     );
   });
+
+  it("sends think:false when reasoning is 'off'", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const stream = await streamFn(
+          {
+            id: "deepseek-r1:32b",
+            api: "ollama",
+            provider: "ollama",
+            contextWindow: 131072,
+          } as never,
+          { messages: [{ role: "user", content: "hello" }] } as never,
+          { reasoning: "off" } as never,
+        );
+        await collectStreamEvents(stream);
+
+        const [, reqInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const body = JSON.parse(reqInit.body as string) as { think?: boolean };
+        expect(body.think).toBe(false);
+      },
+    );
+  });
 });
 
 describe("resolveOllamaBaseUrlForRun", () => {
