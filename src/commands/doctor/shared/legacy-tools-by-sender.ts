@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import { parseToolsBySenderTypedKey } from "../../../config/types.tools.js";
+import { formatConfigPath, resolveConfigPathTarget } from "../../doctor-config-analysis.js";
 import { asObjectRecord } from "./object.js";
 
 export type LegacyToolsBySenderKeyHit = {
@@ -8,39 +9,6 @@ export type LegacyToolsBySenderKeyHit = {
   key: string;
   targetKey: string;
 };
-
-function formatConfigPath(parts: Array<string | number>): string {
-  if (parts.length === 0) {
-    return "<root>";
-  }
-  let out = "";
-  for (const part of parts) {
-    if (typeof part === "number") {
-      out += `[${part}]`;
-      continue;
-    }
-    out = out ? `${out}.${part}` : part;
-  }
-  return out || "<root>";
-}
-
-function resolveConfigPathTarget(root: unknown, path: Array<string | number>): unknown {
-  let current: unknown = root;
-  for (const part of path) {
-    if (typeof part === "number") {
-      if (!Array.isArray(current)) {
-        return undefined;
-      }
-      current = current[part];
-      continue;
-    }
-    if (!current || typeof current !== "object") {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
-}
 
 function collectLegacyToolsBySenderKeyHits(
   value: unknown,
