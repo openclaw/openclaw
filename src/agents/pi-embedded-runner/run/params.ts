@@ -20,6 +20,12 @@ export type ClientToolDefinition = {
   };
 };
 
+export type RunEmbeddedPiAgentContext = {
+  sessionTarget?: "main" | "isolated";
+  cronJobId?: string;
+  maintenanceScope?: string;
+};
+
 export type RunEmbeddedPiAgentParams = {
   sessionId: string;
   sessionKey?: string;
@@ -119,6 +125,7 @@ export type RunEmbeddedPiAgentParams = {
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
+  runContext?: RunEmbeddedPiAgentContext;
   /**
    * Allow a single run attempt even when all auth profiles are in cooldown,
    * but only for inferred transient cooldowns like `rate_limit` or `overloaded`.

@@ -327,6 +327,7 @@ export async function runAgentTurnWithFallback(params: {
                 ...embeddedContext,
                 allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
+                runContext: { sessionTarget: "main" },
                 groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
                 groupChannel:
                   params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),

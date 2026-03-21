@@ -496,6 +496,7 @@ export async function runMemoryFlushIfNeeded(params: {
           ...runBaseParams,
           allowGatewaySubagentBinding: true,
           trigger: "memory",
+          runContext: { maintenanceScope: "memory-flush" },
           memoryFlushWritePath,
           prompt: resolveMemoryFlushPromptForRun({
             prompt: memoryFlushSettings.prompt,

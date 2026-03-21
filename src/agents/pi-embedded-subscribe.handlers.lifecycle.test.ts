@@ -9,13 +9,22 @@ vi.mock("../infra/agent-events.js", () => ({
 
 function createContext(
   lastAssistant: unknown,
-  overrides?: { onAgentEvent?: (event: unknown) => void },
+  overrides?: {
+    onAgentEvent?: (event: unknown) => void;
+    sessionKey?: string;
+    runContext?: {
+      sessionTarget?: "main" | "isolated";
+      cronJobId?: string;
+      maintenanceScope?: string;
+    };
+  },
 ): EmbeddedPiSubscribeContext {
   return {
     params: {
       runId: "run-1",
       config: {},
-      sessionKey: "agent:main:main",
+      sessionKey: overrides?.sessionKey ?? "agent:main:main",
+      runContext: overrides?.runContext,
       onAgentEvent: overrides?.onAgentEvent,
     },
     state: {
@@ -60,6 +69,8 @@ describe("handleAgentEnd", () => {
       runId: "run-1",
       error: "connection refused",
       rawErrorPreview: "connection refused",
+      sessionTarget: "main",
+      sessionKey: "agent:main:main",
     });
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
@@ -156,5 +167,39 @@ describe("handleAgentEnd", () => {
 
     expect(ctx.log.warn).not.toHaveBeenCalled();
     expect(ctx.log.debug).toHaveBeenCalledWith("embedded run agent end: runId=run-1 isError=false");
+  });
+
+  it("includes explicit provenance metadata in error logs when provided by the runtime", () => {
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "provider overloaded",
+        content: [{ type: "text", text: "" }],
+      },
+      {
+        sessionKey: "agent:main:cron:job-1",
+        runContext: {
+          sessionTarget: "isolated",
+          cronJobId: "job-1",
+          maintenanceScope: "watchdog",
+        },
+      },
+    );
+
+    handleAgentEnd(ctx);
+
+    expect(vi.mocked(ctx.log.warn).mock.calls[0]?.[1]).toMatchObject({
+      sessionTarget: "isolated",
+      sessionKey: "agent:main:cron:job-1",
+      cronJobId: "job-1",
+      maintenanceScope: "watchdog",
+      runContext: {
+        sessionTarget: "isolated",
+        sessionKey: "agent:main:cron:job-1",
+        cronJobId: "job-1",
+        maintenanceScope: "watchdog",
+      },
+    });
   });
 });

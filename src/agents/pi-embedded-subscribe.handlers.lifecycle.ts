@@ -1,5 +1,6 @@
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
@@ -33,6 +34,14 @@ export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
 export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
+  const runContext = ctx.params.runContext ?? {};
+  const sessionTarget =
+    runContext.sessionTarget ??
+    (isCronSessionKey(ctx.params.sessionKey)
+      ? "isolated"
+      : ctx.params.sessionKey
+        ? "main"
+        : undefined);
 
   if (isError && lastAssistant) {
     const friendlyError = formatAssistantErrorText(lastAssistant, {
@@ -59,6 +68,16 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       failoverReason,
       model: lastAssistant.model,
       provider: lastAssistant.provider,
+      sessionTarget,
+      sessionKey: ctx.params.sessionKey,
+      cronJobId: runContext.cronJobId,
+      maintenanceScope: runContext.maintenanceScope,
+      runContext: {
+        sessionTarget,
+        sessionKey: ctx.params.sessionKey,
+        cronJobId: runContext.cronJobId,
+        maintenanceScope: runContext.maintenanceScope,
+      },
       ...observedError,
       consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}`,
     });

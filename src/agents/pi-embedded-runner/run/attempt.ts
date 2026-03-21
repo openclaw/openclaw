@@ -2549,6 +2549,13 @@ export async function runEmbeddedAttempt(
         sessionKey: sandboxSessionKey,
         sessionId: params.sessionId,
         agentId: sessionAgentId,
+        runContext: {
+          sessionTarget:
+            params.runContext?.sessionTarget ??
+            (params.trigger === "cron" ? "isolated" : sandboxSessionKey ? "main" : undefined),
+          cronJobId: params.runContext?.cronJobId,
+          maintenanceScope: params.runContext?.maintenanceScope,
+        },
       });
 
       const {

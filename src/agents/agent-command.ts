@@ -492,6 +492,7 @@ function runAgentAttempt(params: {
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
     trigger: "user",
+    runContext: { sessionTarget: "main" },
     messageChannel: params.messageChannel,
     agentAccountId: params.runContext.accountId,
     messageTo: params.opts.replyTo ?? params.opts.to,
