@@ -78,12 +78,12 @@ function isRetryableDownloadError(err: unknown): boolean {
     if (err.code === "fetch_failed") {
       return true;
     }
-    // Retry transient HTTP 5xx server errors; do not retry 4xx or policy violations.
+    // Retry transient HTTP errors: 429 (rate-limited) and 5xx server errors.
     if (err.code === "http_error") {
       const match = /HTTP (\d{3})/.exec(err.message);
       if (match) {
         const status = Number(match[1]);
-        return status >= 500;
+        return status === 429 || status >= 500;
       }
     }
     return false;
