@@ -46,3 +46,19 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): boolean {
 
   return didMutate;
 }
+
+/**
+ * Hook point for stripping inline image content before session JSONL
+ * persistence. Currently a pass-through: images must NOT be stripped at
+ * write time because at that point the image has not yet been consumed by a
+ * subsequent assistant turn. Stripping immediately would cause crash/retry
+ * recovery to fail — the model can no longer re-read the image payload from
+ * session history.
+ *
+ * Image cleanup is handled correctly by `pruneProcessedHistoryImages`, which
+ * runs at each run start and only removes images from turns that already have
+ * a later assistant reply (the `lastAssistantIndex` safety boundary).
+ */
+export function stripImageContentForPersistence(message: AgentMessage): AgentMessage {
+  return message;
+}

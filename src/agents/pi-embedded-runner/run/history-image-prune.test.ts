@@ -2,7 +2,11 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
-import { PRUNED_HISTORY_IMAGE_MARKER, pruneProcessedHistoryImages } from "./history-image-prune.js";
+import {
+  PRUNED_HISTORY_IMAGE_MARKER,
+  pruneProcessedHistoryImages,
+  stripImageContentForPersistence,
+} from "./history-image-prune.js";
 
 function expectArrayMessageContent(
   message: AgentMessage | undefined,
@@ -90,5 +94,54 @@ describe("pruneProcessedHistoryImages", () => {
     expect(didMutate).toBe(false);
     const firstUser = messages[0] as Extract<AgentMessage, { role: "user" }> | undefined;
     expect(firstUser?.content).toBe("noop");
+  });
+});
+
+describe("stripImageContentForPersistence", () => {
+  const image: ImageContent = { type: "image", data: "abc123base64data", mimeType: "image/png" };
+
+  it("returns user messages with images as-is (deferred to pruneProcessedHistoryImages)", () => {
+    const msg = castAgentMessage({
+      role: "user",
+      content: [{ type: "text", text: "Look at this" }, { ...image }],
+    });
+    const result = stripImageContentForPersistence(msg);
+    expect(result).toBe(msg);
+  });
+
+  it("returns toolResult messages with images as-is (deferred to pruneProcessedHistoryImages)", () => {
+    const msg = castAgentMessage({
+      role: "toolResult",
+      content: [{ type: "text", text: "screenshot" }, { ...image }],
+    });
+    const result = stripImageContentForPersistence(msg);
+    expect(result).toBe(msg);
+  });
+
+  it("returns message as-is for assistant role", () => {
+    const msg = castAgentMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "reply" }, { ...image }],
+    });
+    const result = stripImageContentForPersistence(msg);
+    expect(result).toBe(msg);
+  });
+
+  it("returns message as-is when content has no images", () => {
+    const msg = castAgentMessage({
+      role: "user",
+      content: [{ type: "text", text: "just text" }],
+    });
+    const result = stripImageContentForPersistence(msg);
+    expect(result).toBe(msg);
+  });
+
+  it("returns message as-is when content is a string", () => {
+    const msg = castAgentMessage({
+      role: "user",
+      content: "plain text",
+    });
+    const result = stripImageContentForPersistence(msg);
+    expect(result).toBe(msg);
   });
 });
