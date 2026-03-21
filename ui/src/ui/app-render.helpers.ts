@@ -136,11 +136,12 @@ function renderCronFilterIcon(hiddenCount: number) {
 export function renderChatSessionSelect(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
   const modelSelect = renderChatModelSelect(state);
+  const selectedSessionKey = state.sessionKey === "main" ? "agent:main:main" : state.sessionKey;
   return html`
     <div class="chat-controls__session-row">
       <label class="field chat-controls__session">
         <select
-          .value=${state.sessionKey}
+          .value=${selectedSessionKey}
           ?disabled=${!state.connected || sessionGroups.length === 0}
           @change=${(e: Event) => {
             const next = (e.target as HTMLSelectElement).value;
@@ -732,23 +733,66 @@ export function resolveSessionDisplayName(
   key: string,
   row?: SessionsListResult["sessions"][number],
 ): string {
-  const label = row?.label?.trim() || "";
-  const displayName = row?.displayName?.trim() || "";
+  const rawLabel = row?.label?.trim() || "";
+  const rawDisplayName = row?.displayName?.trim() || "";
+  const originLabel = row?.origin?.label?.trim() || "";
   const { prefix, fallbackName } = parseSessionKey(key);
+
+  const cleanValue = (value: string): string => {
+    if (!value) {
+      return value;
+    }
+    return value
+      .replace(/^[a-z0-9_-]+:/i, "")
+      .replace(/\sid:\d+$/i, "")
+      .trim();
+  };
+
+  const cleanPersonLabel = (...values: string[]): string => {
+    for (const value of values) {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const match = trimmed.match(/^(.+?)\s+id:\d+$/i);
+      if (match?.[1]?.trim()) {
+        return match[1].trim();
+      }
+      const cleaned = cleanValue(trimmed);
+      if (cleaned && !/^(main|dm|slash|direct:\d+|slash:\d+)$/i.test(cleaned)) {
+        return cleaned;
+      }
+    }
+    return "";
+  };
 
   const applyTypedPrefix = (name: string): string => {
     if (!prefix) {
       return name;
     }
-    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
+    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i");
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 
-  if (label && label !== key) {
-    return applyTypedPrefix(label);
+  if (key === "main" || key.endsWith(":main")) {
+    return "main";
   }
-  if (displayName && displayName !== key) {
-    return applyTypedPrefix(displayName);
+
+  const loweredKey = key.toLowerCase();
+  if (loweredKey.includes(":telegram:direct:") || loweredKey.includes("telegram:direct:")) {
+    const person = cleanPersonLabel(rawLabel, originLabel, rawDisplayName, fallbackName);
+    return person ? `${person} DM` : "DM";
+  }
+  if (loweredKey.includes(":telegram:slash:") || loweredKey.includes("telegram:slash:")) {
+    const person = cleanPersonLabel(rawLabel, originLabel, rawDisplayName, fallbackName);
+    return person ? `${person} slash` : "slash";
+  }
+
+  if (rawLabel && rawLabel !== key) {
+    return applyTypedPrefix(cleanValue(rawLabel));
+  }
+  if (rawDisplayName && rawDisplayName !== key) {
+    return applyTypedPrefix(cleanValue(rawDisplayName));
   }
   return fallbackName;
 }
@@ -817,6 +861,9 @@ export function resolveSessionOptionGroups(
     if (!key || seenKeys.has(key)) {
       return;
     }
+    if (key === "main" && byKey.has("agent:main:main")) {
+      return;
+    }
     seenKeys.add(key);
     const row = byKey.get(key);
     const parsed = parseAgentSessionKey(key);
@@ -848,6 +895,12 @@ export function resolveSessionOptionGroups(
   addOption(sessionKey);
 
   for (const group of groups.values()) {
+    group.options = group.options.filter((option, index, all) => {
+      if (option.label !== "main") {
+        return true;
+      }
+      return all.findIndex((entry) => entry.label === "main") === index;
+    });
     const counts = new Map<string, number>();
     for (const option of group.options) {
       counts.set(option.label, (counts.get(option.label) ?? 0) + 1);
@@ -892,7 +945,14 @@ function resolveSessionScopedOptionLabel(
 
   const label = row.label?.trim() || "";
   const displayName = row.displayName?.trim() || "";
-  if ((label && label !== key) || (displayName && displayName !== key)) {
+  // Also delegate for channel-keyed sessions (e.g. telegram:direct/slash/group)
+  // which may carry display info only in origin.label, not label/displayName.
+  const loweredKey = key.toLowerCase();
+  const isChannelSession =
+    loweredKey.includes(":telegram:direct:") ||
+    loweredKey.includes(":telegram:slash:") ||
+    loweredKey.includes(":telegram:group:");
+  if ((label && label !== key) || (displayName && displayName !== key) || isChannelSession) {
     return resolveSessionDisplayName(key, row);
   }
 

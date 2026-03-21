@@ -1005,4 +1005,89 @@ describe("chat view", () => {
     );
     expect(labels).not.toContain("Subagent: cron-config-check");
   });
+
+  it("renders clean Telegram DM and topic labels in the grouped session selector", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "agent:main:telegram:group:-1009999999999:topic:3";
+    state.settings.sessionKey = state.sessionKey;
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 4,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: null,
+        },
+        {
+          key: "agent:main:telegram:direct:12345678",
+          kind: "direct",
+          updatedAt: null,
+          origin: { label: "Alice id:12345678" },
+        },
+        {
+          key: "agent:main:telegram:group:-1009999999999:topic:3",
+          kind: "group",
+          updatedAt: null,
+          displayName: "telegram:Monk-tech",
+          origin: { label: "Test Group id:-1009999999999 topic:3" },
+        },
+        {
+          key: "agent:main:telegram:slash:12345678",
+          kind: "direct",
+          updatedAt: null,
+          origin: { label: "Alice" },
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
+    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.textContent?.trim(),
+    );
+
+    expect(labels).toContain("main");
+    expect(labels).toContain("Alice DM");
+    expect(labels).toContain("Monk-tech");
+    expect(labels).toContain("Alice slash");
+    expect(labels).not.toContain("telegram:Monk-tech");
+    expect(labels).not.toContain("Alice id:12345678");
+  });
+
+  it("dedupes visible main when both canonical and alias keys are present", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "main";
+    state.settings.sessionKey = state.sessionKey;
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: null,
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
+    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.textContent?.trim(),
+    );
+    const values = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.getAttribute("value"),
+    );
+
+    expect(labels.filter((label) => label === "main")).toHaveLength(1);
+    expect(values.filter((value) => value === "agent:main:main")).toHaveLength(1);
+    expect(sessionSelect?.value).toBe("agent:main:main");
+  });
 });
