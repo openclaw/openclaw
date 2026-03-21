@@ -1,4 +1,4 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import { applyQianfanConfig, QIANFAN_DEFAULT_MODEL_REF } from "./onboard.js";

@@ -8,7 +8,7 @@ import {
   definePluginEntry,
   type OpenClawPluginApi,
   type ProviderAuthMethodNonInteractiveContext,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/plugin-entry";
 
 const PROVIDER_ID = "vllm";
 

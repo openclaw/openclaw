@@ -1,7 +1,7 @@
 // Private helper surface for the bundled voice-call plugin.
 // Keep this surface narrow and limited to the voice-call feature contract.
 
-export { definePluginEntry } from "./core.js";
+export { definePluginEntry } from "./plugin-entry.js";
 export {
   TtsAutoSchema,
   TtsConfigSchema,

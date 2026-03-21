@@ -1,4 +1,4 @@
-import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/core";
+import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { createFirecrawlScrapeTool } from "./src/firecrawl-scrape-tool.js";
 import { createFirecrawlWebSearchProvider } from "./src/firecrawl-search-provider.js";
 import { createFirecrawlSearchTool } from "./src/firecrawl-search-tool.js";
