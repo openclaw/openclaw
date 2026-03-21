@@ -313,6 +313,58 @@ describe("plugin interactive handlers", () => {
     });
   });
 
+  it("acknowledges matched Discord interactions before awaiting plugin handlers", async () => {
+    const callOrder: string[] = [];
+    const handler = vi.fn(async () => {
+      callOrder.push("handler");
+      expect(callOrder).toEqual(["ack", "handler"]);
+      return { handled: true };
+    });
+    expect(
+      registerPluginInteractiveHandler("codex-plugin", {
+        channel: "discord",
+        namespace: "codex",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    await expect(
+      dispatchPluginInteractiveHandler({
+        channel: "discord",
+        data: "codex:approve:thread-1",
+        interactionId: "ix-ack-1",
+        ctx: {
+          accountId: "default",
+          interactionId: "ix-ack-1",
+          conversationId: "channel-1",
+          parentConversationId: "parent-1",
+          guildId: "guild-1",
+          senderId: "user-1",
+          senderUsername: "ada",
+          auth: { isAuthorizedSender: true },
+          interaction: {
+            kind: "button",
+            messageId: "message-1",
+          },
+        },
+        respond: {
+          acknowledge: vi.fn(async () => {}),
+          reply: vi.fn(async () => {}),
+          followUp: vi.fn(async () => {}),
+          editMessage: vi.fn(async () => {}),
+          clearComponents: vi.fn(async () => {}),
+        },
+        onMatched: async () => {
+          callOrder.push("ack");
+        },
+      }),
+    ).resolves.toEqual({
+      matched: true,
+      handled: true,
+      duplicate: false,
+    });
+  });
+
   it("routes Slack interactions by namespace and dedupes interaction ids", async () => {
     const handler = vi.fn(async () => ({ handled: true }));
     expect(
