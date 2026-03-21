@@ -25,8 +25,8 @@ import {
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort.js";
 import { buildStatusReply, handleCommands } from "./commands.js";
-import type { InlineDirectives } from "./directive-handling.js";
-import { isDirectiveOnly } from "./directive-handling.js";
+import type { InlineDirectives } from "./directive-handling.parse.js";
+import { isDirectiveOnly } from "./directive-handling.parse.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
@@ -59,6 +59,17 @@ function resolveSlashCommandName(commandBodyNormalized: string): string | null {
   const match = trimmed.match(/^\/([^\s:]+)(?::|\s|$)/);
   const name = match?.[1]?.trim().toLowerCase() ?? "";
   return name ? name : null;
+}
+
+function expandBundleCommandPromptTemplate(template: string, args?: string): string {
+  const normalizedArgs = args?.trim() || "";
+  const rendered = template.includes("$ARGUMENTS")
+    ? template.replaceAll("$ARGUMENTS", normalizedArgs)
+    : template;
+  if (!normalizedArgs || template.includes("$ARGUMENTS")) {
+    return rendered.trim();
+  }
+  return `${rendered.trim()}\n\nUser input:\n${normalizedArgs}`;
 }
 
 export type InlineActionResult =
@@ -248,11 +259,17 @@ export async function handleInlineActions(params: {
       }
     }
 
-    const promptParts = [
-      `Use the "${skillInvocation.command.skillName}" skill for this request.`,
-      skillInvocation.args ? `User input:\n${skillInvocation.args}` : null,
-    ].filter((entry): entry is string => Boolean(entry));
-    const rewrittenBody = promptParts.join("\n\n");
+    const rewrittenBody = skillInvocation.command.promptTemplate
+      ? expandBundleCommandPromptTemplate(
+          skillInvocation.command.promptTemplate,
+          skillInvocation.args,
+        )
+      : [
+          `Use the "${skillInvocation.command.skillName}" skill for this request.`,
+          skillInvocation.args ? `User input:\n${skillInvocation.args}` : null,
+        ]
+          .filter((entry): entry is string => Boolean(entry))
+          .join("\n\n");
     ctx.Body = rewrittenBody;
     ctx.BodyForAgent = rewrittenBody;
     sessionCtx.Body = rewrittenBody;

@@ -39,6 +39,7 @@ import * as lazyRuntimeSdk from "openclaw/plugin-sdk/lazy-runtime";
 import * as matrixRuntimeSharedSdk from "openclaw/plugin-sdk/matrix-runtime-shared";
 import * as mediaRuntimeSdk from "openclaw/plugin-sdk/media-runtime";
 import * as ollamaSetupSdk from "openclaw/plugin-sdk/ollama-setup";
+import * as pluginEntrySdk from "openclaw/plugin-sdk/plugin-entry";
 import * as providerAuthSdk from "openclaw/plugin-sdk/provider-auth";
 import * as providerModelsSdk from "openclaw/plugin-sdk/provider-models";
 import * as providerSetupSdk from "openclaw/plugin-sdk/provider-setup";
@@ -97,7 +98,6 @@ describe("plugin-sdk subpath exports", () => {
     expect(pluginSdkSubpaths).not.toContain("bluebubbles");
     expect(pluginSdkSubpaths).not.toContain("compat");
     expect(pluginSdkSubpaths).not.toContain("device-pair");
-    expect(pluginSdkSubpaths).not.toContain("discord");
     expect(pluginSdkSubpaths).not.toContain("feishu");
     expect(pluginSdkSubpaths).not.toContain("google");
     expect(pluginSdkSubpaths).not.toContain("googlechat");
@@ -132,7 +132,6 @@ describe("plugin-sdk subpath exports", () => {
     expect(pluginSdkSubpaths).not.toContain("secret-input-runtime");
     expect(pluginSdkSubpaths).not.toContain("secret-input-schema");
     expect(pluginSdkSubpaths).not.toContain("zai");
-    expect(pluginSdkSubpaths).not.toContain("discord-core");
     expect(pluginSdkSubpaths).not.toContain("slack-core");
     expect(pluginSdkSubpaths).not.toContain("provider-model-definitions");
   });
@@ -142,12 +141,17 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof coreSdk.definePluginEntry).toBe("function");
     expect(typeof coreSdk.defineChannelPluginEntry).toBe("function");
     expect(typeof coreSdk.defineSetupPluginEntry).toBe("function");
+    expect(typeof coreSdk.createChatChannelPlugin).toBe("function");
     expect(typeof coreSdk.createChannelPluginBase).toBe("function");
     expect(typeof coreSdk.isSecretRef).toBe("function");
     expect(typeof coreSdk.optionalStringEnum).toBe("function");
     expect("runPassiveAccountLifecycle" in asExports(coreSdk)).toBe(false);
     expect("createLoggerBackedRuntime" in asExports(coreSdk)).toBe(false);
     expect("registerSandboxBackend" in asExports(coreSdk)).toBe(false);
+  });
+
+  it("re-exports the canonical plugin entry helper from core", () => {
+    expect(coreSdk.definePluginEntry).toBe(pluginEntrySdk.definePluginEntry);
   });
 
   it("exports routing helpers from the dedicated subpath", () => {
@@ -218,6 +222,14 @@ describe("plugin-sdk subpath exports", () => {
 
   it("exports runtime helpers from the dedicated subpath", () => {
     expect(typeof runtimeSdk.createLoggerBackedRuntime).toBe("function");
+  });
+
+  it("exports Discord component helpers from the dedicated subpath", async () => {
+    const discordSdk = await import("openclaw/plugin-sdk/discord");
+    expect(typeof discordSdk.buildDiscordComponentMessage).toBe("function");
+    expect(typeof discordSdk.editDiscordComponentMessage).toBe("function");
+    expect(typeof discordSdk.registerBuiltDiscordComponentMessage).toBe("function");
+    expect(typeof discordSdk.resolveDiscordAccount).toBe("function");
   });
 
   it("exports channel identity and session helpers from stronger existing homes", () => {

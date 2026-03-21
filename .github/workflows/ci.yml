@@ -4,10 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -16,6 +17,7 @@ jobs:
   # Detect docs-only changes to skip heavy jobs (test, build, Windows, macOS, Android).
   # Lint and format always run. Fail-safe: if detection fails, run everything.
   docs-scope:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
       docs_only: ${{ steps.check.outputs.docs_only }}
@@ -221,7 +223,9 @@ jobs:
             cache_key_suffix: "node22"
             command: |
               pnpm build
-              pnpm test
+              node openclaw.mjs --help
+              node openclaw.mjs status --json --timeout 1
+              pnpm test:build:singleton
               node scripts/stage-bundled-plugin-runtime-deps.mjs
               node --import tsx scripts/release-check.ts
     steps:
@@ -404,8 +408,8 @@ jobs:
 
   build-smoke:
     name: "build-smoke"
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    needs: [docs-scope, changed-scope, build-artifacts]
+    if: always() && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -419,7 +423,15 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "false"
 
+      - name: Download dist artifact
+        if: github.event_name == 'push'
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
       - name: Build dist
+        if: github.event_name != 'push'
         run: pnpm build
 
       - name: Smoke test CLI launcher help
@@ -481,6 +493,7 @@ jobs:
         run: python -m pytest -q skills
 
   secrets:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
