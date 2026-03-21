@@ -40,10 +40,19 @@ const listSkillCommandsForAgents = vi.hoisted(() => vi.fn(() => []));
 const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
+const generateTopicLabel = vi.hoisted(() => vi.fn());
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
 }));
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    generateTopicLabel,
+  };
+});
 
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
@@ -123,6 +132,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     wasSentByBot.mockClear();
     loadSessionStore.mockClear();
     resolveStorePath.mockClear();
+    generateTopicLabel.mockClear();
     loadConfig.mockReturnValue({});
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
@@ -130,6 +140,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
     loadSessionStore.mockReturnValue({});
+    generateTopicLabel.mockResolvedValue("Topic label");
   });
 
   const createDraftStream = (messageId?: number) => createTestDraftStream({ messageId });
@@ -156,6 +167,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
       chatId: 123,
       isGroup: false,
+      groupConfig: undefined,
       resolvedThreadId: undefined,
       replyThreadId: 777,
       threadSpec: { id: 777, scope: "dm" },
@@ -196,6 +208,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         sendMessage: vi.fn(),
         editMessageText: vi.fn(),
         deleteMessage: vi.fn().mockResolvedValue(true),
+        editForumTopic: vi.fn().mockResolvedValue(true),
       },
     } as unknown as Bot;
   }
@@ -2384,5 +2397,37 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(statusReactionController.cancelPending.mock.invocationCallOrder[0]).toBeLessThan(
       statusReactionController.setThinking.mock.invocationCallOrder[1],
     );
+  });
+
+  it("uses resolved DM config for auto-topic-label overrides", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    loadSessionStore.mockReturnValue({ s1: {} });
+    const bot = createBot();
+
+    await dispatchWithContext({
+      bot,
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          RawBody: "Need help with invoices",
+        } as TelegramMessageContext["ctxPayload"],
+        groupConfig: {
+          autoTopicLabel: false,
+        } as TelegramMessageContext["groupConfig"],
+      }),
+      telegramCfg: { autoTopicLabel: true },
+      cfg: {
+        channels: {
+          telegram: {
+            direct: {
+              "123": { autoTopicLabel: true },
+            },
+          },
+        },
+      },
+    });
+
+    expect(generateTopicLabel).not.toHaveBeenCalled();
+    expect(bot.api.editForumTopic).not.toHaveBeenCalled();
   });
 });
