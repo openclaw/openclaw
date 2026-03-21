@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveTelegramTransport,
+  shouldRetryTelegramTransportFallback,
+} from "../../extensions/telegram/src/fetch.js";
+import { makeProxyFetch } from "../../extensions/telegram/src/proxy.js";
+import { fetchRemoteMedia } from "./fetch.js";
 
 const undiciMocks = vi.hoisted(() => {
   const createDispatcherCtor = <T extends Record<string, unknown> | string>() =>
@@ -21,18 +27,14 @@ vi.mock("undici", () => ({
   fetch: undiciMocks.fetch,
 }));
 
-let resolveTelegramTransport: typeof import("../../extensions/telegram/src/fetch.js").resolveTelegramTransport;
-let shouldRetryTelegramTransportFallback: typeof import("../../extensions/telegram/src/fetch.js").shouldRetryTelegramTransportFallback;
-let fetchRemoteMedia: typeof import("./fetch.js").fetchRemoteMedia;
-
 describe("fetchRemoteMedia telegram network policy", () => {
   type LookupFn = NonNullable<Parameters<typeof fetchRemoteMedia>[0]["lookupFn"]>;
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveTelegramTransport, shouldRetryTelegramTransportFallback } =
-      await import("../../extensions/telegram/src/fetch.js"));
-    ({ fetchRemoteMedia } = await import("./fetch.js"));
+  beforeEach(() => {
+    undiciMocks.fetch.mockReset();
+    undiciMocks.agentCtor.mockClear();
+    undiciMocks.envHttpProxyAgentCtor.mockClear();
+    undiciMocks.proxyAgentCtor.mockClear();
   });
 
   function createTelegramFetchFailedError(code: string): Error {
@@ -42,10 +44,6 @@ describe("fetchRemoteMedia telegram network policy", () => {
   }
 
   afterEach(() => {
-    undiciMocks.fetch.mockReset();
-    undiciMocks.agentCtor.mockClear();
-    undiciMocks.envHttpProxyAgentCtor.mockClear();
-    undiciMocks.proxyAgentCtor.mockClear();
     vi.unstubAllEnvs();
   });
 
@@ -99,7 +97,6 @@ describe("fetchRemoteMedia telegram network policy", () => {
   });
 
   it("keeps explicit proxy routing for file downloads", async () => {
-    const { makeProxyFetch } = await import("../../extensions/telegram/src/proxy.js");
     const lookupFn = vi.fn(async () => [
       { address: "149.154.167.220", family: 4 },
     ]) as unknown as LookupFn;
