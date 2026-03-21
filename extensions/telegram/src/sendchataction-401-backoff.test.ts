@@ -11,7 +11,10 @@ vi.mock("../../../src/infra/backoff.js", async (importOriginal) => {
 });
 
 describe("createTelegramSendChatActionHandler", () => {
-  const make401Error = () => new Error("401 Unauthorized");
+  const make401Error = () =>
+    Object.assign(new Error("401 Unauthorized"), {
+      error_code: 401,
+    });
   const make500Error = () => new Error("500 Internal Server Error");
   const makeProxyHttpError = () =>
     Object.assign(new Error("Network request for 'sendChatAction' failed!"), {
@@ -261,7 +264,10 @@ describe("createTelegramSendChatActionHandler", () => {
   });
 
   it("resets the network failure streak when a non-network Telegram rejection (429/403) proves the network is healthy", async () => {
-    const make429Error = () => new Error("429 Too Many Requests");
+    const make429Error = () =>
+      Object.assign(new Error("429 Too Many Requests"), {
+        error_code: 429,
+      });
     const errors = [makeNetworkError(), make429Error(), makeNetworkError()];
     let callCount = 0;
     const fn = vi.fn().mockImplementation(async () => {
@@ -318,5 +324,33 @@ describe("createTelegramSendChatActionHandler", () => {
         consecutiveFailures: 2,
       }),
     );
+  });
+
+  it("does not treat intermediary 401 text as Telegram token failure", async () => {
+    const errors = [makeNetworkError(), new Error("401 Unauthorized"), makeNetworkError()];
+    let callCount = 0;
+    const fn = vi.fn().mockImplementation(async () => {
+      const err = errors[callCount++];
+      if (err) throw err;
+      return true;
+    });
+    const logger = vi.fn();
+    const onRecoverableNetworkFailure = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutiveNetworkFailures: 2,
+      maxConsecutive401: 2,
+      onRecoverableNetworkFailure,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("401 Unauthorized");
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+
+    // Intermediary 401 text should neither reset outage streaks nor trip token suspension.
+    expect(onRecoverableNetworkFailure).toHaveBeenCalledTimes(1);
+    expect(handler.isSuspended()).toBe(false);
+    expect(logger).not.toHaveBeenCalledWith(expect.stringContaining("CRITICAL"));
   });
 });

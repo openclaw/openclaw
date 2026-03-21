@@ -1,9 +1,10 @@
 import {
+  collectErrorGraphCandidates,
   computeBackoff,
   sleepWithAbort,
   type BackoffPolicy,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { isRecoverableTelegramNetworkError, isTelegramClientRejection } from "./network-errors.js";
 
 export type TelegramSendChatActionLogger = (message: string) => void;
 
@@ -59,12 +60,37 @@ const BACKOFF_POLICY: BackoffPolicy = {
   jitter: 0.1,
 };
 
-function is401Error(error: unknown): boolean {
-  if (!error) {
-    return false;
+function collectTelegramErrorCandidates(err: unknown) {
+  return collectErrorGraphCandidates(err, (current) => {
+    const nested: Array<unknown> = [current.cause, current.reason];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
+    }
+    if ("error" in current) {
+      nested.push(current.error);
+    }
+    return nested;
+  });
+}
+
+function hasTelegramErrorCode(err: unknown, expectedCode: number): boolean {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    if (!("error_code" in candidate)) {
+      continue;
+    }
+    const code = (candidate as { error_code?: unknown }).error_code;
+    if (typeof code === "number" && code === expectedCode) {
+      return true;
+    }
   }
-  const message = error instanceof Error ? error.message : JSON.stringify(error);
-  return message.includes("401") || message.toLowerCase().includes("unauthorized");
+  return false;
+}
+
+function isTelegramUnauthorizedError(error: unknown): boolean {
+  return hasTelegramErrorCode(error, 401);
 }
 
 /**
@@ -126,7 +152,7 @@ export function createTelegramSendChatActionHandler({
       }
       noteNetworkHealthy();
     } catch (error) {
-      if (is401Error(error)) {
+      if (isTelegramUnauthorizedError(error)) {
         consecutive401Failures++;
         // 401 means the request reached Telegram, so the network is healthy.
         noteNetworkHealthy();
@@ -157,7 +183,7 @@ export function createTelegramSendChatActionHandler({
             consecutiveFailures: consecutiveNetworkFailures,
           });
         }
-      } else {
+      } else if (isTelegramClientRejection(error)) {
         // Any non-network Telegram response (429, 403, etc.) proves the request
         // reached Telegram, so the network is healthy — break the outage streak.
         noteNetworkHealthy();
