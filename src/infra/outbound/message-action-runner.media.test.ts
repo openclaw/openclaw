@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { MediaFetchError, SAFE_MEDIA_FETCH_ERROR_MESSAGE } from "../../media/fetch.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -446,6 +447,91 @@ describe("runMessageAction media behavior", () => {
       } finally {
         await fs.rm(sandboxDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe("media fetch error sanitization", () => {
+    const bbCfg = {
+      channels: {
+        bluebubbles: {
+          enabled: true,
+          serverUrl: "http://localhost:1234",
+          password: "test-password",
+        },
+      },
+    } as OpenClawConfig;
+
+    const bbPlugin: ChannelPlugin = {
+      id: "bluebubbles",
+      meta: {
+        id: "bluebubbles",
+        label: "BlueBubbles",
+        selectionLabel: "BlueBubbles",
+        docsPath: "/channels/bluebubbles",
+        blurb: "BlueBubbles test plugin.",
+      },
+      capabilities: { chatTypes: ["direct", "group"], media: true },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["sendAttachment"] }),
+        supportsAction: ({ action }) => action === "sendAttachment",
+        handleAction: async ({ params }) =>
+          jsonResult({
+            ok: true,
+            buffer: params.buffer,
+            filename: params.filename,
+          }),
+      },
+    };
+
+    beforeEach(() => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "bluebubbles",
+            source: "test",
+            plugin: bbPlugin,
+          },
+        ]),
+      );
+    });
+
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+      vi.clearAllMocks();
+    });
+
+    it("does not expose raw MediaFetchError details containing PII", async () => {
+      const piiMessage =
+        'Failed to fetch media from https://wa.example.com/media: {"from":"+905551234567@g.us","groupName":"Secret Group","path":"/home/user/.openclaw/sessions/abc"}';
+      vi.mocked(loadWebMedia).mockRejectedValueOnce(
+        new MediaFetchError("fetch_failed", piiMessage),
+      );
+
+      const error = await runMessageAction({
+        cfg: bbCfg,
+        action: "sendAttachment",
+        params: {
+          channel: "bluebubbles",
+          target: "+15551234567",
+          media: "https://wa.example.com/media/photo.jpg",
+          message: "caption",
+        },
+      }).catch((err: unknown) => err as Error);
+
+      expect(error).toBeInstanceOf(Error);
+      const errorText = error instanceof Error ? error.message : "unknown error";
+      // Raw PII must NOT leak
+      expect(errorText).not.toContain("+905551234567");
+      expect(errorText).not.toContain("@g.us");
+      expect(errorText).not.toContain("Secret Group");
+      expect(errorText).not.toContain("/home/user");
+      // Safe message should be used
+      expect(errorText).toContain(SAFE_MEDIA_FETCH_ERROR_MESSAGE);
     });
   });
 });

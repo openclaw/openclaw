@@ -29,6 +29,7 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isMediaFetchError, SAFE_MEDIA_FETCH_ERROR_MESSAGE } from "../../media/fetch.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
@@ -744,10 +745,12 @@ async function deliverOutboundPayloadsCore(
         messageId: lastMessageId,
       });
     } catch (err) {
+      const rawError = err instanceof Error ? err.message : "unknown error";
+      const safeError = isMediaFetchError(err) ? SAFE_MEDIA_FETCH_ERROR_MESSAGE : rawError;
       emitMessageSent({
         success: false,
         content: payloadSummary.text,
-        error: err instanceof Error ? err.message : String(err),
+        error: safeError,
       });
       if (!params.bestEffort) {
         throw err;
