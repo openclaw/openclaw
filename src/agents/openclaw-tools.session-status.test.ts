@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
@@ -321,9 +321,49 @@ function getSessionStatusTool(agentSessionKey = "main", options?: { sandboxed?: 
   return tool;
 }
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("session_status tool", () => {
   beforeEach(() => {
     buildStatusMessageMock.mockClear();
+  });
+
+  it("includes machine-readable local and UTC time in the status card", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-08T03:15:00.000Z"));
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {},
+          userTimezone: "America/Los_Angeles",
+          timeFormat: "12",
+        },
+      },
+      tools: {
+        agentToAgent: { enabled: false },
+      },
+    };
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call-time", {});
+    const details = result.details as { ok?: boolean; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.statusText).toContain(
+      "🕒 Time: Saturday, February 7th, 2026 — 7:15 PM (America/Los_Angeles)",
+    );
+    expect(details.statusText).toContain("local ISO 2026-02-07T19:15:00-08:00");
+    expect(details.statusText).toContain("UTC 2026-02-08T03:15:00Z");
   });
 
   it("returns a status card for the current session", async () => {
