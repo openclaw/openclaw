@@ -22,6 +22,9 @@ const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvid
 
 vi.mock("../plugins/web-search-providers.js", () => ({
   resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
+}));
+
+vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 

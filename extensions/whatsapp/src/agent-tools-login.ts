@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
-import type { ChannelAgentTool } from "openclaw/plugin-sdk/channel-runtime";
-import { startWebLoginWithQr, waitForWebLogin } from "openclaw/plugin-sdk/whatsapp-login-qr";
+import type { ChannelAgentTool } from "openclaw/plugin-sdk/channel-contract";
+import { startWebLoginWithQr, waitForWebLogin } from "../login-qr-api.js";
 
 export function createWhatsAppLoginTool(): ChannelAgentTool {
   return {

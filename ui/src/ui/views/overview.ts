@@ -395,7 +395,7 @@ export function renderOverview(props: OverviewProps) {
 
     <div class="ov-section-divider"></div>
 
-    <div class="ov-bottom-grid" style="margin-top: 18px;">
+    <div class="ov-bottom-grid">
       ${renderOverviewEventLog({
         events: props.eventLog,
       })}
