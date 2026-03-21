@@ -1,6 +1,6 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -52,7 +52,7 @@ describe("doctor exec safe bin helpers", () => {
     const binPath = join(tempDir, "custom-safe-bin");
     writeFileSync(binPath, "#!/bin/sh\nexit 0\n");
     chmodSync(binPath, 0o755);
-    process.env.PATH = `${tempDir}:${originalPath}`;
+    process.env.PATH = [tempDir, originalPath].filter((entry) => entry.length > 0).join(delimiter);
 
     const hits = scanExecSafeBinTrustedDirHints({
       tools: {
