@@ -354,8 +354,8 @@ topics, OpenClaw preserves the topic for the approval prompt and the post-approv
 
 See:
 
-- [Discord](/channels/discord#feature-details)
-- [Telegram](/channels/telegram#feature-reference)
+- [Discord](/channels/discord#exec-approvals)
+- [Telegram](/channels/telegram#exec-approvals)
 
 ### macOS IPC flow
 

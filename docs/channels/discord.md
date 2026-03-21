@@ -937,6 +937,8 @@ Default slash command settings:
 
   </Accordion>
 
+### Exec approvals
+
   <Accordion title="Exec approvals in Discord">
     Discord supports button-based exec approvals in DMs and can optionally post approval prompts in the originating channel.
 

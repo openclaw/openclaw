@@ -800,6 +800,8 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 
   </Accordion>
 
+### Exec approvals
+
   <Accordion title="Exec approvals in Telegram">
     Telegram supports exec approvals in approver DMs and can optionally post approval prompts in the originating chat or topic.
 
