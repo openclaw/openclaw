@@ -87,8 +87,8 @@ OpenClaw Enterprise WeCom Channel Plugin.
 A bot plugin powered by WeCom AI Bot WebSocket persistent connections. 
 Supports direct messages & group chats, streaming replies, and proactive messaging.
 
-- **npm: ** `@wecom/wecom-openclaw-plugin`
-- **repo: ** [github.com/WecomTeam/wecom-openclaw-plugin](https://github.com/WecomTeam/wecom-openclaw-plugin)
+- **npm:** `@wecom/wecom-openclaw-plugin`
+- **repo:** [github.com/WecomTeam/wecom-openclaw-plugin](https://github.com/WecomTeam/wecom-openclaw-plugin)
 
 ```bash
   install: `openclaw plugins install @wecom/wecom-openclaw-plugin`
