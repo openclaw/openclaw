@@ -526,6 +526,9 @@ export async function initSessionState(params: {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;
+    // Clear stale context hash so the first flush in the new session is not
+    // incorrectly skipped due to a hash match with the old transcript (#30115).
+    sessionEntry.memoryFlushContextHash = undefined;
     // Clear stale token metrics from previous session so /status doesn't
     // display the old session's context usage after /new or /reset.
     sessionEntry.totalTokens = undefined;

@@ -118,4 +118,20 @@ describe("memory manager cache hydration", () => {
 
     await secondManager?.close?.();
   });
+
+  it("does not cache status-only managers when no full manager exists", async () => {
+    const indexPath = path.join(workspaceDir, "index.sqlite");
+    const cfg = createMemoryConcurrencyConfig(indexPath);
+
+    const first = await RawMemoryIndexManager.get({ cfg, agentId: "main", purpose: "status" });
+    const second = await RawMemoryIndexManager.get({ cfg, agentId: "main", purpose: "status" });
+
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(Object.is(second, first)).toBe(false);
+    expect(hoisted.providerCreateCalls).toBe(0);
+
+    await first?.close?.();
+    await second?.close?.();
+  });
 });
