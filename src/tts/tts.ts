@@ -120,7 +120,7 @@ export type ResolvedTtsConfig = {
     speed?: number;
     instructions?: string;
   };
-  
+
   azure: {
     apiKey?: string;
     region: string;
@@ -130,7 +130,7 @@ export type ResolvedTtsConfig = {
     outputFormat: string;
     timeoutMs?: number;
   };
-edge: {
+  edge: {
     enabled: boolean;
     voice: string;
     lang: string;

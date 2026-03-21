@@ -86,9 +86,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
     aliases: ["azure-tts"],
     listVoices: async (req) => {
       const apiKey =
-        req.apiKey ||
-        (req.config as any)?.azure?.apiKey ||
-        process.env.AZURE_SPEECH_API_KEY;
+        req.apiKey || (req.config as any)?.azure?.apiKey || process.env.AZURE_SPEECH_API_KEY;
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }
@@ -101,16 +99,16 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
     isConfigured: ({ config }) =>
       Boolean(
         ((config as any)?.azure?.apiKey || process.env.AZURE_SPEECH_API_KEY) &&
-        ((config as any)?.azure?.voice || (config as any)?.azure?.lang)
+        ((config as any)?.azure?.voice || (config as any)?.azure?.lang),
       ),
     synthesize: async (req) => {
-      const apiKey =
-        (req.config as any)?.azure?.apiKey || process.env.AZURE_SPEECH_API_KEY;
+      const apiKey = (req.config as any)?.azure?.apiKey || process.env.AZURE_SPEECH_API_KEY;
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }
 
-      const region = (req.config as any)?.azure?.region || process.env.AZURE_SPEECH_REGION || "eastus";
+      const region =
+        (req.config as any)?.azure?.region || process.env.AZURE_SPEECH_REGION || "eastus";
       const baseUrl = (req.config as any)?.azure?.baseUrl;
       // Use baseUrl if provided, otherwise derive from region
       const endpoint = baseUrl
@@ -127,7 +125,9 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         DEFAULT_AZURE_OUTPUT_FORMAT;
 
       if (!voice) {
-        throw new Error("Azure voice not configured. Set voice in config or use [[tts:voice=zh-HK-HiuMaanNeural]] directive");
+        throw new Error(
+          "Azure voice not configured. Set voice in config or use [[tts:voice=zh-HK-HiuMaanNeural]] directive",
+        );
       }
 
       // Use timeout from config, directive, or default

@@ -102,15 +102,17 @@ describe("listAzureVoices", () => {
       .fn()
       .mockResolvedValue(new Response("nope", { status: 503 })) as typeof globalThis.fetch;
 
-    await expect(
-      listAzureVoices({ apiKey: "test-key", region: "eastus" }),
-    ).rejects.toThrow("Azure voices API error (503)");
+    await expect(listAzureVoices({ apiKey: "test-key", region: "eastus" })).rejects.toThrow(
+      "Azure voices API error (503)",
+    );
   });
 
   it("uses custom baseUrl when provided", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify([]), { status: 200 }),
-    ) as typeof globalThis.fetch;
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify([]), { status: 200 }),
+      ) as typeof globalThis.fetch;
 
     await listAzureVoices({
       apiKey: "test-key",
