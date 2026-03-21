@@ -345,6 +345,66 @@ def add_time_acknowledgment(reply: str, age_days: int) -> str:
     return reply
 
 
+def predict_response(comment_text: str, our_reply: str, category: str, post_ctx: dict) -> dict:
+    """Gate 8: Predict how they'll interpret our reply and what they'll say next.
+
+    Returns:
+        {
+            'interpretation': how they'll read our reply,
+            'likely_response': what they'll probably say,
+            'risk': 'safe' | 'trap' | 'escalate' | 'engage',
+            'safer_reply': alternative if risk is 'trap',
+        }
+    """
+    text = (comment_text or '').strip().lower()
+    reply_lower = our_reply.lower()
+    result = {'interpretation': '', 'likely_response': '', 'risk': 'safe'}
+
+    # Trap 1: We say "歡迎" anything → they say "果然是AI罐頭回覆"
+    if '歡迎' in our_reply:
+        result['risk'] = 'trap'
+        result['interpretation'] = '覺得是機器人套話'
+        result['likely_response'] = '果然是AI'
+        result['safer_reply'] = '你說的有道理。'
+        return result
+
+    # Trap 2: We compliment them → they say "少拍馬屁"
+    if any(w in our_reply for w in ['角度很好', '你比大多數人想得深', '觀察很具體']):
+        if category in ('hostile_with_point', 'hostile_no_point'):
+            result['risk'] = 'trap'
+            result['interpretation'] = '覺得被敷衍/拍馬屁'
+            result['likely_response'] = '少來這套'
+            result['safer_reply'] = '不同意也沒關係。數據在那裡。'
+            return result
+
+    # Trap 3: They ask a specific question, we give vague answer → "答非所問"
+    has_question = '？' in comment_text or '?' in comment_text
+    if has_question and len(comment_text) > 30:
+        vague_replies = ['好問題', '值得展開', '這個我也在想', '留言區講不完']
+        if any(v in our_reply for v in vague_replies):
+            result['risk'] = 'trap'
+            result['interpretation'] = '覺得被打太極'
+            result['likely_response'] = '答非所問/不敢回'
+            result['safer_reply'] = '這個問題的具體答案取決於你的情境。你能多說一點嗎？'
+            return result
+
+    # Escalate: hostile person gets generic positive reply → they escalate
+    if category == 'hostile_with_point' and our_reply == '🙌':
+        result['risk'] = 'escalate'
+        result['interpretation'] = '覺得被無視'
+        result['likely_response'] = '更激烈的攻擊'
+        result['safer_reply'] = '你的情緒我收到了。但數字不會因為不喜歡就消失。'
+        return result
+
+    # Engage prediction: substantive reply to substantive comment → might start dialogue
+    if category == 'substantive_insight' and len(our_reply) > 20 and len(comment_text) > 50:
+        result['risk'] = 'engage'
+        result['interpretation'] = '覺得被認真對待'
+        result['likely_response'] = '可能繼續對話或追蹤'
+
+    return result
+
+
 def quality_gate_1_semantic(comment_text: str, reply: str, post_ctx: dict) -> tuple[bool, str]:
     """Gate 1: Does the reply address the commenter's point?"""
     # Check if reply is about the same domain as the comment
@@ -543,6 +603,14 @@ def main():
             rejected["voice"] += 1
             reply = '🙌'
 
+        # ❽ Predict response — 預判他三步
+        prediction = predict_response(text, reply, cat, post_ctx)
+        if prediction['risk'] == 'trap':
+            # Our reply walks into a trap — rephrase
+            reply = prediction.get('safer_reply', reply)
+            rejected.setdefault("prediction", 0)
+            rejected["prediction"] += 1
+
         # ❼ Time acknowledgment
         age_days = extra.get('age_days', 0)
         reply = add_time_acknowledgment(reply, age_days)
@@ -588,7 +656,8 @@ def main():
     conn.close()
 
     print(f"\n{'[DRY RUN] ' if dry_run else ''}Sent: {sent} | Skipped: {skipped}")
-    print(f"Quality gates: ctx={rejected['context']} sem={rejected['semantic']} len={rejected['length']} dedup={rejected['dedup']} thr_dedup={rejected['thread_dedup']} voice={rejected['voice']}")
+    pred = rejected.get('prediction', 0)
+    print(f"Quality gates: ctx={rejected['context']} sem={rejected['semantic']} len={rejected['length']} dedup={rejected['dedup']} thr={rejected['thread_dedup']} voice={rejected['voice']} pred={pred}")
     print(f"Coverage: {s}/{t2} = {round(s / max(t2, 1) * 100)}% | Remaining: {remaining} | Wave tracking: {waves}")
 
 
