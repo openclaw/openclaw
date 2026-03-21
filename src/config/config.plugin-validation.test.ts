@@ -78,6 +78,7 @@ describe("config plugin validation", () => {
   let badPluginDir = "";
   let enumPluginDir = "";
   let bluebubblesPluginDir = "";
+  let googleOverridePluginDir = "";
   let voiceCallSchemaPluginDir = "";
   let bundlePluginDir = "";
   let manifestlessClaudeBundleDir = "";
@@ -133,6 +134,17 @@ describe("config plugin validation", () => {
       id: "bluebubbles-plugin",
       channels: ["bluebubbles"],
       schema: { type: "object" },
+    });
+    googleOverridePluginDir = path.join(suiteHome, "google");
+    await writePluginFixture({
+      dir: googleOverridePluginDir,
+      id: "google",
+      schema: {
+        type: "object",
+        properties: {
+          apiKey: { type: "string" },
+        },
+      },
     });
     bundlePluginDir = path.join(suiteHome, "bundle-plugin");
     await writeBundleFixture({
@@ -320,6 +332,33 @@ describe("config plugin validation", () => {
         ]),
       );
     }
+  });
+
+  it("does not auto-allow config-loaded overrides of bundled web search plugin ids", async () => {
+    const res = validateInSuite({
+      plugins: {
+        allow: ["bluebubbles", "memory-core"],
+        load: {
+          paths: [googleOverridePluginDir],
+        },
+        entries: {
+          google: {
+            config: {
+              apiKey: "test-google-key",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toContainEqual({
+      path: "plugins.entries.google",
+      message: "plugin disabled (not in allowlist) but config is present",
+    });
   });
 
   it("surfaces plugin config diagnostics", async () => {
