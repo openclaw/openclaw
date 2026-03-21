@@ -331,20 +331,14 @@ export function coerceToFailoverError(
 }
 
 /**
- * Default HTTP status codes that trigger fallback.
- * - Server errors: 500, 502, 503, 504
- * - Rate limits: 429
- * - Timeouts: 408
- * - Not found: 404 (model may have been removed)
- */
-const DEFAULT_FALLBACK_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504, 404]);
-
-/**
  * Check if an error should trigger fallback based on the configured error codes.
+ *
+ * For "default" or undefined, this delegates to resolveFailoverReasonFromError() which
+ * matches the original behavior (no regression).
  *
  * @param err - The error to check
  * @param fallbackOnErrors - Configuration for which errors should trigger fallback
- *   - "default": Use default behavior (server errors + rate limits + timeout + not found)
+ *   - "default": Use original behavior (same as no config) - any recognized failover reason
  *   - "all": All HTTP errors (4xx and 5xx) trigger fallback
  *   - number[]: Custom list of status codes
  * @returns true if the error should trigger fallback
@@ -354,25 +348,23 @@ export function shouldTriggerFallback(
   fallbackOnErrors?: FallbackOnErrorCodes,
 ): boolean {
   const status = getStatusCode(err);
+  const reason = resolveFailoverReasonFromError(err);
 
-  // If no status code found, try to determine from error reason
-  if (status === undefined) {
-    const reason = resolveFailoverReasonFromError(err);
-    // For any mode, only trigger fallback if we have a recognized failover reason
-    // This prevents unrelated runtime errors (parse errors, filesystem errors) from triggering fallback
+  // For "default" or undefined, match original behavior exactly
+  // This delegates to the existing reason classification logic
+  if (fallbackOnErrors === undefined || fallbackOnErrors === "default") {
     return reason !== null;
   }
 
-  // Determine if status code should trigger fallback
-  if (fallbackOnErrors === undefined || fallbackOnErrors === "default") {
-    return DEFAULT_FALLBACK_STATUS_CODES.has(status);
-  } else if (fallbackOnErrors === "all") {
-    // "all" means all HTTP errors (4xx and 5xx)
-    return status >= 400;
-  } else {
-    // Custom list of status codes
-    return new Set(fallbackOnErrors).has(status);
+  // For "all", check if HTTP error (4xx or 5xx)
+  // Also allow non-HTTP errors with recognized reasons
+  if (fallbackOnErrors === "all") {
+    return status !== undefined ? status >= 400 : reason !== null;
   }
+
+  // For custom array, check specific status codes only
+  // Ignore non-HTTP errors even if they have a recognized reason
+  return status !== undefined && new Set(fallbackOnErrors).has(status);
 }
 
 /**

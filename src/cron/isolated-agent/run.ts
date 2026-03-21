@@ -5,6 +5,7 @@ import {
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  resolveRunModelFallbackOnErrors,
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
@@ -455,6 +456,10 @@ export async function runCronIsolatedAgentTurn(params: {
         agentDir,
         fallbacksOverride:
           payloadFallbacks ?? resolveAgentModelFallbacksOverride(params.cfg, agentId),
+        fallbackOnErrors: resolveRunModelFallbackOnErrors({
+          cfg: cfgWithAgentDefaults,
+          agentId,
+        }),
         run: async (providerOverride, modelOverride, runOptions) => {
           if (abortSignal?.aborted) {
             throw new Error(abortReason());
