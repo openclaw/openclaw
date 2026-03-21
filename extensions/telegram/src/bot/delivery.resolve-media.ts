@@ -65,7 +65,8 @@ function isRetryableGetFileError(err: unknown): boolean {
  * retried at the outer level.
  *
  * Two categories are retried:
- * - `http_error` with 5xx status — transient server errors.
+ * - `http_error` with transient status (408, 429, 5xx) — server timeouts,
+ *   rate-limiting, and server errors.
  * - `fetch_failed` — covers body-read timeouts, connection resets, and cases
  *   where no dispatcher fallback transports are configured so the inner
  *   `dispatcherAttempts` loop cannot help.
@@ -83,7 +84,7 @@ function isRetryableDownloadError(err: unknown): boolean {
       const match = /HTTP (\d{3})/.exec(err.message);
       if (match) {
         const status = Number(match[1]);
-        return status === 429 || status >= 500;
+        return status === 408 || status === 429 || status >= 500;
       }
     }
     return false;
