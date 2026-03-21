@@ -1,22 +1,23 @@
 {
   "editor.formatOnSave": true,
+  "editor.tabSize": 2,
+  "editor.insertSpaces": false,
+  "editor.detectIndentation": true,
+  "editor.trimAutoWhitespace": true,
+  "files.trimTrailingWhitespace": true,
   "files.insertFinalNewline": true,
-  "files.trimFinalNewlines": true,
-  "[javascript]": {
-    "editor.defaultFormatter": "oxc.oxc-vscode"
-  },
-  "[typescriptreact]": {
-    "editor.defaultFormatter": "oxc.oxc-vscode"
-  },
-  "[typescript]": {
-    "editor.defaultFormatter": "oxc.oxc-vscode"
-  },
-  "[json]": {
-    "editor.defaultFormatter": "oxc.oxc-vscode"
+  "files.autoSave": "afterDelay",
+  "files.autoSaveDelay": 1000,
+  "files.associations": {
+    "*.md": "markdown",
+    "*.ts": "typescript",
+    "*.js": "javascript",
+    "*.json": "json"
   },
   "typescript.preferences.importModuleSpecifierEnding": "js",
   "typescript.reportStyleChecksAsWarnings": false,
   "typescript.updateImportsOnFileMove.enabled": "always",
   "typescript.tsdk": "node_modules/typescript/lib",
-  "typescript.experimental.useTsgo": true
+  "typescript.experimental.useTsgo": true,
+  "rust-analyzer.linkedProjects": ["extensions/rust-plugin/native/Cargo.toml"]
 }

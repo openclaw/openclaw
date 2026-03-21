@@ -48,6 +48,7 @@ pub fn cancellable_operation(
 /// Complex data task for async processing
 pub struct ComplexDataTask {
     data: Vec<u8>,
+    oversized: bool,  // Flag to indicate input was too large
 }
 
 impl Task for ComplexDataTask {
@@ -55,6 +56,14 @@ impl Task for ComplexDataTask {
     type JsValue = Buffer;
 
     fn compute(&mut self) -> Result<Self::Output> {
+        // Return error if input was oversized
+        if self.oversized {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Input too large (max 10MB)",
+            ));
+        }
+        
         // Process data with overflow protection
         let processed: Vec<u8> = self.data.iter()
             .map(|b| b.wrapping_add(1))
@@ -66,20 +75,22 @@ impl Task for ComplexDataTask {
         Ok(output.into())
     }
 
-    fn reject(&mut self, _env: Env, _err: Error) -> Result<Self::JsValue> {
-        Ok(vec![].into())
+    fn reject(&mut self, _env: Env, err: Error) -> Result<Self::JsValue> {
+        // Propagate the error properly
+        Err(err)
     }
 }
 
 #[napi]
 pub fn complex_data_async(data: Vec<u8>) -> AsyncTask<ComplexDataTask> {
-    // Validate input size
-    if data.len() > 10_000_000 {
-        // Return task with empty data for graceful error handling
-        return AsyncTask::new(ComplexDataTask { data: vec![] });
-    }
-
-    AsyncTask::new(ComplexDataTask { data })
+    const MAX_SIZE: usize = 10_000_000;  // 10MB
+    
+    let oversized = data.len() > MAX_SIZE;
+    
+    AsyncTask::new(ComplexDataTask { 
+        data: if oversized { vec![] } else { data },
+        oversized,
+    })
 }
 
 /// Buffer processor for async operations

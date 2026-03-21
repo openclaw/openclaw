@@ -262,15 +262,15 @@
 
 ### Pre-Deployment Sign-Off
 
-- **Technical Lead**: ********\_******** Date: **\_\_\_**
-- **Security Officer**: ********\_******** Date: **\_\_\_**
-- **DevOps Engineer**: ********\_******** Date: **\_\_\_**
+- **Technical Lead**: **\*\*\*\***\_**\*\*\*\*** Date: **\_\_\_**
+- **Security Officer**: **\*\*\*\***\_**\*\*\*\*** Date: **\_\_\_**
+- **DevOps Engineer**: **\*\*\*\***\_**\*\*\*\*** Date: **\_\_\_**
 
 ### Post-Deployment Sign-Off
 
-- **Deployment Completed By**: ********\_******** Date: **\_\_\_**
-- **Verification Completed By**: ********\_******** Date: **\_\_\_**
-- **Approved for Production**: ********\_******** Date: **\_\_\_**
+- **Deployment Completed By**: **\*\*\*\***\_**\*\*\*\*** Date: **\_\_\_**
+- **Verification Completed By**: **\*\*\*\***\_**\*\*\*\*** Date: **\_\_\_**
+- **Approved for Production**: **\*\*\*\***\_**\*\*\*\*** Date: **\_\_\_**
 
 ---
 

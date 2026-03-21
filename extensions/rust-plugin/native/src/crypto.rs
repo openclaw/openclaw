@@ -19,14 +19,15 @@ struct NonceEntry {
     timestamp: u64,
 }
 
-// Nonce tracker with automatic cleanup to prevent memory leaks
+// Nonce tracker with automatic cleanup to prevent memory leaks and nonce reuse
 struct NonceTracker {
     nonces: HashMap<Vec<u8>, NonceEntry>,
 }
 
 impl NonceTracker {
-    const MAX_NONCES: usize = 10_000;      // Lower threshold
-    const NONCE_TTL_SECS: u64 = 300;        // 5 minutes
+    const MAX_NONCES: usize = 10_000;      // Hard cap on stored nonces
+    const NONCE_TTL_SECS: u64 = 60;         // 1 minute TTL (shorter for security)
+    const CLEANUP_INTERVAL: usize = 100;    // Cleanup every 100 inserts
 
     fn insert(&mut self, nonce: Vec<u8>) -> Result<()> {
         let now = SystemTime::now()
@@ -34,11 +35,20 @@ impl NonceTracker {
             .unwrap()
             .as_secs();
 
-        // Cleanup old nonces periodically (lower threshold for better memory management)
-        if self.nonces.len() > Self::MAX_NONCES {
+        // Cleanup old nonces more frequently to prevent TTL reuse window
+        if self.nonces.len() % Self::CLEANUP_INTERVAL == 0 {
             self.nonces.retain(|_, entry| now - entry.timestamp < Self::NONCE_TTL_SECS);
         }
 
+        // Hard cap: if still over limit after cleanup, reject new nonces
+        if self.nonces.len() >= Self::MAX_NONCES {
+            return Err(Error::new(
+                Status::GenericFailure,
+                "Nonce tracker at capacity - wait before encrypting more",
+            ));
+        }
+
+        // Check for reuse BEFORE inserting (critical for security)
         if self.nonces.contains_key(&nonce) {
             return Err(Error::new(
                 Status::InvalidArg,

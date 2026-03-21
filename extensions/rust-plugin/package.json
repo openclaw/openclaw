@@ -35,9 +35,8 @@
     "test:watch": "vitest watch tests/",
     "version": "napi version"
   },
-  "dependencies": {},
   "devDependencies": {
-    "@napi-rs/cli": "^3.0.0",
+    "@napi-rs/cli": "^3.5.1",
     "vitest": "^2.0.0"
   },
   "optionalDependencies": {

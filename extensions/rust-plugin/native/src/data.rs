@@ -25,6 +25,7 @@ pub struct DecompressionResult {
 }
 
 /// Secure run-length encoding compression with bounds checking
+/// Uses byte-level encoding to properly handle all input including non-ASCII
 #[napi]
 pub fn rle_compress(data: String) -> Result<CompressionResult> {
     // Validate input size
@@ -35,25 +36,30 @@ pub fn rle_compress(data: String) -> Result<CompressionResult> {
         ));
     }
 
+    let bytes = data.as_bytes();
     let mut compressed = Vec::new();
-    let mut chars = data.chars().peekable();
+    let mut i = 0;
 
-    while let Some(c) = chars.next() {
+    while i < bytes.len() {
+        let current_byte = bytes[i];
         let mut count = 1u8;
 
-        // Count consecutive characters (with bounds check)
-        while chars.peek() == Some(&c) && count < 255 {
-            chars.next();
-            count = count.checked_add(1).ok_or_else(|| {
-                Error::new(Status::GenericFailure, "Count overflow")
-            })?;
+        // Count consecutive bytes (with bounds check)
+        while (i + count as usize) < bytes.len()
+            && bytes[i + count as usize] == current_byte
+            && count < 255 {
+            count = count.saturating_add(1);
         }
 
+        // Encode as count:byte pairs
         compressed.push(count);
-        compressed.push(c as u8);
+        compressed.push(current_byte);
+        i += count as usize;
     }
 
-    let compressed_str = compressed.iter().map(|&b| b as char).collect();
+    // Return as base64 to safely encode binary data
+    use base64::{Engine as _, engine::general_purpose};
+    let compressed_str = general_purpose::STANDARD.encode(&compressed);
     let original_size = data.len() as u32;
     let compressed_size = compressed.len() as u32;
     let ratio = if original_size > 0 {
@@ -71,7 +77,7 @@ pub fn rle_compress(data: String) -> Result<CompressionResult> {
 }
 
 /// Secure run-length encoding decompression with bounds checking
-/// Protected against compression bombs
+/// Protected against compression bombs, expects base64-encoded input
 #[napi]
 pub fn rle_decompress(compressed: String) -> Result<DecompressionResult> {
     // Limit input size
@@ -79,19 +85,34 @@ pub fn rle_decompress(compressed: String) -> Result<DecompressionResult> {
     const MAX_OUTPUT: usize = 20_000_000;    // 20MB
     
     if compressed.len() > MAX_INPUT {
-        return Err(Error::new(
-            Status::InvalidArg,
-            format!("Input too large (max {}MB)", MAX_INPUT / 1024 / 1024),
-        ));
+        return Ok(DecompressionResult {
+            data: String::new(),
+            success: false,
+            error: Some(format!("Input too large (max {}MB)", MAX_INPUT / 1024 / 1024)),
+        });
     }
 
-    let mut decompressed = String::new();
-    let mut bytes = compressed.bytes().peekable();
-    let mut decompressed_size = 0usize;
+    // Decode base64 input
+    use base64::{Engine as _, engine::general_purpose};
+    let compressed_bytes = match general_purpose::STANDARD.decode(&compressed) {
+        Ok(b) => b,
+        Err(e) => return Ok(DecompressionResult {
+            data: String::new(),
+            success: false,
+            error: Some(format!("Invalid base64: {}", e)),
+        }),
+    };
 
-    while let Some(count_byte) = bytes.next() {
-        // Validate count byte
-        if count_byte == 0 {
+    let mut decompressed = Vec::new();
+    let mut decompressed_size = 0usize;
+    let mut i = 0;
+
+    while i + 1 < compressed_bytes.len() {
+        let count = compressed_bytes[i] as usize;
+        let byte_val = compressed_bytes[i + 1];
+        
+        // Validate count
+        if count == 0 {
             return Ok(DecompressionResult {
                 data: String::new(),
                 success: false,
@@ -99,41 +120,45 @@ pub fn rle_decompress(compressed: String) -> Result<DecompressionResult> {
             });
         }
 
-        if let Some(char_byte) = bytes.next() {
-            let count = count_byte as usize;
+        // Check for overflow
+        decompressed_size = match decompressed_size.checked_add(count) {
+            Some(s) => s,
+            None => return Ok(DecompressionResult {
+                data: String::new(),
+                success: false,
+                error: Some("Decompressed size too large".to_string()),
+            }),
+        };
 
-            // Check for overflow
-            decompressed_size = decompressed_size.checked_add(count).ok_or_else(|| {
-                Error::new(Status::InvalidArg, "Decompressed size too large")
-            })?;
-
-            // Validate total size (compression bomb protection)
-            if decompressed_size > MAX_OUTPUT {
-                return Ok(DecompressionResult {
-                    data: String::new(),
-                    success: false,
-                    error: Some(format!("Decompressed data too large (max {}MB)", MAX_OUTPUT / 1024 / 1024)),
-                });
-            }
-
-            let ch = char_byte as char;
-            for _ in 0..count {
-                decompressed.push(ch);
-            }
-        } else {
+        // Validate total size (compression bomb protection)
+        if decompressed_size > MAX_OUTPUT {
             return Ok(DecompressionResult {
                 data: String::new(),
                 success: false,
-                error: Some("Invalid compressed data: missing character".to_string()),
+                error: Some(format!("Decompressed data too large (max {}MB)", MAX_OUTPUT / 1024 / 1024)),
             });
         }
+
+        for _ in 0..count {
+            decompressed.push(byte_val);
+        }
+        
+        i += 2;
     }
 
-    Ok(DecompressionResult {
-        data: decompressed,
-        success: true,
-        error: None,
-    })
+    // Convert bytes to string (handle invalid UTF-8)
+    match String::from_utf8(decompressed) {
+        Ok(s) => Ok(DecompressionResult {
+            data: s,
+            success: true,
+            error: None,
+        }),
+        Err(e) => Ok(DecompressionResult {
+            data: String::new(),
+            success: false,
+            error: Some(format!("Invalid UTF-8 in decompressed data: {}", e)),
+        }),
+    }
 }
 
 /// Advanced string tokenization

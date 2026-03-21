@@ -114,21 +114,8 @@ pub fn compute_hash(data: String, algorithm: Option<String>) -> Result<String> {
 pub fn hash_file(path: String, algorithm: Option<String>) -> Result<String> {
     let algo = algorithm.unwrap_or_else(|| "sha256".to_string());
 
-    // Validate path to prevent directory traversal (allow absolute paths on Unix)
-    if path.contains("..") {
-        return Err(Error::new(
-            Status::InvalidArg,
-            "Invalid path: path traversal detected",
-        ));
-    }
-
-    // Validate path length
-    if path.len() > 4096 {
-        return Err(Error::new(
-            Status::InvalidArg,
-            "Path too long (max 4096 characters)",
-        ));
-    }
+    // Use shared validate_path for consistency with other file operations
+    validate_path(&path)?;
 
     let metadata = fs::metadata(&path)
         .map_err(|e| Error::new(Status::GenericFailure, format!("Failed to access file: {}", e)))?;
@@ -162,22 +149,6 @@ pub fn hash_file(path: String, algorithm: Option<String>) -> Result<String> {
         }
         _ => Err(Error::new(Status::InvalidArg, format!("Unsupported: {}", algo))),
     }
-}
-
-#[napi]
-pub fn random_bytes(length: u32) -> Result<Buffer> {
-    // Validate size to prevent DoS
-    if length > 1_000_000 {
-        return Err(Error::new(
-            Status::InvalidArg,
-            "Length too large (max 1MB)",
-        ));
-    }
-
-    use rand::RngCore;
-    let mut bytes = vec![0u8; length as usize];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
-    Ok(bytes.into())
 }
 
 #[napi]
@@ -420,11 +391,6 @@ pub fn base64_decode(input: String) -> Result<String> {
     
     String::from_utf8(bytes)
         .map_err(|e| Error::new(Status::InvalidArg, format!("Invalid UTF-8: {}", e)))
-}
-
-#[napi]
-pub fn url_encode(input: String) -> String {
-    urlencoding::encode(&input).to_string()
 }
 
 #[napi]
@@ -740,10 +706,35 @@ pub async fn prettify_json(json_string: String, indent: Option<u32>) -> Result<S
     let value: serde_json::Value = serde_json::from_str(&json_string)
         .map_err(|e| Error::new(Status::InvalidArg, format!("Invalid JSON: {}", e)))?;
 
-    let spaces = indent.unwrap_or(2);
-    serde_json::to_string_pretty(&value)
-        .map(|s| s.replace("  ", &" ".repeat(spaces as usize)))
-        .map_err(|e| Error::new(Status::GenericFailure, format!("Serialization failed: {}", e)))
+    let indent_spaces = indent.unwrap_or(2) as usize;
+    
+    // Use serde_json's formatter with custom indent
+    let formatted = serde_json::to_string_pretty(&value)
+        .map_err(|e| Error::new(Status::GenericFailure, format!("Serialization failed: {}", e)))?;
+    
+    // Safe indent replacement: only replace leading spaces on each line
+    let lines: Vec<&str> = formatted.lines().collect();
+    let mut result = String::new();
+    
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+        
+        // Count leading spaces
+        let leading_spaces = line.chars().take_while(|&c| c == ' ').count();
+        
+        // Convert indent depth (2 spaces = 1 level)
+        let indent_level = leading_spaces / 2;
+        let new_indent = " ".repeat(indent_level * indent_spaces);
+        
+        // Replace leading spaces with new indent
+        let trimmed = line.trim_start();
+        result.push_str(&new_indent);
+        result.push_str(trimmed);
+    }
+
+    Ok(result)
 }
 
 // =============================================================================
