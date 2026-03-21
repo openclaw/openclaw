@@ -43,9 +43,9 @@ describe("scripts/test-extension.mjs", () => {
   });
 
   it("returns an empty test list for provider extensions without dedicated tests", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "openrouter", cwd: process.cwd() });
+    const plan = resolveExtensionTestPlan({ targetArg: "anthropic", cwd: process.cwd() });
 
-    expect(plan.extensionId).toBe("openrouter");
+    expect(plan.extensionId).toBe("anthropic");
     expect(plan.config).toBe("vitest.extensions.config.ts");
     expect(plan.testFiles).toEqual([]);
   });
@@ -68,14 +68,14 @@ describe("scripts/test-extension.mjs", () => {
   });
 
   it("treats extensions without dedicated tests as a clean dry-run skip", () => {
-    const stdout = execFileSync(process.execPath, [scriptPath, "openrouter"], {
+    const stdout = execFileSync(process.execPath, [scriptPath, "anthropic"], {
       cwd: process.cwd(),
       encoding: "utf8",
     });
 
-    expect(stdout).toContain("[test-extension] No tests found for extensions/openrouter.");
+    expect(stdout).toContain("[test-extension] No tests found for extensions/anthropic.");
     expect(stdout).toContain(
-      'Run "pnpm test:extension openrouter -- --dry-run" to inspect the resolved roots. Skipping.',
+      'Run "pnpm test:extension anthropic -- --dry-run" to inspect the resolved roots. Skipping.',
     );
   });
 
