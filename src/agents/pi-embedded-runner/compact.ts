@@ -32,6 +32,10 @@ import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
+import {
+  hasMeaningfulConversationContent,
+  isRealConversationMessage,
+} from "../compaction-real-conversation.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
@@ -144,6 +148,14 @@ type CompactionMessageMetrics = {
   estTokens?: number;
   contributors: Array<{ role: string; chars: number; tool?: string }>;
 };
+
+function hasRealConversationContent(
+  msg: AgentMessage,
+  messages: AgentMessage[],
+  index: number,
+): boolean {
+  return isRealConversationMessage(msg, messages, index);
+}
 
 function createCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
@@ -794,6 +806,21 @@ export async function compactEmbeddedPiSessionDirect(
           );
         }
 
+        if (
+          !session.messages.some((message, index, messages) =>
+            hasRealConversationContent(message, messages, index),
+          )
+        ) {
+          log.info(
+            `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
+          );
+          return {
+            ok: true,
+            compacted: false,
+            reason: "no real conversation messages",
+          };
+        }
+
         const compactStartedAt = Date.now();
         const result = await compactWithSafetyTimeout(() =>
           session.compact(params.customInstructions),
@@ -1008,3 +1035,8 @@ export async function compactEmbeddedPiSession(
     }),
   );
 }
+
+export const __testing = {
+  hasRealConversationContent,
+  hasMeaningfulConversationContent,
+} as const;
