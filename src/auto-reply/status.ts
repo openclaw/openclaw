@@ -447,14 +447,6 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
   let activeProvider = modelRefs.active.provider;
   let activeModel = modelRefs.active.model;
-  let contextTokens =
-    resolveContextTokensForModel({
-      cfg: contextConfig,
-      provider: activeProvider,
-      model: activeModel,
-      contextTokensOverride: entry?.contextTokens ?? args.agent?.contextTokens,
-      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-    }) ?? DEFAULT_CONTEXT_TOKENS;
 
   let inputTokens = entry?.inputTokens;
   let outputTokens = entry?.outputTokens;
@@ -490,14 +482,6 @@ export function buildStatusMessage(args: StatusArgs): string {
           activeModel = logUsage.model;
         }
       }
-      if (!contextTokens && logUsage.model) {
-        contextTokens =
-          resolveContextTokensForModel({
-            cfg: contextConfig,
-            model: logUsage.model,
-            fallbackContextTokens: contextTokens ?? undefined,
-          }) ?? contextTokens;
-      }
       if (!inputTokens || inputTokens === 0) {
         inputTokens = logUsage.input;
       }
@@ -506,6 +490,23 @@ export function buildStatusMessage(args: StatusArgs): string {
       }
     }
   }
+
+  const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
+  const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
+  const contextTokensOverride = runtimeDiffersFromSelected
+    ? undefined
+    : (entry?.contextTokens ?? args.agent?.contextTokens);
+  // When a fallback model is active, persisted session contextTokens can still
+  // reflect the originally selected model. Recompute from the active runtime
+  // model so /status reports the real window instead of the stale selected one.
+  const contextTokens =
+    resolveContextTokensForModel({
+      cfg: contextConfig,
+      provider: activeProvider,
+      model: activeModel,
+      contextTokensOverride,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const thinkLevel =
     args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";
@@ -581,7 +582,6 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.activeModelAuth ??
     (activeAuthMode && activeAuthMode !== "unknown" ? activeAuthMode : undefined);
   const selectedModelLabel = modelRefs.selected.label || "unknown";
-  const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
   const fallbackState = resolveActiveFallbackState({
     selectedModelRef: selectedModelLabel,
     activeModelRef: activeModelLabel,
