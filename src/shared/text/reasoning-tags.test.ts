@@ -250,6 +250,14 @@ describe("stripReasoningTagsFromText", () => {
         "Use `<think>` in your response",
       );
     });
+
+    it("recovers only content after the last tag when multiple unclosed tags appear", () => {
+      // With `<think>A<think>B`, lastIndex advances past the second <think>,
+      // so only "B" is recovered. "A" between the two tags is lost. Acceptable
+      // for the target scenario (single unclosed tag wrapping the entire response).
+      const input = "<think>Part A<think>Part B";
+      expect(stripReasoningTagsFromText(input, { mode: "strict" })).toBe("Part B");
+    });
   });
 
   describe("trim options", () => {
