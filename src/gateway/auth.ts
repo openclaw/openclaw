@@ -1,3 +1,5 @@
+// 网关认证模块 - 处理网关连接的身份验证和授权 / Gateway authentication module - handles authentication and authorization for gateway connections
+
 import type { IncomingMessage } from "node:http";
 import type {
   GatewayAuthConfig,
@@ -21,7 +23,23 @@ import {
   resolveClientIp,
 } from "./net.js";
 
+/**
+ * 已解析的网关认证模式 / Resolved gateway authentication mode
+ * - none: 无认证 / No authentication
+ * - token: 令牌认证 / Token authentication
+ * - password: 密码认证 / Password authentication
+ * - trusted-proxy: 可信代理认证 / Trusted proxy authentication
+ */
 export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+
+/**
+ * 已解析的网关认证模式来源 / Resolved gateway authentication mode source
+ * - override: 覆盖配置 / Override configuration
+ * - config: 配置文件 / Configuration file
+ * - password: 密码 / Password
+ * - token: 令牌 / Token
+ * - default: 默认值 / Default value
+ */
 export type ResolvedGatewayAuthModeSource =
   | "override"
   | "config"
@@ -29,17 +47,31 @@ export type ResolvedGatewayAuthModeSource =
   | "token"
   | "default";
 
+/**
+ * 已解析的网关认证配置 / Resolved gateway authentication configuration
+ */
 export type ResolvedGatewayAuth = {
+  /** 认证模式 / Authentication mode */
   mode: ResolvedGatewayAuthMode;
+  /** 模式来源 / Mode source */
   modeSource?: ResolvedGatewayAuthModeSource;
+  /** 认证令牌 / Authentication token */
   token?: string;
+  /** 认证密码 / Authentication password */
   password?: string;
+  /** 是否允许 Tailscale 认证 / Whether to allow Tailscale authentication */
   allowTailscale: boolean;
+  /** 可信代理配置 / Trusted proxy configuration */
   trustedProxy?: GatewayTrustedProxyConfig;
 };
 
+/**
+ * 网关认证结果 / Gateway authentication result
+ */
 export type GatewayAuthResult = {
+  /** 认证是否成功 / Whether authentication succeeded */
   ok: boolean;
+  /** 认证方法 / Authentication method */
   method?:
     | "none"
     | "token"
@@ -48,39 +80,60 @@ export type GatewayAuthResult = {
     | "device-token"
     | "bootstrap-token"
     | "trusted-proxy";
+  /** 用户标识 / User identifier */
   user?: string;
+  /** 失败原因 / Failure reason */
   reason?: string;
-  /** Present when the request was blocked by the rate limiter. */
+  /** 当请求被速率限制器阻止时存在 / Present when the request was blocked by the rate limiter */
   rateLimited?: boolean;
-  /** Milliseconds the client should wait before retrying (when rate-limited). */
+  /** 客户端应等待的毫秒数（当被速率限制时）/ Milliseconds the client should wait before retrying (when rate-limited) */
   retryAfterMs?: number;
 };
 
+/**
+ * 连接认证信息 / Connection authentication info
+ */
 type ConnectAuth = {
+  /** 令牌 / Token */
   token?: string;
+  /** 密码 / Password */
   password?: string;
 };
 
+/**
+ * 网关认证表面 / Gateway authentication surface
+ * - http: HTTP 认证 / HTTP authentication
+ * - ws-control-ui: WebSocket 控制界面认证 / WebSocket control UI authentication
+ */
 export type GatewayAuthSurface = "http" | "ws-control-ui";
 
+/**
+ * 授权网关连接参数 / Authorize gateway connection parameters
+ */
 export type AuthorizeGatewayConnectParams = {
+  /** 已解析的认证配置 / Resolved authentication configuration */
   auth: ResolvedGatewayAuth;
+  /** 连接认证信息 / Connection authentication info */
   connectAuth?: ConnectAuth | null;
+  /** HTTP 请求对象 / HTTP request object */
   req?: IncomingMessage;
+  /** 可信代理列表 / Trusted proxies list */
   trustedProxies?: string[];
+  /** Tailscale whois 查询函数 / Tailscale whois lookup function */
   tailscaleWhois?: TailscaleWhoisLookup;
   /**
-   * Explicit auth surface. HTTP keeps Tailscale forwarded-header auth disabled.
-   * WS Control UI enables it intentionally for tokenless trusted-host login.
+   * 显式认证表面 / Explicit auth surface
+   * HTTP 保持 Tailscale 转发头部认证禁用 / HTTP keeps Tailscale forwarded-header auth disabled
+   * WS 控制界面有意启用它以实现无令牌的可信主机登录 / WS Control UI enables it intentionally for tokenless trusted-host login
    */
   authSurface?: GatewayAuthSurface;
-  /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
+  /** 可选的速率限制器实例；当提供时，失败的尝试会按 IP 跟踪 / Optional rate limiter instance; when provided, failed attempts are tracked per IP */
   rateLimiter?: AuthRateLimiter;
-  /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
+  /** 用于速率限制跟踪的客户端 IP；回退到代理感知的请求 IP 解析 / Client IP used for rate-limit tracking; falls back to proxy-aware request IP resolution */
   clientIp?: string;
-  /** Optional limiter scope; defaults to shared-secret auth scope. */
+  /** 可选的限制器范围；默认为共享密钥认证范围 / Optional limiter scope; defaults to shared-secret auth scope */
   rateLimitScope?: string;
-  /** Trust X-Real-IP only when explicitly enabled. */
+  /** 仅在显式启用时信任 X-Real-IP / Trust X-Real-IP only when explicitly enabled */
   allowRealIpFallback?: boolean;
 };
 
@@ -92,10 +145,20 @@ type TailscaleUser = {
 
 type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
 
+/**
+ * 规范化登录名 / Normalize login name
+ * @param login - 原始登录名 / Original login name
+ * @returns 规范化后的登录名 / Normalized login name
+ */
 function normalizeLogin(login: string): string {
   return login.trim().toLowerCase();
 }
 
+/**
+ * 获取头部值 / Get header value
+ * @param value - 头部值（可能是字符串或数组）/ Header value (may be string or array)
+ * @returns 头部值 / Header value
+ */
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -113,6 +176,13 @@ function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
   });
 }
 
+/**
+ * 检查是否为本地直接请求 / Check if it's a local direct request
+ * @param req - HTTP 请求对象 / HTTP request object
+ * @param trustedProxies - 可信代理列表 / Trusted proxies list
+ * @param allowRealIpFallback - 是否允许 X-Real-IP 回退 / Whether to allow X-Real-IP fallback
+ * @returns 是否为本地直接请求 / Whether it's a local direct request
+ */
 export function isLocalDirectRequest(
   req?: IncomingMessage,
   trustedProxies?: string[],
@@ -126,6 +196,7 @@ export function isLocalDirectRequest(
     return false;
   }
 
+  // 检查是否有转发头部 / Check if there are forwarded headers
   const hasForwarded = Boolean(
     req.headers?.["x-forwarded-for"] ||
     req.headers?.["x-real-ip"] ||
@@ -205,15 +276,26 @@ async function resolveVerifiedTailscaleUser(params: {
   };
 }
 
+/**
+ * 解析网关认证配置 / Resolve gateway authentication configuration
+ * @param params - 参数对象 / Parameter object
+ * @returns 已解析的认证配置 / Resolved authentication configuration
+ */
 export function resolveGatewayAuth(params: {
+  /** 认证配置 / Authentication configuration */
   authConfig?: GatewayAuthConfig | null;
+  /** 认证覆盖配置 / Authentication override configuration */
   authOverride?: GatewayAuthConfig | null;
+  /** 环境变量 / Environment variables */
   env?: NodeJS.ProcessEnv;
+  /** Tailscale 模式 / Tailscale mode */
   tailscaleMode?: GatewayTailscaleMode;
 }): ResolvedGatewayAuth {
   const baseAuthConfig = params.authConfig ?? {};
   const authOverride = params.authOverride ?? undefined;
   const authConfig: GatewayAuthConfig = { ...baseAuthConfig };
+
+  // 应用覆盖配置 / Apply override configuration
   if (authOverride) {
     if (authOverride.mode !== undefined) {
       authConfig.mode = authOverride.mode;
@@ -234,9 +316,12 @@ export function resolveGatewayAuth(params: {
       authConfig.trustedProxy = authOverride.trustedProxy;
     }
   }
+
   const env = params.env ?? process.env;
   const tokenRef = resolveSecretInputRef({ value: authConfig.token }).ref;
   const passwordRef = resolveSecretInputRef({ value: authConfig.password }).ref;
+
+  // 解析凭据 / Resolve credentials
   const resolvedCredentials = resolveGatewayCredentialsFromValues({
     configToken: tokenRef ? undefined : authConfig.token,
     configPassword: passwordRef ? undefined : authConfig.password,
@@ -245,12 +330,15 @@ export function resolveGatewayAuth(params: {
     tokenPrecedence: "config-first",
     passwordPrecedence: "config-first", // pragma: allowlist secret
   });
+
   const token = resolvedCredentials.token;
   const password = resolvedCredentials.password;
   const trustedProxy = authConfig.trustedProxy;
 
+  // 确定认证模式和来源 / Determine authentication mode and source
   let mode: ResolvedGatewayAuth["mode"];
   let modeSource: ResolvedGatewayAuth["modeSource"];
+
   if (authOverride?.mode !== undefined) {
     mode = authOverride.mode;
     modeSource = "override";
@@ -268,6 +356,7 @@ export function resolveGatewayAuth(params: {
     modeSource = "default";
   }
 
+  // 确定 Tailscale 是否允许 / Determine if Tailscale is allowed
   const allowTailscale =
     authConfig.allowTailscale ??
     (params.tailscaleMode === "serve" && mode !== "password" && mode !== "trusted-proxy");

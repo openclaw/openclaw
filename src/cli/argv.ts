@@ -4,17 +4,31 @@ import {
   FLAG_TERMINATOR,
   isValueToken,
 } from "../infra/cli-root-options.js";
+import { normalizeCommand, normalizeOption } from "./program/command-aliases.js";
 
+// 帮助标志集合 / Help flags set
 const HELP_FLAGS = new Set(["-h", "--help"]);
+// 版本标志集合 / Version flags set
 const VERSION_FLAGS = new Set(["-V", "--version"]);
+// 根版本别名标志 / Root version alias flag
 const ROOT_VERSION_ALIAS_FLAG = "-v";
 
+/**
+ * 检查参数是否包含帮助或版本标志 / Check if arguments contain help or version flags
+ * @param argv - 命令行参数数组 / Command line argument array
+ * @returns 是否包含帮助或版本标志 / Whether contains help or version flags
+ */
 export function hasHelpOrVersion(argv: string[]): boolean {
   return (
     argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) || hasRootVersionAlias(argv)
   );
 }
 
+/**
+ * 解析正整数 / Parse positive integer
+ * @param value - 字符串值 / String value
+ * @returns 正整数或 undefined / Positive integer or undefined
+ */
 function parsePositiveInt(value: string): number | undefined {
   const parsed = Number.parseInt(value, 10);
   if (Number.isNaN(parsed) || parsed <= 0) {
@@ -23,13 +37,21 @@ function parsePositiveInt(value: string): number | undefined {
   return parsed;
 }
 
+/**
+ * 检查参数中是否包含指定标志 / Check if arguments contain specified flag
+ * @param argv - 命令行参数数组 / Command line argument array
+ * @param name - 标志名称 / Flag name
+ * @returns 是否包含该标志 / Whether contains the flag
+ */
 export function hasFlag(argv: string[], name: string): boolean {
   const args = argv.slice(2);
   for (const arg of args) {
     if (arg === FLAG_TERMINATOR) {
       break;
     }
-    if (arg === name) {
+    // 应用选项规范化 / Apply option normalization
+    const normalizedArg = normalizeOption(arg);
+    if (normalizedArg === name) {
       return true;
     }
   }
@@ -105,6 +127,12 @@ export function isRootHelpInvocation(argv: string[]): boolean {
   return isRootInvocationForFlags(argv, HELP_FLAGS);
 }
 
+/**
+ * 获取标志值 / Get flag value
+ * @param argv - 命令行参数数组 / Command line argument array
+ * @param name - 标志名称 / Flag name
+ * @returns 标志值 / Flag value
+ */
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
   const args = argv.slice(2);
   for (let i = 0; i < args.length; i += 1) {
@@ -112,12 +140,14 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
     if (arg === FLAG_TERMINATOR) {
       break;
     }
-    if (arg === name) {
+    // 应用选项规范化 / Apply option normalization
+    const normalizedArg = normalizeOption(arg);
+    if (normalizedArg === name) {
       const next = args[i + 1];
       return isValueToken(next) ? next : null;
     }
-    if (arg.startsWith(`${name}=`)) {
-      const value = arg.slice(name.length + 1);
+    if (normalizedArg.startsWith(`${name}=`)) {
+      const value = normalizedArg.slice(name.length + 1);
       return value ? value : null;
     }
   }
@@ -142,14 +172,33 @@ export function getPositiveIntFlagValue(argv: string[], name: string): number | 
   return parsePositiveInt(raw);
 }
 
+/**
+ * 获取命令路径 / Get command path
+ * @param argv - 命令行参数数组 / Command line argument array
+ * @param depth - 命令深度 / Command depth
+ * @returns 命令路径数组 / Command path array
+ */
 export function getCommandPath(argv: string[], depth = 2): string[] {
   return getCommandPathInternal(argv, depth, { skipRootOptions: false });
 }
 
+/**
+ * 获取命令路径（跳过根选项）/ Get command path with root options
+ * @param argv - 命令行参数数组 / Command line argument array
+ * @param depth - 命令深度 / Command depth
+ * @returns 命令路径数组 / Command path array
+ */
 export function getCommandPathWithRootOptions(argv: string[], depth = 2): string[] {
   return getCommandPathInternal(argv, depth, { skipRootOptions: true });
 }
 
+/**
+ * 内部函数：获取命令路径 / Internal function: get command path
+ * @param argv - 命令行参数数组 / Command line argument array
+ * @param depth - 命令深度 / Command depth
+ * @param opts - 选项 / Options
+ * @returns 命令路径数组 / Command path array
+ */
 function getCommandPathInternal(
   argv: string[],
   depth: number,
@@ -175,7 +224,8 @@ function getCommandPathInternal(
     if (arg.startsWith("-")) {
       continue;
     }
-    path.push(arg);
+    // 应用命令规范化 / Apply command normalization
+    path.push(normalizeCommand(arg));
     if (path.length >= depth) {
       break;
     }
@@ -183,9 +233,15 @@ function getCommandPathInternal(
   return path;
 }
 
+/**
+ * 获取主命令 / Get primary command
+ * @param argv - 命令行参数数组 / Command line argument array
+ * @returns 主命令名称或 null / Primary command name or null
+ */
 export function getPrimaryCommand(argv: string[]): string | null {
   const [primary] = getCommandPathWithRootOptions(argv, 1);
-  return primary ?? null;
+  // 应用命令规范化 / Apply command normalization
+  return primary ? normalizeCommand(primary) : null;
 }
 
 type CommandPositionalsParseOptions = {

@@ -1,3 +1,5 @@
+// 网关凭据管理模块 - 处理网关认证凭据的解析和管理 / Gateway credentials management module - handles resolution and management of gateway authentication credentials
+
 import type { OpenClawConfig } from "../config/config.js";
 import {
   createGatewayCredentialPlan,
@@ -16,31 +18,74 @@ export {
   trimToUndefined,
 } from "./credential-planner.js";
 
+/**
+ * 显式网关认证信息 / Explicit gateway authentication info
+ */
 export type ExplicitGatewayAuth = {
+  /** 令牌 / Token */
   token?: string;
+  /** 密码 / Password */
   password?: string;
 };
 
+/**
+ * 已解析的网关凭据 / Resolved gateway credentials
+ */
 export type ResolvedGatewayCredentials = {
+  /** 令牌 / Token */
   token?: string;
+  /** 密码 / Password */
   password?: string;
 };
 
+/**
+ * 网关凭据模式 / Gateway credential mode
+ * - local: 本地模式 / Local mode
+ * - remote: 远程模式 / Remote mode
+ */
 export type GatewayCredentialMode = "local" | "remote";
+
+/**
+ * 网关凭据优先级 / Gateway credential precedence
+ * - env-first: 环境变量优先 / Environment variables first
+ * - config-first: 配置文件优先 / Configuration file first
+ */
 export type GatewayCredentialPrecedence = "env-first" | "config-first";
+
+/**
+ * 网关远程凭据优先级 / Gateway remote credential precedence
+ * - remote-first: 远程配置优先 / Remote configuration first
+ * - env-first: 环境变量优先 / Environment variables first
+ */
 export type GatewayRemoteCredentialPrecedence = "remote-first" | "env-first";
+
+/**
+ * 网关远程凭据回退 / Gateway remote credential fallback
+ * - remote-env-local: 远程 -> 环境变量 -> 本地 / Remote -> Environment -> Local
+ * - remote-only: 仅远程 / Remote only
+ */
 export type GatewayRemoteCredentialFallback = "remote-env-local" | "remote-only";
 
+// 网关密钥引用不可用错误代码 / Gateway secret reference unavailable error code
 const GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE = "GATEWAY_SECRET_REF_UNAVAILABLE"; // pragma: allowlist secret
 
+/**
+ * 网关密钥引用不可用错误 / Gateway secret reference unavailable error
+ * 当配置的密钥引用在当前命令路径中不可用时抛出
+ * Thrown when a configured secret reference is unavailable in the current command path
+ */
 export class GatewaySecretRefUnavailableError extends Error {
+  /** 错误代码 / Error code */
   readonly code = GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE;
+  /** 密钥路径 / Secret path */
   readonly path: string;
 
   constructor(path: string) {
     super(
       [
+        // 错误信息：密钥引用不可用 / Error message: secret reference unavailable
         `${path} is configured as a secret reference but is unavailable in this command path.`,
+        // 修复建议 / Fix suggestions
         "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass explicit --token/--password,",
         "or run a gateway command path that resolves secret references before credential selection.",
       ].join("\n"),
@@ -50,6 +95,12 @@ export class GatewaySecretRefUnavailableError extends Error {
   }
 }
 
+/**
+ * 检查是否为网关密钥引用不可用错误 / Check if it's a gateway secret reference unavailable error
+ * @param error - 错误对象 / Error object
+ * @param expectedPath - 预期的路径（可选）/ Expected path (optional)
+ * @returns 是否为该错误 / Whether it's this error
+ */
 export function isGatewaySecretRefUnavailableError(
   error: unknown,
   expectedPath?: string,
@@ -63,6 +114,11 @@ export function isGatewaySecretRefUnavailableError(
   return error.path === expectedPath;
 }
 
+/**
+ * 获取第一个定义的值 / Get first defined value
+ * @param values - 值数组 / Array of values
+ * @returns 第一个定义的值或 undefined / First defined value or undefined
+ */
 function firstDefined(values: Array<string | undefined>): string | undefined {
   for (const value of values) {
     if (value) {
@@ -72,31 +128,59 @@ function firstDefined(values: Array<string | undefined>): string | undefined {
   return undefined;
 }
 
+/**
+ * 抛出未解析的网关密钥输入错误 / Throw unresolved gateway secret input error
+ * @param path - 密钥路径 / Secret path
+ * @throws GatewaySecretRefUnavailableError
+ */
 function throwUnresolvedGatewaySecretInput(path: string): never {
   throw new GatewaySecretRefUnavailableError(path);
 }
 
+/**
+ * 从值解析网关凭据 / Resolve gateway credentials from values
+ * 根据配置值和环境变量解析网关认证凭据
+ * Resolves gateway authentication credentials based on configuration values and environment variables
+ *
+ * @param params - 参数对象 / Parameter object
+ * @returns 已解析的凭据 / Resolved credentials
+ */
 export function resolveGatewayCredentialsFromValues(params: {
+  /** 配置令牌 / Config token */
   configToken?: unknown;
+  /** 配置密码 / Config password */
   configPassword?: unknown;
+  /** 环境变量 / Environment variables */
   env?: NodeJS.ProcessEnv;
+  /** 是否包含旧版环境变量 / Whether to include legacy environment variables */
   includeLegacyEnv?: boolean;
+  /** 令牌优先级 / Token precedence */
   tokenPrecedence?: GatewayCredentialPrecedence;
+  /** 密码优先级 / Password precedence */
   passwordPrecedence?: GatewayCredentialPrecedence;
 }): ResolvedGatewayCredentials {
   const env = params.env ?? process.env;
   const includeLegacyEnv = params.includeLegacyEnv ?? true;
+
+  // 读取环境变量中的凭据 / Read credentials from environment variables
   const envToken = readGatewayTokenEnv(env, includeLegacyEnv);
   const envPassword = readGatewayPasswordEnv(env, includeLegacyEnv);
+
+  // 规范化配置凭据 / Normalize config credentials
   const configToken = trimCredentialToUndefined(params.configToken);
   const configPassword = trimCredentialToUndefined(params.configPassword);
+
+  // 获取优先级设置 / Get precedence settings
   const tokenPrecedence = params.tokenPrecedence ?? "env-first";
   const passwordPrecedence = params.passwordPrecedence ?? "env-first";
 
+  // 根据优先级解析令牌 / Resolve token based on precedence
   const token =
     tokenPrecedence === "config-first"
       ? firstDefined([configToken, envToken])
       : firstDefined([envToken, configToken]);
+
+  // 根据优先级解析密码 / Resolve password based on precedence
   const password =
     passwordPrecedence === "config-first" // pragma: allowlist secret
       ? firstDefined([configPassword, envPassword])

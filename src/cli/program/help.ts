@@ -18,29 +18,29 @@ const ROOT_COMMANDS_WITH_SUBCOMMANDS = new Set([
   ...getSubCliCommandsWithSubcommands(),
 ]);
 const ROOT_COMMANDS_HINT =
-  "Hint: commands suffixed with * have subcommands. Run <command> --help for details.";
+  "带 * 的命令有子命令，运行 <command> --help 查看详情 / Commands with * have subcommands. Run <command> --help for details.";
 
 const EXAMPLES = [
-  ["openclaw models --help", "Show detailed help for the models command."],
+  ["openclaw models --help", "显示 models 命令详细帮助 / Show detailed help for models command."],
   [
     "openclaw channels login --verbose",
-    "Link personal WhatsApp Web and show QR + connection logs.",
+    "链接个人 WhatsApp 并显示 QR 码 / Link personal WhatsApp and show QR + logs.",
   ],
   [
     'openclaw message send --target +15555550123 --message "Hi" --json',
-    "Send via your web session and print JSON result.",
+    "发送消息并打印 JSON 结果 / Send message and print JSON result.",
   ],
-  ["openclaw gateway --port 18789", "Run the WebSocket Gateway locally."],
-  ["openclaw --dev gateway", "Run a dev Gateway (isolated state/config) on ws://127.0.0.1:19001."],
-  ["openclaw gateway --force", "Kill anything bound to the default gateway port, then start it."],
-  ["openclaw gateway ...", "Gateway control via WebSocket."],
+  ["openclaw gateway --port 18789", "本地运行 WebSocket 网关 / Run WebSocket Gateway locally."],
+  ["openclaw --dev gateway", "开发模式网关（隔离状态） / Dev Gateway (isolated state/config)."],
+  ["openclaw gateway --force", "强制启动网关（杀死占用端口的进程）/ Force start gateway."],
+  ["openclaw gateway ...", "通过 WebSocket 控制网关 / Gateway control via WebSocket."],
   [
     'openclaw agent --to +15555550123 --message "Run summary" --deliver',
-    "Talk directly to the agent using the Gateway; optionally send the WhatsApp reply.",
+    "直接与代理对话并可选发送回复 / Talk to agent, optionally send reply.",
   ],
   [
     'openclaw message send --channel telegram --target @mychat --message "Hi"',
-    "Send via your Telegram bot.",
+    "通过 Telegram 机器人发送 / Send via Telegram bot.",
   ],
 ] as const;
 
@@ -51,21 +51,21 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     .version(ctx.programVersion)
     .option(
       "--dev",
-      "Dev profile: isolate state under ~/.openclaw-dev, default gateway port 19001, and shift derived ports (browser/canvas)",
+      "开发模式：独立状态存储于 ~/.openclaw-dev，默认网关端口 19001 / Dev profile: isolate state under ~/.openclaw-dev, default gateway port 19001",
     )
     .option(
       "--profile <name>",
-      "Use a named profile (isolates OPENCLAW_STATE_DIR/OPENCLAW_CONFIG_PATH under ~/.openclaw-<name>)",
+      "使用命名配置（隔离状态和配置） / Use a named profile (isolates state/config under ~/.openclaw-<name>)",
     )
     .option(
       "--log-level <level>",
-      `Global log level override for file + console (${CLI_LOG_LEVEL_VALUES})`,
+      `日志级别 (${CLI_LOG_LEVEL_VALUES}) / Log level override`,
       parseCliLogLevelOption,
     );
 
-  program.option("--no-color", "Disable ANSI colors", false);
-  program.helpOption("-h, --help", "Display help for command");
-  program.helpCommand("help [command]", "Display help for command");
+  program.option("--no-color", "禁用彩色输出 / Disable ANSI colors", false);
+  program.helpOption("-h, --help", "显示帮助 / Display help for command");
+  program.helpCommand("help [command]", "显示命令帮助 / Display help for command");
 
   program.configureHelp({
     // sort options and subcommands alphabetically
