@@ -5,8 +5,22 @@ vi.mock("../pi-model-discovery.js", () => ({
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 
+import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
+
+const mockGetOpenRouterModelCapabilities = vi.fn<
+  (modelId: string) => OpenRouterModelCapabilities | undefined
+>(() => undefined);
+const mockLoadOpenRouterModelCapabilities = vi.fn<(modelId: string) => Promise<void>>(
+  async () => {},
+);
+vi.mock("./openrouter-model-capabilities.js", () => ({
+  getOpenRouterModelCapabilities: (modelId: string) => mockGetOpenRouterModelCapabilities(modelId),
+  loadOpenRouterModelCapabilities: (modelId: string) =>
+    mockLoadOpenRouterModelCapabilities(modelId),
+}));
+
 import type { OpenClawConfig } from "../../config/config.js";
-import { buildInlineProviderModels, resolveModel } from "./model.js";
+import { buildInlineProviderModels, resolveModel, resolveModelAsync } from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
@@ -17,6 +31,10 @@ import {
 
 beforeEach(() => {
   resetMockDiscoverModels();
+  mockGetOpenRouterModelCapabilities.mockReset();
+  mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
+  mockLoadOpenRouterModelCapabilities.mockReset();
+  mockLoadOpenRouterModelCapabilities.mockResolvedValue();
 });
 
 function buildForwardCompatTemplate(params: {
@@ -25,6 +43,7 @@ function buildForwardCompatTemplate(params: {
   provider: string;
   api: "anthropic-messages" | "google-gemini-cli" | "openai-completions" | "openai-responses";
   baseUrl: string;
+  reasoning?: boolean;
   input?: readonly ["text"] | readonly ["text", "image"];
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow?: number;
@@ -36,7 +55,7 @@ function buildForwardCompatTemplate(params: {
     provider: params.provider,
     api: params.api,
     baseUrl: params.baseUrl,
-    reasoning: true,
+    reasoning: params.reasoning ?? true,
     input: params.input ?? (["text", "image"] as const),
     cost: params.cost ?? { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
     contextWindow: params.contextWindow ?? 200000,
@@ -180,7 +199,7 @@ describe("buildInlineProviderModels", () => {
     expect(result[0].headers).toBeUndefined();
   });
 
-  it("preserves literal marker-shaped headers in inline provider models", () => {
+  it("drops SecretRef marker headers in inline provider models", () => {
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
         headers: {
@@ -196,14 +215,48 @@ describe("buildInlineProviderModels", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].headers).toEqual({
-      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
-      "X-Managed": "secretref-managed",
       "X-Static": "tenant-a",
     });
   });
 });
 
 describe("resolveModel", () => {
+  it("defaults model input to text when discovery omits input", () => {
+    mockDiscoveredModel({
+      provider: "custom",
+      modelId: "missing-input",
+      templateModel: {
+        id: "missing-input",
+        name: "missing-input",
+        api: "openai-completions",
+        provider: "custom",
+        baseUrl: "http://localhost:9999",
+        reasoning: false,
+        // NOTE: deliberately omit input to simulate buggy/custom catalogs.
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 1024,
+      },
+    });
+
+    const result = resolveModel("custom", "missing-input", "/tmp/agent", {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9999",
+            api: "openai-completions",
+            // Intentionally keep this minimal — the discovered model provides the rest.
+            models: [{ id: "missing-input", name: "missing-input" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(result.error).toBeUndefined();
+    expect(Array.isArray(result.model?.input)).toBe(true);
+    expect(result.model?.input).toEqual(["text"]);
+  });
+
   it("includes provider baseUrl in fallback model", () => {
     const cfg = {
       models: {
@@ -245,7 +298,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("preserves literal marker-shaped provider headers in fallback models", () => {
+  it("drops SecretRef marker provider headers in fallback models", () => {
     const cfg = {
       models: {
         providers: {
@@ -266,8 +319,6 @@ describe("resolveModel", () => {
 
     expect(result.error).toBeUndefined();
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
-      Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
-      "X-Managed": "secretref-managed",
       "X-Custom-Auth": "token-123",
     });
   });
@@ -348,6 +399,141 @@ describe("resolveModel", () => {
     const result = resolveModel("custom", "model-b", "/tmp/agent", cfg);
 
     expect(result.model?.reasoning).toBe(true);
+  });
+
+  it("matches prefixed OpenRouter native ids in configured fallback models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("openrouter/healer-alpha"),
+                reasoning: true,
+                input: ["text", "image"],
+                contextWindow: 262144,
+                maxTokens: 65536,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openrouter", "openrouter/healer-alpha", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openrouter/healer-alpha",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 262144,
+      maxTokens: 65536,
+    });
+  });
+
+  it("uses OpenRouter API capabilities for unknown models when cache is populated", () => {
+    mockGetOpenRouterModelCapabilities.mockReturnValue({
+      name: "Healer Alpha",
+      input: ["text", "image"],
+      reasoning: true,
+      contextWindow: 262144,
+      maxTokens: 65536,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+
+    const result = resolveModel("openrouter", "openrouter/healer-alpha", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openrouter/healer-alpha",
+      name: "Healer Alpha",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 262144,
+      maxTokens: 65536,
+    });
+  });
+
+  it("falls back to text-only when OpenRouter API cache is empty", () => {
+    mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
+
+    const result = resolveModel("openrouter", "openrouter/healer-alpha", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openrouter/healer-alpha",
+      reasoning: false,
+      input: ["text"],
+    });
+  });
+
+  it("preloads OpenRouter capabilities before first async resolve of an unknown model", async () => {
+    mockLoadOpenRouterModelCapabilities.mockImplementation(async (modelId) => {
+      if (modelId === "google/gemini-3.1-flash-image-preview") {
+        mockGetOpenRouterModelCapabilities.mockReturnValue({
+          name: "Google: Nano Banana 2 (Gemini 3.1 Flash Image Preview)",
+          input: ["text", "image"],
+          reasoning: true,
+          contextWindow: 65536,
+          maxTokens: 65536,
+          cost: { input: 0.5, output: 3, cacheRead: 0, cacheWrite: 0 },
+        });
+      }
+    });
+
+    const result = await resolveModelAsync(
+      "openrouter",
+      "google/gemini-3.1-flash-image-preview",
+      "/tmp/agent",
+    );
+
+    expect(mockLoadOpenRouterModelCapabilities).toHaveBeenCalledWith(
+      "google/gemini-3.1-flash-image-preview",
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "google/gemini-3.1-flash-image-preview",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 65536,
+      maxTokens: 65536,
+    });
+  });
+
+  it("skips OpenRouter preload for models already present in the registry", async () => {
+    mockDiscoveredModel({
+      provider: "openrouter",
+      modelId: "openrouter/healer-alpha",
+      templateModel: {
+        id: "openrouter/healer-alpha",
+        name: "Healer Alpha",
+        api: "openai-completions",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262144,
+        maxTokens: 65536,
+      },
+    });
+
+    const result = await resolveModelAsync("openrouter", "openrouter/healer-alpha", "/tmp/agent");
+
+    expect(mockLoadOpenRouterModelCapabilities).not.toHaveBeenCalled();
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openrouter/healer-alpha",
+      input: ["text", "image"],
+    });
   });
 
   it("prefers configured provider api metadata over discovered registry model", () => {
@@ -480,6 +666,60 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
   });
 
+  it("builds an openai-codex fallback for gpt-5.3-codex-spark", () => {
+    mockOpenAICodexTemplateModel();
+
+    const result = resolveModel("openai-codex", "gpt-5.3-codex-spark", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject(
+      buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex-spark"),
+    );
+  });
+
+  it("keeps openai-codex gpt-5.3-codex-spark when discovery provides it", () => {
+    mockDiscoveredModel({
+      provider: "openai-codex",
+      modelId: "gpt-5.3-codex-spark",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex-spark"),
+        name: "GPT-5.3 Codex Spark",
+        input: ["text"],
+      },
+    });
+
+    const result = resolveModel("openai-codex", "gpt-5.3-codex-spark", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.3-codex-spark",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
+  });
+
+  it("rejects stale direct openai gpt-5.3-codex-spark discovery rows", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5.3-codex-spark",
+        name: "GPT-5.3 Codex Spark",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.3-codex-spark", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+    );
+  });
+
   it("applies provider overrides to openai gpt-5.4 forward-compat models", () => {
     mockDiscoveredModel({
       provider: "openai",
@@ -513,8 +753,116 @@ describe("resolveModel", () => {
       api: "openai-responses",
       baseUrl: "https://proxy.example.com/v1",
     });
-    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
-      "X-Proxy-Auth": "token-123",
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toMatchObject(
+      {
+        "X-Proxy-Auth": "token-123",
+      },
+    );
+  });
+
+  it("applies configured overrides to github-copilot dynamic models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "https://proxy.example.com/v1",
+            api: "openai-completions",
+            headers: { "X-Proxy-Auth": "token-123" },
+            models: [
+              {
+                ...makeModel("gpt-5.4-mini"),
+                reasoning: true,
+                input: ["text"],
+                contextWindow: 256000,
+                maxTokens: 32000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("github-copilot", "gpt-5.4-mini", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "github-copilot",
+      id: "gpt-5.4-mini",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 256000,
+      maxTokens: 32000,
+    });
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toMatchObject(
+      {
+        "X-Proxy-Auth": "token-123",
+      },
+    );
+  });
+
+  it("builds an openai fallback for gpt-5.4 mini from the gpt-5-mini template", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5-mini",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5-mini",
+        name: "GPT-5 mini",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4-mini", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4-mini",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("builds an openai fallback for gpt-5.4 nano from the gpt-5-nano template", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5-nano",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5-nano",
+        name: "GPT-5 nano",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4-nano", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4-nano",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      maxTokens: 128_000,
     });
   });
 
@@ -657,6 +1005,45 @@ describe("resolveModel", () => {
 
   it("keeps unknown-model errors for non-gpt-5 openai-codex ids", () => {
     expectUnknownModelError("openai-codex", "gpt-4.1-mini");
+  });
+
+  it("rejects direct openai gpt-5.3-codex-spark with a codex-only hint", () => {
+    const result = resolveModel("openai", "gpt-5.3-codex-spark", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+    );
+  });
+
+  it("keeps suppressed openai gpt-5.3-codex-spark from falling through provider fallback", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-responses",
+            models: [{ ...makeModel("gpt-4.1"), api: "openai-responses" }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openai", "gpt-5.3-codex-spark", "/tmp/agent", cfg);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+    );
+  });
+
+  it("rejects azure openai gpt-5.3-codex-spark with a codex-only hint", () => {
+    const result = resolveModel("azure-openai-responses", "gpt-5.3-codex-spark", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: azure-openai-responses/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+    );
   });
 
   it("uses codex fallback even when openai-codex provider is configured", () => {
@@ -846,6 +1233,44 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
       "X-Custom-Auth": "token-123",
+    });
+  });
+
+  it("lets provider config override registry-found kimi user agent headers", () => {
+    mockDiscoveredModel({
+      provider: "kimi",
+      modelId: "kimi-code",
+      templateModel: {
+        ...buildForwardCompatTemplate({
+          id: "kimi-code",
+          name: "Kimi Code",
+          provider: "kimi",
+          api: "anthropic-messages",
+          baseUrl: "https://api.kimi.com/coding/",
+        }),
+        headers: { "User-Agent": "claude-code/0.1.0" },
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          kimi: {
+            headers: {
+              "User-Agent": "custom-kimi-client/1.0",
+              "X-Kimi-Tenant": "tenant-a",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("kimi", "kimi-code", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect(result.model?.id).toBe("kimi-for-coding");
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "User-Agent": "custom-kimi-client/1.0",
+      "X-Kimi-Tenant": "tenant-a",
     });
   });
 

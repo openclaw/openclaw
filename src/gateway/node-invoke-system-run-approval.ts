@@ -1,5 +1,5 @@
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
-import { resolveSystemRunCommand } from "../infra/system-run-command.js";
+import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 import {
   systemRunApprovalGuardError,
@@ -117,7 +117,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   const next: Record<string, unknown> = pickSystemRunParams(obj);
 
   if (!wantsApprovalOverride) {
-    const cmdTextResolution = resolveSystemRunCommand({
+    const cmdTextResolution = resolveSystemRunCommandRequest({
       command: p.command,
       rawCommand: p.rawCommand,
     });
@@ -230,8 +230,8 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   if (runtimeContext.plan) {
     next.command = [...runtimeContext.plan.argv];
     next.systemRunPlan = runtimeContext.plan;
-    if (runtimeContext.rawCommand) {
-      next.rawCommand = runtimeContext.rawCommand;
+    if (runtimeContext.commandText) {
+      next.rawCommand = runtimeContext.commandText;
     } else {
       delete next.rawCommand;
     }

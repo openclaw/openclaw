@@ -75,7 +75,7 @@ class ChatController(
   fun load(sessionKey: String) {
     val key = sessionKey.trim().ifEmpty { "main" }
     _sessionKey.value = key
-    scope.launch { bootstrap(forceHealth = true) }
+    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
   }
 
   fun applyMainSessionKey(mainSessionKey: String) {
@@ -84,11 +84,11 @@ class ChatController(
     if (_sessionKey.value == trimmed) return
     if (_sessionKey.value != "main") return
     _sessionKey.value = trimmed
-    scope.launch { bootstrap(forceHealth = true) }
+    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
   }
 
   fun refresh() {
-    scope.launch { bootstrap(forceHealth = true) }
+    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
   }
 
   fun refreshSessions(limit: Int? = null) {
@@ -106,7 +106,9 @@ class ChatController(
     if (key.isEmpty()) return
     if (key == _sessionKey.value) return
     _sessionKey.value = key
-    scope.launch { bootstrap(forceHealth = true) }
+    // Keep the thread switch path lean: history + health are needed immediately,
+    // but the session list is usually unchanged and can refresh on explicit pull-to-refresh.
+    scope.launch { bootstrap(forceHealth = true, refreshSessions = false) }
   }
 
   fun sendMessage(
@@ -249,7 +251,7 @@ class ChatController(
     }
   }
 
-  private suspend fun bootstrap(forceHealth: Boolean) {
+  private suspend fun bootstrap(forceHealth: Boolean, refreshSessions: Boolean) {
     _errorText.value = null
     _healthOk.value = false
     clearPendingRuns()
@@ -265,13 +267,15 @@ class ChatController(
       }
 
       val historyJson = session.request("chat.history", """{"sessionKey":"$key"}""")
-      val history = parseHistory(historyJson, sessionKey = key)
+      val history = parseHistory(historyJson, sessionKey = key, previousMessages = _messages.value)
       _messages.value = history.messages
       _sessionId.value = history.sessionId
       history.thinkingLevel?.trim()?.takeIf { it.isNotEmpty() }?.let { _thinkingLevel.value = it }
 
       pollHealthIfNeeded(force = forceHealth)
-      fetchSessions(limit = 50)
+      if (refreshSessions) {
+        fetchSessions(limit = 50)
+      }
     } catch (err: Throwable) {
       _errorText.value = err.message
     }
@@ -336,7 +340,7 @@ class ChatController(
           try {
             val historyJson =
               session.request("chat.history", """{"sessionKey":"${_sessionKey.value}"}""")
-            val history = parseHistory(historyJson, sessionKey = _sessionKey.value)
+            val history = parseHistory(historyJson, sessionKey = _sessionKey.value, previousMessages = _messages.value)
             _messages.value = history.messages
             _sessionId.value = history.sessionId
             history.thinkingLevel?.trim()?.takeIf { it.isNotEmpty() }?.let { _thinkingLevel.value = it }
@@ -450,7 +454,11 @@ class ChatController(
     }
   }
 
-  private fun parseHistory(historyJson: String, sessionKey: String): ChatHistory {
+  private fun parseHistory(
+    historyJson: String,
+    sessionKey: String,
+    previousMessages: List<ChatMessage>,
+  ): ChatHistory {
     val root = json.parseToJsonElement(historyJson).asObjectOrNull() ?: return ChatHistory(sessionKey, null, null, emptyList())
     val sid = root["sessionId"].asStringOrNull()
     val thinkingLevel = root["thinkingLevel"].asStringOrNull()
@@ -470,7 +478,12 @@ class ChatController(
         )
       }
 
-    return ChatHistory(sessionKey = sessionKey, sessionId = sid, thinkingLevel = thinkingLevel, messages = messages)
+    return ChatHistory(
+      sessionKey = sessionKey,
+      sessionId = sid,
+      thinkingLevel = thinkingLevel,
+      messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
+    )
   }
 
   private fun parseMessageContent(el: JsonElement): ChatMessageContent? {
@@ -517,6 +530,47 @@ class ChatController(
       else -> "off"
     }
   }
+}
+
+internal fun reconcileMessageIds(previous: List<ChatMessage>, incoming: List<ChatMessage>): List<ChatMessage> {
+  if (previous.isEmpty() || incoming.isEmpty()) return incoming
+
+  val idsByKey = LinkedHashMap<String, ArrayDeque<String>>()
+  for (message in previous) {
+    val key = messageIdentityKey(message) ?: continue
+    idsByKey.getOrPut(key) { ArrayDeque() }.addLast(message.id)
+  }
+
+  return incoming.map { message ->
+    val key = messageIdentityKey(message) ?: return@map message
+    val ids = idsByKey[key] ?: return@map message
+    val reusedId = ids.removeFirstOrNull() ?: return@map message
+    if (ids.isEmpty()) {
+      idsByKey.remove(key)
+    }
+    if (reusedId == message.id) return@map message
+    message.copy(id = reusedId)
+  }
+}
+
+internal fun messageIdentityKey(message: ChatMessage): String? {
+  val role = message.role.trim().lowercase()
+  if (role.isEmpty()) return null
+
+  val timestamp = message.timestampMs?.toString().orEmpty()
+  val contentFingerprint =
+    message.content.joinToString(separator = "\u001E") { part ->
+      listOf(
+        part.type.trim().lowercase(),
+        part.text?.trim().orEmpty(),
+        part.mimeType?.trim()?.lowercase().orEmpty(),
+        part.fileName?.trim().orEmpty(),
+        part.base64?.hashCode()?.toString().orEmpty(),
+      ).joinToString(separator = "\u001F")
+    }
+
+  if (timestamp.isEmpty() && contentFingerprint.isEmpty()) return null
+  return listOf(role, timestamp, contentFingerprint).joinToString(separator = "|")
 }
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject

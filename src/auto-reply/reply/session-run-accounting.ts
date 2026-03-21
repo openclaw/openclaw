@@ -8,6 +8,7 @@ type IncrementRunCompactionCountParams = Omit<
   Parameters<typeof incrementCompactionCount>[0],
   "tokensAfter"
 > & {
+  amount?: number;
   lastCallUsage?: NormalizedUsage;
   contextTokensUsed?: number;
 };
@@ -30,6 +31,7 @@ export async function incrementRunCompactionCount(
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
+    amount: params.amount,
     tokensAfter: tokensAfterCompaction,
   });
 }

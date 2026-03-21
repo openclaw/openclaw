@@ -3,6 +3,7 @@ import { CHANNEL_IDS } from "../channels/registry.js";
 import { VERSION } from "../version.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
 import { applySensitiveHints, buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
+import { findWildcardHintMatch, schemaHasChildren } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -449,6 +450,7 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
 export function buildConfigSchema(params?: {
   plugins?: PluginUiMetadata[];
   channels?: ChannelUiMetadata[];
+  cache?: boolean;
 }): ConfigSchemaResponse {
   const base = buildBaseConfigSchema();
   const plugins = params?.plugins ?? [];
@@ -456,10 +458,13 @@ export function buildConfigSchema(params?: {
   if (plugins.length === 0 && channels.length === 0) {
     return base;
   }
-  const cacheKey = buildMergedSchemaCacheKey({ plugins, channels });
-  const cached = mergedSchemaCache.get(cacheKey);
-  if (cached) {
-    return cached;
+  const useCache = params?.cache !== false;
+  const cacheKey = useCache ? buildMergedSchemaCacheKey({ plugins, channels }) : null;
+  if (cacheKey) {
+    const cached = mergedSchemaCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
   }
   const mergedWithoutSensitiveHints = applyHeartbeatTargetHints(
     applyChannelHints(applyPluginHints(base.uiHints, plugins), channels),
@@ -479,7 +484,9 @@ export function buildConfigSchema(params?: {
     schema: mergedSchema,
     uiHints: mergedHints,
   };
-  setMergedSchemaCache(cacheKey, merged);
+  if (cacheKey) {
+    setMergedSchemaCache(cacheKey, merged);
+  }
   return merged;
 }
 
@@ -500,52 +507,11 @@ function resolveUiHintMatch(
   uiHints: ConfigUiHints,
   path: string,
 ): { path: string; hint: ConfigUiHint } | null {
-  const targetParts = splitLookupPath(path);
-  let best: { path: string; hint: ConfigUiHint; wildcardCount: number } | null = null;
-
-  for (const [hintPath, hint] of Object.entries(uiHints)) {
-    const hintParts = splitLookupPath(hintPath);
-    if (hintParts.length !== targetParts.length) {
-      continue;
-    }
-
-    let wildcardCount = 0;
-    let matches = true;
-    for (let index = 0; index < hintParts.length; index += 1) {
-      const hintPart = hintParts[index];
-      const targetPart = targetParts[index];
-      if (hintPart === targetPart) {
-        continue;
-      }
-      if (hintPart === "*") {
-        wildcardCount += 1;
-        continue;
-      }
-      matches = false;
-      break;
-    }
-    if (!matches) {
-      continue;
-    }
-    if (!best || wildcardCount < best.wildcardCount) {
-      best = { path: hintPath, hint, wildcardCount };
-    }
-  }
-
-  return best ? { path: best.path, hint: best.hint } : null;
-}
-
-function schemaHasChildren(schema: JsonSchemaObject): boolean {
-  if (schema.properties && Object.keys(schema.properties).length > 0) {
-    return true;
-  }
-  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
-    return true;
-  }
-  if (Array.isArray(schema.items)) {
-    return schema.items.some((entry) => typeof entry === "object" && entry !== null);
-  }
-  return Boolean(schema.items && typeof schema.items === "object");
+  return findWildcardHintMatch({
+    uiHints,
+    path,
+    splitPath: splitLookupPath,
+  });
 }
 
 function resolveItemsSchema(schema: JsonSchemaObject, index?: number): JsonSchemaObject | null {

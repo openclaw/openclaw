@@ -64,6 +64,7 @@ public actor GatewayNodeSession {
     private var channel: GatewayChannelActor?
     private var activeURL: URL?
     private var activeToken: String?
+    private var activeBootstrapToken: String?
     private var activePassword: String?
     private var activeConnectOptionsKey: String?
     private var connectOptions: GatewayConnectOptions?
@@ -194,6 +195,7 @@ public actor GatewayNodeSession {
     public func connect(
         url: URL,
         token: String?,
+        bootstrapToken: String?,
         password: String?,
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
@@ -204,6 +206,7 @@ public actor GatewayNodeSession {
         let nextOptionsKey = self.connectOptionsKey(connectOptions)
         let shouldReconnect = self.activeURL != url ||
             self.activeToken != token ||
+            self.activeBootstrapToken != bootstrapToken ||
             self.activePassword != password ||
             self.activeConnectOptionsKey != nextOptionsKey ||
             self.channel == nil
@@ -221,6 +224,7 @@ public actor GatewayNodeSession {
             let channel = GatewayChannelActor(
                 url: url,
                 token: token,
+                bootstrapToken: bootstrapToken,
                 password: password,
                 session: sessionBox,
                 pushHandler: { [weak self] push in
@@ -233,6 +237,7 @@ public actor GatewayNodeSession {
             self.channel = channel
             self.activeURL = url
             self.activeToken = token
+            self.activeBootstrapToken = bootstrapToken
             self.activePassword = password
             self.activeConnectOptionsKey = nextOptionsKey
         }
@@ -257,6 +262,7 @@ public actor GatewayNodeSession {
         self.channel = nil
         self.activeURL = nil
         self.activeToken = nil
+        self.activeBootstrapToken = nil
         self.activePassword = nil
         self.activeConnectOptionsKey = nil
         self.hasEverConnected = false

@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as normalize from "./normalize.js";
-import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 
 vi.mock("./normalize.js");
 vi.mock("../infra/outbound/target-errors.js", () => ({
   missingTargetError: (platform: string, format: string) => new Error(`${platform}: ${format}`),
 }));
+
+let resolveWhatsAppOutboundTarget: typeof import("./resolve-outbound-target.js").resolveWhatsAppOutboundTarget;
 
 type ResolveParams = Parameters<typeof resolveWhatsAppOutboundTarget>[0];
 const PRIMARY_TARGET = "+11234567890";
@@ -62,8 +63,10 @@ function expectDeniedForTarget(params: {
 }
 
 describe("resolveWhatsAppOutboundTarget", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.resetAllMocks();
+    ({ resolveWhatsAppOutboundTarget } = await import("./resolve-outbound-target.js"));
   });
 
   describe("empty/missing to parameter", () => {

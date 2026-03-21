@@ -10,8 +10,8 @@ import { defaultRuntime } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
-import { resolveOnboardingSecretInputString } from "../wizard/onboarding.secret-input.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
+import { resolveSetupSecretInputString } from "../wizard/setup.secret-input.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -37,7 +37,6 @@ import {
   DEFAULT_WORKSPACE,
   ensureWorkspaceAndSessions,
   guardCancel,
-  printWizardHeader,
   probeGatewayReachable,
   resolveControlUiLinks,
   summarizeExistingConfig,
@@ -54,7 +53,7 @@ async function resolveGatewaySecretInputForWizard(params: {
   path: string;
 }): Promise<string | undefined> {
   try {
-    return await resolveOnboardingSecretInputString({
+    return await resolveSetupSecretInputString({
       config: params.cfg,
       value: params.value,
       path: params.path,
@@ -167,31 +166,30 @@ async function promptWebToolsConfig(
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
   const {
-    SEARCH_PROVIDER_OPTIONS,
+    resolveSearchProviderOptions,
     resolveExistingKey,
     hasExistingKey,
     applySearchKey,
+    applySearchProviderSelection,
     hasKeyInEnv,
   } = await import("./onboard-search.js");
-  type SP = (typeof SEARCH_PROVIDER_OPTIONS)[number]["value"];
+  const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
+  const defaultProvider = searchProviderOptions[0]?.id;
 
   const hasKeyForProvider = (provider: string): boolean => {
-    const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === provider);
+    const entry = searchProviderOptions.find((e) => e.id === provider);
     if (!entry) {
       return false;
     }
-    return hasExistingKey(nextConfig, provider as SP) || hasKeyInEnv(entry);
+    return hasExistingKey(nextConfig, provider) || hasKeyInEnv(entry);
   };
 
-  const existingProvider: string = (() => {
+  const existingProvider = (() => {
     const stored = existingSearch?.provider;
-    if (stored && SEARCH_PROVIDER_OPTIONS.some((e) => e.value === stored)) {
+    if (stored && searchProviderOptions.some((e) => e.id === stored)) {
       return stored;
     }
-    return (
-      SEARCH_PROVIDER_OPTIONS.find((e) => hasKeyForProvider(e.value))?.value ??
-      SEARCH_PROVIDER_OPTIONS[0].value
-    );
+    return searchProviderOptions.find((e) => hasKeyForProvider(e.id))?.id ?? defaultProvider;
   })();
 
   note(
@@ -207,7 +205,7 @@ async function promptWebToolsConfig(
     await confirm({
       message: "Enable web_search?",
       initialValue:
-        existingSearch?.enabled ?? SEARCH_PROVIDER_OPTIONS.some((e) => hasKeyForProvider(e.value)),
+        existingSearch?.enabled ?? searchProviderOptions.some((e) => hasKeyForProvider(e.id)),
     }),
     runtime,
   );
@@ -216,64 +214,83 @@ async function promptWebToolsConfig(
     ...existingSearch,
     enabled: enableSearch,
   };
+  let workingConfig = nextConfig;
 
   if (enableSearch) {
-    const providerOptions = SEARCH_PROVIDER_OPTIONS.map((entry) => {
-      const configured = hasKeyForProvider(entry.value);
-      return {
-        value: entry.value,
-        label: entry.label,
-        hint: configured ? `${entry.hint} · configured` : entry.hint,
-      };
-    });
-
-    const providerChoice = guardCancel(
-      await select({
-        message: "Choose web search provider",
-        options: providerOptions,
-        initialValue: existingProvider,
-      }),
-      runtime,
-    );
-
-    nextSearch = { ...nextSearch, provider: providerChoice };
-
-    const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === providerChoice)!;
-    const existingKey = resolveExistingKey(nextConfig, providerChoice as SP);
-    const keyConfigured = hasExistingKey(nextConfig, providerChoice as SP);
-    const envAvailable = entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
-    const envVarNames = entry.envKeys.join(" / ");
-
-    const keyInput = guardCancel(
-      await text({
-        message: keyConfigured
-          ? envAvailable
-            ? `${entry.label} API key (leave blank to keep current or use ${envVarNames})`
-            : `${entry.label} API key (leave blank to keep current)`
-          : envAvailable
-            ? `${entry.label} API key (paste it here; leave blank to use ${envVarNames})`
-            : `${entry.label} API key`,
-        placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
-      }),
-      runtime,
-    );
-    const key = String(keyInput ?? "").trim();
-
-    if (key || existingKey) {
-      const applied = applySearchKey(nextConfig, providerChoice as SP, (key || existingKey)!);
-      nextSearch = { ...applied.tools?.web?.search };
-    } else if (keyConfigured || envAvailable) {
-      nextSearch = { ...nextSearch };
-    } else {
+    if (searchProviderOptions.length === 0) {
       note(
         [
-          "No key stored yet — web_search won't work until a key is available.",
-          `Store a key here or set ${envVarNames} in the Gateway environment.`,
-          `Get your API key at: ${entry.signupUrl}`,
+          "No web search providers are currently available under this plugin policy.",
+          "Enable plugins or remove deny rules, then rerun configure.",
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
         "Web search",
       );
+      nextSearch = {
+        ...existingSearch,
+        enabled: false,
+      };
+    } else {
+      const providerOptions = searchProviderOptions.map((entry) => {
+        const configured = hasKeyForProvider(entry.id);
+        return {
+          value: entry.id,
+          label: entry.label,
+          hint: configured ? `${entry.hint} · configured` : entry.hint,
+        };
+      });
+
+      const providerChoice = guardCancel(
+        await select({
+          message: "Choose web search provider",
+          options: providerOptions,
+          initialValue: existingProvider,
+        }),
+        runtime,
+      );
+
+      nextSearch = { ...nextSearch, provider: providerChoice };
+
+      const entry = searchProviderOptions.find((e) => e.id === providerChoice)!;
+      const credentialLabel = entry.credentialLabel?.trim() || `${entry.label} API key`;
+      const existingKey = resolveExistingKey(nextConfig, providerChoice);
+      const keyConfigured = hasExistingKey(nextConfig, providerChoice);
+      const envAvailable = entry.envVars.some((k) => Boolean(process.env[k]?.trim()));
+      const envVarNames = entry.envVars.join(" / ");
+
+      const keyInput = guardCancel(
+        await text({
+          message: keyConfigured
+            ? envAvailable
+              ? `${credentialLabel} (leave blank to keep current or use ${envVarNames})`
+              : `${credentialLabel} (leave blank to keep current)`
+            : envAvailable
+              ? `${credentialLabel} (paste it here; leave blank to use ${envVarNames})`
+              : credentialLabel,
+          placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
+        }),
+        runtime,
+      );
+      const key = String(keyInput ?? "").trim();
+
+      if (key || existingKey) {
+        workingConfig = applySearchKey(workingConfig, providerChoice, (key || existingKey)!);
+        nextSearch = { ...workingConfig.tools?.web?.search };
+      } else if (keyConfigured || envAvailable) {
+        workingConfig = applySearchProviderSelection(workingConfig, providerChoice);
+        nextSearch = { ...workingConfig.tools?.web?.search };
+      } else {
+        nextSearch = { ...nextSearch, provider: providerChoice };
+        note(
+          [
+            "No key stored yet — web_search won't work until a key is available.",
+            `Store your ${credentialLabel} here or set ${envVarNames} in the Gateway environment.`,
+            `Get your API key at: ${entry.signupUrl}`,
+            "Docs: https://docs.openclaw.ai/tools/web",
+          ].join("\n"),
+          "Web search",
+        );
+      }
     }
   }
 
@@ -291,11 +308,11 @@ async function promptWebToolsConfig(
   };
 
   return {
-    ...nextConfig,
+    ...workingConfig,
     tools: {
-      ...nextConfig.tools,
+      ...workingConfig.tools,
       web: {
-        ...nextConfig.tools?.web,
+        ...workingConfig.tools?.web,
         search: nextSearch,
         fetch: nextFetch,
       },
@@ -308,7 +325,6 @@ export async function runConfigureWizard(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   try {
-    printWizardHeader(runtime);
     intro(opts.command === "update" ? "OpenClaw update wizard" : "OpenClaw configure");
     const prompter = createClackPrompter();
 
