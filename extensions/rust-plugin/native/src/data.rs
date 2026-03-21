@@ -39,10 +39,11 @@ pub fn rle_compress(data: String) -> Result<CompressionResult> {
     let bytes = data.as_bytes();
     let mut compressed = Vec::new();
     let mut i = 0;
+    let mut count: u8;
 
     while i < bytes.len() {
         let current_byte = bytes[i];
-        let mut count = 1u8;
+        count = 1;
 
         // Count consecutive bytes (with bounds check)
         while (i + count as usize) < bytes.len()
@@ -59,7 +60,7 @@ pub fn rle_compress(data: String) -> Result<CompressionResult> {
 
     // Return as base64 to safely encode binary data
     use base64::{Engine as _, engine::general_purpose};
-    let compressed_str = general_purpose::STANDARD.encode(&compressed);
+    let compressed_str = general_purpose::STANDARD_NO_PAD.encode(&compressed);
     let original_size = data.len() as u32;
     let compressed_size = compressed.len() as u32;
     let ratio = if original_size > 0 {
@@ -83,7 +84,7 @@ pub fn rle_decompress(compressed: String) -> Result<DecompressionResult> {
     // Limit input size
     const MAX_INPUT: usize = 10_000_000;     // 10MB
     const MAX_OUTPUT: usize = 20_000_000;    // 20MB
-    
+
     if compressed.len() > MAX_INPUT {
         return Ok(DecompressionResult {
             data: String::new(),
@@ -94,7 +95,7 @@ pub fn rle_decompress(compressed: String) -> Result<DecompressionResult> {
 
     // Decode base64 input
     use base64::{Engine as _, engine::general_purpose};
-    let compressed_bytes = match general_purpose::STANDARD.decode(&compressed) {
+    let compressed_bytes = match general_purpose::STANDARD_NO_PAD.decode(&compressed) {
         Ok(b) => b,
         Err(e) => return Ok(DecompressionResult {
             data: String::new(),
