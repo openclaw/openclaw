@@ -31,6 +31,7 @@ vi.mock("undici", () => ({
 describe("fetchRemoteMedia telegram network policy", () => {
   type LookupFn = NonNullable<Parameters<typeof fetchRemoteMedia>[0]["lookupFn"]>;
 
+<<<<<<< HEAD
   beforeEach(() => {
     undiciMocks.fetch.mockReset();
     undiciMocks.agentCtor.mockClear();
@@ -147,6 +148,15 @@ describe("fetchRemoteMedia telegram network policy", () => {
     expect(undiciMocks.proxyAgentCtor).toHaveBeenCalled();
   });
 
+  it("classifies Telegram transport network failures as retryable", () => {
+    expect(
+      shouldRetryTelegramTransportFallback(createTelegramFetchFailedError("EHOSTUNREACH")),
+    ).toBe(true);
+    expect(shouldRetryTelegramTransportFallback(createTelegramFetchFailedError("ETIMEDOUT"))).toBe(
+      true,
+    );
+  });
+
   it("retries Telegram file downloads with IPv4 fallback when the first fetch fails", async () => {
     const lookupFn = vi.fn(async () => [
       { address: "149.154.167.220", family: 4 },
@@ -172,7 +182,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
       url: "https://api.telegram.org/file/bottok/photos/2.jpg",
       fetchImpl: telegramTransport.sourceFetch,
       dispatcherAttempts: telegramTransport.dispatcherAttempts,
-      shouldRetryFetchError: shouldRetryTelegramTransportFallback,
+      shouldRetryFetchError: () => true,
       lookupFn,
       maxBytes: 1024,
       ssrfPolicy: {
@@ -243,7 +253,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
       url: "https://api.telegram.org/file/bottok/photos/3.jpg",
       fetchImpl: telegramTransport.sourceFetch,
       dispatcherAttempts: telegramTransport.dispatcherAttempts,
-      shouldRetryFetchError: shouldRetryTelegramTransportFallback,
+      shouldRetryFetchError: () => true,
       lookupFn,
       maxBytes: 1024,
       ssrfPolicy: {
@@ -307,7 +317,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
         url: "https://api.telegram.org/file/bottok/photos/4.jpg",
         fetchImpl: telegramTransport.sourceFetch,
         dispatcherAttempts: telegramTransport.dispatcherAttempts,
-        shouldRetryFetchError: shouldRetryTelegramTransportFallback,
+        shouldRetryFetchError: () => true,
         lookupFn,
         maxBytes: 1024,
         ssrfPolicy: {

@@ -327,7 +327,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           if (params.abortSignal?.aborted && isAnyAbortError(sleepErr)) {
             markPreviewEditAbortKind(
               sleepErr,
-              currentRetryKind === "preconnect"
+              effectiveRetryKind === "preconnect"
                 ? PREVIEW_EDIT_ABORTED_AFTER_PRECONNECT_FAILURE
                 : PREVIEW_EDIT_ABORTED_AFTER_AMBIGUOUS_RETRY,
             );

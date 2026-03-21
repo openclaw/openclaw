@@ -681,6 +681,68 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("resets typing network streaks on Telegram 4xx responses", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ ok: false, error_code: 429, description: "Too Many Requests" }),
+          {
+            status: 429,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+    try {
+      const onRecoverableSendChatActionNetworkFailure = vi.fn();
+      sendChatActionSpy.mockRejectedValue(
+        Object.assign(new TypeError("fetch failed"), {
+          cause: Object.assign(new Error("connect timeout"), {
+            code: "UND_ERR_CONNECT_TIMEOUT",
+          }),
+        }),
+      );
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.typingCallbacks?.onReplyStart?.();
+        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+      });
+
+      createTelegramBot({
+        token: "tok",
+        onRecoverableSendChatActionNetworkFailure,
+        proxyFetch: fetchSpy as unknown as typeof fetch,
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const messageCtx = {
+        message: {
+          chat: { id: 42, type: "private" },
+          from: { id: 999, username: "random" },
+          text: "hi",
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+
+      await handler(messageCtx);
+      expect(onRecoverableSendChatActionNetworkFailure).not.toHaveBeenCalled();
+
+      const clientFetch = (
+        botCtorSpy.mock.calls.at(-1)?.[1] as {
+          client?: { fetch?: typeof fetch };
+        }
+      )?.client?.fetch;
+      expect(clientFetch).toBeTypeOf("function");
+      const telegramResponse = await clientFetch?.("https://api.telegram.org/bottok/getMe");
+      expect(telegramResponse?.ok).toBe(false);
+      expect(telegramResponse?.status).toBe(429);
+
+      await handler(messageCtx);
+      expect(onRecoverableSendChatActionNetworkFailure).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("dedupes duplicate updates for callback_query, message, and channel_post", async () => {
     loadConfig.mockReturnValue({
       channels: {

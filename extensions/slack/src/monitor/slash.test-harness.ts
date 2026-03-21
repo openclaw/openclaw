@@ -20,21 +20,22 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    readChannelAllowFromStore: (...args: unknown[]) => mocks.readAllowFromStoreMock(...args),
+    upsertChannelPairingRequest: (...args: unknown[]) => mocks.upsertPairingRequestMock(...args),
+    resolveConversationLabel: (...args: unknown[]) => mocks.resolveConversationLabelMock(...args),
+    recordInboundSessionMetaSafe: (...args: unknown[]) =>
+      mocks.recordSessionMetaFromInboundMock(...args),
+  };
+});
 vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
   return {
     ...actual,
     resolveAgentRoute: (...args: unknown[]) => mocks.resolveAgentRouteMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    resolveConversationLabel: (...args: unknown[]) => mocks.resolveConversationLabelMock(...args),
-    recordInboundSessionMetaSafe: (...args: unknown[]) =>
-      mocks.recordSessionMetaFromInboundMock(...args),
   };
 });
 

@@ -1,10 +1,6 @@
 import path from "node:path";
-import { createJiti } from "jiti";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildPluginLoaderJitiOptions,
-  resolvePluginSdkScopedAliasMap,
-} from "../../src/plugins/sdk-alias.ts";
+import { resolvePluginSdkScopedAliasMap } from "../../src/plugins/sdk-alias.ts";
 
 const setMatrixRuntimeMock = vi.hoisted(() => vi.fn());
 const registerChannelMock = vi.hoisted(() => vi.fn());
@@ -20,16 +16,14 @@ describe("matrix plugin registration", () => {
     vi.clearAllMocks();
   });
 
-  it("loads the matrix runtime api through Jiti", () => {
+  it("exposes the lightweight matrix runtime api without bootstrapping crypto runtime", async () => {
     const runtimeApiPath = path.join(process.cwd(), "extensions", "matrix", "runtime-api.ts");
-    const jiti = createJiti(import.meta.url, {
-      ...buildPluginLoaderJitiOptions(
-        resolvePluginSdkScopedAliasMap({ modulePath: runtimeApiPath }),
-      ),
-      tryNative: false,
-    });
+    const aliasMap = resolvePluginSdkScopedAliasMap({ modulePath: runtimeApiPath });
 
-    expect(jiti(runtimeApiPath)).toMatchObject({
+    expect(aliasMap["openclaw/plugin-sdk/infra-runtime"]).toBeDefined();
+
+    const runtimeApi = await import("./runtime-api.ts");
+    expect(runtimeApi).toMatchObject({
       requiresExplicitMatrixDefaultAccount: expect.any(Function),
       resolveMatrixDefaultOrOnlyAccountId: expect.any(Function),
     });

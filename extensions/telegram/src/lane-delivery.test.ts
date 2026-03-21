@@ -239,6 +239,40 @@ describe("createLaneTextDeliverer", () => {
     expect(sleepWithAbort).toHaveBeenCalledTimes(1);
   });
 
+  it("retains preview when an ambiguous retry chain aborts during a later pre-connect backoff", async () => {
+    computeBackoff.mockClear();
+    sleepWithAbort.mockClear();
+    const abortController = new AbortController();
+    const harness = createHarness({
+      answerMessageId: 999,
+      abortSignal: abortController.signal,
+    });
+    const preConnectErr = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+    });
+    harness.editPreview
+      .mockRejectedValueOnce(new Error("timeout after Telegram accepted send"))
+      .mockRejectedValueOnce(preConnectErr);
+    sleepWithAbort
+      .mockImplementationOnce(async () => undefined)
+      .mockImplementationOnce(async () => {
+        const abortErr = Object.assign(new Error("The operation was aborted"), {
+          name: "AbortError",
+        });
+        abortController.abort(new Error("poller restart"));
+        throw new Error("aborted", { cause: abortErr });
+      });
+
+    await expectFinalPreviewRetained({
+      harness,
+      expectedLogSnippet: "aborted after ambiguous network failure; keeping existing preview",
+    });
+
+    expect(harness.editPreview).toHaveBeenCalledTimes(2);
+    expect(computeBackoff).toHaveBeenCalledTimes(2);
+    expect(sleepWithAbort).toHaveBeenCalledTimes(2);
+  });
+
   it("retains preview when a retried ambiguous final edit aborts mid-request", async () => {
     computeBackoff.mockClear();
     sleepWithAbort.mockClear();

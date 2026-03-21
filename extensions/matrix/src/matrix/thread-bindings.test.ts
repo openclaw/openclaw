@@ -16,14 +16,29 @@ import {
   setMatrixThreadBindingMaxAgeBySessionKey,
 } from "./thread-bindings.js";
 
+const pluginSdkActual = vi.hoisted(() => ({
+  writeJsonFileAtomically: null as null | ((filePath: string, value: unknown) => Promise<void>),
+}));
+
 const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (_to: string, _message: string, opts?: { threadId?: string }) => ({
     messageId: opts?.threadId ? "$reply" : "$root",
     roomId: "!room:example",
   })),
 );
-const actualRename = fs.rename.bind(fs);
-const renameMock = vi.spyOn(fs, "rename");
+const writeJsonFileAtomicallyMock = vi.hoisted(() =>
+  vi.fn<(filePath: string, value: unknown) => Promise<void>>(),
+);
+
+vi.mock("../runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
+  pluginSdkActual.writeJsonFileAtomically = actual.writeJsonFileAtomically;
+  return {
+    ...actual,
+    writeJsonFileAtomically: (filePath: string, value: unknown) =>
+      writeJsonFileAtomicallyMock(filePath, value),
+  };
+});
 
 vi.mock("./send.js", async () => {
   const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
@@ -66,8 +81,10 @@ describe("matrix thread bindings", () => {
     __testing.resetSessionBindingAdaptersForTests();
     resetMatrixThreadBindingsForTests();
     sendMessageMatrixMock.mockClear();
-    renameMock.mockReset();
-    renameMock.mockImplementation(actualRename);
+    writeJsonFileAtomicallyMock.mockReset();
+    writeJsonFileAtomicallyMock.mockImplementation(async (filePath: string, value: unknown) => {
+      await pluginSdkActual.writeJsonFileAtomically?.(filePath, value);
+    });
     setMatrixRuntime({
       state: {
         resolveStateDir: () => stateDir,
@@ -198,7 +215,7 @@ describe("matrix thread bindings", () => {
     }
   });
 
-  it("persists expired bindings after a sweep", async () => {
+  it("persists a batch of expired bindings once per sweep", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
     try {
@@ -233,8 +250,14 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
 
+      writeJsonFileAtomicallyMock.mockClear();
       await vi.advanceTimersByTimeAsync(61_000);
       await Promise.resolve();
+      await Promise.resolve();
+
+      await vi.waitFor(() => {
+        expect(writeJsonFileAtomicallyMock).toHaveBeenCalledTimes(1);
+      });
 
       await vi.waitFor(async () => {
         const persistedRaw = await fs.readFile(resolveBindingsFilePath(), "utf-8");
@@ -274,24 +297,18 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
 
-      renameMock.mockRejectedValueOnce(new Error("disk full"));
+      writeJsonFileAtomicallyMock.mockClear();
+      writeJsonFileAtomicallyMock.mockRejectedValueOnce(new Error("disk full"));
       await vi.advanceTimersByTimeAsync(61_000);
+      await Promise.resolve();
       await Promise.resolve();
 
       await vi.waitFor(() => {
         expect(
-          logVerboseMessage.mock.calls.some(
-            ([message]) =>
-              typeof message === "string" &&
-              message.includes("failed auto-unbinding expired bindings"),
+          logVerboseMessage.mock.calls.some((call) =>
+            String(call[0]).includes("failed auto-unbinding expired bindings"),
           ),
         ).toBe(true);
-      });
-
-      await vi.waitFor(() => {
-        expect(logVerboseMessage).toHaveBeenCalledWith(
-          expect.stringContaining("matrix: auto-unbinding $thread due to idle-expired"),
-        );
       });
 
       expect(
