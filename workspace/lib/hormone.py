@@ -246,12 +246,12 @@ def _check_gateway_down() -> bool:
 TRIGGER_CHECKS = {
     "threads_spike": {
         "check": _check_threads_spike,
-        "action": lambda: (_update_hormone("season", "grow"), _pulse("threads spike detected → season:grow")),
+        "action": lambda: (_update_hormone("season", "grow"), _pulse("threads spike → season:grow, all hands on deck")),
         "notify": True,
     },
     "threads_cold": {
         "check": _check_threads_cold,
-        "action": lambda: _pulse("threads cold 6h — suppressing scan frequency"),
+        "action": lambda: _pulse("threads cold 6h — build don't patrol"),
         "notify": False,
     },
     "coverage_drop": {
@@ -271,10 +271,23 @@ TRIGGER_CHECKS = {
     },
     "gateway_down": {
         "check": _check_gateway_down,
-        "action": lambda: _pulse("gateway down — auto repair triggered"),
+        "action": lambda: (_repair_gateway(), _pulse("gateway down — auto repaired")),
         "notify": False,
     },
 }
+
+
+def _repair_gateway():
+    """Auto-repair gateway via launchctl kickstart."""
+    import subprocess
+    try:
+        uid = subprocess.run(["id", "-u"], capture_output=True, text=True).stdout.strip()
+        subprocess.run(
+            ["launchctl", "kickstart", "-k", f"gui/{uid}/ai.openclaw.gateway"],
+            capture_output=True, timeout=15
+        )
+    except Exception:
+        pass
 
 
 def evaluate_triggers() -> list[str]:

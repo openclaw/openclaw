@@ -1,0 +1,29 @@
+[
+  {
+    "target": "bluewhitegrass.bluebird",
+    "tier": "A/pro",
+    "topics": ["military", "energy"],
+    "draft": "第二篇的核心數據：一架無人機兩萬美元，攔截飛彈八百五十四萬。成本比 1:427。你之前提到的能源數據跟這個直接相關——戰爭的本質是經濟消耗戰。",
+    "channel": "threads",
+    "status": "draft",
+    "note": "A/pro 13次互動，軍事+能源專家。引用他之前的能源論點。"
+  },
+  {
+    "target": "sengthesong",
+    "tier": "A/pro",
+    "topics": ["economy", "resilience"],
+    "draft": "你之前提到韌性的觀點很準。下一篇會從經濟角度切入——不是打不打得贏，是帳單撐不撐得住。你關注的經濟面正好是核心。",
+    "channel": "threads",
+    "status": "draft",
+    "note": "A/pro 11次，經濟+韌性。暗示第二篇方向但不爆具體內容。"
+  },
+  {
+    "target": "max19930314",
+    "tier": "B/pro",
+    "topics": ["military", "energy", "economy"],
+    "draft": "你的留言涵蓋軍事、能源、經濟三個面向，這正好是接下來要展開的方向。如果你有興趣深入討論，可以追蹤後續。",
+    "channel": "threads",
+    "status": "draft",
+    "note": "B/pro 7次，全面型。輕推追蹤。"
+  }
+]

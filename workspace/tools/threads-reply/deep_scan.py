@@ -264,6 +264,35 @@ def deep_scan():
     not_directed = len(blocks) - directed
     print(f"③ 統計：{directed} 則對我們說的 | {not_directed} 則不是對我們說的")
 
+    # ④ Autonomy 決策（讀 .hormone）
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "lib"))
+        from hormone import get_autonomy, is_suppressed
+        print(f"\n④ AUTONOMY 決策")
+        for b in blocks:
+            if not b['directed_at_us']:
+                continue
+            tier = b.get('profile', {}).get('tier', 'C')
+            stance = b.get('profile', {}).get('stance', '?')
+            # Map tier+stance to autonomy key
+            if tier == 'S':
+                key = 'S'
+            elif tier == 'A' and stance == 'pro':
+                key = 'A_pro'
+            elif tier == 'A':
+                key = 'A_neutral'
+            elif tier == 'B':
+                key = 'B'
+            else:
+                key = 'C'
+            level = get_autonomy('threads_reply', key)
+            emoji_only = not b['text'].strip() or all(c in '😡👊👎🤡❎🙌💪🔥' for c in b['text'].strip().replace(' ', ''))
+            suppressed = is_suppressed('threads_emoji_replies') and emoji_only
+            action = 'SUPPRESS(emoji)' if suppressed else level.upper()
+            print(f"  @{b['username']:24s} [{tier}/{stance}] → {action}")
+    except ImportError:
+        pass
+
     return blocks
 
 
