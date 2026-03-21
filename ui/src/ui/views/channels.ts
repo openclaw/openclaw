@@ -19,7 +19,11 @@ import { renderDiscordCard } from "./channels.discord.ts";
 import { renderGoogleChatCard } from "./channels.googlechat.ts";
 import { renderIMessageCard } from "./channels.imessage.ts";
 import { renderNostrCard } from "./channels.nostr.ts";
-import { channelEnabled, renderChannelAccountCount } from "./channels.shared.ts";
+import {
+  channelEnabled,
+  renderChannelAccountCount,
+  resolveChannelConfigured,
+} from "./channels.shared.ts";
 import { renderSignalCard } from "./channels.signal.ts";
 import { renderSlackCard } from "./channels.slack.ts";
 import { renderTelegramCard } from "./channels.telegram.ts";
@@ -184,7 +188,7 @@ function renderGenericChannelCard(
 ) {
   const label = resolveChannelLabel(props.snapshot, key);
   const status = props.snapshot?.channels?.[key] as Record<string, unknown> | undefined;
-  const configured = typeof status?.configured === "boolean" ? status.configured : undefined;
+  const configured = resolveChannelConfigured(key, props);
   const running = typeof status?.running === "boolean" ? status.running : undefined;
   const connected = typeof status?.connected === "boolean" ? status.connected : undefined;
   const lastError = typeof status?.lastError === "string" ? status.lastError : undefined;
