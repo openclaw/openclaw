@@ -210,6 +210,71 @@ describe("discordPlugin outbound", () => {
   });
 });
 
+describe("discordPlugin gateway startAccount error handling", () => {
+  it("catches monitorDiscordProvider errors and disables account instead of crashing", async () => {
+    setDiscordRuntime({
+      channel: { discord: {} },
+      logging: { shouldLogVerbose: () => false },
+    } as unknown as PluginRuntime);
+    probeDiscordMock.mockResolvedValue({
+      ok: true,
+      bot: { username: "TestBot" },
+      application: { intents: { messageContent: "enabled" } },
+      elapsedMs: 1,
+    });
+    monitorDiscordProviderMock.mockRejectedValue(
+      new Error("Gateway closed with code 4014 (Disallowed intents)"),
+    );
+
+    const cfg = createCfg();
+    const ctx = createStartAccountCtx({
+      cfg,
+      accountId: "default",
+      runtime: createRuntimeEnv(),
+    });
+
+    // Should NOT throw — error is caught internally
+    await discordPlugin.gateway!.startAccount!(ctx);
+
+    expect(ctx.log?.warn).toHaveBeenCalledWith(expect.stringContaining("Discord provider failed"));
+    expect(ctx.log?.warn).toHaveBeenCalledWith(expect.stringContaining("4014"));
+    expect(ctx.setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        running: false,
+        lastError: expect.stringContaining("4014"),
+      }),
+    );
+  });
+
+  it("handles non-Error thrown values gracefully", async () => {
+    setDiscordRuntime({
+      channel: { discord: {} },
+      logging: { shouldLogVerbose: () => false },
+    } as unknown as PluginRuntime);
+    probeDiscordMock.mockResolvedValue({ ok: false, elapsedMs: 1 });
+    monitorDiscordProviderMock.mockRejectedValue("raw string error");
+
+    const cfg = createCfg();
+    const ctx = createStartAccountCtx({
+      cfg,
+      accountId: "default",
+      runtime: createRuntimeEnv(),
+    });
+
+    await discordPlugin.gateway!.startAccount!(ctx);
+
+    expect(ctx.log?.warn).toHaveBeenCalledWith(expect.stringContaining("unknown error"));
+    expect(ctx.setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        running: false,
+        lastError: "unknown error",
+      }),
+    );
+  });
+});
+
 describe("discordPlugin groups", () => {
   it("uses plugin-owned group policy resolvers", () => {
     const cfg = {

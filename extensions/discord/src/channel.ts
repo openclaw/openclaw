@@ -679,16 +679,28 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         }
       }
       ctx.log?.info(`[${account.accountId}] starting provider${discordBotLabel}`);
-      return monitorDiscordProvider({
-        token,
-        accountId: account.accountId,
-        config: ctx.cfg,
-        runtime: ctx.runtime,
-        abortSignal: ctx.abortSignal,
-        mediaMaxMb: account.config.mediaMaxMb,
-        historyLimit: account.config.historyLimit,
-        setStatus: (patch) => ctx.setStatus({ accountId: account.accountId, ...patch }),
-      });
+      try {
+        await monitorDiscordProvider({
+          token,
+          accountId: account.accountId,
+          config: ctx.cfg,
+          runtime: ctx.runtime,
+          abortSignal: ctx.abortSignal,
+          mediaMaxMb: account.config.mediaMaxMb,
+          historyLimit: account.config.historyLimit,
+          setStatus: (patch) => ctx.setStatus({ accountId: account.accountId, ...patch }),
+        });
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : "unknown error";
+        ctx.log?.warn(
+          `[${account.accountId}] Discord provider failed — disabling account: ${reason}`,
+        );
+        ctx.setStatus({
+          accountId: account.accountId,
+          running: false,
+          lastError: reason,
+        });
+      }
     },
   },
 };
