@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   cosineSimilarity,
   parseEmbedding,
@@ -24,12 +25,10 @@ function extractRelevantSnippet(
     return { snippet: text, offsetLines: 0 };
   }
 
-  // Try to find the query (case-insensitive) in the text
+  // Use the same tokenizer as the search engine so CJK terms and
+  // conversational queries produce correct anchor terms.
   const lowerText = text.toLowerCase();
-  const queryTerms = query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((term) => term.length > 2);
+  const queryTerms = extractKeywords(query).sort((a, b) => b.length - a.length);
 
   let matchIndex = -1;
 
