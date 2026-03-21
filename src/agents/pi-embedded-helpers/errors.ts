@@ -771,6 +771,13 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
     return true;
   }
 
+  // OpenRouter (and similar) returns {"error":{"code":404,"message":"..."}} where the message
+  // may not contain "not found" text (e.g., model redirect notices). Treat a JSON-style
+  // "code": 404 as model-not-found when paired with an error envelope.
+  if (/"code"\s*:\s*404\b/.test(raw) && /"error"/.test(raw)) {
+    return true;
+  }
+
   return false;
 }
 
