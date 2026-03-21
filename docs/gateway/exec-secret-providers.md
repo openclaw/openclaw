@@ -166,7 +166,7 @@ OpenClaw validates the command path before running it.
     providers: {
       vault_openai: {
         source: "exec",
-        command: "/usr/local/bin/vault",
+        command: "/home/gateway-user/.local/bin/openclaw-vault-read", // user-owned wrapper around the Vault CLI
         args: ["kv", "get", "-field=apiKey", "secret/providers/openai"],
         passEnv: ["HOME", "VAULT_ADDR", "VAULT_TOKEN"],
         jsonOnly: false,
@@ -182,6 +182,8 @@ OpenClaw validates the command path before running it.
   },
 }
 ```
+
+On POSIX, `command` must be owned by the same user running OpenClaw. If your installed `vault` binary is root-owned, point `command` at a user-owned wrapper that calls Vault.
 
 ## Operations notes
 
