@@ -144,8 +144,12 @@ struct ChatMessageBubble: View {
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
     let showsAssistantTrace: Bool
+    @AppStorage("openclaw.showSystemMessages") private var showSystemMessages: Bool = true
 
     var body: some View {
+        if self.isUser && self.isSystemUserMessage && !self.showSystemMessages {
+            EmptyView()
+        } else {
         ChatMessageBody(
             message: self.message,
             isUser: self.isUser,
@@ -153,12 +157,34 @@ struct ChatMessageBubble: View {
             markdownVariant: self.markdownVariant,
             userAccent: self.userAccent,
             showsAssistantTrace: self.showsAssistantTrace)
-            .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: self.isUser ? .trailing : .leading)
-            .frame(maxWidth: .infinity, alignment: self.isUser ? .trailing : .leading)
+            .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: self.bubbleAlignment)
+            .frame(maxWidth: .infinity, alignment: self.bubbleAlignment)
             .padding(.horizontal, 2)
+        }
     }
 
     private var isUser: Bool { self.message.role.lowercased() == "user" }
+
+    private var isSystemUserMessage: Bool {
+        guard self.isUser else { return false }
+        let text = self.message.content.compactMap { ($0.type ?? "text").lowercased() == "text" ? $0.text : nil }
+            .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return false }
+        return lines.allSatisfy { line in
+            line.hasPrefix("System:") ||
+            line.hasPrefix("An async command") ||
+            line.hasPrefix("Current time:") ||
+            line.hasPrefix("Handle the result internally")
+        }
+    }
+
+    private var bubbleAlignment: Alignment {
+        if self.isUser && self.isSystemUserMessage { return .leading }
+        return self.isUser ? .trailing : .leading
+    }
 }
 
 @MainActor

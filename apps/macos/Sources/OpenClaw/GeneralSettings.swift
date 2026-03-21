@@ -53,6 +53,11 @@ struct GeneralSettings: View {
                         binding: self.$state.iconAnimationsEnabled)
 
                     SettingsToggleRow(
+                        title: "Show system messages",
+                        subtitle: "Show internal system messages in the chat window.",
+                        binding: self.$state.showSystemMessages)
+
+                    SettingsToggleRow(
                         title: "Allow Canvas",
                         subtitle: "Allow the agent to show and control the Canvas panel.",
                         binding: self.$state.canvasEnabled)

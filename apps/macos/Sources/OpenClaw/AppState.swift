@@ -176,6 +176,10 @@ final class AppState {
         didSet { self.syncGatewayConfigIfNeeded() }
     }
 
+    var showSystemMessages: Bool {
+        didSet { self.ifNotPreview { UserDefaults.standard.set(self.showSystemMessages, forKey: "openclaw.showSystemMessages") } }
+    }
+
     var canvasEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
     }
@@ -317,6 +321,7 @@ final class AppState {
         self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey) ?? ""
+        self.showSystemMessages = UserDefaults.standard.object(forKey: "openclaw.showSystemMessages") as? Bool ?? true
         self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
         let execDefaults = ExecApprovalsStore.resolveDefaults()
         self.execApprovalMode = ExecApprovalQuickMode.from(security: execDefaults.security, ask: execDefaults.ask)
