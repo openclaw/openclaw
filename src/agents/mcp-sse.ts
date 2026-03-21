@@ -93,7 +93,12 @@ export function describeSseMcpServerLaunchConfig(config: SseMcpServerLaunchConfi
         lower === "api_key" ||
         lower === "apikey" ||
         lower === "secret" ||
-        lower === "access_token"
+        lower === "access_token" ||
+        lower === "password" ||
+        lower === "pass" ||
+        lower === "auth" ||
+        lower === "client_secret" ||
+        lower === "refresh_token"
       ) {
         parsed.searchParams.set(key, "***");
       }
