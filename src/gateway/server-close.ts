@@ -1,5 +1,7 @@
 import type { Server as HttpServer } from "node:http";
 import type { WebSocketServer } from "ws";
+import { persistFollowupQueues } from "../auto-reply/reply/queue/persist.js";
+import { FOLLOWUP_QUEUES } from "../auto-reply/reply/queue/state.js";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
@@ -123,6 +125,12 @@ export function createGatewayCloseHandler(params: {
           /* ignore */
         }
       }
+      // Persist pending followup queue items to disk before clearing state,
+      // so queued messages survive restart and can be replayed on next startup.
+      // This is best-effort — if persistence fails, messages are still lost
+      // (same as today) but now we at least attempt to save them.
+      await persistFollowupQueues(FOLLOWUP_QUEUES).catch(() => {});
+
       params.chatRunState.clear();
       for (const c of params.clients) {
         try {

@@ -23,6 +23,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
+import { replayPersistedPendingMessages } from "./server-pending-messages.js";
 import {
   scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel,
@@ -186,6 +187,14 @@ export async function startGatewaySidecars(params: {
       void scheduleRestartSentinelWake({ deps: params.deps });
     }, 750);
   }
+
+  // Replay any pending messages that were persisted before the last restart.
+  // Runs after a short delay to allow channels and sessions to initialize.
+  setTimeout(() => {
+    void replayPersistedPendingMessages().catch((err) => {
+      params.log.warn(`pending message replay failed: ${String(err)}`);
+    });
+  }, 1500);
 
   return { browserControl, pluginServices };
 }
