@@ -327,4 +327,33 @@ describe("existing-session browser routes", () => {
       timeoutMs: 9_000,
     });
   });
+
+  it("fills selector-only fields for existing-session profiles via evaluate fallback", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValue(true as never);
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: {
+          kind: "fill",
+          timeoutMs: 11_000,
+          fields: [{ selector: "input[name='arrival']", value: "DXB" }],
+        },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: expect.stringContaining("document.querySelector"),
+      args: ["input[name='arrival']", "DXB"],
+      timeoutMs: 11_000,
+    });
+  });
 });

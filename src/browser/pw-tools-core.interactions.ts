@@ -255,7 +255,8 @@ export async function fillFormViaPlaywright(opts: {
   const page = await getRestoredPageForTarget(opts);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   for (const field of opts.fields) {
-    const ref = field.ref.trim();
+    const ref = field.ref?.trim() ?? "";
+    const selector = field.selector?.trim() ?? "";
     const type = (field.type || DEFAULT_FILL_FIELD_TYPE).trim() || DEFAULT_FILL_FIELD_TYPE;
     const rawValue = field.value;
     const value =
@@ -264,24 +265,25 @@ export async function fillFormViaPlaywright(opts: {
         : typeof rawValue === "number" || typeof rawValue === "boolean"
           ? String(rawValue)
           : "";
-    if (!ref) {
+    if (!ref && !selector) {
       continue;
     }
-    const locator = refLocator(page, ref);
+    const locator = ref ? refLocator(page, ref) : page.locator(selector);
+    const label = ref || selector;
     if (type === "checkbox" || type === "radio") {
       const checked =
         rawValue === true || rawValue === 1 || rawValue === "1" || rawValue === "true";
       try {
         await locator.setChecked(checked, { timeout });
       } catch (err) {
-        throw toAIFriendlyError(err, ref);
+        throw toAIFriendlyError(err, label);
       }
       continue;
     }
     try {
       await locator.fill(value, { timeout });
     } catch (err) {
-      throw toAIFriendlyError(err, ref);
+      throw toAIFriendlyError(err, label);
     }
   }
 }

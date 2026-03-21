@@ -868,15 +868,57 @@ export function registerBrowserAgentActRoutes(
             }
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
-              await fillChromeMcpForm({
-                profileName,
-                targetId: tab.targetId,
-                elements: fields.map((field) => ({
-                  uid: field.ref,
-                  value: String(field.value ?? ""),
-                })),
-                timeoutMs: timeoutMs ?? undefined,
-              });
+              const refFields = fields.filter(
+                (field): field is BrowserFormField & { ref: string } =>
+                  typeof field.ref === "string",
+              );
+              const selectorFields = fields.filter(
+                (field): field is BrowserFormField & { selector: string } =>
+                  typeof field.selector === "string" && field.selector.trim().length > 0,
+              );
+              if (refFields.length) {
+                await fillChromeMcpForm({
+                  profileName,
+                  targetId: tab.targetId,
+                  elements: refFields.map((field) => ({
+                    uid: field.ref,
+                    value: String(field.value ?? ""),
+                  })),
+                  timeoutMs: timeoutMs ?? undefined,
+                });
+              }
+              for (const field of selectorFields) {
+                // Existing-session Chrome MCP only fills by ref. When the agent only has a
+                // selector, use page-context DOM writes so we do not discard an otherwise
+                // valid form action.
+                await evaluateChromeMcpScript({
+                  profileName,
+                  targetId: tab.targetId,
+                  fn: `(selector, rawValue) => {
+                    const el = document.querySelector(selector);
+                    if (!(el instanceof HTMLElement)) {
+                      throw new Error(\`No element matches selector: \${selector}\`);
+                    }
+                    const value = rawValue == null ? "" : String(rawValue);
+                    if (el instanceof HTMLInputElement) {
+                      if (el.type === "checkbox" || el.type === "radio") {
+                        el.checked = value === "true" || value === "1";
+                      } else {
+                        el.value = value;
+                      }
+                    } else if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+                      el.value = value;
+                    } else {
+                      el.setAttribute("value", value);
+                    }
+                    el.dispatchEvent(new Event("input", { bubbles: true }));
+                    el.dispatchEvent(new Event("change", { bubbles: true }));
+                    return true;
+                  }`,
+                  args: [field.selector, String(field.value ?? "")],
+                  timeoutMs: timeoutMs ?? undefined,
+                });
+              }
               return res.json({ ok: true, targetId: tab.targetId });
             }
             const pw = await requirePwAi(res, `act:${kind}`);

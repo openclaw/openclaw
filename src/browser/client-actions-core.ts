@@ -11,7 +11,8 @@ import { fetchBrowserJson } from "./client-fetch.js";
 const BROWSER_INTERACTION_TIMEOUT_MS = 45_000;
 
 export type BrowserFormField = {
-  ref: string;
+  ref?: string;
+  selector?: string;
   type: string;
   value?: string | number | boolean;
 };
