@@ -6,19 +6,23 @@ import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
-  isOllamaCompatProvider,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
-  resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+} from "./attempt.js";
+import {
+  isOllamaCompatProvider,
+  resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
-  decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
+} from "./ollama-compat.js";
+import {
+  decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
-} from "./attempt.js";
+} from "./tool-call-repair.js";
 
 type FakeWrappedStream = {
   result: () => Promise<unknown>;
