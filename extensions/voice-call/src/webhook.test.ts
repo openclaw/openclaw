@@ -499,12 +499,23 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       manager,
       createTwilioProvider(clearTtsQueue) as unknown as VoiceCallProvider,
     );
+    const handleInboundResponse = vi.fn(async () => {});
+    (
+      server as unknown as {
+        handleInboundResponse: (
+          callId: string,
+          transcript: string,
+          timing?: unknown,
+        ) => Promise<void>;
+      }
+    ).handleInboundResponse = handleInboundResponse;
 
     try {
       const media = getMediaCallbacks(server);
       media.config.onSpeechStart?.("CA-barge");
       media.config.onTranscript?.("CA-barge", "hello");
       expect(clearTtsQueue).not.toHaveBeenCalled();
+      expect(handleInboundResponse).not.toHaveBeenCalled();
 
       if (call.metadata) {
         delete call.metadata.initialMessage;
@@ -513,6 +524,11 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       media.config.onSpeechStart?.("CA-barge");
       media.config.onTranscript?.("CA-barge", "hello again");
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
+      expect(handleInboundResponse).toHaveBeenCalledTimes(1);
+      const [calledCallId, calledTranscript] = (handleInboundResponse.mock.calls[0] ??
+        []) as unknown as [string | undefined, string | undefined];
+      expect(calledCallId).toBe(call.callId);
+      expect(calledTranscript).toBe("hello again");
     } finally {
       await server.stop();
     }
