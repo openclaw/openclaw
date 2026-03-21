@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DaemonActionResponse } from "./response.js";
 import { captureFullEnv } from "../../test-utils/env.js";
+import type { DaemonActionResponse } from "./response.js";
 
 const resolveNodeStartupTlsEnvironmentMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn());
