@@ -370,10 +370,11 @@ function parsePortFromProgramArguments(programArguments?: string[]): number | nu
 
 async function resolveScheduledTaskPort(env: GatewayServiceEnv): Promise<number | null> {
   const command = await readScheduledTaskCommand(env).catch(() => null);
+  const taskEnv = command?.environment ? { ...env, ...command.environment } : env;
   return (
     parsePortFromProgramArguments(command?.programArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
-    (await resolveConfiguredGatewayPort(env))
+    (await resolveConfiguredGatewayPort(taskEnv))
   );
 }
 

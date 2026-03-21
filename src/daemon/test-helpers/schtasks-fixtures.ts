@@ -46,6 +46,7 @@ export async function writeGatewayScript(
   options: {
     includePortEnv?: boolean;
     includePortFlag?: boolean;
+    extraEnv?: Record<string, string>;
   } = {},
 ) {
   const includePortEnv = options.includePortEnv ?? true;
@@ -62,6 +63,7 @@ export async function writeGatewayScript(
     scriptPath,
     [
       "@echo off",
+      ...Object.entries(options.extraEnv ?? {}).map(([key, value]) => `set "${key}=${value}"`),
       ...(includePortEnv ? [`set "OPENCLAW_GATEWAY_PORT=${port}"`] : []),
       command,
       "",

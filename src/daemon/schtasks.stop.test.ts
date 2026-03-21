@@ -2,6 +2,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/schtasks-base-mocks.js";
+import { resolveTaskScriptPath } from "./schtasks.js";
 import {
   inspectPortUsage,
   killProcessTree,
@@ -222,15 +223,20 @@ describe("Scheduled Task stop/restart cleanup", () => {
   it("prefers the task env config over the caller shell env when OPENCLAW_STATE_DIR differs", async () => {
     await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
       const taskEnv = { ...env, OPENCLAW_STATE_DIR: path.join(tmpDir, "task-state") };
-      const shellEnv = { ...env, OPENCLAW_STATE_DIR: path.join(tmpDir, "shell-state") };
+      const shellEnv = {
+        ...env,
+        OPENCLAW_STATE_DIR: path.join(tmpDir, "shell-state"),
+        OPENCLAW_TASK_SCRIPT: resolveTaskScriptPath(taskEnv),
+      };
       await writeGatewayScript(taskEnv, GATEWAY_PORT, {
         includePortEnv: false,
         includePortFlag: false,
+        extraEnv: { OPENCLAW_STATE_DIR: taskEnv.OPENCLAW_STATE_DIR },
       });
       await writeGatewayConfig(taskEnv, GATEWAY_PORT);
       await writeGatewayConfig(shellEnv, 29999);
       const stdout = new PassThrough();
-      const envWithoutPort: Record<string, string> = { ...taskEnv };
+      const envWithoutPort: Record<string, string> = { ...shellEnv };
       delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
       pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([6464]);
