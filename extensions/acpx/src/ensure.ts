@@ -15,6 +15,8 @@ export type AcpxVersionCheckResult =
       ok: true;
       version: string;
       expectedVersion?: string;
+      /** Set when version was resolved from package.json because the .cmd wrapper could not be executed. The binary needs a local install to become truly executable. */
+      cmdWrapperFallback?: true;
     }
   | {
       ok: false;
@@ -149,11 +151,17 @@ function tryResolveVersionFromPackageForWrapperFailure(params: {
   if (!installedVersion) {
     return null;
   }
-  return resolveVersionCheckResult({
+  const result = resolveVersionCheckResult({
     expectedVersion: params.expectedVersion,
     installedVersion,
     installCommand: params.installCommand,
   });
+  // Tag ok results so ensureAcpx knows the command is not yet executable and
+  // must still run a local install to replace the broken .cmd wrapper.
+  if (result.ok) {
+    return { ...result, cmdWrapperFallback: true };
+  }
+  return result;
 }
 
 export async function checkAcpxVersion(params: {
@@ -298,15 +306,24 @@ export async function ensureAcpx(params: {
       stripProviderAuthEnvVars: params.stripProviderAuthEnvVars,
       spawnOptions: params.spawnOptions,
     });
-    if (precheck.ok) {
+    if (precheck.ok && !precheck.cmdWrapperFallback) {
       return;
     }
     if (!allowInstall) {
+      if (precheck.ok) {
+        // Version matches via package.json fallback but the .cmd wrapper is not
+        // executable; install is not permitted, so there is nothing more to do.
+        return;
+      }
       throw new Error(precheck.message);
     }
 
+    const precheckMessage = precheck.ok
+      ? "Windows .cmd wrapper is not directly executable; reinstalling to fix"
+      : precheck.message;
+
     params.logger?.warn(
-      `acpx local binary unavailable or mismatched (${precheck.message}); running plugin-local install`,
+      `acpx local binary unavailable or mismatched (${precheckMessage}); running plugin-local install`,
     );
 
     const install = await spawnAndCollect({
