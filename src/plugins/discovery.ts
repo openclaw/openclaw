@@ -17,6 +17,7 @@ import type { PluginBundleFormat, PluginDiagnostic, PluginFormat, PluginOrigin }
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 
 const CANONICAL_PACKAGE_ID_ALIASES: Record<string, string> = {
+  "@openclawbrain/openclaw": "openclawbrain",
   "elevenlabs-speech": "elevenlabs",
   "microsoft-speech": "microsoft",
   "ollama-provider": "ollama",
@@ -345,7 +346,10 @@ function deriveIdHint(params: {
   const unscoped = rawPackageName.includes("/")
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
-  const canonicalPackageId = CANONICAL_PACKAGE_ID_ALIASES[unscoped] ?? unscoped;
+  const canonicalPackageId =
+    CANONICAL_PACKAGE_ID_ALIASES[rawPackageName] ??
+    CANONICAL_PACKAGE_ID_ALIASES[unscoped] ??
+    unscoped;
   const normalizedPackageId =
     canonicalPackageId.endsWith("-provider") && canonicalPackageId.length > "-provider".length
       ? canonicalPackageId.slice(0, -"-provider".length)

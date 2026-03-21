@@ -58,6 +58,10 @@ export const PLUGIN_INSTALL_ERROR_CODE = {
   PLUGIN_ID_MISMATCH: "plugin_id_mismatch",
 } as const;
 
+const KNOWN_MANIFEST_PACKAGE_ID_EQUIVALENTS: Record<string, string> = {
+  "@openclawbrain/openclaw": "openclawbrain",
+};
+
 export type PluginInstallErrorCode =
   (typeof PLUGIN_INSTALL_ERROR_CODE)[keyof typeof PLUGIN_INSTALL_ERROR_CODE];
 
@@ -124,6 +128,13 @@ function validatePluginId(pluginId: string): string | null {
     return "invalid plugin name: scoped ids must use @scope/name format";
   }
   return null;
+}
+
+function isKnownManifestPackageIdEquivalent(params: {
+  manifestPluginId: string;
+  npmPluginId: string;
+}): boolean {
+  return KNOWN_MANIFEST_PACKAGE_ID_EQUIVALENTS[params.npmPluginId] === params.manifestPluginId;
 }
 
 function matchesExpectedPluginId(params: {
@@ -519,7 +530,11 @@ async function installPluginFromPackageDir(
     };
   }
 
-  if (manifestPluginId && manifestPluginId !== npmPluginId) {
+  if (
+    manifestPluginId &&
+    manifestPluginId !== npmPluginId &&
+    !isKnownManifestPackageIdEquivalent({ manifestPluginId, npmPluginId })
+  ) {
     logger.info?.(
       `Plugin manifest id "${manifestPluginId}" differs from npm package name "${npmPluginId}"; using manifest id as the config key.`,
     );

@@ -221,12 +221,20 @@ async function installFromDirWithWarnings(params: { pluginDir: string; extension
   return { result, warnings };
 }
 
-function setupManifestInstallFixture(params: { manifestId: string }) {
+function setupManifestInstallFixture(params: { manifestId: string; packageName?: string }) {
   const caseDir = makeTempDir();
   const stateDir = path.join(caseDir, "state");
   const pluginDir = path.join(caseDir, "plugin-src");
   fs.mkdirSync(stateDir, { recursive: true });
   fs.cpSync(manifestInstallTemplateDir, pluginDir, { recursive: true });
+  if (params.packageName) {
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      name?: string;
+    };
+    packageJson.name = params.packageName;
+    fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2), "utf-8");
+  }
   fs.writeFileSync(
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
@@ -822,6 +830,25 @@ describe("installPluginFromDir", () => {
     });
 
     expectInstalledWithPluginId(res, extensionsDir, "@team/memory-cognee");
+  });
+
+  it("suppresses manifest/package mismatch chatter for known canonical aliases", async () => {
+    const { pluginDir, extensionsDir } = setupManifestInstallFixture({
+      manifestId: "openclawbrain",
+      packageName: "@openclawbrain/openclaw",
+    });
+
+    const infoMessages: string[] = [];
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+      logger: { info: (msg: string) => infoMessages.push(msg), warn: () => {} },
+    });
+
+    expectInstalledWithPluginId(res, extensionsDir, "openclawbrain");
+    expect(infoMessages.some((msg) => msg.includes('Plugin manifest id "openclawbrain"'))).toBe(
+      false,
+    );
   });
 
   it("preserves scoped package names when no plugin manifest id is present", async () => {
