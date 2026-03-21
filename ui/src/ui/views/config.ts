@@ -792,8 +792,6 @@ export function renderConfig(props: ConfigProps) {
             : nothing
         }
         <div class="config-actions">
-          <div class="config-actions__left">
-          </div>
           <div class="config-actions__right">
             ${
               props.onOpenFile

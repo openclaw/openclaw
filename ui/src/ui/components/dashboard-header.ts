@@ -27,8 +27,8 @@ export class DashboardHeader extends LitElement {
             <span class="dashboard-header__breadcrumb-sep">›</span>
             <span class="dashboard-header__breadcrumb-current">${label}</span>
           </div>
-          <span class="dashboard-header__subtitle-sep">•</span>
-          <div class="dashboard-header__subtitle">${subtitle}</div>
+          ${subtitle ? html`<span class="dashboard-header__subtitle-sep">•</span>
+          <div class="dashboard-header__subtitle">${subtitle}</div>` : nothing}
         </div>
         <div class="dashboard-header__actions">
           <slot></slot>

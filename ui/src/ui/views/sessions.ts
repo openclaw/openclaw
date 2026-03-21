@@ -216,9 +216,7 @@ export function renderSessions(props: SessionsProps) {
     }
     <section class="card" style=${props.actionsOpenKey ? "position: relative; z-index: 41;" : ""}>
       <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
-        <div>
-          ${props.result ? html`<div class="card-sub">Store: ${props.result.path}</div>` : nothing}
-        </div>
+        ${props.result ? html`<div class="card-sub">Store: ${props.result.path}</div>` : nothing}
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? "Loading…" : "Refresh"}
         </button>
