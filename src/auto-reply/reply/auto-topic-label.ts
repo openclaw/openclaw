@@ -9,6 +9,7 @@ import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { resolveModelAsync } from "../../agents/pi-embedded-runner/model.js";
+import { prepareModelForSimpleCompletion } from "../../agents/simple-completion-transport.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 
@@ -53,9 +54,10 @@ export async function generateTopicLabel(params: {
     logVerbose(`auto-topic-label: failed to resolve model ${modelRef.provider}/${modelRef.model}`);
     return null;
   }
+  const completionModel = prepareModelForSimpleCompletion({ model: resolved.model, cfg });
 
   const apiKey = requireApiKey(
-    await getApiKeyForModel({ model: resolved.model, cfg, agentDir }),
+    await getApiKeyForModel({ model: completionModel, cfg, agentDir }),
     modelRef.provider,
   );
 
@@ -63,7 +65,7 @@ export async function generateTopicLabel(params: {
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     const result = await completeSimple(
-      resolved.model,
+      completionModel,
       {
         messages: [
           {
