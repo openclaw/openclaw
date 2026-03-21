@@ -193,7 +193,7 @@ const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
 const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(plugins?.entries && Object.prototype.hasOwnProperty.call(plugins.entries, "memory-core"));
 
-const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
+export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
   if (!plugins) {
     return false;
   }

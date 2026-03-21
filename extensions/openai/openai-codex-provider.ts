@@ -3,13 +3,13 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import {
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   listProfilesForProvider,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/provider-auth";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { loginOpenAICodexOAuth } from "openclaw/plugin-sdk/provider-auth-login";
 import {
   DEFAULT_CONTEXT_TOKENS,
