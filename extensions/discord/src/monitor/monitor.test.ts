@@ -19,10 +19,12 @@ import {
   resolveDiscordModalEntry,
 } from "../components-registry.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
+import * as sendComponents from "../send.components.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
   createDiscordComponentButton,
+  createDiscordComponentStringSelect,
   createDiscordComponentModal,
 } from "./agent-components.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
@@ -198,7 +200,7 @@ describe("agent components", () => {
 
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
+    expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledTimes(1);
     const pairingText = String(reply.mock.calls[0]?.[0]?.content ?? "");
     expect(pairingText).toContain("Pairing code:");
@@ -219,8 +221,11 @@ describe("agent components", () => {
 
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "You are not authorized to use this button." });
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({
+      content: "You are not authorized to use this button.",
+      ephemeral: true,
+    });
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -236,8 +241,8 @@ describe("agent components", () => {
 
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalled();
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
@@ -254,8 +259,8 @@ describe("agent components", () => {
 
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -271,8 +276,11 @@ describe("agent components", () => {
 
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "DM interactions are disabled." });
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({
+      content: "DM interactions are disabled.",
+      ephemeral: true,
+    });
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -289,8 +297,8 @@ describe("agent components", () => {
 
     await select.run(interaction, { componentId: "hello" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -306,8 +314,8 @@ describe("agent components", () => {
 
     await button.run(interaction, { cid: "hello_cid" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       expect.stringContaining("hello_cid"),
       expect.any(Object),
@@ -326,8 +334,8 @@ describe("agent components", () => {
 
     await button.run(interaction, { cid: "hello%2G" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       expect.stringContaining("hello%2G"),
       expect.any(Object),
@@ -337,6 +345,7 @@ describe("agent components", () => {
 });
 
 describe("discord component interactions", () => {
+  let editDiscordComponentMessageMock: ReturnType<typeof vi.spyOn>;
   const createCfg = (): OpenClawConfig =>
     ({
       channels: {
@@ -391,6 +400,31 @@ describe("discord component interactions", () => {
       reply,
       ...overrides,
     } as unknown as ButtonInteraction;
+    return { interaction, defer, reply };
+  };
+
+  const createComponentSelectInteraction = (
+    overrides: Partial<StringSelectMenuInteraction> = {},
+  ) => {
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const defer = vi.fn().mockResolvedValue(undefined);
+    const rest = {
+      get: vi.fn().mockResolvedValue({ type: ChannelType.DM }),
+      post: vi.fn().mockResolvedValue({}),
+      patch: vi.fn().mockResolvedValue({}),
+      delete: vi.fn().mockResolvedValue(undefined),
+    };
+    const interaction = {
+      rawData: { channel_id: "dm-channel", id: "interaction-select-1" },
+      user: { id: "123456789", username: "AgentUser", discriminator: "0001" },
+      customId: "occomp:cid=sel_1",
+      message: { id: "msg-1" },
+      values: ["alpha"],
+      client: { rest },
+      defer,
+      reply,
+      ...overrides,
+    } as unknown as StringSelectMenuInteraction;
     return { interaction, defer, reply };
   };
 
@@ -454,6 +488,12 @@ describe("discord component interactions", () => {
   });
 
   beforeEach(() => {
+    editDiscordComponentMessageMock = vi
+      .spyOn(sendComponents, "editDiscordComponentMessage")
+      .mockResolvedValue({
+        messageId: "msg-1",
+        channelId: "dm-channel",
+      });
     clearDiscordComponentEntries();
     lastDispatchCtx = undefined;
     readAllowFromStoreMock.mockClear().mockResolvedValue([]);
@@ -511,10 +551,55 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
+  });
+
+  it("uses raw callbackData for built-in fallback when no plugin handler matches", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "/codex_resume --browse-projects" })],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction, reply } = createComponentButtonInteraction();
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(lastDispatchCtx?.BodyForAgent).toBe("/codex_resume --browse-projects");
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves selected values for select fallback when no plugin handler matches", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        {
+          id: "sel_1",
+          kind: "select",
+          label: "Pick",
+          messageId: "msg-1",
+          sessionKey: "session-1",
+          agentId: "agent-1",
+          accountId: "default",
+          callbackData: "/codex_resume",
+          selectType: "string",
+          options: [{ value: "alpha", label: "Alpha" }],
+        },
+      ],
+      modals: [],
+    });
+
+    const select = createDiscordComponentStringSelect(createComponentContext());
+    const { interaction, reply } = createComponentSelectInteraction();
+
+    await select.run(interaction, { cid: "sel_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(lastDispatchCtx?.BodyForAgent).toBe('Selected Alpha from "Pick".');
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps reusable buttons active after use", async () => {
@@ -550,7 +635,10 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(reply).toHaveBeenCalledWith({ content: "You are not authorized to use this button." });
+    expect(reply).toHaveBeenCalledWith({
+      content: "You are not authorized to use this button.",
+      ephemeral: true,
+    });
     expect(dispatchReplyMock).not.toHaveBeenCalled();
     expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
   });
@@ -797,6 +885,43 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 
+  it("lets plugin Discord interactions clear components after acknowledging", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "codex:approve" })],
+      modals: [],
+    });
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: any) => {
+      await params.respond.acknowledge();
+      await params.respond.clearComponents({ text: "Handled" });
+      return {
+        matched: true,
+        handled: true,
+        duplicate: false,
+      };
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const acknowledge = vi.fn().mockResolvedValue(undefined);
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const update = vi.fn().mockResolvedValue(undefined);
+    const interaction = {
+      ...(createComponentButtonInteraction().interaction as any),
+      acknowledge,
+      reply,
+      update,
+    } as ButtonInteraction;
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      content: "Handled",
+      components: [],
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(dispatchReplyMock).not.toHaveBeenCalled();
+  });
+
   it("falls through to built-in Discord component routing when a plugin declines handling", async () => {
     registerDiscordComponentEntries({
       entries: [createButtonEntry({ callbackData: "codex:approve" })],
@@ -814,7 +939,7 @@ describe("discord component interactions", () => {
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
     expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
   });
 
@@ -828,21 +953,23 @@ describe("discord component interactions", () => {
       modals: [],
     });
     const button = createDiscordComponentButton(createComponentContext());
-    const update = vi.fn().mockResolvedValue(undefined);
+    const acknowledge = vi.fn().mockResolvedValue(undefined);
     const followUp = vi.fn().mockResolvedValue(undefined);
     const interaction = {
       ...(createComponentButtonInteraction().interaction as any),
-      update,
+      acknowledge,
       followUp,
     } as ButtonInteraction;
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(update).toHaveBeenCalledWith({ components: [] });
-    expect(followUp).toHaveBeenCalledWith({
-      content: expect.stringContaining("bind approval"),
-      ephemeral: true,
-    });
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(editDiscordComponentMessageMock).toHaveBeenCalledWith(
+      "user:123456789",
+      "msg-1",
+      { text: expect.any(String) },
+      { accountId: "default" },
+    );
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 });

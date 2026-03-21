@@ -1,5 +1,5 @@
 import { MessageFlags } from "discord-api-types/v10";
-import { describe, expect, it, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearDiscordComponentEntries,
   registerDiscordComponentEntries,
@@ -78,6 +78,8 @@ describe("discord component registry", () => {
     clearDiscordComponentEntries();
   });
 
+  const componentsRegistryModuleUrl = new URL("./components-registry.ts", import.meta.url).href;
+
   it("registers and consumes component entries", () => {
     registerDiscordComponentEntries({
       entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
@@ -101,5 +103,29 @@ describe("discord component registry", () => {
     const consumed = resolveDiscordComponentEntry({ id: "btn_1" });
     expect(consumed?.id).toBe("btn_1");
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
+  });
+
+  it("shares registry state across duplicate module instances", async () => {
+    const first = (await import(
+      `${componentsRegistryModuleUrl}?t=first-${Date.now()}`
+    )) as typeof import("./components-registry.js");
+    const second = (await import(
+      `${componentsRegistryModuleUrl}?t=second-${Date.now()}`
+    )) as typeof import("./components-registry.js");
+
+    first.clearDiscordComponentEntries();
+    first.registerDiscordComponentEntries({
+      entries: [{ id: "btn_shared", kind: "button", label: "Shared" }],
+      modals: [],
+    });
+
+    expect(second.resolveDiscordComponentEntry({ id: "btn_shared", consume: false })).toMatchObject(
+      {
+        id: "btn_shared",
+        label: "Shared",
+      },
+    );
+
+    second.clearDiscordComponentEntries();
   });
 });
