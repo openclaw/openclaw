@@ -15,7 +15,12 @@ const MAX_ENTRIES = 5000;
  */
 const SLACK_THREAD_PARTICIPATION_KEY = Symbol.for("openclaw.slackThreadParticipation");
 
-const threadParticipation = resolveGlobalMap<string, number>(SLACK_THREAD_PARTICIPATION_KEY);
+let threadParticipation: Map<string, number> | undefined;
+
+function getThreadParticipation(): Map<string, number> {
+  threadParticipation ??= resolveGlobalMap<string, number>(SLACK_THREAD_PARTICIPATION_KEY);
+  return threadParticipation;
+}
 
 function makeKey(accountId: string, channelId: string, threadTs: string): string {
   return `${accountId}:${channelId}:${threadTs}`;
@@ -23,17 +28,17 @@ function makeKey(accountId: string, channelId: string, threadTs: string): string
 
 function evictExpired(): void {
   const now = Date.now();
-  for (const [key, timestamp] of threadParticipation) {
+  for (const [key, timestamp] of getThreadParticipation()) {
     if (now - timestamp > TTL_MS) {
-      threadParticipation.delete(key);
+      getThreadParticipation().delete(key);
     }
   }
 }
 
 function evictOldest(): void {
-  const oldest = threadParticipation.keys().next().value;
+  const oldest = getThreadParticipation().keys().next().value;
   if (oldest) {
-    threadParticipation.delete(oldest);
+    getThreadParticipation().delete(oldest);
   }
 }
 
@@ -45,6 +50,7 @@ export function recordSlackThreadParticipation(
   if (!accountId || !channelId || !threadTs) {
     return;
   }
+  const threadParticipation = getThreadParticipation();
   if (threadParticipation.size >= MAX_ENTRIES) {
     evictExpired();
   }
@@ -63,6 +69,7 @@ export function hasSlackThreadParticipation(
     return false;
   }
   const key = makeKey(accountId, channelId, threadTs);
+  const threadParticipation = getThreadParticipation();
   const timestamp = threadParticipation.get(key);
   if (timestamp == null) {
     return false;
@@ -75,5 +82,5 @@ export function hasSlackThreadParticipation(
 }
 
 export function clearSlackThreadParticipationCache(): void {
-  threadParticipation.clear();
+  getThreadParticipation().clear();
 }
