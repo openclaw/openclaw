@@ -434,6 +434,15 @@ export const TtsConfigSchema = z
       })
       .strict()
       .optional(),
+    gemini: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        model: z.string().optional(),
+        voice: z.string().optional(),
+        instructions: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     openai: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),

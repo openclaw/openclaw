@@ -109,6 +109,12 @@ export type ResolvedTtsConfig = {
       speed: number;
     };
   };
+  gemini: {
+    apiKey?: string;
+    model: string;
+    voice: string;
+    instructions?: string;
+  };
   openai: {
     apiKey?: string;
     baseUrl: string;
@@ -159,6 +165,10 @@ export type ResolvedTtsModelOverrides = {
 export type TtsDirectiveOverrides = {
   ttsText?: string;
   provider?: TtsProvider;
+  gemini?: {
+    voice?: string;
+    model?: string;
+  };
   openai?: {
     voice?: string;
     model?: string;
@@ -290,6 +300,15 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
           DEFAULT_ELEVENLABS_VOICE_SETTINGS.useSpeakerBoost,
         speed: raw.elevenlabs?.voiceSettings?.speed ?? DEFAULT_ELEVENLABS_VOICE_SETTINGS.speed,
       },
+    },
+    gemini: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.gemini?.apiKey,
+        path: "messages.tts.gemini.apiKey",
+      }),
+      model: raw.gemini?.model ?? "gemini-2.5-flash-preview-tts",
+      voice: raw.gemini?.voice ?? "Kore",
+      instructions: raw.gemini?.instructions?.trim() || undefined,
     },
     openai: {
       apiKey: normalizeResolvedSecretInputString({
@@ -527,10 +546,13 @@ export function resolveTtsApiKey(
   if (normalizedProvider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (normalizedProvider === "gemini") {
+    return config.gemini.apiKey || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "microsoft"] as const;
+export const TTS_PROVIDERS = ["gemini", "openai", "elevenlabs", "microsoft"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
   const normalizedPrimary = normalizeSpeechProviderId(primary) ?? primary;

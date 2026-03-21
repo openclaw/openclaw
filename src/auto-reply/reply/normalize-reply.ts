@@ -27,8 +27,20 @@ import { hasSlackDirectives, parseSlackDirectives } from "./slack-directives.js"
 const THINKING_BLOCK_RE =
   /<(?:think|thinking|reasoning|internal_thoughts|chain_of_thought|reflection)>[\s\S]*?<\/(?:think|thinking|reasoning|internal_thoughts|chain_of_thought|reflection)>/gi;
 
+// Catches untagged chain-of-thought leaked by GLM 4.7, Qwen, DeepSeek etc.
+// Patterns: "Okay, so the user wants...", "Let me think about...", "The user is asking..."
 const THINKING_PREFIX_RE =
-  /^(?:(?:The )?user (?:is asking|wants|asked|said|has asked|is requesting|seems to|appears to)\b.*?\n+)+/i;
+  /^(?:(?:okay|ok|alright|right|so|well|hmm|let me)[,.]?\s+)*(?:(?:so\s+)?(?:the\s+)?user\s+(?:is asking|wants|asked|said|has asked|is requesting|seems to|appears to|needs|would like)\b.*?\n+)+/i;
+
+// Catches "Let me think/analyze/consider..." preambles before the real answer
+const LET_ME_THINK_RE =
+  /^(?:(?:okay|ok|alright|sure|right)[,.]?\s+)?let me\s+(?:think|analyze|consider|figure|work|break|look|check|plan|reason)\b[^]*?\n\n/i;
+
+// Catches leaked tool-call XML that some models (GLM 4.7, Qwen) emit as plain text
+// instead of structured tool_use blocks. Matches <arg_key>…</arg_key><arg_value>…</arg_value>,
+// <tool_call>…</tool_call>, <function_call>…</function_call>, etc.
+const TOOL_CALL_LEAK_RE =
+  /<(?:arg_key|arg_value|tool_call|function_call|tool_use|parameters|arguments)>[\s\S]*?<\/(?:arg_key|arg_value|tool_call|function_call|tool_use|parameters|arguments)>/gi;
 
 export function stripThinkingTextLeaks(text: string): string {
   if (!text) {
@@ -36,8 +48,12 @@ export function stripThinkingTextLeaks(text: string): string {
   }
   // Strip XML-wrapped thinking blocks
   let cleaned = text.replace(THINKING_BLOCK_RE, "").trim();
+  // Strip leaked tool-call XML fragments
+  cleaned = cleaned.replace(TOOL_CALL_LEAK_RE, "").trim();
   // Strip leading meta-commentary about the user's intent
   cleaned = cleaned.replace(THINKING_PREFIX_RE, "").trim();
+  // Strip "Let me think about this..." preambles (up to first double newline)
+  cleaned = cleaned.replace(LET_ME_THINK_RE, "").trim();
   return cleaned || text; // fallback to original if everything was stripped
 }
 

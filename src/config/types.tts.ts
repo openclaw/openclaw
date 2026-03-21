@@ -55,6 +55,14 @@ export type TtsConfig = {
       speed?: number;
     };
   };
+  /** Google Gemini configuration. */
+  gemini?: {
+    apiKey?: SecretInput;
+    model?: string;
+    voice?: string;
+    /** System-level instructions for the TTS model. */
+    instructions?: string;
+  };
   /** OpenAI configuration. */
   openai?: {
     apiKey?: SecretInput;

@@ -40,5 +40,10 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
     return true;
   }
 
+  // Local llama-server with reasoning models (e.g. Qwen3.5)
+  if (normalized === "local-llama") {
+    return true;
+  }
+
   return false;
 }
