@@ -1053,6 +1053,51 @@ describe("runMessageAction accountId defaults", () => {
     expect(ctx.params.accountId).toBe("ops");
   });
 
+  it("prunes poll-only params for non-poll actions before plugin dispatch", async () => {
+    await runMessageAction({
+      cfg: {} as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "discord",
+        target: "channel:123",
+        message: "hi",
+        pollQuestion: "",
+        pollOption: [],
+        pollDurationHours: 0,
+        pollDurationSeconds: 0,
+        pollMulti: false,
+        pollAnonymous: false,
+        pollPublic: false,
+        pollId: "",
+        pollOptionId: "",
+        pollOptionIds: [],
+        pollOptionIndex: 0,
+        pollOptionIndexes: [],
+      },
+    });
+
+    const ctx = (handleAction.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
+      | {
+          params: Record<string, unknown>;
+        }
+      | undefined;
+    if (!ctx) {
+      throw new Error("expected action context");
+    }
+    expect(ctx.params.pollQuestion).toBeUndefined();
+    expect(ctx.params.pollOption).toBeUndefined();
+    expect(ctx.params.pollDurationHours).toBeUndefined();
+    expect(ctx.params.pollDurationSeconds).toBeUndefined();
+    expect(ctx.params.pollMulti).toBeUndefined();
+    expect(ctx.params.pollAnonymous).toBeUndefined();
+    expect(ctx.params.pollPublic).toBeUndefined();
+    expect(ctx.params.pollId).toBeUndefined();
+    expect(ctx.params.pollOptionId).toBeUndefined();
+    expect(ctx.params.pollOptionIds).toBeUndefined();
+    expect(ctx.params.pollOptionIndex).toBeUndefined();
+    expect(ctx.params.pollOptionIndexes).toBeUndefined();
+  });
+
   it("falls back to the agent's bound account when accountId is omitted", async () => {
     await runMessageAction({
       cfg: {

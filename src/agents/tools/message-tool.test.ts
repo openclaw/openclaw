@@ -131,6 +131,42 @@ describe("message tool path passthrough", () => {
     expect(call?.params?.[field]).toBe(value);
     expect(call?.params?.media).toBeUndefined();
   });
+
+  it("prunes poll-only params for send before dispatch", async () => {
+    mockSendResult({ to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        message: "report",
+        pollQuestion: "",
+        pollOption: [],
+        pollDurationHours: 0,
+        pollDurationSeconds: 0,
+        pollMulti: false,
+        pollAnonymous: false,
+        pollPublic: false,
+        pollId: "",
+        pollOptionId: "",
+        pollOptionIds: [],
+        pollOptionIndex: 0,
+        pollOptionIndexes: [],
+      },
+    });
+
+    expect(call?.params?.pollQuestion).toBeUndefined();
+    expect(call?.params?.pollOption).toBeUndefined();
+    expect(call?.params?.pollDurationHours).toBeUndefined();
+    expect(call?.params?.pollDurationSeconds).toBeUndefined();
+    expect(call?.params?.pollMulti).toBeUndefined();
+    expect(call?.params?.pollAnonymous).toBeUndefined();
+    expect(call?.params?.pollPublic).toBeUndefined();
+    expect(call?.params?.pollId).toBeUndefined();
+    expect(call?.params?.pollOptionId).toBeUndefined();
+    expect(call?.params?.pollOptionIds).toBeUndefined();
+    expect(call?.params?.pollOptionIndex).toBeUndefined();
+    expect(call?.params?.pollOptionIndexes).toBeUndefined();
+  });
 });
 
 describe("message tool schema scoping", () => {
