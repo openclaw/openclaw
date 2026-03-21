@@ -893,16 +893,7 @@ export class AcpxRuntime implements AcpRuntime {
     sessionName: string;
     cwd: string;
   }): Promise<string[]> {
-    const prefix = [
-      "--format",
-      "json",
-      "--json-strict",
-      "--cwd",
-      params.cwd,
-      ...buildPermissionArgs(this.config.permissionMode),
-      "--non-interactive-permissions",
-      this.config.nonInteractivePermissions,
-    ];
+    const prefix = [...this.buildSessionInitPrefix(params.cwd)];
     if (this.config.timeoutSeconds) {
       prefix.push("--timeout", String(this.config.timeoutSeconds));
     }
