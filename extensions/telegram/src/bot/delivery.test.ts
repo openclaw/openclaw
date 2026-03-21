@@ -624,7 +624,9 @@ describe("deliverReplies", () => {
     // Before the fix: Telegram 400 "text must be non-empty" → "No response generated."
     // After the fix: empty chunk is skipped silently; first chunk delivers successfully.
     const { runtime, sendMessage, bot } = createSendMessageHarness(99);
-    const longText = "A".repeat(3900) + "\n\n   "; // ~3900 chars + trailing whitespace
+    // 3500 As (exactly at limit) + trailing whitespace: produces chunk1="A"*3500 (sent)
+    // and chunk2="   " (whitespace only, skipped by empty-text guard).
+    const longText = "A".repeat(3500) + "\n\n   ";
     await deliverWith({
       replies: [{ text: longText }],
       runtime,
