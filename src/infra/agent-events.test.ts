@@ -25,6 +25,27 @@ describe("agent-events sequencing", () => {
     expect(getAgentRunContext("run-1")).toBeUndefined();
   });
 
+  test("clearAgentRunContext also removes seqByRun entry", async () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-seq", { sessionKey: "main" });
+    emitAgentEvent({ runId: "run-seq", stream: "lifecycle", data: {} });
+    emitAgentEvent({ runId: "run-seq", stream: "lifecycle", data: {} });
+
+    clearAgentRunContext("run-seq");
+
+    // After clearing, the next event for the same runId should restart from seq 1
+    const seqs: number[] = [];
+    const stop = onAgentEvent((evt) => {
+      if (evt.runId === "run-seq") {
+        seqs.push(evt.seq);
+      }
+    });
+    emitAgentEvent({ runId: "run-seq", stream: "lifecycle", data: {} });
+    stop();
+
+    expect(seqs).toEqual([1]);
+  });
+
   test("maintains monotonic seq per runId", async () => {
     const seen: Record<string, number[]> = {};
     const stop = onAgentEvent((evt) => {
