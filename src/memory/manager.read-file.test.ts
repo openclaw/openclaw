@@ -53,6 +53,7 @@ describe("MemoryIndexManager.readFile", () => {
     manager = await getRequiredMemoryIndexManager({
       cfg: createMemorySearchCfg({ workspaceDir, indexPath }),
       agentId: "main",
+      purpose: "status",
     });
 
     const relPath = "memory/2099-01-01.md";
@@ -69,6 +70,7 @@ describe("MemoryIndexManager.readFile", () => {
     manager = await getRequiredMemoryIndexManager({
       cfg: createMemorySearchCfg({ workspaceDir, indexPath }),
       agentId: "main",
+      purpose: "status",
     });
 
     const result = await manager.readFile({ relPath, from: 2, lines: 1 });
@@ -84,6 +86,7 @@ describe("MemoryIndexManager.readFile", () => {
     manager = await getRequiredMemoryIndexManager({
       cfg: createMemorySearchCfg({ workspaceDir, indexPath }),
       agentId: "main",
+      purpose: "status",
     });
 
     const result = await manager.readFile({ relPath, from: 10, lines: 5 });
@@ -99,6 +102,7 @@ describe("MemoryIndexManager.readFile", () => {
     manager = await getRequiredMemoryIndexManager({
       cfg: createMemorySearchCfg({ workspaceDir, indexPath }),
       agentId: "main",
+      purpose: "status",
     });
 
     const realReadFile = fs.readFile;

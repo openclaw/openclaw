@@ -8,6 +8,7 @@ import {
   resolveThreadBindingEffectiveExpiresAt,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
+  type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { writeJsonAtomic } from "openclaw/plugin-sdk/infra-runtime";
@@ -542,7 +543,11 @@ export function createTelegramThreadBindingManager(
         clearInterval(sweepTimer);
         sweepTimer = null;
       }
-      unregisterSessionBindingAdapter({ channel: "telegram", accountId });
+      unregisterSessionBindingAdapter({
+        channel: "telegram",
+        accountId,
+        adapter: sessionBindingAdapter,
+      });
       const existingManager = getThreadBindingsState().managersByAccountId.get(accountId);
       if (existingManager === manager) {
         getThreadBindingsState().managersByAccountId.delete(accountId);
@@ -550,7 +555,7 @@ export function createTelegramThreadBindingManager(
     },
   };
 
-  registerSessionBindingAdapter({
+  const sessionBindingAdapter: SessionBindingAdapter = {
     channel: "telegram",
     accountId,
     capabilities: {
@@ -687,7 +692,9 @@ export function createTelegramThreadBindingManager(
           ]
         : [];
     },
-  });
+  };
+
+  registerSessionBindingAdapter(sessionBindingAdapter);
 
   const sweeperEnabled = params.enableSweeper !== false;
   if (sweeperEnabled) {
