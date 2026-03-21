@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
@@ -134,7 +135,7 @@ describe("Feishu monitor startup preflight", () => {
     });
 
     const abortController = new AbortController();
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createRuntimeEnv({ throwOnExit: false });
     const monitorPromise = monitorFeishuProvider({
       config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
       runtime,
