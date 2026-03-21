@@ -7,6 +7,8 @@ const makeProxyFetch = vi.hoisted(() => vi.fn());
 
 vi.mock("./fetch.js", () => ({
   resolveTelegramFetch,
+  resolveTelegramApiBase: (apiRoot?: string) =>
+    apiRoot?.trim()?.replace(/\/+$/, "") || "https://api.telegram.org",
 }));
 
 vi.mock("./proxy.js", () => ({
@@ -190,6 +192,7 @@ describe("probeTelegram retry logic", () => {
         autoSelectFamily: false,
         dnsResultOrder: "ipv4first",
       },
+      apiRoot: undefined,
     });
   });
 
