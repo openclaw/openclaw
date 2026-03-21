@@ -61,6 +61,7 @@ const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_AZURE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -118,6 +119,16 @@ export type ResolvedTtsConfig = {
     voice: string;
     speed?: number;
     instructions?: string;
+  };
+
+  azure: {
+    apiKey?: string;
+    region: string;
+    baseUrl: string;
+    voice: string;
+    lang: string;
+    outputFormat: string;
+    timeoutMs?: number;
   };
   edge: {
     enabled: boolean;
@@ -177,6 +188,11 @@ export type TtsDirectiveOverrides = {
   };
   microsoft?: {
     voice?: string;
+    outputFormat?: string;
+  };
+  azure?: {
+    voice?: string;
+    lang?: string;
     outputFormat?: string;
   };
 };
@@ -325,6 +341,18 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
       speed: raw.openai?.speed,
       instructions: raw.openai?.instructions?.trim() || undefined,
+    },
+    azure: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.azure?.apiKey,
+        path: "messages.tts.azure.apiKey",
+      }),
+      region: raw.azure?.region?.trim() || process.env.AZURE_SPEECH_REGION || "eastus",
+      baseUrl: raw.azure?.baseUrl?.trim() || "",
+      voice: raw.azure?.voice || "",
+      lang: raw.azure?.lang?.trim() || "en-US",
+      outputFormat: raw.azure?.outputFormat?.trim() || DEFAULT_AZURE_OUTPUT_FORMAT,
+      timeoutMs: raw.azure?.timeoutMs,
     },
     edge: {
       enabled: rawMicrosoft.enabled ?? true,
@@ -478,6 +506,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "azure")) {
+    return "azure";
+  }
   return "microsoft";
 }
 
@@ -546,10 +577,13 @@ export function resolveTtsApiKey(
   if (normalizedProvider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (normalizedProvider === "azure") {
+    return config.azure.apiKey || process.env.AZURE_SPEECH_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "microsoft"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "microsoft", "azure"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
   const normalizedPrimary = normalizeSpeechProviderId(primary) ?? primary;

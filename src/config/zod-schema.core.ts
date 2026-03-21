@@ -392,6 +392,18 @@ const TtsMicrosoftConfigSchema = z
   })
   .strict()
   .optional();
+const TtsAzureConfigSchema = z
+  .object({
+    apiKey: SecretInputSchema.optional().register(sensitive),
+    region: z.string().optional(),
+    baseUrl: z.string().optional(),
+    voice: z.string().optional(),
+    lang: z.string().optional(),
+    outputFormat: z.string().optional(),
+    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+  })
+  .strict()
+  .optional();
 export const TtsConfigSchema = z
   .object({
     auto: TtsAutoSchema.optional(),
@@ -447,6 +459,7 @@ export const TtsConfigSchema = z
       .optional(),
     edge: TtsMicrosoftConfigSchema,
     microsoft: TtsMicrosoftConfigSchema,
+    azure: TtsAzureConfigSchema,
     prefsPath: z.string().optional(),
     maxTextLength: z.number().int().min(1).optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),

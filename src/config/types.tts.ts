@@ -93,6 +93,16 @@ export type TtsConfig = {
     proxy?: string;
     timeoutMs?: number;
   };
+  /** Azure Speech configuration. */
+  azure?: {
+    apiKey?: SecretInput;
+    region?: string;
+    baseUrl?: string;
+    voice?: string;
+    lang?: string;
+    outputFormat?: string;
+    timeoutMs?: number;
+  };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
   /** Hard cap for text sent to TTS (chars). */
