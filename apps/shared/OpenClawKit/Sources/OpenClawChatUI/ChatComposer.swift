@@ -557,6 +557,20 @@ private final class ChatComposerNSTextView: NSTextView {
         return types
     }
 
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Ensure Option+key combos (e.g. @ on German keyboard = Option+L) are handled
+        // by the text view, not intercepted by toolbar/menu bar.
+        // Only intercept if it produces a character and doesn't involve Command.
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.option) && !flags.contains(.command),
+           let chars = event.characters, !chars.isEmpty
+        {
+            self.interpretKeyEvents([event])
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     override func keyDown(with event: NSEvent) {
         let isReturn = event.keyCode == 36
         if isReturn {
