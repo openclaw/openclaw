@@ -25,12 +25,18 @@ function createSessions(): SessionsListResult {
 function createChatHeaderState(
   overrides: {
     model?: string | null;
+    modelProvider?: string | null;
+    defaultModel?: string | null;
+    defaultModelProvider?: string | null;
     models?: ModelCatalogEntry[];
     omitSessionFromList?: boolean;
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
+  const defaultModel = overrides.defaultModel ?? "gpt-5";
+  const defaultModelProvider = defaultModel ? (overrides.defaultModelProvider ?? "openai") : null;
   let currentModel = overrides.model ?? null;
-  let currentModelProvider = currentModel ? "openai" : null;
+  let currentModelProvider =
+    overrides.modelProvider ?? (currentModel ? defaultModelProvider : null);
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
   const catalog = overrides.models ?? [
     { id: "gpt-5", name: "GPT-5", provider: "openai" },
@@ -68,7 +74,7 @@ function createChatHeaderState(
         ts: 0,
         path: "",
         count: omitSessionFromList ? 0 : 1,
-        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        defaults: { modelProvider: defaultModelProvider, model: defaultModel, contextTokens: null },
         sessions: omitSessionFromList
           ? []
           : [
@@ -95,7 +101,7 @@ function createChatHeaderState(
       ts: 0,
       path: "",
       count: omitSessionFromList ? 0 : 1,
-      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      defaults: { modelProvider: defaultModelProvider, model: defaultModel, contextTokens: null },
       sessions: omitSessionFromList
         ? []
         : [
@@ -764,6 +770,55 @@ describe("chat view", () => {
     expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
     expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
     expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps provider-qualified model refs when switching across providers from the chat header picker", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+      } satisfies Partial<Response>),
+    );
+    const { state, request } = createChatHeaderState({
+      defaultModel: "MiniMax-M2.7",
+      defaultModelProvider: "minimax-cn",
+      models: [
+        { id: "MiniMax-M2.7", name: "MiniMax M2.7", provider: "minimax-cn" },
+        {
+          id: "qwen3.5-flash",
+          name: "Qwen 3.5 Flash",
+          provider: "custom-dashscope-aliyuncs-com",
+        },
+        { id: "gemini-3-flash-preview", name: "Gemini 3 Flash Preview", provider: "google" },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+
+    const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(
+      (option) => option.value,
+    );
+    expect(optionValues).toContain("custom-dashscope-aliyuncs-com/qwen3.5-flash");
+    expect(optionValues).toContain("google/gemini-3-flash-preview");
+    expect(optionValues).not.toContain("qwen3.5-flash");
+    expect(optionValues).not.toContain("gemini-3-flash-preview");
+
+    modelSelect!.value = "custom-dashscope-aliyuncs-com/qwen3.5-flash";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "custom-dashscope-aliyuncs-com/qwen3.5-flash",
+    });
+    expect(state.sessionsResult?.sessions[0]?.model).toBe("qwen3.5-flash");
+    expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("custom-dashscope-aliyuncs-com");
     vi.unstubAllGlobals();
   });
 

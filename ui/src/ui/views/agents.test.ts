@@ -171,4 +171,59 @@ describe("renderAgents", () => {
 
     expect(skillsTab?.textContent?.trim()).toContain("1");
   });
+
+  it("lists configured provider-qualified model ids in the overview picker", async () => {
+    const container = document.createElement("div");
+    render(
+      renderAgents(
+        createProps({
+          config: {
+            form: {
+              agents: {
+                defaults: {
+                  model: {
+                    primary: "minimax-cn/MiniMax-M2.7",
+                    fallbacks: ["google/gemini-3-flash-preview"],
+                  },
+                  models: {
+                    "custom-dashscope-aliyuncs-com/qwen3.5-flash": { alias: "bailian" },
+                  },
+                },
+                list: [{ id: "beta" }],
+              },
+            },
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(".agent-model-select select");
+    expect(modelSelect).not.toBeNull();
+
+    const options = Array.from(modelSelect?.querySelectorAll("option") ?? []).map((option) => ({
+      value: option.value,
+      label: option.textContent?.trim(),
+    }));
+
+    expect(options).toEqual(
+      expect.arrayContaining([
+        { value: "", label: "Inherit default (minimax-cn/MiniMax-M2.7)" },
+        {
+          value: "custom-dashscope-aliyuncs-com/qwen3.5-flash",
+          label: "bailian (custom-dashscope-aliyuncs-com/qwen3.5-flash)",
+        },
+        { value: "google/gemini-3-flash-preview", label: "google/gemini-3-flash-preview" },
+        { value: "minimax-cn/MiniMax-M2.7", label: "minimax-cn/MiniMax-M2.7" },
+      ]),
+    );
+    expect(options).not.toContainEqual({
+      value: "minimax-cn/MiniMax-M2.7",
+      label: "Current (minimax-cn/MiniMax-M2.7)",
+    });
+  });
 });
