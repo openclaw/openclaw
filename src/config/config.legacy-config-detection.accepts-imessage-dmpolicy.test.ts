@@ -342,21 +342,16 @@ describe("legacy config detection", () => {
       expectedValue: "slack",
     });
   });
-  it("strips bindings[].match.accountID with warning on load", async () => {
-    await withSnapshotForConfig(
-      {
+  it("rejects bindings[].match.accountID on load", async () => {
+    await expectLoadRejectionPreservesField({
+      config: {
         bindings: [{ agentId: "main", match: { channel: "telegram", accountID: "work" } }],
       },
-      async (ctx) => {
-        // Unknown keys are now stripped with warnings instead of rejecting.
-        expect(ctx.snapshot.valid).toBe(true);
-        expect(ctx.snapshot.warnings.length).toBeGreaterThan(0);
-        // The on-disk file is preserved (not rewritten).
-        expect(ctx.parsed).toEqual({
-          bindings: [{ agentId: "main", match: { channel: "telegram", accountID: "work" } }],
-        });
-      },
-    );
+      readValue: (parsed) =>
+        (parsed as { bindings?: Array<{ match?: { accountID?: string } }> }).bindings?.[0]?.match
+          ?.accountID,
+      expectedValue: "work",
+    });
   });
   it("accepts bindings[].comment on load", () => {
     expectValidConfigValue({

@@ -41,7 +41,7 @@ describe("signal groups schema", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("rejects unknown keys in Signal groups entries", () => {
+  it("strips unknown keys in Signal groups entries with warnings", () => {
     const res = validateConfigObject({
       channels: {
         signal: {
@@ -55,11 +55,14 @@ describe("signal groups schema", () => {
       },
     });
 
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues.some((issue) => issue.path.startsWith("channels.signal.groups"))).toBe(
-        true,
-      );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(
+        res.warnings?.some((warning) => warning.path.startsWith("channels.signal.groups")),
+      ).toBe(true);
+      expect(res.config.channels?.signal?.groups?.["*"]).toEqual({
+        requireMention: false,
+      });
     }
   });
 });
