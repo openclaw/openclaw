@@ -77,6 +77,7 @@ import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import { collectTelegramGroupPolicyWarnings } from "./doctor/providers/telegram.js";
+import { hasAllowFromEntries } from "./doctor/shared/allowlist.js";
 
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
 
@@ -1135,10 +1136,6 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
     return { config: cfg, changes: [] };
   }
   return { config: next, changes };
-}
-
-function hasAllowFromEntries(list?: Array<string | number>) {
-  return Array.isArray(list) && list.map((v) => String(v).trim()).filter(Boolean).length > 0;
 }
 
 async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise<{

@@ -1,8 +1,5 @@
-import type { DoctorAccountRecord } from "../types.js";
-
-function hasAllowFromEntries(list?: Array<string | number>) {
-  return Array.isArray(list) && list.map((v) => String(v).trim()).filter(Boolean).length > 0;
-}
+import { hasAllowFromEntries } from "../shared/allowlist.js";
+import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 
 function hasConfiguredGroups(account: DoctorAccountRecord, parent?: DoctorAccountRecord): boolean {
   const groups =
@@ -14,7 +11,7 @@ function hasConfiguredGroups(account: DoctorAccountRecord, parent?: DoctorAccoun
 type CollectTelegramGroupPolicyWarningsParams = {
   account: DoctorAccountRecord;
   prefix: string;
-  effectiveAllowFrom?: Array<string | number>;
+  effectiveAllowFrom?: DoctorAllowFromList;
   dmPolicy?: string;
   parent?: DoctorAccountRecord;
 };
@@ -38,8 +35,8 @@ export function collectTelegramGroupPolicyWarnings(
   }
 
   const rawGroupAllowFrom =
-    (params.account.groupAllowFrom as Array<string | number> | undefined) ??
-    (params.parent?.groupAllowFrom as Array<string | number> | undefined);
+    (params.account.groupAllowFrom as DoctorAllowFromList | undefined) ??
+    (params.parent?.groupAllowFrom as DoctorAllowFromList | undefined);
   // Match runtime semantics: resolveGroupAllowFromSources treats empty arrays as
   // unset and falls back to allowFrom.
   const groupAllowFrom = hasAllowFromEntries(rawGroupAllowFrom) ? rawGroupAllowFrom : undefined;
