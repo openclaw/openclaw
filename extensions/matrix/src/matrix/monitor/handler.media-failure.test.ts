@@ -40,6 +40,9 @@ function createHandlerHarness() {
           mainSessionKey: "agent:main:main",
         }),
       },
+      mentions: {
+        buildMentionRegexes: vi.fn().mockReturnValue([]),
+      },
       session: {
         resolveStorePath: vi.fn().mockReturnValue("/tmp/openclaw-test-session.json"),
         readSessionUpdatedAt: vi.fn().mockReturnValue(123),
