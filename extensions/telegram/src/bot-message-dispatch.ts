@@ -22,6 +22,7 @@ import type {
   OpenClawConfig,
   ReplyToMode,
   TelegramAccountConfig,
+  TelegramDirectConfig,
 } from "openclaw/plugin-sdk/config-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
@@ -888,10 +889,8 @@ export const dispatchTelegramMessage = async ({
     const userMessage = (ctxPayload.RawBody ?? ctxPayload.Body ?? "").slice(0, 500);
     if (userMessage.trim()) {
       const agentDir = resolveAgentDir(cfg, route.agentId);
-      const directAutoTopicLabel =
-        !isGroup && groupConfig && "dmPolicy" in groupConfig
-          ? groupConfig.autoTopicLabel
-          : undefined;
+      const directConfig = !isGroup ? (groupConfig as TelegramDirectConfig | undefined) : undefined;
+      const directAutoTopicLabel = directConfig?.autoTopicLabel;
       const accountAutoTopicLabel = telegramCfg?.autoTopicLabel;
       const autoTopicConfig = resolveAutoTopicLabelConfig(
         directAutoTopicLabel,

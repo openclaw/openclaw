@@ -2412,7 +2412,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
           RawBody: "Need help with invoices",
         } as TelegramMessageContext["ctxPayload"],
         groupConfig: {
-          dmPolicy: "pairing",
           autoTopicLabel: false,
         } as TelegramMessageContext["groupConfig"],
       }),
