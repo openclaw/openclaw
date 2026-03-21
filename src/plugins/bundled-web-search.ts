@@ -1,4 +1,5 @@
 import { bundledWebSearchPluginRegistrations } from "../bundled-web-search-registry.js";
+import { listBundledWebSearchPluginIds as listBundledWebSearchPluginIdsFromIds } from "./bundled-web-search-ids.js";
 import { capturePluginRegistration } from "./captured-registration.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
@@ -8,7 +9,6 @@ type BundledWebSearchProviderEntry = PluginWebSearchProviderEntry & { pluginId: 
 type BundledWebSearchPluginRegistration = (typeof bundledWebSearchPluginRegistrations)[number];
 
 let bundledWebSearchProvidersCache: BundledWebSearchProviderEntry[] | null = null;
-let bundledWebSearchPluginIdsCache: string[] | null = null;
 
 function resolveBundledWebSearchPlugin(
   entry: BundledWebSearchPluginRegistration,
@@ -35,19 +35,6 @@ function listBundledWebSearchPluginRegistrations() {
     );
 }
 
-function loadBundledWebSearchPluginIds(): string[] {
-  if (!bundledWebSearchPluginIdsCache) {
-    bundledWebSearchPluginIdsCache = listBundledWebSearchPluginRegistrations()
-      .map(({ plugin }) => plugin.id)
-      .toSorted((left, right) => left.localeCompare(right));
-  }
-  return bundledWebSearchPluginIdsCache;
-}
-
-export function listBundledWebSearchPluginIds(): string[] {
-  return loadBundledWebSearchPluginIds();
-}
-
 function loadBundledWebSearchProviders(): BundledWebSearchProviderEntry[] {
   if (!bundledWebSearchProvidersCache) {
     bundledWebSearchProvidersCache = listBundledWebSearchPluginRegistrations().flatMap(
@@ -71,11 +58,15 @@ export function resolveBundledWebSearchPluginIds(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  const bundledWebSearchPluginIdSet = new Set<string>(loadBundledWebSearchPluginIds());
+  const bundledWebSearchPluginIdSet = new Set<string>(listBundledWebSearchPluginIdsFromIds());
   return registry.plugins
     .filter((plugin) => plugin.origin === "bundled" && bundledWebSearchPluginIdSet.has(plugin.id))
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listBundledWebSearchPluginIds(): string[] {
+  return listBundledWebSearchPluginIdsFromIds();
 }
 
 export function listBundledWebSearchProviders(): PluginWebSearchProviderEntry[] {
