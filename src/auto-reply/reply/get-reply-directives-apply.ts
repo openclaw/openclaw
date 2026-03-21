@@ -150,6 +150,7 @@ export async function applyInlineDirectiveOverrides(params: {
     }
     const {
       currentThinkLevel: resolvedDefaultThinkLevel,
+      currentFastMode,
       currentVerboseLevel,
       currentReasoningLevel,
       currentElevatedLevel,
@@ -162,6 +163,7 @@ export async function applyInlineDirectiveOverrides(params: {
     const directiveReply = await handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
       currentThinkLevel,
+      currentFastMode,
       currentVerboseLevel,
       currentReasoningLevel,
       currentElevatedLevel,
@@ -201,6 +203,7 @@ export async function applyInlineDirectiveOverrides(params: {
 
   const hasAnyDirective =
     directives.hasThinkDirective ||
+    directives.hasFastDirective ||
     directives.hasVerboseDirective ||
     directives.hasReasoningDirective ||
     directives.hasElevatedDirective ||

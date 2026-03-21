@@ -6,7 +6,7 @@ import * as crypto from "node:crypto";
 import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
-} from "openclaw/plugin-sdk/synology-chat";
+} from "openclaw/plugin-sdk/webhook-ingress";
 
 export type DmAuthorizationResult =
   | { allowed: true }

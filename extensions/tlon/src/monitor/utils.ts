@@ -161,42 +161,74 @@ export function isGroupInviteAllowed(
   return allowlist.map((ship) => normalizeShip(ship)).some((ship) => ship === normalizedInviter);
 }
 
+/**
+ * Resolve quoted/cited content only after the caller has passed authorization.
+ * Unauthorized paths must keep raw text and must not trigger cross-channel cite fetches.
+ */
+export async function resolveAuthorizedMessageText(params: {
+  rawText: string;
+  content: unknown;
+  authorizedForCites: boolean;
+  resolveAllCites: (content: unknown) => Promise<string>;
+}): Promise<string> {
+  const { rawText, content, authorizedForCites, resolveAllCites } = params;
+  if (!authorizedForCites) {
+    return rawText;
+  }
+  const citedContent = await resolveAllCites(content);
+  return citedContent + rawText;
+}
+
 // Helper to recursively extract text from inline content
+function renderInlineItem(
+  item: any,
+  options?: {
+    linkMode?: "content-or-href" | "href";
+    allowBreak?: boolean;
+    allowBlockquote?: boolean;
+  },
+): string {
+  if (typeof item === "string") {
+    return item;
+  }
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+  if (item.ship) {
+    return item.ship;
+  }
+  if ("sect" in item) {
+    return `@${item.sect || "all"}`;
+  }
+  if (options?.allowBreak && item.break !== undefined) {
+    return "\n";
+  }
+  if (item["inline-code"]) {
+    return `\`${item["inline-code"]}\``;
+  }
+  if (item.code) {
+    return `\`${item.code}\``;
+  }
+  if (item.link && item.link.href) {
+    return options?.linkMode === "href" ? item.link.href : item.link.content || item.link.href;
+  }
+  if (item.bold && Array.isArray(item.bold)) {
+    return `**${extractInlineText(item.bold)}**`;
+  }
+  if (item.italics && Array.isArray(item.italics)) {
+    return `*${extractInlineText(item.italics)}*`;
+  }
+  if (item.strike && Array.isArray(item.strike)) {
+    return `~~${extractInlineText(item.strike)}~~`;
+  }
+  if (options?.allowBlockquote && item.blockquote && Array.isArray(item.blockquote)) {
+    return `> ${extractInlineText(item.blockquote)}`;
+  }
+  return "";
+}
+
 function extractInlineText(items: any[]): string {
-  return items
-    .map((item: any) => {
-      if (typeof item === "string") {
-        return item;
-      }
-      if (item && typeof item === "object") {
-        if (item.ship) {
-          return item.ship;
-        }
-        if ("sect" in item) {
-          return `@${item.sect || "all"}`;
-        }
-        if (item["inline-code"]) {
-          return `\`${item["inline-code"]}\``;
-        }
-        if (item.code) {
-          return `\`${item.code}\``;
-        }
-        if (item.link && item.link.href) {
-          return item.link.content || item.link.href;
-        }
-        if (item.bold && Array.isArray(item.bold)) {
-          return `**${extractInlineText(item.bold)}**`;
-        }
-        if (item.italics && Array.isArray(item.italics)) {
-          return `*${extractInlineText(item.italics)}*`;
-        }
-        if (item.strike && Array.isArray(item.strike)) {
-          return `~~${extractInlineText(item.strike)}~~`;
-        }
-      }
-      return "";
-    })
-    .join("");
+  return items.map((item: any) => renderInlineItem(item)).join("");
 }
 
 export function extractMessageText(content: unknown): string {
@@ -209,48 +241,13 @@ export function extractMessageText(content: unknown): string {
       // Handle inline content (text, ships, links, etc.)
       if (verse.inline && Array.isArray(verse.inline)) {
         return verse.inline
-          .map((item: any) => {
-            if (typeof item === "string") {
-              return item;
-            }
-            if (item && typeof item === "object") {
-              if (item.ship) {
-                return item.ship;
-              }
-              // Handle sect (role mentions like @all)
-              if ("sect" in item) {
-                return `@${item.sect || "all"}`;
-              }
-              if (item.break !== undefined) {
-                return "\n";
-              }
-              if (item.link && item.link.href) {
-                return item.link.href;
-              }
-              // Handle inline code (Tlon uses "inline-code" key)
-              if (item["inline-code"]) {
-                return `\`${item["inline-code"]}\``;
-              }
-              if (item.code) {
-                return `\`${item.code}\``;
-              }
-              // Handle bold/italic/strike - recursively extract text
-              if (item.bold && Array.isArray(item.bold)) {
-                return `**${extractInlineText(item.bold)}**`;
-              }
-              if (item.italics && Array.isArray(item.italics)) {
-                return `*${extractInlineText(item.italics)}*`;
-              }
-              if (item.strike && Array.isArray(item.strike)) {
-                return `~~${extractInlineText(item.strike)}~~`;
-              }
-              // Handle blockquote inline
-              if (item.blockquote && Array.isArray(item.blockquote)) {
-                return `> ${extractInlineText(item.blockquote)}`;
-              }
-            }
-            return "";
-          })
+          .map((item: any) =>
+            renderInlineItem(item, {
+              linkMode: "href",
+              allowBreak: true,
+              allowBlockquote: true,
+            }),
+          )
           .join("");
       }
 

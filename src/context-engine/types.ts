@@ -57,7 +57,43 @@ export type SubagentSpawnPreparation = {
 };
 
 export type SubagentEndReason = "deleted" | "completed" | "swept" | "released";
-export type ContextEngineRuntimeContext = Record<string, unknown>;
+
+export type TranscriptRewriteReplacement = {
+  /** Existing transcript entry id to replace on the active branch. */
+  entryId: string;
+  /** Replacement message content for that entry. */
+  message: AgentMessage;
+};
+
+export type TranscriptRewriteRequest = {
+  /** Message entry replacements to apply in one branch-and-reappend pass. */
+  replacements: TranscriptRewriteReplacement[];
+};
+
+export type TranscriptRewriteResult = {
+  /** Whether the active branch changed. */
+  changed: boolean;
+  /** Estimated bytes removed from the active branch message payloads. */
+  bytesFreed: number;
+  /** Number of transcript message entries rewritten. */
+  rewrittenEntries: number;
+  /** Optional reason when no rewrite occurred. */
+  reason?: string;
+};
+
+export type ContextEngineMaintenanceResult = TranscriptRewriteResult;
+
+export type ContextEngineRuntimeContext = Record<string, unknown> & {
+  /**
+   * Safe transcript rewrite helper implemented by the runtime.
+   *
+   * Engines decide what is safe to rewrite; the runtime owns how the session
+   * DAG is updated on disk.
+   */
+  rewriteTranscriptEntries?: (
+    request: TranscriptRewriteRequest,
+  ) => Promise<TranscriptRewriteResult>;
+};
 
 /**
  * ContextEngine defines the pluggable contract for context management.
@@ -72,13 +108,31 @@ export interface ContextEngine {
   /**
    * Initialize engine state for a session, optionally importing historical context.
    */
-  bootstrap?(params: { sessionId: string; sessionFile: string }): Promise<BootstrapResult>;
+  bootstrap?(params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+  }): Promise<BootstrapResult>;
+
+  /**
+   * Run transcript maintenance after bootstrap, successful turns, or compaction.
+   *
+   * Engines can use runtimeContext.rewriteTranscriptEntries() to request safe
+   * branch-and-reappend transcript rewrites without depending on Pi internals.
+   */
+  maintain?(params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+    runtimeContext?: ContextEngineRuntimeContext;
+  }): Promise<ContextEngineMaintenanceResult>;
 
   /**
    * Ingest a single message into the engine's store.
    */
   ingest(params: {
     sessionId: string;
+    sessionKey?: string;
     message: AgentMessage;
     /** True when the message belongs to a heartbeat run. */
     isHeartbeat?: boolean;
@@ -89,6 +143,7 @@ export interface ContextEngine {
    */
   ingestBatch?(params: {
     sessionId: string;
+    sessionKey?: string;
     messages: AgentMessage[];
     /** True when the batch belongs to a heartbeat run. */
     isHeartbeat?: boolean;
@@ -101,6 +156,7 @@ export interface ContextEngine {
    */
   afterTurn?(params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     messages: AgentMessage[];
     /** Number of messages that existed before the prompt was sent. */
@@ -121,8 +177,14 @@ export interface ContextEngine {
    */
   assemble(params: {
     sessionId: string;
+    sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
+    /** Current model identifier (e.g. "claude-opus-4", "gpt-4o", "qwen2.5-7b").
+     *  Allows context engine plugins to adapt formatting per model. */
+    model?: string;
+    /** The incoming user prompt for this turn (useful for retrieval-oriented engines). */
+    prompt?: string;
   }): Promise<AssembleResult>;
 
   /**
@@ -131,6 +193,7 @@ export interface ContextEngine {
    */
   compact(params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     tokenBudget?: number;
     /** Force compaction even below the default trigger threshold. */

@@ -1,40 +1,11 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/zalouser";
 import { describe, expect, it, vi } from "vitest";
-
-const listZaloGroupMembersMock = vi.hoisted(() => vi.fn(async () => []));
-
-vi.mock("./zalo-js.js", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    listZaloGroupMembers: listZaloGroupMembersMock,
-  };
-});
-
-vi.mock("./accounts.js", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    resolveZalouserAccountSync: () => ({
-      accountId: "default",
-      profile: "default",
-      name: "test",
-      enabled: true,
-      authenticated: true,
-      config: {},
-    }),
-  };
-});
-
+import "./accounts.test-mocks.js";
+import "./zalo-js.test-mocks.js";
 import { zalouserPlugin } from "./channel.js";
+import { createZalouserRuntimeEnv } from "./test-helpers.js";
+import { listZaloGroupMembersMock } from "./zalo-js.test-mocks.js";
 
-const runtimeStub: RuntimeEnv = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: ((code: number): never => {
-    throw new Error(`exit ${code}`);
-  }) as RuntimeEnv["exit"],
-};
+const runtimeStub = createZalouserRuntimeEnv();
 
 describe("zalouser directory group members", () => {
   it("accepts prefixed group ids from directory groups list output", async () => {

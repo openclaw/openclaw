@@ -1,3 +1,4 @@
+import { resolveOpenAITtsInstructions } from "../../api.js";
 import { pcmToMulaw } from "../telephony-audio.js";
 
 /**
@@ -110,9 +111,11 @@ export class OpenAITTSProvider {
       speed: this.speed,
     };
 
-    // Add instructions if using gpt-4o-mini-tts model
-    const effectiveInstructions = trimToUndefined(instructions) ?? this.instructions;
-    if (effectiveInstructions && this.model.includes("gpt-4o-mini-tts")) {
+    const effectiveInstructions = resolveOpenAITtsInstructions(
+      this.model,
+      trimToUndefined(instructions) ?? this.instructions,
+    );
+    if (effectiveInstructions) {
       body.instructions = effectiveInstructions;
     }
 

@@ -1,10 +1,15 @@
+import {
+  isTelegramExecApprovalApprover,
+  isTelegramExecApprovalClientEnabled,
+} from "../../../extensions/telegram/api.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
-const COMMAND = "/approve";
+const COMMAND_REGEX = /^\/approve(?:\s|$)/i;
+const FOREIGN_COMMAND_MENTION_REGEX = /^\/approve@([^\s]+)(?:\s|$)/i;
 
 const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> = {
   allow: "allow-once",
@@ -25,10 +30,14 @@ type ParsedApproveCommand =
 
 function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith(COMMAND)) {
+  if (FOREIGN_COMMAND_MENTION_REGEX.test(trimmed)) {
+    return { ok: false, error: "❌ This /approve command targets a different Telegram bot." };
+  }
+  const commandMatch = trimmed.match(COMMAND_REGEX);
+  if (!commandMatch) {
     return null;
   }
-  const rest = trimmed.slice(COMMAND.length).trim();
+  const rest = trimmed.slice(commandMatch[0].length).trim();
   if (!rest) {
     return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
   }
@@ -81,6 +90,29 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
 
   if (!parsed.ok) {
     return { shouldContinue: false, reply: { text: parsed.error } };
+  }
+
+  if (params.command.channel === "telegram") {
+    if (
+      !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
+    ) {
+      return {
+        shouldContinue: false,
+        reply: { text: "❌ Telegram exec approvals are not enabled for this bot account." },
+      };
+    }
+    if (
+      !isTelegramExecApprovalApprover({
+        cfg: params.cfg,
+        accountId: params.ctx.AccountId,
+        senderId: params.command.senderId,
+      })
+    ) {
+      return {
+        shouldContinue: false,
+        reply: { text: "❌ You are not authorized to approve exec requests on Telegram." },
+      };
+    }
   }
 
   const missingScope = requireGatewayClientScopeForInternalChannel(params, {
