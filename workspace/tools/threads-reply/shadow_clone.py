@@ -309,5 +309,50 @@ if __name__ == '__main__':
         out = Path(__file__).parent / 'shadow-clone-prompts.json'
         out.write_text(json.dumps(prompts, ensure_ascii=False, indent=2))
         print(f"\nPrompts saved to {out}")
+    elif sys.argv[1] == 'auto-prompt':
+        # Generate a loop prompt for the Claude Code session to execute
+        limit = 10
+        for i, arg in enumerate(sys.argv):
+            if arg == '--limit' and i + 1 < len(sys.argv):
+                limit = int(sys.argv[i + 1])
+        blocks = cmd_prepare(limit)
+        if not blocks:
+            print("No targets. Clean.")
+            sys.exit(0)
+
+        # Build the prompt that the session should execute
+        print("\n=== COPY THIS INTO YOUR SESSION ===\n")
+        # Generate Agent calls
+        for i, b in enumerate(blocks):
+            prompt = build_agent_prompt(b)
+            # Escape for inline use
+            print(f"--- CLONE {i+1}: @{b['username']} ---")
+            print(f"comment_id: {b['comment_id']}")
+            print(f"post_id: {b['post_id']}")
+            print(f"PROMPT: {prompt[:100]}...")
+            print()
+
+        # Also save for send
+        out = Path(__file__).parent / 'shadow-clone-queue.json'
+        out.write_text(json.dumps(blocks, ensure_ascii=False, indent=2))
+        print(f"Queue saved. After agents finish, save results to shadow-clone-results.json then run: python3 shadow_clone.py send")
+
+    elif sys.argv[1] == 'wave-report':
+        # Show today's wave stats
+        conn = db.get_conn()
+        sent_today = conn.execute('''
+            SELECT COUNT(*) FROM replies WHERE status='sent'
+            AND sent_at > date('now', '-1 day')
+        ''').fetchone()[0]
+        total_sent = conn.execute('SELECT COUNT(*) FROM replies WHERE status="sent"').fetchone()[0]
+        total_comments = conn.execute('SELECT COUNT(DISTINCT c.comment_id) FROM comments c JOIN profiles p ON c.user_id=p.user_id WHERE p.username != "tangcruzz"').fetchone()[0]
+        remaining = conn.execute('''SELECT COUNT(*) FROM comments c LEFT JOIN replies r ON c.comment_id=r.comment_id
+            JOIN profiles p ON c.user_id=p.user_id WHERE r.reply_id IS NULL AND p.username != "tangcruzz"
+            AND length(c.text_content) > 10 AND c.parent_comment_id IS NULL''').fetchone()[0]
+        print(f"Today: {sent_today} sent")
+        print(f"Total: {total_sent}/{total_comments} = {round(total_sent/max(total_comments,1)*100)}%")
+        print(f"Remaining (root, >10 chars): {remaining}")
+        conn.close()
+
     else:
         print(__doc__)
