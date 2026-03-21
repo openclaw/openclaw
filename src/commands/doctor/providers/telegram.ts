@@ -1,4 +1,4 @@
-type DoctorAccountRecord = Record<string, unknown>;
+import type { DoctorAccountRecord } from "../types.js";
 
 function hasAllowFromEntries(list?: Array<string | number>) {
   return Array.isArray(list) && list.map((v) => String(v).trim()).filter(Boolean).length > 0;
