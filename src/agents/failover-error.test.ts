@@ -69,6 +69,24 @@ describe("failover-error", () => {
     expect(err?.status).toBe(400);
   });
 
+  it("maps HTTP 404 to model_not_found", () => {
+    expect(resolveFailoverReasonFromError({ status: 404 })).toBe("model_not_found");
+    expect(resolveFailoverReasonFromError({ statusCode: 404 })).toBe("model_not_found");
+    expect(resolveFailoverReasonFromError({ statusCode: "404" })).toBe("model_not_found");
+  });
+
+  it("coerces 404 status into FailoverError with model_not_found reason", () => {
+    const err = coerceToFailoverError(
+      { status: 404, message: "model not found" },
+      {
+        provider: "openai",
+        model: "gpt-5",
+      },
+    );
+    expect(err?.reason).toBe("model_not_found");
+    expect(err?.status).toBe(404);
+  });
+
   it("describes non-Error values consistently", () => {
     const described = describeFailoverError(123);
     expect(described.message).toBe("123");
