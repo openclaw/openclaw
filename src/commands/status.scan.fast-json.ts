@@ -1,7 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
@@ -100,6 +99,23 @@ const LEGACY_STATE_DIRNAMES = [".clawdbot", ".moldbot", ".moltbot"] as const;
 const CONFIG_FILENAME = "openclaw.json";
 const LEGACY_CONFIG_FILENAMES = ["clawdbot.json", "moldbot.json", "moltbot.json"] as const;
 const DEFAULT_GATEWAY_PORT = 18789;
+const DEFAULT_ACCOUNT_ID = "default";
+const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+const CHANNEL_ENV_PREFIXES = [
+  ["BLUEBUBBLES_", "bluebubbles"],
+  ["DISCORD_", "discord"],
+  ["GOOGLECHAT_", "googlechat"],
+  ["IRC_", "irc"],
+  ["LINE_", "line"],
+  ["MATRIX_", "matrix"],
+  ["MSTEAMS_", "msteams"],
+  ["SIGNAL_", "signal"],
+  ["SLACK_", "slack"],
+  ["TELEGRAM_", "telegram"],
+  ["WHATSAPP_", "whatsapp"],
+  ["ZALOUSER_", "zalouser"],
+  ["ZALO_", "zalo"],
+] as const;
 
 function resolveHomeDirFast(env: NodeJS.ProcessEnv = process.env): string {
   return env.OPENCLAW_HOME?.trim() || env.HOME || env.USERPROFILE || os.homedir();
@@ -135,6 +151,81 @@ function resolveStateDirFast(env: NodeJS.ProcessEnv = process.env): string {
     }
   }
   return newDir;
+}
+
+function resolveOAuthDirFast(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.OPENCLAW_OAUTH_DIR?.trim();
+  if (override) {
+    return resolveUserPathFast(override, env);
+  }
+  return path.join(resolveStateDirFast(env), "credentials");
+}
+
+function hasNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasMeaningfulChannelConfigFast(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return Object.keys(value).some((key) => key !== "enabled");
+}
+
+function hasWhatsAppAuthStateFast(env: NodeJS.ProcessEnv): boolean {
+  try {
+    const oauthDir = resolveOAuthDirFast(env);
+    const legacyCreds = path.join(oauthDir, "creds.json");
+    if (existsSync(legacyCreds)) {
+      return true;
+    }
+    const accountsRoot = path.join(oauthDir, "whatsapp");
+    const defaultCreds = path.join(accountsRoot, DEFAULT_ACCOUNT_ID, "creds.json");
+    if (existsSync(defaultCreds)) {
+      return true;
+    }
+    return readdirSync(accountsRoot, { withFileTypes: true }).some((entry) => {
+      if (!entry.isDirectory()) {
+        return false;
+      }
+      return existsSync(path.join(accountsRoot, entry.name, "creds.json"));
+    });
+  } catch {
+    return false;
+  }
+}
+
+function hasPotentialConfiguredChannelsFast(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const channels = isRecord(cfg.channels) ? cfg.channels : null;
+  if (channels) {
+    for (const [key, value] of Object.entries(channels)) {
+      if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
+        continue;
+      }
+      if (hasMeaningfulChannelConfigFast(value)) {
+        return true;
+      }
+    }
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (!hasNonEmptyString(value)) {
+      continue;
+    }
+    if (
+      CHANNEL_ENV_PREFIXES.some(([prefix]) => key.startsWith(prefix)) ||
+      key === "TELEGRAM_BOT_TOKEN"
+    ) {
+      return true;
+    }
+  }
+  return hasWhatsAppAuthStateFast(env);
 }
 
 function resolveConfigPathFast(env: NodeJS.ProcessEnv = process.env): string {
@@ -173,7 +264,7 @@ function shouldSkipMissingConfigFastPath(): boolean {
 }
 
 function shouldCollectPluginCompatibility(cfg: OpenClawConfig): boolean {
-  if (hasPotentialConfiguredChannels(cfg)) {
+  if (hasPotentialConfiguredChannelsFast(cfg)) {
     return true;
   }
   return existsSync(resolveConfigPathFast(process.env));
@@ -321,14 +412,14 @@ export async function scanStatusJsonFast(
     sourceConfig: loadedRaw,
     commandName: "status --json",
   });
-  if (hasPotentialConfiguredChannels(cfg)) {
+  if (hasPotentialConfiguredChannelsFast(cfg)) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
   }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;
-  const canUseLeanSummary = hasMissingConfigFastPath() && !hasPotentialConfiguredChannels(cfg);
+  const canUseLeanSummary = hasMissingConfigFastPath() && !hasPotentialConfiguredChannelsFast(cfg);
   const updatePromise = canUseLeanSummary
     ? Promise.resolve(buildLeanUpdateCheckResult())
     : loadStatusUpdateModule().then(({ getUpdateCheckResult }) =>
