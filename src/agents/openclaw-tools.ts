@@ -57,7 +57,7 @@ function coerceFiniteNumber(value: unknown): number | undefined {
   return undefined;
 }
 
-function toolParametersSupportsTopicId(tool: AnyAgentTool): boolean {
+function toolParametersSupportsMessageThreadId(tool: AnyAgentTool): boolean {
   const schema =
     tool.parameters && typeof tool.parameters === "object"
       ? (tool.parameters as Record<string, unknown>)
@@ -69,7 +69,7 @@ function toolParametersSupportsTopicId(tool: AnyAgentTool): boolean {
     schema.properties && typeof schema.properties === "object"
       ? (schema.properties as Record<string, unknown>)
       : null;
-  return Boolean(properties && "topicId" in properties);
+  return Boolean(properties && "messageThreadId" in properties);
 }
 
 export function createOpenClawTools(
@@ -298,13 +298,13 @@ export function createOpenClawTools(
     allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
   });
 
-  const normalizedTopicId = coerceFiniteNumber(options?.agentThreadId);
-  if (normalizedTopicId === undefined) {
+  const normalizedMessageThreadId = coerceFiniteNumber(options?.agentThreadId);
+  if (normalizedMessageThreadId === undefined) {
     return [...tools, ...pluginTools];
   }
 
   const wrappedPluginTools = pluginTools.map((tool) => {
-    if (!tool.execute || !toolParametersSupportsTopicId(tool)) {
+    if (!tool.execute || !toolParametersSupportsMessageThreadId(tool)) {
       return tool;
     }
     const originalExecute = tool.execute.bind(tool);
@@ -319,11 +319,10 @@ export function createOpenClawTools(
         if (!paramsRecord) {
           return await originalExecute(...(args as Parameters<typeof originalExecute>));
         }
-        // Avoid overriding an explicit user/model topicId.
-        if (paramsRecord.topicId !== undefined) {
+        if (paramsRecord.messageThreadId !== undefined) {
           return await originalExecute(...(args as Parameters<typeof originalExecute>));
         }
-        const nextParams = { ...paramsRecord, topicId: normalizedTopicId };
+        const nextParams = { ...paramsRecord, messageThreadId: normalizedMessageThreadId };
         const nextArgs = [...args];
         nextArgs[1] = nextParams;
         return await originalExecute(...(nextArgs as Parameters<typeof originalExecute>));
