@@ -55,11 +55,11 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     state_init();
     notify_init();
     
-    // 2. Initialize systemd D-Bus lane
-    systemd_init();
-    
-    // 3. Initialize tray first so the UI helper exists when systemd_refresh fires
+    // 2. Initialize tray first so the UI helper exists to receive early state broadcasts
     tray_init();
+    
+    // 3. Initialize systemd D-Bus lane (which may immediately publish 'User Systemd Unavailable')
+    systemd_init();
     
     // 4. Perform the initial systemd state fetch so we don't start with a blank UI
     systemd_refresh();

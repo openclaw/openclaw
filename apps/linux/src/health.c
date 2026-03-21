@@ -82,14 +82,34 @@ static gchar** resolve_openclaw_argv(const gchar *subcommand) {
         }
     }
 
-    // Priority 2: Repo-local
+    // Priority 2: Repo-local (with bounded upward search to tolerate Meson build directories)
     g_autofree gchar *exe_path = g_file_read_link("/proc/self/exe", NULL);
     if (exe_path) {
-        gchar *last_slash = strrchr(exe_path, '/');
-        if (last_slash) *last_slash = '\0';
+        gchar *current_dir = g_path_get_dirname(exe_path);
+        gboolean found_local = FALSE;
+        gchar *local_js = NULL;
         
-        g_autofree gchar *local_js = g_build_filename(exe_path, "..", "..", "..", "dist", "index.js", NULL);
-        if (g_file_test(local_js, G_FILE_TEST_EXISTS)) {
+        for (int depth = 0; depth < 5; depth++) {
+            local_js = g_build_filename(current_dir, "dist", "index.js", NULL);
+            if (g_file_test(local_js, G_FILE_TEST_EXISTS)) {
+                found_local = TRUE;
+                break;
+            }
+            g_free(local_js);
+            local_js = NULL;
+            
+            gchar *parent_dir = g_path_get_dirname(current_dir);
+            if (g_strcmp0(current_dir, parent_dir) == 0) {
+                g_free(parent_dir);
+                break; // Reached root
+            }
+            g_free(current_dir);
+            current_dir = parent_dir;
+        }
+        
+        g_free(current_dir);
+        
+        if (found_local && local_js) {
             gchar **new_argv = g_new0(gchar*, subcommand && g_strcmp0(subcommand, "status") == 0 ? 6 : 5);
             new_argv[0] = g_strdup("node"); 
             new_argv[1] = g_strdup(local_js);
@@ -100,8 +120,10 @@ static gchar** resolve_openclaw_argv(const gchar *subcommand) {
                     new_argv[4] = g_strdup("--json");
                 }
             }
+            g_free(local_js);
             return new_argv;
         }
+        g_free(local_js);
     }
 
     // Priority 3: PATH

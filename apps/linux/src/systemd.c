@@ -660,6 +660,16 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
 
     // 2. If GetUnitFileState fails or state is "not-found", treat as not installed
     if (!is_installed) {
+        // Drop the previous unit subscription if the selected unit is no longer installed
+        if (unit_proxy) {
+            if (properties_changed_signal_id > 0) {
+                g_signal_handler_disconnect(unit_proxy, properties_changed_signal_id);
+                properties_changed_signal_id = 0;
+            }
+            g_object_unref(unit_proxy);
+            unit_proxy = NULL;
+        }
+
         // Failed to get file state or unit not found -> assume not installed
         SystemdState sys_state = {0};
         if (check_system_scope_units()) {
