@@ -365,7 +365,7 @@ describe("createTelegramDraftStream", () => {
     expect(stream.sendMayHaveLanded?.()).toBe(false);
   });
 
-  it("clears sendMayHaveLanded when a retried preview send aborts after pre-connect failure", async () => {
+  it("keeps sendMayHaveLanded ambiguous when a retried preview send aborts", async () => {
     const api = createMockDraftApi();
     const abortController = new AbortController();
     const preConnectErr = Object.assign(new Error("connect ECONNREFUSED"), {
@@ -388,7 +388,7 @@ describe("createTelegramDraftStream", () => {
 
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
     expect(computeBackoff).toHaveBeenCalledTimes(1);
-    expect(stream.sendMayHaveLanded?.()).toBe(false);
+    expect(stream.sendMayHaveLanded?.()).toBe(true);
   });
 
   it("materializes draft previews using rendered HTML text", async () => {

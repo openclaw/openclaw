@@ -251,9 +251,6 @@ export function createTelegramDraftStream(params: {
       } catch (err) {
         attempt += 1;
         const safePreconnectFailure = isSafeToRetrySendError(err);
-        if (isAnyAbortError(err) && previousFailureWasSafePreconnect) {
-          markPreviewRetryAbortedAfterPreconnectFailure(err);
-        }
         if (
           params.abortSignal?.aborted ||
           !safePreconnectFailure ||

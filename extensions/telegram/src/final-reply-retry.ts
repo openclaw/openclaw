@@ -50,14 +50,20 @@ export async function retryTelegramPreConnectSend<T>(params: {
   abortSignal?: AbortSignal;
 }): Promise<T> {
   let attempt = 0;
+  let previousFailureWasSafePreconnect = false;
   while (true) {
     try {
       return await params.deliver();
     } catch (err) {
       attempt += 1;
-      if (!isSafeToRetrySendError(err) || attempt >= TELEGRAM_FINAL_REPLY_MAX_ATTEMPTS) {
+      const safePreconnectFailure = isSafeToRetrySendError(err);
+      if ((isAbortError(err) || isWrappedAbortError(err)) && previousFailureWasSafePreconnect) {
+        markPreconnectRetryAbortedAfterSafeFailure(err);
+      }
+      if (!safePreconnectFailure || attempt >= TELEGRAM_FINAL_REPLY_MAX_ATTEMPTS) {
         throw err;
       }
+      previousFailureWasSafePreconnect = true;
       const delayMs = computeBackoff(TELEGRAM_FINAL_REPLY_RETRY_POLICY, attempt);
       params.log?.(
         `telegram: ${params.operationLabel ?? "send"} failed before reaching Telegram; retrying in ${delayMs}ms (${String(err)})`,

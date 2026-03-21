@@ -107,4 +107,29 @@ describe("retryTelegramFinalReplyDelivery", () => {
 
     expect(isSafeToRetrySendError(result)).toBe(true);
   });
+
+  it("preserves safe pre-connect retry state when a retried request aborts", async () => {
+    const preConnectErr = new Error("connect ECONNREFUSED 149.154.167.220:443");
+    (preConnectErr as NodeJS.ErrnoException).code = "ECONNREFUSED";
+    const abortController = new AbortController();
+    const abortErr = Object.assign(new Error("The operation was aborted"), {
+      name: "AbortError",
+    });
+    const deliver = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(preConnectErr)
+      .mockImplementationOnce(async () => {
+        abortController.abort(new Error("poller restart"));
+        throw abortErr;
+      });
+
+    const result = await retryTelegramFinalReplyDelivery({
+      deliver,
+      abortSignal: abortController.signal,
+    }).catch((err) => err);
+
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(computeBackoff).toHaveBeenCalledTimes(1);
+    expect(isSafeToRetrySendError(result)).toBe(true);
+  });
 });
