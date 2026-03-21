@@ -6824,6 +6824,22 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.tools.exec.windowStyle",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "normal",
+        "hidden",
+        "minimized",
+        "maximized"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.tools.fs",
       "kind": "core",
       "type": "object",
@@ -60382,6 +60398,26 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.exec.windowStyle",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "normal",
+        "hidden",
+        "minimized",
+        "maximized"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Exec PowerShell Window Style",
+      "help": "PowerShell window style for exec on Windows (normal|hidden|minimized|maximized, default: normal).",
       "hasChildren": false
     },
     {
