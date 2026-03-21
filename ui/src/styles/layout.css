@@ -188,6 +188,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .topnav-shell .dashboard-header__subtitle-sep {
