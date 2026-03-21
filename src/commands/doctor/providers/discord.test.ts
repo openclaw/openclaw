@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { maybeRepairDiscordNumericIds, scanDiscordNumericIdEntries } from "./discord.js";
+import {
+  collectDiscordNumericIdWarnings,
+  maybeRepairDiscordNumericIds,
+  scanDiscordNumericIdEntries,
+} from "./discord.js";
 
 describe("doctor discord provider repairs", () => {
   it("finds numeric id entries across discord scopes", () => {
@@ -64,6 +68,18 @@ describe("doctor discord provider repairs", () => {
     expect(result.config.channels?.discord?.allowFrom).toEqual(["123"]);
     expect(result.config.channels?.discord?.accounts?.work?.execApprovals?.approvers).toEqual([
       "456",
+    ]);
+  });
+
+  it("formats numeric id warnings", () => {
+    const warnings = collectDiscordNumericIdWarnings({
+      hits: [{ path: "channels.discord.allowFrom[0]", entry: 123 }],
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining("Discord allowlists contain 1 numeric entries"),
+      expect.stringContaining('run "openclaw doctor --fix"'),
     ]);
   });
 });
