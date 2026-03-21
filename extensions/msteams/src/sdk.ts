@@ -37,7 +37,9 @@ export function createMSTeamsAdapter(
     ) {
       const [serviceUrl, scope, identity, headers] = args;
       const propagation = headers ?? new HeaderPropagation({});
-      propagation.override({ "User-Agent": buildUserAgent() });
+      if (!propagation.get("User-Agent")) {
+        propagation.override({ "User-Agent": buildUserAgent() });
+      }
       return super.createConnectorClient(serviceUrl, scope, identity, propagation);
     }
 
@@ -46,7 +48,9 @@ export function createMSTeamsAdapter(
     ) {
       const [identity, activity, headers] = args;
       const propagation = headers ?? new HeaderPropagation({});
-      propagation.override({ "User-Agent": buildUserAgent() });
+      if (!propagation.get("User-Agent")) {
+        propagation.override({ "User-Agent": buildUserAgent() });
+      }
       return super.createConnectorClientWithIdentity(identity, activity, propagation);
     }
   }

@@ -282,6 +282,7 @@ export async function downloadMSTeamsGraphMedia(params: {
             fetchImpl: async (input, init) => {
               const requestUrl = resolveRequestUrl(input);
               const headers = new Headers(init?.headers);
+              headers.set("User-Agent", buildUserAgent());
               headers.set("Authorization", `Bearer ${accessToken}`);
               return await safeFetch({
                 url: requestUrl,
