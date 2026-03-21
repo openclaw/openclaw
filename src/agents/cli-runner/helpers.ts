@@ -8,6 +8,7 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
+import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { isRecord } from "../../utils.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
@@ -15,9 +16,11 @@ import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { detectImageReferences, loadImageFromRef } from "../pi-embedded-runner/run/images.js";
+import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
+import { sanitizeImageBlocks } from "../tool-images.js";
 export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
@@ -328,12 +331,16 @@ export function appendImagePathsToPrompt(prompt: string, paths: string[]): strin
 export async function loadPromptRefImages(params: {
   prompt: string;
   workspaceDir: string;
+  maxBytes?: number;
+  workspaceOnly?: boolean;
+  sandbox?: { root: string; bridge: SandboxFsBridge };
 }): Promise<ImageContent[]> {
   const refs = detectImageReferences(params.prompt);
   if (refs.length === 0) {
     return [];
   }
 
+  const maxBytes = params.maxBytes ?? MAX_IMAGE_BYTES;
   const seen = new Set<string>();
   const images: ImageContent[] = [];
   for (const ref of refs) {
@@ -342,12 +349,20 @@ export async function loadPromptRefImages(params: {
       continue;
     }
     seen.add(key);
-    const image = await loadImageFromRef(ref, params.workspaceDir);
+    const image = await loadImageFromRef(ref, params.workspaceDir, {
+      maxBytes,
+      workspaceOnly: params.workspaceOnly,
+      sandbox: params.sandbox,
+    });
     if (image) {
       images.push(image);
     }
   }
-  return images;
+
+  const { images: sanitizedImages } = await sanitizeImageBlocks(images, "prompt:images", {
+    maxBytes,
+  });
+  return sanitizedImages;
 }
 
 export async function writeCliImages(
