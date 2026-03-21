@@ -89,7 +89,7 @@ export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number):
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
   const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
-  return { allow: mergedAllow, deny };
+  return { allow: mergedAllow, alsoAllow, deny };
 }
 
 export function resolveSubagentToolPolicyForSession(
@@ -109,8 +109,13 @@ export function resolveSubagentToolPolicyForSession(
     ),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
+  // Merge allow + alsoAllow when both are present (keeps allow list accurate for
+  // access gating). When only alsoAllow is set, preserve it on the returned
+  // object so collectExplicitAllowlist() can build the plugin tool allowlist —
+  // callers that only gate on `allow` remain unaffected because allow stays
+  // undefined, but the alsoAllow entries are no longer silently dropped.
   const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
-  return { allow: mergedAllow, deny };
+  return { allow: mergedAllow, alsoAllow, deny };
 }
 
 export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {

@@ -6,6 +6,7 @@ export type { SandboxDockerConfig } from "./types.docker.js";
 
 export type SandboxToolPolicy = {
   allow?: string[];
+  alsoAllow?: string[];
   deny?: string[];
 };
 

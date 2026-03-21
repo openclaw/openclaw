@@ -58,6 +58,7 @@ export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: b
 
 export type ToolPolicyLike = {
   allow?: string[];
+  alsoAllow?: string[];
   deny?: string[];
 };
 
@@ -75,10 +76,14 @@ export type AllowlistResolution = {
 export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefined>): string[] {
   const entries: string[] = [];
   for (const policy of policies) {
-    if (!policy?.allow) {
-      continue;
-    }
-    for (const value of policy.allow) {
+    // Collect both `allow` and `alsoAllow` entries. `alsoAllow` is the additive
+    // form used when a profile is set and the user wants to extend it with
+    // additional tools (e.g. plugin tools for subagents) without replacing the
+    // full allow list. Without including `alsoAllow` here, plugin tools listed
+    // in `tools.subagents.tools.alsoAllow` are silently ignored and never reach
+    // subagent sessions.
+    const sources = [...(policy?.allow ?? []), ...(policy?.alsoAllow ?? [])];
+    for (const value of sources) {
       if (typeof value !== "string") {
         continue;
       }
@@ -149,6 +154,7 @@ export function expandPolicyWithPluginGroups(
   }
   return {
     allow: expandPluginGroups(policy.allow, groups),
+    alsoAllow: expandPluginGroups(policy.alsoAllow, groups),
     deny: expandPluginGroups(policy.deny, groups),
   };
 }
