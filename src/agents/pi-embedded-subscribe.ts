@@ -533,13 +533,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     } = splitResult;
 
     // Drain pending media artifacts from tool results and attach to this block reply.
-    const { mediaUrls: artifactMediaUrls, audioAsVoice: artifactAudioAsVoice } =
-      state.pendingMediaArtifacts.length > 0
-        ? drainPendingMediaArtifacts()
-        : { mediaUrls: [], audioAsVoice: false };
-
-    const mergedMediaUrls = [...(mediaUrls ?? []), ...artifactMediaUrls];
-    const mergedAudioAsVoice = audioAsVoice || artifactAudioAsVoice;
+    const drained = drainPendingMediaArtifacts();
+    const mergedMediaUrls = [...(mediaUrls ?? []), ...drained.mediaUrls];
+    const mergedAudioAsVoice = audioAsVoice || drained.audioAsVoice;
 
     // Skip empty payloads, but always emit if audioAsVoice is set (to propagate the flag)
     if (!cleanedText && mergedMediaUrls.length === 0 && !mergedAudioAsVoice) {

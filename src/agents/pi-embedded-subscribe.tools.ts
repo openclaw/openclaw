@@ -185,11 +185,17 @@ function normalizeMediaArtifact(value: unknown): ToolMediaArtifact | undefined {
   if (!mediaUrl && !mediaUrls?.length && !audioAsVoice) {
     return undefined;
   }
-  return {
-    ...(mediaUrl ? { mediaUrl } : {}),
-    ...(mediaUrls?.length ? { mediaUrls } : {}),
-    ...(audioAsVoice ? { audioAsVoice } : {}),
-  };
+  const artifact: ToolMediaArtifact = {};
+  if (mediaUrl) {
+    artifact.mediaUrl = mediaUrl;
+  }
+  if (mediaUrls?.length) {
+    artifact.mediaUrls = mediaUrls;
+  }
+  if (audioAsVoice) {
+    artifact.audioAsVoice = true;
+  }
+  return artifact;
 }
 
 function isToolResultMediaTrusted(toolName: string): boolean {
@@ -201,22 +207,24 @@ function filterMediaArtifactUrls(
   artifact: ToolMediaArtifact,
 ): ToolMediaArtifact | undefined {
   const allowLocalPaths = isToolResultMediaTrusted(toolName);
+  const isAllowed = (url: string) => allowLocalPaths || HTTP_URL_RE.test(url.trim());
   const mediaUrl =
-    typeof artifact.mediaUrl === "string" &&
-    (allowLocalPaths || HTTP_URL_RE.test(artifact.mediaUrl.trim()))
-      ? artifact.mediaUrl
-      : undefined;
-  const mediaUrls = artifact.mediaUrls?.filter(
-    (url) => allowLocalPaths || HTTP_URL_RE.test(url.trim()),
-  );
+    artifact.mediaUrl && isAllowed(artifact.mediaUrl) ? artifact.mediaUrl : undefined;
+  const mediaUrls = artifact.mediaUrls?.filter(isAllowed);
   if (!mediaUrl && !mediaUrls?.length && !artifact.audioAsVoice) {
     return undefined;
   }
-  return {
-    ...(mediaUrl ? { mediaUrl } : {}),
-    ...(mediaUrls?.length ? { mediaUrls } : {}),
-    ...(artifact.audioAsVoice ? { audioAsVoice: true } : {}),
-  };
+  const filtered: ToolMediaArtifact = {};
+  if (mediaUrl) {
+    filtered.mediaUrl = mediaUrl;
+  }
+  if (mediaUrls?.length) {
+    filtered.mediaUrls = mediaUrls;
+  }
+  if (artifact.audioAsVoice) {
+    filtered.audioAsVoice = true;
+  }
+  return filtered;
 }
 
 /**
