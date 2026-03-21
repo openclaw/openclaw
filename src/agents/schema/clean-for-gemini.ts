@@ -362,6 +362,13 @@ function cleanSchemaForGeminiWithDefs(
     }
   }
 
+  // Google's schema validator rejects "required": [] (empty array).
+  // JSON Schema treats an absent required and required: [] differently at the validator level.
+  // Strip required when it would be an empty array.
+  if (Array.isArray(cleaned.required) && cleaned.required.length === 0) {
+    delete cleaned.required;
+  }
+
   return cleaned;
 }
 
