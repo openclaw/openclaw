@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+
+set -e
+
+if [ $# -lt 1 ]; then
+    echo "Usage: get-pr-comments PR_NUMBER [OWNER/REPO]"
+    echo "Example: get-pr-comments 123"
+    echo "Example: get-pr-comments 123 EveryInc/cora"
+    exit 1
+fi
+
+PR_NUMBER=$1
+
+if [ -n "$2" ]; then
+    OWNER=$(echo "$2" | cut -d/ -f1)
+    REPO=$(echo "$2" | cut -d/ -f2)
+else
+    OWNER=$(gh repo view --json owner -q .owner.login 2>/dev/null)
+    REPO=$(gh repo view --json name -q .name 2>/dev/null)
+fi
+
+if [ -z "$OWNER" ] || [ -z "$REPO" ]; then
+    echo "Error: Could not detect repository. Pass OWNER/REPO as second argument."
+    exit 1
+fi
+
+gh api graphql -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" -f query='
+query FetchUnresolvedComments($owner: String!, $repo: String!, $pr: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      title
+      url
+      reviewThreads(first: 100) {
+        totalCount
+        edges {
+          node {
+            id
+            isResolved
+            isOutdated
+            isCollapsed
+            path
+            line
+            startLine
+            diffSide
+            comments(first: 100) {
+              totalCount
+              nodes {
+                id
+                author {
+                  login
+                }
+                body
+                createdAt
+                updatedAt
+                url
+                outdated
+              }
+            }
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}' | jq '.data.repository.pullRequest.reviewThreads.edges | map(select(.node.isResolved == false and .node.isOutdated == false))'

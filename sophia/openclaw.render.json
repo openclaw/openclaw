@@ -37,6 +37,11 @@
       "dangerouslyAllowHostHeaderOriginFallback": true
     }
   },
+  "plugins": {
+    "load": {
+      "paths": ["/app/sophia/.openclaw/extensions"]
+    }
+  },
   "channels": {
     "whatsapp": {
       "enabled": true,

@@ -1,0 +1,32 @@
+{
+  "name": "openclaw-compound-engineering",
+  "version": "2.47.0",
+  "type": "module",
+  "private": true,
+  "description": "AI-powered development tools for code review, research, design, and workflow automation.",
+  "main": "index.ts",
+  "openclaw": {
+    "extensions": [
+      {
+        "id": "compound-engineering",
+        "entry": "./index.ts"
+      }
+    ]
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "ai-powered",
+    "compound-engineering",
+    "workflow-automation",
+    "code-review",
+    "rails",
+    "ruby",
+    "python",
+    "typescript",
+    "knowledge-management",
+    "image-generation",
+    "agent-browser",
+    "browser-automation"
+  ]
+}
