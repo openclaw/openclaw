@@ -37,6 +37,7 @@ type SharedServiceEnvironmentFields = {
 };
 
 const SERVICE_PROXY_ENV_KEYS = [
+  "NODE_USE_ENV_PROXY",
   "HTTP_PROXY",
   "HTTPS_PROXY",
   "NO_PROXY",
