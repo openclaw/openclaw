@@ -4,7 +4,8 @@ read_when:
   - You want to switch between stable/beta/dev
   - You want to pin a specific version, tag, or SHA
   - You are tagging or publishing prereleases
-title: "Development Channels"
+title: "Release Channels"
+sidebarTitle: "Release Channels"
 ---
 
 # Development channels

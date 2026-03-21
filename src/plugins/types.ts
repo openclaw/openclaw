@@ -963,7 +963,7 @@ export type PluginCommandContext = {
   /** Account id for multi-account channels */
   accountId?: string;
   /** Thread/topic id if available */
-  messageThreadId?: number;
+  messageThreadId?: string | number;
   requestConversationBinding: (
     params?: PluginConversationBindingRequestParams,
   ) => Promise<PluginConversationBindingRequestResult>;

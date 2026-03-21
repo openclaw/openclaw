@@ -48,6 +48,12 @@ function loadRootAliasWithStubs(options?: {
     }
     if (id === "node:fs") {
       return {
+        readFileSync: () =>
+          JSON.stringify({
+            exports: {
+              "./plugin-sdk/group-access": { default: "./dist/plugin-sdk/group-access.js" },
+            },
+          }),
         existsSync: () => options?.distExists ?? false,
       };
     }
@@ -109,6 +115,17 @@ describe("plugin-sdk root alias", () => {
     expect(lazyModule.jitiLoadCalls).toBe(0);
   });
 
+  it("does not load the monolithic sdk for promise-like or symbol reflection probes", () => {
+    const lazyModule = loadRootAliasWithStubs();
+    const lazyRootSdk = lazyModule.moduleExports;
+
+    expect("then" in lazyRootSdk).toBe(false);
+    expect(Reflect.get(lazyRootSdk, Symbol.toStringTag)).toBeUndefined();
+    expect(Object.getOwnPropertyDescriptor(lazyRootSdk, Symbol.toStringTag)).toBeUndefined();
+    expect(lazyModule.createJitiCalls).toBe(0);
+    expect(lazyModule.jitiLoadCalls).toBe(0);
+  });
+
   it("loads legacy root exports on demand and preserves reflection", () => {
     const lazyModule = loadRootAliasWithStubs({
       monolithicExports: {
@@ -153,8 +170,27 @@ describe("plugin-sdk root alias", () => {
     expect("delegateCompactionToRuntime" in lazyRootSdk).toBe(true);
   });
 
+  it("forwards onDiagnosticEvent through the compat-backed root alias", () => {
+    const onDiagnosticEvent = () => () => undefined;
+    const lazyModule = loadRootAliasWithStubs({
+      monolithicExports: {
+        onDiagnosticEvent,
+      },
+    });
+    const lazyRootSdk = lazyModule.moduleExports;
+
+    expect(typeof lazyRootSdk.onDiagnosticEvent).toBe("function");
+    expect(
+      typeof (lazyRootSdk.onDiagnosticEvent as (listener: () => void) => () => void)(
+        () => undefined,
+      ),
+    ).toBe("function");
+    expect("onDiagnosticEvent" in lazyRootSdk).toBe(true);
+  });
+
   it("loads legacy root exports through the merged root wrapper", { timeout: 240_000 }, () => {
     expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
+    expect(typeof rootSdk.onDiagnosticEvent).toBe("function");
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
     expect(rootSdk.__esModule).toBe(true);
@@ -162,9 +198,12 @@ describe("plugin-sdk root alias", () => {
 
   it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {
     expect("resolveControlCommandGate" in rootSdk).toBe(true);
+    expect("onDiagnosticEvent" in rootSdk).toBe(true);
     const keys = Object.keys(rootSdk);
     expect(keys).toContain("resolveControlCommandGate");
+    expect(keys).toContain("onDiagnosticEvent");
     const descriptor = Object.getOwnPropertyDescriptor(rootSdk, "resolveControlCommandGate");
     expect(descriptor).toBeDefined();
+    expect(Object.getOwnPropertyDescriptor(rootSdk, "onDiagnosticEvent")).toBeDefined();
   });
 });
