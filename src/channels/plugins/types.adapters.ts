@@ -140,6 +140,12 @@ export type ChannelOutboundContext = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   silent?: boolean;
+  /** Session key for component/interaction persistence. */
+  sessionKey?: string;
+  /** Agent id for component/interaction persistence. */
+  agentId?: string;
+  /** Workspace override from binding resolution; persisted on Discord components. */
+  workspaceOverride?: string;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
