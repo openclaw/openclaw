@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { ensureSandboxContainer } from "./docker.js";
+import { slugifySessionKey } from "./shared.js";
 import { collectDockerFlagValues } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
 
@@ -146,6 +147,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
   it("recreates shared container when array-order change alters hash", async () => {
     const workspaceDir = "/tmp/workspace";
+    const expectedName = `oc-test-${slugifySessionKey(`shared:${workspaceDir}`)}`.slice(0, 63);
     const oldCfg = createSandboxConfig(["1.1.1.1", "8.8.8.8"]);
     const newCfg = createSandboxConfig(["8.8.8.8", "1.1.1.1"]);
 
@@ -167,7 +169,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     registryMocks.readRegistry.mockResolvedValue({
       entries: [
         {
-          containerName: "oc-test-shared",
+          containerName: expectedName,
           sessionKey: "shared",
           createdAtMs: 1,
           lastUsedAtMs: 0,
@@ -184,12 +186,11 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       cfg: newCfg,
     });
 
-    expect(containerName).toBe("oc-test-shared");
+    expect(containerName).toBe(expectedName);
     const dockerCalls = spawnState.calls.filter((call) => call.command === "docker");
     expect(
       dockerCalls.some(
-        (call) =>
-          call.args[0] === "rm" && call.args[1] === "-f" && call.args[2] === "oc-test-shared",
+        (call) => call.args[0] === "rm" && call.args[1] === "-f" && call.args[2] === expectedName,
       ),
     ).toBe(true);
     const createCall = dockerCalls.find((call) => call.args[0] === "create");
@@ -197,7 +198,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(createCall?.args).toContain(`openclaw.configHash=${newHash}`);
     expect(registryMocks.updateRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
-        containerName: "oc-test-shared",
+        containerName: expectedName,
         configHash: newHash,
       }),
     );
@@ -205,6 +206,10 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
   it("applies custom binds after workspace mounts so overlapping binds can override", async () => {
     const workspaceDir = "/tmp/workspace";
+    const expectedContainerName = `oc-test-${slugifySessionKey(`shared:${workspaceDir}`)}`.slice(
+      0,
+      63,
+    );
     const cfg = createSandboxConfig(
       ["1.1.1.1"],
       ["/tmp/workspace-shared/USER.md:/workspace/USER.md:ro"],
@@ -222,7 +227,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     registryMocks.readRegistry.mockResolvedValue({
       entries: [
         {
-          containerName: "oc-test-shared",
+          containerName: expectedContainerName,
           sessionKey: "shared",
           createdAtMs: 1,
           lastUsedAtMs: 0,

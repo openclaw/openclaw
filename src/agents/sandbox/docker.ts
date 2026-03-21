@@ -496,7 +496,13 @@ export async function ensureSandboxContainer(params: {
   cfg: SandboxConfig;
 }) {
   const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
-  const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
+  // Include workspaceDir in the slug so co-hosted instances with different HOME
+  // dirs produce distinct container names (fixes #51363).
+  const slug = slugifySessionKey(
+    params.cfg.scope === "shared"
+      ? `shared:${params.workspaceDir}`
+      : `${scopeKey}:${params.workspaceDir}`,
+  );
   const name = `${params.cfg.docker.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);
   const expectedHash = computeSandboxConfigHash({

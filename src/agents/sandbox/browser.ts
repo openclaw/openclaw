@@ -141,7 +141,13 @@ export async function ensureSandboxBrowser(params: {
     return null;
   }
 
-  const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
+  // Include workspaceDir in the slug so co-hosted instances with different HOME
+  // dirs produce distinct container names (fixes #51363).
+  const slug = slugifySessionKey(
+    params.cfg.scope === "shared"
+      ? `shared:${params.workspaceDir}`
+      : `${params.scopeKey}:${params.workspaceDir}`,
+  );
   const name = `${params.cfg.browser.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);
   const state = await dockerContainerState(containerName);
