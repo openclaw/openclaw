@@ -88,5 +88,24 @@ export function stripReasoningTagsFromText(
     result += cleaned.slice(lastIndex);
   }
 
-  return applyTrim(result, trimMode);
+  const trimmed = applyTrim(result, trimMode);
+
+  // When an unclosed opening tag at EOF causes strict mode to drop all
+  // remaining content, the user receives nothing — a silent response drop.
+  // Recover by including the text after the last matched tag (the same content
+  // preserve mode would keep). Only fires for genuinely unclosed tags; properly
+  // closed <think>…</think> blocks are still stripped per strict-mode contract.
+  // Observed with Gemini Flash wrapping entire responses in unclosed <think>.
+  if (mode === "strict" && inThinking && !trimmed && text.trim()) {
+    result += cleaned.slice(lastIndex);
+    const fallbackResult = applyTrim(result, trimMode);
+    if (fallbackResult) {
+      console.warn(
+        `[reasoning-tags] strict-mode empty-result fallback activated. Input length=${text.length}, recovered length=${fallbackResult.length}`,
+      );
+      return fallbackResult;
+    }
+  }
+
+  return trimmed;
 }

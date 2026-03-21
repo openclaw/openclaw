@@ -207,6 +207,51 @@ describe("stripReasoningTagsFromText", () => {
     });
   });
 
+  describe("strict-mode unclosed-tag fallback", () => {
+    it("recovers content after an unclosed opening tag that drops all text", () => {
+      const cases = [
+        {
+          name: "unclosed think tag wrapping entire response",
+          input: "<think>This is the full response text",
+          expected: "This is the full response text",
+        },
+        {
+          name: "unclosed thinking tag wrapping entire response",
+          input: "<thinking>Full response here",
+          expected: "Full response here",
+        },
+      ] as const;
+      for (const { name, input, expected } of cases) {
+        expect(stripReasoningTagsFromText(input, { mode: "strict" }), name).toBe(expected);
+      }
+    });
+
+    it("does not fall back for properly closed think tags (strict-mode contract)", () => {
+      // Closed tags: strict mode correctly strips content — not a bug.
+      expect(stripReasoningTagsFromText("<think>reasoning</think>", { mode: "strict" })).toBe("");
+      expect(
+        stripReasoningTagsFromText("<think>a</think><think>b</think>", { mode: "strict" }),
+      ).toBe("");
+    });
+
+    it("does not fall back when there is visible text outside tags", () => {
+      const input = "Before <think>hidden</think>";
+      expect(stripReasoningTagsFromText(input, { mode: "strict" })).toBe("Before");
+    });
+
+    it("does not fall back when unclosed tag has visible text before it", () => {
+      const input = "Visible <think>unclosed content";
+      expect(stripReasoningTagsFromText(input, { mode: "strict" })).toBe("Visible");
+    });
+
+    it("preserves code-block tags during fallback", () => {
+      const input = "<think>Use `<think>` in your response";
+      expect(stripReasoningTagsFromText(input, { mode: "strict" })).toBe(
+        "Use `<think>` in your response",
+      );
+    });
+  });
+
   describe("trim options", () => {
     it("applies configured trim strategies", () => {
       const cases = [
