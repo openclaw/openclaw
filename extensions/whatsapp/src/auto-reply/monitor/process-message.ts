@@ -334,6 +334,7 @@ export async function processMessage(params: {
     Surface: "whatsapp",
     OriginatingChannel: "whatsapp",
     OriginatingTo: params.msg.from,
+    WorkspaceOverride: params.route.workspaceOverride,
   });
 
   // Only update main session's lastRoute when DM actually IS the main session.

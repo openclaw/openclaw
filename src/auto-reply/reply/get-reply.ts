@@ -10,6 +10,7 @@ import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
+import { logDebug } from "../../logger.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
@@ -102,12 +103,20 @@ export async function getReplyFromConfig(
     }
   }
 
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const workspaceOverrideTrimmed = ctx.WorkspaceOverride?.trim();
+  const hasWorkspaceOverride = Boolean(workspaceOverrideTrimmed);
+  const workspaceDirRaw =
+    workspaceOverrideTrimmed ||
+    (resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+    // Skip auto-creating bootstrap files in override workspaces — users manage those explicitly.
+    ensureBootstrapFiles: !hasWorkspaceOverride && !agentCfg?.skipBootstrap && !isFastTestEnv,
   });
   const workspaceDir = workspace.dir;
+  logDebug(
+    `[workspace] agent=${agentId} binding-override=${workspaceOverrideTrimmed || "none"} agent-config=${resolveAgentWorkspaceDir(cfg, agentId) || "default"} resolved=${workspaceDirRaw}`,
+  );
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =

@@ -454,6 +454,7 @@ async function handleSlashCommandAsync(params: {
     CommandSource: "native" as const,
     OriginatingChannel: "mattermost" as const,
     OriginatingTo: to,
+    WorkspaceOverride: route.workspaceOverride,
   });
 
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "mattermost", account.accountId, {

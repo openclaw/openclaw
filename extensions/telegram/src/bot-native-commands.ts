@@ -760,6 +760,7 @@ export const registerTelegramNativeCommands = ({
             // Originating context for sub-agent announce routing
             OriginatingChannel: "telegram" as const,
             OriginatingTo: `telegram:${chatId}`,
+            WorkspaceOverride: route.workspaceOverride,
           });
 
           await recordInboundSessionMetaSafe({

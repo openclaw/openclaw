@@ -64,6 +64,8 @@ export function resolveMatrixInboundRoute(params: {
         sessionKey: boundSessionKey,
         agentId: resolveAgentIdFromSessionKey(boundSessionKey) || baseRoute.agentId,
         matchedBy: "binding.channel",
+        // Clear workspace override — bound session agent uses its own workspace config.
+        workspaceOverride: undefined,
       },
       configuredBinding: null,
     };
@@ -92,6 +94,8 @@ export function resolveMatrixInboundRoute(params: {
               configuredBinding.spec.agentId ||
               baseRoute.agentId,
             matchedBy: "binding.channel",
+            // Clear workspace override — bound session agent uses its own workspace config.
+            workspaceOverride: undefined,
           }
         : baseRoute,
     configuredBinding,

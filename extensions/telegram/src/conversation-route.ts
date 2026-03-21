@@ -91,6 +91,8 @@ export function resolveTelegramConversationRoute(params: {
           agentId: topicAgentId,
         }).toLowerCase(),
       }),
+      // Clear workspace override — topic-bound agent uses its own workspace config.
+      workspaceOverride: undefined,
     };
     logVerbose(
       `telegram: topic route override: topic=${params.resolvedThreadId ?? params.replyThreadId} agent=${topicAgentId} sessionKey=${route.sessionKey}`,
@@ -135,6 +137,8 @@ export function resolveTelegramConversationRoute(params: {
             mainSessionKey: route.mainSessionKey,
           }),
           matchedBy: "binding.channel",
+          // Clear workspace override — bound session agent uses its own workspace.
+          workspaceOverride: undefined,
         };
       }
       configuredBinding = null;

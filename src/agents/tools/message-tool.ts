@@ -395,6 +395,7 @@ type MessageToolOptions = {
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
   requesterSenderId?: string;
+  workspaceOverride?: string;
 };
 
 function resolveMessageToolSchemaActions(params: {
@@ -776,6 +777,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         sessionKey: options?.agentSessionKey,
         sessionId: options?.sessionId,
         agentId: resolvedAgentId,
+        workspaceOverride: options?.workspaceOverride,
         sandboxRoot: options?.sandboxRoot,
         abortSignal: signal,
       });

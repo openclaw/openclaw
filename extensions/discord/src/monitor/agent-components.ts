@@ -245,7 +245,12 @@ async function dispatchDiscordComponentEvent(params: {
   guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
   eventText: string;
   replyToId?: string;
-  routeOverrides?: { sessionKey?: string; agentId?: string; accountId?: string };
+  routeOverrides?: {
+    sessionKey?: string;
+    agentId?: string;
+    accountId?: string;
+    workspaceOverride?: string;
+  };
 }): Promise<void> {
   const { ctx, interaction, interactionCtx, channelCtx, guildInfo, eventText } = params;
   const runtime = ctx.runtime ?? createNonExitingRuntime();
@@ -366,6 +371,7 @@ async function dispatchDiscordComponentEvent(params: {
     Timestamp: timestamp,
     OriginatingChannel: "discord" as const,
     OriginatingTo: `channel:${interactionCtx.channelId}`,
+    WorkspaceOverride: params.routeOverrides?.workspaceOverride ?? route.workspaceOverride,
   });
 
   await recordInboundSession({
@@ -638,6 +644,7 @@ async function handleDiscordComponentEvent(params: {
       sessionKey: consumed.sessionKey,
       agentId: consumed.agentId,
       accountId: consumed.accountId,
+      workspaceOverride: consumed.workspaceOverride,
     },
   });
 }
@@ -1268,6 +1275,7 @@ class DiscordComponentModal extends Modal {
         sessionKey: consumed.sessionKey,
         agentId: consumed.agentId,
         accountId: consumed.accountId,
+        workspaceOverride: consumed.workspaceOverride,
       },
     });
   }

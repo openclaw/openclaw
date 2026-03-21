@@ -102,6 +102,7 @@ export type RunMessageActionParams = {
   deps?: OutboundSendDeps;
   sessionKey?: string;
   agentId?: string;
+  workspaceOverride?: string;
   sandboxRoot?: string;
   dryRun?: boolean;
   abortSignal?: AbortSignal;
@@ -535,6 +536,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   }
   if (agentId) {
     params.__agentId = agentId;
+  }
+  if (input.workspaceOverride) {
+    params.__workspaceOverride = input.workspaceOverride;
   }
   const mirrorMediaUrls =
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;

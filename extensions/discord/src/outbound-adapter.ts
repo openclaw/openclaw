@@ -136,6 +136,9 @@ export const discordOutbound: ChannelOutboundAdapter = {
           accountId: ctx.accountId ?? undefined,
           silent: ctx.silent ?? undefined,
           cfg: ctx.cfg,
+          sessionKey: ctx.sessionKey,
+          agentId: ctx.agentId,
+          workspaceOverride: ctx.workspaceOverride,
         }),
       send: async ({ text, mediaUrl, isFirst }) => {
         if (isFirst) {
@@ -146,6 +149,9 @@ export const discordOutbound: ChannelOutboundAdapter = {
             accountId: ctx.accountId ?? undefined,
             silent: ctx.silent ?? undefined,
             cfg: ctx.cfg,
+            sessionKey: ctx.sessionKey,
+            agentId: ctx.agentId,
+            workspaceOverride: ctx.workspaceOverride,
           });
         }
         return await send(target, text, {

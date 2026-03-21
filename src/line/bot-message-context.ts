@@ -312,6 +312,7 @@ async function finalizeLineInboundContext(params: {
       ? resolveLineGroupSystemPrompt(params.account.config.groups, params.source)
       : undefined,
     InboundHistory: params.inboundHistory,
+    WorkspaceOverride: params.route.workspaceOverride,
   });
 
   const pinnedMainDmOwner = !params.source.isGroup

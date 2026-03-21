@@ -323,6 +323,7 @@ export async function handleDiscordMessagingAction(
         : undefined;
       const sessionKey = readStringParam(params, "__sessionKey");
       const agentId = readStringParam(params, "__agentId");
+      const workspaceOverride = readStringParam(params, "__workspaceOverride");
 
       if (componentSpec) {
         if (asVoice) {
@@ -345,6 +346,7 @@ export async function handleDiscordMessagingAction(
             replyTo: replyTo ?? undefined,
             sessionKey: sessionKey ?? undefined,
             agentId: agentId ?? undefined,
+            workspaceOverride: workspaceOverride ?? undefined,
             mediaUrl: mediaUrl ?? undefined,
             filename: filename ?? undefined,
           },

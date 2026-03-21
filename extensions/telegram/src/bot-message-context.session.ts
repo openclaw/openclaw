@@ -248,6 +248,7 @@ export async function buildTelegramInboundContextPayload(params: {
     IsForum: isForum,
     OriginatingChannel: "telegram" as const,
     OriginatingTo: `telegram:${chatId}`,
+    WorkspaceOverride: route.workspaceOverride,
   });
 
   const pinnedMainDmOwner = !isGroup

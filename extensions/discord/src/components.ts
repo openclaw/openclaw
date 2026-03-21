@@ -168,6 +168,7 @@ export type DiscordComponentEntry = {
   sessionKey?: string;
   agentId?: string;
   accountId?: string;
+  workspaceOverride?: string;
   reusable?: boolean;
   allowedUsers?: string[];
   messageId?: string;
@@ -199,6 +200,7 @@ export type DiscordModalEntry = {
   sessionKey?: string;
   agentId?: string;
   accountId?: string;
+  workspaceOverride?: string;
   reusable?: boolean;
   messageId?: string;
   createdAt?: number;
@@ -951,6 +953,7 @@ export function buildDiscordComponentMessage(params: {
   sessionKey?: string;
   agentId?: string;
   accountId?: string;
+  workspaceOverride?: string;
 }): DiscordComponentBuildResult {
   const entries: DiscordComponentEntry[] = [];
   const modals: DiscordModalEntry[] = [];
@@ -978,6 +981,7 @@ export function buildDiscordComponentMessage(params: {
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       accountId: params.accountId,
+      workspaceOverride: params.workspaceOverride,
       reusable: entry.reusable ?? params.spec.reusable,
     });
   };
@@ -1077,6 +1081,7 @@ export function buildDiscordComponentMessage(params: {
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       accountId: params.accountId,
+      workspaceOverride: params.workspaceOverride,
       reusable: params.spec.reusable,
       allowedUsers: params.spec.modal.allowedUsers,
     });
