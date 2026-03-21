@@ -25,6 +25,7 @@ protocol ScreenRecordingServicing: Sendable {
 protocol LocationServicing: Sendable {
     func authorizationStatus() -> CLAuthorizationStatus
     func accuracyAuthorization() -> CLAccuracyAuthorization
+    var isLocationServicesEnabled: Bool { get }
     func ensureAuthorization(mode: OpenClawLocationMode) async -> CLAuthorizationStatus
     func currentLocation(
         params: OpenClawLocationGetParams,
