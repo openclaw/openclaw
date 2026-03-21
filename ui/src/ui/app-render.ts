@@ -14,13 +14,18 @@ import {
   renderTab,
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
-  switchChatSession,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents, loadToolsCatalog, saveAgentsConfig } from "./controllers/agents.ts";
+import {
+  loadBrowserSessions,
+  openBrowserTab,
+  closeBrowserTab,
+  startBrowserProfile,
+} from "./controllers/browser.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
@@ -78,6 +83,11 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import {
+  loadTerminalSessions,
+  createTerminalSession,
+  killTerminalSession,
+} from "./controllers/terminal.ts";
 import "./components/dashboard-header.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
@@ -124,6 +134,8 @@ function createLazy<T>(loader: () => Promise<T>): () => T | null {
 const lazyAgents = createLazy(() => import("./views/agents.ts"));
 const lazyChannels = createLazy(() => import("./views/channels.ts"));
 const lazyCron = createLazy(() => import("./views/cron.ts"));
+const lazyBrowser = createLazy(() => import("./views/browser.ts"));
+const lazyTerminal = createLazy(() => import("./views/terminal.ts"));
 const lazyDebug = createLazy(() => import("./views/debug.ts"));
 const lazyInstances = createLazy(() => import("./views/instances.ts"));
 const lazyLogs = createLazy(() => import("./views/logs.ts"));
@@ -539,9 +551,6 @@ export function renderApp(state: AppViewState) {
                       : nothing
                   }
                 </a>
-                <div class="sidebar-mode-switch">
-                  ${renderTopbarThemeModeToggle(state)}
-                </div>
                 ${(() => {
                   const version = state.hello?.server?.version ?? "";
                   return version
@@ -902,10 +911,6 @@ export function renderApp(state: AppViewState) {
                       return;
                     }
                     await loadCronRuns(state, state.cronRunsJobId);
-                  },
-                  onNavigateToChat: (sessionKey) => {
-                    switchChatSession(state, sessionKey);
-                    state.setTab("chat" as import("./navigation.ts").Tab);
                   },
                 }),
               )
@@ -1474,7 +1479,10 @@ export function renderApp(state: AppViewState) {
                   state.setTab("agents" as import("./navigation.ts").Tab);
                 },
                 onSessionSelect: (key: string) => {
-                  switchChatSession(state, key);
+                  state.setSessionKey(key);
+                  state.chatMessages = [];
+                  void loadChatHistory(state);
+                  void state.loadAssistantIdentity();
                 },
                 showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                 onScrollToBottom: () => state.scrollToBottom(),
@@ -1554,7 +1562,6 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
-                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.configFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.configSearchQuery = query),
@@ -1573,8 +1580,6 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1627,7 +1632,6 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
-                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.communicationsFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.communicationsSearchQuery = query),
@@ -1646,8 +1650,6 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1694,7 +1696,6 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
-                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.appearanceFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.appearanceSearchQuery = query),
@@ -1713,8 +1714,6 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1761,7 +1760,6 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
-                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.automationFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.automationSearchQuery = query),
@@ -1780,8 +1778,6 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1828,7 +1824,6 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
-                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.infrastructureFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.infrastructureSearchQuery = query),
@@ -1847,8 +1842,6 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1895,7 +1888,6 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
-                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.aiAgentsFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.aiAgentsSearchQuery = query),
@@ -1914,8 +1906,6 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
-                borderRadius: state.settings.borderRadius,
-                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1970,6 +1960,61 @@ export function renderApp(state: AppViewState) {
                   onRefresh: () => loadLogs(state, { reset: true }),
                   onExport: (lines, label) => state.exportLogs(lines, label),
                   onScroll: (event) => state.handleLogsScroll(event),
+                }),
+              )
+            : nothing
+        }
+
+        ${
+          state.tab === "browser"
+            ? lazyRender(lazyBrowser, (m) =>
+                m.renderBrowser({
+                  loading: state.browserLoading,
+                  error: state.browserError,
+                  profiles: state.browserProfiles,
+                  newTabUrl: state.browserNewTabUrl,
+                  onRefresh: () => {
+                    void loadBrowserSessions(state);
+                  },
+                  onNewTabUrlChange: (v) => {
+                    state.browserNewTabUrl = v;
+                  },
+                  onOpenTab: (profile, url) => {
+                    void openBrowserTab(state, profile, url);
+                  },
+                  onCloseTab: (profile, targetId) => {
+                    void closeBrowserTab(state, profile, targetId);
+                  },
+                  onStartProfile: (profile) => {
+                    void startBrowserProfile(state, profile);
+                  },
+                }),
+              )
+            : nothing
+        }
+
+        ${
+          state.tab === "terminal"
+            ? lazyRender(lazyTerminal, (m) =>
+                m.renderTerminal({
+                  loading: state.terminalLoading,
+                  error: state.terminalError,
+                  sessions: state.terminalSessions,
+                  onRefresh: () => {
+                    void loadTerminalSessions(state);
+                  },
+                  newSessionName: state.terminalNewSessionName,
+                  onNewSessionNameChange: (v) => {
+                    state.terminalNewSessionName = v;
+                  },
+                  onCreate: () => {
+                    void createTerminalSession(state, state.terminalNewSessionName);
+                  },
+                  onKill: (name) => {
+                    void killTerminalSession(state, name);
+                  },
+                  actionBusy: state.terminalActionBusy,
+                  autoRefreshActive: state.terminalPollInterval != null,
                 }),
               )
             : nothing

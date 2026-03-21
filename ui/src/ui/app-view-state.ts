@@ -282,6 +282,17 @@ export type AppViewState = {
     debugCallParams: string;
     debugCallResult: string | null;
     debugCallError: string | null;
+    browserLoading: boolean;
+    browserError: string | null;
+    browserProfiles: import("./controllers/browser.ts").BrowserProfile[];
+    browserPollInterval: number | null;
+    browserNewTabUrl: string;
+    terminalLoading: boolean;
+    terminalError: string | null;
+    terminalSessions: Array<{ name: string; windows: number; attached: boolean }>;
+    terminalNewSessionName: string;
+    terminalActionBusy: boolean;
+    terminalPollInterval: number | null;
     logsLoading: boolean;
     logsError: string | null;
     logsFile: string | null;
@@ -311,7 +322,6 @@ export type AppViewState = {
     setTab: (tab: Tab) => void;
     setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
     setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
-    setBorderRadius: (value: number) => void;
     applySettings: (next: UiSettings) => void;
     loadOverview: () => Promise<void>;
     loadAssistantIdentity: () => Promise<void>;
@@ -357,6 +367,7 @@ export type AppViewState = {
     handleDebugCall: () => Promise<void>;
     handleRunUpdate: () => Promise<void>;
     setPassword: (next: string) => void;
+    setSessionKey: (next: string) => void;
     setChatMessage: (next: string) => void;
     handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
     handleAbortChat: () => Promise<void>;

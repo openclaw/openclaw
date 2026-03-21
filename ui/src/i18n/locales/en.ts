@@ -45,6 +45,8 @@ export const en: TranslationMap = {
     aiAgents: "AI & Agents",
     debug: "Debug",
     logs: "Logs",
+    browser: "Browser",
+    terminal: "Terminal",
   },
   subtitles: {
     agents: "Workspaces, tools, identities.",
@@ -65,6 +67,8 @@ export const en: TranslationMap = {
     aiAgents: "Agents, models, skills, tools, memory, session.",
     debug: "Snapshots, events, RPC.",
     logs: "Live gateway logs.",
+    browser: "Agent browser sessions with human tap-in.",
+    terminal: "Agent terminal sessions via tmux.",
   },
   overview: {
     access: {

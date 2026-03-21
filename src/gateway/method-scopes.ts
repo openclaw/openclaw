@@ -112,6 +112,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.steer",
     "sessions.abort",
     "browser.request",
+    "exec.run",
     "push.test",
     "node.pending.enqueue",
   ],

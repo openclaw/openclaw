@@ -416,6 +416,19 @@ export class OpenClawApp extends LitElement {
   @state() debugCallResult: string | null = null;
   @state() debugCallError: string | null = null;
 
+  @state() browserLoading = false;
+  @state() browserError: string | null = null;
+  @state() browserProfiles: import("./controllers/browser.ts").BrowserProfile[] = [];
+  @state() browserNewTabUrl = "";
+  private browserPollInterval: number | null = null;
+
+  @state() terminalLoading = false;
+  @state() terminalError: string | null = null;
+  @state() terminalSessions: Array<{ name: string; windows: number; attached: boolean }> = [];
+  @state() terminalNewSessionName = "";
+  @state() terminalActionBusy = false;
+  private terminalPollInterval: number | null = null;
+
   @state() logsLoading = false;
   @state() logsError: string | null = null;
   @state() logsFile: string | null = null;
@@ -560,14 +573,6 @@ export class OpenClawApp extends LitElement {
       next,
       context,
     );
-  }
-
-  setBorderRadius(value: number) {
-    applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
-      ...this.settings,
-      borderRadius: value,
-    });
-    this.requestUpdate();
   }
 
   buildThemeOrder(active: ThemeName): ThemeName[] {
