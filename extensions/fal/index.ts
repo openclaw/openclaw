@@ -35,6 +35,7 @@ export default definePluginEntry({
             groupId: "fal",
             groupLabel: "fal",
             groupHint: "Image generation",
+            onboardingScopes: ["image-generation"],
           },
         }),
       ],

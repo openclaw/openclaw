@@ -10,6 +10,17 @@ import {
 } from "./auth-choice-options.static.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
+const DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE = "text-inference" as const;
+
+function includesOnboardingScope(
+  onboardingScopes: readonly ("text-inference" | "image-generation")[] | undefined,
+  scope: "text-inference" | "image-generation",
+): boolean {
+  return onboardingScopes
+    ? onboardingScopes.includes(scope)
+    : scope === DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE;
+}
+
 function compareOptionLabels(a: AuthChoiceOption, b: AuthChoiceOption): number {
   return a.label.localeCompare(b.label);
 }
@@ -23,14 +34,18 @@ function resolveManifestProviderChoiceOptions(params?: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): AuthChoiceOption[] {
-  return resolveManifestProviderAuthChoices(params ?? {}).map((choice) => ({
-    value: choice.choiceId as AuthChoice,
-    label: choice.choiceLabel,
-    ...(choice.choiceHint ? { hint: choice.choiceHint } : {}),
-    ...(choice.groupId ? { groupId: choice.groupId as AuthChoiceGroupId } : {}),
-    ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
-    ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
-  }));
+  return resolveManifestProviderAuthChoices(params ?? {})
+    .filter((choice) =>
+      includesOnboardingScope(choice.onboardingScopes, DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE),
+    )
+    .map((choice) => ({
+      value: choice.choiceId as AuthChoice,
+      label: choice.choiceLabel,
+      ...(choice.choiceHint ? { hint: choice.choiceHint } : {}),
+      ...(choice.groupId ? { groupId: choice.groupId as AuthChoiceGroupId } : {}),
+      ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
+      ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
+    }));
 }
 
 function resolveRuntimeFallbackProviderChoiceOptions(params?: {
@@ -38,14 +53,18 @@ function resolveRuntimeFallbackProviderChoiceOptions(params?: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): AuthChoiceOption[] {
-  return resolveProviderWizardOptions(params ?? {}).map((option) => ({
-    value: option.value as AuthChoice,
-    label: option.label,
-    ...(option.hint ? { hint: option.hint } : {}),
-    groupId: option.groupId as AuthChoiceGroupId,
-    groupLabel: option.groupLabel,
-    ...(option.groupHint ? { groupHint: option.groupHint } : {}),
-  }));
+  return resolveProviderWizardOptions(params ?? {})
+    .filter((option) =>
+      includesOnboardingScope(option.onboardingScopes, DEFAULT_AUTH_CHOICE_ONBOARDING_SCOPE),
+    )
+    .map((option) => ({
+      value: option.value as AuthChoice,
+      label: option.label,
+      ...(option.hint ? { hint: option.hint } : {}),
+      groupId: option.groupId as AuthChoiceGroupId,
+      groupLabel: option.groupLabel,
+      ...(option.groupHint ? { groupHint: option.groupHint } : {}),
+    }));
 }
 
 export function formatAuthChoiceChoicesForCli(params?: {
