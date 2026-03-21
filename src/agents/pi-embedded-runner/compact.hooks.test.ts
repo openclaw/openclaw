@@ -1206,6 +1206,36 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     }
   });
 
+  it("runs maintain after successful compaction with a transcript rewrite helper", async () => {
+    const maintain = vi.fn(async (_params?: unknown) => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: true },
+      compact: contextEngineCompactMock,
+      maintain,
+    } as never);
+
+    const result = await compactEmbeddedPiSession(wrappedCompactionArgs());
+
+    expect(result.ok).toBe(true);
+    expect(maintain).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: TEST_SESSION_KEY,
+        sessionFile: TEST_SESSION_FILE,
+        runtimeContext: expect.objectContaining({
+          workspaceDir: TEST_WORKSPACE_DIR,
+        }),
+      }),
+    );
+    const runtimeContext = (
+      maintain.mock.calls[0]?.[0] as { runtimeContext?: Record<string, unknown> } | undefined
+    )?.runtimeContext;
+    expect(typeof runtimeContext?.rewriteTranscriptEntries).toBe("function");
+  });
+
   it("does not fire after_compaction when compaction fails", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     const sync = vi.fn(async () => {});

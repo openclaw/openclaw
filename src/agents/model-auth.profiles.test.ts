@@ -515,8 +515,59 @@ describe("getApiKeyForModel", () => {
       },
       async () => {
         const resolved = resolveEnvApiKey("gigachat");
-        expect(resolved).toBeUndefined();
+        expect(resolved).toBeNull();
       },
     );
+  });
+
+  it("resolveEnvApiKey('anthropic-vertex') uses the provided env snapshot", async () => {
+    const resolved = resolveEnvApiKey("anthropic-vertex", {
+      GOOGLE_CLOUD_PROJECT_ID: "vertex-project",
+    } as NodeJS.ProcessEnv);
+
+    expect(resolved).toBeNull();
+  });
+
+  it("resolveEnvApiKey('anthropic-vertex') accepts GOOGLE_APPLICATION_CREDENTIALS with project_id", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-adc-"));
+    const credentialsPath = path.join(tempDir, "adc.json");
+    await fs.writeFile(credentialsPath, JSON.stringify({ project_id: "vertex-project" }), "utf8");
+
+    try {
+      const resolved = resolveEnvApiKey("anthropic-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('anthropic-vertex') accepts GOOGLE_APPLICATION_CREDENTIALS without a local project field", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-adc-"));
+    const credentialsPath = path.join(tempDir, "adc.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+
+    try {
+      const resolved = resolveEnvApiKey("anthropic-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('anthropic-vertex') accepts explicit metadata auth opt-in", async () => {
+    const resolved = resolveEnvApiKey("anthropic-vertex", {
+      ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+    } as NodeJS.ProcessEnv);
+
+    expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+    expect(resolved?.source).toBe("gcloud adc");
   });
 });
