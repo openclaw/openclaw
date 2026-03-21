@@ -175,6 +175,25 @@ function normalizeMarkdownImageLabel(text?: string | null): string {
   return trimmed ? trimmed : "image";
 }
 
+// Half-block characters used in UTF-8 QR codes and block-art:
+// U+2580 ▀ upper half, U+2584 ▄ lower half, U+2588 █ full block,
+// plus shades ░▒▓ and partial blocks ▌▐.
+const HALF_BLOCK_RE = /[\u2580\u2584\u2588]/;
+
+function looksLikeHalfBlockArt(text: string): boolean {
+  const lines = text.trim().split("\n");
+  if (lines.length < 10) {
+    return false;
+  }
+  let blockLines = 0;
+  for (const line of lines) {
+    if (HALF_BLOCK_RE.test(line)) {
+      blockLines++;
+    }
+  }
+  return blockLines / lines.length > 0.6;
+}
+
 htmlEscapeRenderer.code = ({
   text,
   lang,
@@ -197,6 +216,13 @@ htmlEscapeRenderer.code = ({
   const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
 
   const trimmed = text.trim();
+
+  // Half-block art (QR codes, box-drawing art) needs tight line-height so
+  // upper/lower half-blocks tile without gaps.
+  if (looksLikeHalfBlockArt(trimmed)) {
+    return `<div class="code-block-wrapper half-block-art">${header}${codeBlock}</div>`;
+  }
+
   const isJson =
     lang === "json" ||
     (!lang &&

@@ -94,6 +94,38 @@
   object-fit: contain;
 }
 
+/* =============================================
+   HALF-BLOCK ART (UTF-8 QR codes, block art)
+   Half-block characters (▀▄█) encode 2 vertical
+   pixels per character row, so line-height must
+   be ~0.5 to tile without gaps. Black background
+   with white foreground matches the standard
+   encoding: █=white pair, ▀=white-top, ▄=white-bottom,
+   space=black pair.
+   ============================================= */
+
+:root[data-theme-mode="light"] .sidebar-markdown .half-block-art pre {
+  background: #000;
+  color: #fff;
+  line-height: 0.6;
+  font-size: 1.3em;
+  padding: 4px;
+  border-radius: 4px;
+  overflow-x: auto;
+  width: fit-content;
+}
+
+:root[data-theme-mode="dark"] .sidebar-markdown .half-block-art pre {
+  background: #000;
+  color: #fff;
+  line-height: 0.6;
+  font-size: 1.3em;
+  padding: 4px;
+  border-radius: 4px;
+  overflow-x: auto;
+  width: fit-content;
+}
+
 .sidebar-markdown pre {
   background: rgba(0, 0, 0, 0.12);
   border-radius: 4px;
