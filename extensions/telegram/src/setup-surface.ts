@@ -272,10 +272,11 @@ export const telegramSetupWizard: ChannelSetupWizard = {
       "Telegram token missing; use numeric sender ids (usernames require a bot token).",
     parseInputs: splitOnboardingEntries,
     parseId: parseTelegramAllowFromId,
-    resolveEntries: async ({ credentialValue, entries }) =>
+    resolveEntries: async ({ cfg, accountId, credentialValues, entries }) =>
       resolveTelegramAllowFromEntries({
         credentialValue,
         entries,
+        apiRoot: resolveTelegramAccount({ cfg, accountId }).config.apiRoot,
       }),
     apply: async ({ cfg, accountId, allowFrom }) =>
       patchChannelConfigForAccount({
