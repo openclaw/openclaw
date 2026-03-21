@@ -694,6 +694,7 @@ export async function startGatewayServer(
     removeChatRun,
     chatAbortControllers,
     toolEventRecipients,
+    clientTaskQueue,
   } = await createGatewayRuntimeState({
     cfg: cfgAtStart,
     bindHost,
@@ -1124,6 +1125,7 @@ export async function startGatewayServer(
     markChannelLoggedOut,
     wizardRunner,
     broadcastVoiceWakeChanged,
+    clientTaskQueue,
   };
 
   // Register a lazy fallback for plugin subagent dispatch in non-WS paths

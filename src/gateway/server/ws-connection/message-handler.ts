@@ -1130,18 +1130,24 @@ export function attachGatewayWsMessageHandler(params: {
         });
       };
 
-      void (async () => {
-        await handleGatewayRequest({
-          req,
-          respond,
-          client,
-          isWebchatConnect,
-          extraHandlers,
-          context: buildRequestContext(),
-        });
-      })().catch((err) => {
-        logGateway.error(`request handler failed: ${formatForLog(err)}`);
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      const context = buildRequestContext();
+      void context.clientTaskQueue.enqueue(connId, async () => {
+        try {
+          if (isClosed()) {
+            return;
+          }
+          await handleGatewayRequest({
+            req,
+            respond,
+            client,
+            isWebchatConnect,
+            extraHandlers,
+            context,
+          });
+        } catch (err) {
+          logGateway.error(`request handler failed: ${formatForLog(err)}`);
+          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+        }
       });
     } catch (err) {
       logGateway.error(`parse/handle error: ${String(err)}`);

@@ -99,6 +99,7 @@ export type GatewayRequestContext = {
     prompter: import("../../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;
+  clientTaskQueue: import("../../plugin-sdk/keyed-async-queue.js").KeyedAsyncQueue;
 };
 
 export type GatewayRequestOptions = {

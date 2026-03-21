@@ -4,6 +4,7 @@ import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import {
   pinActivePluginHttpRouteRegistry,
@@ -97,6 +98,7 @@ export async function createGatewayRuntimeState(params: {
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
+  clientTaskQueue: KeyedAsyncQueue;
 }> {
   pinActivePluginHttpRouteRegistry(params.pluginRegistry);
   try {
@@ -227,6 +229,7 @@ export async function createGatewayRuntimeState(params: {
     const removeChatRun = chatRunRegistry.remove;
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const toolEventRecipients = createToolEventRecipientRegistry();
+    const clientTaskQueue = new KeyedAsyncQueue();
 
     return {
       canvasHost,
@@ -248,6 +251,7 @@ export async function createGatewayRuntimeState(params: {
       removeChatRun,
       chatAbortControllers,
       toolEventRecipients,
+      clientTaskQueue,
     };
   } catch (err) {
     releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
