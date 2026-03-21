@@ -181,6 +181,12 @@ export function deriveSessionTotalTokens(params: {
       });
 
   if (!(typeof promptTokens === "number") || !Number.isFinite(promptTokens) || promptTokens <= 0) {
+    // No valid prompt token count. If the API reported a total (e.g. vLLM's total_tokens),
+    // use it as a fallback — it includes prompt tokens and is meaningful for context display.
+    const reportedTotal = asFiniteNumber(usage?.total);
+    if (reportedTotal !== undefined && reportedTotal > 0) {
+      return reportedTotal;
+    }
     return undefined;
   }
 

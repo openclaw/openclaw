@@ -492,7 +492,8 @@ export function buildAssistantMessageFromResponse(
     stopReason,
     usage: buildUsageWithNoCost({
       input: response.usage?.input_tokens ?? 0,
-      output: response.usage?.output_tokens ?? 0,
+      // vLLM uses completion_tokens, not output_tokens
+      output: response.usage?.output_tokens ?? response.usage?.completion_tokens ?? 0,
       totalTokens: response.usage?.total_tokens ?? 0,
     }),
   });
