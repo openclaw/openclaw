@@ -1,10 +1,11 @@
 import {
-  fetchTelegramChatId,
   inspectTelegramAccount,
   isNumericTelegramUserId,
   listTelegramAccountIds,
+  lookupTelegramChatId,
   normalizeTelegramAllowFromEntry,
 } from "../../extensions/telegram/api.js";
+import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
@@ -87,6 +88,8 @@ type TelegramAllowFromListRef = {
 type ResolvedTelegramLookupAccount = {
   token: string;
   apiRoot?: string;
+  proxyUrl?: string;
+  network?: TelegramNetworkConfig;
 };
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
@@ -421,12 +424,14 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
       continue;
     }
     const apiRoot = account.config.apiRoot?.trim() || undefined;
-    const cacheKey = `${token}::${apiRoot ?? ""}`;
+    const proxyUrl = account.config.proxy?.trim() || undefined;
+    const network = account.config.network;
+    const cacheKey = `${token}::${apiRoot ?? ""}::${proxyUrl ?? ""}::${JSON.stringify(network ?? {})}`;
     if (seenLookupAccounts.has(cacheKey)) {
       continue;
     }
     seenLookupAccounts.add(cacheKey);
-    lookupAccounts.push({ token, apiRoot });
+    lookupAccounts.push({ token, apiRoot, proxyUrl, network });
   }
 
   if (lookupAccounts.length === 0) {
@@ -461,11 +466,13 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
       try {
-        const id = await fetchTelegramChatId({
+        const id = await lookupTelegramChatId({
           token: account.token,
           chatId: username,
           signal: controller.signal,
           apiRoot: account.apiRoot,
+          proxyUrl: account.proxyUrl,
+          network: account.network,
         });
         if (id) {
           return id;

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { GrammyError } from "grammy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/infra-runtime";
@@ -143,6 +144,9 @@ async function downloadAndSaveTelegramFile(params: {
   telegramFileName?: string;
   apiRoot?: string;
 }) {
+  if (path.isAbsolute(params.filePath)) {
+    return { path: params.filePath, contentType: undefined };
+  }
   const apiBase = resolveTelegramApiBase(params.apiRoot);
   const url = `${apiBase}/file/bot${params.token}/${params.filePath}`;
   const fetched = await fetchRemoteMedia({

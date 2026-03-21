@@ -1,15 +1,28 @@
-import { resolveTelegramApiBase } from "./fetch.js";
+import type { TelegramNetworkConfig } from "../runtime-api.js";
+import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
+import { makeProxyFetch } from "./proxy.js";
+
+export function resolveTelegramChatLookupFetch(params?: {
+  proxyUrl?: string;
+  network?: TelegramNetworkConfig;
+}): typeof fetch {
+  const proxyUrl = params?.proxyUrl?.trim();
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
+  return resolveTelegramFetch(proxyFetch, { network: params?.network });
+}
 
 export async function fetchTelegramChatId(params: {
   token: string;
   chatId: string;
   signal?: AbortSignal;
   apiRoot?: string;
+  fetchImpl?: typeof fetch;
 }): Promise<string | null> {
   const apiBase = resolveTelegramApiBase(params.apiRoot);
   const url = `${apiBase}/bot${params.token}/getChat?chat_id=${encodeURIComponent(params.chatId)}`;
+  const fetchImpl = params.fetchImpl ?? fetch;
   try {
-    const res = await fetch(url, params.signal ? { signal: params.signal } : undefined);
+    const res = await fetchImpl(url, params.signal ? { signal: params.signal } : undefined);
     if (!res.ok) {
       return null;
     }
