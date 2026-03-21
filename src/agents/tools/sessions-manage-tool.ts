@@ -18,7 +18,6 @@ const SESSIONS_MANAGE_ACTIONS = ["compact", "reset"] as const;
 const SessionsManageToolSchema = Type.Object({
   sessionKey: Type.String(),
   action: stringEnum(SESSIONS_MANAGE_ACTIONS),
-  instructions: Type.Optional(Type.String()),
 });
 
 export function createSessionsManageTool(opts?: {
@@ -36,7 +35,6 @@ export function createSessionsManageTool(opts?: {
       const params = args as Record<string, unknown>;
       const sessionKeyParam = readStringParam(params, "sessionKey", { required: true });
       const action = readStringParam(params, "action", { required: true });
-      const instructions = readStringParam(params, "instructions");
 
       if (!SESSIONS_MANAGE_ACTIONS.includes(action as (typeof SESSIONS_MANAGE_ACTIONS)[number])) {
         return jsonResult({ status: "error", error: "action must be 'compact' or 'reset'" });
@@ -80,6 +78,7 @@ export function createSessionsManageTool(opts?: {
         cfg,
         sandboxed: opts?.sandboxed === true,
       });
+      // TODO: add "manage" to SessionAccessAction for accurate error messages
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "send",
         requesterSessionKey: effectiveRequesterKey,
@@ -104,10 +103,7 @@ export function createSessionsManageTool(opts?: {
             kept?: number;
           }>({
             method: "sessions.compact",
-            params: {
-              key: resolvedKey,
-              ...(instructions ? { instructions } : {}),
-            },
+            params: { key: resolvedKey },
           });
           return jsonResult({
             status: "ok",
