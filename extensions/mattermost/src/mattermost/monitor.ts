@@ -1568,10 +1568,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 }
               } catch (err) {
                 logVerboseMessage(`mattermost stream-patch send failed: ${String(err)}`);
-                // Latch the failure so schedulePatch() does not re-arm the interval
-                // on subsequent onPartialReply calls (which would retry indefinitely).
-                previewSendFailed = true;
-                stopPatchInterval();
+                // Only latch the failure for the current turn. If a turn boundary
+                // already fired while this send was in flight (currentTurnSeq !=
+                // sendTurnSeq), the failure belongs to the previous (abandoned) turn
+                // and must not stop streaming for the new turn (ID=2969630961).
+                if (currentTurnSeq === sendTurnSeq) {
+                  previewSendFailed = true;
+                  stopPatchInterval();
+                }
               }
             } else {
               try {
@@ -1891,6 +1895,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               await deleteMattermostPost(client, orphanId).catch(() => {
                 // Best-effort — the run is already complete.
               });
+            }
+            // Also drain any queued over-limit orphan previews that were never
+            // re-delivered (e.g. aborted run or no-final path). Without this,
+            // stale partial preview posts remain in-channel (ID=2969630963).
+            if (pendingOrphanDeletes.length > 0) {
+              const toDelete = pendingOrphanDeletes.splice(0);
+              for (const id of toDelete) {
+                void deleteMattermostPost(client, id).catch(() => {});
+              }
             }
           })();
         }
