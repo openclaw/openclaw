@@ -184,7 +184,13 @@ export class VoiceCallWebhookServer {
         // Auto-respond in conversation mode (inbound always, outbound if mode is conversation)
         const callMode = call.metadata?.mode as string | undefined;
         const shouldRespond = call.direction === "inbound" || callMode === "conversation";
-        if (shouldRespond && !suppressBargeIn) {
+        if (shouldRespond) {
+          if (suppressBargeIn) {
+            console.log(
+              `[voice-call] Skipping auto-response while initial message is still playing (${providerCallId})`,
+            );
+            return;
+          }
           this.handleInboundResponse(call.callId, transcript).catch((err) => {
             console.warn(`[voice-call] Failed to auto-respond:`, err);
           });
