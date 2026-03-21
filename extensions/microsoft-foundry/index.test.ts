@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
 import plugin from "./index.js";
-import { isValidTenantIdentifier } from "./onboard.js";
+import { buildFoundryConnectionTest, isValidTenantIdentifier } from "./onboard.js";
 import { buildFoundryAuthResult } from "./shared.js";
 
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -360,6 +360,33 @@ describe("microsoft-foundry plugin", () => {
       apiKey: "test-api-key",
       authHeader: false,
       headers: { "api-key": "test-api-key" },
+    });
+  });
+
+  it("uses the minimum supported response token count for GPT-5 connection tests", () => {
+    const testRequest = buildFoundryConnectionTest({
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "gpt-5.4",
+      modelNameHint: "gpt-5.4",
+    });
+
+    expect(testRequest.url).toContain("/responses");
+    expect(testRequest.body).toMatchObject({
+      model: "gpt-5.4",
+      max_output_tokens: 16,
+    });
+  });
+
+  it("includes api-version for non GPT-5 chat completion connection tests", () => {
+    const testRequest = buildFoundryConnectionTest({
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "FW-GLM-5",
+      modelNameHint: "FW-GLM-5",
+    });
+
+    expect(testRequest.url).toContain("/chat/completions?api-version=2024-12-01-preview");
+    expect(testRequest.body).toMatchObject({
+      max_tokens: 1,
     });
   });
 

@@ -268,12 +268,12 @@ export function buildFoundryConnectionTest(params: {
       body: {
         model: params.modelId,
         input: "hi",
-        max_output_tokens: 1,
+        max_output_tokens: 16,
       },
     };
   }
   return {
-    url: `${baseUrl}/chat/completions`,
+    url: `${baseUrl}/chat/completions?api-version=2024-12-01-preview`,
     body: {
       messages: [{ role: "user", content: "hi" }],
       max_tokens: 1,
