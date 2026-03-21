@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createQuotedMessageCache, normalizeQuotedMessage } from "./quoted-message-cache.js";
 
 describe("normalizeQuotedMessage", () => {
@@ -321,5 +321,38 @@ describe("createQuotedMessageCache", () => {
       },
       message: { conversation: "group hello" },
     });
+  });
+
+  it("expires stale entries on resolve without needing another write", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-21T00:00:00Z"));
+      const cache = createQuotedMessageCache({ ttlMs: 1_000 });
+      cache.remember({
+        message: {
+          key: {
+            id: "msg-1",
+            remoteJid: "1234567890@lid",
+            fromMe: false,
+          },
+          message: { conversation: "hello there" },
+        },
+        messageId: "msg-1",
+        remoteJid: "1234567890@lid",
+        normalizedJid: "1555@s.whatsapp.net",
+        isGroup: false,
+      });
+
+      vi.setSystemTime(new Date("2026-03-21T00:00:02Z"));
+
+      expect(
+        cache.resolve({
+          jid: "1555@s.whatsapp.net",
+          replyToId: "msg-1",
+        }),
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

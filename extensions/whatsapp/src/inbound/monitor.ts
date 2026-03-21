@@ -331,6 +331,7 @@ export async function monitorWebInbox(options: {
     enriched: EnrichedInboundMessage,
   ) => {
     const chatJid = inbound.remoteJid;
+    const quotedLookupJid = toWhatsappJid(chatJid);
     const createAutoReplySendOptions = (replyToId?: string) => {
       const normalizedReplyToId = replyToId?.trim();
       return normalizedReplyToId
@@ -342,8 +343,10 @@ export async function monitorWebInbox(options: {
       if (!normalizedReplyToId) {
         return undefined;
       }
+      // Keep quote-cache lookups aligned with sendApi.sendMessage(), while still
+      // preserving jid-shaped inputs like @lid/@g.us unchanged.
       const quoted = quotedMessageCache.resolve({
-        jid: chatJid,
+        jid: quotedLookupJid,
         replyToId: normalizedReplyToId,
       });
       return quoted ? { quoted } : undefined;

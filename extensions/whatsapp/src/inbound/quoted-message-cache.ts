@@ -96,13 +96,16 @@ export function createQuotedMessageCache(options?: { limit?: number; ttlMs?: num
     }
   };
 
-  const prune = () => {
+  const pruneExpiredEntries = () => {
     const now = Date.now();
     for (const [entryKey, entry] of entries.entries()) {
       if (now - entry.storedAt > ttlMs) {
         deleteEntry(entryKey);
       }
     }
+  };
+
+  const pruneOverflowEntries = () => {
     while (entries.size > limit) {
       const oldestEntryKey = entries.keys().next().value;
       if (!oldestEntryKey) {
@@ -159,11 +162,12 @@ export function createQuotedMessageCache(options?: { limit?: number; ttlMs?: num
     for (const aliasKey of aliasKeys) {
       aliasIndex.set(aliasKey, entryKey);
     }
-    prune();
+    pruneExpiredEntries();
+    pruneOverflowEntries();
   };
 
   const resolve = (params: { jid: string; replyToId: string }): WAMessage | undefined => {
-    prune();
+    pruneExpiredEntries();
     const entryKey = aliasIndex.get(createQuotedMessageAliasKey(params.jid, params.replyToId));
     const message = entryKey ? entries.get(entryKey)?.message : undefined;
     return message ? alignQuotedMessageToJid(message, params.jid) : undefined;
