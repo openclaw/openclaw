@@ -568,7 +568,6 @@ export class TwilioProvider implements VoiceCallProvider {
   async playTts(input: PlayTtsInput): Promise<void> {
     // Try telephony TTS via media stream first (if configured)
     const streamSid = this.callStreamMap.get(input.providerCallId);
-    const shouldAvoidTwimlFallback = Boolean(streamSid);
 
     if (this.ttsProvider && this.mediaStreamHandler && streamSid) {
       try {
@@ -581,12 +580,6 @@ export class TwilioProvider implements VoiceCallProvider {
         );
         throw err instanceof Error ? err : new Error(String(err));
       }
-    }
-
-    if (shouldAvoidTwimlFallback) {
-      throw new Error(
-        "Cannot use TwiML fallback while media stream is active; telephony TTS is unavailable",
-      );
     }
 
     // Fall back to TwiML <Say> (may not work on all accounts)

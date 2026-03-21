@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createManagerHarness, FakeProvider } from "./manager.test-harness.js";
 
 class FailFirstPlayTtsProvider extends FakeProvider {
@@ -10,6 +10,24 @@ class FailFirstPlayTtsProvider extends FakeProvider {
       this.failed = true;
       throw new Error("synthetic tts failure");
     }
+  }
+}
+
+class DelayedPlayTtsProvider extends FakeProvider {
+  private releasePlayTts: (() => void) | null = null;
+  readonly playTtsStarted = vi.fn();
+
+  override async playTts(input: Parameters<FakeProvider["playTts"]>[0]): Promise<void> {
+    this.playTtsCalls.push(input);
+    this.playTtsStarted();
+    await new Promise<void>((resolve) => {
+      this.releasePlayTts = resolve;
+    });
+  }
+
+  releaseCurrentPlayback(): void {
+    this.releasePlayTts?.();
+    this.releasePlayTts = null;
   }
 }
 
@@ -202,5 +220,43 @@ describe("CallManager notify and mapping", () => {
 
     expect(provider.playTtsCalls).toHaveLength(1);
     expect(provider.playTtsCalls[0]?.text).toBe("Stream hello");
+  });
+
+  it("prevents concurrent initial-message replays while first playback is in flight", async () => {
+    const provider = new DelayedPlayTtsProvider("twilio");
+    const { manager } = await createManagerHarness({ streaming: { enabled: true } }, provider);
+
+    const { callId, success } = await manager.initiateCall("+15550000008", undefined, {
+      message: "In-flight hello",
+      mode: "conversation",
+    });
+    expect(success).toBe(true);
+
+    manager.processEvent({
+      id: "evt-stream-answered-concurrent",
+      type: "call.answered",
+      callId,
+      providerCallId: "call-uuid",
+      timestamp: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(provider.playTtsCalls).toHaveLength(0);
+
+    const first = manager.speakInitialMessage("call-uuid");
+    await vi.waitFor(() => {
+      expect(provider.playTtsStarted).toHaveBeenCalledTimes(1);
+    });
+
+    const second = manager.speakInitialMessage("call-uuid");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(provider.playTtsCalls).toHaveLength(1);
+
+    provider.releaseCurrentPlayback();
+    await Promise.all([first, second]);
+
+    const call = manager.getCall(callId);
+    expect(call?.metadata?.initialMessage).toBeUndefined();
+    expect(provider.playTtsCalls).toHaveLength(1);
+    expect(provider.playTtsCalls[0]?.text).toBe("In-flight hello");
   });
 });

@@ -189,8 +189,29 @@ describe("TwilioProvider", () => {
     expect(event?.turnToken).toBe("turn-xyz");
   });
 
-  it("does not fall back to TwiML when an active stream exists but telephony TTS is unavailable", async () => {
+  it("falls back to TwiML when an active stream exists but telephony TTS is unavailable", async () => {
     const provider = createProvider();
+    const apiRequest = vi.fn<
+      (
+        endpoint: string,
+        params: Record<string, string | string[]>,
+        options?: { allowNotFound?: boolean },
+      ) => Promise<unknown>
+    >(async () => ({}));
+    (
+      provider as unknown as {
+        apiRequest: (
+          endpoint: string,
+          params: Record<string, string | string[]>,
+          options?: { allowNotFound?: boolean },
+        ) => Promise<unknown>;
+      }
+    ).apiRequest = apiRequest;
+    (
+      provider as unknown as {
+        callWebhookUrls: Map<string, string>;
+      }
+    ).callWebhookUrls.set("CA-stream", "https://example.ngrok.app/voice/twilio");
     provider.registerCallStream("CA-stream", "MZ-stream");
 
     await expect(
@@ -199,7 +220,13 @@ describe("TwilioProvider", () => {
         providerCallId: "CA-stream",
         text: "Hello stream",
       }),
-    ).rejects.toThrow("Cannot use TwiML fallback while media stream is active");
+    ).resolves.toBeUndefined();
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+    const call = apiRequest.mock.calls[0]!;
+    const endpoint = call[0];
+    const params = call[1] as { Twiml?: string };
+    expect(endpoint).toBe("/Calls/CA-stream.json");
+    expect(params.Twiml).toContain("<Say");
   });
 
   it("times out telephony synthesis in stream mode and does not send completion mark", async () => {

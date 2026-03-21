@@ -18,6 +18,18 @@ import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 const STREAM_DISCONNECT_HANGUP_GRACE_MS = 2000;
+const TRANSCRIPT_LOG_MAX_CHARS = 200;
+
+function sanitizeTranscriptForLog(value: string): string {
+  const sanitized = value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (sanitized.length <= TRANSCRIPT_LOG_MAX_CHARS) {
+    return sanitized;
+  }
+  return `${sanitized.slice(0, TRANSCRIPT_LOG_MAX_CHARS)}...`;
+}
 
 type WebhookResponsePayload = {
   statusCode: number;
@@ -160,7 +172,10 @@ export class VoiceCallWebhookServer {
         return true;
       },
       onTranscript: (providerCallId, transcript) => {
-        console.log(`[voice-call] Transcript for ${providerCallId}: ${transcript}`);
+        const safeTranscript = sanitizeTranscriptForLog(transcript);
+        console.log(
+          `[voice-call] Transcript for ${providerCallId}: ${safeTranscript} (chars=${transcript.length})`,
+        );
         const call = this.manager.getCallByProviderCallId(providerCallId);
         const suppressBargeIn = this.shouldSuppressBargeInForInitialMessage(call);
 
@@ -213,7 +228,8 @@ export class VoiceCallWebhookServer {
         (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
       },
       onPartialTranscript: (callId, partial) => {
-        console.log(`[voice-call] Partial for ${callId}: ${partial}`);
+        const safePartial = sanitizeTranscriptForLog(partial);
+        console.log(`[voice-call] Partial for ${callId}: ${safePartial} (chars=${partial.length})`);
       },
       onConnect: (callId, streamSid) => {
         console.log(`[voice-call] Media stream connected: ${callId} -> ${streamSid}`);

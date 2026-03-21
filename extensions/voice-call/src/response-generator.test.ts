@@ -83,6 +83,12 @@ describe("generateVoiceResponse", () => {
     expect(result.text).toBe("Fenced JSON works.");
   });
 
+  it("returns silence for an explicit empty spoken contract response", async () => {
+    const { result } = await runGenerateVoiceResponse([{ text: '{"spoken":""}' }]);
+
+    expect(result.text).toBeNull();
+  });
+
   it("strips leading planning text when model returns plain text", async () => {
     const { result } = await runGenerateVoiceResponse([
       {

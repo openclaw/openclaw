@@ -74,20 +74,20 @@ function tryParseSpokenJson(text: string): string | null {
       if (typeof parsed?.spoken !== "string") {
         continue;
       }
-      return normalizeSpokenText(parsed.spoken);
+      return normalizeSpokenText(parsed.spoken) ?? "";
     } catch {
       // Continue trying other candidates.
     }
   }
 
   const inlineSpokenMatch = trimmed.match(/"spoken"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
-  if (!inlineSpokenMatch?.[1]) {
+  if (!inlineSpokenMatch) {
     return null;
   }
 
   try {
-    const decoded = JSON.parse(`"${inlineSpokenMatch[1]}"`) as string;
-    return normalizeSpokenText(decoded);
+    const decoded = JSON.parse(`"${inlineSpokenMatch[1] ?? ""}"`) as string;
+    return normalizeSpokenText(decoded) ?? "";
   } catch {
     return null;
   }
@@ -153,8 +153,10 @@ function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string
     }
 
     const structured = tryParseSpokenJson(rawText);
-    if (structured) {
-      spokenSegments.push(structured);
+    if (structured !== null) {
+      if (structured.length > 0) {
+        spokenSegments.push(structured);
+      }
       continue;
     }
 
