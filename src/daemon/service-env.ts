@@ -1,10 +1,10 @@
 import os from "node:os";
 import path from "node:path";
 import {
-  isNvmNode,
-  resolveAutoNodeExtraCaCerts,
+  isNodeVersionManagerRuntime,
   resolveLinuxSystemCaBundle,
 } from "../bootstrap/node-extra-ca-certs.js";
+import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,
@@ -20,7 +20,7 @@ import {
   resolveNodeWindowsTaskName,
 } from "./constants.js";
 
-export { isNvmNode, resolveLinuxSystemCaBundle };
+export { isNodeVersionManagerRuntime, resolveLinuxSystemCaBundle };
 
 export type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
@@ -346,16 +346,11 @@ function resolveSharedServiceEnvironmentFields(
   // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
   // works correctly when running as a LaunchAgent without extra user configuration.
   // On Linux, nvm-installed Node may need the host CA bundle injected before startup.
-  const nodeCaCerts =
-    env.NODE_EXTRA_CA_CERTS ??
-    (platform === "darwin"
-      ? "/etc/ssl/cert.pem"
-      : resolveAutoNodeExtraCaCerts({
-          env,
-          platform,
-          execPath,
-        }));
-  const nodeUseSystemCa = env.NODE_USE_SYSTEM_CA ?? (platform === "darwin" ? "1" : undefined);
+  const startupTlsEnv = resolveNodeStartupTlsEnvironment({
+    env,
+    platform,
+    execPath,
+  });
   return {
     stateDir,
     configPath,
@@ -367,7 +362,7 @@ function resolveSharedServiceEnvironmentFields(
         ? undefined
         : buildMinimalServicePath({ env, platform, extraDirs: extraPathDirs }),
     proxyEnv,
-    nodeCaCerts,
-    nodeUseSystemCa,
+    nodeCaCerts: startupTlsEnv.NODE_EXTRA_CA_CERTS,
+    nodeUseSystemCa: startupTlsEnv.NODE_USE_SYSTEM_CA,
   };
 }
