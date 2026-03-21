@@ -16,3 +16,5 @@ export type {
   QueueMode,
   QueueSettings,
 } from "./queue/types.js";
+export { persistFollowupQueues, consumePersistedFollowups } from "./queue/persist.js";
+export type { PersistedFollowupItem, PersistedFollowupQueue } from "./queue/persist.js";

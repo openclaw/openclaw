@@ -26,6 +26,7 @@ import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
+import { replayPersistedFollowups } from "./replay-persisted-followups.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
   scheduleRestartSentinelWake,
@@ -221,6 +222,13 @@ export async function startGatewaySidecars(params: {
       void scheduleRestartSentinelWake({ deps: params.deps });
     }, 750);
   }
+
+  // Replay any followup queue items persisted before the previous shutdown.
+  // Runs unconditionally (not just after restart sentinel) since followups
+  // could be persisted from any shutdown path.
+  setTimeout(() => {
+    void replayPersistedFollowups();
+  }, 1000);
 
   return { browserControl, pluginServices };
 }
