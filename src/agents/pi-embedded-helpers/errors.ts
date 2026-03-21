@@ -83,6 +83,11 @@ function hasRateLimitTpmHint(raw: string): boolean {
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
 }
 
+/** Jinja template rendering errors are provider-side prompt formatting failures, not context overflow. */
+function isJinjaTemplateError(errorMessage: string): boolean {
+  return /jinja.?template/i.test(errorMessage) && /render|error/i.test(errorMessage);
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -95,6 +100,11 @@ export function isContextOverflowError(errorMessage?: string): boolean {
   }
 
   if (isReasoningConstraintErrorMessage(errorMessage)) {
+    return false;
+  }
+
+  // Jinja template errors from LM Studio / Qwen are prompt formatting failures, not overflow.
+  if (isJinjaTemplateError(errorMessage)) {
     return false;
   }
 
@@ -148,6 +158,11 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   }
 
   if (isReasoningConstraintErrorMessage(errorMessage)) {
+    return false;
+  }
+
+  // Jinja template errors from LM Studio / Qwen are prompt formatting failures, not overflow.
+  if (isJinjaTemplateError(errorMessage)) {
     return false;
   }
 
