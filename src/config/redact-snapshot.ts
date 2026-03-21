@@ -1,4 +1,3 @@
-import JSON5 from "json5";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stripUrlUserInfo } from "../shared/net/url-userinfo.js";
 import {
@@ -416,7 +415,13 @@ export function redactConfigSnapshot(
         ),
     })
   ) {
-    redactedRaw = JSON5.stringify(redactedParsed ?? redactedConfig, null, 2);
+    // When the raw text cannot round-trip cleanly through redaction and restore,
+    // do not fall back to JSON5.stringify(redactedConfig) — that injects runtime
+    // defaults (model, session, logging) that were never in the on-disk file,
+    // producing a synthetic document that fails config.set validation (#48415).
+    // Setting raw to null forces the Control UI into form-only editing mode,
+    // which is already handled by applyConfigSnapshot() in the UI controller.
+    redactedRaw = null;
   }
   // Also redact the resolved config (contains values after ${ENV} substitution)
   const redactedResolved = redactConfigObject(snapshot.resolved, uiHints);
