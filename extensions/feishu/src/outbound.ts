@@ -96,13 +96,13 @@ function buildFeishuLocalMediaGuidanceError(params: {
   return new Error(
     [
       "Feishu media upload failed; local media path is outside the allowed roots (command exits with non-zero status).",
-      "channels.feishu.mediaLocalRoots is unsupported for Feishu and ignored.",
+      "channels.feishu.mediaLocalRoots cannot override runtime-level allowed roots for Feishu.",
       `Rejected path: ${params.mediaUrl}`,
       `Allowed local media roots: ${roots.join(", ")}`,
       `Recommended staging directory: ${stagingDir}`,
       "macOS note: OpenClaw uses os.tmpdir() (typically /var/folders/.../T), not /tmp.",
       `Details: ${details}`,
-    ].join(" "),
+    ].join("\n"),
     { cause: params.err instanceof Error ? params.err : undefined },
   );
 }
@@ -211,21 +211,13 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       threadId,
     }) => {
       const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
-      // Send text first if provided
-      if (text?.trim()) {
-        await sendOutboundText({
-          cfg,
-          to,
-          text,
-          accountId: accountId ?? undefined,
-          replyToMessageId,
-        });
-      }
+      const hasText = Boolean(text?.trim());
 
-      // Upload and send media if URL or local path provided
+      // Upload and send media first when provided so allowlist violations fail-fast
+      // before any caption text is emitted.
       if (mediaUrl) {
         try {
-          return await sendMediaFeishu({
+          const mediaResult = await sendMediaFeishu({
             cfg,
             to,
             mediaUrl,
@@ -233,12 +225,31 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             mediaLocalRoots,
             replyToMessageId,
           });
+          if (hasText) {
+            await sendOutboundText({
+              cfg,
+              to,
+              text: text!,
+              accountId: accountId ?? undefined,
+              replyToMessageId,
+            });
+          }
+          return mediaResult;
         } catch (err) {
           if (findLocalMediaPathNotAllowedError(err)) {
             throw buildFeishuLocalMediaGuidanceError({ err, mediaUrl, mediaLocalRoots });
           }
           // Log the error for debugging
           console.error(`[feishu] sendMediaFeishu failed:`, err);
+          if (hasText) {
+            await sendOutboundText({
+              cfg,
+              to,
+              text: text!,
+              accountId: accountId ?? undefined,
+              replyToMessageId,
+            });
+          }
           // Fallback to URL link if upload fails
           return await sendOutboundText({
             cfg,

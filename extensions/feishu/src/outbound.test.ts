@@ -141,7 +141,9 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       } catch (err) {
         message = err instanceof Error ? err.message : String(err);
       }
-      expect(message).toContain("channels.feishu.mediaLocalRoots is unsupported");
+      expect(message).toContain(
+        "channels.feishu.mediaLocalRoots cannot override runtime-level allowed roots for Feishu.",
+      );
       expect(message).toContain("Allowed local media roots: /state/media, /state/workspace");
       expect(message).toContain("macOS note: OpenClaw uses os.tmpdir()");
       expect(sendMessageFeishuMock).not.toHaveBeenCalled();
@@ -392,7 +394,7 @@ describe("feishuOutbound.sendMedia failure handling", () => {
     resetOutboundMocks();
   });
 
-  it("throws non-zero guidance for path-not-allowed media paths", async () => {
+  it("throws non-zero guidance for path-not-allowed media paths before caption send", async () => {
     sendMediaFeishuMock.mockRejectedValueOnce({
       name: "LocalMediaAccessError",
       code: "path-not-allowed",
@@ -404,7 +406,7 @@ describe("feishuOutbound.sendMedia failure handling", () => {
       await feishuOutbound.sendMedia?.({
         cfg: {} as any,
         to: "chat_1",
-        text: "",
+        text: "caption should not send",
         mediaUrl: "/tmp/test.pdf",
         mediaLocalRoots: ["/state/media", "/state/workspace"],
         accountId: "main",
@@ -413,7 +415,9 @@ describe("feishuOutbound.sendMedia failure handling", () => {
       message = err instanceof Error ? err.message : String(err);
     }
     expect(message).toContain("command exits with non-zero status");
-    expect(message).toContain("channels.feishu.mediaLocalRoots is unsupported");
+    expect(message).toContain(
+      "channels.feishu.mediaLocalRoots cannot override runtime-level allowed roots for Feishu.",
+    );
     expect(message).toContain("Allowed local media roots: /state/media, /state/workspace");
 
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
