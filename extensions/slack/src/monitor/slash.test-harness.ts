@@ -20,15 +20,6 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    readChannelAllowFromStore: (...args: unknown[]) => mocks.readAllowFromStoreMock(...args),
-    upsertChannelPairingRequest: (...args: unknown[]) => mocks.upsertPairingRequestMock(...args),
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
   return {
