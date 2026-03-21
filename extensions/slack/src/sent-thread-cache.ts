@@ -1,4 +1,4 @@
-import { resolveGlobalMap } from "openclaw/plugin-sdk/text-runtime";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/text-core";
 
 /**
  * In-memory cache of Slack threads the bot has participated in.

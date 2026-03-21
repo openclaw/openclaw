@@ -1,5 +1,5 @@
 import MarkdownIt from "markdown-it";
-import { isAutoLinkedFileRef } from "openclaw/plugin-sdk/text-runtime";
+import { isAutoLinkedFileRef } from "openclaw/plugin-sdk/text-core";
 
 const md = new MarkdownIt({
   html: false,

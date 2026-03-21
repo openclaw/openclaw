@@ -4,10 +4,10 @@ import {
   FILE_REF_EXTENSIONS_WITH_TLD,
   isAutoLinkedFileRef,
   markdownToIR,
+  renderMarkdownWithMarkers,
   type MarkdownLinkSpan,
   type MarkdownIR,
-} from "openclaw/plugin-sdk/text-runtime";
-import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/text-core";
 
 export type TelegramFormattedChunk = {
   html: string;

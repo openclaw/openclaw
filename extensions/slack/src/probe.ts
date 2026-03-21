@@ -1,5 +1,5 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import { withTimeout } from "openclaw/plugin-sdk/text-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/text-core";
 import { createSlackWebClient } from "./client.js";
 
 export type SlackProbe = BaseProbeResult & {

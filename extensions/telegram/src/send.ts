@@ -18,7 +18,7 @@ import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { redactSensitiveText } from "openclaw/plugin-sdk/text-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/text-core";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";

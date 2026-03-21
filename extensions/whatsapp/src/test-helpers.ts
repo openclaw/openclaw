@@ -1,5 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { vi } from "vitest";
 import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
@@ -30,6 +32,42 @@ export function setLoadConfigMock(fn: unknown) {
 
 export function resetLoadConfigMock() {
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = () => DEFAULT_CONFIG;
+}
+
+function normalizeAgentIdForStorePath(value: string | undefined): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return "main";
+  }
+  return (
+    trimmed
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^-+/, "")
+      .replace(/-+$/, "")
+      .slice(0, 64) || "main"
+  );
+}
+
+function resolveStorePathFallback(store?: string, opts?: { agentId?: string }): string {
+  const agentId = normalizeAgentIdForStorePath(opts?.agentId);
+  if (!store) {
+    return path.resolve(
+      process.env.HOME ?? os.homedir(),
+      ".openclaw",
+      "agents",
+      agentId,
+      "sessions",
+      "sessions.json",
+    );
+  }
+  if (store.includes("{agentId}")) {
+    return path.resolve(store.replaceAll("{agentId}", agentId));
+  }
+  if (store.startsWith("~")) {
+    return path.resolve(path.join(process.env.HOME ?? os.homedir(), store.slice(1)));
+  }
+  return path.resolve(store);
 }
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
@@ -92,7 +130,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
       configurable: true,
       enumerable: true,
       writable: true,
-      value: actual.resolveStorePath,
+      value: actual.resolveStorePath ?? resolveStorePathFallback,
     },
   });
   return mockModule;

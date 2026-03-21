@@ -27,6 +27,7 @@
   "matrix-runtime-heavy",
   "matrix-runtime-shared",
   "thread-bindings-runtime",
+  "text-core",
   "text-runtime",
   "agent-runtime",
   "speech-runtime",
