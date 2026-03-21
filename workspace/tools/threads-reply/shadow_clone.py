@@ -236,6 +236,8 @@ def cmd_send():
 
     results = json.loads(results_path.read_text())
     conn = db.get_conn()
+    conn.execute('PRAGMA busy_timeout=60000')
+    conn.execute('PRAGMA journal_mode=WAL')
     sent = 0
 
     for r in results:
