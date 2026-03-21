@@ -195,6 +195,7 @@ Docs: https://docs.openclaw.ai
 - Agents/embedded transport errors: distinguish common network failures like connection refused, DNS lookup failure, and interrupted sockets from true timeouts in embedded-run user messaging and lifecycle diagnostics. (#51419) Thanks @scoootscooob.
 - Discord/startup logging: report client initialization while the gateway is still connecting instead of claiming Discord is logged in before readiness is reached. (#51425) Thanks @scoootscooob.
 - Gateway/probe: honor caller `--timeout` for active local loopback probes in `gateway status`, keep inactive remote-mode loopback probes fast, and clamp probe timers to JS-safe bounds so slow local/container gateways stop reporting false timeouts. (#47533) Thanks @MonkeyLeeT.
+- Plugins/runtime: fix `api.runtime.version` returning `"unknown"` in bundled and npm-installed OpenClaw, so version-aware plugins can detect the host version correctly again. Fixes #51494. Thanks @sparkyrider.
 
 ### Breaking
 
