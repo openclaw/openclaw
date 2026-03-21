@@ -79,6 +79,7 @@ function buildExistingSessionWaitPredicate(params: {
 async function waitForExistingSessionCondition(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   timeMs?: number;
   text?: string;
@@ -105,6 +106,7 @@ async function waitForExistingSessionCondition(params: {
         await evaluateChromeMcpScript({
           profileName: params.profileName,
           userDataDir: params.userDataDir,
+          cdpPort: params.cdpPort,
           targetId: params.targetId,
           fn: `async () => ${predicate}`,
         }),
@@ -114,6 +116,7 @@ async function waitForExistingSessionCondition(params: {
       const currentUrl = await evaluateChromeMcpScript({
         profileName: params.profileName,
         userDataDir: params.userDataDir,
+        cdpPort: params.cdpPort,
         targetId: params.targetId,
         fn: "() => window.location.href",
       });
@@ -524,6 +527,7 @@ export function registerBrowserAgentActRoutes(
               await clickChromeMcpElement({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
+                cdpPort: profileCtx.profile.cdpPort,
                 targetId: tab.targetId,
                 uid: ref!,
                 doubleClick,
@@ -591,6 +595,7 @@ export function registerBrowserAgentActRoutes(
               await fillChromeMcpElement({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
+                cdpPort: profileCtx.profile.cdpPort,
                 targetId: tab.targetId,
                 uid: ref!,
                 value: text,
@@ -599,6 +604,7 @@ export function registerBrowserAgentActRoutes(
                 await pressChromeMcpKey({
                   profileName,
                   userDataDir: profileCtx.profile.userDataDir,
+                  cdpPort: profileCtx.profile.cdpPort,
                   targetId: tab.targetId,
                   key: "Enter",
                 });
@@ -641,6 +647,7 @@ export function registerBrowserAgentActRoutes(
               await pressChromeMcpKey({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
+                cdpPort: profileCtx.profile.cdpPort,
                 targetId: tab.targetId,
                 key,
               });
@@ -683,6 +690,7 @@ export function registerBrowserAgentActRoutes(
               await hoverChromeMcpElement({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
+                cdpPort: profileCtx.profile.cdpPort,
                 targetId: tab.targetId,
                 uid: ref!,
               });
@@ -726,6 +734,7 @@ export function registerBrowserAgentActRoutes(
               await evaluateChromeMcpScript({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
+                cdpPort: profileCtx.profile.cdpPort,
                 targetId: tab.targetId,
                 fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
                 args: [ref!],
@@ -782,6 +791,7 @@ export function registerBrowserAgentActRoutes(
               await dragChromeMcpElement({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
+                cdpPort: profileCtx.profile.cdpPort,
                 targetId: tab.targetId,
                 fromUid: startRef!,
                 toUid: endRef!,
@@ -836,6 +846,7 @@ export function registerBrowserAgentActRoutes(
               await fillChromeMcpElement({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
+                cdpPort: profileCtx.profile.cdpPort,
                 targetId: tab.targetId,
                 uid: ref!,
                 value: values[0] ?? "",
@@ -881,6 +892,7 @@ export function registerBrowserAgentActRoutes(
               await fillChromeMcpForm({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
+                cdpPort: profileCtx.profile.cdpPort,
                 targetId: tab.targetId,
                 elements: fields.map((field) => ({
                   uid: field.ref,
@@ -911,6 +923,7 @@ export function registerBrowserAgentActRoutes(
               await resizeChromeMcpPage({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
+                cdpPort: profileCtx.profile.cdpPort,
                 targetId: tab.targetId,
                 width,
                 height,
@@ -973,6 +986,7 @@ export function registerBrowserAgentActRoutes(
               await waitForExistingSessionCondition({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
+                cdpPort: profileCtx.profile.cdpPort,
                 targetId: tab.targetId,
                 timeMs,
                 text,
@@ -1024,6 +1038,7 @@ export function registerBrowserAgentActRoutes(
               const result = await evaluateChromeMcpScript({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
+                cdpPort: profileCtx.profile.cdpPort,
                 targetId: tab.targetId,
                 fn,
                 args: ref ? [ref] : undefined,
@@ -1059,7 +1074,12 @@ export function registerBrowserAgentActRoutes(
           }
           case "close": {
             if (isExistingSession) {
-              await closeChromeMcpTab(profileName, tab.targetId, profileCtx.profile.userDataDir);
+              await closeChromeMcpTab(
+                profileName,
+                tab.targetId,
+                profileCtx.profile.userDataDir,
+                profileCtx.profile.cdpPort,
+              );
               return res.json({ ok: true, targetId: tab.targetId });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
@@ -1175,6 +1195,7 @@ export function registerBrowserAgentActRoutes(
           await evaluateChromeMcpScript({
             profileName: profileCtx.profile.name,
             userDataDir: profileCtx.profile.userDataDir,
+            cdpPort: profileCtx.profile.cdpPort,
             targetId: tab.targetId,
             args: [ref],
             fn: `(el) => {

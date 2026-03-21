@@ -176,8 +176,16 @@ function normalizeChromeMcpUserDataDir(userDataDir?: string): string | undefined
   return trimmed ? trimmed : undefined;
 }
 
-function buildChromeMcpSessionCacheKey(profileName: string, userDataDir?: string): string {
-  return JSON.stringify([profileName, normalizeChromeMcpUserDataDir(userDataDir) ?? ""]);
+function buildChromeMcpSessionCacheKey(
+  profileName: string,
+  userDataDir?: string,
+  cdpPort?: number,
+): string {
+  return JSON.stringify([
+    profileName,
+    normalizeChromeMcpUserDataDir(userDataDir) ?? "",
+    typeof cdpPort === "number" && cdpPort > 0 ? cdpPort : 0,
+  ]);
 }
 
 function cacheKeyMatchesProfileName(cacheKey: string, profileName: string): boolean {
@@ -213,20 +221,26 @@ async function closeChromeMcpSessionsForProfile(
   return closed;
 }
 
-export function buildChromeMcpArgs(userDataDir?: string): string[] {
+export function buildChromeMcpArgs(userDataDir?: string, cdpPort?: number): string[] {
   const normalizedUserDataDir = normalizeChromeMcpUserDataDir(userDataDir);
-  return normalizedUserDataDir
-    ? [...DEFAULT_CHROME_MCP_ARGS, "--userDataDir", normalizedUserDataDir]
-    : [...DEFAULT_CHROME_MCP_ARGS];
+  const args = [...DEFAULT_CHROME_MCP_ARGS];
+  if (normalizedUserDataDir) {
+    args.push("--userDataDir", normalizedUserDataDir);
+  }
+  if (typeof cdpPort === "number" && cdpPort > 0) {
+    args.push("--port", String(cdpPort));
+  }
+  return args;
 }
 
 async function createRealSession(
   profileName: string,
   userDataDir?: string,
+  cdpPort?: number,
 ): Promise<ChromeMcpSession> {
   const transport = new StdioClientTransport({
     command: DEFAULT_CHROME_MCP_COMMAND,
-    args: buildChromeMcpArgs(userDataDir),
+    args: buildChromeMcpArgs(userDataDir, cdpPort),
     stderr: "pipe",
   });
   const client = new Client(
@@ -264,8 +278,12 @@ async function createRealSession(
   };
 }
 
-async function getSession(profileName: string, userDataDir?: string): Promise<ChromeMcpSession> {
-  const cacheKey = buildChromeMcpSessionCacheKey(profileName, userDataDir);
+async function getSession(
+  profileName: string,
+  userDataDir?: string,
+  cdpPort?: number,
+): Promise<ChromeMcpSession> {
+  const cacheKey = buildChromeMcpSessionCacheKey(profileName, userDataDir, cdpPort);
   await closeChromeMcpSessionsForProfile(profileName, cacheKey);
 
   let session = sessions.get(cacheKey);
@@ -277,7 +295,11 @@ async function getSession(profileName: string, userDataDir?: string): Promise<Ch
     let pending = pendingSessions.get(cacheKey);
     if (!pending) {
       pending = (async () => {
-        const created = await (sessionFactory ?? createRealSession)(profileName, userDataDir);
+        const created = await (sessionFactory ?? createRealSession)(
+          profileName,
+          userDataDir,
+          cdpPort,
+        );
         if (pendingSessions.get(cacheKey) === pending) {
           sessions.set(cacheKey, created);
         } else {
@@ -312,9 +334,10 @@ async function callTool(
   userDataDir: string | undefined,
   name: string,
   args: Record<string, unknown> = {},
+  cdpPort?: number,
 ): Promise<ChromeMcpToolResult> {
-  const cacheKey = buildChromeMcpSessionCacheKey(profileName, userDataDir);
-  const session = await getSession(profileName, userDataDir);
+  const cacheKey = buildChromeMcpSessionCacheKey(profileName, userDataDir, cdpPort);
+  const session = await getSession(profileName, userDataDir, cdpPort);
   let result: ChromeMcpToolResult;
   try {
     result = (await session.client.callTool({
@@ -349,8 +372,9 @@ async function findPageById(
   profileName: string,
   pageId: number,
   userDataDir?: string,
+  cdpPort?: number,
 ): Promise<ChromeMcpStructuredPage> {
-  const pages = await listChromeMcpPages(profileName, userDataDir);
+  const pages = await listChromeMcpPages(profileName, userDataDir, cdpPort);
   const page = pages.find((entry) => entry.id === pageId);
   if (!page) {
     throw new BrowserTabNotFoundError();
@@ -361,8 +385,9 @@ async function findPageById(
 export async function ensureChromeMcpAvailable(
   profileName: string,
   userDataDir?: string,
+  cdpPort?: number,
 ): Promise<void> {
-  await getSession(profileName, userDataDir);
+  await getSession(profileName, userDataDir, cdpPort);
 }
 
 export function getChromeMcpPid(profileName: string): number | null {
@@ -388,24 +413,27 @@ export async function stopAllChromeMcpSessions(): Promise<void> {
 export async function listChromeMcpPages(
   profileName: string,
   userDataDir?: string,
+  cdpPort?: number,
 ): Promise<ChromeMcpStructuredPage[]> {
-  const result = await callTool(profileName, userDataDir, "list_pages");
+  const result = await callTool(profileName, userDataDir, "list_pages", {}, cdpPort);
   return extractStructuredPages(result);
 }
 
 export async function listChromeMcpTabs(
   profileName: string,
   userDataDir?: string,
+  cdpPort?: number,
 ): Promise<BrowserTab[]> {
-  return toBrowserTabs(await listChromeMcpPages(profileName, userDataDir));
+  return toBrowserTabs(await listChromeMcpPages(profileName, userDataDir, cdpPort));
 }
 
 export async function openChromeMcpTab(
   profileName: string,
   url: string,
   userDataDir?: string,
+  cdpPort?: number,
 ): Promise<BrowserTab> {
-  const result = await callTool(profileName, userDataDir, "new_page", { url });
+  const result = await callTool(profileName, userDataDir, "new_page", { url }, cdpPort);
   const pages = extractStructuredPages(result);
   const chosen = pages.find((page) => page.selected) ?? pages.at(-1);
   if (!chosen) {
@@ -423,38 +451,60 @@ export async function focusChromeMcpTab(
   profileName: string,
   targetId: string,
   userDataDir?: string,
+  cdpPort?: number,
 ): Promise<void> {
-  await callTool(profileName, userDataDir, "select_page", {
-    pageId: parsePageId(targetId),
-    bringToFront: true,
-  });
+  await callTool(
+    profileName,
+    userDataDir,
+    "select_page",
+    {
+      pageId: parsePageId(targetId),
+      bringToFront: true,
+    },
+    cdpPort,
+  );
 }
 
 export async function closeChromeMcpTab(
   profileName: string,
   targetId: string,
   userDataDir?: string,
+  cdpPort?: number,
 ): Promise<void> {
-  await callTool(profileName, userDataDir, "close_page", { pageId: parsePageId(targetId) });
+  await callTool(
+    profileName,
+    userDataDir,
+    "close_page",
+    { pageId: parsePageId(targetId) },
+    cdpPort,
+  );
 }
 
 export async function navigateChromeMcpPage(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   url: string;
   timeoutMs?: number;
 }): Promise<{ url: string }> {
-  await callTool(params.profileName, params.userDataDir, "navigate_page", {
-    pageId: parsePageId(params.targetId),
-    type: "url",
-    url: params.url,
-    ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
-  });
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "navigate_page",
+    {
+      pageId: parsePageId(params.targetId),
+      type: "url",
+      url: params.url,
+      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
+    },
+    params.cdpPort,
+  );
   const page = await findPageById(
     params.profileName,
     parsePageId(params.targetId),
     params.userDataDir,
+    params.cdpPort,
   );
   return { url: page.url ?? params.url };
 }
@@ -462,30 +512,44 @@ export async function navigateChromeMcpPage(params: {
 export async function takeChromeMcpSnapshot(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
 }): Promise<ChromeMcpSnapshotNode> {
-  const result = await callTool(params.profileName, params.userDataDir, "take_snapshot", {
-    pageId: parsePageId(params.targetId),
-  });
+  const result = await callTool(
+    params.profileName,
+    params.userDataDir,
+    "take_snapshot",
+    {
+      pageId: parsePageId(params.targetId),
+    },
+    params.cdpPort,
+  );
   return extractSnapshot(result);
 }
 
 export async function takeChromeMcpScreenshot(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   uid?: string;
   fullPage?: boolean;
   format?: "png" | "jpeg";
 }): Promise<Buffer> {
   return await withTempFile(async (filePath) => {
-    await callTool(params.profileName, params.userDataDir, "take_screenshot", {
-      pageId: parsePageId(params.targetId),
-      filePath,
-      format: params.format ?? "png",
-      ...(params.uid ? { uid: params.uid } : {}),
-      ...(params.fullPage ? { fullPage: true } : {}),
-    });
+    await callTool(
+      params.profileName,
+      params.userDataDir,
+      "take_screenshot",
+      {
+        pageId: parsePageId(params.targetId),
+        filePath,
+        format: params.format ?? "png",
+        ...(params.uid ? { uid: params.uid } : {}),
+        ...(params.fullPage ? { fullPage: true } : {}),
+      },
+      params.cdpPort,
+    );
     return await fs.readFile(filePath);
   });
 }
@@ -493,150 +557,227 @@ export async function takeChromeMcpScreenshot(params: {
 export async function clickChromeMcpElement(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   uid: string;
   doubleClick?: boolean;
 }): Promise<void> {
-  await callTool(params.profileName, params.userDataDir, "click", {
-    pageId: parsePageId(params.targetId),
-    uid: params.uid,
-    ...(params.doubleClick ? { dblClick: true } : {}),
-  });
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "click",
+    {
+      pageId: parsePageId(params.targetId),
+      uid: params.uid,
+      ...(params.doubleClick ? { dblClick: true } : {}),
+    },
+    params.cdpPort,
+  );
 }
 
 export async function fillChromeMcpElement(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   uid: string;
   value: string;
 }): Promise<void> {
-  await callTool(params.profileName, params.userDataDir, "fill", {
-    pageId: parsePageId(params.targetId),
-    uid: params.uid,
-    value: params.value,
-  });
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "fill",
+    {
+      pageId: parsePageId(params.targetId),
+      uid: params.uid,
+      value: params.value,
+    },
+    params.cdpPort,
+  );
 }
 
 export async function fillChromeMcpForm(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   elements: Array<{ uid: string; value: string }>;
 }): Promise<void> {
-  await callTool(params.profileName, params.userDataDir, "fill_form", {
-    pageId: parsePageId(params.targetId),
-    elements: params.elements,
-  });
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "fill_form",
+    {
+      pageId: parsePageId(params.targetId),
+      elements: params.elements,
+    },
+    params.cdpPort,
+  );
 }
 
 export async function hoverChromeMcpElement(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   uid: string;
 }): Promise<void> {
-  await callTool(params.profileName, params.userDataDir, "hover", {
-    pageId: parsePageId(params.targetId),
-    uid: params.uid,
-  });
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "hover",
+    {
+      pageId: parsePageId(params.targetId),
+      uid: params.uid,
+    },
+    params.cdpPort,
+  );
 }
 
 export async function dragChromeMcpElement(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   fromUid: string;
   toUid: string;
 }): Promise<void> {
-  await callTool(params.profileName, params.userDataDir, "drag", {
-    pageId: parsePageId(params.targetId),
-    from_uid: params.fromUid,
-    to_uid: params.toUid,
-  });
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "drag",
+    {
+      pageId: parsePageId(params.targetId),
+      from_uid: params.fromUid,
+      to_uid: params.toUid,
+    },
+    params.cdpPort,
+  );
 }
 
 export async function uploadChromeMcpFile(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   uid: string;
   filePath: string;
 }): Promise<void> {
-  await callTool(params.profileName, params.userDataDir, "upload_file", {
-    pageId: parsePageId(params.targetId),
-    uid: params.uid,
-    filePath: params.filePath,
-  });
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "upload_file",
+    {
+      pageId: parsePageId(params.targetId),
+      uid: params.uid,
+      filePath: params.filePath,
+    },
+    params.cdpPort,
+  );
 }
 
 export async function pressChromeMcpKey(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   key: string;
 }): Promise<void> {
-  await callTool(params.profileName, params.userDataDir, "press_key", {
-    pageId: parsePageId(params.targetId),
-    key: params.key,
-  });
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "press_key",
+    {
+      pageId: parsePageId(params.targetId),
+      key: params.key,
+    },
+    params.cdpPort,
+  );
 }
 
 export async function resizeChromeMcpPage(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   width: number;
   height: number;
 }): Promise<void> {
-  await callTool(params.profileName, params.userDataDir, "resize_page", {
-    pageId: parsePageId(params.targetId),
-    width: params.width,
-    height: params.height,
-  });
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "resize_page",
+    {
+      pageId: parsePageId(params.targetId),
+      width: params.width,
+      height: params.height,
+    },
+    params.cdpPort,
+  );
 }
 
 export async function handleChromeMcpDialog(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   action: "accept" | "dismiss";
   promptText?: string;
 }): Promise<void> {
-  await callTool(params.profileName, params.userDataDir, "handle_dialog", {
-    pageId: parsePageId(params.targetId),
-    action: params.action,
-    ...(params.promptText ? { promptText: params.promptText } : {}),
-  });
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "handle_dialog",
+    {
+      pageId: parsePageId(params.targetId),
+      action: params.action,
+      ...(params.promptText ? { promptText: params.promptText } : {}),
+    },
+    params.cdpPort,
+  );
 }
 
 export async function evaluateChromeMcpScript(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   fn: string;
   args?: string[];
 }): Promise<unknown> {
-  const result = await callTool(params.profileName, params.userDataDir, "evaluate_script", {
-    pageId: parsePageId(params.targetId),
-    function: params.fn,
-    ...(params.args?.length ? { args: params.args } : {}),
-  });
+  const result = await callTool(
+    params.profileName,
+    params.userDataDir,
+    "evaluate_script",
+    {
+      pageId: parsePageId(params.targetId),
+      function: params.fn,
+      ...(params.args?.length ? { args: params.args } : {}),
+    },
+    params.cdpPort,
+  );
   return extractJsonMessage(result);
 }
 
 export async function waitForChromeMcpText(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   text: string[];
   timeoutMs?: number;
 }): Promise<void> {
-  await callTool(params.profileName, params.userDataDir, "wait_for", {
-    pageId: parsePageId(params.targetId),
-    text: params.text,
-    ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
-  });
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "wait_for",
+    {
+      pageId: parsePageId(params.targetId),
+      text: params.text,
+      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
+    },
+    params.cdpPort,
+  );
 }
 
 export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFactory | null): void {

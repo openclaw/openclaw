@@ -281,6 +281,36 @@ describe("browser config", () => {
     expect(profile?.color).toBe("#00AA00");
   });
 
+  it("resolves existing-session profiles with explicit cdpPort for targeting specific Chrome debug port", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        personal: {
+          driver: "existing-session",
+          cdpPort: 9222,
+          color: "#00AA00",
+        },
+        work: {
+          driver: "existing-session",
+          cdpPort: 9223,
+          color: "#FF0000",
+        },
+      },
+    });
+    const personal = resolveProfile(resolved, "personal");
+    expect(personal).not.toBeNull();
+    expect(personal?.driver).toBe("existing-session");
+    expect(personal?.cdpPort).toBe(9222);
+    expect(personal?.cdpUrl).toBe("");
+    expect(personal?.color).toBe("#00AA00");
+
+    const work = resolveProfile(resolved, "work");
+    expect(work).not.toBeNull();
+    expect(work?.driver).toBe("existing-session");
+    expect(work?.cdpPort).toBe(9223);
+    expect(work?.cdpUrl).toBe("");
+    expect(work?.color).toBe("#FF0000");
+  });
+
   it("expands tilde-prefixed userDataDir for existing-session profiles", () => {
     const resolved = resolveBrowserConfig({
       profiles: {

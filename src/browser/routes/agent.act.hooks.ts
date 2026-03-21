@@ -66,6 +66,7 @@ export function registerBrowserAgentActHookRoutes(
           await uploadChromeMcpFile({
             profileName: profileCtx.profile.name,
             userDataDir: profileCtx.profile.userDataDir,
+            cdpPort: profileCtx.profile.cdpPort,
             targetId: tab.targetId,
             uid,
             filePath: resolvedPaths[0] ?? "",
@@ -136,6 +137,7 @@ export function registerBrowserAgentActHookRoutes(
           await evaluateChromeMcpScript({
             profileName: profileCtx.profile.name,
             userDataDir: profileCtx.profile.userDataDir,
+            cdpPort: profileCtx.profile.cdpPort,
             targetId: tab.targetId,
             fn: `() => {
               const state = (window.__openclawDialogHook ??= {});

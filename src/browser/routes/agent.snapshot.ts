@@ -45,11 +45,13 @@ const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
 async function clearChromeMcpOverlay(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
 }): Promise<void> {
   await evaluateChromeMcpScript({
     profileName: params.profileName,
     userDataDir: params.userDataDir,
+    cdpPort: params.cdpPort,
     targetId: params.targetId,
     fn: `() => {
       document.querySelectorAll("[${CHROME_MCP_OVERLAY_ATTR}]").forEach((node) => node.remove());
@@ -61,6 +63,7 @@ async function clearChromeMcpOverlay(params: {
 async function renderChromeMcpLabels(params: {
   profileName: string;
   userDataDir?: string;
+  cdpPort?: number;
   targetId: string;
   refs: string[];
 }): Promise<{ labels: number; skipped: number }> {
@@ -68,6 +71,7 @@ async function renderChromeMcpLabels(params: {
   const result = await evaluateChromeMcpScript({
     profileName: params.profileName,
     userDataDir: params.userDataDir,
+    cdpPort: params.cdpPort,
     targetId: params.targetId,
     args: params.refs,
     fn: `(...elements) => {
@@ -236,6 +240,7 @@ export function registerBrowserAgentSnapshotRoutes(
           const result = await navigateChromeMcpPage({
             profileName: profileCtx.profile.name,
             userDataDir: profileCtx.profile.userDataDir,
+            cdpPort: profileCtx.profile.cdpPort,
             targetId: tab.targetId,
             url,
           });
@@ -328,6 +333,7 @@ export function registerBrowserAgentSnapshotRoutes(
           const buffer = await takeChromeMcpScreenshot({
             profileName: profileCtx.profile.name,
             userDataDir: profileCtx.profile.userDataDir,
+            cdpPort: profileCtx.profile.cdpPort,
             targetId: tab.targetId,
             uid: ref,
             fullPage,
@@ -413,6 +419,7 @@ export function registerBrowserAgentSnapshotRoutes(
         const snapshot = await takeChromeMcpSnapshot({
           profileName: profileCtx.profile.name,
           userDataDir: profileCtx.profile.userDataDir,
+          cdpPort: profileCtx.profile.cdpPort,
           targetId: tab.targetId,
         });
         if (plan.format === "aria") {
@@ -438,6 +445,7 @@ export function registerBrowserAgentSnapshotRoutes(
           const labelResult = await renderChromeMcpLabels({
             profileName: profileCtx.profile.name,
             userDataDir: profileCtx.profile.userDataDir,
+            cdpPort: profileCtx.profile.cdpPort,
             targetId: tab.targetId,
             refs,
           });
@@ -445,6 +453,7 @@ export function registerBrowserAgentSnapshotRoutes(
             const labeled = await takeChromeMcpScreenshot({
               profileName: profileCtx.profile.name,
               userDataDir: profileCtx.profile.userDataDir,
+              cdpPort: profileCtx.profile.cdpPort,
               targetId: tab.targetId,
               format: "png",
             });
@@ -475,6 +484,7 @@ export function registerBrowserAgentSnapshotRoutes(
             await clearChromeMcpOverlay({
               profileName: profileCtx.profile.name,
               userDataDir: profileCtx.profile.userDataDir,
+              cdpPort: profileCtx.profile.cdpPort,
               targetId: tab.targetId,
             });
           }

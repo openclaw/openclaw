@@ -1,5 +1,12 @@
 export type BrowserProfileConfig = {
-  /** CDP port for this profile. Allocated once at creation, persisted permanently. */
+  /**
+   * CDP port for this profile.
+   * For `openclaw` driver: allocated once at creation, persisted permanently.
+   * For `existing-session` driver: targets a specific Chrome instance launched with
+   * `--remote-debugging-port=<port>`. When set, OpenClaw connects to that specific
+   * port instead of auto-discovering any running Chrome. This enables targeting a
+   * specific Chrome profile when multiple profile windows are open.
+   */
   cdpPort?: number;
   /** CDP URL for this profile (use for remote Chrome). */
   cdpUrl?: string;

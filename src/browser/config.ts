@@ -323,10 +323,14 @@ export function resolveProfile(
   const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
 
   if (driver === "existing-session") {
-    // existing-session uses Chrome MCP auto-connect; no CDP port/URL needed
+    // existing-session uses Chrome MCP. When cdpPort is specified, it targets
+    // a specific Chrome instance launched with --remote-debugging-port=<port>.
+    // Without cdpPort, Chrome MCP auto-discovers any running Chrome.
+    const explicitCdpPort =
+      typeof profile.cdpPort === "number" && profile.cdpPort > 0 ? profile.cdpPort : 0;
     return {
       name: profileName,
-      cdpPort: 0,
+      cdpPort: explicitCdpPort,
       cdpUrl: "",
       cdpHost: "",
       cdpIsLoopback: true,

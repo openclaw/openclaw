@@ -64,7 +64,7 @@ export function createProfileAvailability({
   const isReachable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
       // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required
-      await listChromeMcpTabs(profile.name, profile.userDataDir);
+      await listChromeMcpTabs(profile.name, profile.userDataDir, profile.cdpPort);
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
@@ -159,7 +159,7 @@ export function createProfileAvailability({
           `Browser user data directory not found for profile "${profile.name}": ${profile.userDataDir}`,
         );
       }
-      await ensureChromeMcpAvailable(profile.name, profile.userDataDir);
+      await ensureChromeMcpAvailable(profile.name, profile.userDataDir, profile.cdpPort);
       return;
     }
     const current = state();

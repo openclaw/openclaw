@@ -116,6 +116,49 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it("adds --port when cdpPort is specified for targeting a specific Chrome debug port", () => {
+    expect(buildChromeMcpArgs(undefined, 9222)).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--port",
+      "9222",
+    ]);
+  });
+
+  it("adds both --userDataDir and --port when both are specified", () => {
+    expect(buildChromeMcpArgs("/tmp/brave-profile", 9223)).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--userDataDir",
+      "/tmp/brave-profile",
+      "--port",
+      "9223",
+    ]);
+  });
+
+  it("does not add --port when cdpPort is 0 or negative", () => {
+    expect(buildChromeMcpArgs(undefined, 0)).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+    ]);
+    expect(buildChromeMcpArgs(undefined, -1)).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+    ]);
+  });
+
   it("parses new_page text responses and returns the created tab", async () => {
     const factory: ChromeMcpSessionFactory = async () => createFakeSession();
     setChromeMcpSessionFactoryForTest(factory);
