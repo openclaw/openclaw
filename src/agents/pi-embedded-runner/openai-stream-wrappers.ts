@@ -320,7 +320,14 @@ export function createOpenAIResponsesContextManagementWrapper(
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
     const stripStore = shouldStripResponsesStore(model, forceStore);
     const stripPromptCache = shouldStripResponsesPromptCache(model);
-    if (!forceStore && !useServerCompaction && !stripStore && !stripPromptCache) {
+    const normalizeAssistantContent = model.api === "openai-completions";
+    if (
+      !forceStore &&
+      !useServerCompaction &&
+      !stripStore &&
+      !stripPromptCache &&
+      !normalizeAssistantContent
+    ) {
       return underlying(model, context, options);
     }
 
@@ -331,6 +338,9 @@ export function createOpenAIResponsesContextManagementWrapper(
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
+        if (normalizeAssistantContent) {
+          normalizeOpenAICompletionsAssistantMessageContent(payload);
+        }
         if (payload && typeof payload === "object") {
           applyOpenAIResponsesPayloadOverrides({
             payloadObj: payload as Record<string, unknown>,
@@ -445,27 +455,6 @@ function normalizeOpenAICompletionsAssistantMessageContent(payload: unknown): vo
     }
     assistantMessage.content = flattened;
   }
-}
-
-export function createOpenAICompletionsAssistantContentStringWrapper(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    if (model.api !== "openai-completions") {
-      return underlying(model, context, options);
-    }
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload, payloadModel) => {
-        // pi-ai serializes assistant text blocks as Anthropic-style arrays for
-        // openai-completions; many OpenAI-compatible backends only accept strings here.
-        normalizeOpenAICompletionsAssistantMessageContent(payload);
-        return originalOnPayload?.(payload, payloadModel);
-      },
-    });
-  };
 }
 
 export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {

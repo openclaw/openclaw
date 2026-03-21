@@ -24,7 +24,6 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
-  createOpenAICompletionsAssistantContentStringWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
@@ -314,6 +313,4 @@ export function applyExtraParamsToAgent(
       log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
     }
   }
-
-  agent.streamFn = createOpenAICompletionsAssistantContentStringWrapper(agent.streamFn);
 }
