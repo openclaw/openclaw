@@ -1,13 +1,12 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { CONFIG_PATH, migrateLegacyConfig } from "../config/config.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
+import { CONFIG_PATH } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { detectLegacyMatrixCrypto } from "../infra/matrix-legacy-crypto.js";
 import { detectLegacyMatrixState } from "../infra/matrix-legacy-state.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { note } from "../terminal/note.js";
-import { noteOpencodeProviderOverrides, stripUnknownConfigKeys } from "./doctor-config-analysis.js";
+import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
@@ -29,6 +28,10 @@ import {
   scanTelegramAllowFromUsernameEntries,
 } from "./doctor/providers/telegram.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./doctor/shared/allowlist-policy-repair.js";
+import {
+  applyLegacyCompatibilityStep,
+  applyUnknownConfigKeyStep,
+} from "./doctor/shared/config-flow-steps.js";
 import { applyDoctorConfigMutation } from "./doctor/shared/config-mutation-state.js";
 import {
   collectMissingDefaultAccountBindingWarnings,
@@ -69,30 +72,20 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let pendingChanges = false;
   let shouldWriteConfig = false;
   let fixHints: string[] = [];
+  const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
 
-  if (snapshot.legacyIssues.length > 0) {
-    note(
-      formatConfigIssueLines(snapshot.legacyIssues, "-").join("\n"),
-      "Compatibility config keys detected",
-    );
-    const { config: migrated, changes } = migrateLegacyConfig(snapshot.parsed);
-    if (changes.length > 0) {
-      note(changes.join("\n"), "Doctor changes");
-    }
-    if (migrated) {
-      candidate = migrated;
-      pendingChanges = pendingChanges || changes.length > 0;
-    }
-    if (shouldRepair) {
-      // Compatibility migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into channels.whatsapp.allowFrom.
-      if (migrated) {
-        cfg = migrated;
-      }
-    } else {
-      fixHints.push(
-        `Run "${formatCliCommand("openclaw doctor --fix")}" to apply compatibility migrations.`,
-      );
-    }
+  const legacyStep = applyLegacyCompatibilityStep({
+    snapshot,
+    state: { cfg, candidate, pendingChanges, fixHints },
+    shouldRepair,
+    doctorFixCommand,
+  });
+  ({ cfg, candidate, pendingChanges, fixHints } = legacyStep.state);
+  if (legacyStep.issueLines.length > 0) {
+    note(legacyStep.issueLines.join("\n"), "Compatibility config keys detected");
+  }
+  if (legacyStep.changeLines.length > 0) {
+    note(legacyStep.changeLines.join("\n"), "Doctor changes");
   }
 
   const normalized = normalizeCompatibilityConfigValues(candidate);
@@ -102,7 +95,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       state: { cfg, candidate, pendingChanges, fixHints },
       mutation: normalized,
       shouldRepair,
-      fixHint: `Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`,
+      fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
     }));
   }
 
@@ -113,7 +106,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       state: { cfg, candidate, pendingChanges, fixHints },
       mutation: autoEnable,
       shouldRepair,
-      fixHint: `Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`,
+      fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
     }));
   }
 
@@ -250,7 +243,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       note(
         collectTelegramAllowFromUsernameWarnings({
           hits,
-          doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+          doctorFixCommand,
         }).join("\n"),
         "Doctor warnings",
       );
@@ -261,7 +254,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       note(
         collectDiscordNumericIdWarnings({
           hits: discordHits,
-          doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+          doctorFixCommand,
         }).join("\n"),
         "Doctor warnings",
       );
@@ -272,7 +265,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       note(
         collectOpenPolicyAllowFromWarnings({
           changes: allowFromScan.changes,
-          doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+          doctorFixCommand,
         }).join("\n"),
         "Doctor warnings",
       );
@@ -294,7 +287,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       note(
         collectLegacyToolsBySenderWarnings({
           hits: toolsBySenderHits,
-          doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+          doctorFixCommand,
         }).join("\n"),
         "Doctor warnings",
       );
@@ -305,7 +298,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       note(
         collectExecSafeBinCoverageWarnings({
           hits: safeBinCoverage,
-          doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+          doctorFixCommand,
         }).join("\n"),
         "Doctor warnings",
       );
@@ -325,18 +318,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(collectMutableAllowlistWarnings(mutableAllowlistHits).join("\n"), "Doctor warnings");
   }
 
-  const unknown = stripUnknownConfigKeys(candidate);
-  if (unknown.removed.length > 0) {
-    const lines = unknown.removed.map((path) => `- ${path}`).join("\n");
-    candidate = unknown.config;
-    pendingChanges = true;
-    if (shouldRepair) {
-      cfg = unknown.config;
-      note(lines, "Doctor changes");
-    } else {
-      note(lines, "Unknown config keys");
-      fixHints.push('Run "openclaw doctor --fix" to remove these keys.');
-    }
+  const unknownStep = applyUnknownConfigKeyStep({
+    state: { cfg, candidate, pendingChanges, fixHints },
+    shouldRepair,
+    doctorFixCommand,
+  });
+  ({ cfg, candidate, pendingChanges, fixHints } = unknownStep.state);
+  if (unknownStep.removed.length > 0) {
+    const lines = unknownStep.removed.map((path) => `- ${path}`).join("\n");
+    note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
   }
 
   if (!shouldRepair && pendingChanges) {
