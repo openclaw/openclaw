@@ -103,7 +103,9 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
-      Value: updateAvailability.available ? theme.warn(`available · ${updateLine}`) : updateLine,
+      Value: updateAvailability.available
+        ? theme.warn(`available · ${updateLine}`)
+        : theme.success(`✓ up to date · ${updateLine}`),
     },
   ];
 

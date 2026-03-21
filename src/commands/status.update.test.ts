@@ -90,7 +90,7 @@ describe("formatUpdateOneLiner", () => {
     });
 
     expect(formatUpdateOneLiner(update)).toBe(
-      `Update: git main · ↔ origin/main · dirty · behind 2 · npm latest ${VERSION} · deps ok`,
+      `Update: git main · ↔ origin/main · dirty · behind 2 · npm latest ${VERSION} (up to date) · deps ok`,
     );
   });
 
