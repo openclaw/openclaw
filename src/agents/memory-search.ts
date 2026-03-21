@@ -337,7 +337,11 @@ function mergeConfig(
     outputDimensionality,
     local,
     store,
-    chunking: { tokens: Math.max(1, chunking.tokens), overlap: chunking.overlap, headingAware: chunking.headingAware },
+    chunking: {
+      tokens: Math.max(1, chunking.tokens),
+      overlap: chunking.overlap,
+      headingAware: chunking.headingAware,
+    },
     sync: {
       ...sync,
       sessions: {

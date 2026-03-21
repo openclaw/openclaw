@@ -399,13 +399,13 @@ export function chunkMarkdown(
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     const lineNo = i + 1;
-    
+
     // Heading-aware: flush on heading (unless it's the first heading)
     if (headingAware && isHeading(line) && current.length > 0) {
       flush();
       carryOverlap();
     }
-    
+
     const segments: string[] = [];
     if (line.length === 0) {
       segments.push("");
@@ -416,7 +416,7 @@ export function chunkMarkdown(
     }
     for (const segment of segments) {
       const lineSize = segment.length + 1;
-      
+
       // Enforce cumulative size limit to avoid giant chunks
       if (currentChars + lineSize > maxChars && current.length > 0) {
         flush();
