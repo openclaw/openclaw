@@ -98,7 +98,6 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
     !(await params.maybeSetResolvedApiKey(resolved, (value) =>
       setGigachatApiKey(value, params.agentDir, params.apiKeyStorageOptions, {
         authMode: "oauth",
-        insecureTls: "false",
         scope: "GIGACHAT_API_PERS",
       }),
     ))

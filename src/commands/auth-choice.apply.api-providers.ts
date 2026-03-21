@@ -165,7 +165,6 @@ export async function applyAuthChoiceApiProviders(
             { secretInputMode: mode ?? requestedSecretInputMode },
             {
               authMode: "oauth",
-              insecureTls: "false",
               scope: gigachatScope,
             },
           );
@@ -248,7 +247,6 @@ export async function applyAuthChoiceApiProviders(
 
     const basicMetadata: Record<string, string> = {
       authMode: "basic",
-      insecureTls: "false",
       ...(gigachatBasicScope ? { scope: gigachatBasicScope } : {}),
     };
 

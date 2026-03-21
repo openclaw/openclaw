@@ -342,10 +342,10 @@ describe("applyAuthChoice", () => {
       key: "basic-user:basic-pass",
       metadata: {
         authMode: "basic",
-        insecureTls: "false",
         scope: "GIGACHAT_API_PERS",
       },
     });
+    expect((await readAuthProfile("gigachat:default"))?.metadata).not.toHaveProperty("insecureTls");
     expect((await readAuthProfile("gigachat:default"))?.keyRef).toBeUndefined();
   });
 
@@ -376,7 +376,6 @@ describe("applyAuthChoice", () => {
     expect(await readAuthProfile("gigachat:default")).toMatchObject({
       metadata: {
         authMode: "basic",
-        insecureTls: "false",
         scope: "GIGACHAT_API_B2B",
       },
     });
@@ -447,9 +446,9 @@ describe("applyAuthChoice", () => {
       metadata: {
         authMode: "oauth",
         scope: "GIGACHAT_API_PERS",
-        insecureTls: "false",
       },
     });
+    expect(profile?.metadata).not.toHaveProperty("insecureTls");
   });
 
   it("resets a custom Basic GigaChat base URL when switching to OAuth", async () => {
@@ -497,7 +496,6 @@ describe("applyAuthChoice", () => {
       metadata: {
         authMode: "oauth",
         scope: "GIGACHAT_API_PERS",
-        insecureTls: "false",
       },
     });
   });

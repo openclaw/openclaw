@@ -377,9 +377,12 @@ describe("onboard (non-interactive): provider auth", () => {
         metadata: {
           authMode: "oauth",
           scope: "GIGACHAT_API_PERS",
-          insecureTls: "false",
         },
       });
+      const gigachatProfile = cfg.auth?.profiles?.["gigachat:default"] as
+        | { metadata?: Record<string, string> }
+        | undefined;
+      expect(gigachatProfile?.metadata).not.toHaveProperty("insecureTls");
     });
   });
 

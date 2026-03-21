@@ -168,7 +168,6 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
       undefined,
       {
         authMode: "oauth",
-        insecureTls: "false",
         scope: "GIGACHAT_API_PERS",
       },
     );
@@ -282,7 +281,6 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
       undefined,
       {
         authMode: "oauth",
-        insecureTls: "false",
         scope: "GIGACHAT_API_PERS",
       },
     );

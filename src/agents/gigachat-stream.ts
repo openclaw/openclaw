@@ -296,6 +296,24 @@ function sanitizeContent(content: string | null | undefined): string {
   );
 }
 
+function extractToolResultTextContent(content: unknown): string {
+  if (Array.isArray(content)) {
+    return content
+      .filter((c): c is TextContent => c.type === "text")
+      .map((c) => c.text)
+      .join("\n");
+  }
+  if (typeof content === "string") {
+    return content;
+  }
+  return JSON.stringify(content ?? {});
+}
+
+function formatToolResultReplayText(toolName: string | undefined, content: unknown): string {
+  const replayContent = extractToolResultTextContent(content) || "ok";
+  return `[Tool Result: ${toolName?.trim() || "unknown"}]\n${replayContent}`;
+}
+
 function tryParseJsonObjectString(content: string): string | null {
   const trimmed = content.trim();
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
@@ -776,24 +794,27 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
                 content: toolCalls.map((toolCall) => `[Called ${toolCall.name}]`).join(" "),
               });
             }
-          } else if (msg.role === "toolResult" && functionsEnabled) {
+          } else if (msg.role === "toolResult") {
             const toolName = msg.toolName ?? "unknown";
-            const msgContent = msg.content;
-            const resultContent = Array.isArray(msgContent)
-              ? msgContent
-                  .filter((c): c is TextContent => c.type === "text")
-                  .map((c) => c.text)
-                  .join("\n")
-              : typeof msgContent === "string"
-                ? msgContent
-                : JSON.stringify(msgContent ?? {});
-            const coercedContent = ensureJsonObjectStr(resultContent || "ok", toolName);
-            const gigaToolName = rememberToolNameMapping(toolNameToGiga, gigaToToolName, toolName);
-            messages.push({
-              role: "function",
-              content: coercedContent,
-              name: gigaToolName,
-            });
+            if (functionsEnabled) {
+              const resultContent = extractToolResultTextContent(msg.content);
+              const coercedContent = ensureJsonObjectStr(resultContent || "ok", toolName);
+              const gigaToolName = rememberToolNameMapping(
+                toolNameToGiga,
+                gigaToToolName,
+                toolName,
+              );
+              messages.push({
+                role: "function",
+                content: coercedContent,
+                name: gigaToolName,
+              });
+            } else {
+              messages.push({
+                role: "user",
+                content: sanitizeContent(formatToolResultReplayText(toolName, msg.content)),
+              });
+            }
           }
         }
 
