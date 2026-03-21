@@ -85,6 +85,17 @@ export type TelegramCustomCommand = {
   description: string;
 };
 
+export type TelegramIngressMiddlewareConfig =
+  | string
+  | {
+      /** Optional logical name for diagnostics/logging. */
+      name?: string;
+      /** ESM module specifier or file:// URL. */
+      module: string;
+      /** Export to call. Defaults to runIngressMiddleware. */
+      exportName?: string;
+    };
+
 export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -92,6 +103,8 @@ export type TelegramAccountConfig = {
   capabilities?: TelegramCapabilitiesConfig;
   /** Telegram-native exec approval delivery + approver authorization. */
   execApprovals?: TelegramExecApprovalConfig;
+  /** Awaited ingress middleware chain executed before Telegram model-dispatch. */
+  ingressMiddlewares?: TelegramIngressMiddlewareConfig[];
   /** Markdown formatting overrides (tables). */
   markdown?: MarkdownConfig;
   /** Override native command registration for Telegram (bool or "auto"). */

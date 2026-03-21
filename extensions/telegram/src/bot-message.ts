@@ -11,6 +11,7 @@ import {
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
+import { maybeRunTelegramIngressMiddlewares } from "./ingress-runtime.js";
 
 /** Dependencies injected once when creating the message processor. */
 type TelegramMessageProcessorDeps = Omit<
@@ -85,6 +86,13 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     if (!context) {
       return;
     }
+    await maybeRunTelegramIngressMiddlewares({
+      context,
+      cfg,
+      account,
+      telegramCfg,
+      runtime,
+    });
     try {
       await dispatchTelegramMessage({
         context,

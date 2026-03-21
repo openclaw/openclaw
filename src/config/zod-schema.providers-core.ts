@@ -120,6 +120,17 @@ const TelegramCustomCommandSchema = z
   })
   .strict();
 
+const TelegramIngressMiddlewareSchema = z.union([
+  z.string(),
+  z
+    .object({
+      name: z.string().optional(),
+      module: z.string(),
+      exportName: z.string().optional(),
+    })
+    .strict(),
+]);
+
 const validateTelegramCustomCommands = (
   value: { customCommands?: Array<{ command?: string; description?: string }> },
   ctx: z.RefinementCtx,
@@ -175,6 +186,7 @@ export const TelegramAccountSchemaBase = z
       })
       .strict()
       .optional(),
+    ingressMiddlewares: z.array(TelegramIngressMiddlewareSchema).optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
