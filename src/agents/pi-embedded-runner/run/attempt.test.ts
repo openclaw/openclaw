@@ -414,7 +414,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
   });
 
-<<<<<<< HEAD
   it("infers tool names from malformed toolCallId variants when allowlist is present", async () => {
     const partialToolCall = { type: "toolCall", id: "functions.read:0", name: "" };
     const finalToolCallA = { type: "toolCall", id: "functionsread3", name: "" };
