@@ -598,5 +598,43 @@ describe("stream-wrapper integration", () => {
       expect(JSON.stringify(event.message)).toContain(original);
       expect(JSON.stringify(event.message)).not.toContain("pf_");
     });
+
+    it("restores placeholders in streamed reasoning deltas", async () => {
+      const ctx = createPrivacyFilterContext("test-session");
+      const original = "admin@company.com";
+      filterText(`contact ${original}`, ctx);
+      const replacement = ctx.replacer.getMappings()[0]?.replacement;
+      if (!replacement) {
+        throw new Error("expected replacement mapping");
+      }
+
+      const splitAt = Math.max(1, Math.floor(replacement.length / 2));
+      const baseFn: StreamFn = () =>
+        ({
+          async *[Symbol.asyncIterator]() {
+            yield { type: "thinking_delta", contentIndex: 0, delta: replacement.slice(0, splitAt) };
+            yield { type: "thinking_delta", contentIndex: 0, delta: replacement.slice(splitAt) };
+          },
+        }) as unknown as ReturnType<StreamFn>;
+
+      const wrapped = wrapStreamFnPrivacyFilter(baseFn, ctx);
+      const stream = wrapped(
+        {
+          api: "openai-completions",
+          provider: "openai",
+          id: "gpt-test",
+        } as Parameters<StreamFn>[0],
+        { messages: [] },
+      );
+
+      const deltas: string[] = [];
+      for await (const event of stream as AsyncIterable<{ type?: string; delta?: unknown }>) {
+        if (event.type === "thinking_delta" && typeof event.delta === "string") {
+          deltas.push(event.delta);
+        }
+      }
+      expect(deltas.join("")).toContain(original);
+      expect(deltas.join("")).not.toContain("pf_");
+    });
   });
 });

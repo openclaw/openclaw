@@ -7,6 +7,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
 import { resolveConfigPath } from "../config/paths.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
+import { resolveUserPath } from "../utils.js";
 import { validateBarePassword, validateHighEntropy } from "./detector.js";
 import { BASIC_RULES, EXTENDED_RULES } from "./rules.js";
 import type { PrivacyRule, RiskLevel, UserDefinedRule } from "./types.js";
@@ -45,11 +46,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Relative paths are interpreted from the active config file directory.
  */
 export function resolveCustomRulesPath(filePath: string): string {
-  if (isAbsolute(filePath)) {
-    return filePath;
+  const trimmed = filePath.trim();
+  if (trimmed.startsWith("~")) {
+    return resolveUserPath(trimmed);
+  }
+  if (isAbsolute(trimmed)) {
+    return trimmed;
   }
   const configDir = dirname(resolveConfigPath());
-  return resolve(configDir, filePath);
+  return resolve(configDir, trimmed);
 }
 
 /**

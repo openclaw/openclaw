@@ -92,6 +92,42 @@ describe("custom-rules", () => {
       }
     });
 
+    it("expands tilde-prefixed rules path", () => {
+      const homeDir = mkdtempSync(join(tmpdir(), "privacy-custom-rules-home-"));
+      const rulesPath = join(homeDir, "privacy-rules.json5");
+      const prevOpenClawHome = process.env.OPENCLAW_HOME;
+
+      try {
+        writeFileSync(
+          rulesPath,
+          `
+          {
+            extends: 'none',
+            rules: [
+              {
+                type: 'tilde_secret',
+                description: 'tilde secret',
+                riskLevel: 'high',
+                pattern: 'TILDE_SECRET_[A-Z]+',
+              },
+            ],
+          }
+          `,
+        );
+        process.env.OPENCLAW_HOME = homeDir;
+        const loaded = loadCustomRules("~/privacy-rules.json5");
+        expect(loaded.errors).toHaveLength(0);
+        expect(loaded.rules.some((r) => r.type === "tilde_secret")).toBe(true);
+      } finally {
+        if (prevOpenClawHome === undefined) {
+          delete process.env.OPENCLAW_HOME;
+        } else {
+          process.env.OPENCLAW_HOME = prevOpenClawHome;
+        }
+        rmSync(homeDir, { recursive: true, force: true });
+      }
+    });
+
     it("falls back safely when parsed root is not an object", () => {
       const dir = mkdtempSync(join(tmpdir(), "privacy-custom-rules-badroot-"));
       const filePath = join(dir, "rules.json5");

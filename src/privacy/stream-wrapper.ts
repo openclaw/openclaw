@@ -320,6 +320,29 @@ function restoreStreamChunk(
     }
   }
 
+  if (chunk.type === "thinking_delta" && typeof chunk.delta === "string") {
+    const laneKey = `thinking_delta:${getChunkContentIndex(chunk)}`;
+    const restored = bufferedRestore.delta(laneKey, chunk.delta, (text) => ({
+      ...chunk,
+      delta: text,
+    }));
+    if (restored !== chunk.delta) {
+      return { ...chunk, delta: restored };
+    }
+  }
+
+  if (
+    (chunk.type === "thinking_start" ||
+      chunk.type === "thinking_delta" ||
+      chunk.type === "thinking_end") &&
+    typeof chunk.content === "string"
+  ) {
+    const restored = restoreText(chunk.content, ctx);
+    if (restored !== chunk.content) {
+      return { ...chunk, content: restored };
+    }
+  }
+
   // Handle content blocks with text.
   if (chunk.type === "content_block_delta" && chunk.delta && typeof chunk.delta === "object") {
     const delta = chunk.delta as Record<string, unknown>;
