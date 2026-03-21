@@ -193,6 +193,7 @@ Docs: https://docs.openclaw.ai
 - Agents/replay: sanitize malformed assistant tool-call replay blocks before provider replay so follow-up Anthropic requests do not inherit the downstream `replace` crash. (#50005) Thanks @jalehman.
 - Plugins/context engines: retry strict legacy `assemble()` calls without the new `prompt` field when older engines reject it, preserving prompt-aware retrieval compatibility for pre-prompt plugins. (#50848) thanks @danhdoan.
 - Agents/embedded transport errors: distinguish common network failures like connection refused, DNS lookup failure, and interrupted sockets from true timeouts in embedded-run user messaging and lifecycle diagnostics. (#51419) Thanks @scoootscooob.
+- Discord/startup logging: report client initialization while the gateway is still connecting instead of claiming Discord is logged in before readiness is reached. (#51425) Thanks @scoootscooob.
 
 ### Breaking
 
