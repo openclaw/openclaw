@@ -72,6 +72,36 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       },
     ]);
   });
+
+  it("strips inbound metadata from payload text", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        {
+          text: `Conversation info (untrusted metadata):
+\`\`\`json
+{"channel":"discord"}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{"displayName":"Alice"}
+\`\`\`
+
+Hello there`,
+        },
+      ]),
+    ).toEqual([
+      {
+        text: "Hello there",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
 });
 
 describe("normalizeOutboundPayloadsForJson", () => {

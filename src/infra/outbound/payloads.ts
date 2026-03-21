@@ -1,5 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import {
   formatBtwTextForExternalDelivery,
   isRenderablePayload,
@@ -70,10 +71,12 @@ export function normalizeReplyPayloadsForDelivery(
     const next: ReplyPayload = {
       ...payload,
       text:
-        formatBtwTextForExternalDelivery({
-          ...payload,
-          text: parsed.text ?? "",
-        }) ?? "",
+        stripInboundMetadata(
+          formatBtwTextForExternalDelivery({
+            ...payload,
+            text: parsed.text ?? "",
+          }) ?? "",
+        ),
       mediaUrls: mergedMedia.length ? mergedMedia : undefined,
       mediaUrl: resolvedMediaUrl,
       replyToId: payload.replyToId ?? parsed.replyToId,
