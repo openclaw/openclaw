@@ -360,9 +360,33 @@ function validateConfigObjectWithPluginsBase(
       return compatConfig ?? config;
     }
 
+    const allow = config.plugins?.allow;
+    if (!Array.isArray(allow) || allow.length === 0) {
+      compatConfig = config;
+      return config;
+    }
+
+    const bundledWebSearchPluginIds = new Set(listBundledWebSearchPluginIds());
+    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const seenCompatPluginIds = new Set<string>();
+    const compatPluginIds = loadPluginManifestRegistry({
+      config,
+      workspaceDir: workspaceDir ?? undefined,
+      env: opts.env,
+    })
+      .plugins.filter((plugin) => {
+        if (seenCompatPluginIds.has(plugin.id)) {
+          return false;
+        }
+        seenCompatPluginIds.add(plugin.id);
+        return plugin.origin === "bundled" && bundledWebSearchPluginIds.has(plugin.id);
+      })
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
+
     compatConfig = withBundledPluginAllowlistCompat({
       config,
-      pluginIds: listBundledWebSearchPluginIds(),
+      pluginIds: compatPluginIds,
     });
     return compatConfig ?? config;
   };
