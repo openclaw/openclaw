@@ -223,12 +223,7 @@ struct PrivacyAccessSectionView: View {
 
     private func handleRemindersAction() {
         switch remindersStatus {
-        case .notDetermined:
-            Task {
-                _ = await requestRemindersFull()
-                await MainActor.run { refreshAll() }
-            }
-        case .writeOnly:
+        case .notDetermined, .writeOnly:
             Task {
                 _ = await requestRemindersFull()
                 await MainActor.run { refreshAll() }
@@ -250,15 +245,8 @@ struct PrivacyAccessSectionView: View {
 
     private func requestCalendarWriteOnly() async -> Bool {
         let store = EKEventStore()
-        if #available(iOS 17.0, *) {
-            return await withCheckedContinuation { cont in
-                store.requestWriteOnlyAccessToEvents { granted, _ in
-                    cont.resume(returning: granted)
-                }
-            }
-        }
         return await withCheckedContinuation { cont in
-            store.requestAccess(to: .event) { granted, _ in
+            store.requestWriteOnlyAccessToEvents { granted, _ in
                 cont.resume(returning: granted)
             }
         }
@@ -266,15 +254,8 @@ struct PrivacyAccessSectionView: View {
 
     private func requestCalendarFull() async -> Bool {
         let store = EKEventStore()
-        if #available(iOS 17.0, *) {
-            return await withCheckedContinuation { cont in
-                store.requestFullAccessToEvents { granted, _ in
-                    cont.resume(returning: granted)
-                }
-            }
-        }
         return await withCheckedContinuation { cont in
-            store.requestAccess(to: .event) { granted, _ in
+            store.requestFullAccessToEvents { granted, _ in
                 cont.resume(returning: granted)
             }
         }
@@ -282,15 +263,8 @@ struct PrivacyAccessSectionView: View {
 
     private func requestRemindersFull() async -> Bool {
         let store = EKEventStore()
-        if #available(iOS 17.0, *) {
-            return await withCheckedContinuation { cont in
-                store.requestFullAccessToReminders { granted, _ in
-                    cont.resume(returning: granted)
-                }
-            }
-        }
         return await withCheckedContinuation { cont in
-            store.requestAccess(to: .reminder) { granted, _ in
+            store.requestFullAccessToReminders { granted, _ in
                 cont.resume(returning: granted)
             }
         }
