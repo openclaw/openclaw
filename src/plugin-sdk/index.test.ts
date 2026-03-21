@@ -50,9 +50,11 @@ describe("plugin-sdk exports", () => {
   it("keeps the root runtime surface intentionally small", () => {
     expect(typeof sdk.emptyPluginConfigSchema).toBe("function");
     expect(typeof sdk.delegateCompactionToRuntime).toBe("function");
+    expect(typeof sdk.onDiagnosticEvent).toBe("function");
     expect(Object.prototype.hasOwnProperty.call(sdk, "resolveControlCommandGate")).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(sdk, "buildAgentSessionKey")).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(sdk, "isDangerousNameMatchingEnabled")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(sdk, "emitDiagnosticEvent")).toBe(false);
   });
 
   it("keeps package.json plugin-sdk exports synced with the manifest", async () => {

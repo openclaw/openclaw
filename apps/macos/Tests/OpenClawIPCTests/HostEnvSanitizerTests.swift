@@ -33,4 +33,24 @@ struct HostEnvSanitizerTests {
         let env = HostEnvSanitizer.sanitize(overrides: ["OPENCLAW_TOKEN": "secret"])
         #expect(env["OPENCLAW_TOKEN"] == "secret")
     }
+
+    @Test func `inspect overrides rejects blocked and invalid keys`() {
+        let diagnostics = HostEnvSanitizer.inspectOverrides(overrides: [
+            "CLASSPATH": "/tmp/evil-classpath",
+            "BAD-KEY": "x",
+            "ProgramFiles(x86)": "C:\\Program Files (x86)",
+        ])
+
+        #expect(diagnostics.blockedKeys == ["CLASSPATH"])
+        #expect(diagnostics.invalidKeys == ["BAD-KEY"])
+    }
+
+    @Test func `sanitize accepts Windows-style override key names`() {
+        let env = HostEnvSanitizer.sanitize(overrides: [
+            "ProgramFiles(x86)": "D:\\SDKs",
+            "CommonProgramFiles(x86)": "D:\\Common",
+        ])
+        #expect(env["ProgramFiles(x86)"] == "D:\\SDKs")
+        #expect(env["CommonProgramFiles(x86)"] == "D:\\Common")
+    }
 }

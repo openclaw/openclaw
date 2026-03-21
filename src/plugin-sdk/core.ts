@@ -51,6 +51,8 @@ export type {
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthMethod,
   ProviderAuthResult,
+  OpenClawPluginToolContext,
+  OpenClawPluginToolFactory,
   OpenClawPluginCommandDefinition,
   OpenClawPluginDefinition,
   PluginCommandContext,
@@ -83,6 +85,7 @@ export {
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
 export {
+  clearAccountEntryFields,
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
@@ -91,7 +94,6 @@ export {
   parseOptionalDelimitedEntries,
 } from "../channels/plugins/helpers.js";
 export { getChatChannelMeta } from "../channels/registry.js";
-export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
   channelTargetSchema,
   channelTargetsSchema,
@@ -120,8 +122,6 @@ export {
   type RoutePeer,
   type RoutePeerKind,
 } from "../routing/resolve-route.js";
-export { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
-export { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
 export { resolveThreadSessionKeys } from "../routing/session-key.js";
 
 export type ChannelOutboundSessionRouteParams = Parameters<
