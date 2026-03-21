@@ -65,6 +65,7 @@ export function registerCronEditCommand(cron: Command) {
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
+      .option("--thread-id <id>", "Thread id (Telegram forum topic)")
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail job if delivery fails")
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
@@ -219,6 +220,7 @@ export function registerCronEditCommand(cron: Command) {
           const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
           const hasDeliveryTarget = typeof opts.channel === "string" || typeof opts.to === "string";
           const hasDeliveryAccount = typeof opts.account === "string";
+          const hasThreadId = typeof opts.threadId === "string";
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
           const hasAgentTurnPatch =
             typeof opts.message === "string" ||
@@ -253,7 +255,13 @@ export function registerCronEditCommand(cron: Command) {
             patch.payload = payload;
           }
 
-          if (hasDeliveryModeFlag || hasDeliveryTarget || hasDeliveryAccount || hasBestEffort) {
+          if (
+            hasDeliveryModeFlag ||
+            hasDeliveryTarget ||
+            hasDeliveryAccount ||
+            hasThreadId ||
+            hasBestEffort
+          ) {
             const delivery: Record<string, unknown> = {};
             if (hasDeliveryModeFlag) {
               delivery.mode = opts.announce || opts.deliver === true ? "announce" : "none";
@@ -265,9 +273,14 @@ export function registerCronEditCommand(cron: Command) {
               const channel = opts.channel.trim();
               delivery.channel = channel ? channel : undefined;
             }
-            if (typeof opts.to === "string") {
-              const to = opts.to.trim();
-              delivery.to = to ? to : undefined;
+            if (typeof opts.to === "string" || typeof opts.threadId === "string") {
+              const to = typeof opts.to === "string" ? opts.to.trim() : "";
+              const threadId = typeof opts.threadId === "string" ? opts.threadId.trim() : "";
+              if (to && threadId) {
+                delivery.to = `${to}:topic:${threadId}`;
+              } else if (to) {
+                delivery.to = to || undefined;
+              }
             }
             if (typeof opts.account === "string") {
               const account = opts.account.trim();

@@ -96,6 +96,7 @@ export function registerCronAddCommand(cron: Command) {
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
+      .option("--thread-id <id>", "Thread id (Telegram forum topic)")
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
       .option("--json", "Output JSON", false)
@@ -272,7 +273,14 @@ export function registerCronAddCommand(cron: Command) {
                     typeof opts.channel === "string" && opts.channel.trim()
                       ? opts.channel.trim()
                       : undefined,
-                  to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
+                  to: (() => {
+                    const to = typeof opts.to === "string" ? opts.to.trim() : "";
+                    const threadId = typeof opts.threadId === "string" ? opts.threadId.trim() : "";
+                    if (to && threadId) {
+                      return `${to}:topic:${threadId}`;
+                    }
+                    return to || undefined;
+                  })(),
                   accountId,
                   bestEffort: opts.bestEffortDeliver ? true : undefined,
                 }
