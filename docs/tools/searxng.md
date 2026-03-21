@@ -67,20 +67,33 @@ curl -s "http://localhost:8888/search?q=test&format=json" | head -c 200
 
 ## Config example
 
+Select SearXNG as the search provider and configure the base URL via the plugin
+config path:
+
 ```json5
 {
   tools: {
     web: {
       search: {
         provider: "searxng",
-        searxng: {
-          baseUrl: "http://localhost:8888",
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      searxng: {
+        config: {
+          webSearch: {
+            baseUrl: "http://localhost:8888",
+          },
         },
       },
     },
   },
 }
 ```
+
+For remote instances, use HTTPS instead of HTTP.
 
 **Environment alternative:** set `SEARXNG_BASE_URL` in the Gateway environment
 instead of config. For a gateway install, put it in `~/.openclaw/.env`.

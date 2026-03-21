@@ -19,7 +19,9 @@
         "additionalProperties": false,
         "properties": {
           "baseUrl": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^https?://",
+            "maxLength": 2048
           }
         }
       }

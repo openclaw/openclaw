@@ -151,25 +151,7 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts searxng provider and config", () => {
-    const res = validateConfigObject({
-      tools: {
-        web: {
-          search: {
-            enabled: true,
-            provider: "searxng",
-            searxng: {
-              baseUrl: "http://searxng:8181",
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts searxng provider without searxng config block", () => {
+  it("accepts searxng provider selection", () => {
     const res = validateConfigObject({
       tools: {
         web: {
@@ -184,23 +166,25 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("rejects unknown keys in searxng config", () => {
+  it("silently drops searxng scoped config from tools.web.search (use plugin config instead)", () => {
     const res = validateConfigObject({
       tools: {
         web: {
           search: {
-            enabled: true,
             provider: "searxng",
             searxng: {
               baseUrl: "http://searxng:8181",
-              apiKey: "should-not-exist",
             },
           },
         },
       },
     });
 
-    expect(res.ok).toBe(false);
+    // searxng is not a legacy provider — the normalization layer strips unknown
+    // scoped keys before schema validation, so the config is accepted but the
+    // searxng block is silently dropped. Config belongs in
+    // plugins.entries.searxng.config.webSearch.baseUrl.
+    expect(res.ok).toBe(true);
   });
 });
 

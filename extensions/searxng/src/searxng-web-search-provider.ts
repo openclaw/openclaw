@@ -1,10 +1,11 @@
 import { Type } from "@sinclair/typebox";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  enablePluginInConfig,
   MAX_SEARCH_COUNT,
-  mergeScopedSearchConfig,
   readCachedSearchPayload,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
@@ -15,7 +16,6 @@ import {
   withTrustedWebSearchEndpoint,
   wrapWebContent,
   writeCachedSearchPayload,
-  type SearchConfigRecord,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search";
 
@@ -34,14 +34,41 @@ type SearxngSearchResponse = {
   results?: SearxngSearchResult[];
 };
 
-function resolveSearxngBaseUrl(searchConfig?: SearchConfigRecord): string {
-  const searxng = searchConfig?.searxng;
-  const fromConfig =
-    searxng && typeof searxng === "object" && !Array.isArray(searxng)
-      ? ((searxng as { baseUrl?: string }).baseUrl ?? "").trim()
-      : "";
+type SearxngPluginConfig =
+  | {
+      baseUrl?: string;
+    }
+  | undefined;
+
+function resolveSearxngPluginConfig(cfg?: OpenClawConfig): SearxngPluginConfig {
+  const pluginConfig = resolveProviderWebSearchPluginConfig(cfg, "searxng");
+  if (pluginConfig && typeof pluginConfig === "object" && !Array.isArray(pluginConfig)) {
+    return pluginConfig as SearxngPluginConfig;
+  }
+  return undefined;
+}
+
+function validateSearxngBaseUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`SearXNG: invalid baseUrl "${url}"`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      `SearXNG: baseUrl must use http or https, got "${parsed.protocol.slice(0, -1)}"`,
+    );
+  }
+}
+
+function resolveSearxngBaseUrl(cfg?: OpenClawConfig): string {
+  const pluginCfg = resolveSearxngPluginConfig(cfg);
+  const fromConfig = typeof pluginCfg?.baseUrl === "string" ? pluginCfg.baseUrl.trim() : "";
   const fromEnv = (process.env.SEARXNG_BASE_URL ?? "").trim();
-  return fromConfig || fromEnv || DEFAULT_SEARXNG_BASE_URL;
+  const resolved = fromConfig || fromEnv || DEFAULT_SEARXNG_BASE_URL;
+  validateSearxngBaseUrl(resolved);
+  return resolved;
 }
 
 async function runSearxngSearch(params: {
@@ -51,7 +78,12 @@ async function runSearxngSearch(params: {
   language?: string;
 }): Promise<SearxngSearchResult[]> {
   const base = params.baseUrl.trim().replace(/\/$/, "");
-  const url = new URL(`${base}/search`);
+  let url: URL;
+  try {
+    url = new URL(`${base}/search`);
+  } catch {
+    throw new Error(`SearXNG: invalid baseUrl "${params.baseUrl}"`);
+  }
   url.searchParams.set("q", params.query);
   url.searchParams.set("format", "json");
   if (params.language) {
@@ -73,7 +105,12 @@ async function runSearxngSearch(params: {
       if (!res.ok) {
         await throwWebSearchApiError(res, "SearXNG");
       }
-      const data = (await res.json()) as SearxngSearchResponse;
+      let data: SearxngSearchResponse;
+      try {
+        data = (await res.json()) as SearxngSearchResponse;
+      } catch {
+        throw new Error("SearXNG: failed to parse search response as JSON");
+      }
       return data.results ?? [];
     },
   );
@@ -113,25 +150,24 @@ export function createSearxngWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://docs.searxng.org/",
     docsUrl: "https://docs.openclaw.ai/tools/searxng",
     autoDetectOrder: 999,
+    requiresCredential: false,
+    onboardingScopes: ["text-inference"],
     credentialPath: "plugins.entries.searxng.config.webSearch.baseUrl",
     inactiveSecretPaths: [],
+    // SearXNG is key-free; all credential accessors are no-ops.
     getCredentialValue: () => undefined,
     setCredentialValue: () => undefined,
     getConfiguredCredentialValue: () => undefined,
     setConfiguredCredentialValue: () => undefined,
+    applySelectionConfig: (config) => enablePluginInConfig(config, "searxng").config,
     createTool: (ctx) => {
-      const searchConfig = mergeScopedSearchConfig(
-        ctx.searchConfig as SearchConfigRecord | undefined,
-        "searxng",
-        resolveProviderWebSearchPluginConfig(ctx.config, "searxng"),
-      ) as SearchConfigRecord | undefined;
-      const baseUrl = resolveSearxngBaseUrl(searchConfig);
-      const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
-      const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+      const baseUrl = resolveSearxngBaseUrl(ctx.config);
+      const timeoutSeconds = resolveSearchTimeoutSeconds(ctx.searchConfig);
+      const cacheTtlMs = resolveSearchCacheTtlMs(ctx.searchConfig);
 
       return {
         description:
-          "Search the web using SearXNG (self-hosted meta search engine). Aggregates results from multiple search engines. Returns titles, URLs, and snippets for fast research.",
+          "Search the web using SearXNG (self-hosted meta search engine). Aggregates results from multiple search engines. Returns titles, URLs, and snippets.",
         parameters: SearxngWebSearchSchema,
         execute: async (args) => {
           const params = args as Record<string, unknown>;
@@ -204,4 +240,5 @@ export function createSearxngWebSearchProvider(): WebSearchProviderPlugin {
 
 export const __testing = {
   resolveSearxngBaseUrl,
+  resolveSearxngPluginConfig,
 } as const;

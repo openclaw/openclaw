@@ -19,8 +19,8 @@ describe("resolveBundledPluginWebSearchProviders", () => {
         "xai:grok",
         "moonshot:kimi",
         "perplexity:perplexity",
-        "tavily:tavily",
         "searxng:searxng",
+        "tavily:tavily",
       ]);
       expect(providers.map((provider) => provider.credentialPath)).toEqual([
         "plugins.entries.brave.config.webSearch.apiKey",
@@ -31,8 +31,8 @@ describe("resolveBundledPluginWebSearchProviders", () => {
         "plugins.entries.xai.config.webSearch.apiKey",
         "plugins.entries.moonshot.config.webSearch.apiKey",
         "plugins.entries.perplexity.config.webSearch.apiKey",
-        "plugins.entries.tavily.config.webSearch.apiKey",
         "plugins.entries.searxng.config.webSearch.baseUrl",
+        "plugins.entries.tavily.config.webSearch.apiKey",
       ]);
       expect(
         providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig,
@@ -62,8 +62,8 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "xai",
       "moonshot",
       "perplexity",
-      "tavily",
       "searxng",
+      "tavily",
     ]);
   });
 
@@ -119,8 +119,8 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "xai:grok",
       "moonshot:kimi",
       "perplexity:perplexity",
-      "tavily:tavily",
       "searxng:searxng",
+      "tavily:tavily",
     ]);
   });
 

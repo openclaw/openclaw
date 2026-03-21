@@ -84,7 +84,7 @@ function createProviderSearchTool(
           : provider === "kimi"
             ? { provider, kimi: { apiKey: "moonshot-config-test" } } // pragma: allowlist secret
             : provider === "searxng"
-              ? { provider, searxng: { baseUrl: "http://127.0.0.1:8181" } }
+              ? { provider }
               : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
   return createWebSearchTool({
     config: {
@@ -93,6 +93,13 @@ function createProviderSearchTool(
           search: searchConfig,
         },
       },
+      ...(provider === "searxng" && {
+        plugins: {
+          entries: {
+            searxng: { enabled: true, config: { webSearch: { baseUrl: "http://127.0.0.1:8181" } } },
+          },
+        },
+      }),
     },
     sandboxed: true,
   });
@@ -1141,8 +1148,12 @@ describe("web_search searxng provider", () => {
           web: {
             search: {
               provider: "searxng",
-              searxng: { baseUrl: "http://127.0.0.1:8181" },
             },
+          },
+        },
+        plugins: {
+          entries: {
+            searxng: { enabled: true, config: { webSearch: { baseUrl: "http://127.0.0.1:8181" } } },
           },
         },
       },
@@ -1335,11 +1346,17 @@ describe("resolveSearxngBaseUrl", () => {
     vi.unstubAllEnvs();
   });
 
-  it("uses config baseUrl over env var", () => {
+  it("uses plugin config baseUrl over env var", () => {
     vi.stubEnv("SEARXNG_BASE_URL", "http://env:9999");
-    expect(resolveSearxngBaseUrl({ searxng: { baseUrl: "http://config:8181" } })).toBe(
-      "http://config:8181",
-    );
+    expect(
+      resolveSearxngBaseUrl({
+        plugins: {
+          entries: {
+            searxng: { config: { webSearch: { baseUrl: "http://config:8181" } } },
+          },
+        },
+      }),
+    ).toBe("http://config:8181");
   });
 
   it("falls back to SEARXNG_BASE_URL env var", () => {
@@ -1352,16 +1369,150 @@ describe("resolveSearxngBaseUrl", () => {
     expect(resolveSearxngBaseUrl(undefined)).toBe("http://localhost:8888");
   });
 
-  it("trims whitespace from config baseUrl", () => {
-    expect(resolveSearxngBaseUrl({ searxng: { baseUrl: "  http://trimmed:8080  " } })).toBe(
-      "http://trimmed:8080",
-    );
+  it("trims whitespace from plugin config baseUrl", () => {
+    expect(
+      resolveSearxngBaseUrl({
+        plugins: {
+          entries: {
+            searxng: { config: { webSearch: { baseUrl: "  http://trimmed:8080  " } } },
+          },
+        },
+      }),
+    ).toBe("http://trimmed:8080");
   });
 
   it("handles trailing slash in baseUrl via search URL construction", async () => {
     vi.stubEnv("SEARXNG_BASE_URL", "");
-    const resolved = resolveSearxngBaseUrl({ searxng: { baseUrl: "http://localhost:8888/" } });
+    const resolved = resolveSearxngBaseUrl({
+      plugins: {
+        entries: {
+          searxng: { config: { webSearch: { baseUrl: "http://localhost:8888/" } } },
+        },
+      },
+    });
     // The URL still has a trailing slash here; runSearxngSearch strips it.
     expect(resolved).toBe("http://localhost:8888/");
+  });
+
+  it("throws for non-http/https protocol in plugin config", () => {
+    expect(() =>
+      resolveSearxngBaseUrl({
+        plugins: {
+          entries: {
+            searxng: { config: { webSearch: { baseUrl: "file:///etc/passwd" } } },
+          },
+        },
+      }),
+    ).toThrow("http or https");
+  });
+
+  it("throws for unparseable baseUrl string in plugin config", () => {
+    expect(() =>
+      resolveSearxngBaseUrl({
+        plugins: {
+          entries: {
+            searxng: { config: { webSearch: { baseUrl: "not-a-url" } } },
+          },
+        },
+      }),
+    ).toThrow("invalid baseUrl");
+  });
+});
+
+describe("resolveSearxngPluginConfig", () => {
+  const { resolveSearxngPluginConfig } = searxngTesting;
+
+  it("returns config object when present", () => {
+    expect(
+      resolveSearxngPluginConfig({
+        plugins: {
+          entries: {
+            searxng: { config: { webSearch: { baseUrl: "http://localhost:8888" } } },
+          },
+        },
+      }),
+    ).toEqual({ baseUrl: "http://localhost:8888" });
+  });
+
+  it("returns undefined when cfg is undefined", () => {
+    expect(resolveSearxngPluginConfig(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined when no searxng plugin entry", () => {
+    expect(resolveSearxngPluginConfig({})).toBeUndefined();
+  });
+
+  it("returns undefined when plugin config is an array", () => {
+    const cfg = {
+      plugins: { entries: { searxng: { config: [] as unknown } } },
+    };
+    expect(
+      resolveSearxngPluginConfig(cfg as Parameters<typeof resolveSearxngPluginConfig>[0]),
+    ).toBeUndefined();
+  });
+});
+
+describe("web_search searxng provider — error and edge-case handling", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
+
+  it("throws on non-JSON response body", async () => {
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.reject(new Error("Unexpected token")),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: { web: { search: { provider: "searxng" } } },
+        plugins: {
+          entries: {
+            searxng: { enabled: true, config: { webSearch: { baseUrl: "http://127.0.0.1:8181" } } },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    await expect(tool?.execute?.("call-1", { query: "test" })).rejects.toThrow(
+      "SearXNG: failed to parse search response as JSON",
+    );
+  });
+
+  it("maps results with all optional fields absent to empty defaults", async () => {
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ results: [{}] }),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: { web: { search: { provider: "searxng" } } },
+        plugins: {
+          entries: {
+            searxng: { enabled: true, config: { webSearch: { baseUrl: "http://127.0.0.1:8181" } } },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", { query: "test" });
+    const details = result?.details as { results?: Array<Record<string, unknown>> };
+    expect(details.results).toHaveLength(1);
+    expect(details.results?.[0]?.title).toBe("");
+    expect(details.results?.[0]?.url).toBe("");
+    expect(details.results?.[0]?.description).toBe("");
+    expect(details.results?.[0]?.published).toBeUndefined();
+    expect(details.results?.[0]?.siteName).toBeUndefined();
+    expect(details.results?.[0]?.engine).toBeUndefined();
   });
 });

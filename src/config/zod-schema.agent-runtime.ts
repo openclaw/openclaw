@@ -318,12 +318,6 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
-    searxng: z
-      .object({
-        baseUrl: z.string().optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict()
   .optional();

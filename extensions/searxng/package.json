@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/searxng-plugin",
-  "version": "2026.3.20",
+  "version": "2026.3.14",
   "private": true,
   "description": "OpenClaw SearXNG plugin",
   "type": "module",

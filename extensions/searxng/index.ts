@@ -1,4 +1,4 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createSearxngWebSearchProvider } from "./src/searxng-web-search-provider.js";
 
 export default definePluginEntry({
