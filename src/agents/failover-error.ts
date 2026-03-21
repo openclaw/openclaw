@@ -1,3 +1,4 @@
+import type { FallbackOnErrorCodes } from "../config/types.agents-shared.js";
 import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverReason,
@@ -320,6 +321,115 @@ export function coerceToFailoverError(
 
   return new FailoverError(message, {
     reason,
+    provider: context?.provider,
+    model: context?.model,
+    profileId: context?.profileId,
+    status,
+    code,
+    cause: err instanceof Error ? err : undefined,
+  });
+}
+
+/**
+ * Default HTTP status codes that trigger fallback.
+ * - Server errors: 500, 502, 503, 504
+ * - Rate limits: 429
+ * - Timeouts: 408
+ * - Not found: 404 (model may have been removed)
+ */
+const DEFAULT_FALLBACK_STATUS_CODES = [408, 429, 500, 502, 503, 504, 404];
+
+/**
+ * All HTTP status codes that could trigger fallback (including client errors).
+ */
+const ALL_FALLBACK_STATUS_CODES = [400, 401, 402, 403, 404, 405, 408, 410, 429, 500, 502, 503, 504];
+
+/**
+ * Check if an error should trigger fallback based on the configured error codes.
+ *
+ * @param err - The error to check
+ * @param fallbackOnErrors - Configuration for which errors should trigger fallback
+ *   - "default": Use default behavior (server errors + rate limits)
+ *   - "all": All errors trigger fallback
+ *   - number[]: Custom list of status codes
+ * @returns true if the error should trigger fallback
+ */
+export function shouldTriggerFallback(
+  err: unknown,
+  fallbackOnErrors?: FallbackOnErrorCodes,
+): boolean {
+  const status = getStatusCode(err);
+
+  // If no status code found, try to determine from error reason
+  if (status === undefined) {
+    const reason = resolveFailoverReasonFromError(err);
+    // Default behavior: non-null reason means it's a recognized failover error
+    if (fallbackOnErrors === undefined || fallbackOnErrors === "default") {
+      return reason !== null;
+    }
+    // For "all", any reason (including null) should trigger fallback
+    if (fallbackOnErrors === "all") {
+      return true;
+    }
+    // For custom codes, we can't determine without status
+    return false;
+  }
+
+  // Determine which status codes to use
+  let allowedCodes: number[];
+  if (fallbackOnErrors === undefined || fallbackOnErrors === "default") {
+    allowedCodes = DEFAULT_FALLBACK_STATUS_CODES;
+  } else if (fallbackOnErrors === "all") {
+    allowedCodes = ALL_FALLBACK_STATUS_CODES;
+  } else {
+    allowedCodes = fallbackOnErrors;
+  }
+
+  return allowedCodes.includes(status);
+}
+
+/**
+ * Coerce an error to FailoverError if it should trigger fallback based on configuration.
+ *
+ * @param err - The error to check
+ * @param fallbackOnErrors - Configuration for which errors should trigger fallback
+ * @param context - Additional context (provider, model, profileId)
+ * @returns FailoverError if the error should trigger fallback, null otherwise
+ */
+export function coerceToFailoverErrorWithConfig(
+  err: unknown,
+  fallbackOnErrors: FallbackOnErrorCodes | undefined,
+  context?: {
+    provider?: string;
+    model?: string;
+    profileId?: string;
+  },
+): FailoverError | null {
+  // First check if it's already a FailoverError
+  if (isFailoverError(err)) {
+    // Still need to check if it should trigger fallback based on config
+    if (!shouldTriggerFallback(err, fallbackOnErrors)) {
+      return null;
+    }
+    return err;
+  }
+
+  // Check if error should trigger fallback
+  if (!shouldTriggerFallback(err, fallbackOnErrors)) {
+    return null;
+  }
+
+  // Coerce to FailoverError
+  const status = getStatusCode(err);
+  const reason = resolveFailoverReasonFromError(err);
+  const message = getErrorMessage(err) || String(err);
+  const code = getErrorCode(err);
+
+  // If we have a status but no reason, create a generic reason
+  const effectiveReason: FailoverReason = reason ?? "unknown";
+
+  return new FailoverError(message, {
+    reason: effectiveReason,
     provider: context?.provider,
     model: context?.model,
     profileId: context?.profileId,
