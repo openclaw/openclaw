@@ -1383,8 +1383,18 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
 
     if (groupPolicy === "allowlist" && usesSenderBasedGroupAllowlist(channelName)) {
       if (channelName === "telegram" && !hasConfiguredGroups(account, parent)) {
-        // Fresh Telegram installs default to fail-closed group access until the
-        // operator explicitly configures allowed groups or sender filters.
+        const effectiveDmPolicy = dmPolicy ?? "pairing";
+        const dmSetupLine =
+          effectiveDmPolicy === "pairing"
+            ? `DMs use pairing mode, so new senders must start a chat and be approved before regular messages are accepted.`
+            : effectiveDmPolicy === "allowlist"
+              ? `DMs use allowlist mode, so only sender IDs in ${prefix}.allowFrom are accepted.`
+              : effectiveDmPolicy === "open"
+                ? `DMs are open.`
+                : `DMs are disabled.`;
+        warnings.push(
+          `- ${prefix}: Telegram is in first-time setup mode. ${dmSetupLine} Group messages stay blocked until you add allowed chats under ${prefix}.groups (and optional sender IDs under ${prefix}.groupAllowFrom), or set ${prefix}.groupPolicy to "open" if you want broad group access.`,
+        );
         return;
       }
       const rawGroupAllowFrom =
