@@ -308,8 +308,8 @@ function preserveDiscoveredTransportMetadata(params: {
     headers:
       discoveredHeaders || dynamicHeaders
         ? {
-            ...discoveredHeaders,
             ...dynamicHeaders,
+            ...discoveredHeaders,
           }
         : undefined,
   };
