@@ -337,6 +337,44 @@ if __name__ == '__main__':
         out.write_text(json.dumps(blocks, ensure_ascii=False, indent=2))
         print(f"Queue saved. After agents finish, save results to shadow-clone-results.json then run: python3 shadow_clone.py send")
 
+    elif sys.argv[1] == 'dashboard':
+        # My own dashboard — reality check before acting
+        conn = db.get_conn()
+        from datetime import datetime as _dt
+        print('=== 儀表板 ===')
+        # Hot posts
+        posts = conn.execute('''
+            SELECT p.post_id, p.text_content, p.posted_at, p.like_count,
+                   COUNT(c.comment_id) as comments,
+                   SUM(CASE WHEN r.reply_id IS NULL AND pr.username != 'tangcruzz' AND length(c.text_content) > 10 THEN 1 ELSE 0 END) as unreplied
+            FROM posts p LEFT JOIN comments c ON p.post_id=c.post_id
+            LEFT JOIN replies r ON c.comment_id=r.comment_id
+            LEFT JOIN profiles pr ON c.user_id=pr.user_id
+            GROUP BY p.post_id HAVING comments > 0
+            ORDER BY p.posted_at DESC LIMIT 10
+        ''').fetchall()
+        for p in posts:
+            text = (p['text_content'] or '')[:30]
+            age = '?'
+            try:
+                pt = _dt.fromisoformat(p['posted_at'].replace('+0000','+00:00'))
+                age = f"{(_dt.now(pt.tzinfo)-pt).days}d"
+            except: pass
+            ur = p['unreplied'] or 0
+            heat = '🔥' if p['comments'] > 50 else '🟡' if p['comments'] > 10 else '⚪'
+            status = '✅' if ur == 0 else f'❌{ur}'
+            print(f'  {heat}{age:4s} 💬{p["comments"]:4d} {status:6s} | {text}')
+
+        # Real activity (not bulk import)
+        print()
+        sent = conn.execute('SELECT COUNT(*) FROM replies WHERE status="sent"').fetchone()[0]
+        total = conn.execute('SELECT COUNT(DISTINCT c.comment_id) FROM comments c JOIN profiles p ON c.user_id=p.user_id WHERE p.username != "tangcruzz"').fetchone()[0]
+        remaining = conn.execute('''SELECT COUNT(*) FROM comments c LEFT JOIN replies r ON c.comment_id=r.comment_id
+            JOIN profiles p ON c.user_id=p.user_id WHERE r.reply_id IS NULL AND p.username != 'tangcruzz'
+            AND length(c.text_content) > 10 AND c.parent_comment_id IS NULL''').fetchone()[0]
+        print(f'覆蓋: {sent}/{total}={round(sent/total*100)}% | 剩餘: {remaining}')
+        conn.close()
+
     elif sys.argv[1] == 'wave-report':
         # Show today's wave stats
         conn = db.get_conn()
