@@ -61,16 +61,23 @@ function isRetryableGetFileError(err: unknown): boolean {
 }
 
 /**
- * Returns true if the download error is a transient HTTP 5xx server error
- * that should be retried at the outer level.
+ * Returns true if the download error is a transient failure that should be
+ * retried at the outer level.
  *
- * `fetch_failed` errors are NOT retried here because they are already handled
- * by the transport fallback dispatcher (`dispatcherAttempts`) inside
- * `fetchRemoteMedia`. Retrying them at the outer level would fan out to up to
- * 9 total fetch attempts in degraded-network environments.
+ * Two categories are retried:
+ * - `http_error` with 5xx status — transient server errors.
+ * - `fetch_failed` — covers body-read timeouts, connection resets, and cases
+ *   where no dispatcher fallback transports are configured so the inner
+ *   `dispatcherAttempts` loop cannot help.
+ *
+ * With `attempts: 2` the outer retry fires at most once, so the total is
+ * bounded to 2 × dispatcherAttempts — acceptable even in degraded networks.
  */
 function isRetryableDownloadError(err: unknown): boolean {
   if (err instanceof MediaFetchError) {
+    if (err.code === "fetch_failed") {
+      return true;
+    }
     // Retry transient HTTP 5xx server errors; do not retry 4xx or policy violations.
     if (err.code === "http_error") {
       const match = /HTTP (\d{3})/.exec(err.message);

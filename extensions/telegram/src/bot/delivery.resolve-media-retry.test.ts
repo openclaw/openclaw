@@ -210,18 +210,31 @@ describe("resolveMedia getFile retry", () => {
     },
   );
 
-  it("does not retry fetchRemoteMedia on fetch_failed (handled by transport fallbacks)", async () => {
+  it("retries fetchRemoteMedia on transient fetch_failed and succeeds", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });
-    fetchRemoteMedia.mockRejectedValueOnce(
-      new MockMediaFetchError("fetch_failed", "Network request failed"),
-    );
+    fetchRemoteMedia
+      .mockRejectedValueOnce(
+        new MockMediaFetchError("fetch_failed", "Network request failed"),
+      )
+      .mockResolvedValueOnce({
+        buffer: Buffer.from("audio"),
+        contentType: "audio/ogg",
+        fileName: "file_0.oga",
+      });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_0.oga",
+      contentType: "audio/ogg",
+    });
 
-    await expect(
-      resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN),
-    ).rejects.toThrow("Network request failed");
+    const promise = resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    await flushRetryTimers();
+    const result = await promise;
 
     expect(getFile).toHaveBeenCalledTimes(1);
-    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(2);
+    expect(result).toEqual(
+      expect.objectContaining({ path: "/tmp/file_0.oga", placeholder: "<media:audio>" }),
+    );
   });
 
   it("does not retry fetchRemoteMedia on permanent http_error", async () => {
@@ -277,18 +290,25 @@ describe("resolveMedia getFile retry", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
   });
 
-  it("throws immediately on persistent fetch_failed without outer retry", async () => {
+  it("throws on persistent fetch_failed after outer retry exhausted", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });
-    fetchRemoteMedia.mockRejectedValue(
-      new MockMediaFetchError("fetch_failed", "Network request failed"),
+    fetchRemoteMedia
+      .mockRejectedValueOnce(new MockMediaFetchError("fetch_failed", "Network request failed"))
+      .mockRejectedValueOnce(new MockMediaFetchError("fetch_failed", "Network request failed"));
+
+    const promise = resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    // Capture rejection synchronously to prevent unhandled-rejection with fake timers
+    const settled = promise.catch((e: unknown) => e);
+    await flushRetryTimers();
+    const err = await settled;
+
+    expect(err).toBeInstanceOf(MockMediaFetchError);
+    expect((err as InstanceType<typeof MockMediaFetchError>).message).toBe(
+      "Network request failed",
     );
-
-    await expect(
-      resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN),
-    ).rejects.toThrow("Network request failed");
-
     expect(getFile).toHaveBeenCalledTimes(1);
-    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    // attempts: 2 means 1 initial + 1 retry = 2 total calls
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(2);
   });
 
   it("does not retry 'file is too big' error (400 Bad Request) and returns null", async () => {
