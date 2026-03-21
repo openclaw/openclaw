@@ -691,4 +691,106 @@ describe("AcpxRuntime", () => {
       delete process.env.MOCK_ACPX_NEW_EMPTY;
     }
   });
+
+  it("kills grandchild processes on session abort, not just the direct child", async () => {
+    if (process.platform === "win32") {
+      // Process group kill is not supported on Windows; skip.
+      return;
+    }
+    const { runtime, logPath } = await createMockRuntimeFixture({ queueOwnerTtlSeconds: 180 });
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:grandchild-test",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    const controller = new AbortController();
+    process.env.MOCK_ACPX_SPAWN_GRANDCHILD = "1";
+    try {
+      let sawDone = false;
+      for await (const event of runtime.runTurn({
+        handle,
+        text: "grandchild-test",
+        mode: "prompt",
+        requestId: "req-grandchild-test",
+        signal: controller.signal,
+      })) {
+        if (event.type === "done") {
+          sawDone = true;
+          controller.abort();
+          break;
+        }
+      }
+      expect(sawDone).toBe(true);
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const grandchildLog = logs.find((e) => e.kind === "spawned-grandchild");
+      expect(grandchildLog).toBeDefined();
+      const pid = grandchildLog!.pid as number;
+      expect(pid).toBeGreaterThan(0);
+
+      // Poll until the grandchild is gone (killed by process group cleanup on abort).
+      let alive = true;
+      for (let i = 0; i < 20; i++) {
+        try {
+          process.kill(pid, 0);
+          await new Promise((r) => setTimeout(r, 25));
+        } catch {
+          alive = false;
+          break;
+        }
+      }
+      expect(alive).toBe(false);
+    } finally {
+      delete process.env.MOCK_ACPX_SPAWN_GRANDCHILD;
+    }
+  });
+
+  it("preserves grandchild processes on normal completion (no abort)", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { runtime, logPath } = await createMockRuntimeFixture({ queueOwnerTtlSeconds: 180 });
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:grandchild-preserve-test",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    process.env.MOCK_ACPX_SPAWN_GRANDCHILD = "1";
+    try {
+      // Drain the generator to completion (no break, no abort) — this is how
+      // production consumers like manager.core.ts consume runTurn.
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _event of runtime.runTurn({
+        handle,
+        text: "grandchild-test",
+        mode: "prompt",
+        requestId: "req-grandchild-preserve-test",
+      })) {
+        // intentionally drain all events
+      }
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const grandchildLog = logs.find((e) => e.kind === "spawned-grandchild");
+      expect(grandchildLog).toBeDefined();
+      const pid = grandchildLog!.pid as number;
+      expect(pid).toBeGreaterThan(0);
+
+      // Grandchild should still be alive — killProcessTree is skipped on normal exit
+      // to preserve TTL-managed runtime owner processes.
+      expect(() => process.kill(pid, 0)).not.toThrow();
+
+      // Clean up the grandchild manually.
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        // Already gone
+      }
+    } finally {
+      delete process.env.MOCK_ACPX_SPAWN_GRANDCHILD;
+    }
+  });
 });

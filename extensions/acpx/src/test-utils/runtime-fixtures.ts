@@ -221,6 +221,14 @@ if (command === "prompt") {
     openaiApiKey: process.env.OPENAI_API_KEY || "",
     githubToken: process.env.GITHUB_TOKEN || "",
   });
+  if (process.env.MOCK_ACPX_SPAWN_GRANDCHILD === "1") {
+    const { spawn } = require("node:child_process");
+    // Spawn WITHOUT detached so the grandchild inherits mock-acpx's process group.
+    // This simulates how real coding harnesses (claude, codex CLI) are spawned.
+    const grandchild = spawn("sleep", ["30"]);
+    grandchild.unref();
+    writeLog({ kind: "spawned-grandchild", pid: grandchild.pid });
+  }
   const requestId = "req-1";
 
   emitJson({
@@ -399,6 +407,7 @@ export async function cleanupMockRuntimeFixtures(): Promise<void> {
   delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
   delete process.env.MOCK_ACPX_STATUS_STATUS;
   delete process.env.MOCK_ACPX_STATUS_SUMMARY;
+  delete process.env.MOCK_ACPX_SPAWN_GRANDCHILD;
   sharedMockCliScriptPath = null;
   logFileSequence = 0;
   while (tempDirs.length > 0) {
