@@ -155,6 +155,7 @@ function emitSessionsChanged(
             lastAccountId: sessionRow.lastAccountId,
             totalTokens: sessionRow.totalTokens,
             totalTokensFresh: sessionRow.totalTokensFresh,
+            totalTokensEstimate: sessionRow.totalTokensEstimate,
             contextTokens: sessionRow.contextTokens,
             estimatedCostUsd: sessionRow.estimatedCostUsd,
             modelProvider: sessionRow.modelProvider,
@@ -1123,6 +1124,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       delete entryToUpdate.outputTokens;
       delete entryToUpdate.totalTokens;
       delete entryToUpdate.totalTokensFresh;
+      delete entryToUpdate.totalTokensEstimate;
       entryToUpdate.updatedAt = Date.now();
     });
 

@@ -1084,13 +1084,17 @@ export function buildGatewaySessionRow(params: {
           fallbackModel: model,
         })
       : null;
+  const freshTotal = resolveFreshSessionTotalTokens(entry);
   const totalTokens =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
+    resolvePositiveNumber(freshTotal) ??
+    resolvePositiveNumber(entry?.totalTokensEstimate) ??
     resolvePositiveNumber(transcriptUsage?.totalTokens);
+
   const totalTokensFresh =
-    typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
-      ? true
-      : transcriptUsage?.totalTokensFresh === true;
+    (typeof freshTotal === "number" && Number.isFinite(freshTotal) && freshTotal > 0) ||
+    (freshTotal === undefined &&
+      entry?.totalTokensEstimate === undefined &&
+      transcriptUsage?.totalTokensFresh === true);
   const childSessions = resolveChildSessionKeys(key, store);
   const estimatedCostUsd =
     resolveEstimatedSessionCostUsd({
@@ -1150,10 +1154,11 @@ export function buildGatewaySessionRow(params: {
     reasoningLevel: entry?.reasoningLevel,
     elevatedLevel: entry?.elevatedLevel,
     sendPolicy: entry?.sendPolicy,
-    inputTokens: entry?.inputTokens,
-    outputTokens: entry?.outputTokens,
-    totalTokens,
-    totalTokensFresh,
+    inputTokens: entry?.inputTokens ?? null,
+    outputTokens: entry?.outputTokens ?? null,
+    totalTokens: totalTokens ?? null,
+    totalTokensFresh: totalTokensFresh ?? false,
+    totalTokensEstimate: entry?.totalTokensEstimate ?? null,
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
@@ -1164,7 +1169,7 @@ export function buildGatewaySessionRow(params: {
     responseUsage: entry?.responseUsage,
     modelProvider,
     model,
-    contextTokens,
+    contextTokens: contextTokens ?? null,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
     lastTo: deliveryFields.lastTo ?? entry?.lastTo,

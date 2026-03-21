@@ -255,7 +255,8 @@ export async function getStatusSummary(
             fallbackContextTokens: configContextTokens ?? undefined,
             allowAsyncLoad: false,
           }) ?? null;
-        const total = resolveFreshSessionTotalTokens(entry);
+        const freshTotal = resolveFreshSessionTotalTokens(entry);
+        const total = freshTotal ?? entry?.totalTokensEstimate;
         const totalTokensFresh =
           typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
         const remaining =
@@ -285,8 +286,9 @@ export async function getStatusSummary(
           outputTokens: entry?.outputTokens,
           cacheRead: entry?.cacheRead,
           cacheWrite: entry?.cacheWrite,
-          totalTokens: total ?? null,
+          totalTokens: freshTotal ?? null,
           totalTokensFresh,
+          totalTokensEstimate: entry?.totalTokensEstimate ?? null,
           remainingTokens: remaining,
           percentUsed: pct,
           model,

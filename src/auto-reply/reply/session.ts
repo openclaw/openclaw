@@ -20,6 +20,7 @@ import {
   resolveThreadFlag,
   resolveSessionResetPolicy,
   resolveSessionResetType,
+  resolveFreshSessionTotalTokens,
   resolveGroupSessionKey,
   resolveSessionKey,
   resolveSessionTranscriptPath,
@@ -478,7 +479,9 @@ export async function initSessionState(params: {
     sessionStore[parentSessionKey] &&
     !alreadyForked
   ) {
-    const parentTokens = sessionStore[parentSessionKey].totalTokens ?? 0;
+    const parentEntry = sessionStore[parentSessionKey];
+    const parentTokens =
+      resolveFreshSessionTotalTokens(parentEntry) ?? parentEntry.totalTokensEstimate ?? 0;
     if (parentForkMaxTokens > 0 && parentTokens > parentForkMaxTokens) {
       // Parent context is too large — forking would create a thread session
       // that immediately overflows the model's context window. Start fresh
@@ -529,6 +532,8 @@ export async function initSessionState(params: {
     // Clear stale token metrics from previous session so /status doesn't
     // display the old session's context usage after /new or /reset.
     sessionEntry.totalTokens = undefined;
+    sessionEntry.totalTokensFresh = undefined;
+    sessionEntry.totalTokensEstimate = undefined;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;

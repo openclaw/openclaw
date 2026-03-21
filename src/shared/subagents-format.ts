@@ -42,6 +42,8 @@ export function truncateLine(value: string, maxLength: number) {
 
 export type TokenUsageLike = {
   totalTokens?: unknown;
+  totalTokensFresh?: unknown;
+  totalTokensEstimate?: unknown;
   inputTokens?: unknown;
   outputTokens?: unknown;
 };
@@ -50,8 +52,15 @@ export function resolveTotalTokens(entry?: TokenUsageLike) {
   if (!entry || typeof entry !== "object") {
     return undefined;
   }
-  if (typeof entry.totalTokens === "number" && Number.isFinite(entry.totalTokens)) {
+  if (
+    entry.totalTokensFresh !== false &&
+    typeof entry.totalTokens === "number" &&
+    Number.isFinite(entry.totalTokens)
+  ) {
     return entry.totalTokens;
+  }
+  if (typeof entry.totalTokensEstimate === "number" && Number.isFinite(entry.totalTokensEstimate)) {
+    return entry.totalTokensEstimate;
   }
   const input = typeof entry.inputTokens === "number" ? entry.inputTokens : 0;
   const output = typeof entry.outputTokens === "number" ? entry.outputTokens : 0;

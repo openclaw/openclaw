@@ -122,6 +122,7 @@ function emitSessionsChanged(
         ? {
             totalTokens: sessionRow.totalTokens,
             totalTokensFresh: sessionRow.totalTokensFresh,
+            totalTokensEstimate: sessionRow.totalTokensEstimate,
             contextTokens: sessionRow.contextTokens,
             estimatedCostUsd: sessionRow.estimatedCostUsd,
             modelProvider: sessionRow.modelProvider,

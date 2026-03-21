@@ -189,8 +189,11 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.outputTokens !== undefined) {
       next.outputTokens = entry.outputTokens;
     }
-    if (entry?.totalTokens !== undefined) {
-      next.totalTokens = entry.totalTokens;
+    if (entry?.totalTokens !== undefined || "totalTokens" in (entry ?? {})) {
+      next.totalTokens = entry?.totalTokens;
+    }
+    if (entry?.totalTokensEstimate !== undefined || "totalTokensEstimate" in (entry ?? {})) {
+      next.totalTokensEstimate = entry?.totalTokensEstimate;
     }
     if (entry?.contextTokens !== undefined || defaults?.contextTokens !== undefined) {
       next.contextTokens =
@@ -369,9 +372,9 @@ export function createSessionActions(context: SessionActionContext) {
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
     state.currentSessionId = null;
-    // Session keys can move backwards in updatedAt ordering; drop previous session freshness
-    // so refresh data for the newly selected session isn't rejected as stale.
-    state.sessionInfo.updatedAt = null;
+    // Session keys can move backwards in updatedAt ordering; drop previous session metadata
+    // entirely so data for the newly selected session is fresh.
+    state.sessionInfo = {};
     state.historyLoaded = false;
     clearLocalRunIds?.();
     btw.clear();

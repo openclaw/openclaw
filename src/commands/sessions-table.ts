@@ -24,6 +24,7 @@ export type SessionDisplayRow = {
   outputTokens?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
+  totalTokensEstimate?: number;
   model?: string;
   modelProvider?: string;
   providerOverride?: string;
@@ -60,6 +61,7 @@ export function toSessionDisplayRows(store: Record<string, SessionEntry>): Sessi
         outputTokens: entry?.outputTokens,
         totalTokens: entry?.totalTokens,
         totalTokensFresh: entry?.totalTokensFresh,
+        totalTokensEstimate: entry?.totalTokensEstimate,
         model: entry?.model,
         modelProvider: entry?.modelProvider,
         providerOverride: entry?.providerOverride,

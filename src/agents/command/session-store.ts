@@ -68,10 +68,30 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: Date.now(),
     contextTokens,
   };
+
+  const lastModel = entry.model;
+  const lastProvider = entry.modelProvider;
+  const modelChanged =
+    (lastModel !== undefined && lastModel !== modelUsed) ||
+    (lastProvider !== undefined && lastProvider !== providerUsed);
+
   setSessionRuntimeModel(next, {
     provider: providerUsed,
     model: modelUsed,
   });
+
+  if (modelChanged) {
+    next.totalTokens = undefined;
+    next.totalTokensFresh = false;
+    next.totalTokensEstimate = undefined;
+  }
+
+  // Backfill estimate baseline for upgraded sessions only if we haven't just
+  // switched models (which would make the legacy total invalid).
+  if (!modelChanged && next.totalTokensEstimate === undefined && entry.totalTokens !== undefined) {
+    next.totalTokensEstimate = entry.totalTokens;
+  }
+
   if (isCliProvider(providerUsed, cfg)) {
     const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
     if (cliSessionId) {
@@ -82,9 +102,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (result.meta.systemPromptReport) {
     next.systemPromptReport = result.meta.systemPromptReport;
   }
-  if (hasNonzeroUsage(usage)) {
-    const input = usage.input ?? 0;
-    const output = usage.output ?? 0;
+  if (hasNonzeroUsage(usage) || (typeof promptTokens === "number" && promptTokens > 0)) {
+    const input = usage?.input ?? 0;
+    const output = usage?.output ?? 0;
     const totalTokens = deriveSessionTotalTokens({
       usage,
       contextTokens,
@@ -92,7 +112,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     });
     const runEstimatedCostUsd = resolveNonNegativeNumber(
       estimateUsageCost({
-        usage,
+        usage: usage ?? {},
         cost: resolveModelCostConfig({
           provider: providerUsed,
           model: modelUsed,
@@ -100,21 +120,29 @@ export async function updateSessionStoreAfterAgentRun(params: {
         }),
       }),
     );
-    next.inputTokens = input;
-    next.outputTokens = output;
+    next.inputTokens = input || undefined;
+    next.outputTokens = output || undefined;
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
       next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
+      next.totalTokensEstimate = totalTokens;
     } else {
       next.totalTokens = undefined;
       next.totalTokensFresh = false;
     }
-    next.cacheRead = usage.cacheRead ?? 0;
-    next.cacheWrite = usage.cacheWrite ?? 0;
+    next.cacheRead = usage?.cacheRead ?? 0;
+    next.cacheWrite = usage?.cacheWrite ?? 0;
     if (runEstimatedCostUsd !== undefined) {
       next.estimatedCostUsd =
         (resolveNonNegativeNumber(entry.estimatedCostUsd) ?? 0) + runEstimatedCostUsd;
     }
+  } else {
+    next.inputTokens = undefined;
+    next.outputTokens = undefined;
+    next.totalTokens = undefined;
+    next.totalTokensFresh = false;
+    next.cacheRead = undefined;
+    next.cacheWrite = undefined;
   }
   if (compactionsThisRun > 0) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;

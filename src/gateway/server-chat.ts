@@ -486,6 +486,7 @@ export function createAgentEventHandler({
       ...(session ? { session } : {}),
       totalTokens: row?.totalTokens,
       totalTokensFresh: row?.totalTokensFresh,
+      totalTokensEstimate: row?.totalTokensEstimate,
       contextTokens: row?.contextTokens,
       estimatedCostUsd: row?.estimatedCostUsd,
       modelProvider: row?.modelProvider,

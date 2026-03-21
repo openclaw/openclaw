@@ -173,6 +173,11 @@ export function estimateUsageCost(params: {
   const output = toNumber(usage.output);
   const cacheRead = toNumber(usage.cacheRead);
   const cacheWrite = toNumber(usage.cacheWrite);
+
+  if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) {
+    return undefined;
+  }
+
   const total =
     input * cost.input +
     output * cost.output +
