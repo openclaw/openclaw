@@ -40,7 +40,7 @@ import {
   collectMissingDefaultAccountBindingWarnings,
   collectMissingExplicitDefaultAccountWarnings,
 } from "./doctor/shared/default-account-warnings.js";
-import { collectEmptyAllowlistPolicyWarningsForAccount } from "./doctor/shared/empty-allowlist-policy.js";
+import { scanEmptyAllowlistPolicyWarnings } from "./doctor/shared/empty-allowlist-scan.js";
 import {
   maybeRepairExecSafeBinProfiles,
   scanExecSafeBinCoverage,
@@ -51,7 +51,6 @@ import {
   scanLegacyToolsBySenderKeys,
 } from "./doctor/shared/legacy-tools-by-sender.js";
 import { scanMutableAllowlistEntries } from "./doctor/shared/mutable-allowlist.js";
-import { asObjectRecord } from "./doctor/shared/object.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./doctor/shared/open-policy-allowfrom.js";
 
 function formatMatrixLegacyStatePreview(
@@ -102,97 +101,6 @@ async function collectMatrixInstallPathWarnings(cfg: OpenClawConfig): Promise<st
     repoInstallCommand: "openclaw plugins install ./extensions/matrix",
     formatCommand: formatCliCommand,
   }).map((entry) => `- ${entry}`);
-}
-
-/**
- * Scan all channel configs for dmPolicy="allowlist" without any allowFrom entries.
- * This configuration blocks all DMs because no sender can match the empty
- * allowlist. Common after upgrades that remove external allowlist
- * file support.
- */
-function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
-  const channels = cfg.channels;
-  if (!channels || typeof channels !== "object") {
-    return [];
-  }
-
-  const warnings: string[] = [];
-
-  const checkAccount = (
-    account: Record<string, unknown>,
-    prefix: string,
-    parent?: Record<string, unknown>,
-    channelName?: string,
-  ) => {
-    const accountDm = asObjectRecord(account.dm);
-    const parentDm = asObjectRecord(parent?.dm);
-    const dmPolicy =
-      (account.dmPolicy as string | undefined) ??
-      (accountDm?.policy as string | undefined) ??
-      (parent?.dmPolicy as string | undefined) ??
-      (parentDm?.policy as string | undefined) ??
-      undefined;
-    const effectiveAllowFrom =
-      (account.allowFrom as Array<string | number> | undefined) ??
-      (parent?.allowFrom as Array<string | number> | undefined) ??
-      (accountDm?.allowFrom as Array<string | number> | undefined) ??
-      (parentDm?.allowFrom as Array<string | number> | undefined) ??
-      undefined;
-
-    warnings.push(
-      ...collectEmptyAllowlistPolicyWarningsForAccount({
-        account,
-        channelName,
-        doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
-        parent,
-        prefix,
-      }),
-    );
-    if (
-      channelName === "telegram" &&
-      ((account.groupPolicy as string | undefined) ??
-        (parent?.groupPolicy as string | undefined) ??
-        undefined) === "allowlist"
-    ) {
-      warnings.push(
-        ...collectTelegramGroupPolicyWarnings({
-          account,
-          dmPolicy,
-          effectiveAllowFrom,
-          parent,
-          prefix,
-        }),
-      );
-    }
-  };
-
-  for (const [channelName, channelConfig] of Object.entries(
-    channels as Record<string, Record<string, unknown>>,
-  )) {
-    if (!channelConfig || typeof channelConfig !== "object") {
-      continue;
-    }
-    checkAccount(channelConfig, `channels.${channelName}`, undefined, channelName);
-
-    const accounts = channelConfig.accounts;
-    if (accounts && typeof accounts === "object") {
-      for (const [accountId, account] of Object.entries(
-        accounts as Record<string, Record<string, unknown>>,
-      )) {
-        if (!account || typeof account !== "object") {
-          continue;
-        }
-        checkAccount(
-          account,
-          `channels.${channelName}.accounts.${accountId}`,
-          channelConfig,
-          channelName,
-        );
-      }
-    }
-  }
-
-  return warnings;
 }
 
 export async function loadAndMaybeMigrateDoctorConfig(params: {
@@ -408,7 +316,29 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       cfg = allowlistRepair.config;
     }
 
-    const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
+    const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(candidate, {
+      doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+      extraWarningsForAccount: ({
+        account,
+        channelName,
+        dmPolicy,
+        effectiveAllowFrom,
+        parent,
+        prefix,
+      }) =>
+        channelName === "telegram" &&
+        ((account.groupPolicy as string | undefined) ??
+          (parent?.groupPolicy as string | undefined) ??
+          undefined) === "allowlist"
+          ? collectTelegramGroupPolicyWarnings({
+              account,
+              dmPolicy,
+              effectiveAllowFrom,
+              parent,
+              prefix,
+            })
+          : [],
+    });
     if (emptyAllowlistWarnings.length > 0) {
       note(
         emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"),
@@ -471,7 +401,29 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       );
     }
 
-    const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
+    const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(candidate, {
+      doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+      extraWarningsForAccount: ({
+        account,
+        channelName,
+        dmPolicy,
+        effectiveAllowFrom,
+        parent,
+        prefix,
+      }) =>
+        channelName === "telegram" &&
+        ((account.groupPolicy as string | undefined) ??
+          (parent?.groupPolicy as string | undefined) ??
+          undefined) === "allowlist"
+          ? collectTelegramGroupPolicyWarnings({
+              account,
+              dmPolicy,
+              effectiveAllowFrom,
+              parent,
+              prefix,
+            })
+          : [],
+    });
     if (emptyAllowlistWarnings.length > 0) {
       note(
         emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"),
