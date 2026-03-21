@@ -292,6 +292,7 @@ describe("sweepCronRunSessions", () => {
       force: true,
     });
 
+    expect(result.swept).toBe(true);
     expect(result.pruned).toBe(1);
 
     const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));

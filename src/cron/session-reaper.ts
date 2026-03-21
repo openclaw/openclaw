@@ -99,7 +99,7 @@ export async function sweepCronRunSessions(params: {
         }
         // For subagent/ACP sessions, only prune completed sessions (endedAt set).
         // Running sessions (no endedAt) are skipped to avoid killing active work.
-        if (!isCronRun && !entry.endedAt) {
+        if (!isCronRun && entry.endedAt == null) {
           continue;
         }
         const ageRef = isCronRun ? (entry.updatedAt ?? 0) : (entry.endedAt ?? entry.updatedAt ?? 0);
@@ -150,7 +150,7 @@ export async function sweepCronRunSessions(params: {
   if (pruned > 0) {
     params.log.info(
       { pruned, retentionMs },
-      `cron-reaper: pruned ${pruned} expired cron run session(s)`,
+      `cron-reaper: pruned ${pruned} expired ephemeral session(s)`,
     );
   }
 
