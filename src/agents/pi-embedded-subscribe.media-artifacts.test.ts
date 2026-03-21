@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
 import {
+  createSubscribedSessionHarness,
   createTextEndBlockReplyHarness,
   emitAssistantTextDelta,
   emitAssistantTextEnd,
@@ -165,5 +166,56 @@ describe("media artifact collect-then-attach", () => {
       .map((c: unknown[]) => c[0] as BlockReplyPayload)
       .filter((p) => p.mediaUrls?.length);
     expect(anyMedia).toHaveLength(0);
+  });
+
+  it("delivers media exactly once: via onBlockReply, not onToolResult", async () => {
+    const onBlockReply = vi.fn();
+    const onToolResult = vi.fn();
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run-once",
+      onBlockReply,
+      onToolResult,
+      blockReplyBreak: "text_end",
+    });
+
+    // Tool produces media via details.media
+    emit({
+      type: "tool_execution_start",
+      toolName: "image_generate",
+      toolCallId: "tc-once",
+      args: {},
+    });
+    await flush();
+    emit({
+      type: "tool_execution_end",
+      toolName: "image_generate",
+      toolCallId: "tc-once",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Generated 1 image." }],
+        details: { media: { mediaUrls: ["/tmp/single.png"] } },
+      },
+    });
+    await flush();
+
+    // onToolResult should NOT have been called with the media
+    const toolResultMediaCalls = onToolResult.mock.calls.filter((c: unknown[]) => {
+      const payload = c[0] as Record<string, unknown>;
+      return payload.mediaUrls || payload.mediaUrl;
+    });
+    expect(toolResultMediaCalls).toHaveLength(0);
+
+    // Assistant reply
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "Here is your image!" });
+    emitAssistantTextEnd({ emit });
+    await flush();
+
+    // onBlockReply should carry the media exactly once
+    const blockMediaCalls = onBlockReply.mock.calls
+      .map((c: unknown[]) => c[0] as BlockReplyPayload)
+      .filter((p) => p.mediaUrls?.includes("/tmp/single.png"));
+    expect(blockMediaCalls).toHaveLength(1);
+    expect(blockMediaCalls[0].text).toBe("Here is your image!");
   });
 });
