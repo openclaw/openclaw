@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveMatrixAccountStorageRoot } from "openclaw/plugin-sdk/matrix";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { resolveMatrixAccountStorageRoot } from "../../../runtime-api.js";
 import { setMatrixRuntime } from "../../runtime.js";
 
 const createBackupArchiveMock = vi.hoisted(() =>

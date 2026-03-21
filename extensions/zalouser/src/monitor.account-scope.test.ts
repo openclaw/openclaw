@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import "./monitor.send-mocks.js";
+import "./zalo-js.test-mocks.js";
 import { __testing } from "./monitor.js";
 import { sendMessageZalouserMock } from "./monitor.send-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";

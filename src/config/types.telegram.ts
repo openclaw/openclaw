@@ -30,6 +30,19 @@ export type TelegramActionConfig = {
   editForumTopic?: boolean;
 };
 
+export type TelegramThreadBindingsConfig = SessionThreadBindingsConfig & {
+  /**
+   * Allow `sessions_spawn({ thread: true })` to auto-create + bind Telegram
+   * topics for subagent sessions. Default: false (opt-in).
+   */
+  spawnSubagentSessions?: boolean;
+  /**
+   * Allow `/acp spawn` to auto-create + bind Telegram topics for ACP
+   * sessions. Default: false (opt-in).
+   */
+  spawnAcpSessions?: boolean;
+};
+
 export type TelegramNetworkConfig = {
   /** Override Node's autoSelectFamily behavior (true = enable, false = disable). */
   autoSelectFamily?: boolean;
@@ -166,7 +179,7 @@ export type TelegramAccountConfig = {
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
   /** Telegram thread/conversation binding overrides. */
-  threadBindings?: SessionThreadBindingsConfig;
+  threadBindings?: TelegramThreadBindingsConfig;
   /**
    * Controls which user reactions trigger notifications:
    * - "off" (default): ignore all reactions

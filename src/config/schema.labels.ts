@@ -467,6 +467,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
   "agents.defaults.compaction.timeoutSeconds": "Compaction Timeout (Seconds)",
   "agents.defaults.compaction.model": "Compaction Model Override",
+  "agents.defaults.compaction.truncateAfterCompaction": "Truncate After Compaction",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
@@ -807,6 +808,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.slack.commands.nativeSkills": "Slack Native Skill Commands",
   "channels.slack.allowBots": "Slack Allow Bot Messages",
   "channels.discord.allowBots": "Discord Allow Bot Messages",
+  "channels.matrix.allowBots": "Matrix Allow Bot Messages",
   "channels.discord.token": "Discord Bot Token",
   "channels.slack.botToken": "Slack Bot Token",
   "channels.slack.appToken": "Slack App Token",

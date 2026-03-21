@@ -1,4 +1,4 @@
-// Public Lobster plugin helpers.
+// Private Lobster plugin helpers for bundled extensions.
 // Keep this surface narrow and limited to the Lobster workflow/tool contract.
 
 export { definePluginEntry } from "./core.js";

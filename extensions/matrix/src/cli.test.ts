@@ -1,6 +1,6 @@
 import { Command } from "commander";
-import { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatZonedTimestamp } from "../runtime-api.js";
 
 const bootstrapMatrixVerificationMock = vi.fn();
 const getMatrixRoomKeyBackupStatusMock = vi.fn();
@@ -20,6 +20,8 @@ const setMatrixSdkConsoleLoggingMock = vi.fn();
 const setMatrixSdkLogModeMock = vi.fn();
 const updateMatrixOwnProfileMock = vi.fn();
 const verifyMatrixRecoveryKeyMock = vi.fn();
+const consoleLogMock = vi.fn();
+const consoleErrorMock = vi.fn();
 
 vi.mock("./matrix/actions/verification.js", () => ({
   bootstrapMatrixVerification: (...args: unknown[]) => bootstrapMatrixVerificationMock(...args),
@@ -86,8 +88,12 @@ describe("matrix CLI verification commands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.exitCode = undefined;
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => consoleLogMock(...args));
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) =>
+      consoleErrorMock(...args),
+    );
+    consoleLogMock.mockReset();
+    consoleErrorMock.mockReset();
     matrixSetupValidateInputMock.mockReturnValue(null);
     matrixSetupApplyAccountConfigMock.mockImplementation(({ cfg }: { cfg: unknown }) => cfg);
     matrixRuntimeLoadConfigMock.mockReturnValue({});
@@ -521,7 +527,7 @@ describe("matrix CLI verification commands", () => {
 
     expect(matrixRuntimeWriteConfigFileMock).toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
-    const jsonOutput = console.log.mock.calls.at(-1)?.[0];
+    const jsonOutput = consoleLogMock.mock.calls.at(-1)?.[0];
     expect(typeof jsonOutput).toBe("string");
     expect(JSON.parse(String(jsonOutput))).toEqual(
       expect.objectContaining({

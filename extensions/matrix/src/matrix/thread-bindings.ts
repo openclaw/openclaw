@@ -6,64 +6,38 @@ import {
   resolveThreadBindingFarewellText,
   unregisterSessionBindingAdapter,
   writeJsonFileAtomically,
-  type BindingTargetKind,
-  type SessionBindingRecord,
 } from "../runtime-api.js";
 import { resolveMatrixStoragePaths } from "./client/storage.js";
 import type { MatrixAuth } from "./client/types.js";
 import type { MatrixClient } from "./sdk.js";
 import { sendMessageMatrix } from "./send.js";
+import {
+  deleteMatrixThreadBindingManagerEntry,
+  getMatrixThreadBindingManager,
+  getMatrixThreadBindingManagerEntry,
+  listBindingsForAccount,
+  removeBindingRecord,
+  resetMatrixThreadBindingsForTests,
+  resolveBindingKey,
+  resolveEffectiveBindingExpiry,
+  setBindingRecord,
+  setMatrixThreadBindingIdleTimeoutBySessionKey,
+  setMatrixThreadBindingManagerEntry,
+  setMatrixThreadBindingMaxAgeBySessionKey,
+  toMatrixBindingTargetKind,
+  toSessionBindingRecord,
+  type MatrixThreadBindingManager,
+  type MatrixThreadBindingRecord,
+} from "./thread-bindings-shared.js";
 
 const STORE_VERSION = 1;
 const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 60_000;
 const TOUCH_PERSIST_DELAY_MS = 30_000;
 
-type MatrixThreadBindingTargetKind = "subagent" | "acp";
-
-type MatrixThreadBindingRecord = {
-  accountId: string;
-  conversationId: string;
-  parentConversationId?: string;
-  targetKind: MatrixThreadBindingTargetKind;
-  targetSessionKey: string;
-  agentId?: string;
-  label?: string;
-  boundBy?: string;
-  boundAt: number;
-  lastActivityAt: number;
-  idleTimeoutMs?: number;
-  maxAgeMs?: number;
-};
-
 type StoredMatrixThreadBindingState = {
   version: number;
   bindings: MatrixThreadBindingRecord[];
 };
-
-export type MatrixThreadBindingManager = {
-  accountId: string;
-  getIdleTimeoutMs: () => number;
-  getMaxAgeMs: () => number;
-  getByConversation: (params: {
-    conversationId: string;
-    parentConversationId?: string;
-  }) => MatrixThreadBindingRecord | undefined;
-  listBySessionKey: (targetSessionKey: string) => MatrixThreadBindingRecord[];
-  listBindings: () => MatrixThreadBindingRecord[];
-  touchBinding: (bindingId: string, at?: number) => MatrixThreadBindingRecord | null;
-  setIdleTimeoutBySessionKey: (params: {
-    targetSessionKey: string;
-    idleTimeoutMs: number;
-  }) => MatrixThreadBindingRecord[];
-  setMaxAgeBySessionKey: (params: {
-    targetSessionKey: string;
-    maxAgeMs: number;
-  }) => MatrixThreadBindingRecord[];
-  stop: () => void;
-};
-
-const MANAGERS_BY_ACCOUNT_ID = new Map<string, MatrixThreadBindingManager>();
-const BINDINGS_BY_ACCOUNT_CONVERSATION = new Map<string, MatrixThreadBindingRecord>();
 
 function normalizeDurationMs(raw: unknown, fallback: number): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
@@ -81,98 +55,11 @@ function normalizeConversationId(raw: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-function resolveBindingKey(params: {
-  accountId: string;
-  conversationId: string;
-  parentConversationId?: string;
-}): string {
-  return `${params.accountId}:${params.parentConversationId?.trim() || "-"}:${params.conversationId}`;
-}
-
-function toSessionBindingTargetKind(raw: MatrixThreadBindingTargetKind): BindingTargetKind {
-  return raw === "subagent" ? "subagent" : "session";
-}
-
-function toMatrixBindingTargetKind(raw: BindingTargetKind): MatrixThreadBindingTargetKind {
-  return raw === "subagent" ? "subagent" : "acp";
-}
-
-function resolveEffectiveBindingExpiry(params: {
-  record: MatrixThreadBindingRecord;
-  defaultIdleTimeoutMs: number;
-  defaultMaxAgeMs: number;
-}): {
-  expiresAt?: number;
-  reason?: "idle-expired" | "max-age-expired";
-} {
-  const idleTimeoutMs =
-    typeof params.record.idleTimeoutMs === "number"
-      ? Math.max(0, Math.floor(params.record.idleTimeoutMs))
-      : params.defaultIdleTimeoutMs;
-  const maxAgeMs =
-    typeof params.record.maxAgeMs === "number"
-      ? Math.max(0, Math.floor(params.record.maxAgeMs))
-      : params.defaultMaxAgeMs;
-  const inactivityExpiresAt =
-    idleTimeoutMs > 0
-      ? Math.max(params.record.lastActivityAt, params.record.boundAt) + idleTimeoutMs
-      : undefined;
-  const maxAgeExpiresAt = maxAgeMs > 0 ? params.record.boundAt + maxAgeMs : undefined;
-
-  if (inactivityExpiresAt != null && maxAgeExpiresAt != null) {
-    return inactivityExpiresAt <= maxAgeExpiresAt
-      ? { expiresAt: inactivityExpiresAt, reason: "idle-expired" }
-      : { expiresAt: maxAgeExpiresAt, reason: "max-age-expired" };
-  }
-  if (inactivityExpiresAt != null) {
-    return { expiresAt: inactivityExpiresAt, reason: "idle-expired" };
-  }
-  if (maxAgeExpiresAt != null) {
-    return { expiresAt: maxAgeExpiresAt, reason: "max-age-expired" };
-  }
-  return {};
-}
-
-function toSessionBindingRecord(
-  record: MatrixThreadBindingRecord,
-  defaults: { idleTimeoutMs: number; maxAgeMs: number },
-): SessionBindingRecord {
-  const lifecycle = resolveEffectiveBindingExpiry({
-    record,
-    defaultIdleTimeoutMs: defaults.idleTimeoutMs,
-    defaultMaxAgeMs: defaults.maxAgeMs,
-  });
-  const idleTimeoutMs =
-    typeof record.idleTimeoutMs === "number" ? record.idleTimeoutMs : defaults.idleTimeoutMs;
-  const maxAgeMs = typeof record.maxAgeMs === "number" ? record.maxAgeMs : defaults.maxAgeMs;
-  return {
-    bindingId: resolveBindingKey(record),
-    targetSessionKey: record.targetSessionKey,
-    targetKind: toSessionBindingTargetKind(record.targetKind),
-    conversation: {
-      channel: "matrix",
-      accountId: record.accountId,
-      conversationId: record.conversationId,
-      parentConversationId: record.parentConversationId,
-    },
-    status: "active",
-    boundAt: record.boundAt,
-    expiresAt: lifecycle.expiresAt,
-    metadata: {
-      agentId: record.agentId,
-      label: record.label,
-      boundBy: record.boundBy,
-      lastActivityAt: record.lastActivityAt,
-      idleTimeoutMs,
-      maxAgeMs,
-    },
-  };
-}
-
 function resolveBindingsPath(params: {
   auth: MatrixAuth;
   accountId: string;
   env?: NodeJS.ProcessEnv;
+  stateDir?: string;
 }): string {
   const storagePaths = resolveMatrixStoragePaths({
     homeserver: params.auth.homeserver,
@@ -181,6 +68,7 @@ function resolveBindingsPath(params: {
     accountId: params.accountId,
     deviceId: params.auth.deviceId,
     env: params.env,
+    stateDir: params.stateDir,
   });
   return path.join(storagePaths.rootDir, "thread-bindings.json");
 }
@@ -247,25 +135,6 @@ async function persistBindingsSnapshot(
   bindings: MatrixThreadBindingRecord[],
 ): Promise<void> {
   await writeJsonFileAtomically(filePath, toStoredBindingsState(bindings));
-}
-
-function setBindingRecord(record: MatrixThreadBindingRecord): void {
-  BINDINGS_BY_ACCOUNT_CONVERSATION.set(resolveBindingKey(record), record);
-}
-
-function removeBindingRecord(record: MatrixThreadBindingRecord): MatrixThreadBindingRecord | null {
-  const key = resolveBindingKey(record);
-  const removed = BINDINGS_BY_ACCOUNT_CONVERSATION.get(key) ?? null;
-  if (removed) {
-    BINDINGS_BY_ACCOUNT_CONVERSATION.delete(key);
-  }
-  return removed;
-}
-
-function listBindingsForAccount(accountId: string): MatrixThreadBindingRecord[] {
-  return [...BINDINGS_BY_ACCOUNT_CONVERSATION.values()].filter(
-    (entry) => entry.accountId === accountId,
-  );
 }
 
 function buildMatrixBindingIntroText(params: {
@@ -341,6 +210,7 @@ export async function createMatrixThreadBindingManager(params: {
   auth: MatrixAuth;
   client: MatrixClient;
   env?: NodeJS.ProcessEnv;
+  stateDir?: string;
   idleTimeoutMs: number;
   maxAgeMs: number;
   enableSweeper?: boolean;
@@ -351,16 +221,19 @@ export async function createMatrixThreadBindingManager(params: {
       `Matrix thread binding account mismatch: requested ${params.accountId}, auth resolved ${params.auth.accountId}`,
     );
   }
-  const existing = MANAGERS_BY_ACCOUNT_ID.get(params.accountId);
-  if (existing) {
-    return existing;
-  }
-
   const filePath = resolveBindingsPath({
     auth: params.auth,
     accountId: params.accountId,
     env: params.env,
+    stateDir: params.stateDir,
   });
+  const existingEntry = getMatrixThreadBindingManagerEntry(params.accountId);
+  if (existingEntry) {
+    if (existingEntry.filePath === filePath) {
+      return existingEntry.manager;
+    }
+    existingEntry.manager.stop();
+  }
   const loaded = await loadBindingsFromDisk(filePath, params.accountId);
   for (const record of loaded) {
     setBindingRecord(record);
@@ -495,11 +368,11 @@ export async function createMatrixThreadBindingManager(params: {
         channel: "matrix",
         accountId: params.accountId,
       });
-      if (MANAGERS_BY_ACCOUNT_ID.get(params.accountId) === manager) {
-        MANAGERS_BY_ACCOUNT_ID.delete(params.accountId);
+      if (getMatrixThreadBindingManagerEntry(params.accountId)?.manager === manager) {
+        deleteMatrixThreadBindingManagerEntry(params.accountId);
       }
       for (const record of listBindingsForAccount(params.accountId)) {
-        BINDINGS_BY_ACCOUNT_CONVERSATION.delete(resolveBindingKey(record));
+        removeBindingRecord(record);
       }
     },
   };
@@ -621,14 +494,6 @@ export async function createMatrixThreadBindingManager(params: {
       });
       return record ? toSessionBindingRecord(record, defaults) : null;
     },
-    setIdleTimeoutBySession: ({ targetSessionKey, idleTimeoutMs }) =>
-      manager
-        .setIdleTimeoutBySessionKey({ targetSessionKey, idleTimeoutMs })
-        .map((record) => toSessionBindingRecord(record, defaults)),
-    setMaxAgeBySession: ({ targetSessionKey, maxAgeMs }) =>
-      manager
-        .setMaxAgeBySessionKey({ targetSessionKey, maxAgeMs })
-        .map((record) => toSessionBindingRecord(record, defaults)),
     touch: (bindingId, at) => {
       manager.touchBinding(bindingId, at);
     },
@@ -702,54 +567,15 @@ export async function createMatrixThreadBindingManager(params: {
     sweepTimer.unref?.();
   }
 
-  MANAGERS_BY_ACCOUNT_ID.set(params.accountId, manager);
+  setMatrixThreadBindingManagerEntry(params.accountId, {
+    filePath,
+    manager,
+  });
   return manager;
 }
-
-export function getMatrixThreadBindingManager(
-  accountId: string,
-): MatrixThreadBindingManager | null {
-  return MANAGERS_BY_ACCOUNT_ID.get(accountId) ?? null;
-}
-
-export function setMatrixThreadBindingIdleTimeoutBySessionKey(params: {
-  accountId: string;
-  targetSessionKey: string;
-  idleTimeoutMs: number;
-}): SessionBindingRecord[] {
-  const manager = MANAGERS_BY_ACCOUNT_ID.get(params.accountId);
-  if (!manager) {
-    return [];
-  }
-  return manager.setIdleTimeoutBySessionKey(params).map((record) =>
-    toSessionBindingRecord(record, {
-      idleTimeoutMs: manager.getIdleTimeoutMs(),
-      maxAgeMs: manager.getMaxAgeMs(),
-    }),
-  );
-}
-
-export function setMatrixThreadBindingMaxAgeBySessionKey(params: {
-  accountId: string;
-  targetSessionKey: string;
-  maxAgeMs: number;
-}): SessionBindingRecord[] {
-  const manager = MANAGERS_BY_ACCOUNT_ID.get(params.accountId);
-  if (!manager) {
-    return [];
-  }
-  return manager.setMaxAgeBySessionKey(params).map((record) =>
-    toSessionBindingRecord(record, {
-      idleTimeoutMs: manager.getIdleTimeoutMs(),
-      maxAgeMs: manager.getMaxAgeMs(),
-    }),
-  );
-}
-
-export function resetMatrixThreadBindingsForTests(): void {
-  for (const manager of MANAGERS_BY_ACCOUNT_ID.values()) {
-    manager.stop();
-  }
-  MANAGERS_BY_ACCOUNT_ID.clear();
-  BINDINGS_BY_ACCOUNT_CONVERSATION.clear();
-}
+export {
+  getMatrixThreadBindingManager,
+  resetMatrixThreadBindingsForTests,
+  setMatrixThreadBindingIdleTimeoutBySessionKey,
+  setMatrixThreadBindingMaxAgeBySessionKey,
+};
