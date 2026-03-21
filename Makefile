@@ -7,7 +7,7 @@ CONTAINER        = openclaw-gateway
 GATEWAY_PORT    ?= 18789
 GATEWAY_URL     ?= http://localhost:$(GATEWAY_PORT)
 
-.PHONY: build build-base build-tony build-sandbox build-sandbox-tony up down restart restart-tony logs status clean
+.PHONY: build build-base build-tony build-sandbox build-sandbox-tony up down dev-gateway restart restart-tony logs status clean
 
 # Full rebuild — upstream changed (rare)
 build: build-base build-sandbox build-tony build-sandbox-tony
@@ -35,6 +35,10 @@ up:
 	docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
 	@sleep 2 && curl -sf $(GATEWAY_URL)/healthz \
 		&& echo "  gateway UP" || echo "  check: make logs"
+
+# Fast local dev loop — host watcher for TypeScript and gateway edits
+dev-gateway:
+	pnpm gateway:watch
 
 # Soft restart — hot-swap container only, memory preserved (daily use)
 restart-tony: build-tony

@@ -13,13 +13,13 @@ If you are setting up for the first time, start with [Getting Started](/start/ge
 For onboarding details, see [Onboarding (CLI)](/start/wizard).
 </Note>
 
-Last updated: 2026-01-01
+Last updated: 2026-03-20
 
 ## TL;DR
 
 - **Tailoring lives outside the repo:** `~/.openclaw/workspace` (workspace) + `~/.openclaw/openclaw.json` (config).
 - **Stable workflow:** install the macOS app; let it run the bundled Gateway.
-- **Bleeding edge workflow:** run the Gateway yourself via `pnpm gateway:watch`, then let the macOS app attach in Local mode.
+- **Bleeding edge workflow:** run the Gateway yourself via `make dev-gateway` after a one-time `pnpm install`, then let the macOS app attach in Local mode.
 
 ## Prereqs (from source)
 
@@ -93,11 +93,12 @@ If you also want the macOS app on the bleeding edge:
 
 ```bash
 pnpm install
-pnpm gateway:watch
+make dev-gateway
 ```
 
-`gateway:watch` runs the gateway in watch mode and reloads on relevant source,
-config, and bundled-plugin metadata changes.
+`make dev-gateway` runs `pnpm gateway:watch` from the repo root. The watcher
+reloads on relevant source, config, and bundled-plugin metadata changes without
+rebuilding the Docker image.
 
 ### 2) Point the macOS app at your running Gateway
 
@@ -115,8 +116,18 @@ In **OpenClaw.app**:
 openclaw health
 ```
 
-### Common footguns
+### Rebuild matrix
 
+- TypeScript and gateway logic changes: `make dev-gateway`
+- `package.json`, `pnpm-lock.yaml`, base-image, or sandbox changes: `make restart`
+- `Dockerfile.tony` or wrapper-only tooling changes: `make restart-tony`
+
+### Troubleshooting
+
+- **First run fails with missing modules:** run `pnpm install` once from the repo root, then rerun `make dev-gateway`.
+- **Need to confirm the watcher restarted cleanly:** save a watched file and keep `openclaw health` green while the terminal respawns the gateway process.
+- **Changed dependencies or baked image inputs:** stop the watcher and use `make restart`.
+- **Changed only `Dockerfile.tony`:** use `make restart-tony`.
 - **Wrong port:** Gateway WS defaults to `ws://127.0.0.1:18789`; keep app + CLI on the same port.
 - **Where state lives:**
   - Credentials: `~/.openclaw/credentials/`
@@ -142,7 +153,7 @@ Use this when debugging auth or deciding what to back up:
 ## Updating (without wrecking your setup)
 
 - Keep `~/.openclaw/workspace` and `~/.openclaw/` as “your stuff”; don’t put personal prompts/config into the `openclaw` repo.
-- Updating source: `git pull` + `pnpm install` (when lockfile changed) + keep using `pnpm gateway:watch`.
+- Updating source: `git pull` + `pnpm install` (when lockfile changed) + keep using `make dev-gateway` for watched gateway edits. If image inputs changed, use `make restart`.
 
 ## Linux (systemd user service)
 

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveStateDir } from "../../config/paths.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import type { SandboxDockerConfig } from "./types.js";
 
@@ -20,6 +21,7 @@ type RuntimePathMapDocument = {
 };
 
 let cachedRuntimePathMap: RuntimePathMapEntry[] | null | undefined;
+let cachedRuntimePathMapSource: string | null | undefined;
 
 function normalizeAbsolutePosix(value: string): string {
   return path.posix.normalize(value.trim()) || "/";
@@ -66,24 +68,33 @@ function loadRuntimePathMapEntriesFromDocument(
 }
 
 export function loadRuntimePathMapEntries(
-  filePath: string | undefined = process.env.OPENCLAW_LOCAL_PATH_MAP?.trim() || undefined,
+  filePath: string | undefined = process.env.OPENCLAW_LOCAL_PATH_MAP?.trim() ||
+    path.join(resolveStateDir(process.env), "config", "runtime-path-map.json"),
 ): RuntimePathMapEntry[] {
-  if (cachedRuntimePathMap !== undefined) {
+  const normalizedFilePath = filePath?.trim() || undefined;
+  const cacheKey = normalizedFilePath ?? null;
+  if (
+    cachedRuntimePathMap !== undefined &&
+    cachedRuntimePathMapSource !== undefined &&
+    cachedRuntimePathMapSource === cacheKey
+  ) {
     return cachedRuntimePathMap ?? [];
   }
-  if (!filePath) {
+  if (!normalizedFilePath) {
     cachedRuntimePathMap = null;
+    cachedRuntimePathMapSource = cacheKey;
     return [];
   }
   try {
-    const raw = fs.readFileSync(filePath, "utf-8");
+    const raw = fs.readFileSync(normalizedFilePath, "utf-8");
     cachedRuntimePathMap = loadRuntimePathMapEntriesFromDocument(
       JSON.parse(raw) as RuntimePathMapDocument,
-      filePath,
+      normalizedFilePath,
     );
   } catch {
     cachedRuntimePathMap = null;
   }
+  cachedRuntimePathMapSource = cacheKey;
   return cachedRuntimePathMap ?? [];
 }
 
@@ -176,6 +187,7 @@ export function translateSandboxDockerConfigToHost(
 
 export function __resetRuntimePathMapCacheForTests(): void {
   cachedRuntimePathMap = undefined;
+  cachedRuntimePathMapSource = undefined;
 }
 
 export function __loadRuntimePathMapEntriesFromDocumentForTests(

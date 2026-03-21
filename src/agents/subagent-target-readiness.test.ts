@@ -70,6 +70,53 @@ describe("subagent target readiness", () => {
     });
   });
 
+  it("uses the canonical state-dir runtime path map when OPENCLAW_LOCAL_PATH_MAP is unset", async () => {
+    await withStateDirEnv("subagent-target-default-runtime-map-", async ({ stateDir }) => {
+      const runtimePathMapPath = path.join(stateDir, "config", "runtime-path-map.json");
+      await fs.mkdir(path.dirname(runtimePathMapPath), { recursive: true });
+      await fs.writeFile(
+        runtimePathMapPath,
+        JSON.stringify(
+          {
+            container_host_roots: [{ container: "/agent-homes/scout", host: "workspace-scout" }],
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const previous = process.env.OPENCLAW_LOCAL_PATH_MAP;
+      delete process.env.OPENCLAW_LOCAL_PATH_MAP;
+      __resetRuntimePathMapCacheForTests();
+
+      try {
+        const hostWorkspaceDir = path.join(stateDir, "workspace-scout");
+        await writePromptPack(hostWorkspaceDir);
+
+        const readiness = resolveConfiguredSubagentTargetReadiness(
+          {
+            agents: {
+              list: [{ id: "scout", workspace: "/agent-homes/scout" }],
+            },
+          },
+          "scout",
+        );
+
+        expect(readiness.status).toBe("ready");
+        expect(readiness.runtimeMapped).toBe(true);
+        expect(readiness.hostWorkspaceDir).toBe(hostWorkspaceDir);
+      } finally {
+        __resetRuntimePathMapCacheForTests();
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_LOCAL_PATH_MAP;
+        } else {
+          process.env.OPENCLAW_LOCAL_PATH_MAP = previous;
+        }
+      }
+    });
+  });
+
   it("classifies configured workspaces with missing prompt packs as missing_workspace", async () => {
     await withStateDirEnv("subagent-target-missing-workspace-", async ({ stateDir }) => {
       await withRuntimePathMap(
