@@ -155,7 +155,7 @@ describe("loginOpenAICodexOAuth", () => {
 
     expect(result).toEqual(creds);
     expect(prompter.text).toHaveBeenCalledWith({
-      message: "Paste the redirect URL",
+      message: "Paste the authorization code (or full redirect URL):",
       validate: expect.any(Function),
     });
   });

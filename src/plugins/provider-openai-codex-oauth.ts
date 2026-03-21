@@ -7,6 +7,8 @@ import {
   runOpenAIOAuthTlsPreflight,
 } from "./provider-openai-codex-oauth-tls.js";
 
+const manualInputPromptMessage = "Paste the authorization code (or full redirect URL):";
+
 export async function loginOpenAICodexOAuth(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -47,6 +49,7 @@ export async function loginOpenAICodexOAuth(params: {
       spin,
       openUrl,
       localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser…",
+      manualPromptMessage: manualInputPromptMessage,
     });
 
     const creds = await loginOpenAICodex({
@@ -55,7 +58,7 @@ export async function loginOpenAICodexOAuth(params: {
       onManualCodeInput: isRemote
         ? async () =>
             await onPrompt({
-              message: "Paste the authorization code (or full redirect URL):",
+              message: manualInputPromptMessage,
             })
         : undefined,
       onProgress: (msg: string) => spin.update(msg),
