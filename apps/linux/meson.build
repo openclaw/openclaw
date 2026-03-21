@@ -19,6 +19,7 @@ gtk3_dep = dependency('gtk+-3.0')
 json_glib_dep = dependency('json-glib-1.0')
 gio_dep = dependency('gio-2.0')
 gio_unix_dep = dependency('gio-unix-2.0')
+glib_dep = dependency('glib-2.0')
 
 # Define LIBEXEC_PATH for the C compiler so tray.c knows where the installed helper lives
 libexec_path = get_option('prefix') / get_option('libexecdir') / meson.project_name()
@@ -54,3 +55,19 @@ executable('openclaw-tray-helper',
 
 install_data('ai.openclaw.Companion.desktop',
   install_dir : get_option('datadir') / 'applications')
+
+# Local Tests
+test_state_exe = executable('test_state',
+  ['tests/test_state.c', 'src/state.c'],
+  dependencies : [glib_dep, gio_dep])
+test('state', test_state_exe)
+
+test_systemd_exe = executable('test_systemd_helpers',
+  ['tests/test_systemd_helpers.c', 'src/systemd.c'],
+  dependencies : [glib_dep, gio_dep, gio_unix_dep])
+test('systemd_helpers', test_systemd_exe)
+
+test_health_exe = executable('test_health_parse',
+  ['tests/test_health_parse.c', 'src/health.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep])
+test('health_parse', test_health_exe)
