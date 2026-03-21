@@ -4,6 +4,7 @@ import { onAgentEvent } from "../../infra/agent-events.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import * as execModule from "../../process/exec.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { VERSION, resolveUsableRuntimeVersion } from "../../version.js";
 import {
   clearGatewaySubagentRuntime,
   createPluginRuntime,
@@ -90,6 +91,11 @@ describe("plugin runtime command execution", () => {
     expect(typeof runtime.agent.runEmbeddedPiAgent).toBe("function");
     expect(typeof runtime.agent.resolveAgentDir).toBe("function");
     expect(typeof runtime.agent.session.resolveSessionFilePath).toBe("function");
+  });
+
+  it("exposes runtime.version from the shared version resolver", () => {
+    const runtime = createPluginRuntime();
+    expect(runtime.version).toBe(resolveUsableRuntimeVersion(VERSION) ?? "unknown");
   });
 
   it("exposes runtime.modelAuth with getApiKeyForModel and resolveApiKeyForProvider", () => {

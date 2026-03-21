@@ -53,6 +53,15 @@ describe("version resolution", () => {
     });
   });
 
+  it("resolves package version from a shared dist root chunk module URL", async () => {
+    await withTempDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "openclaw", version: "7.8.9" });
+      const moduleUrl = await ensureModuleFixture(root, "dist/chunk.js");
+      expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBe("7.8.9");
+      expect(resolveVersionFromModuleUrl(moduleUrl)).toBe("7.8.9");
+    });
+  });
+
   it("ignores unrelated nearby package.json files", async () => {
     await withTempDir(async (root) => {
       await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2.3.4" });
