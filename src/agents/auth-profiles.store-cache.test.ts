@@ -97,8 +97,6 @@ describe("auth profile store cache", () => {
 
       ensureAuthProfileStore(agentDir);
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
       fs.writeFileSync(
         authPath,
         `${JSON.stringify(
@@ -117,6 +115,8 @@ describe("auth profile store cache", () => {
         )}\n`,
         "utf8",
       );
+      const bumpedMtime = new Date(Date.now() + 2_000);
+      fs.utimesSync(authPath, bumpedMtime, bumpedMtime);
 
       const reloaded = ensureAuthProfileStore(agentDir);
 
