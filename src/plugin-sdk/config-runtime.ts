@@ -73,17 +73,16 @@ export type {
   TelegramTopicConfig,
   TtsConfig,
 } from "../config/types.js";
+export { resolveStorePath } from "../config/sessions/paths.js";
+export { resolveSessionKey } from "../config/sessions/session-key.js";
 export {
   loadSessionStore,
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
-  resolveSessionKey,
-  resolveStorePath,
+  resolveSessionStoreEntry,
   updateLastRoute,
   updateSessionStore,
-  type SessionResetMode,
-  type SessionScope,
-} from "../config/sessions.js";
+} from "../config/sessions/store.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export {
   evaluateSessionFreshness,
@@ -91,6 +90,7 @@ export {
   resolveSessionResetPolicy,
   resolveSessionResetType,
   resolveThreadFlag,
+  type SessionResetMode,
 } from "../config/sessions/reset.js";
-export { resolveSessionStoreEntry } from "../config/sessions/store.js";
+export type { SessionScope } from "../config/sessions/types.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
