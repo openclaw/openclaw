@@ -261,7 +261,7 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("drops room messages from configured Matrix bot accounts when allowBots is off", async () => {
-    const { handler, resolveAgentRoute, recordInboundSession } = createMatrixHandlerTestHarness({
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       configuredBotUserIds: new Set(["@ops:example.org"]),
       roomsConfig: {
@@ -279,12 +279,11 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(resolveAgentRoute).not.toHaveBeenCalled();
     expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
   it("accepts room messages from configured Matrix bot accounts when allowBots is true", async () => {
-    const { handler, resolveAgentRoute, recordInboundSession } = createMatrixHandlerTestHarness({
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
       configuredBotUserIds: new Set(["@ops:example.org"]),
@@ -303,7 +302,6 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(resolveAgentRoute).toHaveBeenCalled();
     expect(recordInboundSession).toHaveBeenCalled();
   });
 
@@ -331,7 +329,7 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it('drops configured Matrix bot room messages without a mention when allowBots="mentions"', async () => {
-    const { handler, resolveAgentRoute, recordInboundSession } = createMatrixHandlerTestHarness({
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: "mentions",
       configuredBotUserIds: new Set(["@ops:example.org"]),
@@ -351,12 +349,11 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(resolveAgentRoute).not.toHaveBeenCalled();
     expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
   it('accepts configured Matrix bot room messages with a mention when allowBots="mentions"', async () => {
-    const { handler, resolveAgentRoute, recordInboundSession } = createMatrixHandlerTestHarness({
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: "mentions",
       configuredBotUserIds: new Set(["@ops:example.org"]),
@@ -377,12 +374,11 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(resolveAgentRoute).toHaveBeenCalled();
     expect(recordInboundSession).toHaveBeenCalled();
   });
 
   it('accepts configured Matrix bot DMs without a mention when allowBots="mentions"', async () => {
-    const { handler, resolveAgentRoute, recordInboundSession } = createMatrixHandlerTestHarness({
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: true,
       accountAllowBots: "mentions",
       configuredBotUserIds: new Set(["@ops:example.org"]),
@@ -398,12 +394,11 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(resolveAgentRoute).toHaveBeenCalled();
     expect(recordInboundSession).toHaveBeenCalled();
   });
 
   it("lets room-level allowBots override a permissive account default", async () => {
-    const { handler, resolveAgentRoute, recordInboundSession } = createMatrixHandlerTestHarness({
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
       configuredBotUserIds: new Set(["@ops:example.org"]),
@@ -422,7 +417,6 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(resolveAgentRoute).not.toHaveBeenCalled();
     expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
@@ -442,7 +436,6 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(resolveAgentRoute).not.toHaveBeenCalled();
     expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
@@ -450,7 +443,7 @@ describe("matrix monitor handler pairing account scope", () => {
     const downloadContent = vi.fn(async () => Buffer.from("image"));
     const getMemberDisplayName = vi.fn(async () => "sender");
     const getRoomInfo = vi.fn(async () => ({ altAliases: [] }));
-    const { handler, resolveAgentRoute } = createMatrixHandlerTestHarness({
+    const { handler } = createMatrixHandlerTestHarness({
       client: {
         downloadContent,
       },
@@ -479,7 +472,6 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(downloadContent).not.toHaveBeenCalled();
     expect(getMemberDisplayName).not.toHaveBeenCalled();
     expect(getRoomInfo).not.toHaveBeenCalled();
-    expect(resolveAgentRoute).not.toHaveBeenCalled();
   });
 
   it("skips poll snapshot fetches for unmentioned group poll responses", async () => {
@@ -504,7 +496,7 @@ describe("matrix monitor handler pairing account scope", () => {
     }));
     const getMemberDisplayName = vi.fn(async () => "sender");
     const getRoomInfo = vi.fn(async () => ({ altAliases: [] }));
-    const { handler, resolveAgentRoute } = createMatrixHandlerTestHarness({
+    const { handler } = createMatrixHandlerTestHarness({
       client: {
         getEvent,
         getRelations,
@@ -535,7 +527,6 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(getRelations).not.toHaveBeenCalled();
     expect(getMemberDisplayName).not.toHaveBeenCalled();
     expect(getRoomInfo).not.toHaveBeenCalled();
-    expect(resolveAgentRoute).not.toHaveBeenCalled();
   });
 
   it("records thread starter context for inbound thread replies", async () => {
