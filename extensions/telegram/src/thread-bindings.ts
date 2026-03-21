@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveThreadBindingConversationIdFromBindingId } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveThreadBindingEffectiveExpiresAt } from "openclaw/plugin-sdk/channel-runtime";
-import { formatThreadBindingDurationLabel } from "openclaw/plugin-sdk/channel-runtime";
 import {
+  formatThreadBindingDurationLabel,
   registerSessionBindingAdapter,
+  resolveThreadBindingConversationIdFromBindingId,
+  resolveThreadBindingEffectiveExpiresAt,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
   type SessionBindingRecord,

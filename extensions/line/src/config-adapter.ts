@@ -5,7 +5,7 @@ import {
   resolveLineAccount,
   type OpenClawConfig,
   type ResolvedLineAccount,
-} from "openclaw/plugin-sdk/line-core";
+} from "../runtime-api.js";
 
 export function normalizeLineAllowFrom(entry: string): string {
   return entry.replace(/^line:(?:user:)?/i, "");

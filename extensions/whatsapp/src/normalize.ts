@@ -4,4 +4,4 @@ export {
   normalizeWhatsAppAllowFromEntries,
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "./runtime-api.js";

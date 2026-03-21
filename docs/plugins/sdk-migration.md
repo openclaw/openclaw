@@ -1,144 +1,168 @@
 ---
 title: "Plugin SDK Migration"
-summary: "Migrate from openclaw/plugin-sdk/compat to focused subpath imports"
+sidebarTitle: "SDK Migration"
+summary: "Migrate from the legacy backwards-compatibility layer to the modern plugin SDK"
 read_when:
   - You see the OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED warning
-  - You are updating a plugin from the monolithic plugin-sdk import to scoped subpaths
+  - You see the OPENCLAW_EXTENSION_API_DEPRECATED warning
+  - You are updating a plugin to the modern plugin architecture
   - You maintain an external OpenClaw plugin
 ---
 
 # Plugin SDK Migration
 
-OpenClaw is migrating from a single monolithic `openclaw/plugin-sdk/compat` barrel
-to **focused subpath imports** (`openclaw/plugin-sdk/<subpath>`). This page explains
-what changed, why, and how to migrate.
+OpenClaw has moved from a broad backwards-compatibility layer to a modern plugin
+architecture with focused, documented imports. If your plugin was built before
+the new architecture, this guide helps you migrate.
 
-## Why this change
+## What is changing
 
-The monolithic compat barrel re-exported everything from a single entry point.
-This caused:
+The old plugin system provided two wide-open surfaces that let plugins import
+anything they needed from a single entry point:
 
-- **Slow startup**: importing one helper pulled in dozens of unrelated modules.
-- **Circular dependency risk**: broad re-exports made it easy to create import cycles.
-- **Unclear API surface**: no way to tell which exports were stable vs internal.
+- **`openclaw/plugin-sdk/compat`** — a single import that re-exported dozens of
+  helpers. It was introduced to keep older hook-based plugins working while the
+  new plugin architecture was being built.
+- **`openclaw/extension-api`** — a bridge that gave plugins direct access to
+  host-side helpers like the embedded agent runner.
 
-Focused subpaths fix all three: each subpath is a small, self-contained module
-with a clear purpose.
+Both surfaces are now **deprecated**. They still work at runtime, but new
+plugins must not use them, and existing plugins should migrate before the next
+major release removes them.
 
-## What triggers the warning
+<Warning>
+  The backwards-compatibility layer will be removed in a future major release.
+  Plugins that still import from these surfaces will break when that happens.
+</Warning>
 
-If your plugin imports from the compat barrel, you will see:
+## Why this changed
 
-```
-[OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED] Warning: openclaw/plugin-sdk/compat is
-deprecated for new plugins. Migrate to focused openclaw/plugin-sdk/<subpath> imports.
-```
+The old approach caused problems:
 
-The compat barrel still works at runtime. This is a deprecation warning, not an
-error. But new plugins **must not** use it, and existing plugins should migrate
-before compat is removed.
+- **Slow startup** — importing one helper loaded dozens of unrelated modules
+- **Circular dependencies** — broad re-exports made it easy to create import cycles
+- **Unclear API surface** — no way to tell which exports were stable vs internal
+
+The modern plugin SDK fixes this: each import path (`openclaw/plugin-sdk/\<subpath\>`)
+is a small, self-contained module with a clear purpose and documented contract.
 
 ## How to migrate
 
-### Step 1: Find compat imports
+<Steps>
+  <Step title="Find deprecated imports">
+    Search your plugin for imports from either deprecated surface:
 
-Search your extension for imports from the compat path:
+    ```bash
+    grep -r "plugin-sdk/compat" my-plugin/
+    grep -r "openclaw/extension-api" my-plugin/
+    ```
 
-```bash
-grep -r "plugin-sdk/compat" extensions/my-plugin/
-```
+  </Step>
 
-### Step 2: Replace with focused subpaths
+  <Step title="Replace with focused imports">
+    Each export from the old surface maps to a specific modern import path:
 
-Each export from compat maps to a specific subpath. Replace the import source:
+    ```typescript
+    // Before (deprecated backwards-compatibility layer)
+    import {
+      createChannelReplyPipeline,
+      createPluginRuntimeStore,
+      resolveControlCommandGate,
+    } from "openclaw/plugin-sdk/compat";
 
-```typescript
-// Before (compat barrel)
-import {
-  createChannelReplyPipeline,
-  createPluginRuntimeStore,
-  resolveControlCommandGate,
-} from "openclaw/plugin-sdk/compat";
+    // After (modern focused imports)
+    import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+    import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+    import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+    ```
 
-// After (focused subpaths)
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-```
+    For host-side helpers, use the injected plugin runtime instead of importing
+    directly:
 
-### Step 3: Verify
+    ```typescript
+    // Before (deprecated extension-api bridge)
+    import { runEmbeddedPiAgent } from "openclaw/extension-api";
+    const result = await runEmbeddedPiAgent({ sessionId, prompt });
 
-Run the build and tests:
+    // After (injected runtime)
+    const result = await api.runtime.agent.runEmbeddedPiAgent({ sessionId, prompt });
+    ```
 
-```bash
-pnpm build
-pnpm test -- extensions/my-plugin/
-```
+    The same pattern applies to other legacy bridge helpers:
 
-## Subpath reference
+    | Old import | Modern equivalent |
+    | --- | --- |
+    | `resolveAgentDir` | `api.runtime.agent.resolveAgentDir` |
+    | `resolveAgentWorkspaceDir` | `api.runtime.agent.resolveAgentWorkspaceDir` |
+    | `resolveAgentIdentity` | `api.runtime.agent.resolveAgentIdentity` |
+    | `resolveThinkingDefault` | `api.runtime.agent.resolveThinkingDefault` |
+    | `resolveAgentTimeoutMs` | `api.runtime.agent.resolveAgentTimeoutMs` |
+    | `ensureAgentWorkspace` | `api.runtime.agent.ensureAgentWorkspace` |
+    | session store helpers | `api.runtime.agent.session.*` |
 
-| Subpath                             | Purpose                              | Key exports                                                            |
-| ----------------------------------- | ------------------------------------ | ---------------------------------------------------------------------- |
-| `plugin-sdk/core`                   | Plugin entry definitions, base types | `defineChannelPluginEntry`, `definePluginEntry`                        |
-| `plugin-sdk/channel-setup`          | Setup wizard adapters                | `createOptionalChannelSetupSurface`                                    |
-| `plugin-sdk/channel-pairing`        | DM pairing primitives                | `createChannelPairingController`                                       |
-| `plugin-sdk/channel-reply-pipeline` | Reply prefix + typing wiring         | `createChannelReplyPipeline`                                           |
-| `plugin-sdk/channel-config-helpers` | Config adapter factories             | `createHybridChannelConfigAdapter`, `createScopedChannelConfigAdapter` |
-| `plugin-sdk/channel-config-schema`  | Config schema builders               | Channel config schema types                                            |
-| `plugin-sdk/channel-policy`         | Group/DM policy resolution           | `resolveChannelGroupRequireMention`                                    |
-| `plugin-sdk/channel-lifecycle`      | Account status tracking              | `createAccountStatusSink`                                              |
-| `plugin-sdk/channel-runtime`        | Runtime wiring helpers               | Channel runtime utilities                                              |
-| `plugin-sdk/channel-send-result`    | Send result types                    | Reply result types                                                     |
-| `plugin-sdk/runtime-store`          | Persistent plugin storage            | `createPluginRuntimeStore`                                             |
-| `plugin-sdk/allow-from`             | Allowlist formatting                 | `formatAllowFromLowercase`, `formatNormalizedAllowFromEntries`         |
-| `plugin-sdk/allowlist-resolution`   | Allowlist input mapping              | `mapAllowlistResolutionInputs`                                         |
-| `plugin-sdk/command-auth`           | Command gating                       | `resolveControlCommandGate`                                            |
-| `plugin-sdk/secret-input`           | Secret input parsing                 | Secret input helpers                                                   |
-| `plugin-sdk/webhook-ingress`        | Webhook request helpers              | Webhook target utilities                                               |
-| `plugin-sdk/reply-payload`          | Message reply types                  | Reply payload types                                                    |
-| `plugin-sdk/provider-onboard`       | Provider onboarding patches          | Onboarding config helpers                                              |
-| `plugin-sdk/keyed-async-queue`      | Ordered async queue                  | `KeyedAsyncQueue`                                                      |
-| `plugin-sdk/testing`                | Test utilities                       | Test helpers and mocks                                                 |
+  </Step>
 
-Use the narrowest subpath that has what you need. If you cannot find an export,
+  <Step title="Build and test">
+    ```bash
+    pnpm build
+    pnpm test -- my-plugin/
+    ```
+  </Step>
+</Steps>
+
+## Import path reference
+
+<Accordion title="Full import path table">
+  | Import path | Purpose | Key exports |
+  | --- | --- | --- |
+  | `plugin-sdk/core` | Plugin entry definitions, base types | `defineChannelPluginEntry`, `definePluginEntry` |
+  | `plugin-sdk/channel-setup` | Setup wizard adapters | `createOptionalChannelSetupSurface` |
+  | `plugin-sdk/channel-pairing` | DM pairing primitives | `createChannelPairingController` |
+  | `plugin-sdk/channel-reply-pipeline` | Reply prefix + typing wiring | `createChannelReplyPipeline` |
+  | `plugin-sdk/channel-config-helpers` | Config adapter factories | `createHybridChannelConfigAdapter` |
+  | `plugin-sdk/channel-config-schema` | Config schema builders | Channel config schema types |
+  | `plugin-sdk/channel-policy` | Group/DM policy resolution | `resolveChannelGroupRequireMention` |
+  | `plugin-sdk/channel-lifecycle` | Account status tracking | `createAccountStatusSink` |
+  | `plugin-sdk/channel-runtime` | Runtime wiring helpers | Channel runtime utilities |
+  | `plugin-sdk/channel-send-result` | Send result types | Reply result types |
+  | `plugin-sdk/runtime-store` | Persistent plugin storage | `createPluginRuntimeStore` |
+  | `plugin-sdk/allow-from` | Allowlist formatting | `formatAllowFromLowercase` |
+  | `plugin-sdk/allowlist-resolution` | Allowlist input mapping | `mapAllowlistResolutionInputs` |
+  | `plugin-sdk/command-auth` | Command gating | `resolveControlCommandGate` |
+  | `plugin-sdk/secret-input` | Secret input parsing | Secret input helpers |
+  | `plugin-sdk/webhook-ingress` | Webhook request helpers | Webhook target utilities |
+  | `plugin-sdk/reply-payload` | Message reply types | Reply payload types |
+  | `plugin-sdk/provider-onboard` | Provider onboarding patches | Onboarding config helpers |
+  | `plugin-sdk/keyed-async-queue` | Ordered async queue | `KeyedAsyncQueue` |
+  | `plugin-sdk/testing` | Test utilities | Test helpers and mocks |
+</Accordion>
+
+Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask in Discord.
 
-## Compat barrel removal timeline
+## Removal timeline
 
-- **Now**: compat barrel emits a deprecation warning at runtime.
-- **Next major release**: compat barrel will be removed. Plugins still using it will
-  fail to import.
+| When                   | What happens                                                            |
+| ---------------------- | ----------------------------------------------------------------------- |
+| **Now**                | Deprecated surfaces emit runtime warnings                               |
+| **Next major release** | Deprecated surfaces will be removed; plugins still using them will fail |
 
-Bundled plugins (under `extensions/`) have already been migrated. External plugins
-should migrate before the next major release.
+All core plugins have already been migrated. External plugins should migrate
+before the next major release.
 
-## Suppressing the warning temporarily
+## Suppressing the warnings temporarily
 
-If you need to suppress the warning while migrating:
+Set these environment variables while you work on migrating:
 
 ```bash
 OPENCLAW_SUPPRESS_PLUGIN_SDK_COMPAT_WARNING=1 openclaw gateway run
+OPENCLAW_SUPPRESS_EXTENSION_API_WARNING=1 openclaw gateway run
 ```
 
 This is a temporary escape hatch, not a permanent solution.
 
-## Internal barrel pattern
-
-Within your extension, use local barrel files (`api.ts`, `runtime-api.ts`) for
-internal code sharing instead of importing through the plugin SDK:
-
-```typescript
-// extensions/my-plugin/api.ts — public contract for this extension
-export { MyConfig } from "./src/config.js";
-export { MyRuntime } from "./src/runtime.js";
-```
-
-Never import your own extension back through `openclaw/plugin-sdk/<your-extension>`
-from production files. That path is for external consumers only. See
-[Building Extensions](/plugins/building-extensions#step-4-use-local-barrels-for-internal-imports).
-
 ## Related
 
-- [Building Extensions](/plugins/building-extensions)
-- [Plugin Architecture](/plugins/architecture)
+- [Building Plugins](/plugins/building-plugins)
+- [Plugin Internals](/plugins/architecture)
 - [Plugin Manifest](/plugins/manifest)
