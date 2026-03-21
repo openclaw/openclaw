@@ -61,9 +61,12 @@ Docs: https://docs.openclaw.ai
 - Models/GitHub Copilot: allow forward-compat dynamic model ids without code updates, while preserving configured provider and per-model overrides for those synthetic models. (#51325) Thanks @fuller-stack-dev.
 - Agents/compaction: notify users when followup auto-compaction starts and finishes, keeping those notices out of TTS and preserving reply threading for the real assistant reply. (#38805) Thanks @zidongdesign.
 - Models/OpenAI: switch the default OpenAI setup model to `openai/gpt-5.4`, keep Codex on `openai-codex/gpt-5.4`, and centralize OpenAI chat, image, TTS, transcription, and embedding defaults in one shared module so future default-model updates stay low-churn. Thanks @vincentkoc.
+- Memory/plugins: let the active memory plugin register its own system-prompt section while preserving cache-clear and snapshot-load prompt isolation. (#40126) Thanks @jarimustonen.
 
 ### Fixes
 
+- Agents/default timeout: raise the shared default agent timeout from `600s` to `48h` so long-running ACP and agent sessions do not fail unless you configure a shorter limit.
+- Gateway/Linux: auto-detect nvm-managed Node TLS CA bundle needs before CLI startup and refresh installed services that are missing `NODE_EXTRA_CA_CERTS`. (#51146) Thanks @GodsBoy.
 - CLI/config: make `config set --strict-json` enforce real JSON, prefer `JSON.parse` with JSON5 fallback for machine-written cron/subagent stores, and relabel raw config surfaces as `JSON/JSON5` to match actual compatibility. Related: #48415, #43127, #14529, #21332. Thanks @adhitShet and @vincentkoc.
 - CLI/Ollama onboarding: keep the interactive model picker for explicit `openclaw onboard --auth-choice ollama` runs so setup still selects a default model without reintroducing pre-picker auto-pulls. (#49249) Thanks @BruceMacD.
 - Plugins/bundler TDZ: fix `RESERVED_COMMANDS` temporal dead zone error that prevented device-pair, phone-control, and talk-voice plugins from registering when the bundler placed the commands module after call sites in the same output chunk. Thanks @BunsDev.
@@ -170,6 +173,7 @@ Docs: https://docs.openclaw.ai
 - Exec: harden host env override handling across gateway and node (#51207) Thanks @gladiator9797 and @joshavant.
 - Voice Call: enforce spoken-output contract and fix stream TTS silence regression (#51500) Thanks @joshavant.
 - xAI/models: rename the bundled Grok 4.20 catalog entries to the GA IDs and normalize saved deprecated beta IDs at runtime so existing configs and sessions keep resolving. (#50772) thanks @Jaaneek
+- Plugins/Matrix TTS: send auto-TTS replies as native Matrix voice bubbles instead of generic audio attachments. (#37080) thanks @Matthew19990919.
 
 ### Fixes
 
@@ -204,13 +208,17 @@ Docs: https://docs.openclaw.ai
 - Web search: align onboarding, configure, and finalize with plugin-owned provider contracts, including disabled-provider recovery, config-aware credential hooks, and runtime-visible summaries. (#50935) Thanks @gumadeiras.
 - Agents/replay: sanitize malformed assistant tool-call replay blocks before provider replay so follow-up Anthropic requests do not inherit the downstream `replace` crash. (#50005) Thanks @jalehman.
 - Plugins/context engines: retry strict legacy `assemble()` calls without the new `prompt` field when older engines reject it, preserving prompt-aware retrieval compatibility for pre-prompt plugins. (#50848) thanks @danhdoan.
+- make `openclaw update status` explicitly say `up to date` when the local version already matches npm latest, while keeping the availability logic unchanged. (#51409) Thanks @dongzhenye.
 - Agents/embedded transport errors: distinguish common network failures like connection refused, DNS lookup failure, and interrupted sockets from true timeouts in embedded-run user messaging and lifecycle diagnostics. (#51419) Thanks @scoootscooob.
-- Discord/startup logging: report client initialization while the gateway is still connecting instead of claiming Discord is logged in before readiness is reached. (#51425) Thanks @scoootscooob.
+- Discord/startup logging: report client initialization while the gateway is still connecting instead of claiming Discord is logged in before readiness is reached. (#51425) Thanks @scoootscoob.
 - Gateway/probe: honor caller `--timeout` for active local loopback probes in `gateway status`, keep inactive remote-mode loopback probes fast, and clamp probe timers to JS-safe bounds so slow local/container gateways stop reporting false timeouts. (#47533) Thanks @MonkeyLeeT.
 - Config/startup: keep bundled web-search allowlist compatibility on a lightweight manifest path so config validation no longer pulls bundled web-search registry imports into startup, while still avoiding accidental auto-allow of config-loaded override plugins. (#51574) Thanks @RichardCao.
 - Gateway/chat.send: persist uploaded image references across reloads and compaction without delaying first-turn dispatch or double-submitting the same image to vision models. (#51324) Thanks @fuller-stack-dev.
 - Plugins/runtime state: share plugin-facing infra singleton state across duplicate module graphs and keep session-binding adapter ownership stable until the active owner unregisters. (#50725) thanks @huntharo.
 - Agents/compaction safeguard: preserve split-turn context and preserved recent turns when capped retry fallback reuses the last successful summary. (#27727) thanks @Pandadadadazxf.
+- Discord/pickers: keep `/codex_resume --browse-projects` picker callbacks alive in Discord by sharing component callback state across duplicate module graphs, preserving callback fallbacks, and acknowledging matched plugin interactions before dispatch. (#51260) Thanks @huntharo.
+- Agents/memory flush: keep transcript-hash dedup active across memory-flush fallback retries so a write-then-throw flush attempt cannot append duplicate `MEMORY.md` entries before the fallback cycle completes. (#34222) Thanks @lml2468.
+- make `openclaw update status` explicitly say `up to date` when the local version already matches npm latest, while keeping the availability logic unchanged. (#51409) Thanks @dongzhenye.
 
 ### Breaking
 
@@ -405,6 +413,7 @@ Docs: https://docs.openclaw.ai
 
 - Control UI/auth: restore one-time legacy `?token=` imports for shared Control UI links while keeping `#token=` preferred, and carry pending query tokens through gateway URL confirmation so compatibility links still authenticate after confirmation. (#43979) Thanks @stim64045-spec.
 - Plugins/context engines: retry legacy lifecycle calls once without `sessionKey` when older plugins reject that field, memoize legacy mode after the first strict-schema fallback, and preserve non-compat runtime errors without retry. (#44779) thanks @hhhhao28.
+- Agents/compaction: treat markup-wrapped heartbeat boilerplate as non-meaningful session history when deciding whether to compact, so heartbeat-only sessions no longer keep compaction alive due to wrapper formatting. (#42119) thanks @samzong.
 
 ## 2026.3.11
 

@@ -241,6 +241,10 @@
       "types": "./dist/plugin-sdk/diffs.d.ts",
       "default": "./dist/plugin-sdk/diffs.js"
     },
+    "./plugin-sdk/discord": {
+      "types": "./dist/plugin-sdk/discord.d.ts",
+      "default": "./dist/plugin-sdk/discord.js"
+    },
     "./plugin-sdk/extension-shared": {
       "types": "./dist/plugin-sdk/extension-shared.d.ts",
       "default": "./dist/plugin-sdk/extension-shared.js"
@@ -308,6 +312,10 @@
     "./plugin-sdk/llm-task": {
       "types": "./dist/plugin-sdk/llm-task.d.ts",
       "default": "./dist/plugin-sdk/llm-task.js"
+    },
+    "./plugin-sdk/memory-core": {
+      "types": "./dist/plugin-sdk/memory-core.d.ts",
+      "default": "./dist/plugin-sdk/memory-core.js"
     },
     "./plugin-sdk/memory-lancedb": {
       "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
