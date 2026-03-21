@@ -3,9 +3,9 @@ import {
   buildCatchallMultiAccountChannelSchema,
   DmPolicySchema,
   GroupPolicySchema,
-} from "openclaw/plugin-sdk/compat";
-import { MarkdownConfigSchema } from "openclaw/plugin-sdk/zalo";
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
+import { MarkdownConfigSchema } from "./runtime-api.js";
 import { buildSecretInputSchema } from "./secret-input.js";
 
 const zaloAccountSchema = z.object({

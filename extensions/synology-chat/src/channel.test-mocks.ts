@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Mock } from "vitest";
 import { vi } from "vitest";
 
 export type RegisteredRoute = {
@@ -7,11 +8,13 @@ export type RegisteredRoute = {
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 };
 
-export const registerPluginHttpRouteMock = vi.fn<(params: RegisteredRoute) => () => void>(() =>
-  vi.fn(),
+export const registerPluginHttpRouteMock: Mock<(params: RegisteredRoute) => () => void> = vi.fn(
+  () => vi.fn(),
 );
 
-export const dispatchReplyWithBufferedBlockDispatcher = vi.fn().mockResolvedValue({ counts: {} });
+export const dispatchReplyWithBufferedBlockDispatcher: Mock<
+  () => Promise<{ counts: Record<string, number> }>
+> = vi.fn().mockResolvedValue({ counts: {} });
 
 async function readRequestBodyWithLimitForTest(req: IncomingMessage): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
@@ -24,20 +27,37 @@ async function readRequestBodyWithLimitForTest(req: IncomingMessage): Promise<st
   });
 }
 
-vi.mock("openclaw/plugin-sdk/synology-chat", () => ({
-  DEFAULT_ACCOUNT_ID: "default",
-  setAccountEnabledInConfigSection: vi.fn((_opts: unknown) => ({})),
-  registerPluginHttpRoute: registerPluginHttpRouteMock,
-  buildChannelConfigSchema: vi.fn((schema: unknown) => ({ schema })),
-  readRequestBodyWithLimit: vi.fn(readRequestBodyWithLimitForTest),
-  isRequestBodyLimitError: vi.fn(() => false),
-  requestBodyErrorToText: vi.fn(() => "Request body too large"),
-  createFixedWindowRateLimiter: vi.fn(() => ({
-    isRateLimited: vi.fn(() => false),
-    size: vi.fn(() => 0),
-    clear: vi.fn(),
-  })),
-}));
+vi.mock("openclaw/plugin-sdk/setup", async () => {
+  const actual = await vi.importActual<object>("openclaw/plugin-sdk/setup");
+  return {
+    ...actual,
+    DEFAULT_ACCOUNT_ID: "default",
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/channel-config-schema", async () => {
+  const actual = await vi.importActual<object>("openclaw/plugin-sdk/channel-config-schema");
+  return {
+    ...actual,
+    buildChannelConfigSchema: vi.fn((schema: unknown) => ({ schema })),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
+  const actual = await vi.importActual<object>("openclaw/plugin-sdk/webhook-ingress");
+  return {
+    ...actual,
+    registerPluginHttpRoute: registerPluginHttpRouteMock,
+    readRequestBodyWithLimit: vi.fn(readRequestBodyWithLimitForTest),
+    isRequestBodyLimitError: vi.fn(() => false),
+    requestBodyErrorToText: vi.fn(() => "Request body too large"),
+    createFixedWindowRateLimiter: vi.fn(() => ({
+      isRateLimited: vi.fn(() => false),
+      size: vi.fn(() => 0),
+      clear: vi.fn(),
+    })),
+  };
+});
 
 vi.mock("./client.js", () => ({
   sendMessage: vi.fn().mockResolvedValue(true),

@@ -362,6 +362,7 @@ export abstract class MemoryManagerSyncOps {
     const result = ensureMemoryIndexSchema({
       db: this.db,
       embeddingCacheTable: EMBEDDING_CACHE_TABLE,
+      cacheEnabled: this.cache.enabled,
       ftsTable: FTS_TABLE,
       ftsEnabled: this.fts.enabled,
     });

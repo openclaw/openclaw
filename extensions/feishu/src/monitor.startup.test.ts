@@ -1,10 +1,7 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
-import {
-  createFeishuClientMockModule,
-  createFeishuRuntimeMockModule,
-} from "./monitor.test-mocks.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 
@@ -12,8 +9,14 @@ vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
 }));
 
-vi.mock("./client.js", () => createFeishuClientMockModule());
-vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
+vi.mock("./client.js", async () => {
+  const { createFeishuClientMockModule } = await import("./monitor.test-mocks.js");
+  return createFeishuClientMockModule();
+});
+vi.mock("./runtime.js", async () => {
+  const { createFeishuRuntimeMockModule } = await import("./monitor.test-mocks.js");
+  return createFeishuRuntimeMockModule();
+});
 
 function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig {
   return {
@@ -132,7 +135,7 @@ describe("Feishu monitor startup preflight", () => {
     });
 
     const abortController = new AbortController();
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createRuntimeEnv({ throwOnExit: false });
     const monitorPromise = monitorFeishuProvider({
       config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
       runtime,

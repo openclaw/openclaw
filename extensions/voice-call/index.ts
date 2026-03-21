@@ -1,8 +1,9 @@
 import { Type } from "@sinclair/typebox";
-import type {
-  GatewayRequestHandlerOptions,
-  OpenClawPluginApi,
-} from "openclaw/plugin-sdk/voice-call";
+import {
+  definePluginEntry,
+  type GatewayRequestHandlerOptions,
+  type OpenClawPluginApi,
+} from "./api.js";
 import { registerVoiceCallCli } from "./src/cli.js";
 import {
   VoiceCallConfigSchema,
@@ -80,7 +81,7 @@ const voiceCallConfigSchema = {
     "streaming.streamPath": { label: "Media Stream Path", advanced: true },
     "tts.provider": {
       label: "TTS Provider Override",
-      help: "Deep-merges with messages.tts (Edge is ignored for calls).",
+      help: "Deep-merges with messages.tts (Microsoft is ignored for calls).",
       advanced: true,
     },
     "tts.openai.model": { label: "OpenAI TTS Model", advanced: true },
@@ -143,7 +144,7 @@ const VoiceCallToolSchema = Type.Union([
   }),
 ]);
 
-const voiceCallPlugin = {
+export default definePluginEntry({
   id: "voice-call",
   name: "Voice Call",
   description: "Voice-call plugin with Telnyx/Twilio/Plivo providers",
@@ -180,6 +181,7 @@ const voiceCallPlugin = {
         runtimePromise = createVoiceCallRuntime({
           config,
           coreConfig: api.config as CoreConfig,
+          agentRuntime: api.runtime.agent,
           ttsRuntime: api.runtime.tts,
           logger: api.logger,
         });
@@ -230,7 +232,9 @@ const voiceCallPlugin = {
     const respondToCallMessageAction = async (params: {
       requestParams: GatewayRequestHandlerOptions["params"];
       respond: GatewayRequestHandlerOptions["respond"];
-      action: (request: Awaited<ReturnType<typeof resolveCallMessageRequest>>) => Promise<{
+      action: (
+        request: Exclude<Awaited<ReturnType<typeof resolveCallMessageRequest>>, { error: string }>,
+      ) => Promise<{
         success: boolean;
         error?: string;
         transcript?: string;
@@ -557,6 +561,4 @@ const voiceCallPlugin = {
       },
     });
   },
-};
-
-export default voiceCallPlugin;
+});

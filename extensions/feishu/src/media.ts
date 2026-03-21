@@ -1,7 +1,8 @@
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
-import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
+import { mediaKindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { withTempDownloadPath, type ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -59,6 +60,75 @@ function extractFeishuUploadKey(
     throw new Error(`${params.errorPrefix}: no ${params.key} returned`);
   }
   return key;
+}
+
+function readHeaderValue(
+  headers: Record<string, unknown> | undefined,
+  name: string,
+): string | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const target = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== target) {
+      continue;
+    }
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+    if (Array.isArray(value)) {
+      const first = value.find((entry) => typeof entry === "string" && entry.trim());
+      if (typeof first === "string") {
+        return first.trim();
+      }
+    }
+  }
+  return undefined;
+}
+
+function decodeDispositionFileName(value: string): string | undefined {
+  const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim().replace(/^"(.*)"$/, "$1"));
+    } catch {
+      return utf8Match[1].trim().replace(/^"(.*)"$/, "$1");
+    }
+  }
+
+  const plainMatch = value.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1]?.trim();
+}
+
+function extractFeishuDownloadMetadata(response: unknown): {
+  contentType?: string;
+  fileName?: string;
+} {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
+  const responseAny = response as any;
+  const headers =
+    (responseAny.headers as Record<string, unknown> | undefined) ??
+    (responseAny.header as Record<string, unknown> | undefined);
+
+  const contentType =
+    readHeaderValue(headers, "content-type") ??
+    (typeof responseAny.contentType === "string" ? responseAny.contentType : undefined) ??
+    (typeof responseAny.mime_type === "string" ? responseAny.mime_type : undefined) ??
+    (typeof responseAny.data?.contentType === "string"
+      ? responseAny.data.contentType
+      : undefined) ??
+    (typeof responseAny.data?.mime_type === "string" ? responseAny.data.mime_type : undefined);
+
+  const disposition = readHeaderValue(headers, "content-disposition");
+  const fileName =
+    (disposition ? decodeDispositionFileName(disposition) : undefined) ??
+    (typeof responseAny.file_name === "string" ? responseAny.file_name : undefined) ??
+    (typeof responseAny.fileName === "string" ? responseAny.fileName : undefined) ??
+    (typeof responseAny.data?.file_name === "string" ? responseAny.data.file_name : undefined) ??
+    (typeof responseAny.data?.fileName === "string" ? responseAny.data.fileName : undefined);
+
+  return { contentType, fileName };
 }
 
 async function readFeishuResponseBuffer(params: {
@@ -144,7 +214,8 @@ export async function downloadImageFeishu(params: {
     tmpDirPrefix: "openclaw-feishu-img-",
     errorPrefix: "Feishu image download failed",
   });
-  return { buffer };
+  const meta = extractFeishuDownloadMetadata(response);
+  return { buffer, contentType: meta.contentType };
 }
 
 /**
@@ -175,7 +246,7 @@ export async function downloadMessageResourceFeishu(params: {
     tmpDirPrefix: "openclaw-feishu-resource-",
     errorPrefix: "Feishu message resource download failed",
   });
-  return { buffer };
+  return { buffer, ...extractFeishuDownloadMetadata(response) };
 }
 
 export type UploadImageResult = {
@@ -226,21 +297,17 @@ export async function uploadImageFeishu(params: {
 }
 
 /**
- * Encode a filename for safe use in Feishu multipart/form-data uploads.
- * Non-ASCII characters (Chinese, em-dash, full-width brackets, etc.) cause
- * the upload to silently fail when passed raw through the SDK's form-data
- * serialization.  RFC 5987 percent-encoding keeps headers 7-bit clean while
- * Feishu's server decodes and preserves the original display name.
+ * Sanitize a filename for safe use in Feishu multipart/form-data uploads.
+ * Strips control characters and multipart-injection vectors (CWE-93) while
+ * preserving the original UTF-8 display name (Chinese, emoji, etc.).
+ *
+ * Previous versions percent-encoded non-ASCII characters, but the Feishu
+ * `im.file.create` API uses `file_name` as a literal display name — it does
+ * NOT decode percent-encoding — so encoded filenames appeared as garbled text
+ * in chat (regression in v2026.3.2).
  */
 export function sanitizeFileNameForUpload(fileName: string): string {
-  const ASCII_ONLY = /^[\x20-\x7E]+$/;
-  if (ASCII_ONLY.test(fileName)) {
-    return fileName;
-  }
-  return encodeURIComponent(fileName)
-    .replace(/'/g, "%27")
-    .replace(/\(/g, "%28")
-    .replace(/\)/g, "%29");
+  return fileName.replace(/[\x00-\x1F\x7F\r\n"\\]/g, "_");
 }
 
 /**
@@ -405,6 +472,53 @@ export function detectFileType(
   }
 }
 
+function resolveFeishuOutboundMediaKind(params: { fileName: string; contentType?: string }): {
+  fileType?: "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream";
+  msgType: "image" | "file" | "audio" | "media";
+} {
+  const { fileName, contentType } = params;
+  const ext = path.extname(fileName).toLowerCase();
+  const mimeKind = mediaKindFromMime(contentType);
+
+  const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
+    ext,
+  );
+  if (isImageExt || mimeKind === "image") {
+    return { msgType: "image" };
+  }
+
+  if (
+    ext === ".opus" ||
+    ext === ".ogg" ||
+    contentType === "audio/ogg" ||
+    contentType === "audio/opus"
+  ) {
+    return { fileType: "opus", msgType: "audio" };
+  }
+
+  if (
+    [".mp4", ".mov", ".avi"].includes(ext) ||
+    contentType === "video/mp4" ||
+    contentType === "video/quicktime" ||
+    contentType === "video/x-msvideo"
+  ) {
+    return { fileType: "mp4", msgType: "media" };
+  }
+
+  const fileType = detectFileType(fileName);
+  return {
+    fileType,
+    msgType:
+      fileType === "stream"
+        ? "file"
+        : fileType === "opus"
+          ? "audio"
+          : fileType === "mp4"
+            ? "media"
+            : "file",
+  };
+}
+
 /**
  * Upload and send media (image or file) from URL, local path, or buffer.
  * When mediaUrl is a local path, mediaLocalRoots (from core outbound context)
@@ -441,6 +555,7 @@ export async function sendMediaFeishu(params: {
 
   let buffer: Buffer;
   let name: string;
+  let contentType: string | undefined;
 
   if (mediaBuffer) {
     buffer = mediaBuffer;
@@ -453,33 +568,29 @@ export async function sendMediaFeishu(params: {
     });
     buffer = loaded.buffer;
     name = fileName ?? loaded.fileName ?? "file";
+    contentType = loaded.contentType;
   } else {
     throw new Error("Either mediaUrl or mediaBuffer must be provided");
   }
 
-  // Determine if it's an image based on extension
-  const ext = path.extname(name).toLowerCase();
-  const isImage = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(ext);
+  const routing = resolveFeishuOutboundMediaKind({ fileName: name, contentType });
 
-  if (isImage) {
+  if (routing.msgType === "image") {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
   } else {
-    const fileType = detectFileType(name);
     const { fileKey } = await uploadFileFeishu({
       cfg,
       file: buffer,
       fileName: name,
-      fileType,
+      fileType: routing.fileType ?? "stream",
       accountId,
     });
-    // Feishu API: opus -> "audio", mp4/video -> "media" (playable), others -> "file"
-    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
     return sendFileFeishu({
       cfg,
       to,
       fileKey,
-      msgType,
+      msgType: routing.msgType,
       replyToMessageId,
       replyInThread,
       accountId,

@@ -1,21 +1,25 @@
 import {
-  buildSglangProvider,
-  configureOpenAICompatibleSelfHostedProviderNonInteractive,
-  emptyPluginConfigSchema,
-  promptAndConfigureOpenAICompatibleSelfHostedProviderAuth,
+  SGLANG_DEFAULT_API_KEY_ENV_VAR,
+  SGLANG_DEFAULT_BASE_URL,
+  SGLANG_MODEL_PLACEHOLDER,
+  SGLANG_PROVIDER_LABEL,
+} from "openclaw/plugin-sdk/agent-runtime";
+import {
+  definePluginEntry,
   type OpenClawPluginApi,
   type ProviderAuthMethodNonInteractiveContext,
-  type ProviderDiscoveryContext,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/plugin-entry";
 
 const PROVIDER_ID = "sglang";
-const DEFAULT_BASE_URL = "http://127.0.0.1:30000/v1";
 
-const sglangPlugin = {
+async function loadProviderSetup() {
+  return await import("openclaw/plugin-sdk/self-hosted-provider-setup");
+}
+
+export default definePluginEntry({
   id: "sglang",
   name: "SGLang Provider",
   description: "Bundled SGLang provider plugin",
-  configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     api.registerProvider({
       id: PROVIDER_ID,
@@ -25,50 +29,47 @@ const sglangPlugin = {
       auth: [
         {
           id: "custom",
-          label: "SGLang",
+          label: SGLANG_PROVIDER_LABEL,
           hint: "Fast self-hosted OpenAI-compatible server",
           kind: "custom",
-          run: (ctx) =>
-            promptAndConfigureOpenAICompatibleSelfHostedProviderAuth({
+          run: async (ctx) => {
+            const providerSetup = await loadProviderSetup();
+            return await providerSetup.promptAndConfigureOpenAICompatibleSelfHostedProviderAuth({
               cfg: ctx.config,
               prompter: ctx.prompter,
               providerId: PROVIDER_ID,
-              providerLabel: "SGLang",
-              defaultBaseUrl: DEFAULT_BASE_URL,
-              defaultApiKeyEnvVar: "SGLANG_API_KEY",
-              modelPlaceholder: "Qwen/Qwen3-8B",
-            }),
-          runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
-            configureOpenAICompatibleSelfHostedProviderNonInteractive({
+              providerLabel: SGLANG_PROVIDER_LABEL,
+              defaultBaseUrl: SGLANG_DEFAULT_BASE_URL,
+              defaultApiKeyEnvVar: SGLANG_DEFAULT_API_KEY_ENV_VAR,
+              modelPlaceholder: SGLANG_MODEL_PLACEHOLDER,
+            });
+          },
+          runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
+            const providerSetup = await loadProviderSetup();
+            return await providerSetup.configureOpenAICompatibleSelfHostedProviderNonInteractive({
               ctx,
               providerId: PROVIDER_ID,
-              providerLabel: "SGLang",
-              defaultBaseUrl: DEFAULT_BASE_URL,
-              defaultApiKeyEnvVar: "SGLANG_API_KEY",
-              modelPlaceholder: "Qwen/Qwen3-8B",
-            }),
+              providerLabel: SGLANG_PROVIDER_LABEL,
+              defaultBaseUrl: SGLANG_DEFAULT_BASE_URL,
+              defaultApiKeyEnvVar: SGLANG_DEFAULT_API_KEY_ENV_VAR,
+              modelPlaceholder: SGLANG_MODEL_PLACEHOLDER,
+            });
+          },
         },
       ],
       discovery: {
         order: "late",
-        run: async (ctx: ProviderDiscoveryContext) => {
-          if (ctx.config.models?.providers?.sglang) {
-            return null;
-          }
-          const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...(await buildSglangProvider({ apiKey: discoveryApiKey })),
-              apiKey,
-            },
-          };
+        run: async (ctx) => {
+          const providerSetup = await loadProviderSetup();
+          return await providerSetup.discoverOpenAICompatibleSelfHostedProvider({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: providerSetup.buildSglangProvider,
+          });
         },
       },
       wizard: {
-        onboarding: {
+        setup: {
           choiceId: "sglang",
           choiceLabel: "SGLang",
           choiceHint: "Fast self-hosted OpenAI-compatible server",
@@ -85,6 +86,4 @@ const sglangPlugin = {
       },
     });
   },
-};
-
-export default sglangPlugin;
+});

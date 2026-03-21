@@ -12,7 +12,7 @@ OpenClaw uses Bonjour (mDNS / DNS‑SD) as a **LAN‑only convenience** to disco
 an active Gateway (WebSocket endpoint). It is best‑effort and does **not** replace SSH or
 Tailnet-based connectivity.
 
-## Wide‑area Bonjour (Unicast DNS‑SD) over Tailscale
+## Wide-area Bonjour (Unicast DNS-SD) over Tailscale
 
 If the node and gateway are on different networks, multicast mDNS won’t cross the
 boundary. You can keep the same discovery UX by switching to **unicast DNS‑SD**
@@ -38,7 +38,7 @@ iOS/Android nodes browse both `local.` and your configured wide‑area domain.
 }
 ```
 
-### One‑time DNS server setup (gateway host)
+### One-time DNS server setup (gateway host)
 
 ```bash
 openclaw dns setup --apply
@@ -84,7 +84,7 @@ Only the Gateway advertises `_openclaw-gw._tcp`.
 
 - `_openclaw-gw._tcp` — gateway transport beacon (used by macOS/iOS/Android nodes).
 
-## TXT keys (non‑secret hints)
+## TXT keys (non-secret hints)
 
 The Gateway advertises small non‑secret hints to make UI flows convenient:
 

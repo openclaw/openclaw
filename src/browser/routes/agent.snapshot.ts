@@ -16,6 +16,7 @@ import {
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { withBrowserNavigationPolicy } from "../navigation-guard.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -43,10 +44,12 @@ const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
 
 async function clearChromeMcpOverlay(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
 }): Promise<void> {
   await evaluateChromeMcpScript({
     profileName: params.profileName,
+    userDataDir: params.userDataDir,
     targetId: params.targetId,
     fn: `() => {
       document.querySelectorAll("[${CHROME_MCP_OVERLAY_ATTR}]").forEach((node) => node.remove());
@@ -57,12 +60,14 @@ async function clearChromeMcpOverlay(params: {
 
 async function renderChromeMcpLabels(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   refs: string[];
 }): Promise<{ labels: number; skipped: number }> {
   const refList = JSON.stringify(params.refs);
   const result = await evaluateChromeMcpScript({
     profileName: params.profileName,
+    userDataDir: params.userDataDir,
     targetId: params.targetId,
     args: params.refs,
     fn: `(...elements) => {
@@ -120,6 +125,27 @@ async function renderChromeMcpLabels(params: {
       ? (result as { skipped: number }).skipped
       : 0;
   return { labels, skipped };
+}
+
+async function saveNormalizedScreenshotResponse(params: {
+  res: BrowserResponse;
+  buffer: Buffer;
+  type: "png" | "jpeg";
+  targetId: string;
+  url: string;
+}) {
+  const normalized = await normalizeBrowserScreenshot(params.buffer, {
+    maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
+    maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+  });
+  await saveBrowserMediaResponse({
+    res: params.res,
+    buffer: normalized.buffer,
+    contentType: normalized.contentType ?? `image/${params.type}`,
+    maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+    targetId: params.targetId,
+    url: params.url,
+  });
 }
 
 async function saveBrowserMediaResponse(params: {
@@ -204,11 +230,12 @@ export function registerBrowserAgentSnapshotRoutes(
       ctx,
       targetId,
       run: async ({ profileCtx, tab, cdpUrl }) => {
-        if (profileCtx.profile.driver === "existing-session") {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
           await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
           const result = await navigateChromeMcpPage({
             profileName: profileCtx.profile.name,
+            userDataDir: profileCtx.profile.userDataDir,
             targetId: tab.targetId,
             url,
           });
@@ -242,7 +269,7 @@ export function registerBrowserAgentSnapshotRoutes(
     if (!profileCtx) {
       return;
     }
-    if (profileCtx.profile.driver === "existing-session") {
+    if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
       return jsonError(
         res,
         501,
@@ -290,7 +317,7 @@ export function registerBrowserAgentSnapshotRoutes(
       ctx,
       targetId,
       run: async ({ profileCtx, tab, cdpUrl }) => {
-        if (profileCtx.profile.driver === "existing-session") {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           if (element) {
             return jsonError(
               res,
@@ -300,20 +327,16 @@ export function registerBrowserAgentSnapshotRoutes(
           }
           const buffer = await takeChromeMcpScreenshot({
             profileName: profileCtx.profile.name,
+            userDataDir: profileCtx.profile.userDataDir,
             targetId: tab.targetId,
             uid: ref,
             fullPage,
             format: type,
           });
-          const normalized = await normalizeBrowserScreenshot(buffer, {
-            maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-            maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-          });
-          await saveBrowserMediaResponse({
+          await saveNormalizedScreenshotResponse({
             res,
-            buffer: normalized.buffer,
-            contentType: normalized.contentType ?? `image/${type}`,
-            maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+            buffer,
+            type,
             targetId: tab.targetId,
             url: tab.url,
           });
@@ -350,15 +373,10 @@ export function registerBrowserAgentSnapshotRoutes(
           });
         }
 
-        const normalized = await normalizeBrowserScreenshot(buffer, {
-          maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-          maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-        });
-        await saveBrowserMediaResponse({
+        await saveNormalizedScreenshotResponse({
           res,
-          buffer: normalized.buffer,
-          contentType: normalized.contentType ?? `image/${type}`,
-          maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+          buffer,
+          type,
           targetId: tab.targetId,
           url: tab.url,
         });
@@ -384,7 +402,7 @@ export function registerBrowserAgentSnapshotRoutes(
       if ((plan.labels || plan.mode === "efficient") && plan.format === "aria") {
         return jsonError(res, 400, "labels/mode=efficient require format=ai");
       }
-      if (profileCtx.profile.driver === "existing-session") {
+      if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
         if (plan.selectorValue || plan.frameSelectorValue) {
           return jsonError(
             res,
@@ -394,6 +412,7 @@ export function registerBrowserAgentSnapshotRoutes(
         }
         const snapshot = await takeChromeMcpSnapshot({
           profileName: profileCtx.profile.name,
+          userDataDir: profileCtx.profile.userDataDir,
           targetId: tab.targetId,
         });
         if (plan.format === "aria") {
@@ -418,12 +437,14 @@ export function registerBrowserAgentSnapshotRoutes(
           const refs = Object.keys(built.refs);
           const labelResult = await renderChromeMcpLabels({
             profileName: profileCtx.profile.name,
+            userDataDir: profileCtx.profile.userDataDir,
             targetId: tab.targetId,
             refs,
           });
           try {
             const labeled = await takeChromeMcpScreenshot({
               profileName: profileCtx.profile.name,
+              userDataDir: profileCtx.profile.userDataDir,
               targetId: tab.targetId,
               format: "png",
             });
@@ -453,6 +474,7 @@ export function registerBrowserAgentSnapshotRoutes(
           } finally {
             await clearChromeMcpOverlay({
               profileName: profileCtx.profile.name,
+              userDataDir: profileCtx.profile.userDataDir,
               targetId: tab.targetId,
             });
           }

@@ -4,11 +4,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  canResolveRegistryVersionForPackageTarget,
   cleanupGlobalRenameDirs,
   detectGlobalInstallManagerByPresence,
   detectGlobalInstallManagerForRoot,
   globalInstallArgs,
   globalInstallFallbackArgs,
+  isExplicitPackageInstallSpec,
+  isMainPackageTarget,
+  OPENCLAW_MAIN_PACKAGE_SPEC,
   resolveGlobalPackageRoot,
   resolveGlobalInstallSpec,
   resolveGlobalRoot,
@@ -56,8 +60,42 @@ describe("update global helpers", () => {
       path.join(".bun", "install", "global", "node_modules"),
     );
     await expect(resolveGlobalPackageRoot("npm", runCommand, 1000)).resolves.toBe(
-      "/tmp/npm-root/openclaw",
+      path.join("/tmp/npm-root", "openclaw"),
     );
+  });
+
+  it("maps main and explicit install specs for global installs", () => {
+    expect(resolveGlobalInstallSpec({ packageName: "openclaw", tag: "main" })).toBe(
+      OPENCLAW_MAIN_PACKAGE_SPEC,
+    );
+    expect(
+      resolveGlobalInstallSpec({
+        packageName: "openclaw",
+        tag: "github:openclaw/openclaw#feature/my-branch",
+      }),
+    ).toBe("github:openclaw/openclaw#feature/my-branch");
+    expect(
+      resolveGlobalInstallSpec({
+        packageName: "openclaw",
+        tag: "https://example.com/openclaw-main.tgz",
+      }),
+    ).toBe("https://example.com/openclaw-main.tgz");
+  });
+
+  it("classifies main and raw install specs separately from registry selectors", () => {
+    expect(isMainPackageTarget("main")).toBe(true);
+    expect(isMainPackageTarget(" MAIN ")).toBe(true);
+    expect(isMainPackageTarget("beta")).toBe(false);
+
+    expect(isExplicitPackageInstallSpec("github:openclaw/openclaw#main")).toBe(true);
+    expect(isExplicitPackageInstallSpec("https://example.com/openclaw-main.tgz")).toBe(true);
+    expect(isExplicitPackageInstallSpec("file:/tmp/openclaw-main.tgz")).toBe(true);
+    expect(isExplicitPackageInstallSpec("beta")).toBe(false);
+
+    expect(canResolveRegistryVersionForPackageTarget("latest")).toBe(true);
+    expect(canResolveRegistryVersionForPackageTarget("2026.3.14")).toBe(true);
+    expect(canResolveRegistryVersionForPackageTarget("main")).toBe(false);
+    expect(canResolveRegistryVersionForPackageTarget("github:openclaw/openclaw#main")).toBe(false);
   });
 
   it("detects install managers from resolved roots and on-disk presence", async () => {

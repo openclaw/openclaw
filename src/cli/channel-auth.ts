@@ -1,6 +1,7 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
+import { loadConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
 import { setVerbose } from "../globals.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -18,7 +19,14 @@ async function resolveChannelPluginForMode(
   opts: ChannelAuthOptions,
   mode: ChannelAuthMode,
   cfg: OpenClawConfig,
-): Promise<{ channelInput: string; channelId: string; plugin: ChannelPlugin }> {
+  runtime: RuntimeEnv,
+): Promise<{
+  cfg: OpenClawConfig;
+  configChanged: boolean;
+  channelInput: string;
+  channelId: string;
+  plugin: ChannelPlugin;
+}> {
   const explicitChannel = opts.channel?.trim();
   const channelInput = explicitChannel
     ? explicitChannel
@@ -27,13 +35,28 @@ async function resolveChannelPluginForMode(
   if (!channelId) {
     throw new Error(`Unsupported channel: ${channelInput}`);
   }
-  const plugin = getChannelPlugin(channelId);
+
+  const resolved = await resolveInstallableChannelPlugin({
+    cfg,
+    runtime,
+    channelId,
+    allowInstall: true,
+    supports: (candidate) =>
+      mode === "login" ? Boolean(candidate.auth?.login) : Boolean(candidate.gateway?.logoutAccount),
+  });
+  const plugin = resolved.plugin;
   const supportsMode =
     mode === "login" ? Boolean(plugin?.auth?.login) : Boolean(plugin?.gateway?.logoutAccount);
   if (!supportsMode) {
     throw new Error(`Channel ${channelId} does not support ${mode}`);
   }
-  return { channelInput, channelId, plugin: plugin as ChannelPlugin };
+  return {
+    cfg: resolved.cfg,
+    configChanged: resolved.configChanged,
+    channelInput,
+    channelId,
+    plugin: plugin as ChannelPlugin,
+  };
 }
 
 function resolveAccountContext(
@@ -49,8 +72,16 @@ export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = loadConfig();
-  const { channelInput, plugin } = await resolveChannelPluginForMode(opts, "login", cfg);
+  const loadedCfg = loadConfig();
+  const { cfg, configChanged, channelInput, plugin } = await resolveChannelPluginForMode(
+    opts,
+    "login",
+    loadedCfg,
+    runtime,
+  );
+  if (configChanged) {
+    await writeConfigFile(cfg);
+  }
   const login = plugin.auth?.login;
   if (!login) {
     throw new Error(`Channel ${channelInput} does not support login`);
@@ -71,8 +102,16 @@ export async function runChannelLogout(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = loadConfig();
-  const { channelInput, plugin } = await resolveChannelPluginForMode(opts, "logout", cfg);
+  const loadedCfg = loadConfig();
+  const { cfg, configChanged, channelInput, plugin } = await resolveChannelPluginForMode(
+    opts,
+    "logout",
+    loadedCfg,
+    runtime,
+  );
+  if (configChanged) {
+    await writeConfigFile(cfg);
+  }
   const logoutAccount = plugin.gateway?.logoutAccount;
   if (!logoutAccount) {
     throw new Error(`Channel ${channelInput} does not support logout`);

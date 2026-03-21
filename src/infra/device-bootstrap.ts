@@ -31,11 +31,25 @@ function resolveBootstrapPath(baseDir?: string): string {
 
 async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
   const bootstrapPath = resolveBootstrapPath(baseDir);
-  const state = (await readJsonFile<DeviceBootstrapStateFile>(bootstrapPath)) ?? {};
-  for (const entry of Object.values(state)) {
-    if (typeof entry.ts !== "number") {
-      entry.ts = entry.issuedAtMs;
+  const rawState = (await readJsonFile<DeviceBootstrapStateFile>(bootstrapPath)) ?? {};
+  const state: DeviceBootstrapStateFile = {};
+  if (!rawState || typeof rawState !== "object" || Array.isArray(rawState)) {
+    return state;
+  }
+  for (const [tokenKey, entry] of Object.entries(rawState)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
     }
+    const record = entry as Partial<DeviceBootstrapTokenRecord>;
+    const token =
+      typeof record.token === "string" && record.token.trim().length > 0 ? record.token : tokenKey;
+    const issuedAtMs = typeof record.issuedAtMs === "number" ? record.issuedAtMs : 0;
+    state[tokenKey] = {
+      ...record,
+      token,
+      issuedAtMs,
+      ts: typeof record.ts === "number" ? record.ts : issuedAtMs,
+    };
   }
   pruneExpiredPending(state, Date.now(), DEVICE_BOOTSTRAP_TOKEN_TTL_MS);
   return state;
@@ -65,6 +79,41 @@ export async function issueDeviceBootstrapToken(
   });
 }
 
+export async function clearDeviceBootstrapTokens(
+  params: {
+    baseDir?: string;
+  } = {},
+): Promise<{ removed: number }> {
+  return await withLock(async () => {
+    const state = await loadState(params.baseDir);
+    const removed = Object.keys(state).length;
+    await persistState({}, params.baseDir);
+    return { removed };
+  });
+}
+
+export async function revokeDeviceBootstrapToken(params: {
+  token: string;
+  baseDir?: string;
+}): Promise<{ removed: boolean }> {
+  return await withLock(async () => {
+    const providedToken = params.token.trim();
+    if (!providedToken) {
+      return { removed: false };
+    }
+    const state = await loadState(params.baseDir);
+    const found = Object.entries(state).find(([, candidate]) =>
+      verifyPairingToken(providedToken, candidate.token),
+    );
+    if (!found) {
+      return { removed: false };
+    }
+    delete state[found[0]];
+    await persistState(state, params.baseDir);
+    return { removed: true };
+  });
+}
+
 export async function verifyDeviceBootstrapToken(params: {
   token: string;
   deviceId: string;
@@ -79,12 +128,13 @@ export async function verifyDeviceBootstrapToken(params: {
     if (!providedToken) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
-    const entry = Object.values(state).find((candidate) =>
+    const found = Object.entries(state).find(([, candidate]) =>
       verifyPairingToken(providedToken, candidate.token),
     );
-    if (!entry) {
+    if (!found) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
+    const [tokenKey] = found;
 
     const deviceId = params.deviceId.trim();
     const publicKey = params.publicKey.trim();
@@ -95,7 +145,7 @@ export async function verifyDeviceBootstrapToken(params: {
 
     // Bootstrap setup codes are single-use. Consume the record before returning
     // success so the same token cannot be replayed to mutate a pending request.
-    delete state[entry.token];
+    delete state[tokenKey];
     await persistState(state, params.baseDir);
     return { ok: true };
   });

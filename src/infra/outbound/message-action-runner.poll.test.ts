@@ -1,9 +1,9 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { slackPlugin } from "../../../extensions/slack/src/channel.js";
-import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { runMessageAction } from "./message-action-runner.js";
 
 const mocks = vi.hoisted(() => ({
   executePollAction: vi.fn(),
@@ -19,17 +19,6 @@ vi.mock("./outbound-send-service.js", async () => {
   };
 });
 
-import { runMessageAction } from "./message-action-runner.js";
-
-const slackConfig = {
-  channels: {
-    slack: {
-      botToken: "xoxb-test",
-      appToken: "xapp-test",
-    },
-  },
-} as OpenClawConfig;
-
 const telegramConfig = {
   channels: {
     telegram: {
@@ -37,6 +26,44 @@ const telegramConfig = {
     },
   },
 } as OpenClawConfig;
+
+const telegramPollTestPlugin: ChannelPlugin = {
+  id: "telegram",
+  meta: {
+    id: "telegram",
+    label: "Telegram",
+    selectionLabel: "Telegram",
+    docsPath: "/channels/telegram",
+    blurb: "Telegram poll test plugin.",
+  },
+  capabilities: { chatTypes: ["direct", "group"] },
+  config: {
+    listAccountIds: () => ["default"],
+    resolveAccount: () => ({ botToken: "telegram-test" }),
+    isConfigured: () => true,
+  },
+  messaging: {
+    targetResolver: {
+      looksLikeId: () => true,
+      resolveTarget: async ({ normalized }) => ({
+        to: normalized,
+        kind: "user",
+        source: "normalized",
+      }),
+    },
+  },
+  threading: {
+    resolveAutoThreadId: ({ toolContext, to, replyToId }) => {
+      if (replyToId) {
+        return undefined;
+      }
+      if (toolContext?.currentChannelId !== to) {
+        return undefined;
+      }
+      return toolContext.currentThreadTs;
+    },
+  },
+};
 
 async function runPollAction(params: {
   cfg: OpenClawConfig;
@@ -49,51 +76,42 @@ async function runPollAction(params: {
     params: params.actionParams as never,
     toolContext: params.toolContext as never,
   });
-  return mocks.executePollAction.mock.calls[0]?.[0] as
+  const call = mocks.executePollAction.mock.calls[0]?.[0] as
     | {
-        durationSeconds?: number;
-        maxSelections?: number;
-        threadId?: string;
-        isAnonymous?: boolean;
+        resolveCorePoll?: () => {
+          durationHours?: number;
+          maxSelections?: number;
+          threadId?: string;
+        };
         ctx?: { params?: Record<string, unknown> };
       }
     | undefined;
+  if (!call) {
+    return undefined;
+  }
+  return {
+    ...call.resolveCorePoll?.(),
+    ctx: call.ctx,
+  };
 }
 
-let createPluginRuntime: typeof import("../../plugins/runtime/index.js").createPluginRuntime;
-let setSlackRuntime: typeof import("../../../extensions/slack/src/runtime.js").setSlackRuntime;
-let setTelegramRuntime: typeof import("../../../extensions/telegram/src/runtime.js").setTelegramRuntime;
-
 describe("runMessageAction poll handling", () => {
-  beforeAll(async () => {
-    ({ createPluginRuntime } = await import("../../plugins/runtime/index.js"));
-    ({ setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js"));
-    ({ setTelegramRuntime } = await import("../../../extensions/telegram/src/runtime.js"));
-  });
-
   beforeEach(() => {
-    const runtime = createPluginRuntime();
-    setSlackRuntime(runtime);
-    setTelegramRuntime(runtime);
     setActivePluginRegistry(
       createTestRegistry([
         {
-          pluginId: "slack",
-          source: "test",
-          plugin: slackPlugin,
-        },
-        {
           pluginId: "telegram",
           source: "test",
-          plugin: telegramPlugin,
+          plugin: telegramPollTestPlugin,
         },
       ]),
     );
-    mocks.executePollAction.mockResolvedValue({
+    mocks.executePollAction.mockReset();
+    mocks.executePollAction.mockImplementation(async (input) => ({
       handledBy: "core",
-      payload: { ok: true },
+      payload: { ok: true, corePoll: input.resolveCorePoll() },
       pollResult: { ok: true },
-    });
+    }));
   });
 
   afterEach(() => {
@@ -101,48 +119,22 @@ describe("runMessageAction poll handling", () => {
     mocks.executePollAction.mockReset();
   });
 
-  it.each([
-    {
-      name: "requires at least two poll options",
-      cfg: telegramConfig,
-      actionParams: {
-        channel: "telegram",
-        target: "telegram:123",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza"],
-      },
-      message: /pollOption requires at least two values/i,
-    },
-    {
-      name: "rejects durationSeconds outside telegram",
-      cfg: slackConfig,
-      actionParams: {
-        channel: "slack",
-        target: "#C12345678",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza", "Sushi"],
-        pollDurationSeconds: 60,
-      },
-      message: /pollDurationSeconds is only supported for Telegram polls/i,
-    },
-    {
-      name: "rejects poll visibility outside telegram",
-      cfg: slackConfig,
-      actionParams: {
-        channel: "slack",
-        target: "#C12345678",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza", "Sushi"],
-        pollPublic: true,
-      },
-      message: /pollAnonymous\/pollPublic are only supported for Telegram polls/i,
-    },
-  ])("$name", async ({ cfg, actionParams, message }) => {
-    await expect(runPollAction({ cfg, actionParams })).rejects.toThrow(message);
-    expect(mocks.executePollAction).not.toHaveBeenCalled();
+  it("requires at least two poll options", async () => {
+    await expect(
+      runPollAction({
+        cfg: telegramConfig,
+        actionParams: {
+          channel: "telegram",
+          target: "telegram:123",
+          pollQuestion: "Lunch?",
+          pollOption: ["Pizza"],
+        },
+      }),
+    ).rejects.toThrow(/pollOption requires at least two values/i);
+    expect(mocks.executePollAction).toHaveBeenCalledTimes(1);
   });
 
-  it("passes Telegram durationSeconds, visibility, and auto threadId to executePollAction", async () => {
+  it("passes shared poll fields and auto threadId to executePollAction", async () => {
     const call = await runPollAction({
       cfg: telegramConfig,
       actionParams: {
@@ -150,8 +142,7 @@ describe("runMessageAction poll handling", () => {
         target: "telegram:123",
         pollQuestion: "Lunch?",
         pollOption: ["Pizza", "Sushi"],
-        pollDurationSeconds: 90,
-        pollPublic: true,
+        pollDurationHours: 2,
       },
       toolContext: {
         currentChannelId: "telegram:123",
@@ -159,8 +150,7 @@ describe("runMessageAction poll handling", () => {
       },
     });
 
-    expect(call?.durationSeconds).toBe(90);
-    expect(call?.isAnonymous).toBe(false);
+    expect(call?.durationHours).toBe(2);
     expect(call?.threadId).toBe("42");
     expect(call?.ctx?.params?.threadId).toBe("42");
   });

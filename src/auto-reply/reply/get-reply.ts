@@ -9,8 +9,6 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
-import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
-import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -28,6 +26,10 @@ import { applyResetModelOverride } from "./session-reset-model.js";
 import { initSessionState } from "./session.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
+
+function shouldLogCoreIngressTiming(): boolean {
+  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+}
 
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
   const normalize = (list?: string[]) => {
@@ -54,11 +56,69 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   return channel.filter((name) => agentSet.has(name));
 }
 
+function hasInboundMedia(ctx: MsgContext): boolean {
+  return Boolean(
+    ctx.StickerMediaIncluded ||
+    ctx.Sticker ||
+    ctx.MediaPath?.trim() ||
+    ctx.MediaUrl?.trim() ||
+    ctx.MediaPaths?.some((value) => value?.trim()) ||
+    ctx.MediaUrls?.some((value) => value?.trim()) ||
+    ctx.MediaTypes?.length,
+  );
+}
+
+function hasLinkCandidate(ctx: MsgContext): boolean {
+  const message = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body;
+  if (!message) {
+    return false;
+  }
+  return /\bhttps?:\/\/\S+/i.test(message);
+}
+
+async function applyMediaUnderstandingIfNeeded(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  activeModel: { provider: string; model: string };
+}): Promise<boolean> {
+  if (!hasInboundMedia(params.ctx)) {
+    return false;
+  }
+  const { applyMediaUnderstanding } = await import("../../media-understanding/apply.runtime.js");
+  await applyMediaUnderstanding(params);
+  return true;
+}
+
+async function applyLinkUnderstandingIfNeeded(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+}): Promise<boolean> {
+  if (!hasLinkCandidate(params.ctx)) {
+    return false;
+  }
+  const { applyLinkUnderstanding } = await import("../../link-understanding/apply.runtime.js");
+  await applyLinkUnderstanding(params);
+  return true;
+}
+
 export async function getReplyFromConfig(
   ctx: MsgContext,
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const ingressTimingEnabled = shouldLogCoreIngressTiming();
+  const ingressStartMs = ingressTimingEnabled ? Date.now() : 0;
+  const logIngressStage = (stage: string, extra?: string) => {
+    if (!ingressTimingEnabled) {
+      return;
+    }
+    const sessionKey = ctx.SessionKey?.trim() || "(no-session)";
+    const suffix = extra ? ` ${extra}` : "";
+    defaultRuntime.log?.(
+      `[ingress] session=${sessionKey} stage=${stage} elapsedMs=${Date.now() - ingressStartMs}${suffix}`,
+    );
+  };
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
   const cfg = configOverride ?? loadConfig();
   const targetSessionKey =
@@ -108,6 +168,7 @@ export async function getReplyFromConfig(
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
   });
   const workspaceDir = workspace.dir;
+  logIngressStage("workspace-ready");
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =
@@ -126,16 +187,18 @@ export async function getReplyFromConfig(
   const finalized = finalizeInboundContext(ctx);
 
   if (!isFastTestEnv) {
-    await applyMediaUnderstanding({
+    const appliedMediaUnderstanding = await applyMediaUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
       agentDir,
       activeModel: { provider, model },
     });
-    await applyLinkUnderstanding({
+    logIngressStage("media-understanding", `applied=${appliedMediaUnderstanding ? "1" : "0"}`);
+    const appliedLinkUnderstanding = await applyLinkUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
     });
+    logIngressStage("link-understanding", `applied=${appliedLinkUnderstanding ? "1" : "0"}`);
   }
   emitPreAgentMessageHooks({
     ctx: finalized,
@@ -154,6 +217,7 @@ export async function getReplyFromConfig(
     cfg,
     commandAuthorized,
   });
+  logIngressStage("session-init");
   let {
     sessionCtx,
     sessionEntry,
@@ -246,7 +310,9 @@ export async function getReplyFromConfig(
     opts: resolvedOpts,
     skillFilter: mergedSkillFilter,
   });
+  logIngressStage("directives-resolved");
   if (directiveResult.kind === "reply") {
+    logIngressStage("early-reply");
     return directiveResult.reply;
   }
 
@@ -332,6 +398,8 @@ export async function getReplyFromConfig(
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
+    blockReplyChunking,
+    resolvedBlockStreamingBreak,
     resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
     provider,
     model,
@@ -355,6 +423,7 @@ export async function getReplyFromConfig(
     sessionKey,
     workspaceDir,
   });
+  logIngressStage("sandbox-media");
 
   return runPreparedReply({
     ctx,

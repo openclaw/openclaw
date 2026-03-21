@@ -6,16 +6,17 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import {
   buildModelsProviderData,
-  createReplyPrefixOptions,
-  createTypingCallbacks,
+  createChannelReplyPipeline,
+  isRequestBodyLimitError,
   logTypingFailure,
+  readRequestBodyWithLimit,
   type OpenClawConfig,
   type ReplyPayload,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk/mattermost";
-import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
+} from "../runtime-api.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   createMattermostClient,
@@ -54,24 +55,16 @@ type SlashHttpHandlerParams = {
   log?: (msg: string) => void;
 };
 
+const MAX_BODY_BYTES = 64 * 1024;
+const BODY_READ_TIMEOUT_MS = 5_000;
+
 /**
  * Read the full request body as a string.
  */
 function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    req.on("data", (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > maxBytes) {
-        req.destroy();
-        reject(new Error("Request body too large"));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+  return readRequestBodyWithLimit(req, {
+    maxBytes,
+    timeoutMs: BODY_READ_TIMEOUT_MS,
   });
 }
 
@@ -215,8 +208,6 @@ async function authorizeSlashInvocation(params: {
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
   const { account, cfg, runtime, commandTokens, triggerMap, log } = params;
 
-  const MAX_BODY_BYTES = 64 * 1024; // 64KB
-
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.method !== "POST") {
       res.statusCode = 405;
@@ -228,7 +219,12 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     let body: string;
     try {
       body = await readBody(req, MAX_BODY_BYTES);
-    } catch {
+    } catch (error) {
+      if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+        res.statusCode = 408;
+        res.end("Request body timeout");
+        return;
+      }
       res.statusCode = 413;
       res.end("Payload Too Large");
       return;
@@ -469,29 +465,29 @@ async function handleSlashCommandAsync(params: {
     accountId: account.accountId,
   });
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
     cfg,
     agentId: route.agentId,
     channel: "mattermost",
     accountId: account.accountId,
-  });
-
-  const typingCallbacks = createTypingCallbacks({
-    start: () => sendMattermostTyping(client, { channelId }),
-    onStartError: (err) => {
-      logTypingFailure({
-        log: (message) => log?.(message),
-        channel: "mattermost",
-        target: channelId,
-        error: err,
-      });
+    typing: {
+      start: () => sendMattermostTyping(client, { channelId }),
+      onStartError: (err) => {
+        logTypingFailure({
+          log: (message) => log?.(message),
+          channel: "mattermost",
+          target: channelId,
+          error: err,
+        });
+      },
     },
   });
+  const humanDelay = core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId);
 
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
-      ...prefixOptions,
-      humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
+      ...replyPipeline,
+      humanDelay,
       deliver: async (payload: ReplyPayload) => {
         await deliverMattermostReplyPayload({
           core,
@@ -509,7 +505,7 @@ async function handleSlashCommandAsync(params: {
       onError: (err, info) => {
         runtime.error?.(`mattermost slash ${info.kind} reply failed: ${String(err)}`);
       },
-      onReplyStart: typingCallbacks.onReplyStart,
+      onReplyStart: typingCallbacks?.onReplyStart,
     });
 
   await core.channel.reply.withReplyDispatcher({

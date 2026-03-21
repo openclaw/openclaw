@@ -1,3 +1,4 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -45,7 +46,6 @@ import {
   setSessionRuntimeModel,
   updateSessionStore,
 } from "../../config/sessions.js";
-import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -55,6 +55,7 @@ import {
   getHookType,
   isExternalHookSession,
 } from "../../security/external-content.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
@@ -71,10 +72,15 @@ import {
   pickSummaryFromPayloads,
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
+import { buildCronAgentDefaultsConfig } from "./run-config.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup.js";
+
+function resolveNonNegativeNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
 
 export type RunCronAgentTurnResult = {
   /** Last non-empty agent text output (not truncated). */
@@ -94,54 +100,6 @@ export type RunCronAgentTurnResult = {
   deliveryAttempted?: boolean;
 } & CronRunOutcome &
   CronRunTelemetry;
-
-type ResolvedAgentConfig = NonNullable<ReturnType<typeof resolveAgentConfig>>;
-
-function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentConfig) {
-  const {
-    model: overrideModel,
-    sandbox: _agentSandboxOverride,
-    ...agentOverrideRest
-  } = agentConfigOverride ?? {};
-  return {
-    overrideModel,
-    definedOverrides: Object.fromEntries(
-      Object.entries(agentOverrideRest).filter(([, value]) => value !== undefined),
-    ) as Partial<AgentDefaultsConfig>,
-  };
-}
-
-function mergeCronAgentModelOverride(params: {
-  defaults: AgentDefaultsConfig;
-  overrideModel: ResolvedAgentConfig["model"] | undefined;
-}) {
-  const nextDefaults: AgentDefaultsConfig = { ...params.defaults };
-  const existingModel =
-    nextDefaults.model && typeof nextDefaults.model === "object" ? nextDefaults.model : {};
-  if (typeof params.overrideModel === "string") {
-    nextDefaults.model = { ...existingModel, primary: params.overrideModel };
-  } else if (params.overrideModel) {
-    nextDefaults.model = { ...existingModel, ...params.overrideModel };
-  }
-  return nextDefaults;
-}
-
-function buildCronAgentDefaultsConfig(params: {
-  defaults?: AgentDefaultsConfig;
-  agentConfigOverride?: ResolvedAgentConfig;
-}) {
-  const { overrideModel, definedOverrides } = extractCronAgentDefaultsOverride(
-    params.agentConfigOverride,
-  );
-  // Keep sandbox overrides out of `agents.defaults` here. Sandbox resolution
-  // already merges global defaults with per-agent overrides using `agentId`;
-  // copying the agent sandbox into defaults clobbers global defaults and can
-  // double-apply nested agent overrides during isolated cron runs.
-  return mergeCronAgentModelOverride({
-    defaults: Object.assign({}, params.defaults, definedOverrides),
-    overrideModel,
-  });
-}
 
 type ResolvedCronDeliveryTarget = Awaited<ReturnType<typeof resolveDeliveryTarget>>;
 
@@ -171,6 +129,27 @@ async function resolveCronDeliveryContext(params: {
   deliveryContract: IsolatedDeliveryContract;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
+  if (!deliveryPlan.requested) {
+    const resolvedDelivery = {
+      ok: false as const,
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit" as const,
+      error: new Error("cron delivery not requested"),
+    };
+    return {
+      deliveryPlan,
+      deliveryRequested: false,
+      resolvedDelivery,
+      toolPolicy: resolveCronToolPolicy({
+        deliveryRequested: false,
+        resolvedDelivery,
+        deliveryContract: params.deliveryContract,
+      }),
+    };
+  }
   const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
@@ -601,6 +580,9 @@ export async function runCronIsolatedAgentTurn(params: {
             sessionKey: agentSessionKey,
             agentId,
             trigger: "cron",
+            // Cron runs execute inside the gateway process and need the same
+            // explicit subagent late-binding as other gateway-owned runners.
+            allowGatewaySubagentBinding: true,
             // Cron jobs are trusted local automation, so isolated runs should
             // inherit owner-only tooling like local `openclaw agent` runs.
             senderIsOwner: true,
@@ -663,9 +645,9 @@ export async function runCronIsolatedAgentTurn(params: {
       const interimPayloads = interimRunResult.payloads ?? [];
       const interimDeliveryPayload = pickLastDeliverablePayload(interimPayloads);
       const interimPayloadHasStructuredContent =
-        Boolean(interimDeliveryPayload?.mediaUrl) ||
-        (interimDeliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
-        Object.keys(interimDeliveryPayload?.channelData ?? {}).length > 0;
+        (interimDeliveryPayload
+          ? resolveSendableOutboundReplyParts(interimDeliveryPayload).hasMedia
+          : false) || Object.keys(interimDeliveryPayload?.channelData ?? {}).length > 0;
       const interimText = pickLastNonEmptyTextFromPayloads(interimPayloads)?.trim() ?? "";
       const hasDescendantsSinceRunStart = listDescendantRunsForRequester(agentSessionKey).some(
         (entry) => {
@@ -718,7 +700,9 @@ export async function runCronIsolatedAgentTurn(params: {
     const modelUsed = finalRunResult.meta?.agentMeta?.model ?? fallbackModel ?? model;
     const providerUsed = finalRunResult.meta?.agentMeta?.provider ?? fallbackProvider ?? provider;
     const contextTokens =
-      agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
+      agentCfg?.contextTokens ??
+      lookupContextTokens(modelUsed, { allowAsyncLoad: false }) ??
+      DEFAULT_CONTEXT_TOKENS;
 
     setSessionRuntimeModel(cronSession.sessionEntry, {
       provider: providerUsed,
@@ -739,6 +723,16 @@ export async function runCronIsolatedAgentTurn(params: {
         contextTokens,
         promptTokens,
       });
+      const runEstimatedCostUsd = resolveNonNegativeNumber(
+        estimateUsageCost({
+          usage,
+          cost: resolveModelCostConfig({
+            provider: providerUsed,
+            model: modelUsed,
+            config: cfgWithAgentDefaults,
+          }),
+        }),
+      );
       cronSession.sessionEntry.inputTokens = input;
       cronSession.sessionEntry.outputTokens = output;
       const telemetryUsage: NonNullable<CronRunTelemetry["usage"]> = {
@@ -755,6 +749,11 @@ export async function runCronIsolatedAgentTurn(params: {
       }
       cronSession.sessionEntry.cacheRead = usage.cacheRead ?? 0;
       cronSession.sessionEntry.cacheWrite = usage.cacheWrite ?? 0;
+      if (runEstimatedCostUsd !== undefined) {
+        cronSession.sessionEntry.estimatedCostUsd =
+          (resolveNonNegativeNumber(cronSession.sessionEntry.estimatedCostUsd) ?? 0) +
+          runEstimatedCostUsd;
+      }
 
       telemetry = {
         model: modelUsed,
@@ -785,8 +784,7 @@ export async function runCronIsolatedAgentTurn(params: {
         ? [{ text: synthesizedText }]
         : [];
   const deliveryPayloadHasStructuredContent =
-    Boolean(deliveryPayload?.mediaUrl) ||
-    (deliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
+    (deliveryPayload ? resolveSendableOutboundReplyParts(deliveryPayload).hasMedia : false) ||
     Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
   const hasErrorPayload = payloads.some((payload) => payload?.isError === true);

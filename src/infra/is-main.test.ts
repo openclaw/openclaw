@@ -24,6 +24,17 @@ describe("isMainModule", () => {
     ).toBe(true);
   });
 
+  it("resolves relative pm_exec_path values against cwd", () => {
+    expect(
+      isMainModule({
+        currentFile: "/repo/dist/index.js",
+        argv: ["node", "/pm2/lib/ProcessContainerFork.js"],
+        cwd: "/repo",
+        env: { pm_exec_path: "./dist/index.js", pm_id: "0" },
+      }),
+    ).toBe(true);
+  });
+
   it("returns true for configured wrapper-to-entry pairs", () => {
     expect(
       isMainModule({
@@ -67,14 +78,25 @@ describe("isMainModule", () => {
     ).toBe(false);
   });
 
-  it("falls back to basename matching for relative or symlinked entrypoints", () => {
+  it("returns false for another entrypoint with the same basename", () => {
+    expect(
+      isMainModule({
+        currentFile: "/repo/node_modules/openclaw/dist/index.js",
+        argv: ["node", "/repo/dist/index.js"],
+        cwd: "/repo",
+        env: {},
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when no entrypoint candidate exists", () => {
     expect(
       isMainModule({
         currentFile: "/repo/dist/index.js",
-        argv: ["node", "../other/index.js"],
-        cwd: "/repo/dist",
+        argv: ["node"],
+        cwd: "/repo",
         env: {},
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });

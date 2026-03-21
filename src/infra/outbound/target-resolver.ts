@@ -51,13 +51,30 @@ export async function maybeResolveIdLikeTarget(params: {
   if (!raw) {
     return undefined;
   }
+  return await maybeResolvePluginTarget(params, { requireIdLike: true });
+}
+
+async function maybeResolvePluginTarget(
+  params: {
+    cfg: OpenClawConfig;
+    channel: ChannelId;
+    input: string;
+    accountId?: string | null;
+    preferredKind?: TargetResolveKind;
+  },
+  options?: { requireIdLike?: boolean },
+): Promise<ResolvedMessagingTarget | undefined> {
+  const raw = normalizeChannelTargetInput(params.input);
+  if (!raw) {
+    return undefined;
+  }
   const plugin = getChannelPlugin(params.channel);
   const resolver = plugin?.messaging?.targetResolver;
   if (!resolver?.resolveTarget) {
     return undefined;
   }
   const normalized = normalizeTargetForProvider(params.channel, raw) ?? raw;
-  if (resolver.looksLikeId && !resolver.looksLikeId(raw, normalized)) {
+  if (options?.requireIdLike && resolver.looksLikeId && !resolver.looksLikeId(raw, normalized)) {
     return undefined;
   }
   const resolved = await resolver.resolveTarget({
@@ -157,31 +174,13 @@ export function formatTargetDisplay(params: {
     ? trimmedTarget.slice(channelPrefix.length)
     : trimmedTarget;
 
-  const withoutPrefix = withoutProvider.replace(/^telegram:/i, "");
-  if (/^channel:/i.test(withoutPrefix)) {
-    return `#${withoutPrefix.replace(/^channel:/i, "")}`;
+  if (/^channel:/i.test(withoutProvider)) {
+    return `#${withoutProvider.replace(/^channel:/i, "")}`;
   }
-  if (/^user:/i.test(withoutPrefix)) {
-    return `@${withoutPrefix.replace(/^user:/i, "")}`;
+  if (/^user:/i.test(withoutProvider)) {
+    return `@${withoutProvider.replace(/^user:/i, "")}`;
   }
-  return withoutPrefix;
-}
-
-function preserveTargetCase(channel: ChannelId, raw: string, normalized: string): string {
-  if (channel !== "slack") {
-    return normalized;
-  }
-  const trimmed = raw.trim();
-  if (/^channel:/i.test(trimmed) || /^user:/i.test(trimmed)) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("#")) {
-    return `channel:${trimmed.slice(1).trim()}`;
-  }
-  if (trimmed.startsWith("@")) {
-    return `user:${trimmed.slice(1).trim()}`;
-  }
-  return trimmed;
+  return withoutProvider;
 }
 
 function detectTargetKind(
@@ -196,17 +195,22 @@ function detectTargetKind(
   if (!trimmed) {
     return "group";
   }
+  const inferredChatType = getChannelPlugin(channel)?.messaging?.inferTargetChatType?.({ to: raw });
+  if (inferredChatType === "direct") {
+    return "user";
+  }
+  if (inferredChatType === "channel") {
+    return "channel";
+  }
+  if (inferredChatType === "group") {
+    return "group";
+  }
 
   if (trimmed.startsWith("@") || /^<@!?/.test(trimmed) || /^user:/i.test(trimmed)) {
     return "user";
   }
   if (trimmed.startsWith("#") || /^channel:/i.test(trimmed)) {
     return "group";
-  }
-
-  // For some channels (e.g., BlueBubbles/iMessage), bare phone numbers are almost always DM targets.
-  if ((channel === "bluebubbles" || channel === "imessage") && /^\+?\d{6,}$/.test(trimmed)) {
-    return "user";
   }
 
   return "group";
@@ -340,18 +344,15 @@ async function getDirectoryEntries(params: {
 }
 
 function buildNormalizedResolveResult(params: {
-  channel: ChannelId;
-  raw: string;
   normalized: string;
   kind: TargetResolveKind;
 }): ResolveMessagingTargetResult {
-  const directTarget = preserveTargetCase(params.channel, params.raw, params.normalized);
   return {
     ok: true,
     target: {
-      to: directTarget,
+      to: params.normalized,
       kind: params.kind,
-      display: stripTargetPrefixes(params.raw),
+      display: stripTargetPrefixes(params.normalized),
       source: "normalized",
     },
   };
@@ -410,11 +411,6 @@ export async function resolveMessagingTarget(params: {
       return true;
     }
     if (/^\+?\d{6,}$/.test(trimmed)) {
-      // BlueBubbles/iMessage phone numbers should usually resolve via the directory to a DM chat,
-      // otherwise the provider may pick an existing group containing that handle.
-      if (params.channel === "bluebubbles" || params.channel === "imessage") {
-        return false;
-      }
       return true;
     }
     if (trimmed.includes("@thread")) {
@@ -440,8 +436,6 @@ export async function resolveMessagingTarget(params: {
       };
     }
     return buildNormalizedResolveResult({
-      channel: params.channel,
-      raw,
       normalized,
       kind,
     });
@@ -491,18 +485,18 @@ export async function resolveMessagingTarget(params: {
       candidates: match.entries,
     };
   }
-  // For iMessage-style channels, allow sending directly to the normalized handle
-  // even if the directory doesn't contain an entry yet.
-  if (
-    (params.channel === "bluebubbles" || params.channel === "imessage") &&
-    /^\+?\d{6,}$/.test(query)
-  ) {
-    return buildNormalizedResolveResult({
-      channel: params.channel,
-      raw,
-      normalized,
-      kind,
-    });
+  const resolvedFallbackTarget = await maybeResolvePluginTarget({
+    cfg: params.cfg,
+    channel: params.channel,
+    input: raw,
+    accountId: params.accountId,
+    preferredKind: params.preferredKind,
+  });
+  if (resolvedFallbackTarget) {
+    return {
+      ok: true,
+      target: resolvedFallbackTarget,
+    };
   }
 
   return {

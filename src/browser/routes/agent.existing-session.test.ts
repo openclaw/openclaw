@@ -1,12 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBrowserAgentActRoutes } from "./agent.act.js";
 import { registerBrowserAgentSnapshotRoutes } from "./agent.snapshot.js";
-import type {
-  BrowserRequest,
-  BrowserResponse,
-  BrowserRouteHandler,
-  BrowserRouteRegistrar,
-} from "./types.js";
+import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import type { BrowserRequest } from "./types.js";
 
 const routeState = vi.hoisted(() => ({
   profileCtx: {
@@ -26,7 +22,9 @@ const routeState = vi.hoisted(() => ({
 }));
 
 const chromeMcpMocks = vi.hoisted(() => ({
-  evaluateChromeMcpScript: vi.fn(async () => true),
+  evaluateChromeMcpScript: vi.fn(
+    async (_params: { profileName: string; targetId: string; fn: string }) => true,
+  ),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({
@@ -98,39 +96,34 @@ vi.mock("./agent.shared.js", () => ({
   }),
 }));
 
-function createApp() {
-  const getHandlers = new Map<string, BrowserRouteHandler>();
-  const postHandlers = new Map<string, BrowserRouteHandler>();
-  const deleteHandlers = new Map<string, BrowserRouteHandler>();
-  const app: BrowserRouteRegistrar = {
-    get: (path, handler) => void getHandlers.set(path, handler),
-    post: (path, handler) => void postHandlers.set(path, handler),
-    delete: (path, handler) => void deleteHandlers.set(path, handler),
-  };
-  return { app, getHandlers, postHandlers, deleteHandlers };
+function getSnapshotGetHandler() {
+  const { app, getHandlers } = createBrowserRouteApp();
+  registerBrowserAgentSnapshotRoutes(app, {
+    state: () => ({ resolved: { ssrfPolicy: undefined } }),
+  } as never);
+  const handler = getHandlers.get("/snapshot");
+  expect(handler).toBeTypeOf("function");
+  return handler;
 }
 
-function createResponse() {
-  let statusCode = 200;
-  let jsonBody: unknown;
-  const res: BrowserResponse = {
-    status(code) {
-      statusCode = code;
-      return res;
-    },
-    json(body) {
-      jsonBody = body;
-    },
-  };
-  return {
-    res,
-    get statusCode() {
-      return statusCode;
-    },
-    get body() {
-      return jsonBody;
-    },
-  };
+function getSnapshotPostHandler() {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentSnapshotRoutes(app, {
+    state: () => ({ resolved: { ssrfPolicy: undefined } }),
+  } as never);
+  const handler = postHandlers.get("/screenshot");
+  expect(handler).toBeTypeOf("function");
+  return handler;
+}
+
+function getActPostHandler() {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentActRoutes(app, {
+    state: () => ({ resolved: { evaluateEnabled: true } }),
+  } as never);
+  const handler = postHandlers.get("/act");
+  expect(handler).toBeTypeOf("function");
+  return handler;
 }
 
 describe("existing-session browser routes", () => {
@@ -146,14 +139,8 @@ describe("existing-session browser routes", () => {
   });
 
   it("allows labeled AI snapshots for existing-session profiles", async () => {
-    const { app, getHandlers } = createApp();
-    registerBrowserAgentSnapshotRoutes(app, {
-      state: () => ({ resolved: { ssrfPolicy: undefined } }),
-    } as never);
-    const handler = getHandlers.get("/snapshot");
-    expect(handler).toBeTypeOf("function");
-
-    const response = createResponse();
+    const handler = getSnapshotGetHandler();
+    const response = createBrowserRouteResponse();
     await handler?.({ params: {}, query: { format: "ai", labels: "1" } }, response.res);
 
     expect(response.statusCode).toBe(200);
@@ -171,15 +158,55 @@ describe("existing-session browser routes", () => {
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalled();
   });
 
-  it("fails closed for existing-session networkidle waits", async () => {
-    const { app, postHandlers } = createApp();
-    registerBrowserAgentActRoutes(app, {
-      state: () => ({ resolved: { evaluateEnabled: true } }),
-    } as never);
-    const handler = postHandlers.get("/act");
-    expect(handler).toBeTypeOf("function");
+  it("allows ref screenshots for existing-session profiles", async () => {
+    const handler = getSnapshotPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { ref: "btn-1", type: "jpeg" },
+      },
+      response.res,
+    );
 
-    const response = createResponse();
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      path: "/tmp/fake.png",
+      targetId: "7",
+    });
+    expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      uid: "btn-1",
+      fullPage: false,
+      format: "jpeg",
+    });
+  });
+
+  it("rejects selector-based element screenshots for existing-session profiles", async () => {
+    const handler = getSnapshotPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { element: "#submit" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatchObject({
+      error: expect.stringContaining("element screenshots are not supported"),
+    });
+    expect(chromeMcpMocks.takeChromeMcpScreenshot).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for existing-session networkidle waits", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
     await handler?.(
       {
         params: {},
@@ -203,14 +230,8 @@ describe("existing-session browser routes", () => {
         (fn === "() => window.location.href" ? "https://example.com/" : true) as never,
     );
 
-    const { app, postHandlers } = createApp();
-    registerBrowserAgentActRoutes(app, {
-      state: () => ({ resolved: { evaluateEnabled: true } }),
-    } as never);
-    const handler = postHandlers.get("/act");
-    expect(handler).toBeTypeOf("function");
-
-    const response = createResponse();
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
     await handler?.(
       {
         params: {},
