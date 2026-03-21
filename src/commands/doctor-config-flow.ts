@@ -23,8 +23,8 @@ import {
   formatMatrixLegacyStatePreview,
 } from "./doctor/providers/matrix.js";
 import {
-  collectTelegramEmptyAllowlistExtraWarnings,
   collectTelegramAllowFromUsernameWarnings,
+  collectTelegramEmptyAllowlistExtraWarnings,
   maybeRepairTelegramAllowFromUsernames,
   scanTelegramAllowFromUsernameEntries,
 } from "./doctor/providers/telegram.js";

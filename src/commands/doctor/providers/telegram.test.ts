@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  collectTelegramEmptyAllowlistExtraWarnings,
   collectTelegramAllowFromUsernameWarnings,
+  collectTelegramEmptyAllowlistExtraWarnings,
   collectTelegramGroupPolicyWarnings,
   scanTelegramAllowFromUsernameEntries,
 } from "./telegram.js";
