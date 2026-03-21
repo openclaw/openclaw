@@ -1,5 +1,6 @@
 export {
   collectAttackSurfaceSummaryFindings,
+  collectCredentialEncryptionFindings,
   collectExposureMatrixFindings,
   collectGatewayHttpNoAuthFindings,
   collectGatewayHttpSessionKeyOverrideFindings,
@@ -9,6 +10,7 @@ export {
   collectModelHygieneFindings,
   collectNodeDangerousAllowCommandFindings,
   collectNodeDenyCommandPatternFindings,
+  collectPluginCapabilityFindings,
   collectSandboxDangerousConfigFindings,
   collectSandboxDockerNoopFindings,
   collectSecretsInConfigFindings,

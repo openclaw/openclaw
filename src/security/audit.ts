@@ -1213,6 +1213,8 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...auditNonDeep.collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg));
   findings.push(...auditNonDeep.collectLikelyMultiUserSetupFindings(cfg));
+  findings.push(...auditNonDeep.collectCredentialEncryptionFindings({ stateDir, env }));
+  findings.push(...auditNonDeep.collectPluginCapabilityFindings({ stateDir, env }));
 
   if (context.includeFilesystem) {
     findings.push(

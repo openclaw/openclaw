@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 /**
@@ -524,6 +526,7 @@ function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
 // Exported collectors
 // --------------------------------------------------------------------------
 
+/** Summarizes the overall attack surface: group policies, elevated tools, hooks, and browser state. */
 export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
@@ -554,6 +557,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
   ];
 }
 
+/** Warns when state/config paths live inside cloud-synced folders (iCloud, Dropbox, OneDrive, Google Drive). */
 export function collectSyncedFolderFindings(params: {
   stateDir: string;
   configPath: string;
@@ -571,6 +575,7 @@ export function collectSyncedFolderFindings(params: {
   return findings;
 }
 
+/** Detects secrets (gateway password, hooks token) stored directly in config instead of env vars. */
 export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const password =
@@ -601,6 +606,7 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
   return findings;
 }
 
+/** Checks hooks configuration: token strength, token reuse, path safety, session key controls, and agent routing. */
 export function collectHooksHardeningFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -720,6 +726,7 @@ export function collectHooksHardeningFindings(
   return findings;
 }
 
+/** Reports when HTTP API endpoints allow per-request session-key override. */
 export function collectGatewayHttpSessionKeyOverrideFindings(
   cfg: OpenClawConfig,
 ): SecurityAuditFinding[] {
@@ -747,6 +754,7 @@ export function collectGatewayHttpSessionKeyOverrideFindings(
   return findings;
 }
 
+/** Warns when gateway HTTP APIs are reachable without authentication. */
 export function collectGatewayHttpNoAuthFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -781,6 +789,7 @@ export function collectGatewayHttpNoAuthFindings(
   return findings;
 }
 
+/** Detects sandbox docker settings that have no effect because sandbox mode is off. */
 export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const configuredPaths: string[] = [];
@@ -831,6 +840,7 @@ export function collectSandboxDockerNoopFindings(cfg: OpenClawConfig): SecurityA
   return findings;
 }
 
+/** Flags dangerous sandbox configs: host bind mounts, host networking, unconfined seccomp/AppArmor, and unrestricted browser CDP. */
 export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
@@ -979,6 +989,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
   return findings;
 }
 
+/** Detects ineffective denyCommands entries: glob/regex patterns and unrecognized command names. */
 export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const denyListRaw = cfg.gateway?.nodes?.denyCommands;
@@ -1036,6 +1047,7 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
   return findings;
 }
 
+/** Warns when high-impact node commands (camera, contacts, SMS) are explicitly allowed. */
 export function collectNodeDangerousAllowCommandFindings(
   cfg: OpenClawConfig,
 ): SecurityAuditFinding[] {
@@ -1073,6 +1085,7 @@ export function collectNodeDangerousAllowCommandFindings(
   return findings;
 }
 
+/** Checks if global tools.profile=minimal is undermined by per-agent profile overrides. */
 export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   if (cfg.tools?.profile !== "minimal") {
@@ -1109,6 +1122,7 @@ export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): Secu
   return findings;
 }
 
+/** Identifies legacy and below-recommended-tier models that are more susceptible to prompt injection. */
 export function collectModelHygieneFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const models = collectModels(cfg);
@@ -1194,6 +1208,7 @@ export function collectModelHygieneFindings(cfg: OpenClawConfig): SecurityAuditF
   return findings;
 }
 
+/** Flags small-parameter models (<300B) that lack sandboxing or have web tools enabled. */
 export function collectSmallModelRiskFindings(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -1289,6 +1304,7 @@ export function collectSmallModelRiskFindings(params: {
   return findings;
 }
 
+/** Cross-references open group policies with elevated/runtime/filesystem tool exposure. */
 export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const openGroups = listGroupPolicyOpen(cfg);
@@ -1328,6 +1344,7 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
   return findings;
 }
 
+/** Heuristically detects multi-user setups that conflict with the personal-assistant trust model. */
 export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const signals = listPotentialMultiUserSignals(cfg);
@@ -1356,6 +1373,150 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
     remediation:
       'If users may be mutually untrusted, split trust boundaries (separate gateways + credentials, ideally separate OS users/hosts). If you intentionally run shared-user access, set agents.defaults.sandbox.mode="all", keep tools.fs.workspaceOnly=true, deny runtime/fs/web tools unless required, and keep personal/private identities + credentials off that runtime.',
   });
+
+  return findings;
+}
+
+/** Scans extension manifests for missing capabilities declarations (wildcard access). */
+export function collectPluginCapabilityFindings(params: {
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+}): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+
+  // Scan extension manifests for missing capabilities declarations.
+  const extensionsDir = path.resolve(params.stateDir, "..", "extensions");
+  if (!fs.existsSync(extensionsDir)) {
+    return findings;
+  }
+
+  let totalPlugins = 0;
+  let undeclaredCount = 0;
+  const undeclaredIds: string[] = [];
+
+  try {
+    const entries = fs.readdirSync(extensionsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const manifestPath = path.join(extensionsDir, entry.name, "openclaw.plugin.json");
+      if (!fs.existsSync(manifestPath)) {
+        continue;
+      }
+      totalPlugins++;
+      try {
+        const raw = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+        if (!raw.capabilities) {
+          undeclaredCount++;
+          const id = typeof raw.id === "string" ? raw.id : entry.name;
+          undeclaredIds.push(id);
+        }
+      } catch {
+        // Skip unparseable manifests.
+      }
+    }
+  } catch {
+    // Skip unreadable extensions dir.
+    return findings;
+  }
+
+  if (totalPlugins === 0) {
+    return findings;
+  }
+
+  if (undeclaredCount > 0) {
+    const preview = undeclaredIds.slice(0, 8).join(", ");
+    const more = undeclaredIds.length > 8 ? ` (+${undeclaredIds.length - 8} more)` : "";
+    findings.push({
+      checkId: "plugins.capabilities_undeclared",
+      severity: "info",
+      title: `${undeclaredCount}/${totalPlugins} plugins lack capabilities declarations`,
+      detail:
+        `Plugins without a "capabilities" field in openclaw.plugin.json run with full unrestricted access: ${preview}${more}. ` +
+        "Phase 1 (warn-only) is active; undeclared plugins are not blocked but diagnostics are logged.",
+      remediation:
+        'Add a "capabilities" object with "register" and "runtime" arrays to each plugin manifest to declare minimum required access.',
+    });
+  } else {
+    findings.push({
+      checkId: "plugins.capabilities_declared",
+      severity: "info",
+      title: `All ${totalPlugins} plugins declare capabilities`,
+      detail:
+        "Every plugin manifest includes a capabilities declaration for capability-based access control.",
+    });
+  }
+
+  return findings;
+}
+
+/** Reports credential encryption status: disabled, pending migration, or fully active. */
+export function collectCredentialEncryptionFindings(params: {
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+}): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const identityDir = path.join(params.stateDir, "identity");
+  const encryptionDisabled = params.env.OPENCLAW_CREDENTIAL_ENCRYPTION === "plaintext";
+
+  if (encryptionDisabled) {
+    findings.push({
+      checkId: "credentials.encryption_disabled",
+      severity: "warn",
+      title: "Credential encryption at rest is disabled",
+      detail:
+        "OPENCLAW_CREDENTIAL_ENCRYPTION=plaintext is set; credential files (device-auth.json, auth-profiles.json) are stored as plaintext JSON. " +
+        "Only filesystem permissions (0o600) protect these secrets.",
+      remediation:
+        "Remove OPENCLAW_CREDENTIAL_ENCRYPTION=plaintext to enable AES-256-GCM encryption at rest.",
+    });
+    return findings;
+  }
+
+  // Check if credential files exist and whether they are encrypted.
+  const credentialFiles = [
+    { name: "device-auth.json", path: path.join(identityDir, "device-auth.json") },
+  ];
+
+  const plaintextFiles: string[] = [];
+  for (const file of credentialFiles) {
+    try {
+      if (!fs.existsSync(file.path)) {
+        continue;
+      }
+      const raw = fs.readFileSync(file.path, "utf8");
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      // If it has tokens but no encryption envelope, it's plaintext.
+      if (parsed.tokens && !parsed.encryption) {
+        plaintextFiles.push(file.name);
+      }
+    } catch {
+      // Skip unreadable files.
+    }
+  }
+
+  if (plaintextFiles.length > 0) {
+    findings.push({
+      checkId: "credentials.plaintext_files",
+      severity: "info",
+      title: "Credential files pending encryption migration",
+      detail:
+        `${plaintextFiles.length} credential file(s) still stored as plaintext: ${plaintextFiles.join(", ")}. ` +
+        "These will be encrypted on the next write operation (transparent migration).",
+      remediation:
+        "No action needed — files migrate automatically on next credential update. " +
+        "To force migration now, run any credential-writing operation.",
+    });
+  } else {
+    findings.push({
+      checkId: "credentials.encryption_active",
+      severity: "info",
+      title: "Credential encryption at rest is active",
+      detail:
+        "Credential files are encrypted with AES-256-GCM using keys derived from the device identity.",
+    });
+  }
 
   return findings;
 }
