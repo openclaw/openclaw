@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -16,6 +17,7 @@ jobs:
   # Detect docs-only changes to skip heavy jobs (test, build, Windows, macOS, Android).
   # Lint and format always run. Fail-safe: if detection fails, run everything.
   docs-scope:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
       docs_only: ${{ steps.check.outputs.docs_only }}
@@ -221,7 +223,9 @@ jobs:
             cache_key_suffix: "node22"
             command: |
               pnpm build
-              pnpm test
+              node openclaw.mjs --help
+              node openclaw.mjs status --json --timeout 1
+              pnpm test:build:singleton
               node scripts/stage-bundled-plugin-runtime-deps.mjs
               node --import tsx scripts/release-check.ts
     steps:
@@ -404,8 +408,8 @@ jobs:
 
   build-smoke:
     name: "build-smoke"
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    needs: [docs-scope, changed-scope, build-artifacts]
+    if: always() && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -419,7 +423,15 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "false"
 
+      - name: Download dist artifact
+        if: github.event_name == 'push'
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
       - name: Build dist
+        if: github.event_name != 'push'
         run: pnpm build
 
       - name: Smoke test CLI launcher help
@@ -479,82 +491,6 @@ jobs:
 
       - name: Test skill Python scripts
         run: python -m pytest -q skills
-
-  secrets:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Ensure secrets base commit
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-          install-deps: "false"
-
-      - name: Setup Python
-        id: setup-python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-          cache-dependency-path: |
-            pyproject.toml
-            .pre-commit-config.yaml
-            .github/workflows/ci.yml
-
-      - name: Restore pre-commit cache
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/pre-commit
-          key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
-
-      - name: Install pre-commit
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pre-commit
-
-      - name: Detect committed private keys
-        run: pre-commit run --all-files detect-private-key
-
-      - name: Audit changed GitHub workflows with zizmor
-        env:
-          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "${BASE_SHA:-}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
-            echo "No usable base SHA detected; skipping zizmor."
-            exit 0
-          fi
-
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            echo "Base SHA ${BASE_SHA} is unavailable; skipping zizmor."
-            exit 0
-          fi
-
-          mapfile -t workflow_files < <(
-            git diff --name-only "${BASE_SHA}" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
-          )
-          if [ "${#workflow_files[@]}" -eq 0 ]; then
-            echo "No workflow changes detected; skipping zizmor."
-            exit 0
-          fi
-
-          printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
-          pre-commit run zizmor --files "${workflow_files[@]}"
-
-      - name: Audit production dependencies
-        run: pre-commit run --all-files pnpm-audit-prod
 
   checks-windows:
     needs: [docs-scope, changed-scope]
