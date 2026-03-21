@@ -137,11 +137,14 @@ async function gatewayServiceNeedsAutoNodeExtraCaCertsRefresh(params: {
 }): Promise<boolean> {
   try {
     const currentCommand = await params.service.readCommand(params.env);
-    const currentExecPath = currentCommand?.programArguments[0]?.trim();
+    if (!currentCommand) {
+      return false;
+    }
+    const currentExecPath = currentCommand.programArguments[0]?.trim();
     if (!currentExecPath) {
       return false;
     }
-    const currentEnvironment = currentCommand?.environment ?? {};
+    const currentEnvironment = currentCommand.environment ?? {};
     const currentNodeExtraCaCerts = currentEnvironment.NODE_EXTRA_CA_CERTS?.trim();
     const expectedNodeExtraCaCerts = resolveAutoNodeExtraCaCerts({
       env: {
