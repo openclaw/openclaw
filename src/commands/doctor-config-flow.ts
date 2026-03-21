@@ -29,6 +29,7 @@ import {
   scanTelegramAllowFromUsernameEntries,
 } from "./doctor/providers/telegram.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./doctor/shared/allowlist-policy-repair.js";
+import { applyDoctorConfigMutation } from "./doctor/shared/config-mutation-state.js";
 import {
   collectMissingDefaultAccountBindingWarnings,
   collectMissingExplicitDefaultAccountWarnings,
@@ -67,7 +68,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let candidate = structuredClone(baseCfg);
   let pendingChanges = false;
   let shouldWriteConfig = false;
-  const fixHints: string[] = [];
+  let fixHints: string[] = [];
 
   if (snapshot.legacyIssues.length > 0) {
     note(
@@ -97,25 +98,23 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const normalized = normalizeCompatibilityConfigValues(candidate);
   if (normalized.changes.length > 0) {
     note(normalized.changes.join("\n"), "Doctor changes");
-    candidate = normalized.config;
-    pendingChanges = true;
-    if (shouldRepair) {
-      cfg = normalized.config;
-    } else {
-      fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
-    }
+    ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+      state: { cfg, candidate, pendingChanges, fixHints },
+      mutation: normalized,
+      shouldRepair,
+      fixHint: `Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`,
+    }));
   }
 
   const autoEnable = applyPluginAutoEnable({ config: candidate, env: process.env });
   if (autoEnable.changes.length > 0) {
     note(autoEnable.changes.join("\n"), "Doctor changes");
-    candidate = autoEnable.config;
-    pendingChanges = true;
-    if (shouldRepair) {
-      cfg = autoEnable.config;
-    } else {
-      fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
-    }
+    ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+      state: { cfg, candidate, pendingChanges, fixHints },
+      mutation: autoEnable,
+      shouldRepair,
+      fixHint: `Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`,
+    }));
   }
 
   const matrixLegacyState = detectLegacyMatrixState({
@@ -172,17 +171,21 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const repair = await maybeRepairTelegramAllowFromUsernames(candidate);
     if (repair.changes.length > 0) {
       note(repair.changes.join("\n"), "Doctor changes");
-      candidate = repair.config;
-      pendingChanges = true;
-      cfg = repair.config;
+      ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+        state: { cfg, candidate, pendingChanges, fixHints },
+        mutation: repair,
+        shouldRepair,
+      }));
     }
 
     const discordRepair = maybeRepairDiscordNumericIds(candidate);
     if (discordRepair.changes.length > 0) {
       note(discordRepair.changes.join("\n"), "Doctor changes");
-      candidate = discordRepair.config;
-      pendingChanges = true;
-      cfg = discordRepair.config;
+      ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+        state: { cfg, candidate, pendingChanges, fixHints },
+        mutation: discordRepair,
+        shouldRepair,
+      }));
     }
 
     const allowFromRepair = maybeRepairOpenPolicyAllowFrom(candidate);
@@ -191,17 +194,21 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         allowFromRepair.changes.map((line) => sanitizeForLog(line)).join("\n"),
         "Doctor changes",
       );
-      candidate = allowFromRepair.config;
-      pendingChanges = true;
-      cfg = allowFromRepair.config;
+      ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+        state: { cfg, candidate, pendingChanges, fixHints },
+        mutation: allowFromRepair,
+        shouldRepair,
+      }));
     }
 
     const allowlistRepair = await maybeRepairAllowlistPolicyAllowFrom(candidate);
     if (allowlistRepair.changes.length > 0) {
       note(allowlistRepair.changes.join("\n"), "Doctor changes");
-      candidate = allowlistRepair.config;
-      pendingChanges = true;
-      cfg = allowlistRepair.config;
+      ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+        state: { cfg, candidate, pendingChanges, fixHints },
+        mutation: allowlistRepair,
+        shouldRepair,
+      }));
     }
 
     const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(candidate, {
@@ -218,17 +225,21 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const toolsBySenderRepair = maybeRepairLegacyToolsBySenderKeys(candidate);
     if (toolsBySenderRepair.changes.length > 0) {
       note(toolsBySenderRepair.changes.join("\n"), "Doctor changes");
-      candidate = toolsBySenderRepair.config;
-      pendingChanges = true;
-      cfg = toolsBySenderRepair.config;
+      ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+        state: { cfg, candidate, pendingChanges, fixHints },
+        mutation: toolsBySenderRepair,
+        shouldRepair,
+      }));
     }
 
     const safeBinProfileRepair = maybeRepairExecSafeBinProfiles(candidate);
     if (safeBinProfileRepair.changes.length > 0) {
       note(safeBinProfileRepair.changes.join("\n"), "Doctor changes");
-      candidate = safeBinProfileRepair.config;
-      pendingChanges = true;
-      cfg = safeBinProfileRepair.config;
+      ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+        state: { cfg, candidate, pendingChanges, fixHints },
+        mutation: safeBinProfileRepair,
+        shouldRepair,
+      }));
     }
     if (safeBinProfileRepair.warnings.length > 0) {
       note(safeBinProfileRepair.warnings.join("\n"), "Doctor warnings");
