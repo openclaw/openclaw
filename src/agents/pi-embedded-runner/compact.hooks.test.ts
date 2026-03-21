@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GIGACHAT_BASIC_BASE_URL } from "../../commands/onboard-auth.models.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 const {
@@ -917,7 +918,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
     sessionCompactImpl.mockImplementation(async () => {
       expect(createGigachatStreamFnMock).toHaveBeenCalledWith({
-        baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+        baseUrl: GIGACHAT_BASIC_BASE_URL,
         authMode: "basic",
         insecureTls: true,
         scope: "GIGACHAT_API_PERS",
@@ -990,7 +991,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
     sessionCompactImpl.mockImplementation(async () => {
       expect(createGigachatStreamFnMock).toHaveBeenCalledWith({
-        baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+        baseUrl: GIGACHAT_BASIC_BASE_URL,
         authMode: "basic",
         insecureTls: true,
         scope: "GIGACHAT_API_B2B",
@@ -1038,7 +1039,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     ensureAuthProfileStoreMock.mockReturnValue({ profiles: {} });
     sessionCompactImpl.mockImplementation(async () => {
       expect(createGigachatStreamFnMock).toHaveBeenCalledWith({
-        baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+        baseUrl: GIGACHAT_BASIC_BASE_URL,
         authMode: "basic",
         insecureTls: undefined,
         scope: undefined,

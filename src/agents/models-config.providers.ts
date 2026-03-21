@@ -4,7 +4,6 @@ import {
 } from "../../extensions/qianfan/provider-catalog.js";
 import { XIAOMI_DEFAULT_MODEL_ID } from "../../extensions/xiaomi/provider-catalog.js";
 import {
-  GIGACHAT_BASIC_BASE_URL,
   buildGigachatModelDefinition,
   GIGACHAT_BASE_URL,
 } from "../commands/onboard-auth.models.js";
@@ -15,8 +14,7 @@ import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
-  type GigachatAuthMetadata,
-  resolveGigachatAuthMode,
+  resolveImplicitGigachatBaseUrl,
   resolveGigachatAuthProfileMetadata,
 } from "./gigachat-auth.js";
 import { normalizeGoogleModelId } from "./model-id-normalization.js";
@@ -53,6 +51,7 @@ import {
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 export { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
 export { normalizeGoogleModelId };
+export { resolveImplicitGigachatBaseUrl } from "./gigachat-auth.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -101,25 +100,6 @@ function buildGigachatProvider(params: { apiKey?: string; baseUrl?: string }): P
     ...(params.apiKey ? { apiKey: params.apiKey } : {}),
     models: [buildGigachatModelDefinition()],
   } satisfies ProviderConfig;
-}
-
-export function resolveImplicitGigachatBaseUrl(params: {
-  envBaseUrl?: string;
-  metadata?: GigachatAuthMetadata;
-  apiKey?: string;
-  authProfileId?: string;
-}): string {
-  const envBaseUrl = params.envBaseUrl?.trim();
-  if (envBaseUrl) {
-    return envBaseUrl;
-  }
-  return resolveGigachatAuthMode({
-    metadata: params.metadata,
-    apiKey: params.apiKey,
-    authProfileId: params.authProfileId,
-  }) === "basic"
-    ? GIGACHAT_BASIC_BASE_URL
-    : GIGACHAT_BASE_URL;
 }
 
 function withStreamingUsageCompat(provider: ProviderConfig): ProviderConfig {

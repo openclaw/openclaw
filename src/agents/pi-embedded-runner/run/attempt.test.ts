@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  GIGACHAT_BASE_URL,
+  GIGACHAT_BASIC_BASE_URL,
+} from "../../../commands/onboard-auth.models.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
 import {
+  resolveConfiguredGigachatBaseUrl,
   resolveGigachatAuthMode,
   resolveGigachatInsecureTlsOverride,
 } from "../../gigachat-auth.js";
@@ -329,6 +334,26 @@ describe("resolveGigachatApiKeyForRun", () => {
       apiKey: "runtime-key",
       authProfileId: undefined,
     });
+  });
+});
+
+describe("resolveConfiguredGigachatBaseUrl", () => {
+  it("treats the stock OAuth host as an implicit default for Basic auth", () => {
+    expect(
+      resolveConfiguredGigachatBaseUrl({
+        baseUrl: GIGACHAT_BASE_URL,
+        apiKey: "user:password",
+      }),
+    ).toBe(GIGACHAT_BASIC_BASE_URL);
+  });
+
+  it("preserves custom hosts for Basic auth", () => {
+    expect(
+      resolveConfiguredGigachatBaseUrl({
+        baseUrl: "https://preview.gigachat.example/v1",
+        apiKey: "user:password",
+      }),
+    ).toBe("https://preview.gigachat.example/v1");
   });
 });
 

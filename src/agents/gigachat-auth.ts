@@ -1,3 +1,4 @@
+import { GIGACHAT_BASIC_BASE_URL, GIGACHAT_BASE_URL } from "../commands/onboard-auth.models.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 
 export type GigachatAuthMetadata = Record<string, string> | undefined;
@@ -45,6 +46,14 @@ function looksLikeGigachatBasicCredentials(apiKey: string | undefined): boolean 
   return separatorIndex > 0 && separatorIndex === trimmed.lastIndexOf(":");
 }
 
+function normalizeGigachatBaseUrlForComparison(baseUrl: string | undefined): string | undefined {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
 export function resolveGigachatAuthMode(params: {
   metadata?: GigachatAuthMetadata;
   apiKey?: string;
@@ -60,4 +69,45 @@ export function resolveGigachatAuthMode(params: {
   }
 
   return "oauth";
+}
+
+function resolveGigachatDefaultBaseUrl(params: {
+  metadata?: GigachatAuthMetadata;
+  apiKey?: string;
+  authProfileId?: string;
+}): string {
+  return resolveGigachatAuthMode(params) === "basic" ? GIGACHAT_BASIC_BASE_URL : GIGACHAT_BASE_URL;
+}
+
+export function resolveImplicitGigachatBaseUrl(params: {
+  envBaseUrl?: string;
+  metadata?: GigachatAuthMetadata;
+  apiKey?: string;
+  authProfileId?: string;
+}): string {
+  const envBaseUrl = params.envBaseUrl?.trim();
+  if (envBaseUrl) {
+    return envBaseUrl;
+  }
+  return resolveGigachatDefaultBaseUrl(params);
+}
+
+export function resolveConfiguredGigachatBaseUrl(params: {
+  baseUrl?: string;
+  envBaseUrl?: string;
+  metadata?: GigachatAuthMetadata;
+  apiKey?: string;
+  authProfileId?: string;
+}): string {
+  const baseUrl = params.baseUrl?.trim();
+  if (baseUrl) {
+    const normalizedBaseUrl = normalizeGigachatBaseUrlForComparison(baseUrl);
+    // Treat stock hosts as implicit defaults so they follow the resolved auth mode,
+    // while preserving any genuinely custom endpoint overrides.
+    if (normalizedBaseUrl === GIGACHAT_BASE_URL || normalizedBaseUrl === GIGACHAT_BASIC_BASE_URL) {
+      return resolveGigachatDefaultBaseUrl(params);
+    }
+    return baseUrl;
+  }
+  return resolveImplicitGigachatBaseUrl(params);
 }

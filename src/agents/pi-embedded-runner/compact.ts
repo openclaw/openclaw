@@ -44,6 +44,7 @@ import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../d
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
 import {
+  resolveConfiguredGigachatBaseUrl,
   resolveGigachatAuthMode,
   resolveGigachatAuthProfileMetadata,
   resolveGigachatInsecureTlsOverride,
@@ -851,11 +852,6 @@ export async function compactEmbeddedPiSessionDirect(
         );
       } else if (normalizeProviderId(provider) === "gigachat") {
         const providerConfig = params.config?.models?.providers?.[provider];
-        const baseUrl =
-          (typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined) ??
-          (typeof model.baseUrl === "string" ? model.baseUrl : undefined) ??
-          process.env.GIGACHAT_BASE_URL?.trim() ??
-          "https://gigachat.devices.sberbank.ru/api/v1";
         const gigachatStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
         const resolvedGigachatProfileId = apiKeyInfo?.profileId?.trim() || authProfileId?.trim();
         const gigachatMeta = resolveGigachatAuthProfileMetadata(
@@ -865,6 +861,15 @@ export async function compactEmbeddedPiSessionDirect(
             allowDefaultProfileFallback: Boolean(resolvedGigachatProfileId),
           },
         );
+        const baseUrl = resolveConfiguredGigachatBaseUrl({
+          baseUrl:
+            (typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined) ??
+            (typeof model.baseUrl === "string" ? model.baseUrl : undefined),
+          envBaseUrl: process.env.GIGACHAT_BASE_URL,
+          metadata: gigachatMeta,
+          apiKey: apiKeyInfo?.apiKey,
+          authProfileId: resolvedGigachatProfileId,
+        });
 
         session.agent.streamFn = createGigachatStreamFn({
           baseUrl,
