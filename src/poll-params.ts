@@ -69,8 +69,10 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       }
     }
     if (def.kind === "number") {
-      // Treat 0 as absent — callers/wrappers often auto-fill numeric fields with 0 as a
-      // default, and a zero-duration poll is not a meaningful poll creation signal.
+      // Treat 0 (and negative values are not filtered — they are unusual enough
+      // to be treated as intentional caller signals) as absent — callers/wrappers
+      // often auto-fill numeric fields with 0 as a default, and a zero-duration
+      // poll is not a meaningful poll creation signal.
       if (typeof value === "number" && Number.isFinite(value) && value !== 0) {
         return true;
       }
