@@ -189,6 +189,7 @@ async function resolveExistingProviderApiKey(params: {
   provider: string;
   reuseProviders?: string[];
   agentDir?: string;
+  allowProfile?: boolean;
 }): Promise<{ apiKey: string; source: string; credential: SecretInput } | null> {
   try {
     const providersToSearch = Array.from(
@@ -198,63 +199,65 @@ async function resolveExistingProviderApiKey(params: {
           .filter(Boolean),
       ),
     );
-    const store = await loadScopedAuthProfileStore(params.agentDir);
-    for (const provider of providersToSearch) {
-      const orderedProfiles = resolveAuthProfileOrder({
-        cfg: params.config,
-        store,
-        provider,
-      });
-      const candidateProfileIds = new Set<string>(orderedProfiles);
+    if (params.allowProfile !== false) {
+      const store = await loadScopedAuthProfileStore(params.agentDir);
+      for (const provider of providersToSearch) {
+        const orderedProfiles = resolveAuthProfileOrder({
+          cfg: params.config,
+          store,
+          provider,
+        });
+        const candidateProfileIds = new Set<string>(orderedProfiles);
 
-      for (const [profileId, profile] of Object.entries(store.profiles)) {
-        if (profile?.type === "api_key" && profile.provider === provider) {
-          candidateProfileIds.add(profileId);
+        for (const [profileId, profile] of Object.entries(store.profiles)) {
+          if (profile?.type === "api_key" && profile.provider === provider) {
+            candidateProfileIds.add(profileId);
+          }
         }
-      }
 
-      for (const profileId of candidateProfileIds) {
-        const profile = store.profiles[profileId];
-        if (profile?.type !== "api_key") {
-          continue;
-        }
-        try {
-          const resolved = await resolveApiKeyForProfile({
-            cfg: params.config,
-            store,
-            profileId,
-            agentDir: params.agentDir,
-          });
-          if (!resolved?.apiKey) {
+        for (const profileId of candidateProfileIds) {
+          const profile = store.profiles[profileId];
+          if (profile?.type !== "api_key") {
             continue;
           }
-          return {
-            apiKey: resolved.apiKey,
-            source: `profile:${profileId}`,
-            credential: (() => {
-              if (profile.keyRef) {
-                return profile.keyRef;
-              }
-              if (typeof profile.key === "string" && profile.key.trim().length > 0) {
-                const inlineEnvRef = parseEnvTemplateSecretRef(
-                  profile.key,
-                  resolveDefaultSecretProviderAlias(params.config, "env", {
-                    preferFirstProviderForSource: true,
-                  }),
-                );
-                return inlineEnvRef ?? profile.key;
-              }
-              return resolved.apiKey;
-            })(),
-          };
-        } catch {
-          continue;
+          try {
+            const resolved = await resolveApiKeyForProfile({
+              cfg: params.config,
+              store,
+              profileId,
+              agentDir: params.agentDir,
+            });
+            if (!resolved?.apiKey) {
+              continue;
+            }
+            return {
+              apiKey: resolved.apiKey,
+              source: `profile:${profileId}`,
+              credential: (() => {
+                if (profile.keyRef) {
+                  return profile.keyRef;
+                }
+                if (typeof profile.key === "string" && profile.key.trim().length > 0) {
+                  const inlineEnvRef = parseEnvTemplateSecretRef(
+                    profile.key,
+                    resolveDefaultSecretProviderAlias(params.config, "env", {
+                      preferFirstProviderForSource: true,
+                    }),
+                  );
+                  return inlineEnvRef ?? profile.key;
+                }
+                return resolved.apiKey;
+              })(),
+            };
+          } catch {
+            continue;
+          }
         }
       }
     }
 
     const envKey = resolveEnvApiKey(params.provider);
-    if (envKey && !envKey.source.includes("OAUTH_TOKEN")) {
+    if (envKey) {
       return {
         apiKey: envKey.apiKey,
         source: envKey.source,
@@ -567,6 +570,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   secretInputMode?: SecretInputMode;
   config: OpenClawConfig;
   agentDir?: string;
+  allowProfile?: boolean;
   expectedProviders: string[];
   reuseProviders?: string[];
   provider: string;
@@ -598,6 +602,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   return await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
     agentDir: params.agentDir,
+    allowProfile: params.allowProfile,
     reuseProviders: params.reuseProviders ?? params.expectedProviders,
     provider: params.provider,
     envLabel: params.envLabel,
@@ -613,6 +618,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
 export async function ensureApiKeyFromEnvOrPrompt(params: {
   config: OpenClawConfig;
   agentDir?: string;
+  allowProfile?: boolean;
   reuseProviders?: string[];
   provider: string;
   envLabel: string;
@@ -633,6 +639,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
     provider: params.provider,
     reuseProviders: params.reuseProviders,
     agentDir: params.agentDir,
+    allowProfile: params.allowProfile,
   });
 
   if (selectedMode === "ref") {
