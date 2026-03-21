@@ -782,7 +782,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         // Content capture: standard gen_ai.* attrs (primary), Langfuse compat (secondary).
         // All content is redacted then truncated to MAX_CONTENT_ATTR_BYTES before export
         // to avoid silent drops or rejections by OTEL backends with attribute size limits.
-        // Gated by captureContent policy.
+        // Guard on captureContent policy here as a defense-in-depth check — the event
+        // emitter in agent-runner.ts gates content at the source, but the diagnostic
+        // event bus is shared across all plugin listeners, so we also enforce the
+        // opt-in at the exporter to prevent accidental content export.
         if (contentCapturePolicy.inputMessages && evt.inputText) {
           const redactedInput = truncateToBytes(
             redactSensitiveText(evt.inputText),
