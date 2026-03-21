@@ -41587,6 +41587,21 @@
       "hasChildren": false
     },
     {
+      "path": "hooks.allowRequestSessionTarget",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "storage"
+      ],
+      "label": "Hooks Allow Request Session Target",
+      "help": "Allows callers to supply non-isolated hook session targets in direct `/hooks/agent` requests when true. Keep false unless trusted integrators explicitly need to resume `main` or `session:*` targets from request bodies.",
+      "hasChildren": false
+    },
+    {
       "path": "hooks.defaultSessionKey",
       "kind": "core",
       "type": "string",
@@ -42473,6 +42488,20 @@
       ],
       "label": "Hook Mapping Session Key",
       "help": "Explicit session key override for mapping-delivered messages to control thread continuity. Use stable scoped keys so repeated events correlate without leaking into unrelated conversations.",
+      "hasChildren": false
+    },
+    {
+      "path": "hooks.mappings.*.sessionTarget",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage"
+      ],
+      "label": "Hook Mapping Session Target",
+      "help": "Agent session target mode for mapping execution. Use \"isolated\" to force a fresh session every run, or \"main\", \"current\", or \"session:<id>\" when the hook should resume an existing session instead of starting over.",
       "hasChildren": false
     },
     {
