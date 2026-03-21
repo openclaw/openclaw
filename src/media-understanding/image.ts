@@ -49,22 +49,23 @@ async function resolveImageRuntime(params: {
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
   const resolvedRef = normalizeModelRef(params.provider, params.model);
-  let model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
+  const registryHit = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as
+    | Model<Api>
+    | null;
 
-  // When the direct registry lookup fails, fall back to the full resolution
-  // pipeline which handles OpenRouter pass-through (with vision heuristics),
+  // Always run the full resolution pipeline so that user config overrides
+  // (e.g. input: ["text", "image"]) are applied even for registry-cached models.
+  // This also handles OpenRouter pass-through (with vision heuristics),
   // inline provider models, and plugin-resolved dynamic models.
-  if (!model) {
-    const { resolveModelWithRegistry } = await import("../../agents/pi-embedded-runner/model.js");
-    model =
-      resolveModelWithRegistry({
-        provider: resolvedRef.provider,
-        modelId: resolvedRef.model,
-        modelRegistry,
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-      }) ?? null;
-  }
+  const { resolveModelWithRegistry } = await import("../../agents/pi-embedded-runner/model.js");
+  let model =
+    resolveModelWithRegistry({
+      provider: resolvedRef.provider,
+      modelId: resolvedRef.model,
+      modelRegistry,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    }) ?? registryHit;
 
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
