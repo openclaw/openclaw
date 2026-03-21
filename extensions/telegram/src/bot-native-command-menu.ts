@@ -162,7 +162,7 @@ async function writeCachedCommandHash(
     await fs.writeFile(filePath, hash, "utf-8");
   } catch {
     // Best-effort: failing to cache the hash just means the next restart
-    // will sync commands again, which is the pre-fix behaviour.
+    // will sync commands again, which is the pre-fix behavior.
   }
 }
 

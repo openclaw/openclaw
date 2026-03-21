@@ -26,8 +26,8 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Nextcloud Talk](/channels/nextcloud-talk) — Self-hosted chat via Nextcloud Talk (plugin, installed separately).
 - [Nostr](/channels/nostr) — Decentralized DMs via NIP-04 (plugin, installed separately).
 - [Signal](/channels/signal) — signal-cli; privacy-focused.
-- [Synology Chat](/channels/synology-chat) — Synology NAS Chat via outgoing+incoming webhooks (plugin, installed separately).
 - [Slack](/channels/slack) — Bolt SDK; workspace apps.
+- [Synology Chat](/channels/synology-chat) — Synology NAS Chat via outgoing+incoming webhooks (plugin, installed separately).
 - [Telegram](/channels/telegram) — Bot API via grammY; supports groups.
 - [Tlon](/channels/tlon) — Urbit-based messenger (plugin, installed separately).
 - [Twitch](/channels/twitch) — Twitch chat via IRC connection (plugin, installed separately).
