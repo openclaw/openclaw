@@ -350,8 +350,8 @@ export async function runEmbeddedPiAgent(
           legacyBeforeAgentStartResult = await hookRunner.runBeforeAgentStart(
             {
               prompt: params.prompt,
-              sessionKey: params.sessionKey,
-              agentId: workspaceResolution.agentId,
+              ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+              ...(workspaceResolution.agentId ? { agentId: workspaceResolution.agentId } : {}),
             },
             hookCtx,
           );
