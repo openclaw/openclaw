@@ -32,7 +32,7 @@
           },
           "baseUrl": {
             "type": "string",
-            "pattern": "^(https?://.+|.*\\$\\{[^}]+\\}.*)$"
+            "pattern": "^(|https?://.+|.*\\$\\{[^}]+\\}.*)$"
           },
           "mode": {
             "type": "string",

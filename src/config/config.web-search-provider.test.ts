@@ -234,6 +234,21 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts blank brave baseUrl values so users can clear the override", () => {
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "brave",
+        providerConfig: {
+          apiKey: "test-key", // pragma: allowlist secret
+          baseUrl: "",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
   it("migrates legacy top-level brave baseUrl into plugin-owned config", () => {
     const res = validateConfigObjectWithPlugins({
       tools: {
