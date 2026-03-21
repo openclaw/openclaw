@@ -196,7 +196,7 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 
 Then run:
 
-```
+```bash
 /tts summary off
 ```
 
