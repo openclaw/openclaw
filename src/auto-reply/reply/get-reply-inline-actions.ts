@@ -25,8 +25,8 @@ import {
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort.js";
 import { buildStatusReply, handleCommands } from "./commands.js";
-import type { InlineDirectives } from "./directive-handling.js";
-import { isDirectiveOnly } from "./directive-handling.js";
+import type { InlineDirectives } from "./directive-handling.parse.js";
+import { isDirectiveOnly } from "./directive-handling.parse.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
