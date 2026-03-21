@@ -304,7 +304,11 @@ async function executeUsage(
     const output = session.outputTokens ?? 0;
     const total = session.totalTokens ?? input + output;
     const ctx = session.contextTokens ?? 0;
-    const pct = ctx > 0 ? Math.round((input / ctx) * 100) : null;
+    // Use totalTokens (last-call prompt snapshot) for context %, not inputTokens.
+    // inputTokens accumulates across all API sub-calls (tool loops, retries),
+    // causing inflated readings. totalTokens matches the TUI's calculation.
+    const contextUsed = session.totalTokens ?? input;
+    const pct = ctx > 0 ? Math.round((contextUsed / ctx) * 100) : null;
 
     const lines = [
       "**Session Usage**",

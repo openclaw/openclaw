@@ -37,7 +37,10 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
           key: "main",
           kind: "direct",
           updatedAt: null,
-          inputTokens: 3_800,
+          // Use totalTokens (last-call prompt snapshot) to trigger the context
+          // notice — inputTokens is the accumulated sum across all API sub-calls
+          // and is no longer used for context utilization display.
+          totalTokens: 3_800,
           contextTokens: 4_000,
         },
       ],
