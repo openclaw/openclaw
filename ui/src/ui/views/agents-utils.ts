@@ -576,9 +576,35 @@ export function buildModelOptions(
   current?: string | null,
 ) {
   const options = resolveConfiguredModels(configForm);
-  const hasCurrent = current ? options.some((option) => option.value === current) : false;
-  if (current && !hasCurrent) {
-    options.unshift({ value: current, label: `Current (${current})` });
+
+  // Resolve bare alias (e.g. "k2p5") → full key (e.g. "kimi-coding/k2p5")
+  // so the select value is always a complete provider/key, never a bare alias.
+  const resolvedCurrent = (() => {
+    if (!current) return null;
+    if (options.some((o) => o.value === current)) return current;
+    const cfg = configForm as ConfigSnapshot | null;
+    const models = cfg?.agents?.defaults?.models;
+    if (models && typeof models === "object") {
+      for (const [modelId, modelRaw] of Object.entries(models)) {
+        const alias =
+          modelRaw && typeof modelRaw === "object" && "alias" in modelRaw
+            ? typeof (modelRaw as { alias?: unknown }).alias === "string"
+              ? (modelRaw as { alias?: string }).alias?.trim()
+              : undefined
+            : undefined;
+        if (alias === current) {
+          return modelId.trim();
+        }
+      }
+    }
+    return current;
+  })();
+
+  const hasCurrent = resolvedCurrent
+    ? options.some((option) => option.value === resolvedCurrent)
+    : false;
+  if (resolvedCurrent && !hasCurrent) {
+    options.unshift({ value: resolvedCurrent, label: `Current (${resolvedCurrent})` });
   }
   if (options.length === 0) {
     return html`
