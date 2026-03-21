@@ -428,9 +428,7 @@ function buildRecommendation(
     parts.push(`${countByTier[0]} auto-safe action(s) can run immediately`);
   }
   if (countByTier[1] > 0) {
-    parts.push(
-      `${countByTier[1]} Tier 1 archive/retention action(s) should be previewed before enabling`,
-    );
+    parts.push(`${countByTier[1]} retention cleanup action(s) — review list before enabling`);
   }
   if (countByTier[2] > 0) {
     parts.push(`${countByTier[2]} index-mutating action(s) require explicit approval`);
@@ -532,7 +530,9 @@ export function renderRemediationPlanText(plan: RemediationPlan): string {
   const lines: string[] = [];
 
   lines.push("═══════════════════════════════════════════════════════════════");
-  lines.push("  SESSION HEALTH — REMEDIATION PLAN (DRY RUN)");
+  lines.push("  REMEDIATION PLAN (DRY RUN)");
+  lines.push("  Lifecycle review — uses per-class retention, may differ from");
+  lines.push("  the global age threshold in the maintenance preview above");
   lines.push("═══════════════════════════════════════════════════════════════");
   lines.push("");
   lines.push(`  Generated:  ${plan.generatedAt}`);
@@ -550,7 +550,11 @@ export function renderRemediationPlanText(plan: RemediationPlan): string {
   }
 
   for (const tierGroup of plan.tiers) {
-    const approvalNote = tierGroup.approvalRequired ? " [REQUIRES APPROVAL]" : " [auto-safe]";
+    const approvalNote = tierGroup.approvalRequired
+      ? " [REQUIRES APPROVAL]"
+      : tierGroup.tier === 0
+        ? " [auto-safe]"
+        : " [review list first]";
     lines.push(`── Tier ${tierGroup.tier}: ${tierGroup.label}${approvalNote} ──`);
     lines.push(`   ${tierGroup.description}`);
     lines.push("");
@@ -593,7 +597,7 @@ export function renderRemediationPlanText(plan: RemediationPlan): string {
     lines.push("");
   }
   if (plan.approvalModel.previewThenAutomate.length > 0) {
-    lines.push("  Preview-then-automate (dry-run first, then automate):");
+    lines.push("  Review-then-automate (review list before enabling automation):");
     for (const kind of plan.approvalModel.previewThenAutomate) {
       lines.push(`    • ${kind}`);
     }

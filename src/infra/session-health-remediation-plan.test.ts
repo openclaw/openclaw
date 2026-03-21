@@ -606,6 +606,40 @@ describe("renderRemediationPlanText", () => {
     expect(text).toContain("Generated:");
     expect(text).toContain("Snapshot:");
   });
+
+  it("Tier 1 renders with [review list first], not [auto-safe]", () => {
+    const snapshot = baseSnapshot({
+      drift: {
+        ...baseSnapshot().drift,
+        diskFilesWithoutIndex: 2,
+      },
+    });
+    const plan = buildRemediationPlan({ snapshot });
+    const text = renderRemediationPlanText(plan);
+    // Tier 1 should NOT carry the auto-safe tag
+    expect(text).toContain("Tier 1");
+    expect(text).toContain("[review list first]");
+    // The auto-safe tag should only appear on Tier 0 if present
+    const tier1Section = text.split("Tier 1")[1] ?? "";
+    expect(tier1Section).not.toContain("[auto-safe]");
+  });
+
+  it("remediation plan header explains per-class vs global distinction", () => {
+    const snapshot = baseSnapshot({
+      drift: {
+        ...baseSnapshot().drift,
+        orphanedTempCount: 1,
+      },
+      storage: {
+        ...baseSnapshot().storage,
+        orphanedTempBytes: 512,
+      },
+    });
+    const plan = buildRemediationPlan({ snapshot });
+    const text = renderRemediationPlanText(plan);
+    expect(text).toContain("per-class retention");
+    expect(text).toContain("global age threshold");
+  });
 });
 
 // ---------------------------------------------------------------------------

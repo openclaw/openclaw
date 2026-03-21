@@ -258,12 +258,17 @@ function renderStoreDryRunPlan(params: {
     params.runtime.log(`Agent: ${params.summary.agentId}`);
   }
   params.runtime.log(`Session store: ${params.summary.storePath}`);
+  params.runtime.log("");
+  const sectionLabel = "── Maintenance Preview (global age threshold) ──";
+  params.runtime.log(rich ? theme.heading(sectionLabel) : sectionLabel);
   params.runtime.log(`Maintenance mode: ${params.summary.mode}`);
   params.runtime.log(
     `Entries: ${params.summary.beforeCount} -> ${params.summary.afterCount} (remove ${params.summary.beforeCount - params.summary.afterCount})`,
   );
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
-  params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
+  params.runtime.log(
+    `Would prune stale (global age threshold, all classes): ${params.summary.pruned}`,
+  );
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
   if (params.summary.diskBudget) {
     params.runtime.log(
