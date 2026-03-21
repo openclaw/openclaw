@@ -121,10 +121,34 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       ? `channel:${params.interactionCtx.channelId}`
       : `user:${params.interactionCtx.userId}`;
   let responded = false;
+  let acknowledged = false;
+  const updateOriginalMessage = async (input: {
+    text?: string;
+    components?: TopLevelComponents[];
+  }) => {
+    const payload = {
+      ...(input.text !== undefined ? { content: input.text } : {}),
+      ...(input.components !== undefined ? { components: input.components } : {}),
+    };
+    if (acknowledged) {
+      // Carbon edits @original on reply() after acknowledge(), which preserves
+      // plugin edit/clear flows without consuming a second interaction callback.
+      await params.interaction.reply(payload);
+      return;
+    }
+    if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
+      throw new Error("Discord interaction cannot update the source message");
+    }
+    await params.interaction.update(payload);
+  };
   const respond: PluginInteractiveDiscordHandlerContext["respond"] = {
     acknowledge: async () => {
-      responded = true;
+      if (responded) {
+        return;
+      }
       await params.interaction.acknowledge();
+      acknowledged = true;
+      responded = true;
     },
     reply: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
       responded = true;
@@ -141,23 +165,17 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       });
     },
     editMessage: async (input) => {
-      if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
-        throw new Error("Discord interaction cannot update the source message");
-      }
       const { text, components } = input;
       responded = true;
-      await params.interaction.update({
-        ...(text !== undefined ? { content: text } : {}),
-        ...(components !== undefined ? { components: components as TopLevelComponents[] } : {}),
+      await updateOriginalMessage({
+        text,
+        components: components as TopLevelComponents[] | undefined,
       });
     },
     clearComponents: async (input?: { text?: string }) => {
-      if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
-        throw new Error("Discord interaction cannot clear components on the source message");
-      }
       responded = true;
-      await params.interaction.update({
-        ...(input?.text !== undefined ? { content: input.text } : {}),
+      await updateOriginalMessage({
+        text: input?.text,
         components: [],
       });
     },
@@ -224,6 +242,13 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       },
     },
     respond,
+    onMatched: async () => {
+      try {
+        await respond.acknowledge();
+      } catch {
+        // Interaction may have expired before the plugin handler ran.
+      }
+    },
   });
   if (!dispatched.matched) {
     return "unmatched";
