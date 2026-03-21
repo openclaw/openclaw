@@ -7,8 +7,8 @@ import {
   clearPluginManifestRegistryCache,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
-import { validateConfigObject } from "./config.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+import { validateConfigObject } from "./validation.js";
 
 const tempDirs: string[] = [];
 

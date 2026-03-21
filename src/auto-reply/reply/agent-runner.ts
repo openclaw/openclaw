@@ -296,6 +296,7 @@ export async function runReplyAgent(params: {
       fallbackNoticeSelectedModel: undefined,
       fallbackNoticeActiveModel: undefined,
       fallbackNoticeReason: undefined,
+      memoryFlushContextHash: undefined,
     };
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
     const nextSessionFile = resolveSessionTranscriptPath(

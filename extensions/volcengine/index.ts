@@ -1,4 +1,4 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
 import { buildDoubaoCodingProvider, buildDoubaoProvider } from "./provider-catalog.js";

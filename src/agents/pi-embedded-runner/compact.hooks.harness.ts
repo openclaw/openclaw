@@ -11,6 +11,12 @@ type MockMemorySearchManager = {
     sync: (params?: unknown) => Promise<void>;
   };
 };
+type MockResolvedApiKey = {
+  apiKey: string;
+  mode: string;
+  profileId?: string;
+  source?: string;
+};
 
 export const contextEngineCompactMock = vi.fn(async () => ({
   ok: true as boolean,
@@ -67,7 +73,27 @@ export const resolveMemorySearchConfigMock = vi.fn(() => ({
 }));
 export const resolveSessionAgentIdMock = vi.fn(() => "main");
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
+export const sessionMessages: unknown[] = [
+  { role: "user", content: "hello", timestamp: 1 },
+  { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+  {
+    role: "toolResult",
+    toolCallId: "t1",
+    toolName: "exec",
+    content: [{ type: "text", text: "output" }],
+    isError: false,
+    timestamp: 3,
+  },
+];
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
+export const ensureAuthProfileStoreMock = vi.fn();
+export const getApiKeyForModelMock: Mock<(params?: unknown) => Promise<MockResolvedApiKey>> = vi.fn(
+  async () => ({ apiKey: "test", mode: "env" }),
+);
+export const createGigachatStreamFnMock = vi.fn();
+export const gigachatStreamFn = vi.fn();
+export const lastCreatedSession = { current: null as null | { agent: { streamFn: unknown } } };
+export const lastInitialStreamFn = { current: null as unknown };
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
 
 export function resetCompactHooksHarnessMocks(): void {
@@ -134,7 +160,29 @@ export function resetCompactHooksHarnessMocks(): void {
   resolveSessionAgentIdMock.mockReturnValue("main");
   estimateTokensMock.mockReset();
   estimateTokensMock.mockReturnValue(10);
+  sessionMessages.splice(
+    0,
+    sessionMessages.length,
+    { role: "user", content: "hello", timestamp: 1 },
+    { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+    {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "exec",
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+      timestamp: 3,
+    },
+  );
   sessionAbortCompactionMock.mockReset();
+  ensureAuthProfileStoreMock.mockReset();
+  ensureAuthProfileStoreMock.mockReturnValue({ profiles: {} });
+  getApiKeyForModelMock.mockReset();
+  getApiKeyForModelMock.mockResolvedValue({ apiKey: "test", mode: "env" });
+  createGigachatStreamFnMock.mockReset();
+  createGigachatStreamFnMock.mockReturnValue(gigachatStreamFn);
+  lastCreatedSession.current = null;
+  lastInitialStreamFn.current = null;
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
 }
@@ -142,6 +190,7 @@ export function resetCompactHooksHarnessMocks(): void {
 export async function loadCompactHooksHarness(): Promise<{
   compactEmbeddedPiSessionDirect: typeof import("./compact.js").compactEmbeddedPiSessionDirect;
   compactEmbeddedPiSession: typeof import("./compact.js").compactEmbeddedPiSession;
+  __testing: typeof import("./compact.js").__testing;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 }> {
   resetCompactHooksHarnessMocks();
@@ -174,25 +223,19 @@ export async function loadCompactHooksHarness(): Promise<{
     AuthStorage: class AuthStorage {},
     ModelRegistry: class ModelRegistry {},
     createAgentSession: vi.fn(async () => {
+      const initialStreamFn = vi.fn();
       const session = {
         sessionId: "session-1",
-        messages: [
-          { role: "user", content: "hello", timestamp: 1 },
-          { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
-          {
-            role: "toolResult",
-            toolCallId: "t1",
-            toolName: "exec",
-            content: [{ type: "text", text: "output" }],
-            isError: false,
-            timestamp: 3,
-          },
-        ],
+        messages: sessionMessages.map((message) =>
+          typeof structuredClone === "function"
+            ? structuredClone(message)
+            : JSON.parse(JSON.stringify(message)),
+        ),
         agent: {
           replaceMessages: vi.fn((messages: unknown[]) => {
             session.messages = [...(messages as typeof session.messages)];
           }),
-          streamFn: vi.fn(),
+          streamFn: initialStreamFn,
         },
         compact: vi.fn(async () => {
           session.messages.splice(1);
@@ -201,6 +244,8 @@ export async function loadCompactHooksHarness(): Promise<{
         abortCompaction: sessionAbortCompactionMock,
         dispose: vi.fn(),
       };
+      lastCreatedSession.current = session;
+      lastInitialStreamFn.current = initialStreamFn;
       return { session };
     }),
     DefaultResourceLoader: class DefaultResourceLoader {},
@@ -230,8 +275,13 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../model-auth.js", () => ({
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
-    getApiKeyForModel: vi.fn(async () => ({ apiKey: "test", mode: "env" })),
+    ensureAuthProfileStore: ensureAuthProfileStoreMock,
+    getApiKeyForModel: getApiKeyForModelMock,
     resolveModelAuthMode: vi.fn(() => "env"),
+  }));
+
+  vi.doMock("../gigachat-stream.js", () => ({
+    createGigachatStreamFn: createGigachatStreamFnMock,
   }));
 
   vi.doMock("../sandbox.js", () => ({
@@ -358,10 +408,15 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveChannelCapabilities: vi.fn(() => undefined),
   }));
 
-  vi.doMock("../../utils/message-channel.js", () => ({
-    INTERNAL_MESSAGE_CHANNEL: "webchat",
-    normalizeMessageChannel: vi.fn(() => undefined),
-  }));
+  vi.doMock("../../utils/message-channel.js", async () => {
+    const actual = await vi.importActual<typeof import("../../utils/message-channel.js")>(
+      "../../utils/message-channel.js",
+    );
+    return {
+      ...actual,
+      normalizeMessageChannel: vi.fn(() => undefined),
+    };
+  });
 
   vi.doMock("../pi-embedded-helpers.js", () => ({
     ensureSessionHeader: vi.fn(async () => {}),

@@ -1,5 +1,10 @@
 import os from "node:os";
 import path from "node:path";
+import {
+  isNvmNode,
+  resolveAutoNodeExtraCaCerts,
+  resolveLinuxSystemCaBundle,
+} from "../bootstrap/node-extra-ca-certs.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,
@@ -14,6 +19,8 @@ import {
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
 } from "./constants.js";
+
+export { isNvmNode, resolveLinuxSystemCaBundle };
 
 export type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
@@ -248,10 +255,16 @@ export function buildServiceEnvironment(params: {
   launchdLabel?: string;
   platform?: NodeJS.Platform;
   extraPathDirs?: string[];
+  execPath?: string;
 }): Record<string, string | undefined> {
   const { env, port, launchdLabel, extraPathDirs } = params;
   const platform = params.platform ?? process.platform;
-  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform, extraPathDirs);
+  const sharedEnv = resolveSharedServiceEnvironmentFields(
+    env,
+    platform,
+    extraPathDirs,
+    params.execPath,
+  );
   const profile = env.OPENCLAW_PROFILE;
   const resolvedLaunchdLabel =
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
@@ -273,10 +286,16 @@ export function buildNodeServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
   extraPathDirs?: string[];
+  execPath?: string;
 }): Record<string, string | undefined> {
   const { env, extraPathDirs } = params;
   const platform = params.platform ?? process.platform;
-  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform, extraPathDirs);
+  const sharedEnv = resolveSharedServiceEnvironmentFields(
+    env,
+    platform,
+    extraPathDirs,
+    params.execPath,
+  );
   const gatewayToken =
     env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
   return {
@@ -316,6 +335,7 @@ function resolveSharedServiceEnvironmentFields(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
   extraPathDirs: string[] | undefined,
+  execPath?: string,
 ): SharedServiceEnvironmentFields {
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
@@ -325,8 +345,16 @@ function resolveSharedServiceEnvironmentFields(
   // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
   // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
   // works correctly when running as a LaunchAgent without extra user configuration.
+  // On Linux, nvm-installed Node may need the host CA bundle injected before startup.
   const nodeCaCerts =
-    env.NODE_EXTRA_CA_CERTS ?? (platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
+    env.NODE_EXTRA_CA_CERTS ??
+    (platform === "darwin"
+      ? "/etc/ssl/cert.pem"
+      : resolveAutoNodeExtraCaCerts({
+          env,
+          platform,
+          execPath,
+        }));
   const nodeUseSystemCa = env.NODE_USE_SYSTEM_CA ?? (platform === "darwin" ? "1" : undefined);
   return {
     stateDir,
