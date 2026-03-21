@@ -1,3 +1,5 @@
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+
 export type HeartbeatIndicatorType = "ok" | "alert" | "error";
 
 export type HeartbeatEventPayload = {
@@ -33,13 +35,22 @@ export function resolveIndicatorType(
   }
 }
 
-let lastHeartbeat: HeartbeatEventPayload | null = null;
-const listeners = new Set<(evt: HeartbeatEventPayload) => void>();
+type HeartbeatEventState = {
+  lastHeartbeat: HeartbeatEventPayload | null;
+  listeners: Set<(evt: HeartbeatEventPayload) => void>;
+};
+
+const HEARTBEAT_EVENT_STATE_KEY = Symbol.for("openclaw.heartbeatEvents.state");
+
+const state = resolveGlobalSingleton<HeartbeatEventState>(HEARTBEAT_EVENT_STATE_KEY, () => ({
+  lastHeartbeat: null,
+  listeners: new Set<(evt: HeartbeatEventPayload) => void>(),
+}));
 
 export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, "ts">) {
   const enriched: HeartbeatEventPayload = { ts: Date.now(), ...evt };
-  lastHeartbeat = enriched;
-  for (const listener of listeners) {
+  state.lastHeartbeat = enriched;
+  for (const listener of state.listeners) {
     try {
       listener(enriched);
     } catch {
@@ -49,10 +60,15 @@ export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, "ts">) {
 }
 
 export function onHeartbeatEvent(listener: (evt: HeartbeatEventPayload) => void): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  state.listeners.add(listener);
+  return () => state.listeners.delete(listener);
 }
 
 export function getLastHeartbeatEvent(): HeartbeatEventPayload | null {
-  return lastHeartbeat;
+  return state.lastHeartbeat;
+}
+
+export function resetHeartbeatEventsForTest(): void {
+  state.lastHeartbeat = null;
+  state.listeners.clear();
 }
