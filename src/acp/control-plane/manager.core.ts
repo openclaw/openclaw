@@ -21,6 +21,7 @@ import type {
   AcpRuntime,
   AcpRuntimeCapabilities,
   AcpRuntimeHandle,
+  AcpRuntimeSessionMode,
   AcpRuntimeStatus,
 } from "../runtime/types.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
@@ -706,6 +707,7 @@ export class AcpSessionManager {
             cfg: input.cfg,
             meta,
           });
+          const sessionMode = meta.mode;
           await this.awaitTurnWithTimeout({
             sessionKey,
             turnPromise,
@@ -720,6 +722,7 @@ export class AcpSessionManager {
               await this.cleanupTimedOutTurn({
                 sessionKey,
                 activeTurn,
+                mode: sessionMode,
               });
             },
           });
@@ -904,6 +907,7 @@ export class AcpSessionManager {
   private async cleanupTimedOutTurn(params: {
     sessionKey: string;
     activeTurn: ActiveTurnState;
+    mode: AcpRuntimeSessionMode;
   }): Promise<void> {
     params.activeTurn.abortController.abort();
     if (!params.activeTurn.cancelPromise) {
@@ -912,27 +916,43 @@ export class AcpSessionManager {
         reason: ACP_TURN_TIMEOUT_REASON,
       });
     }
-    await this.awaitCleanupWithGrace({
+    const cancelFinished = await this.awaitCleanupWithGrace({
       sessionKey: params.sessionKey,
       label: "cancel",
       promise: params.activeTurn.cancelPromise,
     });
-    await this.awaitCleanupWithGrace({
+    if (params.mode !== "oneshot") {
+      return;
+    }
+    const closePromise = params.activeTurn.runtime.close({
+      handle: params.activeTurn.handle,
+      reason: ACP_TURN_TIMEOUT_REASON,
+    });
+    const closeFinished = await this.awaitCleanupWithGrace({
       sessionKey: params.sessionKey,
       label: "close",
-      promise: params.activeTurn.runtime.close({
-        handle: params.activeTurn.handle,
-        reason: ACP_TURN_TIMEOUT_REASON,
-      }),
+      promise: closePromise,
     });
-    this.clearCachedRuntimeState(params.sessionKey);
+    if (cancelFinished && closeFinished) {
+      this.clearCachedRuntimeStateIfHandleMatches({
+        sessionKey: params.sessionKey,
+        handle: params.activeTurn.handle,
+      });
+      return;
+    }
+    void Promise.allSettled([params.activeTurn.cancelPromise, closePromise]).then(() => {
+      this.clearCachedRuntimeStateIfHandleMatches({
+        sessionKey: params.sessionKey,
+        handle: params.activeTurn.handle,
+      });
+    });
   }
 
   private async awaitCleanupWithGrace(params: {
     sessionKey: string;
     label: "cancel" | "close";
     promise: Promise<unknown>;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const observedCleanupPromise: Promise<
       | {
           kind: "done";
@@ -970,13 +990,14 @@ export class AcpSessionManager {
         logVerbose(
           `acp-manager: timed-out turn ${params.label} cleanup exceeded ${ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS}ms for ${params.sessionKey}`,
         );
-        return;
+        return false;
       }
       if (outcome.kind === "error") {
         logVerbose(
           `acp-manager: timed-out turn ${params.label} cleanup failed for ${params.sessionKey}: ${String(outcome.error)}`,
         );
       }
+      return true;
     } finally {
       if (timer) {
         clearTimeout(timer);
@@ -1634,5 +1655,28 @@ export class AcpSessionManager {
 
   private clearCachedRuntimeState(sessionKey: string): void {
     this.runtimeCache.clear(normalizeActorKey(sessionKey));
+  }
+
+  private clearCachedRuntimeStateIfHandleMatches(params: {
+    sessionKey: string;
+    handle: AcpRuntimeHandle;
+  }): void {
+    const cached = this.getCachedRuntimeState(params.sessionKey);
+    if (!cached || !this.runtimeHandlesMatch(cached.handle, params.handle)) {
+      return;
+    }
+    this.clearCachedRuntimeState(params.sessionKey);
+  }
+
+  private runtimeHandlesMatch(a: AcpRuntimeHandle, b: AcpRuntimeHandle): boolean {
+    return (
+      a.sessionKey === b.sessionKey &&
+      a.backend === b.backend &&
+      a.runtimeSessionName === b.runtimeSessionName &&
+      (a.cwd ?? "") === (b.cwd ?? "") &&
+      (a.acpxRecordId ?? "") === (b.acpxRecordId ?? "") &&
+      (a.backendSessionId ?? "") === (b.backendSessionId ?? "") &&
+      (a.agentSessionId ?? "") === (b.agentSessionId ?? "")
+    );
   }
 }

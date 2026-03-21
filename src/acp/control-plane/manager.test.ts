@@ -271,7 +271,7 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
 
-  it("times out a hung runtime turn and lets queued work continue", async () => {
+  it("times out a hung persistent turn without closing the session and lets queued work continue", async () => {
     vi.useFakeTimers();
     try {
       const runtimeState = createRuntime();
@@ -332,27 +332,111 @@ describe("AcpSessionManager", () => {
       });
       await expect(second).resolves.toBeUndefined();
 
+      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
       expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
       expect(runtimeState.cancel).toHaveBeenCalledWith(
         expect.objectContaining({
           reason: "turn-timeout",
         }),
       );
-      expect(runtimeState.close).toHaveBeenCalledWith(
-        expect.objectContaining({
-          reason: "turn-timeout",
-        }),
-      );
-      expect(manager.getObservabilitySnapshot(cfg).turns).toMatchObject({
-        active: 0,
-        queueDepth: 0,
-        completed: 1,
-        failed: 1,
+      expect(runtimeState.close).not.toHaveBeenCalled();
+      expect(manager.getObservabilitySnapshot(cfg)).toMatchObject({
+        runtimeCache: {
+          activeSessions: 1,
+        },
+        turns: {
+          active: 0,
+          queueDepth: 0,
+          completed: 1,
+          failed: 1,
+        },
       });
 
       const states = extractStatesFromUpserts();
       expect(states).toContain("error");
       expect(states.at(-1)).toBe("idle");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps timed-out runtime handles counted until timeout cleanup finishes", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtimeState = createRuntime();
+      runtimeState.cancel.mockImplementation(() => new Promise(() => {}));
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+        return {
+          sessionKey,
+          storeSessionKey: sessionKey,
+          acp: {
+            ...readySessionMeta(),
+            runtimeSessionName: `runtime:${sessionKey}`,
+          },
+        };
+      });
+
+      let firstTurnStarted = false;
+      runtimeState.runTurn.mockImplementation(async function* (input: { requestId: string }) {
+        if (input.requestId === "r1") {
+          firstTurnStarted = true;
+          await new Promise(() => {});
+        }
+        yield { type: "done" as const };
+      });
+
+      const manager = new AcpSessionManager();
+      const cfg = {
+        ...baseCfg,
+        acp: {
+          ...baseCfg.acp,
+          maxConcurrentSessions: 1,
+        },
+        agents: {
+          defaults: {
+            timeoutSeconds: 1,
+          },
+        },
+      } as OpenClawConfig;
+
+      const first = manager.runTurn({
+        cfg,
+        sessionKey: "agent:codex:acp:session-a",
+        text: "first",
+        mode: "prompt",
+        requestId: "r1",
+      });
+      void first.catch(() => undefined);
+      await vi.waitFor(() => {
+        expect(firstTurnStarted).toBe(true);
+      });
+
+      await vi.advanceTimersByTimeAsync(4_500);
+
+      await expect(first).rejects.toMatchObject({
+        code: "ACP_TURN_FAILED",
+        message: "ACP turn timed out after 1s.",
+      });
+      expect(manager.getObservabilitySnapshot(cfg).runtimeCache.activeSessions).toBe(1);
+
+      await expect(
+        manager.runTurn({
+          cfg,
+          sessionKey: "agent:codex:acp:session-b",
+          text: "second",
+          mode: "prompt",
+          requestId: "r2",
+        }),
+      ).rejects.toMatchObject({
+        code: "ACP_SESSION_INIT_FAILED",
+        message: expect.stringContaining("max concurrent sessions"),
+      });
+      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
