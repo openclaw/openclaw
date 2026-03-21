@@ -59,6 +59,18 @@ vi.mock("grammy", () => ({
   GrammyError: class GrammyError extends Error {
     description = "";
   },
+  InputMediaBuilder: {
+    photo: (media: unknown, opts?: Record<string, unknown>) => ({
+      type: "photo",
+      media,
+      ...opts,
+    }),
+    video: (media: unknown, opts?: Record<string, unknown>) => ({
+      type: "video",
+      media,
+      ...opts,
+    }),
+  },
 }));
 
 function createRuntime(withLog = true): RuntimeStub {
@@ -830,19 +842,25 @@ describe("deliverReplies", () => {
     }
   });
 
-  it("replyToMode 'first' only applies reply-to to first media item", async () => {
+  it("replyToMode 'first' only applies reply-to to first media item (per-item path)", async () => {
+    // Use a GIF + photo to force per-item delivery (non-groupable mix).
     const runtime = createRuntime();
-    const sendPhoto = vi.fn().mockResolvedValue({
+    const sendAnimation = vi.fn().mockResolvedValue({
       message_id: 30,
       chat: { id: "123" },
     });
-    const bot = createBot({ sendPhoto });
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 31,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendAnimation, sendPhoto });
 
-    mockMediaLoad("a.jpg", "image/jpeg", "img1");
+    // Caching loader serves the GIF to both group attempt and per-item fallback.
+    mockMediaLoad("a.gif", "image/gif", "gif1");
     mockMediaLoad("b.jpg", "image/jpeg", "img2");
 
     await deliverReplies({
-      replies: [{ mediaUrls: ["https://a.jpg", "https://b.jpg"], replyToId: "900" }],
+      replies: [{ mediaUrls: ["https://a.gif", "https://b.jpg"], replyToId: "900" }],
       chatId: "123",
       token: "tok",
       runtime,
@@ -851,13 +869,14 @@ describe("deliverReplies", () => {
       textLimit: 4000,
     });
 
-    expect(sendPhoto).toHaveBeenCalledTimes(2);
-    // First media should have reply_to_message_id
-    expect(sendPhoto.mock.calls[0][2]).toEqual(
+    expect(sendAnimation).toHaveBeenCalledTimes(1);
+    expect(sendPhoto).toHaveBeenCalledTimes(1);
+    // First media (GIF) should have reply_to_message_id
+    expect(sendAnimation.mock.calls[0][2]).toEqual(
       expect.objectContaining({ reply_to_message_id: 900 }),
     );
     // Second media should NOT have reply_to_message_id
-    expect(sendPhoto.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
+    expect(sendPhoto.mock.calls[0][2]).not.toHaveProperty("reply_to_message_id");
   });
 
   it("pins the first delivered text message when telegram pin is requested", async () => {
@@ -916,5 +935,431 @@ describe("deliverReplies", () => {
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  describe("media groups (albums)", () => {
+    function createMediaGroupHarness(messageId = 50) {
+      const runtime = createRuntime();
+      const sendMediaGroup = vi.fn().mockResolvedValue([
+        { message_id: messageId, chat: { id: "123" } },
+        { message_id: messageId + 1, chat: { id: "123" } },
+      ]);
+      const sendMessage = vi.fn().mockResolvedValue({
+        message_id: messageId + 10,
+        chat: { id: "123" },
+      });
+      const sendPhoto = vi.fn().mockResolvedValue({
+        message_id: messageId + 20,
+        chat: { id: "123" },
+      });
+      const bot = createBot({ sendMediaGroup, sendMessage, sendPhoto });
+      return { runtime, sendMediaGroup, sendMessage, sendPhoto, bot };
+    }
+
+    it("sends 2 photos as a media group via sendMediaGroup", async () => {
+      const { runtime, sendMediaGroup, sendPhoto, bot } = createMediaGroupHarness();
+
+      mockMediaLoad("a.jpg", "image/jpeg", "img1");
+      mockMediaLoad("b.jpg", "image/jpeg", "img2");
+
+      await deliverWith({
+        replies: [{ mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"] }],
+        runtime,
+        bot,
+      });
+
+      expect(sendMediaGroup).toHaveBeenCalledTimes(1);
+      expect(sendPhoto).not.toHaveBeenCalled();
+      const media = sendMediaGroup.mock.calls[0][1];
+      expect(media).toHaveLength(2);
+      expect(media[0].type).toBe("photo");
+      expect(media[1].type).toBe("photo");
+    });
+
+    it("sends mixed photos and videos as a media group", async () => {
+      const { runtime, sendMediaGroup, bot } = createMediaGroupHarness();
+
+      mockMediaLoad("a.jpg", "image/jpeg", "img1");
+      mockMediaLoad("b.mp4", "video/mp4", "vid1");
+
+      await deliverWith({
+        replies: [{ mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.mp4"] }],
+        runtime,
+        bot,
+      });
+
+      expect(sendMediaGroup).toHaveBeenCalledTimes(1);
+      const media = sendMediaGroup.mock.calls[0][1];
+      expect(media[0].type).toBe("photo");
+      expect(media[1].type).toBe("video");
+    });
+
+    it("places caption only on the first item in the group", async () => {
+      const { runtime, sendMediaGroup, bot } = createMediaGroupHarness();
+
+      mockMediaLoad("a.jpg", "image/jpeg", "img1");
+      mockMediaLoad("b.jpg", "image/jpeg", "img2");
+
+      await deliverWith({
+        replies: [
+          {
+            mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+            text: "album caption",
+          },
+        ],
+        runtime,
+        bot,
+      });
+
+      expect(sendMediaGroup).toHaveBeenCalledTimes(1);
+      const media = sendMediaGroup.mock.calls[0][1];
+      expect(media[0].caption).toBe("album caption");
+      expect(media[0].parse_mode).toBe("HTML");
+      expect(media[1].caption).toBeUndefined();
+    });
+
+    it("sends caption overflow as a follow-up text message", async () => {
+      const { runtime, sendMediaGroup, sendMessage, bot } = createMediaGroupHarness();
+      const longCaption = "x".repeat(1025);
+
+      mockMediaLoad("a.jpg", "image/jpeg", "img1");
+      mockMediaLoad("b.jpg", "image/jpeg", "img2");
+
+      await deliverWith({
+        replies: [
+          {
+            mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+            text: longCaption,
+          },
+        ],
+        runtime,
+        bot,
+      });
+
+      expect(sendMediaGroup).toHaveBeenCalledTimes(1);
+      // Caption should not be on any media item when it overflows.
+      const media = sendMediaGroup.mock.calls[0][1];
+      expect(media[0].caption).toBeUndefined();
+      // Follow-up text message should be sent.
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage.mock.calls[0][1]).toContain("x".repeat(100));
+    });
+
+    it("falls back to per-item when a GIF is in the list", async () => {
+      const runtime = createRuntime();
+      const sendMediaGroup = vi.fn();
+      const sendAnimation = vi.fn().mockResolvedValue({
+        message_id: 60,
+        chat: { id: "123" },
+      });
+      const sendPhoto = vi.fn().mockResolvedValue({
+        message_id: 61,
+        chat: { id: "123" },
+      });
+      const bot = createBot({ sendMediaGroup, sendAnimation, sendPhoto });
+
+      // First media is a GIF — detected during group loading, triggers fallback.
+      // The caching loader serves already-loaded buffers to the per-item path.
+      mockMediaLoad("anim.gif", "image/gif", "gif1");
+      mockMediaLoad("b.jpg", "image/jpeg", "img1");
+
+      await deliverWith({
+        replies: [{ mediaUrls: ["https://anim.gif", "https://b.jpg"] }],
+        runtime,
+        bot,
+      });
+
+      expect(sendMediaGroup).not.toHaveBeenCalled();
+      expect(sendAnimation).toHaveBeenCalledTimes(1);
+      expect(sendPhoto).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to per-item when audio is in the list", async () => {
+      const runtime = createRuntime();
+      const sendMediaGroup = vi.fn();
+      const sendPhoto = vi.fn().mockResolvedValue({
+        message_id: 70,
+        chat: { id: "123" },
+      });
+      const sendAudio = vi.fn().mockResolvedValue({
+        message_id: 71,
+        chat: { id: "123" },
+      });
+      const bot = createBot({ sendMediaGroup, sendPhoto, sendAudio });
+
+      // First media is audio — not groupable.
+      // The caching loader serves already-loaded buffers to the per-item path.
+      mockMediaLoad("song.mp3", "audio/mpeg", "audio1");
+      mockMediaLoad("b.jpg", "image/jpeg", "img1");
+
+      await deliverWith({
+        replies: [{ mediaUrls: ["https://song.mp3", "https://b.jpg"] }],
+        runtime,
+        bot,
+      });
+
+      expect(sendMediaGroup).not.toHaveBeenCalled();
+      expect(sendAudio).toHaveBeenCalledTimes(1);
+      expect(sendPhoto).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not use media group for a single item", async () => {
+      const { runtime, sendMediaGroup } = createMediaGroupHarness();
+      const sendPhoto = vi.fn().mockResolvedValue({
+        message_id: 80,
+        chat: { id: "123" },
+      });
+      const singleBot = createBot({ sendMediaGroup, sendPhoto });
+
+      mockMediaLoad("a.jpg", "image/jpeg", "img1");
+
+      await deliverWith({
+        replies: [{ mediaUrl: "https://example.com/a.jpg" }],
+        runtime,
+        bot: singleBot,
+      });
+
+      expect(sendMediaGroup).not.toHaveBeenCalled();
+      expect(sendPhoto).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends buttons as a follow-up message since sendMediaGroup has no reply_markup", async () => {
+      const { runtime, sendMediaGroup, sendMessage, bot } = createMediaGroupHarness();
+
+      mockMediaLoad("a.jpg", "image/jpeg", "img1");
+      mockMediaLoad("b.jpg", "image/jpeg", "img2");
+
+      await deliverWith({
+        replies: [
+          {
+            mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+            text: "short caption",
+            channelData: {
+              telegram: {
+                buttons: [[{ text: "Click", callback_data: "click" }]],
+              },
+            },
+          },
+        ],
+        runtime,
+        bot,
+      });
+
+      expect(sendMediaGroup).toHaveBeenCalledTimes(1);
+      // Buttons should be in a follow-up message with caption text for callback context.
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage.mock.calls[0][1]).toContain("short caption");
+      expect(sendMessage.mock.calls[0][2]).toEqual(
+        expect.objectContaining({
+          reply_markup: {
+            inline_keyboard: [[{ text: "Click", callback_data: "click" }]],
+          },
+        }),
+      );
+    });
+
+    it("button follow-up message preserves reply-to metadata", async () => {
+      const { runtime, sendMediaGroup, sendMessage, bot } = createMediaGroupHarness();
+
+      mockMediaLoad("a.jpg", "image/jpeg", "img1");
+      mockMediaLoad("b.jpg", "image/jpeg", "img2");
+
+      await deliverReplies({
+        ...baseDeliveryParams,
+        replies: [
+          {
+            mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+            text: "short",
+            replyToId: "600",
+            channelData: {
+              telegram: {
+                buttons: [[{ text: "OK", callback_data: "ok" }]],
+              },
+            },
+          },
+        ],
+        runtime,
+        bot,
+        replyToMode: "all",
+        mediaLoader: loadWebMedia,
+      });
+
+      expect(sendMediaGroup).toHaveBeenCalledTimes(1);
+      // Button carrier message should include reply_to_message_id and caption text.
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage.mock.calls[0][1]).toContain("short");
+      expect(sendMessage.mock.calls[0][2]).toEqual(
+        expect.objectContaining({
+          reply_to_message_id: 600,
+          reply_markup: {
+            inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
+          },
+        }),
+      );
+    });
+
+    it("button carrier preserves reply-to with replyToMode first", async () => {
+      const { runtime, sendMediaGroup, sendMessage, bot } = createMediaGroupHarness();
+
+      mockMediaLoad("a.jpg", "image/jpeg", "img1");
+      mockMediaLoad("b.jpg", "image/jpeg", "img2");
+
+      await deliverReplies({
+        ...baseDeliveryParams,
+        replies: [
+          {
+            mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+            text: "cap",
+            replyToId: "700",
+            channelData: {
+              telegram: {
+                buttons: [[{ text: "Go", callback_data: "go" }]],
+              },
+            },
+          },
+        ],
+        runtime,
+        bot,
+        replyToMode: "first",
+        mediaLoader: loadWebMedia,
+      });
+
+      expect(sendMediaGroup).toHaveBeenCalledTimes(1);
+      // Both the album and the button carrier should carry reply_to_message_id
+      // even in "first" mode, since they are part of the same logical delivery.
+      expect(sendMediaGroup.mock.calls[0][2]).toEqual(
+        expect.objectContaining({ reply_to_message_id: 700 }),
+      );
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage.mock.calls[0][2]).toEqual(
+        expect.objectContaining({ reply_to_message_id: 700 }),
+      );
+    });
+
+    it("includes message_thread_id for DM topics in media groups", async () => {
+      const { runtime, sendMediaGroup, bot } = createMediaGroupHarness();
+
+      mockMediaLoad("a.jpg", "image/jpeg", "img1");
+      mockMediaLoad("b.jpg", "image/jpeg", "img2");
+
+      await deliverWith({
+        replies: [{ mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"] }],
+        runtime,
+        bot,
+        thread: { id: 42, scope: "dm" },
+      });
+
+      expect(sendMediaGroup).toHaveBeenCalledWith(
+        "123",
+        expect.any(Array),
+        expect.objectContaining({
+          message_thread_id: 42,
+        }),
+      );
+    });
+
+    it("sets disable_notification when silent is true for media groups", async () => {
+      const { runtime, sendMediaGroup, bot } = createMediaGroupHarness();
+
+      mockMediaLoad("a.jpg", "image/jpeg", "img1");
+      mockMediaLoad("b.jpg", "image/jpeg", "img2");
+
+      await deliverWith({
+        replies: [{ mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"] }],
+        runtime,
+        bot,
+        silent: true,
+      });
+
+      expect(sendMediaGroup).toHaveBeenCalledWith(
+        "123",
+        expect.any(Array),
+        expect.objectContaining({
+          disable_notification: true,
+        }),
+      );
+    });
+
+    it("applies reply_to_message_id on media group", async () => {
+      const { runtime, sendMediaGroup, bot } = createMediaGroupHarness();
+
+      mockMediaLoad("a.jpg", "image/jpeg", "img1");
+      mockMediaLoad("b.jpg", "image/jpeg", "img2");
+
+      await deliverReplies({
+        ...baseDeliveryParams,
+        replies: [
+          {
+            mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+            replyToId: "500",
+          },
+        ],
+        runtime,
+        bot,
+        replyToMode: "first",
+        mediaLoader: loadWebMedia,
+      });
+
+      expect(sendMediaGroup).toHaveBeenCalledWith(
+        "123",
+        expect.any(Array),
+        expect.objectContaining({
+          reply_to_message_id: 500,
+        }),
+      );
+    });
+
+    it("does not use media group for audioAsVoice replies", async () => {
+      const runtime = createRuntime();
+      const sendMediaGroup = vi.fn();
+      const sendVoice = vi.fn().mockResolvedValue({
+        message_id: 90,
+        chat: { id: "123" },
+      });
+      const bot = createBot({ sendMediaGroup, sendVoice });
+
+      mockMediaLoad("a.ogg", "audio/ogg", "voice1");
+      mockMediaLoad("b.ogg", "audio/ogg", "voice2");
+
+      await deliverWith({
+        replies: [
+          {
+            mediaUrls: ["https://example.com/a.ogg", "https://example.com/b.ogg"],
+            audioAsVoice: true,
+          },
+        ],
+        runtime,
+        bot,
+      });
+
+      expect(sendMediaGroup).not.toHaveBeenCalled();
+    });
+
+    it("pins the first message from a media group when pin is requested", async () => {
+      const runtime = createRuntime();
+      const sendMediaGroup = vi.fn().mockResolvedValue([
+        { message_id: 100, chat: { id: "123" } },
+        { message_id: 101, chat: { id: "123" } },
+      ]);
+      const pinChatMessage = vi.fn().mockResolvedValue(true);
+      const bot = createBot({ sendMediaGroup, pinChatMessage });
+
+      mockMediaLoad("a.jpg", "image/jpeg", "img1");
+      mockMediaLoad("b.jpg", "image/jpeg", "img2");
+
+      await deliverWith({
+        replies: [
+          {
+            mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+            channelData: { telegram: { pin: true } },
+          },
+        ],
+        runtime,
+        bot,
+      });
+
+      expect(pinChatMessage).toHaveBeenCalledTimes(1);
+      expect(pinChatMessage).toHaveBeenCalledWith("123", 100, { disable_notification: true });
+    });
   });
 });
