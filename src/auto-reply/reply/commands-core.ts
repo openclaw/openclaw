@@ -6,6 +6,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
+import type { OriginatingChannelType } from "../templating.js";
 import { handleAcpCommand } from "./commands-acp.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
@@ -76,8 +77,8 @@ export async function emitResetCommandHooks(params: {
   // Send hook messages immediately if present
   if (hookEvent.messages.length > 0) {
     // Use OriginatingChannel/To if available, otherwise fall back to command channel/from
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const channel = params.ctx.OriginatingChannel || (params.command.channel as any);
+    const channel =
+      params.ctx.OriginatingChannel || (params.command.channel as OriginatingChannelType);
     // For replies, use 'from' (the sender) not 'to' (which might be the bot itself)
     const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
 

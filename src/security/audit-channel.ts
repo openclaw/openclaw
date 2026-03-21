@@ -10,6 +10,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+import type { NativeCommandsSetting } from "../config/types.messages.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
@@ -832,8 +833,7 @@ export async function collectChannelSecurityFindings(params: {
 
       if (!hasAnySenderAllowlist) {
         const providerSetting = (telegramCfg.commands as { nativeSkills?: unknown } | undefined)
-          // oxlint-disable-next-line typescript/no-explicit-any
-          ?.nativeSkills as any;
+          ?.nativeSkills as NativeCommandsSetting | undefined;
         const skillsEnabled = resolveNativeSkillsEnabled({
           providerId: "telegram",
           providerSetting,

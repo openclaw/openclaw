@@ -9,8 +9,7 @@ export function makeState(
   profile: "remote" | "openclaw",
 ): BrowserServerState & { profiles: Map<string, { lastTargetId?: string | null }> } {
   return {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    server: null as any,
+    server: null,
     port: 0,
     resolved: {
       enabled: true,
