@@ -437,6 +437,14 @@
       "types": "./dist/plugin-sdk/tool-send.d.ts",
       "default": "./dist/plugin-sdk/tool-send.js"
     },
+    "./plugin-sdk/telegram": {
+      "types": "./dist/plugin-sdk/telegram.d.ts",
+      "default": "./dist/plugin-sdk/telegram.js"
+    },
+    "./plugin-sdk/telegram-core": {
+      "types": "./dist/plugin-sdk/telegram-core.d.ts",
+      "default": "./dist/plugin-sdk/telegram-core.js"
+    },
     "./extension-api": "./dist/extensionAPI.js",
     "./cli-entry": "./openclaw.mjs"
   },
