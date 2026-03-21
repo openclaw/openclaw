@@ -1,41 +1,41 @@
 # aillium-openclaw
 
 ## Purpose
-`aillium-openclaw` is a **fork of OpenClaw** adapted to act as the orchestration and planning engine for Aillium.
 
-It is responsible for deciding *how* tasks should be executed, not executing them directly.
+`aillium-openclaw` is a **fork of OpenClaw** used by Aillium as runtime and orchestration infrastructure.
+
+Aillium-specific control-plane behavior should be integrated through thin adapters, not deep runtime forks.
 
 ## What This Repo Does
-- Task planning & reasoning
-- Policy-aware decision making
-- Model usage via LiteLLM
-- Execution planning (API vs UI automation)
-- Metadata generation for audit & explainability
+
+- Reuses upstream OpenClaw runtime/orchestration capabilities
+- Hosts thin Aillium integration boundaries for external contracts and callbacks
+- Provides a stable bridge to Aillium Core and external execution surfaces
 
 ## What This Repo Does NOT Do
-- No UI
-- No billing logic
-- No credential storage
-- No direct remote access
 
-## Architecture Role
-Planner / Orchestration Engine
+- No tenancy ownership or policy authority
+- No approval decision ownership
+- No replacement of Aillium Core as source of truth
 
-## Integrations
-- Aillium Core (tasks & policy)
-- LiteLLM (model routing)
-- UI-TARS / n8n (execution targets)
+## Architecture role
 
-## Upstream Notice
+Runtime and orchestration substrate, with Aillium Core as the enterprise control plane.
+
+## Integration boundaries
+
+See `src/aillium/`, `docs/aillium-sync-plan.md`, and `docs/aillium-module-inventory.md` for adapter boundaries and sync inventory:
+
+- contract adapters
+- evidence callback hooks
+- tenant/session metadata passthrough
+- runtime registration with Aillium Core
+
+## Upstream notice
+
 This repository is a fork of OpenClaw.
-Original licence and notices are preserved.
+Original license and notices are preserved.
 
-## Licence
-Original upstream licence + Aillium notices
+## Upstream origin
 
-## Upstream Origin
-
-This repository is based on the OpenClaw project.
-Original source: https://github.com/<upstream-org>/<openclaw-repo>
-
-This fork contains substantial modifications for the Aillium platform.
+Original source: https://github.com/openclaw/openclaw
