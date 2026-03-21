@@ -280,7 +280,7 @@ export function registerCronEditCommand(cron: Command) {
               if (threadId && !/^\d+$/.test(threadId)) {
                 throw new Error("--thread-id must be a numeric value");
               }
-              const to = threadId ? toRaw.replace(/:topic:\d+$/, "") : toRaw;
+              const to = threadId ? toRaw.replace(/:(?:topic:)?\d+$/, "") : toRaw;
               if (to && threadId) {
                 delivery.to = `${to}:topic:${threadId}`;
               } else if (to) {
