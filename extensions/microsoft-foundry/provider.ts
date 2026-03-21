@@ -1,7 +1,5 @@
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/core";
-import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-models";
-import type { ProviderModelSelectedContext } from "../../src/plugins/types.js";
-import type { ModelProviderConfig } from "../../src/config/types.models.js";
+import type { ModelProviderConfig, ProviderPlugin } from "openclaw/plugin-sdk/provider-models";
 import { apiKeyAuthMethod, entraIdAuthMethod } from "./auth.js";
 import { prepareFoundryRuntimeAuth } from "./runtime.js";
 import {
@@ -27,7 +25,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
     capabilities: {
       providerFamily: "openai" as const,
     },
-    onModelSelected: async (ctx: ProviderModelSelectedContext) => {
+    onModelSelected: async (ctx) => {
       const providerConfig = ctx.config.models?.providers?.[PROVIDER_ID];
       if (!providerConfig || !ctx.model.startsWith(`${PROVIDER_ID}/`)) {
         return;
@@ -37,24 +35,31 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
       const selectedModelNameHint = resolveConfiguredModelNameHint(selectedModelId, existingModel?.name);
       const selectedModelCompat = buildFoundryModelCompat(selectedModelId, selectedModelNameHint);
       const providerEndpoint = normalizeFoundryEndpoint(providerConfig.baseUrl ?? "");
+      const nextModels = providerConfig.models.map((model) =>
+        model.id === selectedModelId
+          ? {
+              ...model,
+              ...(selectedModelCompat ? { compat: selectedModelCompat } : {}),
+            }
+          : model,
+      );
+      if (!nextModels.some((model) => model.id === selectedModelId)) {
+        nextModels.push({
+          id: selectedModelId,
+          name: selectedModelNameHint ?? selectedModelId,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 16_384,
+          ...(selectedModelCompat ? { compat: selectedModelCompat } : {}),
+        });
+      }
       const nextProviderConfig: ModelProviderConfig = {
         ...providerConfig,
         baseUrl: buildFoundryProviderBaseUrl(providerEndpoint, selectedModelId, selectedModelNameHint),
         api: resolveFoundryApi(selectedModelId, selectedModelNameHint),
-        models: [
-          {
-            ...(existingModel ?? {
-              id: selectedModelId,
-              name: selectedModelId,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 128_000,
-              maxTokens: 16_384,
-            }),
-            ...(selectedModelCompat ? { compat: selectedModelCompat } : {}),
-          },
-        ],
+        models: nextModels,
       };
       const targetProfileId = resolveFoundryTargetProfileId(ctx.config, ctx.agentDir);
       if (targetProfileId) {

@@ -22,13 +22,14 @@ import {
 
 export { listSubscriptions } from "./cli.js";
 
-export function listFoundryResources(): FoundryResourceOption[] {
+export function listFoundryResources(subscriptionId?: string): FoundryResourceOption[] {
   try {
     const accounts = JSON.parse(
       execAz([
         "cognitiveservices",
         "account",
         "list",
+        ...(subscriptionId ? ["--subscription", subscriptionId] : []),
         "--query",
         "[].{id:id,name:name,kind:kind,location:location,resourceGroup:resourceGroup,endpoint:properties.endpoint,customSubdomain:properties.customSubDomainName,projects:properties.associatedProjects}",
         "--output",
@@ -83,7 +84,10 @@ export function listFoundryResources(): FoundryResourceOption[] {
   }
 }
 
-export function listResourceDeployments(resource: FoundryResourceOption): AzDeploymentSummary[] {
+export function listResourceDeployments(
+  resource: FoundryResourceOption,
+  subscriptionId?: string,
+): AzDeploymentSummary[] {
   try {
     const deployments = JSON.parse(
       execAz([
@@ -91,6 +95,7 @@ export function listResourceDeployments(resource: FoundryResourceOption): AzDepl
         "account",
         "deployment",
         "list",
+        ...(subscriptionId ? ["--subscription", subscriptionId] : []),
         "-g",
         resource.resourceGroup,
         "-n",
@@ -120,7 +125,7 @@ export async function selectFoundryResource(
   ctx: ProviderAuthContext,
   selectedSub: AzAccount,
 ): Promise<FoundryResourceOption> {
-  const resources = listFoundryResources();
+  const resources = listFoundryResources(selectedSub.id);
   if (resources.length === 0) {
     throw new Error(buildCreateFoundryHint(selectedSub));
   }
@@ -151,8 +156,9 @@ export async function selectFoundryResource(
 export async function selectFoundryDeployment(
   ctx: ProviderAuthContext,
   resource: FoundryResourceOption,
+  subscriptionId?: string,
 ): Promise<AzDeploymentSummary> {
-  const deployments = listResourceDeployments(resource);
+  const deployments = listResourceDeployments(resource, subscriptionId);
   if (deployments.length === 0) {
     throw new Error(
       [
@@ -307,6 +313,21 @@ export function extractTenantSuggestions(rawMessage: string): Array<{ id: string
   return suggestions;
 }
 
+export function isValidTenantIdentifier(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const isTenantUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+    trimmed,
+  );
+  const isTenantDomain =
+    /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/.test(
+      trimmed,
+    );
+  return isTenantUuid || isTenantDomain;
+}
+
 export async function promptTenantId(
   ctx: ProviderAuthContext,
   params?: {
@@ -340,7 +361,7 @@ export async function promptTenantId(
         if (!trimmed) {
           return params?.required ? "Tenant ID is required" : undefined;
         }
-        return /^[0-9a-fA-F-]{36}$/.test(trimmed) ? undefined : "Enter a valid tenant ID";
+        return isValidTenantIdentifier(trimmed) ? undefined : "Enter a valid tenant ID or tenant domain";
       },
     }),
   ).trim();

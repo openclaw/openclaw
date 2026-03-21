@@ -11,7 +11,7 @@ import {
   type SecretInput,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
-import { execAz, getLoggedInAccount, isAzCliInstalled } from "./cli.js";
+import { getLoggedInAccount, isAzCliInstalled } from "./cli.js";
 import {
   buildFoundryAuthResult,
   PROVIDER_ID,
@@ -97,10 +97,6 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       tenantId ??= selectedSub.tenantId;
     }
 
-    if (selectedSub) {
-      execAz(["account", "set", "--subscription", selectedSub.id]);
-    }
-
     let endpoint: string;
     let modelId: string;
     let modelNameHint: string | undefined;
@@ -111,7 +107,7 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       });
       if (useDiscoveredResource) {
         const selectedResource = await selectFoundryResource(ctx, selectedSub);
-        const selectedDeployment = await selectFoundryDeployment(ctx, selectedResource);
+        const selectedDeployment = await selectFoundryDeployment(ctx, selectedResource, selectedSub.id);
         endpoint = selectedResource.endpoint;
         modelId = selectedDeployment.name;
         modelNameHint = resolveConfiguredModelNameHint(modelId, selectedDeployment.modelName);

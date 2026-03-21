@@ -5,8 +5,7 @@ import {
   type ProviderAuthResult,
   type SecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
-import type { ModelCompatConfig, ModelProviderConfig } from "../../src/config/types.models.js";
-import type { ProviderModelSelectedContext } from "../../src/plugins/types.js";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
 
 export const PROVIDER_ID = "microsoft-foundry";
 export const DEFAULT_API = "openai-completions";
@@ -70,6 +69,26 @@ export type CachedTokenEntry = {
 
 export type FoundryProviderApi = typeof DEFAULT_API | typeof DEFAULT_GPT5_API;
 
+type FoundryModelCompat = {
+  maxTokensField: "max_completion_tokens" | "max_tokens";
+};
+
+type FoundryAuthProfileConfig = {
+  provider: string;
+  mode: "api_key" | "oauth" | "token";
+  email?: string;
+};
+
+type FoundryConfigShape = {
+  auth?: {
+    profiles?: Record<string, FoundryAuthProfileConfig>;
+    order?: Record<string, string[]>;
+  };
+  models?: {
+    providers?: Record<string, ModelProviderConfig>;
+  };
+};
+
 export function isGpt5FamilyName(value?: string | null): boolean {
   return typeof value === "string" && /^gpt-5(?:$|[-.])/i.test(value.trim());
 }
@@ -122,12 +141,12 @@ export function extractFoundryEndpoint(baseUrl: string): string | undefined {
 export function buildFoundryModelCompat(
   modelId: string,
   modelNameHint?: string | null,
-): ModelCompatConfig | undefined {
+): FoundryModelCompat | undefined {
   if (!isGpt5FamilyDeployment(modelId, modelNameHint)) {
     return undefined;
   }
   return {
-    maxTokensField: "max_completion_tokens",
+    maxTokensField: "max_completion_tokens" as const,
   };
 }
 
@@ -261,7 +280,7 @@ export function buildFoundryAuthResult(params: {
 }
 
 export function applyFoundryProfileBinding(
-  config: ProviderModelSelectedContext["config"],
+  config: FoundryConfigShape,
   profileId: string,
 ): void {
   applyAuthProfileConfig(config, {
@@ -272,7 +291,7 @@ export function applyFoundryProfileBinding(
 }
 
 export function applyFoundryProviderConfig(
-  config: ProviderModelSelectedContext["config"],
+  config: FoundryConfigShape,
   providerConfig: ModelProviderConfig,
 ): void {
   config.models ??= {};
@@ -281,7 +300,7 @@ export function applyFoundryProviderConfig(
 }
 
 export function resolveFoundryTargetProfileId(
-  config: ProviderModelSelectedContext["config"],
+  config: FoundryConfigShape,
   agentDir?: string,
 ): string | undefined {
   const configuredProfiles = config.auth?.profiles ?? {};
@@ -302,11 +321,8 @@ export function resolveFoundryTargetProfileId(
   });
   const credential = authStore.profiles[configuredProfileId];
   const authMethod = credential?.type === "api_key" ? credential.metadata?.authMethod : undefined;
-  if (authMethod === "api-key") {
-    return `${PROVIDER_ID}:default`;
-  }
-  if (authMethod === "entra-id") {
-    return `${PROVIDER_ID}:entra`;
+  if (authMethod === "api-key" || authMethod === "entra-id") {
+    return configuredProfileId;
   }
   return configuredProfileId;
 }
