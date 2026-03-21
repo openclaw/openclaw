@@ -16,7 +16,7 @@ import type { MsgContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-core.js";
-import { resolveDefaultModel } from "./directive-handling.js";
+import { resolveDefaultModel } from "./directive-handling.persist.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
