@@ -867,11 +867,19 @@ async function maybeFetchExternalWebFetchPayload(
     if (brightdataPayload) {
       return brightdataPayload;
     }
-  } catch (error) {
+  } catch (brightdataError) {
+    const parts: string[] = [];
     if (firecrawlError) {
-      throw firecrawlError;
+      parts.push(
+        `Firecrawl: ${firecrawlError instanceof Error ? firecrawlError.message : JSON.stringify(firecrawlError)}`,
+      );
     }
-    throw error;
+    parts.push(
+      `Bright Data: ${brightdataError instanceof Error ? brightdataError.message : String(brightdataError)}`,
+    );
+    throw new Error(parts.length > 1 ? `Both fallbacks failed. ${parts.join(". ")}` : parts[0], {
+      cause: brightdataError,
+    });
   }
   if (firecrawlError) {
     throw firecrawlError;
