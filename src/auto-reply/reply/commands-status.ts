@@ -181,6 +181,7 @@ export async function buildStatusReply(params: {
       },
       contextTokens,
       thinkingDefault: agentDefaults.thinkingDefault,
+      reasoningDefault: agentDefaults.reasoningDefault,
       verboseDefault: agentDefaults.verboseDefault,
       elevatedDefault: agentDefaults.elevatedDefault,
     },

@@ -33,4 +33,18 @@ describe("resolveCurrentDirectiveLevels", () => {
     expect(result.currentThinkLevel).toBe("minimal");
     expect(resolveDefaultThinkingLevel).not.toHaveBeenCalled();
   });
+
+  it("falls back to agent reasoningDefault when session override is absent", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue(undefined);
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentCfg: {
+        reasoningDefault: "stream",
+      },
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentReasoningLevel).toBe("stream");
+  });
 });

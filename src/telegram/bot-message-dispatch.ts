@@ -131,6 +131,10 @@ function resolveTelegramReasoningLevel(params: {
   } catch {
     // Fall through to default.
   }
+  const defaultLevel = cfg.agents?.defaults?.reasoningDefault;
+  if (defaultLevel === "on" || defaultLevel === "stream") {
+    return defaultLevel;
+  }
   return "off";
 }
 

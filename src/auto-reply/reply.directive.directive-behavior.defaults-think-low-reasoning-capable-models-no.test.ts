@@ -138,6 +138,17 @@ describe("directive behavior", () => {
           expectedReasoningLevel: "on" as const,
           thinkingDefault: "off" as const,
         },
+        {
+          expectedThinkLevel: "low" as const,
+          expectedReasoningLevel: "stream" as const,
+          reasoningDefault: "stream" as const,
+        },
+        {
+          expectedThinkLevel: "off" as const,
+          expectedReasoningLevel: "stream" as const,
+          thinkingDefault: "off" as const,
+          reasoningDefault: "stream" as const,
+        },
       ]) {
         await runReasoningDefaultCase({
           home,
