@@ -1547,10 +1547,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const runTick = async () => {
           try {
             if (!streamMessageId) {
+              const sendTurnSeq = currentTurnSeq;
               try {
                 // Capture the turn sequence BEFORE the async POST so we can
                 // detect whether a turn boundary fired while we were waiting.
-                const sendTurnSeq = currentTurnSeq;
                 const result = await sendMessageMattermost(to, text, {
                   accountId: account.accountId,
                   replyToId: effectiveReplyToId,
