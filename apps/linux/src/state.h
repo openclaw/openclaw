@@ -91,3 +91,4 @@ const gchar* systemd_get_canonical_unit_name(void);
 // Callbacks (implemented elsewhere)
 void notify_on_transition(AppState old_state, AppState new_state);
 void tray_update_from_state(AppState state);
+void state_on_probe_refresh_requested(void);
