@@ -1,4 +1,5 @@
 import { type Bot, GrammyError } from "grammy";
+import type { InputMediaPhoto, InputMediaVideo } from "grammy/types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
@@ -90,6 +91,32 @@ export function buildTelegramSendParams(opts?: {
     params.disable_notification = true;
   }
   return params;
+}
+
+export async function sendTelegramMediaGroup(params: {
+  bot: Bot;
+  chatId: string;
+  media: ReadonlyArray<InputMediaPhoto | InputMediaVideo>;
+  runtime: RuntimeEnv;
+  thread?: TelegramThreadSpec | null;
+  replyToMessageId?: number;
+  silent?: boolean;
+}): Promise<number> {
+  const requestParams = buildTelegramSendParams({
+    replyToMessageId: params.replyToMessageId,
+    thread: params.thread,
+    silent: params.silent,
+  });
+  const result = await sendTelegramWithThreadFallback({
+    operation: "sendMediaGroup",
+    runtime: params.runtime,
+    thread: params.thread,
+    requestParams,
+    send: (effectiveParams) =>
+      params.bot.api.sendMediaGroup(params.chatId, params.media, { ...effectiveParams }),
+  });
+  // sendMediaGroup returns an array; first message_id is used for pinning/hooks.
+  return result[0]?.message_id ?? 0;
 }
 
 export async function sendTelegramText(

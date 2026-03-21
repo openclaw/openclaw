@@ -1,4 +1,5 @@
-import { type Bot, GrammyError, InputFile } from "grammy";
+import { type Bot, GrammyError, InputFile, InputMediaBuilder } from "grammy";
+import type { InputMediaPhoto, InputMediaVideo } from "grammy/types";
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { fireAndForgetHook } from "openclaw/plugin-sdk/hook-runtime";
@@ -30,6 +31,7 @@ import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramSendParams,
+  sendTelegramMediaGroup,
   sendTelegramText,
   sendTelegramWithThreadFallback,
 } from "./delivery.send.js";
@@ -88,6 +90,144 @@ function buildChunkTextResolver(params: {
 function markDelivered(progress: DeliveryProgress): void {
   progress.hasDelivered = true;
   progress.deliveredCount += 1;
+}
+
+const MEDIA_GROUP_MIN = 2;
+const MEDIA_GROUP_MAX = 10;
+
+type GroupableMediaKind = "image" | "video";
+
+/** Returns true when all media items are photos/videos and count is 2-10. */
+function isGroupableMediaList(mediaList: string[], reply: ReplyPayload): boolean {
+  if (reply.audioAsVoice) return false;
+  return mediaList.length >= MEDIA_GROUP_MIN && mediaList.length <= MEDIA_GROUP_MAX;
+}
+
+/**
+ * Sends 2-10 photos/videos as a single Telegram album via sendMediaGroup.
+ * Caption is placed on the first item (subject to 1024-char limit).
+ * Buttons and overflow text are sent as follow-up messages because
+ * sendMediaGroup does not support reply_markup.
+ *
+ * Returns the first delivered message_id, or undefined on empty delivery.
+ * Returns `null` when the loaded media turns out to be non-groupable
+ * (e.g. GIF, audio, document) so the caller can fall back to per-item delivery.
+ */
+async function deliverMediaGroupReply(params: {
+  reply: ReplyPayload;
+  mediaList: string[];
+  bot: Bot;
+  chatId: string;
+  runtime: RuntimeEnv;
+  thread?: TelegramThreadSpec | null;
+  tableMode?: MarkdownTableMode;
+  mediaLocalRoots?: readonly string[];
+  chunkText: ChunkTextFn;
+  mediaLoader: typeof loadWebMedia;
+  linkPreview?: boolean;
+  silent?: boolean;
+  replyQuoteText?: string;
+  replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
+  replyToId?: number;
+  replyToMode: ReplyToMode;
+  progress: DeliveryProgress;
+}): Promise<number | undefined | null> {
+  // Load all media and build InputMedia entries, bailing out if any item
+  // is not a groupable type (photo/video).
+  const inputMedia: Array<InputMediaPhoto | InputMediaVideo> = [];
+  for (let i = 0; i < params.mediaList.length; i++) {
+    const mediaUrl = params.mediaList[i]!;
+    const media = await params.mediaLoader(
+      mediaUrl,
+      buildOutboundMediaLoadOptions({ mediaLocalRoots: params.mediaLocalRoots }),
+    );
+    const kind = kindFromMime(media.contentType ?? undefined) as
+      | GroupableMediaKind
+      | string
+      | undefined;
+    const isGif = isGifMedia({
+      contentType: media.contentType,
+      fileName: media.fileName,
+    });
+    // GIFs, audio, documents, and unknown types are not groupable.
+    if (isGif || (kind !== "image" && kind !== "video")) {
+      return null;
+    }
+    const fileName = media.fileName ?? "file";
+    const file = new InputFile(media.buffer, fileName);
+
+    // Caption is only attached to the first item in the group.
+    let captionOpts: { caption?: string; parse_mode?: "HTML" } = {};
+    if (i === 0) {
+      const { caption } = splitTelegramCaption(params.reply.text ?? undefined);
+      if (caption) {
+        const htmlCaption = renderTelegramHtmlText(caption, { tableMode: params.tableMode });
+        captionOpts = { caption: htmlCaption, parse_mode: "HTML" };
+      }
+    }
+
+    if (kind === "video") {
+      inputMedia.push(InputMediaBuilder.video(file, captionOpts));
+    } else {
+      inputMedia.push(InputMediaBuilder.photo(file, captionOpts));
+    }
+  }
+
+  const replyToMessageId = resolveReplyToForSend({
+    replyToId: params.replyToId,
+    replyToMode: params.replyToMode,
+    progress: params.progress,
+  });
+
+  const firstMessageId = await sendTelegramMediaGroup({
+    bot: params.bot,
+    chatId: params.chatId,
+    media: inputMedia,
+    runtime: params.runtime,
+    thread: params.thread,
+    replyToMessageId,
+    silent: params.silent,
+  });
+
+  // Mark all items as delivered.
+  for (let i = 0; i < inputMedia.length; i++) {
+    markDelivered(params.progress);
+  }
+  markReplyApplied(params.progress, replyToMessageId);
+
+  // Handle caption overflow and/or buttons as follow-up messages.
+  // sendMediaGroup does not support reply_markup, so buttons must go in a
+  // separate follow-up message.
+  const { followUpText } = splitTelegramCaption(params.reply.text ?? undefined);
+  if (followUpText) {
+    await sendPendingFollowUpText({
+      bot: params.bot,
+      chatId: params.chatId,
+      runtime: params.runtime,
+      thread: params.thread,
+      chunkText: params.chunkText,
+      text: followUpText,
+      replyMarkup: params.replyMarkup,
+      linkPreview: params.linkPreview,
+      silent: params.silent,
+      replyToId: params.replyToId,
+      replyToMode: params.replyToMode,
+      progress: params.progress,
+    });
+  } else if (params.replyMarkup) {
+    // No caption overflow, but buttons need a carrier message since
+    // sendMediaGroup does not support reply_markup.
+    await sendTelegramText(params.bot, params.chatId, "\u200B", params.runtime, {
+      thread: params.thread,
+      textMode: "html",
+      plainText: "\u200B",
+      silent: params.silent,
+      replyMarkup: params.replyMarkup,
+    });
+    markDelivered(params.progress);
+  }
+
+  return firstMessageId;
 }
 
 async function deliverTextReply(params: {
@@ -671,26 +811,56 @@ export async function deliverReplies(params: {
           progress,
         });
       } else {
-        firstDeliveredMessageId = await deliverMediaReply({
-          reply,
-          mediaList,
-          bot: params.bot,
-          chatId: params.chatId,
-          runtime: params.runtime,
-          thread: params.thread,
-          tableMode: params.tableMode,
-          mediaLocalRoots: params.mediaLocalRoots,
-          chunkText,
-          mediaLoader,
-          onVoiceRecording: params.onVoiceRecording,
-          linkPreview: params.linkPreview,
-          silent: params.silent,
-          replyQuoteText: params.replyQuoteText,
-          replyMarkup,
-          replyToId,
-          replyToMode: params.replyToMode,
-          progress,
-        });
+        // Try sending as a media group (album) when criteria are met.
+        let usedMediaGroup = false;
+        if (isGroupableMediaList(mediaList, reply)) {
+          const groupResult = await deliverMediaGroupReply({
+            reply,
+            mediaList,
+            bot: params.bot,
+            chatId: params.chatId,
+            runtime: params.runtime,
+            thread: params.thread,
+            tableMode: params.tableMode,
+            mediaLocalRoots: params.mediaLocalRoots,
+            chunkText,
+            mediaLoader,
+            linkPreview: params.linkPreview,
+            silent: params.silent,
+            replyQuoteText: params.replyQuoteText,
+            replyMarkup,
+            replyToId,
+            replyToMode: params.replyToMode,
+            progress,
+          });
+          // null means the loaded media was not groupable; fall back to per-item.
+          if (groupResult !== null) {
+            firstDeliveredMessageId = groupResult;
+            usedMediaGroup = true;
+          }
+        }
+        if (!usedMediaGroup) {
+          firstDeliveredMessageId = await deliverMediaReply({
+            reply,
+            mediaList,
+            bot: params.bot,
+            chatId: params.chatId,
+            runtime: params.runtime,
+            thread: params.thread,
+            tableMode: params.tableMode,
+            mediaLocalRoots: params.mediaLocalRoots,
+            chunkText,
+            mediaLoader,
+            onVoiceRecording: params.onVoiceRecording,
+            linkPreview: params.linkPreview,
+            silent: params.silent,
+            replyQuoteText: params.replyQuoteText,
+            replyMarkup,
+            replyToId,
+            replyToMode: params.replyToMode,
+            progress,
+          });
+        }
       }
       await maybePinFirstDeliveredMessage({
         shouldPin: shouldPinFirstMessage,
