@@ -1,10 +1,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildTokenChannelStatusSummary,
+  probeTelegram,
+  type ChannelPlugin as TelegramChannelPlugin,
+} from "../../extensions/telegram/runtime-api.js";
+import {
+  listTelegramAccountIds,
+  resolveTelegramAccount,
+} from "../../extensions/telegram/src/accounts.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { HealthSummary } from "./health.js";
 import { getHealthSnapshot } from "./health.js";
 
@@ -109,20 +117,32 @@ async function runSuccessfulTelegramProbe(
   return { calls, telegram };
 }
 
-let createPluginRuntime: typeof import("../plugins/runtime/index.js").createPluginRuntime;
-let setTelegramRuntime: typeof import("../../extensions/telegram/src/runtime.js").setTelegramRuntime;
+const telegramHealthPlugin: Pick<
+  TelegramChannelPlugin,
+  "id" | "meta" | "capabilities" | "config" | "status"
+> = {
+  ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+  config: {
+    listAccountIds: (cfg) => listTelegramAccountIds(cfg),
+    resolveAccount: (cfg, accountId) => resolveTelegramAccount({ cfg, accountId }),
+    isConfigured: (account) => Boolean(account.token?.trim()),
+  },
+  status: {
+    buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
+    probeAccount: async ({ account, timeoutMs }) =>
+      await probeTelegram(account.token, timeoutMs, {
+        proxyUrl: account.config.proxy,
+        network: account.config.network,
+        accountId: account.accountId,
+      }),
+  },
+};
 
 describe("getHealthSnapshot", () => {
-  beforeAll(async () => {
-    ({ createPluginRuntime } = await import("../plugins/runtime/index.js"));
-    ({ setTelegramRuntime } = await import("../../extensions/telegram/src/runtime.js"));
-  });
-
   beforeEach(() => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+      createTestRegistry([{ pluginId: "telegram", plugin: telegramHealthPlugin, source: "test" }]),
     );
-    setTelegramRuntime(createPluginRuntime());
   });
 
   afterEach(() => {

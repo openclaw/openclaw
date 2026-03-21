@@ -1,5 +1,5 @@
-import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "../../../runtime-api.js";
 import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import type { MatrixRawEvent } from "./types.js";
@@ -53,11 +53,19 @@ function createHandlerHarness() {
           dispatcher: {},
           replyOptions: {},
           markDispatchIdle: vi.fn(),
+          markRunComplete: vi.fn(),
         }),
         resolveHumanDelayConfig: vi.fn().mockReturnValue(undefined),
         dispatchReplyFromConfig: vi
           .fn()
           .mockResolvedValue({ queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } }),
+        withReplyDispatcher: vi.fn().mockImplementation(async ({ run, onSettled }) => {
+          try {
+            return await run();
+          } finally {
+            await onSettled?.();
+          }
+        }),
       },
       commands: {
         shouldHandleTextCommands: vi.fn().mockReturnValue(true),
@@ -100,10 +108,10 @@ function createHandlerHarness() {
     mediaMaxBytes: 5 * 1024 * 1024,
     startupMs: Date.now() - 120_000,
     startupGraceMs: 60_000,
-    dropPreStartupMessages: false,
     directTracker: {
       isDirectMessage: vi.fn().mockResolvedValue(true),
     },
+    dropPreStartupMessages: true,
     getRoomInfo: vi.fn().mockResolvedValue({
       name: "Media Room",
       canonicalAlias: "#media:example.org",

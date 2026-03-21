@@ -1,5 +1,4 @@
-import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-runtime";
-import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {

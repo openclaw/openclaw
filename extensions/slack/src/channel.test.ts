@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/slack";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import { slackOutbound } from "./outbound-adapter.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 
 const handleSlackActionMock = vi.fn();
 

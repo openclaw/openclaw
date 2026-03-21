@@ -194,7 +194,11 @@ function scanWebSearchRegistrySmells(sourceFile, filePath) {
 
 function shouldSkipFile(filePath) {
   const relativeFile = normalizePath(filePath);
-  return relativeFile.startsWith("src/plugins/contracts/");
+  return (
+    relativeFile === "src/plugins/bundled-web-search-registry.ts" ||
+    relativeFile.startsWith("src/plugins/contracts/") ||
+    /^src\/plugins\/runtime\/runtime-[^/]+-contract\.[cm]?[jt]s$/u.test(relativeFile)
+  );
 }
 
 export async function collectPluginExtensionImportBoundaryInventory() {

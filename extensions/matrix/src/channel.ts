@@ -3,28 +3,22 @@ import {
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
+  createPairingPrefixStripper,
+  createTextPairingAdapter,
+} from "openclaw/plugin-sdk/channel-pairing";
+import {
   createAllowlistProviderOpenWarningCollector,
   projectWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
+import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createChannelDirectoryAdapter,
-  createPairingPrefixStripper,
-  createScopedAccountReplyToModeResolver,
   createRuntimeDirectoryLiveAdapter,
-  createRuntimeOutboundDelegates,
-  createTextPairingAdapter,
   listResolvedDirectoryEntriesFromSources,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/directory-runtime";
 import { buildTrafficStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/infra-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  buildChannelConfigSchema,
-  buildProbeChannelStatusSummary,
-  collectStatusIssuesFromLastError,
-  DEFAULT_ACCOUNT_ID,
-  PAIRING_APPROVED_MESSAGE,
-  type ChannelPlugin,
-} from "../runtime-api.js";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import {
@@ -44,6 +38,14 @@ import {
   resolveMatrixDirectUserId,
   resolveMatrixTargetIdentity,
 } from "./matrix/target-ids.js";
+import {
+  buildChannelConfigSchema,
+  buildProbeChannelStatusSummary,
+  collectStatusIssuesFromLastError,
+  DEFAULT_ACCOUNT_ID,
+  PAIRING_APPROVED_MESSAGE,
+  type ChannelPlugin,
+} from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 import { matrixSetupAdapter } from "./setup-core.js";
@@ -82,6 +84,7 @@ const matrixConfigAdapter = createScopedChannelConfigAdapter<
   clearBaseFields: [
     "name",
     "homeserver",
+    "allowPrivateNetwork",
     "userId",
     "accessToken",
     "password",
@@ -396,6 +399,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
           userId: auth.userId,
           timeoutMs,
           accountId: account.accountId,
+          allowPrivateNetwork: auth.allowPrivateNetwork,
+          ssrfPolicy: auth.ssrfPolicy,
         });
       } catch (err) {
         return {
@@ -434,7 +439,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       //
       // INVARIANT: The import() below cannot hang because:
       // 1. It only loads local ESM modules with no circular awaits
-      // 2. Module initialization is synchronous (no top-level await in ./matrix/index.js)
+      // 2. Module initialization is synchronous (no top-level await in ./matrix/monitor/index.js)
       // 3. The lock only serializes the import phase, not the provider startup
       const previousLock = matrixStartupLock;
       let releaseLock: () => void = () => {};
@@ -445,9 +450,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
 
       // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
       // Wrap in try/finally to ensure lock is released even if import fails.
-      let monitorMatrixProvider: typeof import("./matrix/index.js").monitorMatrixProvider;
+      let monitorMatrixProvider: typeof import("./matrix/monitor/index.js").monitorMatrixProvider;
       try {
-        const module = await import("./matrix/index.js");
+        const module = await import("./matrix/monitor/index.js");
         monitorMatrixProvider = module.monitorMatrixProvider;
       } finally {
         // Release lock after import completes or fails

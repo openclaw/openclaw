@@ -101,7 +101,7 @@ describe("model-pricing-cache", () => {
         ],
       },
       hooks: {
-        mappings: [{ model: "xai/grok-4" }],
+        mappings: [{ model: "xai/grok-4.20-experimental-beta-0304-reasoning" }],
       },
       tools: {
         subagents: { model: { primary: "zai/glm-5" } },
@@ -130,7 +130,7 @@ describe("model-pricing-cache", () => {
               },
             },
             {
-              id: "x-ai/grok-4",
+              id: "x-ai/grok-4.20-experimental-beta-0304-reasoning",
               pricing: {
                 prompt: "0.000002",
                 completion: "0.00001",
@@ -172,12 +172,25 @@ describe("model-pricing-cache", () => {
       cacheRead: 0.3,
       cacheWrite: 0,
     });
-    expect(getCachedGatewayModelPricing({ provider: "xai", model: "grok-4" })).toEqual({
+    expect(
+      getCachedGatewayModelPricing({
+        provider: "xai",
+        model: "grok-4.20-experimental-beta-0304-reasoning",
+      }),
+    ).toEqual({
       input: 2,
       output: 10,
       cacheRead: 0,
       cacheWrite: 0,
     });
+    expect(getCachedGatewayModelPricing({ provider: "xai", model: "grok-4.20-reasoning" })).toEqual(
+      {
+        input: 2,
+        output: 10,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    );
     expect(getCachedGatewayModelPricing({ provider: "zai", model: "glm-5" })).toEqual({
       input: 1,
       output: 4,

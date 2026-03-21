@@ -93,6 +93,17 @@ describe("monitorDiscordProvider", () => {
     return opts.eventQueue;
   };
 
+  const getConstructedClientOptions = (): {
+    eventQueue?: { listenerTimeout?: number };
+  } => {
+    expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
+    return (
+      (clientConstructorOptionsMock.mock.calls[0]?.[0] as {
+        eventQueue?: { listenerTimeout?: number };
+      }) ?? {}
+    );
+  };
+
   const getHealthProbe = () => {
     expect(reconcileAcpThreadBindingsOnStartupMock).toHaveBeenCalledTimes(1);
     const firstCall = reconcileAcpThreadBindingsOnStartupMock.mock.calls.at(0) as
@@ -537,6 +548,18 @@ describe("monitorDiscordProvider", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("native command deploy skipped"),
     );
+  });
+
+  it("configures Carbon native deploy by default", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
+    expect(getConstructedClientOptions().eventQueue?.listenerTimeout).toBe(120_000);
   });
 
   it("reports connected status on startup and shutdown", async () => {
