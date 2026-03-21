@@ -141,11 +141,14 @@ export async function ensureSandboxBrowser(params: {
     return null;
   }
 
-  // Include workspaceDir in the slug so co-hosted instances with different HOME
-  // dirs produce distinct container names (fixes #51363).
+  // Include workspaceDir in the slug for shared/agent scopes so co-hosted
+  // instances with different HOME dirs produce distinct container names
+  // (fixes #51363). Session-scope containers are already collision-free via
+  // their per-session unique key, so we leave those names unchanged to avoid
+  // orphaning existing containers on upgrade.
   const slug = slugifySessionKey(
-    params.cfg.scope === "shared"
-      ? `shared:${params.workspaceDir}`
+    params.cfg.scope === "session"
+      ? params.scopeKey
       : `${params.scopeKey}:${params.workspaceDir}`,
   );
   const name = `${params.cfg.browser.containerPrefix}${slug}`;
