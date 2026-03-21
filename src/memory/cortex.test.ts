@@ -102,9 +102,10 @@ describe("cortex bridge", () => {
   });
 
   it("fails preview when graph is missing", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cortex-preview-missing-"));
     runExec.mockResolvedValueOnce({ stdout: "", stderr: "" });
 
-    await expect(previewCortexContext({ workspaceDir: "/tmp/workspace" })).rejects.toThrow(
+    await expect(previewCortexContext({ workspaceDir: tmpDir })).rejects.toThrow(
       "Cortex graph not found",
     );
   });
@@ -240,17 +241,31 @@ describe("cortex bridge", () => {
     );
   });
 
-  it("fails ingest when the Cortex graph is missing", async () => {
-    runExec.mockResolvedValueOnce({ stdout: "", stderr: "" });
+  it("initializes the Cortex graph on first ingest when it is missing", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cortex-first-ingest-"));
+    const graphPath = path.join(tmpDir, ".cortex", "context.json");
+    runExec
+      .mockResolvedValueOnce({ stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ stdout: "", stderr: "" });
 
-    await expect(
-      ingestCortexMemoryFromText({
-        workspaceDir: "/tmp/workspace",
-        event: {
-          actor: "user",
-          text: "I prefer concise answers.",
-        },
-      }),
-    ).rejects.toThrow("Cortex graph not found");
+    const result = await ingestCortexMemoryFromText({
+      workspaceDir: tmpDir,
+      event: {
+        actor: "user",
+        text: "I prefer concise answers.",
+      },
+    });
+
+    await expect(fs.readFile(graphPath, "utf8")).resolves.toContain('"nodes"');
+    expect(result).toEqual({
+      workspaceDir: tmpDir,
+      graphPath,
+      stored: true,
+    });
+    expect(runExec).toHaveBeenLastCalledWith(
+      "cortex",
+      expect.arrayContaining(["extract", "-o", graphPath, "--merge", graphPath]),
+      expect.any(Object),
+    );
   });
 });
