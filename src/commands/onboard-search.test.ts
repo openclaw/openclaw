@@ -249,9 +249,7 @@ describe("setupSearch", () => {
       const result = await setupSearch(cfg, runtime, prompter);
       expect(result.tools?.web?.search?.provider).toBe("brave");
       expect(result.tools?.web?.search?.enabled).toBeUndefined();
-      const missingNote = notes.find((n) =>
-        n.message.includes("No Brave Search API key stored"),
-      );
+      const missingNote = notes.find((n) => n.message.includes("No Brave Search API key stored"));
       expect(missingNote).toBeDefined();
     } finally {
       if (original === undefined) {
