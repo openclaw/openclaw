@@ -13,10 +13,14 @@ private final class OneShotContinuation: @unchecked Sendable {
 
     func resume(error: Error?) {
         lock.lock()
+        defer { lock.unlock() }
         let cont = self.continuation
         self.continuation = nil
-        lock.unlock()
-        guard let cont else { return }
+        guard let cont else {
+            // URLSessionWebSocketTask fired pong handler more than once (iOS 18+ race).
+            // The continuation was already resumed; silently drop the duplicate.
+            return
+        }
         ThrowingContinuationSupport.resumeVoid(cont, error: error)
     }
 }
