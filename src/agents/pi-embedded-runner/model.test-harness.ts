@@ -124,3 +124,22 @@ export function mockDiscoveredModel(params: {
     }),
   } as unknown as ReturnType<typeof discoverModels>);
 }
+
+/**
+ * Mock a stale discovered gpt-5.4 model while keeping the gpt-5.2-codex
+ * template visible so `hasDynamicOverrideTemplate` returns true and the
+ * `preferResolvedModel`/`preserveDiscoveredTransportMetadata` path is exercised.
+ */
+export function mockStaleCodexDiscovery(staleModel: Record<string, unknown>): void {
+  vi.mocked(discoverModels).mockReturnValue({
+    find: vi.fn((provider: string, modelId: string) => {
+      if (provider === "openai-codex" && modelId === "gpt-5.2-codex") {
+        return OPENAI_CODEX_TEMPLATE_MODEL;
+      }
+      if (provider === "openai-codex" && modelId === "gpt-5.4") {
+        return staleModel;
+      }
+      return null;
+    }),
+  } as unknown as ReturnType<typeof discoverModels>);
+}
