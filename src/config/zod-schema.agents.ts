@@ -8,6 +8,8 @@ export {
   ContentRoutingSchema,
   ContentForwardSchema,
   ContentRoutingAgentsSchema,
+  FoodImageIntakeSchema,
+  InvestigationSchema,
 } from "../lionroot/config/content-routing-schema.js";
 
 export const AgentsSchema = z

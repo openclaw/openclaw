@@ -51,6 +51,29 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts content routing investigation config", () => {
+    const res = validateConfigObject({
+      agents: {
+        contentRouting: {
+          enabled: true,
+          agents: {
+            leo: "strategy and architecture",
+          },
+          investigation: {
+            enabled: true,
+            maxSteps: 4,
+            maxDurationMs: 15000,
+            maxTokens: 900,
+            promotionThreshold: "medium",
+            defaultAgentId: "leo",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts safe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {

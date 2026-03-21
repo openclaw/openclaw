@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { logDebug } from "../../logger.js";
 import { runExec } from "../../process/exec.js";
 import { buildAgentSessionKey, pickFirstExistingAgentId } from "../../routing/resolve-route.js";
+import type { InvestigationConfig } from "../config/content-routing-schema.js";
 import { resolveWithStickiness, type ContentConfidence } from "./content-session-sticky.js";
 
 export type RecognizedContentRouteResult = {
@@ -34,6 +35,12 @@ export type ContentRoutingConfig = {
   stickyTimeoutMs?: number;
   defaultAgentId?: string;
   agents: Record<string, string>;
+  foodImageIntake?: {
+    endpointUrl: string;
+    bearerToken: string;
+    timeoutMs?: number;
+  };
+  investigation?: InvestigationConfig;
 };
 
 const DEFAULT_MODEL = "qwen3:14b";
@@ -48,6 +55,8 @@ export const TWITTER_STATUS_RE = /(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/
 
 // GitHub URL pattern
 const GITHUB_RE = /github\.com\//i;
+export const MEAL_INDICATOR_RE =
+  /\b(breakfast|lunch|dinner|snack|brunch|meal|ate|eating|food|calories|macros|protein|intake|nutrition|prep|smoothie|shake|coffee|supplements|recipe|cooking|cooked)\b/i;
 
 const HEALTH_TAG_PATTERNS: Array<{
   pattern: RegExp;
@@ -60,6 +69,24 @@ const HEALTH_TAG_PATTERNS: Array<{
   { pattern: /^\s*workout\s*:/i, category: "fitness", reason: "fast-path: workout tag" },
   { pattern: /^\s*\[liev\]/i, reason: "fast-path: [liev]" },
   { pattern: /^\s*liev\s*:/i, reason: "fast-path: liev prefix" },
+];
+
+const INVESTIGATION_TAG_PATTERNS: Array<{
+  pattern: RegExp;
+  reason: string;
+}> = [
+  { pattern: /^\s*investigate\s*:/i, reason: "fast-path: investigate tag" },
+  { pattern: /^\s*research\s*:/i, reason: "fast-path: research tag" },
+  { pattern: /^\s*(?:please\s+)?look\s+into\s*:/i, reason: "fast-path: look into tag" },
+  { pattern: /^\s*(?:please\s+)?dig\s+into\s*:/i, reason: "fast-path: dig into tag" },
+  {
+    pattern: /^\s*(?:can\s+you\s+|could\s+you\s+)?(?:look|dig)\s+into\b/i,
+    reason: "fast-path: investigation request",
+  },
+  {
+    pattern: /^\s*(?:can\s+you\s+|could\s+you\s+)?(?:research|investigate)\b/i,
+    reason: "fast-path: research request",
+  },
 ];
 
 export function isRecognizedContentRoute(
@@ -88,6 +115,26 @@ export function resolveContentRoutingConfig(cfg: OpenClawConfig): ContentRouting
     stickyTimeoutMs: cr.stickyTimeoutMs,
     defaultAgentId: typeof cr.defaultAgentId === "string" ? cr.defaultAgentId.trim() : undefined,
     agents,
+    foodImageIntake: cr.foodImageIntake
+      ? {
+          endpointUrl: cr.foodImageIntake.endpointUrl,
+          bearerToken: cr.foodImageIntake.bearerToken,
+          timeoutMs: cr.foodImageIntake.timeoutMs,
+        }
+      : undefined,
+    investigation: cr.investigation
+      ? {
+          enabled: cr.investigation.enabled,
+          maxSteps: cr.investigation.maxSteps,
+          maxDurationMs: cr.investigation.maxDurationMs,
+          maxTokens: cr.investigation.maxTokens,
+          promotionThreshold: cr.investigation.promotionThreshold,
+          defaultAgentId:
+            typeof cr.investigation.defaultAgentId === "string"
+              ? cr.investigation.defaultAgentId.trim()
+              : undefined,
+        }
+      : undefined,
   };
 }
 
@@ -95,6 +142,38 @@ export function resolveContentRoutingConfig(cfg: OpenClawConfig): ContentRouting
  * Fast-path content routing — pattern matching without LLM.
  * Returns a result if a URL pattern matches, null otherwise.
  */
+export function isInvestigationClassification(
+  result: ContentRouteResult | null | undefined,
+): result is RecognizedContentRouteResult {
+  return Boolean(result && result.kind === "recognized" && result.category === "investigate");
+}
+
+export function resolveInvestigationFastPath(opts: {
+  text: string;
+  investigationEnabled: boolean;
+  agentId?: string;
+}): ContentRouteResult | null {
+  if (!opts.investigationEnabled) {
+    return null;
+  }
+  const trimmedAgentId = opts.agentId?.trim();
+  if (!trimmedAgentId) {
+    return null;
+  }
+  for (const tagPattern of INVESTIGATION_TAG_PATTERNS) {
+    if (tagPattern.pattern.test(opts.text)) {
+      return {
+        kind: "recognized",
+        agentId: trimmedAgentId,
+        category: "investigate",
+        confidence: "high",
+        reason: tagPattern.reason,
+      };
+    }
+  }
+  return null;
+}
+
 export function resolveContentRouteFastPath(opts: {
   text: string;
   mediaType?: string;
@@ -109,6 +188,16 @@ export function resolveContentRouteFastPath(opts: {
         reason: tagPattern.reason,
       };
     }
+  }
+
+  if (opts.mediaType?.startsWith("image/") && MEAL_INDICATOR_RE.test(opts.text)) {
+    return {
+      kind: "recognized",
+      agentId: "liev",
+      category: "intake",
+      confidence: "high",
+      reason: "fast-path: food image with meal text",
+    };
   }
 
   const urls = opts.text.match(URL_RE);
@@ -207,7 +296,7 @@ ${agentLines}
 Message:
 ${messageContext}
 
-Reply with ONLY the agent name, optionally followed by a colon and content category. Examples: "liev", "liev:intake", "cody:review". If unsure, reply "unknown".`;
+Reply with ONLY the agent name, optionally followed by a colon and content category. Examples: "liev", "liev:intake", "cody:review", "leo:investigate". Use the "investigate" category for exploratory messages where the agent should infer what the user is looking into and do a bounded research pass. If unsure, reply "unknown".`;
 
   try {
     const response = await fetch(`${opts.ollamaUrl}/api/chat`, {

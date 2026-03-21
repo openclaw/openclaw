@@ -16,6 +16,7 @@ const mockDeliverOutboundPayloads = vi.hoisted(() => vi.fn());
 const mockClassifyContentWithLLM = vi.hoisted(() => vi.fn());
 const mockResolveTwitterContent = vi.hoisted(() => vi.fn());
 const mockMaybeHandleFoodImageCapture = vi.hoisted(() => vi.fn());
+const mockRunBoundedInvestigation = vi.hoisted(() => vi.fn());
 
 vi.mock("../auto-reply/dispatch.js", () => ({
   dispatchInboundMessage: mockDispatchInboundMessage,
@@ -37,6 +38,14 @@ vi.mock("./routing/content-route.js", async (importOriginal) => {
 vi.mock("./food-capture.js", () => ({
   maybeHandleFoodImageCapture: mockMaybeHandleFoodImageCapture,
 }));
+
+vi.mock("./routing/investigation-orchestrator.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./routing/investigation-orchestrator.js")>();
+  return {
+    ...actual,
+    runBoundedInvestigation: mockRunBoundedInvestigation,
+  };
+});
 
 import { handleContentIntake, type ContentIntakeParams } from "./content-intake.js";
 
@@ -62,6 +71,14 @@ function createConfig(): OpenClawConfig {
           },
           streamPattern: "{agent}",
           topicPrefix: "x",
+        },
+        investigation: {
+          enabled: true,
+          defaultAgentId: "leo",
+          maxSteps: 4,
+          maxDurationMs: 15000,
+          maxTokens: 900,
+          promotionThreshold: "medium",
         },
       },
     },
@@ -157,6 +174,15 @@ describe("handleContentIntake forwarded agent routing", () => {
       reason: "LLM classified as Cody",
     });
     mockMaybeHandleFoodImageCapture.mockReset().mockResolvedValue(false);
+    mockRunBoundedInvestigation.mockReset().mockResolvedValue({
+      replyText: "leo: bounded investigation summary",
+      rawReplyText: `What you're looking into
+
+A proactive iMessage workflow.`,
+      promotionText: undefined,
+      shouldPromote: false,
+      errorSeen: false,
+    });
     mockDispatchInboundMessage.mockReset().mockImplementation(async ({ dispatcher }) => {
       dispatcher.sendFinalReply({ text: "Looks good for OpenClaw integration." });
       dispatcher.markComplete();
@@ -242,6 +268,64 @@ describe("handleContentIntake forwarded agent routing", () => {
     expect(params.sendMessage).toHaveBeenCalledWith(
       params.sender,
       expect.stringContaining("https://zulip.example.com/#narrow/near/3382"),
+      expect.any(Object),
+    );
+  });
+
+  it("handles explicit investigation fast-path requests in iMessage", async () => {
+    const params = createParams();
+    params.bodyText = "investigate: would BlueBubbles be better than our current relay?";
+
+    const result = await handleContentIntake(params);
+
+    expect(result).toEqual({ handled: true });
+    expect(mockRunBoundedInvestigation).toHaveBeenCalledTimes(1);
+    expect(mockClassifyContentWithLLM).not.toHaveBeenCalled();
+    expect(params.decision.route.agentId).toBe("leo");
+    expect(params.decision.route.sessionKey).toContain(":investigation");
+    expect(params.sendMessage).toHaveBeenCalledTimes(1);
+    expect(params.sendMessage).toHaveBeenCalledWith(
+      params.sender,
+      expect.stringContaining("bounded investigation summary"),
+      expect.any(Object),
+    );
+    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("promotes LLM investigation classifications into Zulip when the result is strong enough", async () => {
+    const params = createParams();
+    params.bodyText = "I still don't know how this iMessage workflow would work out for me";
+    mockClassifyContentWithLLM.mockResolvedValueOnce({
+      kind: "recognized",
+      agentId: "leo",
+      category: "investigate",
+      confidence: "high",
+      reason: "LLM classified as strategy",
+    });
+    mockRunBoundedInvestigation.mockResolvedValueOnce({
+      replyText: "leo: here's the short answer",
+      rawReplyText: `What you're looking into
+
+You want a proactive iMessage workflow with downstream review.
+
+Recommendation: keep iMessage as intake and promote strong findings.`,
+      promotionText: `🧭 Investigation — leo
+
+Detailed review artifact`,
+      shouldPromote: true,
+      errorSeen: false,
+    });
+
+    const result = await handleContentIntake(params);
+
+    expect(result).toEqual({ handled: true });
+    expect(mockRunBoundedInvestigation).toHaveBeenCalledTimes(1);
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(mockDeliverOutboundPayloads.mock.calls[0]?.[0]?.to).toContain("leo");
+    expect(params.sendMessage).toHaveBeenCalledTimes(1);
+    expect(params.sendMessage).toHaveBeenCalledWith(
+      params.sender,
+      expect.stringContaining("→ leo #"),
       expect.any(Object),
     );
   });

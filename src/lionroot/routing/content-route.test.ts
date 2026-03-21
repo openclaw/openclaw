@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  classifyContentWithLLM,
+  isInvestigationClassification,
+  isRecognizedContentRoute,
   parseAgentCategory,
   resolveContentRouteFastPath,
-  classifyContentWithLLM,
-  isRecognizedContentRoute,
   resolveContentRouteWithStickiness,
   resolveContentRoutingConfig,
+  resolveInvestigationFastPath,
   resolveTwitterContent,
   type ContentRoutingConfig,
 } from "./content-route.js";
@@ -57,6 +59,33 @@ describe("parseAgentCategory", () => {
 });
 
 // ── Fast-path tests ──
+
+describe("resolveInvestigationFastPath", () => {
+  it("detects explicit investigation prefixes when enabled", () => {
+    const result = resolveInvestigationFastPath({
+      text: "investigate: would BlueBubbles be better than our current relay?",
+      investigationEnabled: true,
+      agentId: "leo",
+    });
+    expect(result).toEqual({
+      kind: "recognized",
+      agentId: "leo",
+      category: "investigate",
+      confidence: "high",
+      reason: "fast-path: investigate tag",
+    });
+    expect(isInvestigationClassification(result)).toBe(true);
+  });
+
+  it("returns null when investigation is disabled", () => {
+    const result = resolveInvestigationFastPath({
+      text: "research: compare our iMessage routing options",
+      investigationEnabled: false,
+      agentId: "leo",
+    });
+    expect(result).toBeNull();
+  });
+});
 
 describe("resolveContentRouteFastPath", () => {
   it("routes GitHub URLs to Cody", () => {
@@ -263,6 +292,11 @@ describe("resolveContentRoutingConfig", () => {
           stickyTimeoutMs: 300_000,
           defaultAgentId: "leo",
           agents: { liev: "Health", cody: "Code" },
+          investigation: {
+            enabled: true,
+            maxSteps: 4,
+            promotionThreshold: "high",
+          },
         },
       },
     } as unknown as OpenClawConfig;
@@ -272,6 +306,14 @@ describe("resolveContentRoutingConfig", () => {
     expect(result!.stickyTimeoutMs).toBe(300_000);
     expect(result!.defaultAgentId).toBe("leo");
     expect(result!.agents).toEqual({ liev: "Health", cody: "Code" });
+    expect(result!.investigation).toEqual({
+      enabled: true,
+      maxSteps: 4,
+      maxDurationMs: undefined,
+      maxTokens: undefined,
+      promotionThreshold: "high",
+      defaultAgentId: undefined,
+    });
   });
 });
 
