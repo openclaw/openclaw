@@ -51,9 +51,12 @@ export async function resolveSlackThreadContextData(params: {
   }
 
   const starter = params.threadStarter;
-  if (starter?.text) {
-    threadStarterBody = starter.text;
-    const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
+  if (starter) {
+    const starterText = starter.text.trim();
+    if (starterText) {
+      threadStarterBody = starterText;
+    }
+    const snippet = starterText.replace(/\s+/g, " ").slice(0, 80);
     threadLabel = `Slack thread ${params.roomLabel}${snippet ? `: ${snippet}` : ""}`;
     if (!params.effectiveDirectMedia && starter.files && starter.files.length > 0) {
       threadStarterMedia = await resolveSlackMedia({

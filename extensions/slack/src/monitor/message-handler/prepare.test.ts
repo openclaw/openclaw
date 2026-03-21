@@ -10,6 +10,7 @@ import { resolveThreadSessionKeys } from "../../../../../src/routing/session-key
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
+import * as slackMedia from "../media.js";
 import { prepareSlackMessage } from "./prepare.js";
 import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
 
@@ -224,6 +225,49 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.RawBody).toContain("[Forwarded message from Bob]\nForwarded hello");
+  });
+
+  it("populates finalized media fields for forwarded shared attachment media", async () => {
+    const attachmentSpy = vi
+      .spyOn(slackMedia, "resolveSlackAttachmentContent")
+      .mockResolvedValueOnce({
+        text: "[Forwarded message from Bob]\nForwarded hello",
+        media: [
+          {
+            path: "/tmp/forwarded.jpg",
+            contentType: "image/jpeg",
+            placeholder: "[Forwarded image: forwarded.jpg]",
+          },
+          {
+            path: "/tmp/forwarded-file.png",
+            contentType: "image/png",
+            placeholder: "[Slack file: forwarded-file.png]",
+          },
+        ],
+      });
+
+    try {
+      const prepared = await prepareWithDefaultCtx(
+        createSlackMessage({
+          text: "",
+          attachments: [{ is_share: true, author_name: "Bob", text: "Forwarded hello" }],
+        }),
+      );
+
+      expect(prepared).toBeTruthy();
+      expect(prepared!.ctxPayload.RawBody).toContain(
+        "[Forwarded message from Bob]\nForwarded hello",
+      );
+      expect(prepared!.ctxPayload.MediaPath).toBe("/tmp/forwarded.jpg");
+      expect(prepared!.ctxPayload.MediaType).toBe("image/jpeg");
+      expect(prepared!.ctxPayload.MediaPaths).toEqual([
+        "/tmp/forwarded.jpg",
+        "/tmp/forwarded-file.png",
+      ]);
+      expect(prepared!.ctxPayload.MediaTypes).toEqual(["image/jpeg", "image/png"]);
+    } finally {
+      attachmentSpy.mockRestore();
+    }
   });
 
   it("ignores non-forward attachments when no direct text/files are present", async () => {
@@ -455,6 +499,134 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("follow-up question");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it("populates finalized media fields for direct Slack media", async () => {
+    const mediaSpy = vi.spyOn(slackMedia, "resolveSlackMedia").mockResolvedValueOnce([
+      {
+        path: "/tmp/direct-a.png",
+        contentType: "image/png",
+        placeholder: "[Slack file: direct-a.png]",
+      },
+      {
+        path: "/tmp/direct-b.jpg",
+        contentType: "image/jpeg",
+        placeholder: "[Slack file: direct-b.jpg]",
+      },
+    ]);
+
+    try {
+      const prepared = await prepareWithDefaultCtx(
+        createSlackMessage({
+          text: "please inspect",
+          files: [
+            { id: "F1", name: "direct-a.png", url_private: "https://files.slack.com/a" },
+            { id: "F2", name: "direct-b.jpg", url_private: "https://files.slack.com/b" },
+          ],
+        }),
+      );
+
+      expect(prepared).toBeTruthy();
+      expect(prepared!.ctxPayload.MediaPath).toBe("/tmp/direct-a.png");
+      expect(prepared!.ctxPayload.MediaType).toBe("image/png");
+      expect(prepared!.ctxPayload.MediaPaths).toEqual(["/tmp/direct-a.png", "/tmp/direct-b.jpg"]);
+      expect(prepared!.ctxPayload.MediaTypes).toEqual(["image/png", "image/jpeg"]);
+    } finally {
+      mediaSpy.mockRestore();
+    }
+  });
+
+  it("inherits thread-root media into finalized media fields when reply has no direct media", async () => {
+    const { storePath } = makeTmpStorePath();
+    const replies = vi.fn();
+    const slackCtx = createThreadSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      replies,
+    });
+    slackCtx.resolveUserName = async (id: string) => ({ name: id === "U1" ? "Alice" : "Bob" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const starterSpy = vi.spyOn(slackMedia, "resolveSlackThreadStarter").mockResolvedValue({
+      text: "",
+      userId: "U2",
+      ts: "100.000",
+      files: [{ id: "F1", name: "root.png", url_private: "https://files.slack.com/root" }],
+    });
+    const mediaSpy = vi
+      .spyOn(slackMedia, "resolveSlackMedia")
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce([
+        {
+          path: "/tmp/root.png",
+          contentType: "image/png",
+          placeholder: "[Slack file: root.png]",
+        },
+      ]);
+
+    try {
+      const prepared = await prepareThreadMessage(slackCtx, {
+        text: "what is in the image above?",
+        ts: "101.000",
+      });
+
+      expect(prepared).toBeTruthy();
+      expect(prepared!.ctxPayload.MediaPath).toBe("/tmp/root.png");
+      expect(prepared!.ctxPayload.MediaType).toBe("image/png");
+      expect(prepared!.ctxPayload.MediaPaths).toEqual(["/tmp/root.png"]);
+      expect(prepared!.ctxPayload.MediaTypes).toEqual(["image/png"]);
+      expect(prepared!.ctxPayload.ThreadStarterBody).toBeUndefined();
+      expect(starterSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      starterSpy.mockRestore();
+      mediaSpy.mockRestore();
+    }
+  });
+
+  it("preserves ordered multi-image arrays in finalized media fields", async () => {
+    const mediaSpy = vi.spyOn(slackMedia, "resolveSlackMedia").mockResolvedValueOnce([
+      {
+        path: "/tmp/01.png",
+        contentType: "image/png",
+        placeholder: "[Slack file: 01.png]",
+      },
+      {
+        path: "/tmp/02.webp",
+        contentType: "image/webp",
+        placeholder: "[Slack file: 02.webp]",
+      },
+      {
+        path: "/tmp/03.jpg",
+        contentType: "image/jpeg",
+        placeholder: "[Slack file: 03.jpg]",
+      },
+    ]);
+
+    try {
+      const prepared = await prepareWithDefaultCtx(
+        createSlackMessage({
+          text: "compare these",
+          files: [
+            { id: "F1", name: "01.png", url_private: "https://files.slack.com/1" },
+            { id: "F2", name: "02.webp", url_private: "https://files.slack.com/2" },
+            { id: "F3", name: "03.jpg", url_private: "https://files.slack.com/3" },
+          ],
+        }),
+      );
+
+      expect(prepared).toBeTruthy();
+      expect(prepared!.ctxPayload.MediaPath).toBe("/tmp/01.png");
+      expect(prepared!.ctxPayload.MediaPaths).toEqual([
+        "/tmp/01.png",
+        "/tmp/02.webp",
+        "/tmp/03.jpg",
+      ]);
+      expect(prepared!.ctxPayload.MediaTypes).toEqual(["image/png", "image/webp", "image/jpeg"]);
+    } finally {
+      mediaSpy.mockRestore();
+    }
   });
 
   it("skips loading thread history when thread session already exists in store (bloat fix)", async () => {

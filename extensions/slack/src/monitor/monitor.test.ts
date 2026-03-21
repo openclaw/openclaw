@@ -149,9 +149,15 @@ const baseParams = () => ({
 });
 
 type ThreadStarterClient = Parameters<typeof resolveSlackThreadStarter>[0]["client"];
+type ThreadStarterReplyMessage = {
+  text?: string;
+  user?: string;
+  ts?: string;
+  files?: SlackMessageEvent["files"];
+};
 
 function createThreadStarterRepliesClient(
-  response: { messages?: Array<{ text?: string; user?: string; ts?: string }> } = {
+  response: { messages?: ThreadStarterReplyMessage[] } = {
     messages: [{ text: "root message", user: "U1", ts: "1000.1" }],
   },
 ): { replies: ReturnType<typeof vi.fn>; client: ThreadStarterClient } {
@@ -351,7 +357,7 @@ describe("resolveSlackThreadStarter cache", () => {
     expect(replies).toHaveBeenCalledTimes(2);
   });
 
-  it("does not cache empty starter text", async () => {
+  it("does not cache empty starter messages without files", async () => {
     const { replies, client } = createThreadStarterRepliesClient({
       messages: [{ text: "   ", user: "U1", ts: "1000.1" }],
     });
@@ -370,6 +376,39 @@ describe("resolveSlackThreadStarter cache", () => {
     expect(first).toBeNull();
     expect(second).toBeNull();
     expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it("caches file-only thread starters so replies can inherit parent media", async () => {
+    const { replies, client } = createThreadStarterRepliesClient({
+      messages: [
+        {
+          text: "   ",
+          user: "U1",
+          ts: "1000.1",
+          files: [{ id: "F1", name: "thread-image.png" }],
+        },
+      ],
+    });
+
+    const first = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client,
+    });
+    const second = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client,
+    });
+
+    expect(first).toEqual({
+      text: "",
+      userId: "U1",
+      ts: "1000.1",
+      files: [{ id: "F1", name: "thread-image.png" }],
+    });
+    expect(second).toEqual(first);
+    expect(replies).toHaveBeenCalledTimes(1);
   });
 
   it("evicts oldest entries once cache exceeds bounded size", async () => {

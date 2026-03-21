@@ -13,6 +13,7 @@ import {
   resolveSlackAttachmentContent,
   resolveSlackMedia,
   resolveSlackThreadHistory,
+  resolveSlackThreadStarter,
 } from "./media.js";
 
 // Store original fetch
@@ -654,6 +655,37 @@ describe("resolveSlackAttachmentContent", () => {
     const firstInit = firstCall?.[1];
     expect(firstInit?.redirect).toBe("manual");
     expect(new Headers(firstInit?.headers).get("Authorization")).toBe("Bearer xoxb-test-token");
+  });
+});
+
+describe("resolveSlackThreadStarter", () => {
+  it("returns file-only root messages so thread replies can hydrate inherited media", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "   ",
+          user: "U1",
+          ts: "1.000",
+          files: [{ id: "F1", name: "thread-image.png" }],
+        },
+      ],
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
+
+    const result = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+    });
+
+    expect(result).toEqual({
+      text: "",
+      userId: "U1",
+      ts: "1.000",
+      files: [{ id: "F1", name: "thread-image.png" }],
+    });
   });
 });
 
