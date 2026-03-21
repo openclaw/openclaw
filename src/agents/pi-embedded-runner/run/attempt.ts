@@ -1439,8 +1439,8 @@ export async function resolvePromptBuildHookResult(params: {
             {
               prompt: params.prompt,
               messages: params.messages,
-              sessionKey: params.hookCtx.sessionKey,
-              agentId: params.hookCtx.agentId,
+              ...(params.hookCtx.sessionKey ? { sessionKey: params.hookCtx.sessionKey } : {}),
+              ...(params.hookCtx.agentId ? { agentId: params.hookCtx.agentId } : {}),
             },
             params.hookCtx,
           )
