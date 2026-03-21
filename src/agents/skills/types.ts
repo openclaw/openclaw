@@ -54,6 +54,10 @@ export type SkillCommandSpec = {
   description: string;
   /** Optional deterministic dispatch behavior for this command. */
   dispatch?: SkillCommandDispatchSpec;
+  /** Native prompt template used by Claude-bundle command markdown files. */
+  promptTemplate?: string;
+  /** Source markdown path for bundle-backed commands. */
+  sourceFilePath?: string;
 };
 
 export type SkillsInstallPreferences = {

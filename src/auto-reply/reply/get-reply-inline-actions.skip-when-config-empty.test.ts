@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
@@ -6,12 +7,21 @@ import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
 
 const handleCommandsMock = vi.fn();
+const getChannelPluginMock = vi.fn();
 
 vi.mock("./commands.js", () => ({
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
   buildStatusReply: vi.fn(),
   buildCommandContext: vi.fn(),
 }));
+
+vi.mock("../../channels/plugins/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../channels/plugins/index.js")>();
+  return {
+    ...actual,
+    getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+  };
+});
 
 // Import after mocks.
 const { handleInlineActions } = await import("./get-reply-inline-actions.js");
@@ -100,6 +110,11 @@ async function expectInlineActionSkipped(params: {
 describe("handleInlineActions", () => {
   beforeEach(() => {
     handleCommandsMock.mockReset();
+    handleCommandsMock.mockResolvedValue({ shouldContinue: true, reply: undefined });
+    getChannelPluginMock.mockReset();
+    getChannelPluginMock.mockImplementation((channelId?: string) =>
+      channelId === "whatsapp" ? { commands: { skipWhenConfigEmpty: true } } : undefined,
+    );
   });
 
   it("skips whatsapp replies when config is empty and From !== To", async () => {
@@ -221,5 +236,53 @@ describe("handleInlineActions", () => {
     expect(sessionStore["s:main"]?.abortCutoffMessageSid).toBeUndefined();
     expect(sessionStore["s:main"]?.abortCutoffTimestamp).toBeUndefined();
     expect(handleCommandsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rewrites Claude bundle markdown commands into a native agent prompt", async () => {
+    const typing = createTypingController();
+    handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "done" } });
+    const ctx = buildTestCtx({
+      Body: "/office_hours build me a deployment plan",
+      CommandBody: "/office_hours build me a deployment plan",
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "office_hours",
+        skillName: "office-hours",
+        description: "Office hours",
+        promptTemplate: "Act as an engineering advisor.\n\nFocus on:\n$ARGUMENTS",
+        sourceFilePath: "/tmp/plugin/commands/office-hours.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/office_hours build me a deployment plan",
+        command: {
+          isAuthorizedSender: true,
+          rawBodyNormalized: "/office_hours build me a deployment plan",
+          commandBodyNormalized: "/office_hours build me a deployment plan",
+        },
+        overrides: {
+          allowTextCommands: true,
+          cfg: { commands: { text: true } },
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "done" } });
+    expect(ctx.Body).toBe(
+      "Act as an engineering advisor.\n\nFocus on:\nbuild me a deployment plan",
+    );
+    expect(handleCommandsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          Body: "Act as an engineering advisor.\n\nFocus on:\nbuild me a deployment plan",
+        }),
+      }),
+    );
   });
 });
