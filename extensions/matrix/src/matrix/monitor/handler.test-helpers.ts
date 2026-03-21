@@ -134,6 +134,9 @@ export function createMatrixHandlerTestHarness(
         routing: {
           resolveAgentRoute,
         },
+        mentions: {
+          buildMentionRegexes: () => options.mentionRegexes ?? [],
+        },
         session: {
           resolveStorePath: options.resolveStorePath ?? (() => "/tmp/session-store"),
           readSessionUpdatedAt: options.readSessionUpdatedAt ?? (() => undefined),
