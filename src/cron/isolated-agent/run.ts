@@ -46,7 +46,6 @@ import {
   setSessionRuntimeModel,
   updateSessionStore,
 } from "../../config/sessions.js";
-import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -73,6 +72,7 @@ import {
   pickSummaryFromPayloads,
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
+import { buildCronAgentDefaultsConfig } from "./run-config.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
@@ -100,54 +100,6 @@ export type RunCronAgentTurnResult = {
   deliveryAttempted?: boolean;
 } & CronRunOutcome &
   CronRunTelemetry;
-
-type ResolvedAgentConfig = NonNullable<ReturnType<typeof resolveAgentConfig>>;
-
-function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentConfig) {
-  const {
-    model: overrideModel,
-    sandbox: _agentSandboxOverride,
-    ...agentOverrideRest
-  } = agentConfigOverride ?? {};
-  return {
-    overrideModel,
-    definedOverrides: Object.fromEntries(
-      Object.entries(agentOverrideRest).filter(([, value]) => value !== undefined),
-    ) as Partial<AgentDefaultsConfig>,
-  };
-}
-
-function mergeCronAgentModelOverride(params: {
-  defaults: AgentDefaultsConfig;
-  overrideModel: ResolvedAgentConfig["model"] | undefined;
-}) {
-  const nextDefaults: AgentDefaultsConfig = { ...params.defaults };
-  const existingModel =
-    nextDefaults.model && typeof nextDefaults.model === "object" ? nextDefaults.model : {};
-  if (typeof params.overrideModel === "string") {
-    nextDefaults.model = { ...existingModel, primary: params.overrideModel };
-  } else if (params.overrideModel) {
-    nextDefaults.model = { ...existingModel, ...params.overrideModel };
-  }
-  return nextDefaults;
-}
-
-function buildCronAgentDefaultsConfig(params: {
-  defaults?: AgentDefaultsConfig;
-  agentConfigOverride?: ResolvedAgentConfig;
-}) {
-  const { overrideModel, definedOverrides } = extractCronAgentDefaultsOverride(
-    params.agentConfigOverride,
-  );
-  // Keep sandbox overrides out of `agents.defaults` here. Sandbox resolution
-  // already merges global defaults with per-agent overrides using `agentId`;
-  // copying the agent sandbox into defaults clobbers global defaults and can
-  // double-apply nested agent overrides during isolated cron runs.
-  return mergeCronAgentModelOverride({
-    defaults: Object.assign({}, params.defaults, definedOverrides),
-    overrideModel,
-  });
-}
 
 type ResolvedCronDeliveryTarget = Awaited<ReturnType<typeof resolveDeliveryTarget>>;
 

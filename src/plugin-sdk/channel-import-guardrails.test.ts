@@ -8,6 +8,7 @@ const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set([
   "action-runtime.runtime.js",
   "action-runtime-api.js",
   "api.js",
+  "auth-presence.js",
   "index.js",
   "light-runtime-api.js",
   "login-qr-api.js",

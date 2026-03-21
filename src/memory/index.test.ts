@@ -179,10 +179,21 @@ describe("memory index", () => {
   function resetManagerForTest(manager: MemoryIndexManager) {
     // These tests reuse managers for performance. Clear the index + embedding
     // cache to keep each test fully isolated.
+    const db = (
+      manager as unknown as {
+        db: {
+          exec: (sql: string) => void;
+          prepare: (sql: string) => { get: (name: string) => { name?: string } | undefined };
+        };
+      }
+    ).db;
     (manager as unknown as { resetIndex: () => void }).resetIndex();
-    (manager as unknown as { db: { exec: (sql: string) => void } }).db.exec(
-      "DELETE FROM embedding_cache",
-    );
+    const embeddingCacheTable = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get("embedding_cache");
+    if (embeddingCacheTable?.name === "embedding_cache") {
+      db.exec("DELETE FROM embedding_cache");
+    }
     (manager as unknown as { dirty: boolean }).dirty = true;
     (manager as unknown as { sessionsDirty: boolean }).sessionsDirty = false;
   }
@@ -406,6 +417,7 @@ describe("memory index", () => {
     const firstManager = requireManager(first);
     await firstManager.sync?.({ reason: "test" });
     await firstManager.close?.();
+    const providerCallsBeforeStatus = providerCalls.length;
 
     const statusOnly = await getMemorySearchManager({
       cfg,
@@ -415,6 +427,8 @@ describe("memory index", () => {
     const statusManager = requireManager(statusOnly, "status manager missing");
     const status = statusManager.status();
     expect(status.dirty).toBe(false);
+    expect(status.provider).toBe("openai");
+    expect(providerCalls).toHaveLength(providerCallsBeforeStatus);
     await statusManager.close?.();
   });
 

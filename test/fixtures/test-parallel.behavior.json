@@ -140,10 +140,6 @@
         "reason": "One-shot cron service coverage retained a top shared unit-fast heap spike in the March 19, 2026 Linux Node 22 OOM lane."
       },
       {
-        "file": "src/cron/isolated-agent/run.sandbox-config-preserved.test.ts",
-        "reason": "Isolated-agent sandbox config coverage retained a large shared unit-fast heap spike on Linux CI."
-      },
-      {
         "file": "src/cron/isolated-agent.direct-delivery-core-channels.test.ts",
         "reason": "Direct-delivery isolated-agent coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 OOM lane."
       },

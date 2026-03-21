@@ -2,7 +2,7 @@ import {
   listInspectedDirectoryEntriesFromSources,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { inspectDiscordAccount, type InspectedDiscordAccount } from "../api.js";
+import { inspectDiscordAccount, type InspectedDiscordAccount } from "./account-inspect.js";
 
 export async function listDiscordDirectoryPeersFromConfig(params: DirectoryConfigParams) {
   return listInspectedDirectoryEntriesFromSources({

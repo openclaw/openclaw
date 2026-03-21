@@ -4,11 +4,9 @@ import { isSecureWebSocketUrl } from "../gateway/net.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
+import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
+import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  promptSecretRefForSetup,
-  resolveSecretInputModeForEnvSelection,
-} from "./auth-choice.apply-helpers.js";
 import { detectBinary } from "./onboard-helpers.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
