@@ -11,6 +11,10 @@ const loadWebMediaMock = vi.fn().mockResolvedValue({
 const loadConfigMock = vi.fn(() => ({}));
 const getImageMetadataMock = vi.fn().mockResolvedValue(null);
 const resizeToJpegMock = vi.fn();
+const mediaKindFromMimeMock = vi.fn((_: string | null | undefined) => "image");
+const isVoiceCompatibleAudioMock = vi.fn(
+  (_: { contentType?: string | null; fileName?: string | null }) => false,
+);
 const resolveTextChunkLimitMock = vi.fn<
   (cfg: unknown, channel: unknown, accountId?: unknown) => number
 >(() => 4000);
@@ -21,8 +25,9 @@ const runtimeStub = {
   },
   media: {
     loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
-    mediaKindFromMime: () => "image",
-    isVoiceCompatibleAudio: () => false,
+    mediaKindFromMime: (mime?: string | null) => mediaKindFromMimeMock(mime),
+    isVoiceCompatibleAudio: (opts: { contentType?: string | null; fileName?: string | null }) =>
+      isVoiceCompatibleAudioMock(opts),
     getImageMetadata: (...args: unknown[]) => getImageMetadataMock(...args),
     resizeToJpeg: (...args: unknown[]) => resizeToJpegMock(...args),
   },
@@ -80,6 +85,8 @@ describe("sendMessageMatrix media", () => {
     loadConfigMock.mockReset().mockReturnValue({});
     getImageMetadataMock.mockReset().mockResolvedValue(null);
     resizeToJpegMock.mockReset();
+    mediaKindFromMimeMock.mockReset().mockReturnValue("image");
+    isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
     resolveTextChunkLimitMock.mockReset().mockReturnValue(4000);
     setMatrixRuntime(runtimeStub);
   });
@@ -329,6 +336,8 @@ describe("sendMessageMatrix threads", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     loadConfigMock.mockReset().mockReturnValue({});
+    mediaKindFromMimeMock.mockReset().mockReturnValue("image");
+    isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
     setMatrixRuntime(runtimeStub);
   });
 
@@ -376,6 +385,8 @@ describe("voteMatrixPoll", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     loadConfigMock.mockReset().mockReturnValue({});
+    mediaKindFromMimeMock.mockReset().mockReturnValue("image");
+    isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
     setMatrixRuntime(runtimeStub);
   });
 
@@ -520,6 +531,8 @@ describe("sendTypingMatrix", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     loadConfigMock.mockReset().mockReturnValue({});
+    mediaKindFromMimeMock.mockReset().mockReturnValue("image");
+    isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
     setMatrixRuntime(runtimeStub);
   });
 
