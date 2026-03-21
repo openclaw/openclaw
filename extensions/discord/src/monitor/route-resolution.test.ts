@@ -116,6 +116,28 @@ describe("discord route resolution helpers", () => {
     });
   });
 
+  it("clears workspaceOverride when rebinding to a bound session", () => {
+    const route: ResolvedAgentRoute = {
+      agentId: "main",
+      channel: "discord",
+      accountId: "default",
+      sessionKey: "agent:main:discord:channel:c1",
+      mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "session",
+      matchedBy: "binding.peer",
+      workspaceOverride: "~/projects/backend/",
+    };
+
+    const result = resolveDiscordEffectiveRoute({
+      route,
+      boundSessionKey: "agent:worker:discord:channel:c1",
+    });
+
+    expect(result.workspaceOverride).toBeUndefined();
+    expect(result.agentId).toBe("worker");
+    expect(result.sessionKey).toBe("agent:worker:discord:channel:c1");
+  });
+
   it("composes route building with effective-route overrides", () => {
     const cfg = buildWorkerBindingConfig({ kind: "direct", id: "user-1" });
 
