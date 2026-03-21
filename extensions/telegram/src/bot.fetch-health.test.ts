@@ -160,4 +160,26 @@ describe("createTelegramBot network-health fetch wrapper", () => {
     expect(response.status).toBe(407);
     expect(noteNetworkHealthySpy).not.toHaveBeenCalled();
   });
+
+  it("does not treat intermediary JSON error payloads as Telegram health", async () => {
+    const baseFetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ error: "proxy unauthorized" }), {
+        status: 401,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    }) as typeof fetch;
+
+    createTelegramBot({
+      token: "tok",
+      telegramTransport: { fetch: baseFetch } as Parameters<
+        typeof createTelegramBot
+      >[0]["telegramTransport"],
+    });
+
+    const clientFetch = getClientFetch();
+    const response = await clientFetch("https://api.telegram.org/bot123/sendMessage");
+
+    expect(response.status).toBe(401);
+    expect(noteNetworkHealthySpy).not.toHaveBeenCalled();
+  });
 });

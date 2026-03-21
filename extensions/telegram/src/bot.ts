@@ -127,7 +127,7 @@ function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
   }
 }
 
-function shouldMarkTelegramNetworkHealthy(response: unknown): boolean {
+async function shouldMarkTelegramNetworkHealthy(response: unknown): Promise<boolean> {
   if (!response || typeof response !== "object") {
     return false;
   }
@@ -165,9 +165,44 @@ function shouldMarkTelegramNetworkHealthy(response: unknown): boolean {
 
   // Treat responses as network-healthy only when they look like Bot API JSON.
   // This avoids resetting outage streaks on proxy/captive-portal placeholders
-  // such as 200 HTML or 407 plaintext.
+  // such as 200 HTML, 407 plaintext, or generic JSON intermediary errors.
   const contentType = headers.get("content-type")?.toLowerCase() ?? "";
-  return contentType.includes("application/json");
+  if (!contentType.includes("application/json")) {
+    return false;
+  }
+
+  const cloned = typed as {
+    clone?: unknown;
+  };
+  if (typeof cloned.clone !== "function") {
+    return false;
+  }
+
+  try {
+    const payload = await (
+      cloned.clone as () => {
+        json: () => Promise<unknown>;
+      }
+    )().json();
+    if (!payload || typeof payload !== "object") {
+      return false;
+    }
+    const parsed = payload as {
+      ok?: unknown;
+      error_code?: unknown;
+      description?: unknown;
+    };
+    if (parsed.ok === true) {
+      return true;
+    }
+    return (
+      parsed.ok === false &&
+      typeof parsed.error_code === "number" &&
+      typeof parsed.description === "string"
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function createTelegramBot(opts: TelegramBotOptions) {
@@ -274,8 +309,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const baseFetch = finalFetch;
     finalFetch = ((input: TelegramFetchInput, init?: TelegramFetchInit) => {
       return Promise.resolve(baseFetch(input, init))
-        .then((response) => {
-          if (shouldMarkTelegramNetworkHealthy(response)) {
+        .then(async (response) => {
+          if (await shouldMarkTelegramNetworkHealthy(response)) {
             noteTelegramNetworkHealthy?.();
           }
           return response;
