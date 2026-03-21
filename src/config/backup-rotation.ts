@@ -44,19 +44,24 @@ export async function rotateConfigBackups(
 export async function hardenBackupPermissions(
   configPath: string,
   ioFs: BackupRotationFs,
+  log?: { warn?: (msg: string) => void },
 ): Promise<void> {
   if (!ioFs.chmod) {
     return;
   }
   const backupBase = `${configPath}.bak`;
   // Harden the primary .bak
-  await ioFs.chmod(backupBase, 0o600).catch(() => {
-    // best-effort
+  await ioFs.chmod(backupBase, 0o600).catch((err) => {
+    log?.warn?.(
+      `chmod 0o600 failed for ${backupBase}: ${err instanceof Error ? err.message : String(err)} — backup file may have wider permissions than intended`,
+    );
   });
   // Harden numbered backups
   for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
-    await ioFs.chmod(`${backupBase}.${i}`, 0o600).catch(() => {
-      // best-effort
+    await ioFs.chmod(`${backupBase}.${i}`, 0o600).catch((err) => {
+      log?.warn?.(
+        `chmod 0o600 failed for ${backupBase}.${i}: ${err instanceof Error ? err.message : String(err)} — backup file may have wider permissions than intended`,
+      );
     });
   }
 }
@@ -115,11 +120,12 @@ export async function cleanOrphanBackups(
 export async function maintainConfigBackups(
   configPath: string,
   ioFs: BackupMaintenanceFs,
+  log?: { warn?: (msg: string) => void },
 ): Promise<void> {
   await rotateConfigBackups(configPath, ioFs);
   await ioFs.copyFile(configPath, `${configPath}.bak`).catch(() => {
     // best-effort
   });
-  await hardenBackupPermissions(configPath, ioFs);
+  await hardenBackupPermissions(configPath, ioFs, log);
   await cleanOrphanBackups(configPath, ioFs);
 }

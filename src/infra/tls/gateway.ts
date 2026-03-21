@@ -33,7 +33,7 @@ async function fileExists(filePath: string): Promise<boolean> {
 async function generateSelfSignedCert(params: {
   certPath: string;
   keyPath: string;
-  log?: { info?: (msg: string) => void };
+  log?: { info?: (msg: string) => void; warn?: (msg: string) => void };
 }): Promise<void> {
   const certDir = path.dirname(params.certPath);
   const keyDir = path.dirname(params.keyPath);
@@ -57,8 +57,16 @@ async function generateSelfSignedCert(params: {
     "-subj",
     "/CN=openclaw-gateway",
   ]);
-  await fs.chmod(params.keyPath, 0o600).catch(() => {});
-  await fs.chmod(params.certPath, 0o600).catch(() => {});
+  await fs.chmod(params.keyPath, 0o600).catch((err) => {
+    params.log?.warn?.(
+      `chmod 0o600 failed for ${params.keyPath}: ${err instanceof Error ? err.message : String(err)} — TLS key file may have wider permissions than intended`,
+    );
+  });
+  await fs.chmod(params.certPath, 0o600).catch((err) => {
+    params.log?.warn?.(
+      `chmod 0o600 failed for ${params.certPath}: ${err instanceof Error ? err.message : String(err)} — TLS cert file may have wider permissions than intended`,
+    );
+  });
   params.log?.info?.(
     `gateway tls: generated self-signed cert at ${shortenHomeInString(params.certPath)}`,
   );

@@ -57,7 +57,11 @@ type SaveCronStoreOptions = {
 };
 
 async function setSecureFileMode(filePath: string): Promise<void> {
-  await fs.promises.chmod(filePath, 0o600).catch(() => undefined);
+  await fs.promises.chmod(filePath, 0o600).catch((err) => {
+    console.warn(
+      `[openclaw] chmod 0o600 failed for ${filePath}: ${err instanceof Error ? err.message : String(err)} — cron store file may have wider permissions than intended`,
+    );
+  });
 }
 
 export async function saveCronStore(

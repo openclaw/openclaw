@@ -31,8 +31,10 @@ async function readExistingModelsFile(pathname: string): Promise<{
 }
 
 async function ensureModelsFileMode(pathname: string): Promise<void> {
-  await fs.chmod(pathname, 0o600).catch(() => {
-    // best-effort
+  await fs.chmod(pathname, 0o600).catch((err) => {
+    console.warn(
+      `[openclaw] chmod 0o600 failed for ${pathname}: ${err instanceof Error ? err.message : String(err)} — models config file may have wider permissions than intended`,
+    );
   });
 }
 

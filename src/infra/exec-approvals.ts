@@ -1,11 +1,15 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { debuglog } from "node:util";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { expandHomePrefix } from "./home-dir.js";
+import { writeFileSecure } from "./json-file.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
+
+const debug = debuglog("openclaw:exec-approvals");
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecSecurity = "deny" | "allowlist" | "full";
@@ -328,7 +332,8 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
   let parsed: ExecApprovalsFile | null = null;
   try {
     parsed = JSON.parse(raw) as ExecApprovalsFile;
-  } catch {
+  } catch (err) {
+    debug("JSON parse failed for %s: %O", filePath, err);
     parsed = null;
   }
   const file =
@@ -356,7 +361,8 @@ export function loadExecApprovals(): ExecApprovalsFile {
       return normalizeExecApprovals({ version: 1, agents: {} });
     }
     return normalizeExecApprovals(parsed);
-  } catch {
+  } catch (err) {
+    debug("loadExecApprovals failed for %s: %O", filePath, err);
     return normalizeExecApprovals({ version: 1, agents: {} });
   }
 }
@@ -364,12 +370,7 @@ export function loadExecApprovals(): ExecApprovalsFile {
 export function saveExecApprovals(file: ExecApprovalsFile) {
   const filePath = resolveExecApprovalsPath();
   ensureDir(filePath);
-  fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // best-effort on platforms without chmod
-  }
+  writeFileSecure(filePath, `${JSON.stringify(file, null, 2)}\n`);
 }
 
 export function ensureExecApprovals(): ExecApprovalsFile {

@@ -1297,7 +1297,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       });
 
       if (deps.fs.existsSync(configPath)) {
-        await maintainConfigBackups(configPath, deps.fs.promises);
+        await maintainConfigBackups(configPath, deps.fs.promises, deps.logger);
       }
 
       try {
@@ -1307,8 +1307,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         // Windows doesn't reliably support atomic replace via rename when dest exists.
         if (code === "EPERM" || code === "EEXIST") {
           await deps.fs.promises.copyFile(tmp, configPath);
-          await deps.fs.promises.chmod(configPath, 0o600).catch(() => {
-            // best-effort
+          await deps.fs.promises.chmod(configPath, 0o600).catch((err) => {
+            console.warn(
+              `[openclaw] chmod 0o600 failed for ${configPath}: ${err instanceof Error ? err.message : String(err)} — config file may have wider permissions than intended`,
+            );
           });
           await deps.fs.promises.unlink(tmp).catch(() => {
             // best-effort

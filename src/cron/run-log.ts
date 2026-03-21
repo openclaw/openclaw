@@ -76,7 +76,11 @@ export function resolveCronRunLogPath(params: { storePath: string; jobId: string
 const writesByPath = new Map<string, Promise<void>>();
 
 async function setSecureFileMode(filePath: string): Promise<void> {
-  await fs.chmod(filePath, 0o600).catch(() => undefined);
+  await fs.chmod(filePath, 0o600).catch((err) => {
+    console.warn(
+      `[openclaw] chmod 0o600 failed for ${filePath}: ${err instanceof Error ? err.message : String(err)} — cron run log may have wider permissions than intended`,
+    );
+  });
 }
 
 export const DEFAULT_CRON_RUN_LOG_MAX_BYTES = 2_000_000;
