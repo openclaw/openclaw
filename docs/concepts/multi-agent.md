@@ -27,6 +27,8 @@ Main agent credentials are **not** shared automatically. Never reuse `agentDir`
 across agents (it causes auth/session collisions). If you want to share creds,
 copy `auth-profiles.json` into the other agent's `agentDir`.
 
+> **OAuth refresh coordination:** When multiple agents share the same OAuth profile, token refresh is serialized by a global lock and refreshed credentials are written back to the main agent store. This prevents `refresh_token_reused` race conditions. See [OAuth refresh + expiry](/concepts/oauth#refresh--expiry).
+
 Skills are per-agent via each workspace’s `skills/` folder, with shared skills
 available from `~/.openclaw/skills`. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
 

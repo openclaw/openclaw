@@ -19,6 +19,7 @@ Auth is per-agent: each agent reads from its own `agentDir` auth store at
 `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
 Credentials are **not** shared between agents. Never reuse `agentDir` across agents.
 If you want to share creds, copy `auth-profiles.json` into the other agent's `agentDir`.
+OAuth token refresh is coordinated across agents via a global lock — see [OAuth refresh](/concepts/oauth#multi-agent-refresh-coordination).
 
 ---
 

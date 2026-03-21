@@ -441,7 +441,7 @@ export function loadAuthProfileStore(): AuthProfileStore {
   return store;
 }
 
-function loadAuthProfileStoreForAgent(
+export function loadAuthProfileStoreForAgent(
   agentDir?: string,
   options?: LoadAuthProfileStoreOptions,
 ): AuthProfileStore {

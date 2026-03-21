@@ -182,4 +182,196 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       }),
     ).rejects.toThrow(/OAuth token refresh failed for openai-codex/);
   });
+
+  it("recovers from refresh_token_reused by adopting fresher main agent credentials", async () => {
+    const profileId = "openai-codex:default";
+    const now = Date.now();
+    const freshExpiry = now + 60 * 60 * 1000;
+
+    // Sub-agent has expired credentials
+    const subAgentDir = path.join(tempRoot, "agents", "sub-a", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(
+      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      subAgentDir,
+    );
+
+    // Main agent has fresh credentials (as if another agent already refreshed and wrote back)
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "fresh-access-from-main",
+            refresh: "fresh-refresh-from-main",
+            expires: freshExpiry,
+          },
+        },
+      },
+      agentDir,
+    );
+
+    // Plugin refresh throws refresh_token_reused
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+      throw new Error(
+        '401 {"error":{"message":"Your refresh token has already been used","type":"invalid_request_error","code":"refresh_token_reused"}}',
+      );
+    });
+
+    clearRuntimeAuthProfileStoreSnapshots();
+    const result = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(subAgentDir),
+      profileId,
+      agentDir: subAgentDir,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.apiKey).toBe("fresh-access-from-main");
+    expect(result?.provider).toBe("openai-codex");
+  });
+
+  it("still throws when refresh_token_reused fires and no fresh creds exist anywhere", async () => {
+    const profileId = "openai-codex:default";
+
+    // Both main and sub-agent have expired credentials
+    const subAgentDir = path.join(tempRoot, "agents", "sub-b", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(
+      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      subAgentDir,
+    );
+    saveAuthProfileStore(
+      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      agentDir,
+    );
+
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+      throw new Error(
+        '401 {"error":{"message":"Your refresh token has already been used","type":"invalid_request_error","code":"refresh_token_reused"}}',
+      );
+    });
+
+    clearRuntimeAuthProfileStoreSnapshots();
+    await expect(
+      resolveApiKeyForProfile({
+        store: ensureAuthProfileStore(subAgentDir),
+        profileId,
+        agentDir: subAgentDir,
+      }),
+    ).rejects.toThrow(/OAuth token refresh failed for openai-codex/);
+  });
+
+  // Task 5: verifies write-back of refreshed credentials to the main agent store
+  it("writes refreshed credentials back to main agent store", async () => {
+    const profileId = "openai-codex:default";
+    const now = Date.now();
+    const freshExpiry = now + 60 * 60 * 1000;
+
+    // Sub-agent has expired credentials
+    const subAgentDir = path.join(tempRoot, "agents", "sub-wb", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(
+      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      subAgentDir,
+    );
+
+    // Main agent also has expired credentials
+    saveAuthProfileStore(
+      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      agentDir,
+    );
+
+    // Plugin refresh succeeds with new credentials
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async () =>
+        ({
+          type: "oauth",
+          provider: "openai-codex",
+          access: "newly-refreshed-access",
+          refresh: "newly-refreshed-refresh",
+          expires: freshExpiry,
+        }) as never,
+    );
+
+    clearRuntimeAuthProfileStoreSnapshots();
+    const result = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(subAgentDir),
+      profileId,
+      agentDir: subAgentDir,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.apiKey).toBe("newly-refreshed-access");
+
+    // Verify write-back: main agent store should now have the fresh credentials
+    const mainStoreRaw = JSON.parse(
+      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
+    expect(mainStoreRaw.profiles[profileId]).toMatchObject({
+      access: "newly-refreshed-access",
+      expires: freshExpiry,
+    });
+  });
+
+  it("serializes concurrent refreshes so only one HTTP call is made", async () => {
+    const profileId = "openai-codex:default";
+    const now = Date.now();
+    const freshExpiry = now + 60 * 60 * 1000;
+
+    const subAgentDir = path.join(tempRoot, "agents", "sub-conc", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(
+      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      subAgentDir,
+    );
+    saveAuthProfileStore(
+      createExpiredOauthStore({ profileId, provider: "openai-codex" }),
+      agentDir,
+    );
+
+    // Plugin refresh succeeds but with a small delay to widen the race window
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(
+      async () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                type: "oauth",
+                provider: "openai-codex",
+                access: "concurrent-refreshed-access",
+                refresh: "concurrent-refreshed-refresh",
+                expires: freshExpiry,
+              } as never),
+            50,
+          ),
+        ),
+    );
+
+    clearRuntimeAuthProfileStoreSnapshots();
+
+    // Fire two concurrent resolves for the same sub-agent
+    const [result1, result2] = await Promise.all([
+      resolveApiKeyForProfile({
+        store: ensureAuthProfileStore(subAgentDir),
+        profileId,
+        agentDir: subAgentDir,
+      }),
+      resolveApiKeyForProfile({
+        store: ensureAuthProfileStore(subAgentDir),
+        profileId,
+        agentDir: subAgentDir,
+      }),
+    ]);
+
+    // Both should succeed with the same token
+    expect(result1).not.toBeNull();
+    expect(result2).not.toBeNull();
+    expect(result1?.apiKey).toBe("concurrent-refreshed-access");
+    expect(result2?.apiKey).toBe("concurrent-refreshed-access");
+
+    // Only one HTTP refresh should have been made
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+  });
 });

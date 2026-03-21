@@ -145,9 +145,15 @@ Profiles store an `expires` timestamp.
 At runtime:
 
 - if `expires` is in the future → use the stored access token
-- if expired → refresh (under a file lock) and overwrite the stored credentials
+- if expired → refresh (under a global per-profile lock) and overwrite the stored credentials
 
 The refresh flow is automatic; you generally don't need to manage tokens manually.
+
+### Multi-agent refresh coordination
+
+When multiple agents share the same OAuth profile (same `profileId`), refresh is serialized by a global file lock at `~/.openclaw/locks/oauth-refresh/`. Only one agent performs the HTTP refresh; others wait and adopt the result. After a successful refresh, the refreshed credentials are written back to the main agent store so peer agents benefit without re-refreshing.
+
+If refresh fails with `refresh_token_reused` (the token was already consumed by another process), OpenClaw re-reads the main store and adopts the fresher credentials before triggering failover.
 
 ## Multiple accounts (profiles) + routing
 

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveStateDir } from "../../config/paths.js";
 import { saveJsonFile } from "../../infra/json-file.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -30,4 +31,9 @@ export function ensureAuthStoreFile(pathname: string) {
     profiles: {},
   };
   saveJsonFile(pathname, payload);
+}
+
+export function resolveOAuthRefreshLockPath(profileId: string): string {
+  const safeId = profileId.replace(/[^a-zA-Z0-9_.-]/g, "_");
+  return path.join(resolveStateDir(), "locks", "oauth-refresh", safeId);
 }
