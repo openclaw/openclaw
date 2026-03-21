@@ -786,13 +786,18 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
                   },
                 });
               }
-            } else if (text) {
-              messages.push({ role: "assistant", content: sanitizeContent(text) });
             } else if (toolCalls.length > 0 && !functionsEnabled) {
+              const downgradedToolCalls = toolCalls
+                .map((toolCall) => `[Called ${toolCall.name}]`)
+                .join(" ");
               messages.push({
                 role: "assistant",
-                content: toolCalls.map((toolCall) => `[Called ${toolCall.name}]`).join(" "),
+                content: sanitizeContent(
+                  text ? `${text}\n\n${downgradedToolCalls}` : downgradedToolCalls,
+                ),
               });
+            } else if (text) {
+              messages.push({ role: "assistant", content: sanitizeContent(text) });
             }
           } else if (msg.role === "toolResult") {
             const toolName = msg.toolName ?? "unknown";

@@ -708,6 +708,64 @@ describe("createGigachatStreamFn tool calling", () => {
     ]);
   });
 
+  it("downgrades mixed text and tool-call assistant turns when functions are disabled", async () => {
+    vi.stubEnv("GIGACHAT_DISABLE_FUNCTIONS", "1");
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream(['data: {"choices":[{"delta":{"content":"done"}}]}', "data: [DONE]"]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      {
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Thinking through it" },
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "llm-task",
+                arguments: { prompt: "hi" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolName: "llm-task",
+            content: '{"summary":"tool output"}',
+          },
+        ],
+        tools: [],
+      } as never,
+      { apiKey: "token" } as never,
+    );
+
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "done" }],
+    });
+
+    const requestPayload = request.mock.calls[0]?.[0]?.data as {
+      messages?: Array<{ role: string; content?: string }>;
+    };
+    expect(requestPayload.messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        content: "Thinking through it\n\n[Called llm-task]",
+      }),
+      expect.objectContaining({
+        role: "user",
+        content: '[Tool Result: llm-task]\n{"summary":"tool output"}',
+      }),
+    ]);
+  });
+
   it("preserves all historical tool calls from a single assistant turn", async () => {
     request.mockResolvedValueOnce({
       status: 200,
