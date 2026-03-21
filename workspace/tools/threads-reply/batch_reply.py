@@ -229,6 +229,122 @@ def get_reply(category: str, post_context: dict = None) -> str | None:
     return reply
 
 
+def quality_gate_0_context(conn, comment, post_ctx: dict) -> tuple[bool, str, dict]:
+    """Gate 0: Do we have enough context to reply?"""
+    text = (comment['text_content'] or '').strip()
+    username = comment['username']
+    comment_id = comment['comment_id']
+    post_id = comment['post_id']
+    extra = {}
+
+    # Check parent — is this reply directed at us or someone else?
+    parent_id = None
+    try:
+        row = conn.execute('SELECT parent_comment_id FROM comments WHERE comment_id=?', (comment_id,)).fetchone()
+        if row:
+            parent_id = row['parent_comment_id']
+    except Exception:
+        pass
+
+    if parent_id:
+        parent = conn.execute('''SELECT c.text_content, p.username FROM comments c
+            JOIN profiles p ON c.user_id=p.user_id WHERE c.comment_id=?''', (parent_id,)).fetchone()
+        if parent:
+            extra['parent_username'] = parent['username']
+            extra['parent_text'] = (parent['text_content'] or '')[:80]
+            if parent['username'] != 'tangcruzz':
+                return False, f"replying to @{parent['username']} not us", extra
+
+    # Check comment age
+    try:
+        posted = conn.execute('SELECT posted_at FROM comments WHERE comment_id=?', (comment_id,)).fetchone()
+        if posted and posted['posted_at']:
+            from datetime import datetime
+            comment_time = datetime.fromisoformat(posted['posted_at'].replace('+0000', '+00:00').replace('Z', '+00:00'))
+            age_days = (datetime.now(comment_time.tzinfo) - comment_time).days if comment_time.tzinfo else 0
+            extra['age_days'] = age_days
+    except Exception:
+        extra['age_days'] = 0
+
+    return True, "ok", extra
+
+
+def quality_gate_5_length_match(comment_text: str, reply: str) -> tuple[bool, str]:
+    """Gate 5: Reply length should roughly match comment length."""
+    c_len = len(comment_text or '')
+    r_len = len(reply)
+
+    if c_len <= 5 and r_len > 30:
+        return False, "reply too long for short comment"
+    if c_len > 100 and r_len <= 5:
+        return False, "reply too short for long comment"
+    return True, "ok"
+
+
+def quality_gate_6_language(comment_text: str, reply: str) -> str:
+    """Gate 6: Detect language and adjust reply language."""
+    text = (comment_text or '').strip()
+
+    # English detection
+    ascii_ratio = sum(1 for c in text if c.isascii() and c.isalpha()) / max(len(text), 1)
+    if ascii_ratio > 0.7 and len(text) > 10:
+        return "en"
+
+    # Simplified Chinese detection (common simplified-only chars)
+    simplified_chars = set('这个来对们说会还让没关于从进过为实经头发动带给长达见员义应')
+    has_simplified = any(c in simplified_chars for c in text)
+    if has_simplified:
+        return "cn_simplified"
+
+    # Cantonese detection
+    canto_chars = set('嘅啲咗佢哋嘢冇係咁')
+    if any(c in canto_chars for c in text):
+        return "cantonese"
+
+    return "zh_tw"  # Default Traditional Chinese
+
+
+LANG_ADJUSTMENTS = {
+    "en": {
+        "🙌": "🙌",
+        "同感。": "Agreed.",
+        "你說的對。": "You're right.",
+        "好問題。這個值得展開,但留言區講不完。": "Good question. Worth expanding but can't do it justice in a comment.",
+        "謝謝你的回饋。": "Thanks for the feedback.",
+        "很高興有幫助。": "Glad it helped.",
+    },
+}
+
+
+def adjust_language(reply: str, lang: str) -> str:
+    """Adjust reply language to match commenter."""
+    if lang == "en" and reply in LANG_ADJUSTMENTS.get("en", {}):
+        return LANG_ADJUSTMENTS["en"][reply]
+    return reply
+
+
+def quality_gate_7_thread_dedup(conn, post_id: str, reply: str) -> tuple[bool, str]:
+    """Gate 7: Don't send the same reply to multiple people in the same post."""
+    same_reply_count = conn.execute('''
+        SELECT COUNT(*) FROM replies r
+        JOIN comments c ON r.comment_id = c.comment_id
+        WHERE c.post_id = ? AND r.reply_text = ? AND r.status = 'sent'
+    ''', (post_id, reply)).fetchone()[0]
+
+    if same_reply_count >= 3:
+        return False, f"already used '{reply[:20]}' {same_reply_count} times in this post"
+    return True, "ok"
+
+
+def add_time_acknowledgment(reply: str, age_days: int) -> str:
+    """If replying to old comment, acknowledge the delay."""
+    if age_days > 14:
+        return f"遲了很久才回,抱歉。{reply}"
+    elif age_days > 7:
+        return f"晚回了。{reply}"
+    return reply
+
+
 def quality_gate_1_semantic(comment_text: str, reply: str, post_ctx: dict) -> tuple[bool, str]:
     """Gate 1: Does the reply address the commenter's point?"""
     # Check if reply is about the same domain as the comment
@@ -334,13 +450,27 @@ def main():
     # Process with quality gates
     sent = 0
     skipped = 0
-    rejected = {"semantic": 0, "dedup": 0, "voice": 0}
+    rejected = {"context": 0, "semantic": 0, "dedup": 0, "voice": 0, "length": 0, "thread_dedup": 0}
 
     for u in unreplied:
         if sent >= limit:
             break
 
         text = (u['text_content'] or '').strip()
+
+        # ❺ Rate limiting — don't look like a bot
+        # (handled by time.sleep in send block, but also batch pacing)
+
+        # ❶ Context completeness (Gate 0)
+        ok, reason, extra = quality_gate_0_context(conn, u, None)
+        if not ok:
+            if not dry_run:
+                db.add_reply(conn, u['comment_id'], u['post_id'], f'[CTX_{reason[:20]}]', status='failed')
+                conn.commit()
+            rejected["context"] += 1
+            skipped += 1
+            continue
+
         cat = classify(text)
         post_ctx = get_post_context(conn, u['post_id'])
         reply = get_reply(cat, post_ctx)
@@ -352,27 +482,37 @@ def main():
             skipped += 1
             continue
 
+        # ❻ Language matching
+        lang = quality_gate_6_language(text, reply)
+        reply = adjust_language(reply, lang)
+
         # ❶ Semantic check
         ok, reason = quality_gate_1_semantic(text, reply, post_ctx)
         if not ok:
-            # Try to upgrade: get a different variant
             for _ in range(3):
                 reply = get_reply(cat, post_ctx)
+                reply = adjust_language(reply, lang)
                 ok, reason = quality_gate_1_semantic(text, reply, post_ctx)
                 if ok:
                     break
             if not ok:
-                # Still bad — generate a more specific fallback
-                post_text = post_ctx.get('text', '')[:30] if post_ctx else ''
                 reply = f"你的觀點跟這篇的核心有關。值得展開。"
                 rejected["semantic"] += 1
 
-        # ❷ Dedup check
+        # ❷ Length matching
+        ok, reason = quality_gate_5_length_match(text, reply)
+        if not ok:
+            rejected["length"] += 1
+            if len(text) <= 5:
+                reply = '🙌'
+            # else keep reply as is, long reply to long comment is ok
+
+        # ❸ Dedup check (per user)
         ok, reason = quality_gate_2_dedup(conn, u['username'], reply)
         if not ok:
-            # Rotate to next variant
             for _ in range(5):
                 reply = get_reply(cat, post_ctx)
+                reply = adjust_language(reply, lang)
                 ok, _ = quality_gate_2_dedup(conn, u['username'], reply)
                 if ok:
                     break
@@ -384,11 +524,28 @@ def main():
                 skipped += 1
                 continue
 
-        # ❸ Voice check
+        # ❹ Thread dedup (same reply in same post)
+        ok, reason = quality_gate_7_thread_dedup(conn, u['post_id'], reply)
+        if not ok:
+            for _ in range(3):
+                reply = get_reply(cat, post_ctx)
+                reply = adjust_language(reply, lang)
+                ok, _ = quality_gate_7_thread_dedup(conn, u['post_id'], reply)
+                if ok:
+                    break
+            if not ok:
+                rejected["thread_dedup"] += 1
+                reply = '🙌'  # Safe unique fallback
+
+        # ❺ Voice check
         ok, reason = quality_gate_3_voice(reply)
         if not ok:
             rejected["voice"] += 1
-            reply = '🙌'  # Safe fallback
+            reply = '🙌'
+
+        # ❼ Time acknowledgment
+        age_days = extra.get('age_days', 0)
+        reply = add_time_acknowledgment(reply, age_days)
 
         if dry_run:
             topic = post_ctx.get('topic', '?') if post_ctx else '?'
@@ -431,7 +588,7 @@ def main():
     conn.close()
 
     print(f"\n{'[DRY RUN] ' if dry_run else ''}Sent: {sent} | Skipped: {skipped}")
-    print(f"Quality gates rejected: semantic={rejected['semantic']} dedup={rejected['dedup']} voice={rejected['voice']}")
+    print(f"Quality gates: ctx={rejected['context']} sem={rejected['semantic']} len={rejected['length']} dedup={rejected['dedup']} thr_dedup={rejected['thread_dedup']} voice={rejected['voice']}")
     print(f"Coverage: {s}/{t2} = {round(s / max(t2, 1) * 100)}% | Remaining: {remaining} | Wave tracking: {waves}")
 
 
