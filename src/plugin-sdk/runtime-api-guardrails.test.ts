@@ -38,7 +38,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   "extensions/matrix/runtime-api.ts": [
     'export * from "./src/auth-precedence.js";',
     'export * from "./helper-api.js";',
-    'export { assertHttpUrlTargetsPrivateNetwork, closeDispatcher, createPinnedDispatcher, resolvePinnedHostnameWithPolicy, ssrfPolicyFromAllowPrivateNetwork, type LookupFn, type SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";',
+    'export { assertHttpUrlTargetsPrivateNetwork, closeDispatcher, createPinnedDispatcher, resolvePinnedHostnameWithPolicy, ssrfPolicyFromAllowPrivateNetwork, type LookupFn, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";',
     'export { setMatrixThreadBindingIdleTimeoutBySessionKey, setMatrixThreadBindingMaxAgeBySessionKey } from "./thread-bindings-runtime.js";',
     'export { writeJsonFileAtomically } from "../../src/plugin-sdk/json-store.js";',
     'export type { ChannelDirectoryEntry, ChannelMessageActionContext, OpenClawConfig, PluginRuntime, RuntimeLogger, RuntimeEnv, WizardPrompter } from "../../src/plugin-sdk/matrix.js";',

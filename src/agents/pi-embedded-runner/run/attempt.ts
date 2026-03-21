@@ -36,6 +36,7 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import { createAnthropicVertexStreamFnForModel } from "../../anthropic-vertex-stream.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -105,6 +106,7 @@ import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-tt
 import type { CompactEmbeddedPiSessionParams } from "../compact.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
+import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {
@@ -2034,12 +2036,27 @@ export async function runEmbeddedAttempt(
       });
       trackSessionManagerAccess(params.sessionFile);
 
-      if (hadSessionFile && params.contextEngine?.bootstrap) {
+      if (hadSessionFile && (params.contextEngine?.bootstrap || params.contextEngine?.maintain)) {
         try {
-          await params.contextEngine.bootstrap({
+          if (typeof params.contextEngine?.bootstrap === "function") {
+            await params.contextEngine.bootstrap({
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              sessionFile: params.sessionFile,
+            });
+          }
+          await runContextEngineMaintenance({
+            contextEngine: params.contextEngine,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             sessionFile: params.sessionFile,
+            reason: "bootstrap",
+            sessionManager,
+            runtimeContext: buildAfterTurnRuntimeContext({
+              attempt: params,
+              workspaceDir: effectiveWorkspace,
+              agentDir,
+            }),
           });
         } catch (bootstrapErr) {
           log.warn(`context engine bootstrap failed: ${String(bootstrapErr)}`);
@@ -2196,6 +2213,10 @@ export async function runEmbeddedAttempt(
           log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
           activeSession.agent.streamFn = streamSimple;
         }
+      } else if (params.model.provider === "anthropic-vertex") {
+        // Anthropic Vertex AI: inject AnthropicVertex client into pi-ai's
+        // streamAnthropic for GCP IAM auth instead of Anthropic API keys.
+        activeSession.agent.streamFn = createAnthropicVertexStreamFnForModel(params.model);
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
         activeSession.agent.streamFn = streamSimple;
@@ -2405,6 +2426,7 @@ export async function runEmbeddedAttempt(
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
               model: params.modelId,
+              ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
             });
             if (assembled.messages !== activeSession.messages) {
               activeSession.agent.replaceMessages(assembled.messages);
@@ -2973,6 +2995,7 @@ export async function runEmbeddedAttempt(
             workspaceDir: effectiveWorkspace,
             agentDir,
           });
+          let postTurnFinalizationSucceeded = true;
 
           if (typeof params.contextEngine.afterTurn === "function") {
             try {
@@ -2986,6 +3009,7 @@ export async function runEmbeddedAttempt(
                 runtimeContext: afterTurnRuntimeContext,
               });
             } catch (afterTurnErr) {
+              postTurnFinalizationSucceeded = false;
               log.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
             }
           } else {
@@ -3000,6 +3024,7 @@ export async function runEmbeddedAttempt(
                     messages: newMessages,
                   });
                 } catch (ingestErr) {
+                  postTurnFinalizationSucceeded = false;
                   log.warn(`context engine ingest failed: ${String(ingestErr)}`);
                 }
               } else {
@@ -3011,11 +3036,24 @@ export async function runEmbeddedAttempt(
                       message: msg,
                     });
                   } catch (ingestErr) {
+                    postTurnFinalizationSucceeded = false;
                     log.warn(`context engine ingest failed: ${String(ingestErr)}`);
                   }
                 }
               }
             }
+          }
+
+          if (!promptError && !aborted && !yieldAborted && postTurnFinalizationSucceeded) {
+            await runContextEngineMaintenance({
+              contextEngine: params.contextEngine,
+              sessionId: sessionIdUsed,
+              sessionKey: params.sessionKey,
+              sessionFile: params.sessionFile,
+              reason: "turn",
+              sessionManager,
+              runtimeContext: afterTurnRuntimeContext,
+            });
           }
         }
 
