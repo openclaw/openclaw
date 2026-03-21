@@ -5,9 +5,9 @@ import {
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../../../src/line/accounts.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import {
   createTestWizardPrompter,
+  runSetupWizardConfigure,
   type WizardPrompter,
 } from "../../../test/helpers/extensions/setup-wizard.js";
 import type { OpenClawConfig } from "../api.js";
@@ -42,14 +42,11 @@ describe("line setup wizard", () => {
       }) as WizardPrompter["text"],
     });
 
-    const result = await lineConfigureAdapter.configure({
+    const result = await runSetupWizardConfigure({
+      configure: lineConfigureAdapter.configure,
       cfg: {} as OpenClawConfig,
-      runtime: createRuntimeEnv(),
       prompter,
       options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.accountId).toBe("default");
