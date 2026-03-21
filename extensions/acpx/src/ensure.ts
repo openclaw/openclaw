@@ -122,6 +122,14 @@ export async function checkAcpxVersion(params: {
       ? await spawnAndCollect(spawnParams, params.spawnOptions)
       : await spawnAndCollect(spawnParams);
   } catch (error) {
+    const installedVersion = resolveVersionFromPackage(params.command, cwd);
+    if (installedVersion) {
+      return resolveVersionCheckResult({
+        expectedVersion,
+        installedVersion,
+        installCommand,
+      });
+    }
     return {
       ok: false,
       reason: "execution-failed",
@@ -141,6 +149,14 @@ export async function checkAcpxVersion(params: {
         expectedVersion,
         installCommand,
       };
+    }
+    const installedVersion = resolveVersionFromPackage(params.command, cwd);
+    if (installedVersion) {
+      return resolveVersionCheckResult({
+        expectedVersion,
+        installedVersion,
+        installCommand,
+      });
     }
     return {
       ok: false,
