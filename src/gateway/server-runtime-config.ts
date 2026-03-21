@@ -110,7 +110,14 @@ export async function resolveGatewayRuntimeConfig(params: {
     typeof resolvedAuth.password === "string" && resolvedAuth.password.trim().length > 0;
   const hasSharedSecret =
     (authMode === "token" && hasToken) || (authMode === "password" && hasPassword);
-  const hooksConfig = resolveHooksConfig(params.cfg);
+  let hooksConfig: ReturnType<typeof resolveHooksConfig> = null;
+  try {
+    hooksConfig = resolveHooksConfig(params.cfg);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[gateway] Failed to resolve hooks config (hooks disabled): ${message}`);
+    // Fall through with hooksConfig = null (same as hooks disabled).
+  }
   const canvasHostEnabled =
     process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
 

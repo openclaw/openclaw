@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 
 const TRUSTED_PROXY_AUTH = {
@@ -229,6 +229,26 @@ describe("resolveGatewayRuntimeConfig", () => {
         port: 18789,
       });
       expect(result.bindHost).toBe("0.0.0.0");
+    });
+  });
+
+  describe("hooks config error handling", () => {
+    it("does not throw when resolveHooksConfig throws, returns hooksConfig=null", async () => {
+      // hooks.enabled=true without hooks.token triggers "hooks.enabled requires hooks.token"
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: { bind: "loopback", auth: { mode: "none" } },
+          hooks: { enabled: true },
+        },
+        port: 18789,
+      });
+
+      expect(result.hooksConfig).toBeNull();
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to resolve hooks config"),
+      );
+      consoleSpy.mockRestore();
     });
   });
 
