@@ -112,6 +112,24 @@ export type DispatchCronDeliveryState = {
   deliveryPayloads: ReplyPayload[];
 };
 
+function isDirectSilentReplyOnly(payloads: readonly ReplyPayload[]): boolean {
+  if (payloads.length !== 1) {
+    return false;
+  }
+  const [payload] = payloads;
+  if (!payload || !isSilentReplyText(payload.text, SILENT_REPLY_TOKEN)) {
+    return false;
+  }
+  return !(
+    payload.mediaUrl ||
+    (payload.mediaUrls?.length ?? 0) > 0 ||
+    payload.interactive ||
+    payload.btw ||
+    payload.audioAsVoice === true ||
+    Object.keys(payload.channelData ?? {}).length > 0
+  );
+}
+
 const TRANSIENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /\berrorcode=unavailable\b/i,
   /\bstatus\s*[:=]\s*"?unavailable\b/i,
@@ -339,6 +357,18 @@ export async function dispatchCronDelivery(
             : [];
       if (payloadsForDelivery.length === 0) {
         return null;
+      }
+      if (isDirectSilentReplyOnly(payloadsForDelivery)) {
+        deliveryAttempted = true;
+        delivered = false;
+        return params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          delivered: false,
+          deliveryAttempted: true,
+          ...params.telemetry,
+        });
       }
       if (params.isAborted()) {
         return params.withRunSession({
