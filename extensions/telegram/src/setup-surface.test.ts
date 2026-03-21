@@ -3,6 +3,17 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 
+async function runPrepare(cfg: OpenClawConfig, accountId: string) {
+  return await telegramSetupWizard.prepare?.({
+    cfg,
+    accountId,
+    credentialValues: {},
+    runtime: {} as never,
+    prompter: {} as never,
+    options: {},
+  });
+}
+
 async function runFinalize(cfg: OpenClawConfig, accountId: string) {
   const prompter = {
     note: vi.fn(async () => undefined),
@@ -19,6 +30,45 @@ async function runFinalize(cfg: OpenClawConfig, accountId: string) {
 
   return prompter.note;
 }
+
+describe("telegramSetupWizard.prepare", () => {
+  it('adds groups["*"].requireMention=true for fresh setups', async () => {
+    const prepared = await runPrepare(
+      {
+        channels: {
+          telegram: {
+            botToken: "tok",
+          },
+        },
+      },
+      DEFAULT_ACCOUNT_ID,
+    );
+
+    expect(prepared?.cfg.channels?.telegram?.groups).toEqual({
+      "*": { requireMention: true },
+    });
+  });
+
+  it("preserves an explicit wildcard group mention setting", async () => {
+    const prepared = await runPrepare(
+      {
+        channels: {
+          telegram: {
+            botToken: "tok",
+            groups: {
+              "*": { requireMention: false },
+            },
+          },
+        },
+      },
+      DEFAULT_ACCOUNT_ID,
+    );
+
+    expect(prepared?.cfg.channels?.telegram?.groups).toEqual({
+      "*": { requireMention: false },
+    });
+  });
+});
 
 describe("telegramSetupWizard.finalize", () => {
   it("shows global config commands for the default account", async () => {
