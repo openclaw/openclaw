@@ -1,4 +1,5 @@
 import { loginOpenAICodex, type OAuthCredentials } from "@mariozechner/pi-ai/oauth";
+import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
@@ -7,87 +8,21 @@ import {
   runOpenAIOAuthTlsPreflight,
 } from "./provider-openai-codex-oauth-tls.js";
 
-/** OpenAI token endpoint host — used for NO_PROXY checks. */
-const TOKEN_HOST = "auth.openai.com";
-
 /**
- * Returns true when `host` is excluded from proxying by `NO_PROXY` / `no_proxy`.
- * Supports bare hostnames, dotted-prefix matching (`.openai.com`), and the
- * wildcard `*` (proxy nothing).  Port and CIDR matching are intentionally
- * omitted — they are unusual for OAuth token endpoints.
+ * Temporarily replace globalThis.fetch with a proxy-aware variant for the
+ * duration of `fn`. The pi-ai library uses bare `fetch` internally and does
+ * not accept a custom fetch parameter, so this is the only injection point.
+ * The original fetch is restored in a finally block.
  */
-function isHostExcludedByNoProxy(host: string): boolean {
-  const noProxy = process.env.NO_PROXY || process.env.no_proxy;
-  if (!noProxy) return false;
-
-  const entries = noProxy.split(",").map((e) => e.trim().toLowerCase());
-  const lowerHost = host.toLowerCase();
-
-  for (const entry of entries) {
-    if (!entry) continue;
-    if (entry === "*") return true;
-    if (lowerHost === entry) return true;
-    // ".openai.com" matches "auth.openai.com"
-    if (entry.startsWith(".") && lowerHost.endsWith(entry)) return true;
-    // "openai.com" also matches "auth.openai.com" (curl convention)
-    if (lowerHost === entry || lowerHost.endsWith(`.${entry}`)) return true;
-  }
-  return false;
-}
-
-/**
- * Node.js native fetch() ignores HTTP_PROXY / HTTPS_PROXY env vars.
- * This helper temporarily patches globalThis.fetch with a proxy-aware
- * implementation (via undici ProxyAgent) for the duration of `fn()`,
- * then restores the original fetch.  No-op when no proxy is configured,
- * when the target host is excluded via NO_PROXY, or when undici is
- * unavailable.
- */
-async function withProxyFetch<T>(fn: () => Promise<T>): Promise<T> {
-  const proxyUrl =
-    process.env.HTTPS_PROXY ||
-    process.env.https_proxy ||
-    process.env.HTTP_PROXY ||
-    process.env.http_proxy ||
-    process.env.ALL_PROXY ||
-    process.env.all_proxy;
-  if (!proxyUrl) return fn();
-  if (isHostExcludedByNoProxy(TOKEN_HOST)) return fn();
-
-  let restore: (() => void) | undefined;
-  let agent: { close(): Promise<void> } | undefined;
-  try {
-    const { createRequire } = await import("node:module");
-    const require_ = createRequire(import.meta.url);
-    // undici is a transitive dependency of OpenClaw (via Node internals / direct dep)
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const undici = require_("undici") as typeof import("undici");
-    agent = new undici.ProxyAgent(proxyUrl);
-    const origFetch = globalThis.fetch;
-    const patchedFetch = ((url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
-      undici.fetch(url as Parameters<typeof undici.fetch>[0], {
-        ...(init as Parameters<typeof undici.fetch>[1]),
-        dispatcher: agent as import("undici").Dispatcher,
-      })) as typeof fetch;
-    globalThis.fetch = patchedFetch;
-    restore = () => {
-      // Only restore if our patch is still in place (concurrency-safe)
-      if (globalThis.fetch === patchedFetch) {
-        globalThis.fetch = origFetch;
-      }
-    };
-  } catch {
-    // undici not available — proceed with unpatched fetch
-  }
-
+async function withProxyFetch<T>(proxyFetch: typeof fetch, fn: () => Promise<T>): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = proxyFetch;
   try {
     return await fn();
   } finally {
-    restore?.();
-    try {
-      await agent?.close();
-    } catch {
-      // ignore close errors
+    // Only restore if we still own the slot (avoid clobbering a concurrent override)
+    if (globalThis.fetch === proxyFetch) {
+      globalThis.fetch = originalFetch;
     }
   }
 }
@@ -100,7 +35,10 @@ export async function loginOpenAICodexOAuth(params: {
   localBrowserMessage?: string;
 }): Promise<OAuthCredentials | null> {
   const { prompter, runtime, isRemote, openUrl, localBrowserMessage } = params;
-  const preflight = await runOpenAIOAuthTlsPreflight();
+  const proxyFetch = resolveProxyFetchFromEnv();
+  const preflight = await runOpenAIOAuthTlsPreflight({
+    fetchImpl: proxyFetch,
+  });
   if (!preflight.ok && preflight.kind === "tls-cert") {
     const hint = formatOpenAIOAuthTlsPreflightFix(preflight);
     runtime.error(hint);
@@ -134,13 +72,15 @@ export async function loginOpenAICodexOAuth(params: {
       localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser…",
     });
 
-    const creds = await withProxyFetch(() =>
+    const doLogin = () =>
       loginOpenAICodex({
         onAuth: baseOnAuth,
         onPrompt,
         onProgress: (msg: string) => spin.update(msg),
-      }),
-    );
+      });
+
+    // pi-ai uses bare fetch internally; patch globalThis.fetch when a proxy is configured
+    const creds = proxyFetch ? await withProxyFetch(proxyFetch, doLogin) : await doLogin();
     spin.stop("OpenAI OAuth complete");
     return creds ?? null;
   } catch (err) {
