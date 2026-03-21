@@ -175,7 +175,7 @@ function resolveTransport(
             fetch: (url, init) =>
               fetch(url, {
                 ...init,
-                headers: { ...headers, ...(init?.headers as Record<string, string>) },
+                headers: { ...(init?.headers as Record<string, string>), ...headers },
               }),
           }
         : undefined,
