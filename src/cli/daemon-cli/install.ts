@@ -1,5 +1,3 @@
-import type { DaemonInstallOptions } from "./types.js";
-import type { DaemonInstallOptions } from "./types.js";
 import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
@@ -18,6 +16,7 @@ import {
   failIfNixDaemonInstallMode,
   parsePort,
 } from "./shared.js";
+import type { DaemonInstallOptions } from "./types.js";
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
