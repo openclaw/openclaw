@@ -6,8 +6,27 @@ import {
   saveAuthProfileStoreToDb,
   updateAuthProfileStoreInDb,
 } from "./auth-profiles-sqlite.js";
-import { AUTH_STORE_VERSION } from "./constants.js";
+import { AUTH_STORE_VERSION, log } from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
+
+function shouldLogAuthStoreTiming(): boolean {
+  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+}
+
+function syncExternalCliCredentialsTimed(
+  store: AuthProfileStore,
+  options?: Parameters<typeof syncExternalCliCredentials>[1],
+): boolean {
+  if (!shouldLogAuthStoreTiming()) {
+    return syncExternalCliCredentials(store, options);
+  }
+  const startMs = Date.now();
+  const mutated = syncExternalCliCredentials(store, options);
+  log.info(
+    `auth-store stage=external-cli-sync elapsedMs=${Date.now() - startMs} mutated=${mutated}`,
+  );
+  return mutated;
+}
 import { resolveAuthStorePath } from "./paths.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
@@ -152,7 +171,7 @@ function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
 export function loadAuthProfileStore(): AuthProfileStore {
   const fromDb = loadAuthProfileStoreFromDb();
   const store = fromDb ?? { version: AUTH_STORE_VERSION, profiles: {} };
-  const synced = syncExternalCliCredentials(store);
+  const synced = syncExternalCliCredentialsTimed(store);
   if (synced && Object.keys(store.profiles).length > 0) {
     saveAuthProfileStoreToDb(store);
   }
@@ -167,7 +186,7 @@ function loadAuthProfileStoreForAgent(
   const fromDb = loadAuthProfileStoreFromDb();
   const store = fromDb ?? { version: AUTH_STORE_VERSION, profiles: {} };
   const mergedOAuth = mergeOAuthFileIntoStore(store);
-  const syncedCli = syncExternalCliCredentials(store);
+  const syncedCli = syncExternalCliCredentialsTimed(store);
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
   if (!readOnly && !forceReadOnly && (mergedOAuth || syncedCli)) {
     saveAuthProfileStoreToDb(store);
