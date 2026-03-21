@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_AGENT_MAX_CONCURRENT,
+  DEFAULT_NESTED_MAX_CONCURRENT,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
   resolveAgentMaxConcurrent,
+  resolveNestedMaxConcurrent,
   resolveSubagentMaxConcurrent,
 } from "./agent-limits.js";
 import { loadConfig } from "./config.js";
@@ -13,6 +15,7 @@ describe("agent concurrency defaults", () => {
   it("resolves defaults when unset", () => {
     expect(resolveAgentMaxConcurrent({})).toBe(DEFAULT_AGENT_MAX_CONCURRENT);
     expect(resolveSubagentMaxConcurrent({})).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+    expect(resolveNestedMaxConcurrent({})).toBe(DEFAULT_NESTED_MAX_CONCURRENT);
   });
 
   it("clamps invalid values to at least 1", () => {
@@ -21,11 +24,24 @@ describe("agent concurrency defaults", () => {
         defaults: {
           maxConcurrent: 0,
           subagents: { maxConcurrent: -3 },
+          nested: { maxConcurrent: -1 },
         },
       },
     };
     expect(resolveAgentMaxConcurrent(cfg)).toBe(1);
     expect(resolveSubagentMaxConcurrent(cfg)).toBe(1);
+    expect(resolveNestedMaxConcurrent(cfg)).toBe(1);
+  });
+
+  it("reads nested maxConcurrent from config", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          nested: { maxConcurrent: 8 },
+        },
+      },
+    };
+    expect(resolveNestedMaxConcurrent(cfg)).toBe(8);
   });
 
   it("accepts subagent spawn depth and per-agent child limits", () => {
@@ -52,6 +68,7 @@ describe("agent concurrency defaults", () => {
 
       expect(cfg.agents?.defaults?.maxConcurrent).toBe(DEFAULT_AGENT_MAX_CONCURRENT);
       expect(cfg.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+      expect(cfg.agents?.defaults?.nested?.maxConcurrent).toBe(DEFAULT_NESTED_MAX_CONCURRENT);
     });
   });
 });

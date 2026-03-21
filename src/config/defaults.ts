@@ -1,6 +1,10 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js";
-import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
+import {
+  DEFAULT_AGENT_MAX_CONCURRENT,
+  DEFAULT_NESTED_MAX_CONCURRENT,
+  DEFAULT_SUBAGENT_MAX_CONCURRENT,
+} from "./agent-limits.js";
 import { resolveAgentModelPrimaryValue } from "./model-input.js";
 import {
   DEFAULT_TALK_PROVIDER,
@@ -354,7 +358,10 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const hasSubMax =
     typeof defaults?.subagents?.maxConcurrent === "number" &&
     Number.isFinite(defaults.subagents.maxConcurrent);
-  if (hasMax && hasSubMax) {
+  const hasNestedMax =
+    typeof defaults?.nested?.maxConcurrent === "number" &&
+    Number.isFinite(defaults.nested.maxConcurrent);
+  if (hasMax && hasSubMax && hasNestedMax) {
     return cfg;
   }
 
@@ -371,6 +378,12 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
     mutated = true;
   }
 
+  const nextNested = defaults?.nested ? { ...defaults.nested } : {};
+  if (!hasNestedMax) {
+    nextNested.maxConcurrent = DEFAULT_NESTED_MAX_CONCURRENT;
+    mutated = true;
+  }
+
   if (!mutated) {
     return cfg;
   }
@@ -382,6 +395,7 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
       defaults: {
         ...nextDefaults,
         subagents: nextSubagents,
+        nested: nextNested,
       },
     },
   };
