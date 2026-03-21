@@ -193,12 +193,12 @@ export async function getReplyFromConfig(
       agentDir,
       activeModel: { provider, model },
     });
-    logIngressStage("media-understanding", ` applied=${appliedMediaUnderstanding ? "1" : "0"}`);
+    logIngressStage("media-understanding", `applied=${appliedMediaUnderstanding ? "1" : "0"}`);
     const appliedLinkUnderstanding = await applyLinkUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
     });
-    logIngressStage("link-understanding", ` applied=${appliedLinkUnderstanding ? "1" : "0"}`);
+    logIngressStage("link-understanding", `applied=${appliedLinkUnderstanding ? "1" : "0"}`);
   }
   emitPreAgentMessageHooks({
     ctx: finalized,
