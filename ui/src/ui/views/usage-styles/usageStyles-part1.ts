@@ -1,18 +1,4 @@
 export const usageStylesPart1 = `
-  .usage-page-header {
-    margin: 4px 0 12px;
-  }
-  .usage-page-title {
-    font-size: 28px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    margin-bottom: 4px;
-  }
-  .usage-page-subtitle {
-    font-size: 13px;
-    color: var(--muted);
-    margin: 0 0 12px;
-  }
   /* ===== FILTERS & HEADER ===== */
   .usage-filters-inline {
     display: flex;
@@ -701,9 +687,6 @@ export const usageStylesPart1 = `
 
   /* ===== RESPONSIVE ===== */
   @media (max-width: 768px) {
-    .usage-page-title {
-      font-size: 22px;
-    }
     .usage-query-bar {
       grid-template-columns: 1fr;
       gap: 8px;
@@ -734,9 +717,6 @@ export const usageStylesPart1 = `
     }
   }
   @media (max-width: 480px) {
-    .usage-page-title {
-      font-size: 20px;
-    }
     .usage-filters-inline input[type="text"] {
       min-width: 0;
       width: 100%;
