@@ -34,7 +34,7 @@ export function createWebSendApi(params: {
     ): Promise<{ messageId: string }> => {
       const jid = toWhatsappJid(to);
       let payload: AnyMessageContent;
-      if (mediaBuffer && mediaType) {
+      if (mediaBuffer && (mediaType ??= "application/octet-stream")) {
         if (mediaType.startsWith("image/")) {
           payload = {
             image: mediaBuffer,
