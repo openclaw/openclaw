@@ -384,6 +384,32 @@ const singletonBatchLaneCount =
       );
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
+const splitFilesByDurationBudget = (files, targetDurationMs, estimateDurationMs) => {
+  if (!Number.isFinite(targetDurationMs) || targetDurationMs <= 0 || files.length <= 1) {
+    return [files];
+  }
+
+  const batches = [];
+  let currentBatch = [];
+  let currentDurationMs = 0;
+
+  for (const file of files) {
+    const durationMs = estimateDurationMs(file);
+    if (currentBatch.length > 0 && currentDurationMs + durationMs > targetDurationMs) {
+      batches.push(currentBatch);
+      currentBatch = [];
+      currentDurationMs = 0;
+    }
+    currentBatch.push(file);
+    currentDurationMs += durationMs;
+  }
+
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch);
+  }
+
+  return batches;
+};
 const unitSingletonBuckets =
   singletonBatchLaneCount > 0
     ? packFilesByDuration(unitSingletonBatchFiles, singletonBatchLaneCount, estimateUnitDurationMs)
@@ -397,6 +423,11 @@ const unitFastLaneCount = Math.max(
   1,
   parseEnvNumber("OPENCLAW_TEST_UNIT_FAST_LANES", defaultUnitFastLaneCount),
 );
+const defaultUnitFastBatchTargetMs = isCI && !isWindows ? 45_000 : 0;
+const unitFastBatchTargetMs = parseEnvNumber(
+  "OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS",
+  defaultUnitFastBatchTargetMs,
+);
 // Heap snapshots on current main show long-lived unit-fast workers retaining
 // transformed Vitest/Vite module graphs rather than app objects. Multiple
 // bounded unit-fast lanes only help if we also recycle them serially instead
@@ -405,26 +436,34 @@ const unitFastBuckets =
   unitFastLaneCount > 1
     ? packFilesByDuration(unitFastCandidateFiles, unitFastLaneCount, estimateUnitDurationMs)
     : [unitFastCandidateFiles];
-const unitFastEntries = unitFastBuckets
-  .filter((files) => files.length > 0)
-  .map((files, index) => ({
-    name: unitFastBuckets.length === 1 ? "unit-fast" : `unit-fast-${String(index + 1)}`,
-    serialPhase: "unit-fast",
-    env: {
-      OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
-        `vitest-unit-fast-include-${String(index + 1)}`,
-        files,
-      ),
-    },
-    args: [
-      "vitest",
-      "run",
-      "--config",
-      "vitest.unit.config.ts",
-      `--pool=${useVmForks ? "vmForks" : "forks"}`,
-      ...(disableIsolation ? ["--isolate=false"] : []),
-    ],
-  }));
+const unitFastEntries = unitFastBuckets.flatMap((files, index) => {
+  const laneName = unitFastBuckets.length === 1 ? "unit-fast" : `unit-fast-${String(index + 1)}`;
+  const recycledBatches = splitFilesByDurationBudget(
+    files,
+    unitFastBatchTargetMs,
+    estimateUnitDurationMs,
+  );
+  return recycledBatches
+    .filter((batch) => batch.length > 0)
+    .map((batch, batchIndex) => ({
+      name: recycledBatches.length === 1 ? laneName : `${laneName}-batch-${String(batchIndex + 1)}`,
+      serialPhase: "unit-fast",
+      env: {
+        OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+          `vitest-unit-fast-include-${String(index + 1)}-${String(batchIndex + 1)}`,
+          batch,
+        ),
+      },
+      args: [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.unit.config.ts",
+        `--pool=${useVmForks ? "vmForks" : "forks"}`,
+        ...(disableIsolation ? ["--isolate=false"] : []),
+      ],
+    }));
+});
 const heavyUnitBuckets = packFilesByDuration(
   timedHeavyUnitFiles,
   heavyUnitLaneCount,
