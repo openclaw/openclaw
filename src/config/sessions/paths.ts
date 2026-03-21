@@ -41,6 +41,18 @@ export type SessionFilePathOptions = {
 
 const MULTI_STORE_PATH_SENTINEL = "(multiple)";
 
+function traceSessionPathStage(stage: string): void {
+  const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    fs.appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only.
+  }
+}
+
 export function resolveSessionFilePathOptions(params: {
   agentId?: string;
   storePath?: string;
@@ -128,7 +140,7 @@ function extractAgentIdFromAbsoluteSessionPath(candidateAbsPath: string): string
   return agentId || undefined;
 }
 
-function resolveStructuralSessionFallbackPath(
+function resolveStructuralSessionFallbackFileName(
   candidateAbsPath: string,
   expectedAgentId: string,
 ): string | undefined {
@@ -157,7 +169,7 @@ function resolveStructuralSessionFallbackPath(
   if (!fileName || fileName === "." || fileName === "..") {
     return undefined;
   }
-  return path.normalize(path.resolve(candidateAbsPath));
+  return fileName;
 }
 
 function safeRealpathSync(filePath: string): string | undefined {
@@ -216,17 +228,26 @@ function resolvePathWithinSessionsDir(
         return resolvedFromPath;
       }
       // Cross-root compatibility for older absolute paths:
-      // keep only canonical .../agents/<agentId>/sessions/<file> shapes.
-      const structuralFallback = resolveStructuralSessionFallbackPath(
+      // preserve only the session transcript file name, but always re-home it
+      // into the current runtime's sessions dir so isolated runtimes do not
+      // leak writes into another app/worktree state directory.
+      const structuralFallbackFileName = resolveStructuralSessionFallbackFileName(
         realTrimmed,
         extractedAgentId,
       );
-      if (structuralFallback) {
-        return structuralFallback;
+      if (structuralFallbackFileName) {
+        const rebased = path.resolve(realBase, structuralFallbackFileName);
+        traceSessionPathStage(
+          `session-path-cross-root-rebase candidate=${realTrimmed} rebased=${rebased} agent=${extractedAgentId}`,
+        );
+        return rebased;
       }
     }
   }
   if (!normalized || normalized.startsWith("..") || path.isAbsolute(normalized)) {
+    traceSessionPathStage(
+      `session-path-reject candidate=${candidate} sessionsDir=${realBase} reason=outside-sessions-dir`,
+    );
     throw new Error("Session file path must be within sessions directory");
   }
   return path.resolve(realBase, normalized);

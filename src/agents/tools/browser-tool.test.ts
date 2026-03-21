@@ -360,12 +360,12 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 25000 },
+      { timeoutMs: 55000 },
       expect.objectContaining({
         nodeId: "node-1",
         command: "browser.proxy",
         params: expect.objectContaining({
-          timeoutMs: 20000,
+          timeoutMs: 45000,
         }),
       }),
     );
@@ -389,10 +389,10 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 25000 },
+      { timeoutMs: 55000 },
       expect.objectContaining({
         params: expect.objectContaining({
-          timeoutMs: 20000,
+          timeoutMs: 45000,
         }),
       }),
     );
@@ -474,6 +474,21 @@ describe("browser tool url alias support", () => {
     );
   });
 
+  it("passes timeoutMs through for open", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "open",
+      url: "https://example.com",
+      timeoutMs: 60000,
+    });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
+      undefined,
+      "https://example.com",
+      expect.objectContaining({ profile: undefined, timeoutMs: 60000 }),
+    );
+  });
+
   it("tracks opened tabs when session context is available", async () => {
     browserClientMocks.browserOpenTab.mockResolvedValueOnce({
       targetId: "tab-123",
@@ -505,6 +520,26 @@ describe("browser tool url alias support", () => {
         url: "https://example.com",
         targetId: "tab-1",
         profile: undefined,
+      }),
+    );
+  });
+
+  it("passes timeoutMs through for navigate", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "navigate",
+      url: "https://example.com",
+      targetId: "tab-1",
+      timeoutMs: 60000,
+    });
+
+    expect(browserActionsMocks.browserNavigate).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        url: "https://example.com",
+        targetId: "tab-1",
+        profile: undefined,
+        timeoutMs: 60000,
       }),
     );
   });

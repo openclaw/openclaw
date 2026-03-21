@@ -1,5 +1,12 @@
 import { fetchBrowserJson } from "./client-fetch.js";
 
+// Heavy real-world pages (Flights, X, airline checkout flows) can take materially
+// longer than toy examples. Keep read-only status endpoints fast, but give
+// navigation/snapshot/open enough budget to avoid false negatives.
+const BROWSER_PAGE_LOAD_TIMEOUT_MS = 45_000;
+const BROWSER_STATUS_TIMEOUT_MS = 15_000;
+const BROWSER_PROFILES_TIMEOUT_MS = 10_000;
+
 export type BrowserTransport = "cdp" | "chrome-mcp";
 
 export type BrowserStatus = {
@@ -112,7 +119,9 @@ export async function browserStatus(
 ): Promise<BrowserStatus> {
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserStatus>(withBaseUrl(baseUrl, `/${q}`), {
-    timeoutMs: 1500,
+    // Existing-session profile checks can spin up Chrome MCP and attach to a
+    // live browser, so a 1.5s budget creates false "browser unavailable" errors.
+    timeoutMs: BROWSER_STATUS_TIMEOUT_MS,
   });
 }
 
@@ -120,7 +129,7 @@ export async function browserProfiles(baseUrl?: string): Promise<ProfileStatus[]
   const res = await fetchBrowserJson<{ profiles: ProfileStatus[] }>(
     withBaseUrl(baseUrl, `/profiles`),
     {
-      timeoutMs: 3000,
+      timeoutMs: BROWSER_PROFILES_TIMEOUT_MS,
     },
   );
   return res.profiles ?? [];
@@ -225,14 +234,18 @@ export async function browserTabs(
 export async function browserOpenTab(
   baseUrl: string | undefined,
   url: string,
-  opts?: { profile?: string },
+  opts?: { profile?: string; timeoutMs?: number },
 ): Promise<BrowserTab> {
   const q = buildProfileQuery(opts?.profile);
+  const timeoutMs = Math.max(BROWSER_PAGE_LOAD_TIMEOUT_MS, opts?.timeoutMs ?? 0);
   return await fetchBrowserJson<BrowserTab>(withBaseUrl(baseUrl, `/tabs/open${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
-    timeoutMs: 15000,
+    body: JSON.stringify({
+      url,
+      timeoutMs,
+    }),
+    timeoutMs,
   });
 }
 
@@ -298,6 +311,7 @@ export async function browserSnapshot(
     labels?: boolean;
     mode?: "efficient";
     profile?: string;
+    timeoutMs?: number;
   },
 ): Promise<SnapshotResult> {
   const q = new URLSearchParams();
@@ -341,7 +355,7 @@ export async function browserSnapshot(
     q.set("profile", opts.profile);
   }
   return await fetchBrowserJson<SnapshotResult>(withBaseUrl(baseUrl, `/snapshot?${q.toString()}`), {
-    timeoutMs: 20000,
+    timeoutMs: Math.max(BROWSER_PAGE_LOAD_TIMEOUT_MS, opts.timeoutMs ?? 0),
   });
 }
 

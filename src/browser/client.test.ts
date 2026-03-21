@@ -101,6 +101,80 @@ describe("browser client", () => {
     expect(parsed.searchParams.get("refs")).toBe("aria");
   });
 
+  it("respects caller timeout overrides for heavy browser operations", async () => {
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            targetId: "t1",
+            url: "https://example.com",
+            format: "ai",
+            snapshot: "ok",
+          }),
+        } as unknown as Response;
+      }),
+    );
+
+    await browserOpenTab("http://127.0.0.1:18791", "https://example.com", { timeoutMs: 60_000 });
+    await browserNavigate("http://127.0.0.1:18791", {
+      url: "https://example.com",
+      timeoutMs: 55_000,
+    });
+    await browserSnapshot("http://127.0.0.1:18791", {
+      format: "ai",
+      timeoutMs: 50_000,
+    });
+    await browserAct(
+      "http://127.0.0.1:18791",
+      {
+        kind: "wait",
+        selector: "body",
+        timeoutMs: 65_000,
+      },
+      {},
+    );
+
+    expect(calls[0]?.init?.timeoutMs).toBe(60_000);
+    expect(calls[1]?.init?.timeoutMs).toBe(55_000);
+    expect(calls[2]?.init?.timeoutMs).toBe(50_000);
+    expect(calls[3]?.init?.timeoutMs).toBe(65_000);
+  });
+
+  it("uses a longer timeout budget for browser status checks", async () => {
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          json: async () => ({
+            enabled: true,
+            running: true,
+            pid: null,
+            cdpPort: null,
+            chosenBrowser: "chrome",
+            userDataDir: null,
+            color: "#00AA00",
+            headless: false,
+            attachOnly: true,
+          }),
+        } as unknown as Response;
+      }),
+    );
+
+    await browserStatus("http://127.0.0.1:18791");
+
+    expect(calls[0]?.init?.timeoutMs).toBe(15_000);
+  });
+
   it("omits format when the caller wants server-side snapshot capability defaults", async () => {
     const calls: string[] = [];
     stubSnapshotFetch(calls);

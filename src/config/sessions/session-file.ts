@@ -1,3 +1,4 @@
+import path from "node:path";
 import { resolveSessionFilePath } from "./paths.js";
 import { updateSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
@@ -23,7 +24,10 @@ export async function resolveAndPersistSessionFile(params: {
       : baseEntry;
   const sessionFile = resolveSessionFilePath(sessionId, entryForResolve, {
     agentId: params.agentId,
-    sessionsDir: params.sessionsDir,
+    // Persisted session files should default to the current store root rather
+    // than process-global env state so tests, worktrees, and isolated runtimes
+    // all resolve transcripts under the store they are actually updating.
+    sessionsDir: params.sessionsDir ?? path.dirname(storePath),
   });
   const persistedEntry: SessionEntry = {
     ...baseEntry,

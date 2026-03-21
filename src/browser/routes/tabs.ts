@@ -117,10 +117,12 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
   });
 
   app.post("/tabs/open", async (req, res) => {
-    const url = toStringOrEmpty((req.body as { url?: unknown })?.url);
+    const body = (req.body as { url?: unknown; timeoutMs?: unknown } | undefined) ?? {};
+    const url = toStringOrEmpty(body.url);
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
+    const timeoutMs = toNumber(body.timeoutMs) ?? undefined;
 
     await withTabsProfileRoute({
       req,
@@ -129,7 +131,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       mapTabError: true,
       run: async (profileCtx) => {
         await profileCtx.ensureBrowserAvailable();
-        const tab = await profileCtx.openTab(url);
+        const tab = await profileCtx.openTab(url, timeoutMs);
         res.json(tab);
       },
     });

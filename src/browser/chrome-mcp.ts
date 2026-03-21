@@ -479,8 +479,20 @@ export async function listChromeMcpTabs(
   return toBrowserTabs(await listChromeMcpPages(profileName, options));
 }
 
-export async function openChromeMcpTab(profileName: string, url: string): Promise<BrowserTab> {
-  const result = await callTool(profileName, "new_page", { url });
+export async function openChromeMcpTab(
+  profileName: string,
+  url: string,
+  options: ChromeMcpCallOptions = {},
+): Promise<BrowserTab> {
+  const result = await callTool(
+    profileName,
+    "new_page",
+    {
+      url,
+      ...(typeof options.timeoutMs === "number" ? { timeout: options.timeoutMs } : {}),
+    },
+    options,
+  );
   const pages = extractStructuredPages(result);
   const chosen = pages.find((page) => page.selected) ?? pages.at(-1);
   if (!chosen) {
@@ -555,12 +567,21 @@ export async function clickChromeMcpElement(params: {
   targetId: string;
   uid: string;
   doubleClick?: boolean;
+  timeoutMs?: number;
 }): Promise<void> {
-  await callTool(params.profileName, "click", {
-    pageId: parsePageId(params.targetId),
-    uid: params.uid,
-    ...(params.doubleClick ? { dblClick: true } : {}),
-  });
+  const timeoutOptions =
+    typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined;
+  await callTool(
+    params.profileName,
+    "click",
+    {
+      pageId: parsePageId(params.targetId),
+      uid: params.uid,
+      ...(params.doubleClick ? { dblClick: true } : {}),
+      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
+    },
+    timeoutOptions,
+  );
 }
 
 export async function fillChromeMcpElement(params: {
@@ -568,34 +589,61 @@ export async function fillChromeMcpElement(params: {
   targetId: string;
   uid: string;
   value: string;
+  timeoutMs?: number;
 }): Promise<void> {
-  await callTool(params.profileName, "fill", {
-    pageId: parsePageId(params.targetId),
-    uid: params.uid,
-    value: params.value,
-  });
+  const timeoutOptions =
+    typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined;
+  await callTool(
+    params.profileName,
+    "fill",
+    {
+      pageId: parsePageId(params.targetId),
+      uid: params.uid,
+      value: params.value,
+      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
+    },
+    timeoutOptions,
+  );
 }
 
 export async function fillChromeMcpForm(params: {
   profileName: string;
   targetId: string;
   elements: Array<{ uid: string; value: string }>;
+  timeoutMs?: number;
 }): Promise<void> {
-  await callTool(params.profileName, "fill_form", {
-    pageId: parsePageId(params.targetId),
-    elements: params.elements,
-  });
+  const timeoutOptions =
+    typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined;
+  await callTool(
+    params.profileName,
+    "fill_form",
+    {
+      pageId: parsePageId(params.targetId),
+      elements: params.elements,
+      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
+    },
+    timeoutOptions,
+  );
 }
 
 export async function hoverChromeMcpElement(params: {
   profileName: string;
   targetId: string;
   uid: string;
+  timeoutMs?: number;
 }): Promise<void> {
-  await callTool(params.profileName, "hover", {
-    pageId: parsePageId(params.targetId),
-    uid: params.uid,
-  });
+  const timeoutOptions =
+    typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined;
+  await callTool(
+    params.profileName,
+    "hover",
+    {
+      pageId: parsePageId(params.targetId),
+      uid: params.uid,
+      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
+    },
+    timeoutOptions,
+  );
 }
 
 export async function dragChromeMcpElement(params: {
@@ -603,12 +651,21 @@ export async function dragChromeMcpElement(params: {
   targetId: string;
   fromUid: string;
   toUid: string;
+  timeoutMs?: number;
 }): Promise<void> {
-  await callTool(params.profileName, "drag", {
-    pageId: parsePageId(params.targetId),
-    from_uid: params.fromUid,
-    to_uid: params.toUid,
-  });
+  const timeoutOptions =
+    typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined;
+  await callTool(
+    params.profileName,
+    "drag",
+    {
+      pageId: parsePageId(params.targetId),
+      from_uid: params.fromUid,
+      to_uid: params.toUid,
+      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
+    },
+    timeoutOptions,
+  );
 }
 
 export async function uploadChromeMcpFile(params: {
@@ -628,11 +685,20 @@ export async function pressChromeMcpKey(params: {
   profileName: string;
   targetId: string;
   key: string;
+  timeoutMs?: number;
 }): Promise<void> {
-  await callTool(params.profileName, "press_key", {
-    pageId: parsePageId(params.targetId),
-    key: params.key,
-  });
+  const timeoutOptions =
+    typeof params.timeoutMs === "number" ? { timeoutMs: params.timeoutMs } : undefined;
+  await callTool(
+    params.profileName,
+    "press_key",
+    {
+      pageId: parsePageId(params.targetId),
+      key: params.key,
+      ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
+    },
+    timeoutOptions,
+  );
 }
 
 export async function resizeChromeMcpPage(params: {

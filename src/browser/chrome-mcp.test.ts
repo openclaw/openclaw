@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  clickChromeMcpElement,
   evaluateChromeMcpScript,
+  fillChromeMcpElement,
   listChromeMcpTabs,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
@@ -17,8 +19,12 @@ type ChromeMcpSessionFactory = Exclude<
   null
 >;
 type ChromeMcpSession = Awaited<ReturnType<ChromeMcpSessionFactory>>;
+type ChromeMcpSessionBundle = {
+  session: ChromeMcpSession;
+  callTool: ReturnType<typeof vi.fn>;
+};
 
-function createFakeSession(): ChromeMcpSession {
+function createFakeSessionBundle(): ChromeMcpSessionBundle {
   const callTool = vi.fn(async ({ name }: ToolCall) => {
     if (name === "list_pages") {
       return {
@@ -59,21 +65,38 @@ function createFakeSession(): ChromeMcpSession {
         ],
       };
     }
+    if (name === "click" || name === "fill") {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "ok",
+          },
+        ],
+      };
+    }
     throw new Error(`unexpected tool ${name}`);
   });
 
   return {
-    client: {
-      callTool,
-      listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
-      close: vi.fn().mockResolvedValue(undefined),
-      connect: vi.fn().mockResolvedValue(undefined),
-    },
-    transport: {
-      pid: 123,
-    },
-    ready: Promise.resolve(),
-  } as unknown as ChromeMcpSession;
+    callTool,
+    session: {
+      client: {
+        callTool,
+        listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
+        close: vi.fn().mockResolvedValue(undefined),
+        connect: vi.fn().mockResolvedValue(undefined),
+      },
+      transport: {
+        pid: 123,
+      },
+      ready: Promise.resolve(),
+    } as unknown as ChromeMcpSession,
+  };
+}
+
+function createFakeSession(): ChromeMcpSession {
+  return createFakeSessionBundle().session;
 }
 
 describe("chrome MCP page parsing", () => {
@@ -115,6 +138,65 @@ describe("chrome MCP page parsing", () => {
       url: "https://example.com/",
       type: "page",
     });
+  });
+
+  it("forwards timeout overrides to new_page", async () => {
+    const { session, callTool } = createFakeSessionBundle();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await openChromeMcpTab("chrome-live", "https://example.com/", { timeoutMs: 45_000 });
+
+    expect(callTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "new_page",
+        arguments: expect.objectContaining({
+          url: "https://example.com/",
+          timeout: 45_000,
+        }),
+      }),
+      undefined,
+      expect.objectContaining({ timeout: 45_000 }),
+    );
+  });
+
+  it("forwards timeout overrides to existing-session interaction tools", async () => {
+    const { session, callTool } = createFakeSessionBundle();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await clickChromeMcpElement({
+      profileName: "chrome-live",
+      targetId: "1",
+      uid: "e1",
+      timeoutMs: 30_000,
+    });
+    await fillChromeMcpElement({
+      profileName: "chrome-live",
+      targetId: "1",
+      uid: "e2",
+      value: "hello",
+      timeoutMs: 25_000,
+    });
+
+    expect(callTool).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        name: "click",
+        arguments: expect.objectContaining({ uid: "e1", timeout: 30_000 }),
+      }),
+      undefined,
+      expect.objectContaining({ timeout: 30_000 }),
+    );
+    expect(callTool).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        name: "fill",
+        arguments: expect.objectContaining({ uid: "e2", value: "hello", timeout: 25_000 }),
+      }),
+      undefined,
+      expect.objectContaining({ timeout: 25_000 }),
+    );
   });
 
   it("parses evaluate_script text responses when structuredContent is missing", async () => {

@@ -523,6 +523,7 @@ export function registerBrowserAgentActRoutes(
                 targetId: tab.targetId,
                 uid: ref!,
                 doubleClick,
+                timeoutMs: timeoutMs ?? undefined,
               });
               return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
             }
@@ -589,12 +590,14 @@ export function registerBrowserAgentActRoutes(
                 targetId: tab.targetId,
                 uid: ref!,
                 value: text,
+                timeoutMs: timeoutMs ?? undefined,
               });
               if (submit) {
                 await pressChromeMcpKey({
                   profileName,
                   targetId: tab.targetId,
                   key: "Enter",
+                  timeoutMs: timeoutMs ?? undefined,
                 });
               }
               return res.json({ ok: true, targetId: tab.targetId });
@@ -628,11 +631,17 @@ export function registerBrowserAgentActRoutes(
               return jsonError(res, 400, "key is required");
             }
             const delayMs = toNumber(body.delayMs);
+            const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
               if (delayMs) {
                 return jsonError(res, 501, "existing-session press does not support delayMs.");
               }
-              await pressChromeMcpKey({ profileName, targetId: tab.targetId, key });
+              await pressChromeMcpKey({
+                profileName,
+                targetId: tab.targetId,
+                key,
+                timeoutMs: timeoutMs ?? undefined,
+              });
               return res.json({ ok: true, targetId: tab.targetId });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
@@ -662,14 +671,12 @@ export function registerBrowserAgentActRoutes(
                   "existing-session hover does not support selector targeting yet; use ref.",
                 );
               }
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session hover does not support timeoutMs overrides.",
-                );
-              }
-              await hoverChromeMcpElement({ profileName, targetId: tab.targetId, uid: ref! });
+              await hoverChromeMcpElement({
+                profileName,
+                targetId: tab.targetId,
+                uid: ref!,
+                timeoutMs: timeoutMs ?? undefined,
+              });
               return res.json({ ok: true, targetId: tab.targetId });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
@@ -755,18 +762,12 @@ export function registerBrowserAgentActRoutes(
                   "existing-session drag does not support selector targeting yet; use startRef/endRef.",
                 );
               }
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session drag does not support timeoutMs overrides.",
-                );
-              }
               await dragChromeMcpElement({
                 profileName,
                 targetId: tab.targetId,
                 fromUid: startRef!,
                 toUid: endRef!,
+                timeoutMs: timeoutMs ?? undefined,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             }
@@ -808,18 +809,12 @@ export function registerBrowserAgentActRoutes(
                   "existing-session select currently supports a single value only.",
                 );
               }
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session select does not support timeoutMs overrides.",
-                );
-              }
               await fillChromeMcpElement({
                 profileName,
                 targetId: tab.targetId,
                 uid: ref!,
                 value: values[0] ?? "",
+                timeoutMs: timeoutMs ?? undefined,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             }
@@ -852,13 +847,6 @@ export function registerBrowserAgentActRoutes(
             }
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session fill does not support timeoutMs overrides.",
-                );
-              }
               await fillChromeMcpForm({
                 profileName,
                 targetId: tab.targetId,
@@ -866,6 +854,7 @@ export function registerBrowserAgentActRoutes(
                   uid: field.ref,
                   value: String(field.value ?? ""),
                 })),
+                timeoutMs: timeoutMs ?? undefined,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             }

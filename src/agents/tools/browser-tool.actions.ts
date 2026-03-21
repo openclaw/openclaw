@@ -8,6 +8,15 @@ import { loadConfig } from "../../config/config.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { imageResultFromFile, jsonResult } from "./common.js";
 
+const BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS = 45_000;
+
+function readActTimeoutMs(request: Parameters<typeof browserAct>[1]): number | undefined {
+  const timeoutMs = (request as { timeoutMs?: unknown }).timeoutMs;
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.floor(timeoutMs)
+    : undefined;
+}
+
 type BrowserProxyRequest = (opts: {
   method: string;
   path: string;
@@ -170,6 +179,10 @@ export async function executeSnapshotAction(params: {
     typeof input.depth === "number" && Number.isFinite(input.depth) ? input.depth : undefined;
   const selector = typeof input.selector === "string" ? input.selector.trim() : undefined;
   const frame = typeof input.frame === "string" ? input.frame.trim() : undefined;
+  const timeoutMs =
+    typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs) && input.timeoutMs > 0
+      ? Math.floor(input.timeoutMs)
+      : BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS;
   const resolvedMaxChars =
     format === "ai"
       ? hasMaxChars
@@ -200,10 +213,12 @@ export async function executeSnapshotAction(params: {
         path: "/snapshot",
         profile,
         query: snapshotQuery,
+        timeoutMs,
       })) as Awaited<ReturnType<typeof browserSnapshot>>)
     : await browserSnapshot(baseUrl, {
         ...snapshotQuery,
         profile,
+        timeoutMs,
       });
   if (snapshot.format === "ai") {
     const extractedText = snapshot.snapshot ?? "";
@@ -302,6 +317,7 @@ export async function executeActAction(params: {
   proxyRequest: BrowserProxyRequest | null;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
+  const requestTimeoutMs = readActTimeoutMs(request) ?? BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS;
   try {
     const result = proxyRequest
       ? await proxyRequest({
@@ -309,6 +325,7 @@ export async function executeActAction(params: {
           path: "/act",
           profile,
           body: request,
+          timeoutMs: requestTimeoutMs,
         })
       : await browserAct(baseUrl, request, {
           profile,
@@ -336,6 +353,7 @@ export async function executeActAction(params: {
                 path: "/act",
                 profile,
                 body: retryRequest,
+                timeoutMs: requestTimeoutMs,
               })
             : await browserAct(baseUrl, retryRequest, {
                 profile,

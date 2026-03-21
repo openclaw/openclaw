@@ -6,6 +6,10 @@ import type {
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 
+// Interaction-driven routes often wait on navigation, DOM stabilization, or page
+// scripts. A 20s cap is too aggressive for travel and commerce flows.
+const BROWSER_INTERACTION_TIMEOUT_MS = 45_000;
+
 export type BrowserFormField = {
   ref: string;
   type: string;
@@ -102,6 +106,11 @@ export type BrowserActResponse = {
   results?: Array<{ ok: boolean; error?: string }>;
 };
 
+function readActTimeoutMs(req: BrowserActRequest): number | undefined {
+  const timeoutMs = (req as { timeoutMs?: unknown }).timeoutMs;
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) ? timeoutMs : undefined;
+}
+
 export type BrowserDownloadPayload = {
   url: string;
   suggestedFilename: string;
@@ -131,6 +140,7 @@ export async function browserNavigate(
     url: string;
     targetId?: string;
     profile?: string;
+    timeoutMs?: number;
   },
 ): Promise<BrowserActionTabResult> {
   const q = buildProfileQuery(opts.profile);
@@ -138,7 +148,7 @@ export async function browserNavigate(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url: opts.url, targetId: opts.targetId }),
-    timeoutMs: 20000,
+    timeoutMs: Math.max(BROWSER_INTERACTION_TIMEOUT_MS, opts.timeoutMs ?? 0),
   });
 }
 
@@ -244,11 +254,13 @@ export async function browserAct(
   opts?: { profile?: string },
 ): Promise<BrowserActResponse> {
   const q = buildProfileQuery(opts?.profile);
+  const timeoutMs = readActTimeoutMs(req);
   return await fetchBrowserJson<BrowserActResponse>(withBaseUrl(baseUrl, `/act${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
-    timeoutMs: 20000,
+    // Keep the transport timeout above any server-side action timeout override.
+    timeoutMs: Math.max(BROWSER_INTERACTION_TIMEOUT_MS, timeoutMs ?? 0),
   });
 }
 

@@ -754,6 +754,7 @@ export async function listPagesViaPlaywright(opts: { cdpUrl: string }): Promise<
 export async function createPageViaPlaywright(opts: {
   cdpUrl: string;
   url: string;
+  timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<{
   targetId: string;
@@ -772,11 +773,15 @@ export async function createPageViaPlaywright(opts: {
   const targetUrl = opts.url.trim() || "about:blank";
   if (targetUrl !== "about:blank") {
     const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy);
+    const timeoutMs =
+      typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+        ? Math.max(1, Math.floor(opts.timeoutMs))
+        : 30_000;
     await assertBrowserNavigationAllowed({
       url: targetUrl,
       ...navigationPolicy,
     });
-    const response = await page.goto(targetUrl, { timeout: 30_000 }).catch(() => {
+    const response = await page.goto(targetUrl, { timeout: timeoutMs }).catch(() => {
       // Navigation might fail for some URLs, but page is still created
       return null;
     });

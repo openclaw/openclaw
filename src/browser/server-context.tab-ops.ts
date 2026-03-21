@@ -32,7 +32,7 @@ type TabOpsDeps = {
 
 type ProfileTabOps = {
   listTabs: () => Promise<BrowserTab[]>;
-  openTab: (url: string) => Promise<BrowserTab>;
+  openTab: (url: string, timeoutMs?: number) => Promise<BrowserTab>;
 };
 
 /**
@@ -136,12 +136,14 @@ export function createProfileTabOps({
     });
   };
 
-  const openTab = async (url: string): Promise<BrowserTab> => {
+  const openTab = async (url: string, timeoutMs?: number): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
 
     if (capabilities.usesChromeMcp) {
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
-      const page = await openChromeMcpTab(profile.name, url);
+      const page = await openChromeMcpTab(profile.name, url, {
+        timeoutMs,
+      });
       const profileState = getProfileState();
       profileState.lastTargetId = page.targetId;
       await assertBrowserNavigationResultAllowed({ url: page.url, ...ssrfPolicyOpts });
@@ -155,6 +157,7 @@ export function createProfileTabOps({
         const page = await createPageViaPlaywright({
           cdpUrl: profile.cdpUrl,
           url,
+          timeoutMs,
           ...ssrfPolicyOpts,
         });
         const profileState = getProfileState();

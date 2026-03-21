@@ -14,7 +14,7 @@ type SelectionDeps = {
   getProfileState: () => ProfileRuntimeState;
   ensureBrowserAvailable: () => Promise<void>;
   listTabs: () => Promise<BrowserTab[]>;
-  openTab: (url: string) => Promise<BrowserTab>;
+  openTab: (url: string, timeoutMs?: number) => Promise<BrowserTab>;
 };
 
 type SelectionOps = {

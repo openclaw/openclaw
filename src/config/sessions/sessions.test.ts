@@ -70,6 +70,21 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
   });
 
+  it("rebases canonical cross-root sessionFile paths into the current sessions dir", () => {
+    const sessionsDir = "/tmp/openclaw-consumer-bench/agents/main/sessions";
+
+    const resolved = resolveSessionFilePath(
+      "sess-1",
+      {
+        sessionFile:
+          "/Users/user/Library/Application Support/OpenClaw Consumer/.openclaw/agents/main/sessions/sess-1.jsonl",
+      },
+      { sessionsDir, agentId: "main" },
+    );
+
+    expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
+  });
+
   it("ignores multi-store sentinel paths when deriving session file options", () => {
     expect(resolveSessionFilePathOptions({ agentId: "worker", storePath: "(multiple)" })).toEqual({
       agentId: "worker",
@@ -451,5 +466,43 @@ describe("resolveAndPersistSessionFile", () => {
     expect(result.sessionEntry.sessionId).toBe(sessionId);
     const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
     expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
+  });
+
+  it("rewrites stale cross-root absolute sessionFile paths into the current store root", async () => {
+    const sessionId = "bench-openclaw-task6";
+    const sessionKey = "agent:main:main";
+    const staleSessionFile =
+      "/Users/user/Library/Application Support/OpenClaw Consumer/.openclaw/agents/main/sessions/bench-openclaw-task6.jsonl";
+    const store = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile: staleSessionFile,
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+
+    const result = await resolveAndPersistSessionFile({
+      sessionId,
+      sessionKey,
+      sessionStore,
+      storePath: fixture.storePath(),
+      sessionEntry: sessionStore[sessionKey],
+    });
+
+    const expectedSessionFile = path.resolve(fixture.sessionsDir(), "bench-openclaw-task6.jsonl");
+    expect(fs.realpathSync(path.dirname(result.sessionFile))).toBe(
+      fs.realpathSync(fixture.sessionsDir()),
+    );
+    expect(path.basename(result.sessionFile)).toBe(path.basename(expectedSessionFile));
+
+    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
+    expect(fs.realpathSync(path.dirname(saved[sessionKey]?.sessionFile ?? ""))).toBe(
+      fs.realpathSync(fixture.sessionsDir()),
+    );
+    expect(path.basename(saved[sessionKey]?.sessionFile ?? "")).toBe(
+      path.basename(expectedSessionFile),
+    );
   });
 });

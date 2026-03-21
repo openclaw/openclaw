@@ -116,8 +116,9 @@ type BrowserProxyResult = {
   files?: BrowserProxyFile[];
 };
 
-const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
-const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 5_000;
+const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 45_000;
+const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 10_000;
+const BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS = 45_000;
 
 type BrowserNodeTarget = {
   nodeId: string;
@@ -441,16 +442,21 @@ export function createBrowserTool(opts?: {
           return await executeTabsAction({ baseUrl, profile, proxyRequest });
         case "open": {
           const targetUrl = readTargetUrlParam(params);
+          const { timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
               path: "/tabs/open",
               profile,
               body: { url: targetUrl },
+              timeoutMs: timeoutMs ?? BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS,
             });
             return jsonResult(result);
           }
-          const opened = await browserOpenTab(baseUrl, targetUrl, { profile });
+          const opened = await browserOpenTab(baseUrl, targetUrl, {
+            profile,
+            timeoutMs,
+          });
           trackSessionBrowserTab({
             sessionKey: opts?.agentSessionKey,
             targetId: opened.targetId,
@@ -547,7 +553,7 @@ export function createBrowserTool(opts?: {
         }
         case "navigate": {
           const targetUrl = readTargetUrlParam(params);
-          const targetId = readStringParam(params, "targetId");
+          const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
@@ -557,6 +563,7 @@ export function createBrowserTool(opts?: {
                 url: targetUrl,
                 targetId,
               },
+              timeoutMs: timeoutMs ?? BROWSER_TOOL_HEAVY_OP_TIMEOUT_MS,
             });
             return jsonResult(result);
           }
@@ -565,6 +572,7 @@ export function createBrowserTool(opts?: {
               url: targetUrl,
               targetId,
               profile,
+              timeoutMs,
             }),
           );
         }
