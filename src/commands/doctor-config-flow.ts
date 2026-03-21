@@ -3,19 +3,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, migrateLegacyConfig } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import {
-  autoPrepareLegacyMatrixCrypto,
-  detectLegacyMatrixCrypto,
-} from "../infra/matrix-legacy-crypto.js";
-import {
-  autoMigrateLegacyMatrixState,
-  detectLegacyMatrixState,
-} from "../infra/matrix-legacy-state.js";
-import {
-  hasActionableMatrixMigration,
-  hasPendingMatrixMigration,
-  maybeCreateMatrixMigrationSnapshot,
-} from "../infra/matrix-migration-snapshot.js";
+import { detectLegacyMatrixCrypto } from "../infra/matrix-legacy-crypto.js";
+import { detectLegacyMatrixState } from "../infra/matrix-legacy-state.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { note } from "../terminal/note.js";
 import { noteOpencodeProviderOverrides, stripUnknownConfigKeys } from "./doctor-config-analysis.js";
@@ -27,12 +16,13 @@ import {
   scanDiscordNumericIdEntries,
 } from "./doctor/providers/discord.js";
 import {
+  applyMatrixDoctorRepair,
   collectMatrixInstallPathWarnings,
   formatMatrixLegacyCryptoPreview,
   formatMatrixLegacyStatePreview,
 } from "./doctor/providers/matrix.js";
 import {
-  collectTelegramGroupPolicyWarnings,
+  collectTelegramEmptyAllowlistExtraWarnings,
   maybeRepairTelegramAllowFromUsernames,
   scanTelegramAllowFromUsernameEntries,
 } from "./doctor/providers/telegram.js";
@@ -125,80 +115,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     cfg: candidate,
     env: process.env,
   });
-  const pendingMatrixMigration = hasPendingMatrixMigration({
-    cfg: candidate,
-    env: process.env,
-  });
-  const actionableMatrixMigration = hasActionableMatrixMigration({
-    cfg: candidate,
-    env: process.env,
-  });
   if (shouldRepair) {
-    let matrixSnapshotReady = true;
-    if (actionableMatrixMigration) {
-      try {
-        const snapshot = await maybeCreateMatrixMigrationSnapshot({
-          trigger: "doctor-fix",
-          env: process.env,
-        });
-        note(
-          `Matrix migration snapshot ${snapshot.created ? "created" : "reused"} before applying Matrix upgrades.\n- ${snapshot.archivePath}`,
-          "Doctor changes",
-        );
-      } catch (err) {
-        matrixSnapshotReady = false;
-        note(
-          `- Failed creating a Matrix migration snapshot before repair: ${String(err)}`,
-          "Doctor warnings",
-        );
-        note(
-          '- Skipping Matrix migration changes for now. Resolve the snapshot failure, then rerun "openclaw doctor --fix".',
-          "Doctor warnings",
-        );
-      }
-    } else if (pendingMatrixMigration) {
-      note(
-        "- Matrix migration warnings are present, but no on-disk Matrix mutation is actionable yet. No pre-migration snapshot was needed.",
-        "Doctor warnings",
-      );
+    const matrixRepair = await applyMatrixDoctorRepair({
+      cfg: candidate,
+      env: process.env,
+    });
+    for (const change of matrixRepair.changes) {
+      note(change, "Doctor changes");
     }
-    if (matrixSnapshotReady) {
-      const matrixStateRepair = await autoMigrateLegacyMatrixState({
-        cfg: candidate,
-        env: process.env,
-      });
-      if (matrixStateRepair.changes.length > 0) {
-        note(
-          [
-            "Matrix plugin upgraded in place.",
-            ...matrixStateRepair.changes.map((entry) => `- ${entry}`),
-            "- No user action required.",
-          ].join("\n"),
-          "Doctor changes",
-        );
-      }
-      if (matrixStateRepair.warnings.length > 0) {
-        note(matrixStateRepair.warnings.map((entry) => `- ${entry}`).join("\n"), "Doctor warnings");
-      }
-      const matrixCryptoRepair = await autoPrepareLegacyMatrixCrypto({
-        cfg: candidate,
-        env: process.env,
-      });
-      if (matrixCryptoRepair.changes.length > 0) {
-        note(
-          [
-            "Matrix encrypted-state migration prepared.",
-            ...matrixCryptoRepair.changes.map((entry) => `- ${entry}`),
-          ].join("\n"),
-          "Doctor changes",
-        );
-      }
-      if (matrixCryptoRepair.warnings.length > 0) {
-        note(
-          matrixCryptoRepair.warnings.map((entry) => `- ${entry}`).join("\n"),
-          "Doctor warnings",
-        );
-      }
+    for (const warning of matrixRepair.warnings) {
+      note(warning, "Doctor warnings");
     }
   } else if (matrixLegacyState) {
     if ("warning" in matrixLegacyState) {
@@ -269,26 +195,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
     const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(candidate, {
       doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
-      extraWarningsForAccount: ({
-        account,
-        channelName,
-        dmPolicy,
-        effectiveAllowFrom,
-        parent,
-        prefix,
-      }) =>
-        channelName === "telegram" &&
-        ((account.groupPolicy as string | undefined) ??
-          (parent?.groupPolicy as string | undefined) ??
-          undefined) === "allowlist"
-          ? collectTelegramGroupPolicyWarnings({
-              account,
-              dmPolicy,
-              effectiveAllowFrom,
-              parent,
-              prefix,
-            })
-          : [],
+      extraWarningsForAccount: collectTelegramEmptyAllowlistExtraWarnings,
     });
     if (emptyAllowlistWarnings.length > 0) {
       note(
@@ -354,26 +261,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
     const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(candidate, {
       doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
-      extraWarningsForAccount: ({
-        account,
-        channelName,
-        dmPolicy,
-        effectiveAllowFrom,
-        parent,
-        prefix,
-      }) =>
-        channelName === "telegram" &&
-        ((account.groupPolicy as string | undefined) ??
-          (parent?.groupPolicy as string | undefined) ??
-          undefined) === "allowlist"
-          ? collectTelegramGroupPolicyWarnings({
-              account,
-              dmPolicy,
-              effectiveAllowFrom,
-              parent,
-              prefix,
-            })
-          : [],
+      extraWarningsForAccount: collectTelegramEmptyAllowlistExtraWarnings,
     });
     if (emptyAllowlistWarnings.length > 0) {
       note(

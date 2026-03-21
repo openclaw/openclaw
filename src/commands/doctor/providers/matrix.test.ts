@@ -1,14 +1,45 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  applyMatrixDoctorRepair,
   collectMatrixInstallPathWarnings,
   formatMatrixLegacyCryptoPreview,
   formatMatrixLegacyStatePreview,
 } from "./matrix.js";
 
+vi.mock("../../../infra/matrix-migration-snapshot.js", () => ({
+  hasActionableMatrixMigration: vi.fn(() => false),
+  hasPendingMatrixMigration: vi.fn(() => false),
+  maybeCreateMatrixMigrationSnapshot: vi.fn(),
+}));
+
+vi.mock("../../../infra/matrix-legacy-state.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../infra/matrix-legacy-state.js")>(
+    "../../../infra/matrix-legacy-state.js",
+  );
+  return {
+    ...actual,
+    autoMigrateLegacyMatrixState: vi.fn(async () => ({ changes: [], warnings: [] })),
+  };
+});
+
+vi.mock("../../../infra/matrix-legacy-crypto.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../infra/matrix-legacy-crypto.js")>(
+    "../../../infra/matrix-legacy-crypto.js",
+  );
+  return {
+    ...actual,
+    autoPrepareLegacyMatrixCrypto: vi.fn(async () => ({ changes: [], warnings: [] })),
+  };
+});
+
 describe("doctor matrix provider helpers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("formats the legacy state preview", () => {
     const preview = formatMatrixLegacyStatePreview({
       accountId: "default",
@@ -70,5 +101,40 @@ describe("doctor matrix provider helpers", () => {
     expect(warnings[0]).toContain(missingPath);
     expect(warnings[1]).toContain("openclaw plugins install @openclaw/matrix");
     expect(warnings[2]).toContain("openclaw plugins install ./extensions/matrix");
+  });
+
+  it("summarizes matrix repair messaging", async () => {
+    const matrixSnapshotModule = await import("../../../infra/matrix-migration-snapshot.js");
+    const matrixStateModule = await import("../../../infra/matrix-legacy-state.js");
+    const matrixCryptoModule = await import("../../../infra/matrix-legacy-crypto.js");
+
+    vi.mocked(matrixSnapshotModule.hasActionableMatrixMigration).mockReturnValue(true);
+    vi.mocked(matrixSnapshotModule.maybeCreateMatrixMigrationSnapshot).mockResolvedValue({
+      archivePath: "/tmp/matrix-backup.tgz",
+      created: true,
+      markerPath: "/tmp/marker.json",
+    });
+    vi.mocked(matrixStateModule.autoMigrateLegacyMatrixState).mockResolvedValue({
+      migrated: true,
+      changes: ["Migrated legacy sync state"],
+      warnings: [],
+    });
+    vi.mocked(matrixCryptoModule.autoPrepareLegacyMatrixCrypto).mockResolvedValue({
+      migrated: true,
+      changes: ["Prepared recovery key export"],
+      warnings: [],
+    });
+
+    const result = await applyMatrixDoctorRepair({
+      cfg: {},
+      env: process.env,
+    });
+
+    expect(result.changes).toEqual([
+      expect.stringContaining("Matrix migration snapshot created"),
+      expect.stringContaining("Matrix plugin upgraded in place."),
+      expect.stringContaining("Matrix encrypted-state migration prepared."),
+    ]);
+    expect(result.warnings).toEqual([]);
   });
 });

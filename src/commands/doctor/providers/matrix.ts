@@ -1,7 +1,18 @@
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { detectLegacyMatrixCrypto } from "../../../infra/matrix-legacy-crypto.js";
-import { detectLegacyMatrixState } from "../../../infra/matrix-legacy-state.js";
+import {
+  autoPrepareLegacyMatrixCrypto,
+  detectLegacyMatrixCrypto,
+} from "../../../infra/matrix-legacy-crypto.js";
+import {
+  autoMigrateLegacyMatrixState,
+  detectLegacyMatrixState,
+} from "../../../infra/matrix-legacy-state.js";
+import {
+  hasActionableMatrixMigration,
+  hasPendingMatrixMigration,
+  maybeCreateMatrixMigrationSnapshot,
+} from "../../../infra/matrix-migration-snapshot.js";
 import {
   detectPluginInstallPathIssue,
   formatPluginInstallPathIssue,
@@ -55,4 +66,82 @@ export async function collectMatrixInstallPathWarnings(cfg: OpenClawConfig): Pro
     repoInstallCommand: "openclaw plugins install ./extensions/matrix",
     formatCommand: formatCliCommand,
   }).map((entry) => `- ${entry}`);
+}
+
+export async function applyMatrixDoctorRepair(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const pendingMatrixMigration = hasPendingMatrixMigration({
+    cfg: params.cfg,
+    env: params.env,
+  });
+  const actionableMatrixMigration = hasActionableMatrixMigration({
+    cfg: params.cfg,
+    env: params.env,
+  });
+
+  let matrixSnapshotReady = true;
+  if (actionableMatrixMigration) {
+    try {
+      const snapshot = await maybeCreateMatrixMigrationSnapshot({
+        trigger: "doctor-fix",
+        env: params.env,
+      });
+      changes.push(
+        `Matrix migration snapshot ${snapshot.created ? "created" : "reused"} before applying Matrix upgrades.\n- ${snapshot.archivePath}`,
+      );
+    } catch (err) {
+      matrixSnapshotReady = false;
+      warnings.push(`- Failed creating a Matrix migration snapshot before repair: ${String(err)}`);
+      warnings.push(
+        '- Skipping Matrix migration changes for now. Resolve the snapshot failure, then rerun "openclaw doctor --fix".',
+      );
+    }
+  } else if (pendingMatrixMigration) {
+    warnings.push(
+      "- Matrix migration warnings are present, but no on-disk Matrix mutation is actionable yet. No pre-migration snapshot was needed.",
+    );
+  }
+
+  if (!matrixSnapshotReady) {
+    return { changes, warnings };
+  }
+
+  const matrixStateRepair = await autoMigrateLegacyMatrixState({
+    cfg: params.cfg,
+    env: params.env,
+  });
+  if (matrixStateRepair.changes.length > 0) {
+    changes.push(
+      [
+        "Matrix plugin upgraded in place.",
+        ...matrixStateRepair.changes.map((entry) => `- ${entry}`),
+        "- No user action required.",
+      ].join("\n"),
+    );
+  }
+  if (matrixStateRepair.warnings.length > 0) {
+    warnings.push(matrixStateRepair.warnings.map((entry) => `- ${entry}`).join("\n"));
+  }
+
+  const matrixCryptoRepair = await autoPrepareLegacyMatrixCrypto({
+    cfg: params.cfg,
+    env: params.env,
+  });
+  if (matrixCryptoRepair.changes.length > 0) {
+    changes.push(
+      [
+        "Matrix encrypted-state migration prepared.",
+        ...matrixCryptoRepair.changes.map((entry) => `- ${entry}`),
+      ].join("\n"),
+    );
+  }
+  if (matrixCryptoRepair.warnings.length > 0) {
+    warnings.push(matrixCryptoRepair.warnings.map((entry) => `- ${entry}`).join("\n"));
+  }
+
+  return { changes, warnings };
 }
