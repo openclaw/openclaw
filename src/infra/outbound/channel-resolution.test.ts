@@ -126,6 +126,7 @@ describe("outbound channel resolution", () => {
       runtimeOptions: {
         allowGatewaySubagentBinding: true,
       },
+      inheritSharedRuntimeOptions: true,
     });
 
     getChannelPluginMock.mockReturnValue(undefined);
@@ -140,6 +141,7 @@ describe("outbound channel resolution", () => {
       runtimeOptions: {
         allowGatewaySubagentBinding: true,
       },
+      inheritSharedRuntimeOptions: true,
     });
   });
 
