@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveSessionAgentId: vi.fn(() => "agent-from-key"),
@@ -25,8 +25,10 @@ const mocks = vi.hoisted(() => ({
   })),
   normalizeChannelId: vi.fn((channel: string) => channel),
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15550002" })),
-  deliverOutboundPayloads: vi.fn(async () => []),
+  deliverOutboundPayloads: vi.fn(async () => [{ channel: "whatsapp", messageId: "msg-1" }]),
   enqueueSystemEvent: vi.fn(),
+  requestHeartbeatNow: vi.fn(),
+  logWarn: vi.fn(),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -76,19 +78,84 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
 }));
 
+vi.mock("../infra/heartbeat-wake.js", () => ({
+  requestHeartbeatNow: mocks.requestHeartbeatNow,
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: vi.fn(() => ({
+    warn: mocks.logWarn,
+  })),
+}));
+
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 
 describe("scheduleRestartSentinelWake", () => {
-  it("forwards session context to outbound delivery", async () => {
-    await scheduleRestartSentinelWake({ deps: {} as never });
+  beforeEach(() => {
+    vi.useRealTimers();
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+        },
+      },
+    });
+    mocks.deliverOutboundPayloads.mockReset();
+    mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "whatsapp", messageId: "msg-1" }]);
+    mocks.enqueueSystemEvent.mockClear();
+    mocks.requestHeartbeatNow.mockClear();
+    mocks.logWarn.mockClear();
+  });
+
+  it("enqueues the sentinel note and wakes the session even when outbound delivery succeeds", async () => {
+    const deps = {} as never;
+
+    await scheduleRestartSentinelWake({ deps });
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "whatsapp",
         to: "+15550002",
         session: { key: "agent:main:main", agentId: "main" },
+        deps,
+        bestEffort: false,
       }),
     );
-    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+      sessionKey: "agent:main:main",
+    });
+    expect(mocks.requestHeartbeatNow).toHaveBeenCalledWith({
+      reason: "wake",
+      sessionKey: "agent:main:main",
+    });
+    expect(mocks.logWarn).not.toHaveBeenCalled();
+  });
+
+  it("retries outbound delivery once and logs a warning without dropping the agent wake", async () => {
+    vi.useFakeTimers();
+    mocks.deliverOutboundPayloads
+      .mockRejectedValueOnce(new Error("transport not ready"))
+      .mockResolvedValueOnce([{ channel: "whatsapp", messageId: "msg-2" }]);
+
+    const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
+    await vi.runAllTimersAsync();
+    await wakePromise;
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.requestHeartbeatNow).toHaveBeenCalledTimes(1);
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("retrying in 750ms"),
+      expect.objectContaining({
+        channel: "whatsapp",
+        to: "+15550002",
+        sessionKey: "agent:main:main",
+        attempt: 1,
+        maxAttempts: 2,
+      }),
+    );
   });
 });

@@ -3,6 +3,7 @@ import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
+import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
@@ -12,10 +13,76 @@ import {
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
 import { loadSessionEntry } from "./session-utils.js";
 
-export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
+const log = createSubsystemLogger("gateway/restart-sentinel");
+const OUTBOUND_RETRY_DELAY_MS = 750;
+const OUTBOUND_MAX_ATTEMPTS = 2;
+
+function enqueueRestartSentinelWake(message: string, sessionKey: string) {
+  enqueueSystemEvent(message, { sessionKey });
+  requestHeartbeatNow({ reason: "wake", sessionKey });
+}
+
+async function waitForOutboundRetry(delayMs: number) {
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, delayMs);
+    timer.unref?.();
+  });
+}
+
+async function deliverRestartSentinelNotice(params: {
+  deps: CliDeps;
+  cfg: ReturnType<typeof loadSessionEntry>["cfg"];
+  sessionKey: string;
+  summary: string;
+  message: string;
+  channel: string;
+  to: string;
+  accountId?: string;
+  replyToId?: string;
+  threadId?: string;
+  session: ReturnType<typeof buildOutboundSessionContext>;
+}) {
+  for (let attempt = 1; attempt <= OUTBOUND_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const results = await deliverOutboundPayloads({
+        cfg: params.cfg,
+        channel: params.channel,
+        to: params.to,
+        accountId: params.accountId,
+        replyToId: params.replyToId,
+        threadId: params.threadId,
+        payloads: [{ text: params.message }],
+        session: params.session,
+        deps: params.deps,
+        bestEffort: false,
+      });
+      if (results.length > 0) {
+        return;
+      }
+      throw new Error("outbound delivery returned no results");
+    } catch (err) {
+      const retrying = attempt < OUTBOUND_MAX_ATTEMPTS;
+      const suffix = retrying ? `; retrying in ${OUTBOUND_RETRY_DELAY_MS}ms` : "";
+      log.warn(`${params.summary}: outbound delivery failed${suffix}: ${String(err)}`, {
+        channel: params.channel,
+        to: params.to,
+        sessionKey: params.sessionKey,
+        attempt,
+        maxAttempts: OUTBOUND_MAX_ATTEMPTS,
+      });
+      if (!retrying) {
+        return;
+      }
+      await waitForOutboundRetry(OUTBOUND_RETRY_DELAY_MS);
+    }
+  }
+}
+
+export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   const sentinel = await consumeRestartSentinel();
   if (!sentinel) {
     return;
@@ -27,9 +94,11 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
 
   if (!sessionKey) {
     const mainSessionKey = resolveMainSessionKeyFromConfig();
-    enqueueSystemEvent(message, { sessionKey: mainSessionKey });
+    enqueueRestartSentinelWake(message, mainSessionKey);
     return;
   }
+
+  enqueueRestartSentinelWake(message, sessionKey);
 
   const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
 
@@ -54,7 +123,6 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
   const channel = channelRaw ? normalizeChannelId(channelRaw) : null;
   const to = origin?.to;
   if (!channel || !to) {
-    enqueueSystemEvent(message, { sessionKey });
     return;
   }
 
@@ -66,7 +134,6 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
     mode: "implicit",
   });
   if (!resolved.ok) {
-    enqueueSystemEvent(message, { sessionKey });
     return;
   }
 
@@ -88,21 +155,19 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
     sessionKey,
   });
 
-  try {
-    await deliverOutboundPayloads({
-      cfg,
-      channel,
-      to: resolved.to,
-      accountId: origin?.accountId,
-      replyToId,
-      threadId: resolvedThreadId,
-      payloads: [{ text: message }],
-      session: outboundSession,
-      bestEffort: true,
-    });
-  } catch (err) {
-    enqueueSystemEvent(`${summary}\n${String(err)}`, { sessionKey });
-  }
+  await deliverRestartSentinelNotice({
+    deps: params.deps,
+    cfg,
+    sessionKey,
+    summary,
+    message,
+    channel,
+    to: resolved.to,
+    accountId: origin?.accountId,
+    replyToId,
+    threadId: resolvedThreadId,
+    session: outboundSession,
+  });
 }
 
 export function shouldWakeFromRestartSentinel() {
