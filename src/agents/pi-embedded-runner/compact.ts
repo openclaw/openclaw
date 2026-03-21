@@ -38,6 +38,10 @@ import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
+import {
+  hasMeaningfulConversationContent,
+  isRealConversationMessage,
+} from "../compaction-real-conversation.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { ensureCustomApiRegistered } from "../custom-api-registry.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
@@ -169,8 +173,12 @@ type CompactionMessageMetrics = {
   contributors: Array<{ role: string; chars: number; tool?: string }>;
 };
 
-function hasRealConversationContent(msg: AgentMessage): boolean {
-  return msg.role === "user" || msg.role === "assistant" || msg.role === "toolResult";
+function hasRealConversationContent(
+  msg: AgentMessage,
+  messages: AgentMessage[],
+  index: number,
+): boolean {
+  return isRealConversationMessage(msg, messages, index);
 }
 
 function createCompactionDiagId(): string {
@@ -962,7 +970,11 @@ export async function compactEmbeddedPiSessionDirect(
           );
         }
 
-        if (!session.messages.some(hasRealConversationContent)) {
+        if (
+          !session.messages.some((message, index, messages) =>
+            hasRealConversationContent(message, messages, index),
+          )
+        ) {
           log.info(
             `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
           );
@@ -1281,3 +1293,8 @@ export async function compactEmbeddedPiSession(
     }),
   );
 }
+
+export const __testing = {
+  hasRealConversationContent,
+  hasMeaningfulConversationContent,
+} as const;
