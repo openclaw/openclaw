@@ -343,12 +343,31 @@ function loadCoercedStore(authPath: string): AuthProfileStore | null {
   return coerceAuthStore(raw);
 }
 
+function shouldLogAuthStoreTiming(): boolean {
+  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+}
+
+function syncExternalCliCredentialsTimed(
+  store: AuthProfileStore,
+  options?: Parameters<typeof syncExternalCliCredentials>[1],
+): boolean {
+  if (!shouldLogAuthStoreTiming()) {
+    return syncExternalCliCredentials(store, options);
+  }
+  const startMs = Date.now();
+  const mutated = syncExternalCliCredentials(store, options);
+  log.info(
+    `auth-store stage=external-cli-sync elapsedMs=${Date.now() - startMs} mutated=${mutated}`,
+  );
+  return mutated;
+}
+
 export function loadAuthProfileStore(): AuthProfileStore {
   const authPath = resolveAuthStorePath();
   const asStore = loadCoercedStore(authPath);
   if (asStore) {
     // Sync from external CLI tools on every load.
-    const synced = syncExternalCliCredentials(asStore);
+    const synced = syncExternalCliCredentialsTimed(asStore);
     if (synced) {
       saveJsonFile(authPath, asStore);
     }
@@ -362,12 +381,12 @@ export function loadAuthProfileStore(): AuthProfileStore {
       profiles: {},
     };
     applyLegacyStore(store, legacy);
-    syncExternalCliCredentials(store);
+    syncExternalCliCredentialsTimed(store);
     return store;
   }
 
   const store: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
-  syncExternalCliCredentials(store);
+  syncExternalCliCredentialsTimed(store);
   return store;
 }
 
@@ -381,7 +400,7 @@ function loadAuthProfileStoreForAgent(
   if (asStore) {
     // Runtime secret activation must remain read-only:
     // sync external CLI credentials in-memory, but never persist while readOnly.
-    const synced = syncExternalCliCredentials(asStore, { log: !readOnly });
+    const synced = syncExternalCliCredentialsTimed(asStore, { log: !readOnly });
     if (synced && !readOnly) {
       saveJsonFile(authPath, asStore);
     }
@@ -413,7 +432,7 @@ function loadAuthProfileStoreForAgent(
 
   const mergedOAuth = mergeOAuthFileIntoStore(store);
   // Keep external CLI credentials visible in runtime even during read-only loads.
-  const syncedCli = syncExternalCliCredentials(store, { log: !readOnly });
+  const syncedCli = syncExternalCliCredentialsTimed(store, { log: !readOnly });
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
   const shouldWrite = !readOnly && !forceReadOnly && (legacy !== null || mergedOAuth || syncedCli);
   if (shouldWrite) {
