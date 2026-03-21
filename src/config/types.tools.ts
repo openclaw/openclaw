@@ -1,6 +1,6 @@
+import type { PowerShellWindowStyle } from "../agents/shell-utils.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
-import type { PowerShellWindowStyle } from "../agents/shell-utils.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { SecretInput } from "./types.secrets.js";
 
