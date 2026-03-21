@@ -1,3 +1,3 @@
-import { buildChannelConfigSchema, LineConfigSchema } from "../api.js";
+import { buildChannelConfigSchema, LineConfigSchema } from "../runtime-api.js";
 
 export const LineChannelConfigSchema = buildChannelConfigSchema(LineConfigSchema);

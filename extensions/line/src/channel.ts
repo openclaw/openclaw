@@ -22,7 +22,7 @@ import {
   type LineChannelData,
   type OpenClawConfig,
   type ResolvedLineAccount,
-} from "../api.js";
+} from "../runtime-api.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { getLineRuntime } from "./runtime.js";

@@ -120,7 +120,7 @@ describe("resolveGraphChatId", () => {
 
   it("resolves personal DM chat ID via Graph API using user AAD object ID", async () => {
     const fetchFn = vi.fn(
-      async () =>
+      async (_url: string | Request | URL, _init?: RequestInit) =>
         new Response(JSON.stringify({ value: [{ id: "19:dm-chat-id@unq.gbl.spaces" }] }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -141,8 +141,7 @@ describe("resolveGraphChatId", () => {
       }),
     );
     // Should filter by user AAD object ID
-    const firstCall = fetchFn.mock.calls[0] as unknown[] | undefined;
-    const callUrl = firstCall?.[0];
+    const [callUrl] = fetchFn.mock.calls[0] ?? [];
     expect(callUrl).toContain("user-aad-object-id-123");
     expect(result).toBe("19:dm-chat-id@unq.gbl.spaces");
   });

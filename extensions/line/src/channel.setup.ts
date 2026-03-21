@@ -3,7 +3,7 @@ import {
   LineConfigSchema,
   type ChannelPlugin,
   type ResolvedLineAccount,
-} from "../api.js";
+} from "../runtime-api.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
