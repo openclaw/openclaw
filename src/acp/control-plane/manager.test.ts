@@ -270,6 +270,72 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
 
+  it("reproduces queue starvation when a runtime turn never completes", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    let releaseFirstTurn!: () => void;
+    const firstTurnGate = new Promise<void>((resolve) => {
+      releaseFirstTurn = resolve;
+    });
+    let firstTurnStarted = false;
+
+    runtimeState.runTurn.mockImplementation(async function* (input: { requestId: string }) {
+      if (input.requestId === "r1") {
+        firstTurnStarted = true;
+        await firstTurnGate;
+      }
+      yield { type: "done" as const };
+    });
+
+    const manager = new AcpSessionManager();
+    const first = manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "first",
+      mode: "prompt",
+      requestId: "r1",
+    });
+
+    while (!firstTurnStarted) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+
+    const second = manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "second",
+      mode: "prompt",
+      requestId: "r2",
+    });
+    let secondSettled = false;
+    void second.finally(() => {
+      secondSettled = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(manager.getObservabilitySnapshot(baseCfg).turns).toMatchObject({
+      active: 1,
+      queueDepth: 2,
+    });
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    expect(secondSettled).toBe(false);
+
+    releaseFirstTurn();
+    await Promise.all([first, second]);
+
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+  });
+
   it("runs turns for different ACP sessions in parallel", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
