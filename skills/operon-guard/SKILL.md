@@ -40,10 +40,12 @@ pip install operon-guard
 operon-guard test path/to/skill/
 ```
 
-> **Note:** When pointing at a skill directory, `operon-guard` scans for the first
-> Python file containing a recognized callable (`agent`, `run`, `main`, `execute`).
-> Only that file is tested. To test a specific file in a multi-file skill directory,
-> pass the file path explicitly: `operon-guard test path/to/skill/my_agent.py:run`
+> **Note:** When pointing at a skill directory, `operon-guard` picks the **first
+> `.py` file in `scripts/` sorted alphabetically** and passes it to the loader. If
+> that file does not export a recognized entry-point callable (`agent`, `run`, `main`,
+> `execute`, `process`, `handle`), the command fails — it does **not** fall back to
+> other files in the directory. To target a specific file, pass the path explicitly:
+> `operon-guard test path/to/skill/my_agent.py:run`
 
 ### Quick safety scan (injection + PII only)
 
@@ -51,6 +53,13 @@ operon-guard test path/to/skill/
 > gate in scripts or CI (`operon-guard scan && install` will always continue, even when
 > injection or PII problems are detected). Use `operon-guard test` for gating — it
 > exits 1 when the trust score fails.
+>
+> **Warning:** The injection check fires **47 adversarial prompts** at the agent. If
+> your agent has side effects — sending messages, writing to a database, calling paid
+> APIs — those side effects will be triggered up to 47 times during the scan. Either
+> run in a sandboxed environment, or skip injection probes by setting
+> `safety.check_injection: false` in a guardfile and using `operon-guard test --spec`
+> instead.
 
 ```bash
 operon-guard scan path/to/agent.py
