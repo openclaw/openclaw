@@ -211,7 +211,7 @@ describe("hook handler timeout", () => {
   // -----------------------------------------------------------------------
 
   it("uses the default timeout when hookTimeoutMs is not specified", async () => {
-    // Handler that resolves in 5 seconds (well under the 10s default)
+    // Handler that resolves in 5 seconds (well under the 30s default)
     addTestHook({
       registry,
       pluginId: "slow-but-ok",
@@ -303,5 +303,56 @@ describe("hook handler timeout", () => {
     const assertion = expect(promise).rejects.toThrow(/timed out/);
     await vi.advanceTimersByTimeAsync(100);
     await assertion;
+  });
+
+  // -----------------------------------------------------------------------
+  // Gatekeeper hooks are exempt from timeout
+  // -----------------------------------------------------------------------
+
+  it("does not timeout message_sending hooks (gatekeeper)", async () => {
+    addTestHook({
+      registry,
+      pluginId: "slow-moderation",
+      hookName: "message_sending",
+      handler: (() =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ content: "moderated" }), 5000);
+        })) as PluginHookRegistration["handler"],
+    });
+
+    const runner = createHookRunner(registry, { hookTimeoutMs: 100, catchErrors: true });
+    const msgCtx = { channelId: "test" };
+    const promise = runner.runMessageSending(
+      { content: "hello", channel: "test" } as never,
+      msgCtx as never,
+    );
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const result = await promise;
+    expect(result?.content).toBe("moderated");
+  });
+
+  it("does not timeout before_tool_call hooks (gatekeeper)", async () => {
+    addTestHook({
+      registry,
+      pluginId: "slow-tool-gate",
+      hookName: "before_tool_call",
+      handler: (() =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ block: true, blockReason: "denied" }), 5000);
+        })) as PluginHookRegistration["handler"],
+    });
+
+    const runner = createHookRunner(registry, { hookTimeoutMs: 100, catchErrors: true });
+    const toolCtx = { agentId: "test-agent", sessionKey: "test" };
+    const promise = runner.runBeforeToolCall(
+      { toolName: "bash", params: {} } as never,
+      toolCtx as never,
+    );
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const result = await promise;
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toBe("denied");
   });
 });
