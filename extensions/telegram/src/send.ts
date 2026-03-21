@@ -506,7 +506,20 @@ function createTelegramRequestWithDiag(params: {
 }
 
 function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; input: string }) {
-  if (!CHAT_NOT_FOUND_RE.test(formatErrorMessage(err))) {
+  const errorMsg = formatErrorMessage(err);
+  
+  // Check for 403 "bot is not a member" or "bot was blocked" errors
+  if (/403.*(bot.*not.*member|bot.*blocked)/i.test(errorMsg)) {
+    return new Error(
+      [
+        `Telegram send failed: bot is not a member of the chat or has been blocked (chat_id=${params.chatId}).`,
+        "Fix: Add the bot to the channel/group, ensure it has not been removed, or ask the user to unblock the bot.",
+        `Input was: ${JSON.stringify(params.input)}.`,
+      ].join(" "),
+    );
+  }
+  
+  if (!CHAT_NOT_FOUND_RE.test(errorMsg)) {
     return err;
   }
   return new Error(
