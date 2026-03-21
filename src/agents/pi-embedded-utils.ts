@@ -4,6 +4,7 @@ import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
+import { normalizeToolName } from "./tool-policy-shared.js";
 
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
   return msg?.role === "assistant";
@@ -489,7 +490,7 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
         blocks.push({
           type: "toolCall",
           id: `mc_${Math.random().toString(36).slice(2, 11)}`,
-          name: toolName,
+          name: normalizeToolName(toolName),
           arguments: args,
         });
         hasToolCall = true;
@@ -532,12 +533,21 @@ export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void
   let changed = false;
 
   for (const block of message.content) {
-    if (block?.type !== "text") {
+    if (!block || typeof block !== "object") {
       next.push(block);
       continue;
     }
 
-    const split = splitMinimaxToolCalls(block.text);
+    const type = block.type as string;
+    // @ts-expect-error - accessing properties on union type
+    const textValue = type === "text" ? block.text : type === "thinking" ? block.thinking : null;
+
+    if (typeof textValue !== "string") {
+      next.push(block);
+      continue;
+    }
+
+    const split = splitMinimaxToolCalls(textValue);
     if (!split) {
       next.push(block);
       continue;
@@ -553,7 +563,15 @@ export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void
           arguments: part.arguments,
         } as unknown as AssistantMessage["content"][number]);
       } else {
-        next.push(part);
+        // Map back to the original block type (text or thinking)
+        if (type === "thinking") {
+          next.push({
+            type: "thinking",
+            thinking: part.text,
+          } as unknown as AssistantMessage["content"][number]);
+        } else {
+          next.push({ type: "text", text: part.text });
+        }
       }
     }
   }

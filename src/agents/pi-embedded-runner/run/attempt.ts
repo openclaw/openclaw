@@ -74,7 +74,10 @@ import {
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
-import { promoteMinimaxToolCallsToBlocks } from "../../pi-embedded-utils.js";
+import {
+  promoteMinimaxToolCallsToBlocks,
+  promoteThinkingTagsToBlocks,
+} from "../../pi-embedded-utils.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
@@ -1337,7 +1340,12 @@ function wrapStreamEventsForMinimax(response: unknown): unknown {
       const interceptor = (evt: unknown) => {
         const message = (evt as { message?: AgentMessage })?.message;
         if (message?.role === "assistant") {
-          promoteMinimaxToolCallsToBlocks(message);
+          // IMPORTANT: Promote thinking tags FIRST. MiniMax XML tool calls can be
+          // nested inside thinking tags. If we promote XML first, it splits the
+          // text block and breaks thinking tag recognition.
+          const assistantMessage = message;
+          promoteThinkingTagsToBlocks(assistantMessage);
+          promoteMinimaxToolCallsToBlocks(assistantMessage);
         }
         return originalListener(evt);
       };
@@ -2415,7 +2423,8 @@ export async function runEmbeddedAttempt(
         );
       }
 
-      if (normalizeProviderId(params.provider) === "minimax-portal") {
+      const normalizedProvider = normalizeProviderId(params.provider);
+      if (normalizedProvider === "minimax-portal" || normalizedProvider === "minimax") {
         activeSession.agent.streamFn = wrapStreamPromoteMinimaxXmlToolCalls(
           activeSession.agent.streamFn,
         );

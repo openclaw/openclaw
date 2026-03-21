@@ -4,6 +4,7 @@ import {
   extractAssistantText,
   formatReasoningMessage,
   promoteMinimaxToolCallsToBlocks,
+  promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
 
@@ -181,7 +182,7 @@ All done.`;
     const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(toolCall).toMatchObject({
       type: "toolCall",
-      name: "Bash",
+      name: "exec", // Normalized from Bash
       arguments: { command: "ls -la" },
     });
 
@@ -202,8 +203,8 @@ All done.`;
 
     const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(calls.length).toBe(2);
-    expect(calls[0]).toMatchObject({ type: "toolCall", name: "T1", arguments: { p: "1" } });
-    expect(calls[1]).toMatchObject({ type: "toolCall", name: "T2", arguments: { p: "2" } });
+    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: "1" } });
+    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: "2" } });
   });
 
   it("handles multiple invoke blocks within a single MiniMax wrapper", () => {
@@ -221,8 +222,8 @@ All done.`;
 
     const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(calls.length).toBe(2);
-    expect(calls[0]).toMatchObject({ type: "toolCall", name: "T1", arguments: { p: "1" } });
-    expect(calls[1]).toMatchObject({ type: "toolCall", name: "T2", arguments: { p: "2" } });
+    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: "1" } });
+    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: "2" } });
   });
 
   it("parses JSON-like arguments correctly", () => {
@@ -242,7 +243,7 @@ All done.`;
     const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(toolCall).toMatchObject({
       type: "toolCall",
-      name: "Config",
+      name: "config",
       arguments: { settings: { enabled: true, count: 5 } },
     });
   });
@@ -264,7 +265,7 @@ All done.`;
     const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(toolCall).toMatchObject({
       type: "toolCall",
-      name: "Bash",
+      name: "exec",
       arguments: { command: 'ls && echo "done" > out.txt' },
     });
   });
@@ -286,7 +287,7 @@ All done.`;
     const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(toolCall).toMatchObject({
       type: "toolCall",
-      name: "Bash",
+      name: "exec",
       arguments: { command: "echo 'hello' < world" },
     });
   });
@@ -310,7 +311,7 @@ All done.`;
     const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(toolCall).toMatchObject({
       type: "toolCall",
-      name: "Test",
+      name: "test",
       arguments: {
         b1: true,
         b2: false,
@@ -351,6 +352,46 @@ All done.`;
 
     expect(msg.content.length).toBe(1);
     expect(msg.content[0]).toEqual({ type: "text", text: text });
+  });
+
+  it("normalizes tool names", () => {
+    const text = `<minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
+    // "Bash" should be normalized to "exec"
+    expect(toolCall).toMatchObject({
+      type: "toolCall",
+      name: "exec",
+    });
+  });
+
+  it("handles tool calls inside thinking blocks", () => {
+    const text = `<think>Internal thoughts... <minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call> End of thoughts.</think>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    // Step 1: Promote thinking tags first
+    promoteThinkingTagsToBlocks(msg);
+    expect(msg.content[0].type).toBe("thinking");
+
+    // Step 2: Promote MiniMax tool calls from within thinking block
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    // Should result in [thinking, toolCall, thinking]
+    expect(msg.content.length).toBe(3);
+    expect(msg.content[0]).toMatchObject({ type: "thinking", thinking: "Internal thoughts... " });
+    expect(msg.content[1]).toMatchObject({ type: "toolCall", name: "exec" });
+    expect(msg.content[2]).toMatchObject({ type: "thinking", thinking: " End of thoughts." });
   });
 });
 
