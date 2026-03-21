@@ -65,7 +65,7 @@ export function registerCronEditCommand(cron: Command) {
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
-      .option("--thread-id <id>", "Thread id (Telegram forum topic)")
+      .option("--thread-id <id>", "Thread id (Telegram forum topic, must be a number)")
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail job if delivery fails")
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
@@ -231,6 +231,7 @@ export function registerCronEditCommand(cron: Command) {
             hasDeliveryModeFlag ||
             hasDeliveryTarget ||
             hasDeliveryAccount ||
+            hasThreadId ||
             hasBestEffort;
           if (hasSystemEventPatch && hasAgentTurnPatch) {
             throw new Error("Choose at most one payload change");
@@ -274,12 +275,16 @@ export function registerCronEditCommand(cron: Command) {
               delivery.channel = channel ? channel : undefined;
             }
             if (typeof opts.to === "string" || typeof opts.threadId === "string") {
-              const to = typeof opts.to === "string" ? opts.to.trim() : "";
+              const toRaw = typeof opts.to === "string" ? opts.to.trim() : "";
               const threadId = typeof opts.threadId === "string" ? opts.threadId.trim() : "";
+              if (threadId && !/^\d+$/.test(threadId)) {
+                throw new Error("--thread-id must be a numeric value");
+              }
+              const to = toRaw.replace(/:topic:\d+$/, "");
               if (to && threadId) {
                 delivery.to = `${to}:topic:${threadId}`;
               } else if (to) {
-                delivery.to = to || undefined;
+                delivery.to = to;
               }
             }
             if (typeof opts.account === "string") {

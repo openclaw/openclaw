@@ -96,7 +96,7 @@ export function registerCronAddCommand(cron: Command) {
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
-      .option("--thread-id <id>", "Thread id (Telegram forum topic)")
+      .option("--thread-id <id>", "Thread id (Telegram forum topic, must be a number)")
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
       .option("--json", "Output JSON", false)
@@ -274,8 +274,12 @@ export function registerCronAddCommand(cron: Command) {
                       ? opts.channel.trim()
                       : undefined,
                   to: (() => {
-                    const to = typeof opts.to === "string" ? opts.to.trim() : "";
+                    const toRaw = typeof opts.to === "string" ? opts.to.trim() : "";
                     const threadId = typeof opts.threadId === "string" ? opts.threadId.trim() : "";
+                    if (threadId && !/^\d+$/.test(threadId)) {
+                      throw new Error("--thread-id must be a numeric value");
+                    }
+                    const to = toRaw.replace(/:topic:\d+$/, "");
                     if (to && threadId) {
                       return `${to}:topic:${threadId}`;
                     }
