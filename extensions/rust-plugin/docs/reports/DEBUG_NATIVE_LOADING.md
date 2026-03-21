@@ -78,7 +78,7 @@ Created `native/package.json`:
 
 ```json
 {
-  "name": "@openclaw/rust-plugin-native",
+  "name": "@wayazi/rust-plugin-native",
   "main": "index.cjs"
 }
 ```
@@ -127,7 +127,7 @@ if (!loaded) {
 
 ```json
 {
-  "name": "@openclaw/rust-plugin-native",
+  "name": "@wayazi/rust-plugin-native",
   "main": "index.cjs"
 }
 ```

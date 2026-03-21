@@ -75,14 +75,14 @@ This directory contains comprehensive audit reports and documentation for the Ru
 ### Installation
 
 ```bash
-npm install @openclaw/rust-plugin
+npm install @wayazi/rust-plugin
 ```
 
 ### Verification
 
 ```bash
 npm test
-npm list @openclaw/rust-plugin
+npm list @wayazi/rust-plugin
 ```
 
 ---

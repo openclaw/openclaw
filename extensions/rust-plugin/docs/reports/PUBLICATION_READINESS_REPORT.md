@@ -1,7 +1,7 @@
-# 🎯 Publication Readiness Report: @openclaw/rust-plugin
+# 🎯 Publication Readiness Report: @wayazi/rust-plugin
 
 **Date**: March 19, 2026  
-**Package**: @openclaw/rust-plugin  
+**Package**: @wayazi/rust-plugin  
 **Version**: 2026.3.19  
 **Status**: ✅ **READY TO PUBLISH**
 
@@ -270,10 +270,10 @@ cd /tmp
 mkdir test-rust-plugin
 cd test-rust-plugin
 npm init -y
-npm install @openclaw/rust-plugin
+npm install @wayazi/rust-plugin
 
 # Verify it works
-node -e "const { processString } = require('@openclaw/rust-plugin'); console.log(processString('hello', { uppercase: true }));"
+node -e "const { processString } = require('@wayazi/rust-plugin'); console.log(processString('hello', { uppercase: true }));"
 # Expected output: HELLO
 ```
 
@@ -378,5 +378,5 @@ node -e "const { processString } = require('@openclaw/rust-plugin'); console.log
 ---
 
 _Generated: March 19, 2026_  
-_Package: @openclaw/rust-plugin v2026.3.19_  
+_Package: @wayazi/rust-plugin v2026.3.19_  
 _Status: READY FOR NPM PUBLICATION_ 🚀

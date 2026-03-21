@@ -153,14 +153,14 @@ The Rust plugin has successfully completed comprehensive auditing and is **APPRO
 ### Installation
 
 ```bash
-npm install @openclaw/rust-plugin
+npm install @wayazi/rust-plugin
 ```
 
 ### Verification
 
 ```bash
 npm test
-npm list @openclaw/rust-plugin
+npm list @wayazi/rust-plugin
 ```
 
 ### Version Information

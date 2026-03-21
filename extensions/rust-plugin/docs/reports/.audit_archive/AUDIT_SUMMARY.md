@@ -154,7 +154,7 @@ None - plugin is production-ready ✅
 1. **Deploy to Production** ✅
 
    ```bash
-   npm install @openclaw/rust-plugin@latest
+   npm install @wayazi/rust-plugin@latest
    ```
 
 2. **Monitor** (Week 1)

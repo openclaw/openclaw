@@ -289,13 +289,13 @@ The Rust plugin has undergone comprehensive testing, security auditing, and code
 **Installation:**
 
 ```bash
-npm install @openclaw/rust-plugin
+npm install @wayazi/rust-plugin
 ```
 
 **Usage:**
 
 ```typescript
-import * as rust from "@openclaw/rust-plugin";
+import * as rust from "@wayazi/rust-plugin";
 
 // All functions ready for production use
 const hash = rust.compute_hash("data", "sha256");

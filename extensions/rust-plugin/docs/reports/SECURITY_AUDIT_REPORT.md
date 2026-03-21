@@ -1,4 +1,4 @@
-# Security Audit Report: @openclaw/rust-plugin
+# Security Audit Report: @wayazi/rust-plugin
 
 **Date**: March 19, 2026
 **Auditor**: Security-Auditor Agent

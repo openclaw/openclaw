@@ -1,4 +1,4 @@
-# Test Plan for @openclaw/rust-plugin
+# Test Plan for @wayazi/rust-plugin
 
 ## Current State
 

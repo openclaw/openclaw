@@ -1,4 +1,4 @@
-# npm Publishing Guide: @openclaw/rust-plugin
+# npm Publishing Guide: @wayazi/rust-plugin
 
 This guide walks through publishing the Rust-based napi-rs plugin to npm.
 
@@ -33,7 +33,7 @@ Version format follows CalVer (YYYY.M.D) - update both files to match exactly.
 Check that these fields are correct:
 
 - ✅ `version`: `2026.3.19` (follow semantic versioning)
-- ✅ `name`: `@openclaw/rust-plugin`
+- ✅ `name`: `@wayazi/rust-plugin`
 - ✅ `repository`: Correct GitHub URL with directory subpath
 - ✅ `homepage`: Documentation URL
 - ✅ `keywords`: Relevant search terms
@@ -77,7 +77,7 @@ pnpm init -y
 pnpm add file:///path/to/openclaw/extensions/rust-plugin
 
 # Create test.js
-node -e "const { computeHash } = require('@openclaw/rust-plugin'); console.log(computeHash('test', 'sha256'))"
+node -e "const { computeHash } = require('@wayazi/rust-plugin'); console.log(computeHash('test', 'sha256'))"
 ```
 
 ### 5. Dry Run
@@ -164,7 +164,7 @@ npm publish --access public
 
 **What this does:**
 
-- Publishes to `@openclaw/rust-plugin` scoped package
+- Publishes to `@wayazi/rust-plugin` scoped package
 - Makes package publicly accessible
 - Uploads all platform binaries
 - Registers package on npm registry
@@ -173,13 +173,13 @@ npm publish --access public
 
 ```
 npm notice
-npm notice 📦  @openclaw/rust-plugin@2026.3.19
+npm notice 📦  @wayazi/rust-plugin@2026.3.19
 npm notice === Tarball Contents ===
 npm notice 1.2kB  package.json
 npm notice 4.5kB  index.js
 npm notice ...
 npm notice === Tarball Details ===
-npm notice name:          @openclaw/rust-plugin
+npm notice name:          @wayazi/rust-plugin
 npm notice version:       2026.3.19
 npm notice filename:      openclaw-rust-plugin-2026.3.19.tgz
 npm notice package size:  8.2 MB
@@ -188,17 +188,17 @@ npm notice shasum:        ...
 npm notice integrity:     ...
 npm notice total files:   20
 npm notice
-+ @openclaw/rust-plugin@2026.3.19
++ @wayazi/rust-plugin@2026.3.19
 ```
 
 ### Step 5: Verify Publication
 
 ```bash
 # Check on npmjs.com
-open https://www.npmjs.com/package/@openclaw/rust-plugin
+open https://www.npmjs.com/package/@wayazi/rust-plugin
 
 # Or via CLI
-npm view @openclaw/rust-plugin
+npm view @wayazi/rust-plugin
 ```
 
 ## Post-Publishing Verification
@@ -211,11 +211,11 @@ Test installation in a clean directory:
 cd /tmp
 mkdir test-rust-plugin && cd test-rust-plugin
 pnpm init -y
-pnpm add @openclaw/rust-plugin
+pnpm add @wayazi/rust-plugin
 
 # Verify it works
 node -e "
-const plugin = require('@openclaw/rust-plugin');
+const plugin = require('@wayazi/rust-plugin');
 console.log('Plugin info:', plugin.getPluginInfo());
 console.log('Hash test:', plugin.computeHash('hello world', 'sha256'));
 "
@@ -227,10 +227,10 @@ Verify all platform binaries were published:
 
 ```bash
 # View all published files
-npm view @openclaw/rust-plugin --json | jq '.dist.files'
+npm view @wayazi/rust-plugin --json | jq '.dist.files'
 
 # Check package size
-npm view @openclaw/rust-plugin dist.unpackedSize
+npm view @wayazi/rust-plugin dist.unpackedSize
 ```
 
 Expected platforms:
@@ -250,7 +250,7 @@ Test with OpenClaw:
 ```bash
 # Install globally in OpenClaw
 cd /path/to/openclaw
-pnpm add @openclaw/rust-plugin
+pnpm add @wayazi/rust-plugin
 
 # Test in OpenClaw context
 openclaw plugins list
@@ -270,7 +270,7 @@ openclaw plugins list
 # Re-authenticate
 npm login
 # Verify org access
-npm access list collaborators @openclaw/rust-plugin
+npm access list collaborators @wayazi/rust-plugin
 ```
 
 #### "E404 Package not found" (after publish)
@@ -280,7 +280,7 @@ npm access list collaborators @openclaw/rust-plugin
 **Solution**: Wait 2-3 minutes, then try:
 
 ```bash
-npm view @openclaw/rust-plugin
+npm view @wayazi/rust-plugin
 ```
 
 #### "File too large"
@@ -329,13 +329,13 @@ If something goes wrong, you can deprecate or unpublish:
 Keeps package available but marks as deprecated:
 
 ```bash
-npm deprecate @openclaw/rust-plugin@2026.3.19 "Critical bug - use 2026.3.20 instead"
+npm deprecate @wayazi/rust-plugin@2026.3.19 "Critical bug - use 2026.3.20 instead"
 ```
 
 ### Unpublish Last Version (Within 72 hours)
 
 ```bash
-npm unpublish @openclaw/rust-plugin@2026.3.19 --force
+npm unpublish @wayazi/rust-plugin@2026.3.19 --force
 ```
 
 ⚠️ **Warning**: Unpublishing is destructive and should be avoided if possible.
@@ -343,7 +343,7 @@ npm unpublish @openclaw/rust-plugin@2026.3.19 --force
 ### Unpublish Entire Package (Emergency Only)
 
 ```bash
-npm unpublish @openclaw/rust-plugin --force
+npm unpublish @wayazi/rust-plugin --force
 ```
 
 ⚠️ **Warning**: This is permanent and cannot be undone!
@@ -355,7 +355,7 @@ npm unpublish @openclaw/rust-plugin --force
 Create `.github/workflows/publish-rust-plugin.yml`:
 
 ```yaml
-name: Publish @openclaw/rust-plugin
+name: Publish @wayazi/rust-plugin
 
 on:
   push:

@@ -364,7 +364,7 @@ cargo update chrono
 
 ## 📝 **CONCLUSION**
 
-The @openclaw/rust-plugin has an **excellent foundation** with:
+The @wayazi/rust-plugin has an **excellent foundation** with:
 
 - World-class memory safety (Rust)
 - Strong cryptographic implementations

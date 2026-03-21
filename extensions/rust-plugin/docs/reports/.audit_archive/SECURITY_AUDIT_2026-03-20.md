@@ -1,4 +1,4 @@
-# Security Audit Report: @openclaw/rust-plugin
+# Security Audit Report: @wayazi/rust-plugin
 
 **Audit Date:** 2026-03-20
 **Auditor:** flexpay-security (Security, Compliance & Testing Specialist)
@@ -11,7 +11,7 @@
 
 **Overall Security Rating:** ⚠️ **MODERATE** (6.5/10)
 
-The @openclaw/rust-plugin demonstrates **strong security practices** in most areas with proper Rust memory safety, good cryptographic implementations, and comprehensive input validation. However, there are **several medium-severity issues** and **some high-risk areas** that require attention before production deployment.
+The @wayazi/rust-plugin demonstrates **strong security practices** in most areas with proper Rust memory safety, good cryptographic implementations, and comprehensive input validation. However, there are **several medium-severity issues** and **some high-risk areas** that require attention before production deployment.
 
 ### Key Findings:
 

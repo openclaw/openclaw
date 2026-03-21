@@ -436,7 +436,7 @@ pub fn validate_data(data: String, rules: HashMap<String, String>) -> Result<Val
             // Simple validation: must contain @ and have at least one . after @
             let at_pos = data.find('@');
             let dot_after_at = data.as_bytes().iter().position(|&b| b == b'.');
-
+            
             let has_valid_format = match (at_pos, dot_after_at) {
                 (Some(at), Some(dot)) if dot > at => true,
                 _ => false,

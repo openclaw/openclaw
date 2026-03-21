@@ -326,7 +326,7 @@ cd extensions/rust-plugin
 npm publish
 
 # Users can then install:
-# npm install @openclaw/rust-plugin
+# npm install @wayazi/rust-plugin
 ```
 
 ## 📈 **Monitoring & Debugging**

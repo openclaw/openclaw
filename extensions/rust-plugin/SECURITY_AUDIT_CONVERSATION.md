@@ -4,7 +4,7 @@
 
 **Audit Date:** March 21, 2026
 **Auditor:** Security Auditor Agent
-**Target:** `@openclaw/rust-plugin` v2026.3.19
+**Target:** `@wayazi/rust-plugin` v2026.3.19
 **Status:** ❌ **BUILD FAILURE - CRITICAL ISSUES FOUND**
 
 ---

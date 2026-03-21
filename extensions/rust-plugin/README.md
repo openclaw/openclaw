@@ -1,8 +1,8 @@
-# @openclaw/rust-plugin
+# @wayazi/rust-plugin
 
 > High-performance native addon for OpenClaw powered by Rust
 
-[![npm version](https://badge.fury.io/js/%40openclaw%2Frust-plugin.svg)](https://www.npmjs.com/package/@openclaw/rust-plugin)
+[![npm version](https://badge.fury.io/js/%40openclaw%2Frust-plugin.svg)](https://www.npmjs.com/package/@wayazi/rust-plugin)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Security: Passed](https://img.shields.io/badge/Security-Passed-brightgreen.svg)](https://github.com/openclaw/openclaw/blob/main/extensions/rust-plugin/SECURITY_AUDIT_REPORT.md)
 
@@ -21,7 +21,7 @@
 ## 📦 Installation
 
 ```bash
-npm install @openclaw/rust-plugin
+npm install @wayazi/rust-plugin
 ```
 
 **Requirements**: Node.js 18+
@@ -73,7 +73,7 @@ rust-plugin/
 ### Basic Usage
 
 ```typescript
-import { processString, computeHash, generateUUID } from "@openclaw/rust-plugin";
+import { processString, computeHash, generateUUID } from "@wayazi/rust-plugin";
 
 // String processing
 const result = processString("Hello World!", {
@@ -99,7 +99,7 @@ import {
   aes256GcmDecrypt,
   argon2Hash,
   argon2Verify,
-} from "@openclaw/rust-plugin";
+} from "@wayazi/rust-plugin";
 
 // AES-256-GCM encryption
 const key = "0".repeat(64); // 32 bytes in hex (64 hex chars)
@@ -119,7 +119,7 @@ console.log(isValid); // true
 ### File Operations
 
 ```typescript
-import { getFileInfo, readFileBuffer, writeFileString, listDirectory } from "@openclaw/rust-plugin";
+import { getFileInfo, readFileBuffer, writeFileString, listDirectory } from "@wayazi/rust-plugin";
 
 // Get file information
 const info = getFileInfo("/path/to/file.txt");
@@ -146,7 +146,7 @@ import {
   rleDecompress,
   levenshteinDistance,
   textStatistics,
-} from "@openclaw/rust-plugin";
+} from "@wayazi/rust-plugin";
 
 // Compression
 const compressed = rleCompress("aaabbbcccaaa");
@@ -269,7 +269,7 @@ console.log(stats.characters, stats.words, stats.lines, stats.avg_word_length);
 High-performance data processor with external memory management.
 
 ```typescript
-import { DataProcessor } from "@openclaw/rust-plugin";
+import { DataProcessor } from "@wayazi/rust-plugin";
 
 // Create with capacity
 const processor = DataProcessor.withCapacity(1024);
@@ -300,7 +300,7 @@ processor.clear();
 Thread-safe shared state processor for concurrent operations.
 
 ```typescript
-import { SharedStateProcessor } from "@openclaw/rust-plugin";
+import { SharedStateProcessor } from "@wayazi/rust-plugin";
 
 const processor = new SharedStateProcessor();
 processor.addData(Buffer.from("data"));
@@ -373,7 +373,7 @@ import {
   DataProcessor,
   type EncryptionResult,
   type TextStatsExtended,
-} from "@openclaw/rust-plugin";
+} from "@wayazi/rust-plugin";
 
 // Full autocomplete and type checking
 const result: string = processString("hello", { uppercase: true });

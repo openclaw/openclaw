@@ -36,7 +36,7 @@ impl NonceTracker {
             .as_secs();
 
         // Cleanup old nonces more frequently to prevent TTL reuse window
-        if self.nonces.len() % Self::CLEANUP_INTERVAL == 0 {
+        if self.nonces.len().is_multiple_of(Self::CLEANUP_INTERVAL) {
             self.nonces.retain(|_, entry| now - entry.timestamp < Self::NONCE_TTL_SECS);
         }
 

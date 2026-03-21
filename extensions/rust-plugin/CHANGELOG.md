@@ -5,6 +5,32 @@ All notable changes to the Rust plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026.4.1] - 2026-03-21
+
+### Summary
+- Package renamed from `@openclaw/rust-plugin` to `@wayazi/rust-plugin`
+- Repository URLs updated to Wayazi/openclaw
+- Package size optimized with `files` field
+- SECURITY.md and CONTRIBUTING.md added
+- Audit reports reorganized
+- 4 clippy warnings fixed (is_multiple_of, borrow, Default impl)
+- Documentation improved
+
+### Changed
+- Package name: `@openclaw/rust-plugin` → `@wayazi/rust-plugin`
+- Repository: `github.com/openclaw` → `github.com/Wayazi/openclaw`
+- Added `files` field to control published package size
+- All documentation updated to reference @wayazi/rust-plugin
+
+### Fixed
+- Circular self-dependency removed from package.json
+- CI workflow now checks @wayazi package name
+- Version references synced to 2026.4.1
+
+### Security
+- SystemTime::unwrap() error handling added
+- Mutex poison protection improved
+
 ## [2026.3.19] - 2026-03-21
 
 ### Summary

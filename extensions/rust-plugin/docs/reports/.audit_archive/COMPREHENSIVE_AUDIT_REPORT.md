@@ -1,6 +1,6 @@
 # Comprehensive Security & Production Audit Report
 
-## @openclaw/rust-plugin
+## @wayazi/rust-plugin
 
 **Audit Date:** March 20, 2026
 **Auditor:** Code Review & Security Specialist
@@ -13,7 +13,7 @@
 
 ### Overall Assessment: **PRODUCTION READY** ✅
 
-The @openclaw/rust-plugin demonstrates **exceptional security posture** and **production-grade quality**. The codebase shows:
+The @wayazi/rust-plugin demonstrates **exceptional security posture** and **production-grade quality**. The codebase shows:
 
 - ✅ **Strong security practices** with comprehensive input validation
 - ✅ **Zero unsafe code blocks** (0 found)
@@ -712,7 +712,7 @@ $ cargo tree --depth 1
 
 ### Conclusion
 
-The @openclaw/rust-plugin is **well-engineered, secure, and ready for production use**. The codebase demonstrates strong security practices, proper Rust idioms, and comprehensive input validation. The main areas for improvement are testing coverage and documentation, which are not blocking issues for production deployment.
+The @wayazi/rust-plugin is **well-engineered, secure, and ready for production use**. The codebase demonstrates strong security practices, proper Rust idioms, and comprehensive input validation. The main areas for improvement are testing coverage and documentation, which are not blocking issues for production deployment.
 
 **Recommended Action:** **DEPLOY TO PRODUCTION** ✅
 

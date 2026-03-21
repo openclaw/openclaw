@@ -147,7 +147,7 @@ pnpm openclaw agent --agent main -m "Generate a UUID using rust_generate_uuid"
 
 ### **PRODUCTION READY: ✅ APPROVED**
 
-**The @openclaw/rust-plugin is:**
+**The @wayazi/rust-plugin is:**
 
 - ✅ Fully functional
 - ✅ Secure (0 critical, 0 high issues)

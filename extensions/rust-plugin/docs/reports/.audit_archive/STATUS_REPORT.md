@@ -171,7 +171,7 @@ extensions/rust-plugin/native/
 
 ## 🎯 **Summary**
 
-The **@openclaw/rust-plugin** has been successfully:
+The **@wayazi/rust-plugin** has been successfully:
 
 1. ✅ **Fixed** - All critical bugs resolved
 2. ✅ **Secured** - All vulnerabilities patched

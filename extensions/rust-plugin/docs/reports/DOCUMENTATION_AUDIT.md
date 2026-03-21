@@ -1,7 +1,7 @@
-# Documentation Audit: @openclaw/rust-plugin
+# Documentation Audit: @wayazi/rust-plugin
 
 **Audit Date:** 2026-03-19
-**Package:** @openclaw/rust-plugin
+**Package:** @wayazi/rust-plugin
 **Version:** 2026.3.19
 **Auditor:** Documentation Specialist
 
@@ -80,7 +80,7 @@ The README is excellent for **plugin developers** wanting to understand the temp
 
 1. **Installation Guide for npm Users**
    - Current: Only shows plugin developer build process
-   - Missing: `npm install @openclaw/rust-plugin` instructions
+   - Missing: `npm install @wayazi/rust-plugin` instructions
    - Missing: Platform-specific binary installation details
    - Missing: Post-install setup steps
 
@@ -451,13 +451,13 @@ export interface TextStats {
 ## Suggested README Structure
 
 ```markdown
-# @openclaw/rust-plugin
+# @wayazi/rust-plugin
 
 > High-performance OpenClaw plugin powered by Rust with native speed
 
-[![npm version](https://badge.fury.io/js/%40openclaw%2Frust-plugin.svg)](https://www.npmjs.com/package/@openclaw/rust-plugin)
+[![npm version](https://badge.fury.io/js/%40openclaw%2Frust-plugin.svg)](https://www.npmjs.com/package/@wayazi/rust-plugin)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node](https://img.shields.io/node/v/@openclaw/rust-plugin)](https://nodejs.org)
+[![Node](https://img.shields.io/node/v/@wayazi/rust-plugin)](https://nodejs.org)
 
 ## Features
 
@@ -470,13 +470,13 @@ export interface TextStats {
 ## Installation
 
 \`\`\`bash
-npm install @openclaw/rust-plugin
+npm install @wayazi/rust-plugin
 \`\`\`
 
 ## Quick Start
 
 \`\`\`typescript
-import { processString, computeHash } from '@openclaw/rust-plugin';
+import { processString, computeHash } from '@wayazi/rust-plugin';
 
 // String processing
 const result = await processString('Hello World', { uppercase: true });
@@ -510,7 +510,7 @@ const hash = await computeHash('data', 'sha256');
 ### Cryptography
 
 \`\`\`typescript
-import { computeHash, generateUuid } from '@openclaw/rust-plugin';
+import { computeHash, generateUuid } from '@wayazi/rust-plugin';
 
 const hash = await computeHash('secret', 'sha256');
 const uuid = generateUuid();
@@ -542,7 +542,7 @@ processString,
 computeHash,
 type ProcessStringOptions,
 type TextStats
-} from '@openclaw/rust-plugin';
+} from '@wayazi/rust-plugin';
 
 const options: ProcessStringOptions = {
 uppercase: true,

@@ -1,4 +1,4 @@
-# 📖 @openclaw/rust-plugin - User Guide
+# 📖 @wayazi/rust-plugin - User Guide
 
 **How users install and use the rust-plugin with OpenClaw**
 
@@ -10,7 +10,7 @@
 
 ```bash
 # Install the plugin
-openclaw plugins install @openclaw/rust-plugin
+openclaw plugins install @wayazi/rust-plugin
 
 # Enable it
 openclaw plugins enable rust-plugin
@@ -241,7 +241,7 @@ Result: "hello"
 
 ## 🚀 **Next Steps**
 
-1. **Install the plugin**: `openclaw plugins install @openclaw/rust-plugin`
+1. **Install the plugin**: `openclaw plugins install @wayazi/rust-plugin`
 2. **Enable it**: `openclaw plugins enable rust-plugin`
 3. **Restart gateway**: `openclaw gateway restart`
 4. **Use with agent**: Start using the 36 tools in conversations!

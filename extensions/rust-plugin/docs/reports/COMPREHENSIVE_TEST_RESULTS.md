@@ -1,7 +1,7 @@
 # Rust Plugin - Comprehensive Test Results
 
 **Test Date:** 2026-03-20  
-**Module:** @openclaw/rust-plugin  
+**Module:** @wayazi/rust-plugin  
 **Version:** 2026.3.19  
 **Tested Functions:** 65 exported functions  
 **Test Runner:** Custom Node.js test suite

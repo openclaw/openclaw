@@ -5,5 +5,8 @@
   "author": "Wayazi",
   "repository": "https://github.com/Wayazi/openclaw",
   "main": "index.cjs",
-  "types": "index.d.ts"
+  "types": "index.d.ts",
+  "dependencies": {
+    "@wayazi/rust-plugin": "^2026.4.0"
+  }
 }

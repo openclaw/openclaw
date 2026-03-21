@@ -1,7 +1,7 @@
 # 📋 EXECUTIVE BRIEFING - Rust Plugin Production Approval
 
 **Date**: March 21, 2026  
-**Subject**: Production Deployment Approval for @openclaw/rust-plugin  
+**Subject**: Production Deployment Approval for @wayazi/rust-plugin  
 **Version**: 2026.3.19  
 **Decision**: ✅ **APPROVED**
 

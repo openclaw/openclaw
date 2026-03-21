@@ -1,6 +1,6 @@
 # ✅ PRODUCTION DEPLOYMENT CHECKLIST
 
-## Rust Plugin - @openclaw/rust-plugin v2026.3.19
+## Rust Plugin - @wayazi/rust-plugin v2026.3.19
 
 **Deployment Date**: March 21, 2026  
 **Status**: ✅ APPROVED FOR PRODUCTION  
@@ -82,13 +82,13 @@
 2. **Install New Version**
 
    ```bash
-   npm install @openclaw/rust-plugin@2026.3.19
+   npm install @wayazi/rust-plugin@2026.3.19
    ```
 
 3. **Verify Installation**
 
    ```bash
-   npm list @openclaw/rust-plugin
+   npm list @wayazi/rust-plugin
    ```
 
 4. **Run Smoke Tests**
@@ -157,13 +157,13 @@
 1. **Stop Deployment**
 
    ```bash
-   npm uninstall @openclaw/rust-plugin
+   npm uninstall @wayazi/rust-plugin
    ```
 
 2. **Restore Previous Version**
 
    ```bash
-   npm install @openclaw/rust-plugin@<previous-version>
+   npm install @wayazi/rust-plugin@<previous-version>
    ```
 
 3. **Verify Restoration**
