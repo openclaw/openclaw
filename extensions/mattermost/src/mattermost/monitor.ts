@@ -1647,25 +1647,34 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               //    turn B triggers this branch (ID=2969665550). Only shift when the
               //    queue head belongs to this specific turn (turn that just decremented
               //    streamedTurnCount, i.e. the front of finalizedPreviewIds is empty).
-              const orphanId = finalizedPreviewIds.length > 0 ? finalizedPreviewIds.shift() : null; // Do NOT touch pendingOrphanDeletes here — it tracks failed turns
-              if (orphanId && blockStreamingClient) {
-                await deleteMattermostPost(blockStreamingClient, orphanId).catch(() => {});
+              const orphanId = finalizedPreviewIds.length > 0 ? finalizedPreviewIds.shift() : null;
+              let mediaDeliverySucceeded = false;
+              try {
+                await deliverMattermostReplyPayload({
+                  core,
+                  cfg,
+                  payload,
+                  to,
+                  accountId: account.accountId,
+                  agentId: route.agentId,
+                  replyToId: resolveMattermostReplyRootId({
+                    threadRootId: effectiveReplyToId,
+                    replyToId: payload.replyToId,
+                  }),
+                  textLimit,
+                  tableMode,
+                  sendMessage: sendMessageMattermost,
+                });
+                mediaDeliverySucceeded = true;
+              } finally {
+                if (mediaDeliverySucceeded && orphanId && blockStreamingClient) {
+                  await deleteMattermostPost(blockStreamingClient, orphanId).catch(() => {});
+                }
               }
-              await deliverMattermostReplyPayload({
-                core,
-                cfg,
-                payload,
-                to,
-                accountId: account.accountId,
-                agentId: route.agentId,
-                replyToId: resolveMattermostReplyRootId({
-                  threadRootId: effectiveReplyToId,
-                  replyToId: payload.replyToId,
-                }),
-                textLimit,
-                tableMode,
-                sendMessage: sendMessageMattermost,
-              });
+            } else {
+              // Consume this turn's finalized preview ID to keep queue alignment.
+              // Do NOT delete the post — it is the correctly finalized content (ID=2969701179).
+              finalizedPreviewIds.shift();
             }
             return;
           }
@@ -1910,7 +1919,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             // posts remain in-channel (ID=2969630963).
             const orphansToDelete = [
               ...pendingOrphanDeletes.splice(0),
-              ...finalizedPreviewIds.splice(0),
             ];
             for (const id of orphansToDelete) {
               void deleteMattermostPost(client, id).catch(() => {});
