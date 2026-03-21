@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
   formatReasoningMessage,
+  promoteMinimaxToolCallsToBlocks,
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
@@ -486,6 +487,88 @@ File contents here`,
       });
       expect(extractAssistantText(msg), testCase.name).toBe(testCase.expected);
     }
+  });
+});
+
+describe("promoteMinimaxToolCallsToBlocks", () => {
+  it("converts MiniMax XML tool calls into toolCall blocks", () => {
+    const text = `Let me check that.
+<minimax:tool_call>
+  <invoke name="Bash">
+    <parameter name="command">ls -la</parameter>
+  </invoke>
+</minimax:tool_call>
+All done.`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    expect(msg.content.length).toBe(3);
+    expect(msg.content[0]).toEqual({ type: "text", text: "Let me check that.\n" });
+    expect(msg.content[1]).toMatchObject({
+      type: "toolCall",
+      name: "Bash",
+      arguments: { command: "ls -la" },
+    });
+    expect(msg.content[2]).toEqual({ type: "text", text: "\nAll done." });
+
+    // Verify extractAssistantText still works and strips the XML from the text parts
+    const finalResult = extractAssistantText(msg);
+    expect(finalResult).toBe("Let me check that.\nAll done.");
+  });
+
+  it("handles multiple tool calls in one text block", () => {
+    const text = `<minimax:tool_call><invoke name="T1"><parameter name="p">1</parameter></invoke></minimax:tool_call><minimax:tool_call><invoke name="T2"><parameter name="p">2</parameter></invoke></minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    expect(msg.content.length).toBe(2);
+    expect(msg.content[0]).toMatchObject({ type: "toolCall", name: "T1", arguments: { p: "1" } });
+    expect(msg.content[1]).toMatchObject({ type: "toolCall", name: "T2", arguments: { p: "2" } });
+  });
+
+  it("parses JSON-like arguments correctly", () => {
+    const text = `<minimax:tool_call>
+  <invoke name="Config">
+    <parameter name="settings">{"enabled": true, "count": 5}</parameter>
+  </invoke>
+</minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    expect(msg.content[0]).toMatchObject({
+      type: "toolCall",
+      name: "Config",
+      arguments: { settings: { enabled: true, count: 5 } },
+    });
+  });
+
+  it("ignores non-MiniMax XML blocks", () => {
+    const text = `<other:tag>data</other:tag>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    expect(msg.content.length).toBe(1);
+    expect(msg.content[0]).toEqual({ type: "text", text });
   });
 });
 

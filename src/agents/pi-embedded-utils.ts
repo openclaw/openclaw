@@ -453,3 +453,134 @@ export function inferToolMetaFromArgs(toolName: string, args: unknown): string |
   const display = resolveToolDisplay({ name: toolName, args });
   return formatToolDetail(display);
 }
+
+type MinimaxToolCallSplitBlock =
+  | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> }
+  | { type: "text"; text: string };
+
+/**
+ * Split text content into text blocks and toolCall blocks by parsing
+ * MiniMax-specific <minimax:tool_call> XML structures.
+ */
+export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[] | null {
+  if (!text || !/minimax:tool_call/i.test(text)) {
+    return null;
+  }
+
+  const blocks: MinimaxToolCallSplitBlock[] = [];
+  // MiniMax M2.5 XML format:
+  // <minimax:tool_call>
+  //   <invoke name="tool_name">
+  //     <parameter name="arg_name">arg_value</parameter>
+  //   </invoke>
+  // </minimax:tool_call>
+  const toolCallRe =
+    /<minimax:tool_call>[\s\S]*?<invoke\b[^>]*name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/invoke>[\s\S]*?<\/minimax:tool_call>/gi;
+  const paramRe = /<parameter\b[^>]*name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
+
+  let cursor = 0;
+  let hasToolCall = false;
+
+  for (const match of text.matchAll(toolCallRe)) {
+    const index = match.index ?? 0;
+    const [fullMatch, toolName, invokeBody] = match;
+
+    // Push preceding text
+    const preceding = text.slice(cursor, index);
+    if (preceding) {
+      blocks.push({ type: "text", text: preceding });
+    }
+
+    // Parse parameters from the <invoke> body
+    const args: Record<string, unknown> = {};
+    for (const pMatch of invokeBody.matchAll(paramRe)) {
+      const [, pName, pValue] = pMatch;
+      const trimmedValue = pValue.trim();
+      try {
+        // Try to parse as JSON if it looks like one (e.g. nested objects/arrays),
+        // otherwise treat as raw string.
+        if (
+          (trimmedValue.startsWith("{") && trimmedValue.endsWith("}")) ||
+          (trimmedValue.startsWith("[") && trimmedValue.endsWith("]"))
+        ) {
+          args[pName] = JSON.parse(trimmedValue);
+        } else {
+          args[pName] = trimmedValue;
+        }
+      } catch {
+        args[pName] = trimmedValue;
+      }
+    }
+
+    blocks.push({
+      type: "toolCall",
+      id: `mc_${Math.random().toString(36).slice(2, 11)}`,
+      name: toolName,
+      arguments: args,
+    });
+
+    cursor = index + fullMatch.length;
+    hasToolCall = true;
+  }
+
+  if (!hasToolCall) {
+    return null;
+  }
+
+  // Push remaining text after the last tool call
+  const remaining = text.slice(cursor);
+  if (remaining) {
+    blocks.push({ type: "text", text: remaining });
+  }
+
+  return blocks;
+}
+
+/**
+ * Scan assistant message content for MiniMax-specific XML tool calls and
+ * promote them to structured toolCall blocks.
+ */
+export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void {
+  if (!Array.isArray(message.content)) {
+    return;
+  }
+
+  const next: AssistantMessage["content"] = [];
+  let changed = false;
+
+  for (const block of message.content) {
+    if (!block || typeof block !== "object" || !("type" in block)) {
+      next.push(block);
+      continue;
+    }
+    if (block.type !== "text") {
+      next.push(block);
+      continue;
+    }
+
+    const split = splitMinimaxToolCalls(block.text);
+    if (!split) {
+      next.push(block);
+      continue;
+    }
+
+    changed = true;
+    for (const part of split) {
+      if (part.type === "toolCall") {
+        // Promote MiniMax-style tool calls to a structured block format compatible with AssistantMessage.
+        next.push({
+          type: "toolCall",
+          id: part.id,
+          name: part.name,
+          arguments: part.arguments,
+        } as unknown as AssistantMessage["content"][number]);
+      } else {
+        next.push(part);
+      }
+    }
+  }
+
+  if (changed) {
+    message.content = next;
+  }
+}
