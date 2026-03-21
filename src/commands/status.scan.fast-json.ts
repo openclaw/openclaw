@@ -5,7 +5,6 @@ import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
-import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import type { StatusScanResult } from "./status.scan.js";
@@ -35,6 +34,7 @@ let memorySearchModulePromise: Promise<typeof import("../agents/memory-search.js
 let statusScanDepsRuntimeModulePromise:
   | Promise<typeof import("./status.scan.deps.runtime.js")>
   | undefined;
+let processExecModulePromise: Promise<typeof import("../process/exec.js")> | undefined;
 
 function loadPluginRegistryModule() {
   pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
@@ -89,6 +89,11 @@ function loadMemorySearchModule() {
 function loadStatusScanDepsRuntimeModule() {
   statusScanDepsRuntimeModulePromise ??= import("./status.scan.deps.runtime.js");
   return statusScanDepsRuntimeModulePromise;
+}
+
+function loadProcessExecModule() {
+  processExecModulePromise ??= import("../process/exec.js");
+  return processExecModulePromise;
 }
 
 const LEGACY_STATE_DIRNAMES = [".clawdbot", ".moldbot", ".moltbot"] as const;
@@ -340,8 +345,8 @@ export async function scanStatusJsonFast(
   const tailscaleDnsPromise =
     tailscaleMode === "off" || canUseLeanSummary
       ? Promise.resolve<string | null>(null)
-      : loadStatusScanDepsRuntimeModule()
-          .then(({ getTailnetHostname }) =>
+      : Promise.all([loadStatusScanDepsRuntimeModule(), loadProcessExecModule()])
+          .then(([{ getTailnetHostname }, { runExec }]) =>
             getTailnetHostname((cmd, args) =>
               runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
             ),
