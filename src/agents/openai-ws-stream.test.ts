@@ -4,7 +4,7 @@
  * Covers:
  *  - Message format converters (convertMessagesToInputItems, convertTools)
  *  - Response → AssistantMessage parser (buildAssistantMessageFromResponse)
- *  - createOpenAIWebSocketStreamFn behaviour (connect, send, receive, fallback)
+ *  - createOpenAIWebSocketStreamFn behavior (connect, send, receive, fallback)
  *  - Session registry helpers (releaseWsSession, hasWsSession)
  */
 

@@ -78,7 +78,7 @@ describe("models-config: explicit reasoning override", () => {
 
         const m25 = await generateAndReadMinimaxModel(cfg);
         expect(m25).toBeDefined();
-        // Must honour the explicit false — built-in true must NOT win.
+        // Must honor the explicit false — built-in true must NOT win.
         expect(m25?.reasoning).toBe(false);
       });
     });

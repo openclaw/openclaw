@@ -99,7 +99,7 @@ export async function updateAuthProfileStoreWithLock(params: {
 }
 
 /**
- * Normalise a raw auth-profiles.json credential entry.
+ * Normalize a raw auth-profiles.json credential entry.
  *
  * The official format uses `type` and (for api_key credentials) `key`.
  * A common mistake — caused by the similarity with the `openclaw.json`

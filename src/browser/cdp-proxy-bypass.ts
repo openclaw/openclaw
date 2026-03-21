@@ -19,7 +19,7 @@ const directHttpsAgent = new https.Agent();
 /**
  * Returns a plain (non-proxy) agent for WebSocket or HTTP connections
  * when the target is a loopback address. Returns `undefined` otherwise
- * so callers fall through to their default behaviour.
+ * so callers fall through to their default behavior.
  */
 export function getDirectAgentForCdp(url: string): http.Agent | https.Agent | undefined {
   try {

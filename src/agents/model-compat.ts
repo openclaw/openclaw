@@ -101,12 +101,12 @@ function normalizeAnthropicBaseUrl(baseUrl: string): string {
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const baseUrl = model.baseUrl ?? "";
 
-  // Normalise anthropic-messages baseUrl: strip trailing /v1 that users may
+  // Normalize anthropic-messages baseUrl: strip trailing /v1 that users may
   // have included in their config. pi-ai appends /v1/messages itself.
   if (isAnthropicMessagesModel(model) && baseUrl) {
-    const normalised = normalizeAnthropicBaseUrl(baseUrl);
-    if (normalised !== baseUrl) {
-      return { ...model, baseUrl: normalised } as Model<"anthropic-messages">;
+    const normalized = normalizeAnthropicBaseUrl(baseUrl);
+    if (normalized !== baseUrl) {
+      return { ...model, baseUrl: normalized } as Model<"anthropic-messages">;
     }
   }
 

@@ -305,7 +305,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
           // job properties to the top level alongside `action` instead of nesting
           // them inside `job`. When `params.job` is missing or empty, reconstruct
-          // a synthetic job object from any recognised top-level job fields.
+          // a synthetic job object from any recognized top-level job fields.
           // See: https://github.com/openclaw/openclaw/issues/11310
           if (
             !params.job ||

@@ -41,15 +41,15 @@ const SAMPLE_ASSETS: ReleaseAsset[] = [
 ];
 
 describe("looksLikeArchive", () => {
-  it("recognises .tar.gz", () => {
+  it("recognizes .tar.gz", () => {
     expect(looksLikeArchive("foo.tar.gz")).toBe(true);
   });
 
-  it("recognises .tgz", () => {
+  it("recognizes .tgz", () => {
     expect(looksLikeArchive("foo.tgz")).toBe(true);
   });
 
-  it("recognises .zip", () => {
+  it("recognizes .zip", () => {
     expect(looksLikeArchive("foo.zip")).toBe(true);
   });
 

@@ -300,7 +300,7 @@ export function assertGatewayAuthConfigured(
       typeof rawAuthConfig.password !== "string" // pragma: allowlist secret
     ) {
       throw new Error(
-        "gateway auth mode is password, but gateway.auth.password contains a provider reference object instead of a resolved string — bootstrap secrets (gateway.auth.password) must be plaintext strings or set via the OPENCLAW_GATEWAY_PASSWORD environment variable because the secrets provider system has not initialised yet at gateway startup", // pragma: allowlist secret
+        "gateway auth mode is password, but gateway.auth.password contains a provider reference object instead of a resolved string — bootstrap secrets (gateway.auth.password) must be plaintext strings or set via the OPENCLAW_GATEWAY_PASSWORD environment variable because the secrets provider system has not initialized yet at gateway startup", // pragma: allowlist secret
       );
     }
     throw new Error("gateway auth mode is password, but no password was configured");

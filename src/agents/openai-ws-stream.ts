@@ -4,7 +4,7 @@
  * Wraps `OpenAIWebSocketManager` in a `StreamFn` that can be plugged into the
  * pi-embedded-runner agent in place of the default `streamSimple` HTTP function.
  *
- * Key behaviours:
+ * Key behaviors:
  *  - Per-session `OpenAIWebSocketManager` (keyed by sessionId)
  *  - Tracks `previous_response_id` to send only incremental tool-result inputs
  *  - Falls back to `streamSimple` (HTTP) if the WebSocket connection fails
@@ -835,7 +835,7 @@ export function createOpenAIWebSocketStreamFn(
       const capturedContextLength = context.messages.length;
 
       await new Promise<void>((resolve, reject) => {
-        // Honour abort signal
+        // Honor abort signal
         const abortHandler = () => {
           cleanup();
           reject(new Error("aborted"));

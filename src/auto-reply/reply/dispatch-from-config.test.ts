@@ -436,7 +436,7 @@ describe("dispatchReplyFromConfig", () => {
   it("does not resurrect a cleared route thread from origin metadata", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
-    // Simulate the real store: lastThreadId and deliveryContext.threadId may be normalised from
+    // Simulate the real store: lastThreadId and deliveryContext.threadId may be normalized from
     // origin.threadId on read, but a non-thread session key must still route to channel root.
     sessionStoreMocks.currentEntry = {
       deliveryContext: {

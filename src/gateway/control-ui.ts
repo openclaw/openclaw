@@ -79,7 +79,7 @@ function contentTypeForExt(ext: string): string {
 }
 
 /**
- * Extensions recognised as static assets.  Missing files with these extensions
+ * Extensions recognized as static assets.  Missing files with these extensions
  * return 404 instead of the SPA index.html fallback.  `.html` is intentionally
  * excluded — actual HTML files on disk are served earlier, and missing `.html`
  * paths should fall through to the SPA router (client-side routers may use
@@ -453,7 +453,7 @@ export function handleControlUiHttpRequest(
 
   // If the requested path looks like a static asset (known extension), return
   // 404 rather than falling through to the SPA index.html fallback.  We check
-  // against the same set of extensions that contentTypeForExt() recognises so
+  // against the same set of extensions that contentTypeForExt() recognizes so
   // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
   // client-side router fallback.
   if (STATIC_ASSET_EXTENSIONS.has(path.extname(fileRel).toLowerCase())) {

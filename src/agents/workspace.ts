@@ -470,7 +470,7 @@ async function resolveMemoryBootstrapEntry(
   // Prefer MEMORY.md; fall back to memory.md only when absent.
   // Checking both and deduplicating via realpath is unreliable on case-insensitive
   // file systems mounted in Docker (e.g. macOS volumes), where both names pass
-  // fs.access() but realpath does not normalise case through the mount layer,
+  // fs.access() but realpath does not normalize case through the mount layer,
   // causing the same content to be injected twice and wasting tokens.
   for (const name of [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME] as const) {
     const filePath = path.join(resolvedDir, name);

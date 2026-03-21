@@ -272,7 +272,7 @@ describe("lookupContextTokens", () => {
   it("resolveContextTokensForModel prefers exact provider key over alias-normalized match", async () => {
     // When both "qwen" and "qwen-portal" exist as config keys (alias pattern),
     // resolveConfiguredProviderContextWindow must return the exact-key match first,
-    // not the first normalized hit — mirroring pi-embedded-runner/model.ts behaviour.
+    // not the first normalized hit — mirroring pi-embedded-runner/model.ts behavior.
     mockDiscoveryDeps([]);
 
     const cfg = {
