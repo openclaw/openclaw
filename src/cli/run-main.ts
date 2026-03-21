@@ -5,7 +5,7 @@ import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
-import { enableConsoleCapture } from "../logging.js";
+import { enableConsoleCapture, routeLogsToStderr } from "../logging.js";
 import {
   getCommandPathWithRootOptions,
   getPrimaryCommand,
@@ -112,6 +112,13 @@ export async function runCli(argv: string[] = process.argv) {
 
     // Capture all console output into structured logs while keeping stdout/stderr behavior.
     enableConsoleCapture();
+
+    // When stdout is piped (not a TTY), route all diagnostic logs to stderr so
+    // stdout stays clean for command output. This prevents plugin init noise
+    // (e.g. [plugins] lines) from contaminating captured output in scripts.
+    if (!process.stdout.isTTY) {
+      routeLogsToStderr();
+    }
 
     const { buildProgram } = await import("./program.js");
     const program = buildProgram();

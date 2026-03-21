@@ -132,6 +132,30 @@ describe("enableConsoleCapture", () => {
   });
 });
 
+describe("routeLogsToStderr", () => {
+  it("routes info-level console.log to process.stderr when enabled", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    routeLogsToStderr();
+    enableConsoleCapture();
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    console.log("[plugins] test message");
+    expect(stderrWrite).toHaveBeenCalled();
+    const written = String(stderrWrite.mock.calls[0]?.[0] ?? "");
+    expect(written).toContain("test message");
+    expect(stdoutWrite).not.toHaveBeenCalled();
+  });
+
+  it("does not route to stderr when not enabled", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const logFn = vi.fn();
+    console.log = logFn;
+    enableConsoleCapture();
+    console.log("test message");
+    expect(logFn).toHaveBeenCalled();
+  });
+});
+
 function tempLogPath() {
   return path.join(os.tmpdir(), `openclaw-log-${crypto.randomUUID()}.log`);
 }
