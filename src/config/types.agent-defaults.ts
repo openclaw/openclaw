@@ -173,6 +173,15 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
+  /** Tool-result context guard controls. */
+  toolResultContextGuard?: {
+    /**
+     * Whether to compact (replace) old tool results when context exceeds budget.
+     * Disable this to preserve prompt cache stability across turns (default: true).
+     * Individual oversized results are still truncated on first use.
+     */
+    compaction?: boolean;
+  };
   /** Embedded Pi runner hardening and compatibility controls. */
   embeddedPi?: {
     /**

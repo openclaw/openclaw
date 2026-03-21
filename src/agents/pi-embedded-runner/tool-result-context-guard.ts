@@ -161,8 +161,9 @@ function enforceToolResultContextBudgetInPlace(params: {
   messages: AgentMessage[];
   contextBudgetChars: number;
   maxSingleToolResultChars: number;
+  compaction: boolean;
 }): void {
-  const { messages, contextBudgetChars, maxSingleToolResultChars } = params;
+  const { messages, contextBudgetChars, maxSingleToolResultChars, compaction } = params;
   const estimateCache = createMessageCharEstimateCache();
 
   // Ensure each tool result has an upper bound before considering total context usage.
@@ -172,6 +173,10 @@ function enforceToolResultContextBudgetInPlace(params: {
     }
     const truncated = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
     applyMessageMutationInPlace(message, truncated, estimateCache);
+  }
+
+  if (!compaction) {
+    return;
   }
 
   let currentChars = estimateContextChars(messages, estimateCache);
@@ -190,7 +195,10 @@ function enforceToolResultContextBudgetInPlace(params: {
 export function installToolResultContextGuard(params: {
   agent: GuardableAgent;
   contextWindowTokens: number;
+  /** Disable compaction of old tool results to preserve prompt cache stability (default: true). */
+  compaction?: boolean;
 }): () => void {
+  const compactionEnabled = params.compaction !== false;
   const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
   const contextBudgetChars = Math.max(
     1_024,
@@ -222,18 +230,22 @@ export function installToolResultContextGuard(params: {
       messages: contextMessages,
       contextBudgetChars,
       maxSingleToolResultChars,
+      compaction: compactionEnabled,
     });
 
     // After tool-result compaction, check if context still exceeds the high-water mark.
     // If it does, non-tool-result content dominates and only full LLM-based session
     // compaction can reduce context size. Throwing a context overflow error triggers
     // the existing overflow recovery cascade in run.ts.
-    const postEnforcementChars = estimateContextChars(
-      contextMessages,
-      createMessageCharEstimateCache(),
-    );
-    if (postEnforcementChars > preemptiveOverflowChars) {
-      throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+    // Skip when compaction is disabled — let the overflow recovery cascade handle it.
+    if (compactionEnabled) {
+      const postEnforcementChars = estimateContextChars(
+        contextMessages,
+        createMessageCharEstimateCache(),
+      );
+      if (postEnforcementChars > preemptiveOverflowChars) {
+        throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+      }
     }
 
     return contextMessages;
