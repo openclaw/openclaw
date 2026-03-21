@@ -51,7 +51,6 @@
   "diagnostics-otel",
   "diffs",
   "discord",
-  "discord-core",
   "extension-shared",
   "channel-config-helpers",
   "channel-config-schema",

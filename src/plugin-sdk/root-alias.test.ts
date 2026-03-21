@@ -197,13 +197,12 @@ describe("plugin-sdk root alias", () => {
     expect(rootSdk.__esModule).toBe(true);
   });
 
-  it("publishes Discord plugin-sdk subpaths", () => {
+  it("publishes the Discord plugin-sdk subpath", () => {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
       exports?: Record<string, unknown>;
     };
 
     expect(packageJson.exports?.["./plugin-sdk/discord"]).toBeDefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-core"]).toBeDefined();
   });
 
   it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {
