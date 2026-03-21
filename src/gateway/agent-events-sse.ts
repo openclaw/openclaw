@@ -21,7 +21,11 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
-import { logInfo, logWarn } from "../logger.js";
+import { logInfo } from "../logger.js";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import { sendGatewayAuthFailure } from "./http-common.js";
+import { resolveRequestClientIp } from "./net.js";
 
 /** Event streams to include in SSE output. Empty = all streams. */
 const ALLOWED_STREAMS = new Set(["tool", "lifecycle", "error", "assistant"]);
@@ -35,11 +39,38 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 /** Event buffer for recent history (ring buffer). */
 const eventBuffer: AgentEventPayload[] = [];
 
+/** Connected SSE client with filter preferences. */
+type SSEClient = {
+  res: ServerResponse;
+  filterSessionKey: string | null;
+  filterStream: string | null;
+};
+
 /** Connected SSE clients. */
-const clients = new Set<ServerResponse>();
+const clients = new Set<SSEClient>();
 
 /** Whether the global event listener has been started. */
 let listenerStarted = false;
+
+/**
+ * Format an event for SSE transmission.
+ */
+function formatSSEEvent(event: AgentEventPayload): string {
+  return `data: ${JSON.stringify(event)}\n\n`;
+}
+
+/**
+ * Check if event matches client filters.
+ */
+function eventMatchesFilters(event: AgentEventPayload, client: SSEClient): boolean {
+  if (client.filterSessionKey && event.sessionKey !== client.filterSessionKey) {
+    return false;
+  }
+  if (client.filterStream && event.stream !== client.filterStream) {
+    return false;
+  }
+  return true;
+}
 
 /**
  * Start the global agent event listener.
@@ -63,11 +94,14 @@ function ensureListenerStarted() {
       eventBuffer.shift();
     }
 
-    // Broadcast to all connected clients
-    const data = JSON.stringify(event);
+    // Broadcast to all connected clients (with per-client filtering)
+    const data = formatSSEEvent(event);
     for (const client of clients) {
+      if (!eventMatchesFilters(event, client)) {
+        continue;
+      }
       try {
-        client.write(`data: ${data}\n\n`);
+        client.res.write(data);
       } catch {
         // Client disconnected, will be cleaned up
       }
@@ -75,13 +109,6 @@ function ensureListenerStarted() {
   });
 
   logInfo("[agent-events-sse] Global event listener started");
-}
-
-/**
- * Format an event for SSE transmission.
- */
-function formatSSEEvent(event: AgentEventPayload): string {
-  return `data: ${JSON.stringify(event)}\n\n`;
 }
 
 /**
@@ -95,15 +122,48 @@ function sendHeartbeat(res: ServerResponse) {
   }
 }
 
+/** Options for handleAgentEventsSSE. */
+export type AgentEventsSSEOptions = {
+  auth: ResolvedGatewayAuth;
+  trustedProxies: string[];
+  allowRealIpFallback: boolean;
+  rateLimiter: AuthRateLimiter;
+};
+
 /**
  * Handle SSE connection request.
  */
-export function handleAgentEventsSSE(req: IncomingMessage, res: ServerResponse) {
+export async function handleAgentEventsSSE(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: AgentEventsSSEOptions,
+): Promise<boolean> {
+  const { auth, trustedProxies, allowRealIpFallback, rateLimiter } = options;
+
+  // Check if this is an SSE request
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  if (!isAgentEventsSSERequest(url.pathname)) {
+    return false;
+  }
+
+  // Authorize the request
+  const clientIp = resolveRequestClientIp(req, { trustedProxies, allowRealIpFallback });
+  const authResult = await authorizeHttpGatewayConnect({
+    req,
+    auth,
+    clientIp,
+    rateLimiter,
+  });
+
+  if (!authResult.ok) {
+    sendGatewayAuthFailure(res, authResult);
+    return true;
+  }
+
   // Ensure global listener is running
   ensureListenerStarted();
 
   // Parse query params for filtering
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const filterSessionKey = url.searchParams.get("sessionKey");
   const filterStream = url.searchParams.get("stream");
   const includeHistory = url.searchParams.get("history") !== "false";
@@ -113,8 +173,6 @@ export function handleAgentEventsSSE(req: IncomingMessage, res: ServerResponse) 
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
     "X-Accel-Buffering": "no", // Disable nginx buffering
   });
 
@@ -130,14 +188,17 @@ export function handleAgentEventsSSE(req: IncomingMessage, res: ServerResponse) 
     })}\n\n`,
   );
 
-  // Send buffered history
+  // Create client object with filters
+  const client: SSEClient = {
+    res,
+    filterSessionKey,
+    filterStream,
+  };
+
+  // Send buffered history (with filtering)
   if (includeHistory) {
     for (const event of eventBuffer) {
-      // Apply filters
-      if (filterSessionKey && event.sessionKey !== filterSessionKey) {
-        continue;
-      }
-      if (filterStream && event.stream !== filterStream) {
+      if (!eventMatchesFilters(event, client)) {
         continue;
       }
       res.write(formatSSEEvent(event));
@@ -145,7 +206,7 @@ export function handleAgentEventsSSE(req: IncomingMessage, res: ServerResponse) 
   }
 
   // Add to client set
-  clients.add(res);
+  clients.add(client);
   logInfo(`[agent-events-sse] Client connected (total: ${clients.size})`);
 
   // Set up heartbeat
@@ -156,13 +217,15 @@ export function handleAgentEventsSSE(req: IncomingMessage, res: ServerResponse) 
   // Clean up on disconnect
   const cleanup = () => {
     clearInterval(heartbeatInterval);
-    clients.delete(res);
+    clients.delete(client);
     logInfo(`[agent-events-sse] Client disconnected (total: ${clients.size})`);
   };
 
   req.on("close", cleanup);
   req.on("error", cleanup);
   res.on("error", cleanup);
+
+  return true;
 }
 
 /**
