@@ -10,10 +10,11 @@ metadata:
         "install":
           [
             {
-              "id": "pip",
-              "kind": "pip",
+              "id": "uv",
+              "kind": "uv",
               "package": "tradingagents",
-              "label": "Install TradingAgents (pip)",
+              "bins": ["tradingagents"],
+              "label": "Install TradingAgents (uv pip)",
             },
           ],
       },
@@ -51,6 +52,7 @@ export OPENAI_API_KEY=...          # OpenAI (GPT)
 export GOOGLE_API_KEY=...          # Google (Gemini)
 export ANTHROPIC_API_KEY=...       # Anthropic (Claude)
 export XAI_API_KEY=...             # xAI (Grok)
+export OPENROUTER_API_KEY=...      # OpenRouter (any model)
 ```
 
 No extra data API keys needed — defaults to yfinance for market data.
@@ -73,7 +75,13 @@ print(decision)
 
 ## CLI Usage
 
-If installed from source:
+After installing via pip:
+
+```bash
+tradingagents
+```
+
+Or if installed from source:
 
 ```bash
 cd /path/to/TradingAgents
