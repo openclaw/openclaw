@@ -25,7 +25,9 @@ export function formatToolOutputForSidebar(text: string): string {
   // Half-block art (QR codes, box-drawing) needs a code fence so the
   // markdown renderer wraps it with .half-block-art styling.
   if (looksLikeHalfBlockArt(trimmed)) {
-    return "```\n" + trimmed + "\n```";
+    // Use original text (not trimmed) to preserve QR quiet-zone padding
+    // that scanners need around the edges.
+    return "```\n" + text + "\n```";
   }
   return text;
 }
