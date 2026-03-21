@@ -25,7 +25,7 @@ export default definePluginEntry({
           hint: "API key",
           optionKey: "xiaomiApiKey",
           flagName: "--xiaomi-api-key",
-          envVar: "MIMO_API_KEY or XIAOMI_API_KEY",
+          envVar: "MIMO_API_KEY",
           promptMessage: "Enter Xiaomi API key",
           defaultModel: XIAOMI_DEFAULT_MODEL_REF,
           expectedProviders: ["xiaomi"],
