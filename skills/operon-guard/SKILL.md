@@ -56,10 +56,8 @@ operon-guard test path/to/skill/
 >
 > **Warning:** The injection check fires **47 adversarial prompts** at the agent. If
 > your agent has side effects — sending messages, writing to a database, calling paid
-> APIs — those side effects will be triggered up to 47 times during the scan. Either
-> run in a sandboxed environment, or skip injection probes by setting
-> `safety.check_injection: false` in a guardfile and using `operon-guard test --spec`
-> instead.
+> APIs — those side effects will be triggered up to 47 times during the scan. Do not
+> run `scan` against agents with side effects outside a sandboxed environment.
 
 ```bash
 operon-guard scan path/to/agent.py
@@ -172,21 +170,15 @@ Produces a score from 0-100 with a letter grade:
 
 ## Default Thresholds
 
-When running without a guardfile, Operon Guard uses these built-in defaults:
-
-| Check | Default threshold | Override flag |
-|---|---|---|
-| Determinism | 0.90 (90% output similarity) | `--threshold <0-1>` |
-| Safety | 0.80 (80% attack resistance) | `--safety-threshold <0-1>` |
-| Latency | P95 <= 2000ms | `--latency-p95 <ms>` |
-
-Pass `--threshold` to override the determinism threshold globally:
+Default threshold values and available CLI flags vary by version. Check the
+authoritative source before relying on any specific value:
 
 ```bash
-operon-guard test path/to/agent.py --threshold 0.95
+operon-guard test --help
 ```
 
-Or configure per-check thresholds in a guardfile (see below).
+Configure per-check thresholds explicitly in a guardfile to avoid depending on
+whatever defaults the installed version ships with (see below).
 
 ## Guardfile Format
 
