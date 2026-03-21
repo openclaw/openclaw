@@ -5,7 +5,6 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import { buildInboundMediaNote } from "../../auto-reply/media-note.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -317,29 +316,22 @@ function buildChatSendTranscriptMessage(params: {
   savedImages: SavedMedia[];
   timestamp: number;
 }) {
-  const mediaNote = buildInboundMediaNote({
-    Body: params.message,
-    BodyForAgent: params.message,
-    BodyForCommands: params.message,
-    CommandAuthorized: true,
-    MediaPaths: params.savedImages.map((entry) => entry.path),
-    MediaTypes: params.savedImages.map((entry) => entry.contentType ?? "application/octet-stream"),
-  });
-  if (!mediaNote) {
-    return {
-      role: "user" as const,
-      content: params.message,
-      timestamp: params.timestamp,
-    };
-  }
-  const content = [
-    { type: "text" as const, text: params.message },
-    { type: "text" as const, text: mediaNote },
-  ];
+  const mediaPaths = params.savedImages.map((entry) => entry.path);
+  const mediaTypes = params.savedImages.map(
+    (entry) => entry.contentType ?? "application/octet-stream",
+  );
   return {
     role: "user" as const,
-    content: params.message ? content : content.slice(1),
+    content: params.message,
     timestamp: params.timestamp,
+    ...(mediaPaths.length > 0
+      ? {
+          MediaPath: mediaPaths[0],
+          MediaPaths: mediaPaths,
+          MediaType: mediaTypes[0],
+          MediaTypes: mediaTypes,
+        }
+      : {}),
   };
 }
 
@@ -1472,9 +1464,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           onModelSelected,
         },
       })
-        .then(() => {
-          void emitUserTranscriptUpdate();
+        .then(async () => {
           if (!agentRunStarted) {
+            await emitUserTranscriptUpdate();
             const btwReplies = deliveredReplies
               .map((entry) => entry.payload)
               .filter(isBtwReplyPayload);
@@ -1547,6 +1539,8 @@ export const chatHandlers: GatewayRequestHandlers = {
                 message,
               });
             }
+          } else {
+            void emitUserTranscriptUpdate();
           }
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
