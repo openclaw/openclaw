@@ -110,6 +110,12 @@ function getRegisteredRun() {
     | undefined;
 }
 
+function getAgentCallParams() {
+  return hoisted.callGatewayMock.mock.calls
+    .map((call) => call[0] as { method?: string; params?: Record<string, unknown> })
+    .find((entry) => entry.method === "agent")?.params;
+}
+
 async function expectAcceptedWorkspace(params: { agentId: string; expectedWorkspaceDir: string }) {
   const result = await spawnSubagentDirect(
     {
@@ -127,6 +133,9 @@ async function expectAcceptedWorkspace(params: { agentId: string; expectedWorksp
 
   expect(result.status).toBe("accepted");
   expect(getRegisteredRun()).toMatchObject({
+    workspaceDir: params.expectedWorkspaceDir,
+  });
+  expect(getAgentCallParams()).toMatchObject({
     workspaceDir: params.expectedWorkspaceDir,
   });
 }

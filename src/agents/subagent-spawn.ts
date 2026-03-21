@@ -649,11 +649,9 @@ export async function spawnSubagentDirect(
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   try {
-    const {
-      spawnedBy: _spawnedBy,
-      workspaceDir: _workspaceDir,
-      ...publicSpawnedMetadata
-    } = spawnedMetadata;
+    // Keep the resolved workspace override on the immediate child run so same-agent
+    // spawns preserve inherited workspaces instead of falling back to the agent default.
+    const { spawnedBy: _spawnedBy, ...publicSpawnedMetadata } = spawnedMetadata;
     const response = await callGateway<{ runId: string }>({
       method: "agent",
       params: {

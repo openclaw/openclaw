@@ -200,6 +200,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/probe: honor caller `--timeout` for active local loopback probes in `gateway status`, keep inactive remote-mode loopback probes fast, and clamp probe timers to JS-safe bounds so slow local/container gateways stop reporting false timeouts. (#47533) Thanks @MonkeyLeeT.
 - Config/startup: keep bundled web-search allowlist compatibility on a lightweight manifest path so config validation no longer pulls bundled web-search registry imports into startup, while still avoiding accidental auto-allow of config-loaded override plugins. (#51574) Thanks @RichardCao.
 - Gateway/chat.send: persist uploaded image references across reloads and compaction without delaying first-turn dispatch or double-submitting the same image to vision models. (#51324) Thanks @fuller-stack-dev.
+- Subagents/sessions_spawn: forward resolved spawned workspaces into the immediate child `agent` run so same-agent spawns keep inherited workspaces and cross-agent runs stay aligned with the workspace already resolved for the child session.
 
 ### Breaking
 
