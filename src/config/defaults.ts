@@ -558,8 +558,39 @@ export function applyMemorySearchDefaults(cfg: OpenClawConfig): OpenClawConfig {
     return cfg;
   }
 
-  // Don't touch anything if the user has explicitly configured memorySearch
-  if (defaults.memorySearch !== undefined) {
+  const existing = defaults.memorySearch ?? {};
+  let next = { ...existing };
+  let mutated = false;
+
+  // Only apply session indexing defaults if the user hasn't touched either field
+  if (existing.experimental?.sessionMemory === undefined && existing.sources === undefined) {
+    next = {
+      ...next,
+      experimental: { ...existing.experimental, sessionMemory: true },
+      sources: ["memory", "sessions"],
+    };
+    mutated = true;
+  }
+
+  // Only apply hybrid search defaults if the user hasn't configured query.hybrid at all
+  if (existing.query?.hybrid === undefined) {
+    next = {
+      ...next,
+      query: {
+        ...existing.query,
+        hybrid: {
+          enabled: true,
+          vectorWeight: 0.7,
+          textWeight: 0.3,
+          temporalDecay: { enabled: true, halfLifeDays: 30 },
+          mmr: { enabled: true, lambda: 0.7 },
+        },
+      },
+    };
+    mutated = true;
+  }
+
+  if (!mutated) {
     return cfg;
   }
 
@@ -569,25 +600,7 @@ export function applyMemorySearchDefaults(cfg: OpenClawConfig): OpenClawConfig {
       ...cfg.agents,
       defaults: {
         ...defaults,
-        memorySearch: {
-          experimental: { sessionMemory: true },
-          sources: ["memory", "sessions"],
-          query: {
-            hybrid: {
-              enabled: true,
-              vectorWeight: 0.7,
-              textWeight: 0.3,
-              temporalDecay: {
-                enabled: true,
-                halfLifeDays: 30,
-              },
-              mmr: {
-                enabled: true,
-                lambda: 0.7,
-              },
-            },
-          },
-        },
+        memorySearch: next,
       },
     },
   };
