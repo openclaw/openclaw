@@ -32,6 +32,7 @@ export type HookMappingConfig = {
     | "slack"
     | "signal"
     | "imessage"
+    | "bluebubbles"
     | "msteams";
   to?: string;
   /** Override model for this hook (provider/model or alias). */

@@ -59,6 +59,7 @@ export const HookMappingSchema = z
         z.literal("slack"),
         z.literal("signal"),
         z.literal("imessage"),
+        z.literal("bluebubbles"),
         z.literal("msteams"),
       ])
       .optional(),

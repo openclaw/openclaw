@@ -1266,7 +1266,7 @@ export const FIELD_HELP: Record<string, string> = {
   "hooks.mappings[].allowUnsafeExternalContent":
     "When true, mapping content may include less-sanitized external payload data in generated messages. Keep false by default and enable only for trusted sources with reviewed transform logic.",
   "hooks.mappings[].channel":
-    'Delivery channel override for mapping outputs (for example "last", "telegram", "discord", "slack", "signal", "imessage", or "msteams"). Keep channel overrides explicit to avoid accidental cross-channel sends.',
+    'Delivery channel override for mapping outputs (for example "last", "telegram", "discord", "slack", "signal", "imessage", "bluebubbles", or "msteams"). Keep channel overrides explicit to avoid accidental cross-channel sends.',
   "hooks.mappings[].to":
     "Destination identifier inside the selected channel when mapping replies should route to a fixed target. Verify provider-specific destination formats before enabling production mappings.",
   "hooks.mappings[].model":
