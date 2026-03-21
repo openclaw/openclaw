@@ -18,6 +18,19 @@ openclaw plugins install <npm-spec>
 
 ## Listed plugins
 
+### Apify
+
+Scrape data from any website with 20,000+ ready-made scrapers. Let your agent
+extract data from Instagram, Facebook, TikTok, YouTube, Google Maps, Google
+Search, e-commerce sites, and more — just by asking.
+
+- **npm:** `@apify/apify-openclaw-plugin`
+- **repo:** [github.com/apify/apify-openclaw-plugin](https://github.com/apify/apify-openclaw-plugin)
+
+```bash
+openclaw plugins install @apify/apify-openclaw-plugin
+```
+
 ### Codex App Server Bridge
 
 Independent OpenClaw bridge for Codex App Server conversations. Bind a chat to
@@ -81,6 +94,18 @@ and files.
 openclaw plugins install @sliverp/qqbot
 ```
 
+### WeChat
+
+Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol).
+Supports text, image, and file exchange with keyword-triggered conversations.
+
+- **npm:** `@icesword760/openclaw-wechat`
+- **repo:** [github.com/icesword0760/openclaw-wechat](https://github.com/icesword0760/openclaw-wechat)
+
+```bash
+openclaw plugins install @icesword760/openclaw-wechat
+```
+
 ### wecom
 
 OpenClaw Enterprise WeCom Channel Plugin.
@@ -136,23 +161,6 @@ Low-effort wrappers, unclear ownership, or unmaintained packages may be declined
 
 ## Related
 
-- **Apify** — Scrape data from any website with 20,000+ ready-made scrapers. Let your agent extract data from Instagram, Facebook, TikTok, YouTube, Google Maps, Google Search, e-commerce sites, and more — just by asking.
-  npm: `@apify/apify-openclaw-plugin`
-  repo: `https://github.com/apify/apify-openclaw-plugin`
-  install: `openclaw plugins install @apify/apify-openclaw-plugin`
-- **openclaw-dingtalk** — The OpenClaw DingTalk channel plugin enables the integration of enterprise robots using the Stream mode. It supports text, images and file messages via any DingTalk client.
-  npm: `@largezhou/ddingtalk`
-  repo: `https://github.com/largezhou/openclaw-dingtalk`
-  install: `openclaw plugins install @largezhou/ddingtalk`
-- **QQbot** — Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group mentions, channel messages, and rich media including voice, images, videos, and files.
-  npm: `@sliverp/qqbot`
-  repo: `https://github.com/sliverp/qqbot`
-  install: `openclaw plugins install @sliverp/qqbot`
-
-- **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
-  npm: `@icesword760/openclaw-wechat`
-  repo: `https://github.com/icesword0760/openclaw-wechat`
-  install: `openclaw plugins install @icesword760/openclaw-wechat`
 - [Install and Configure Plugins](/tools/plugin) — how to install any plugin
 - [Building Plugins](/plugins/building-plugins) — create your own
 - [Plugin Manifest](/plugins/manifest) — manifest schema
