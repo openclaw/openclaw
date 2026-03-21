@@ -826,6 +826,7 @@ export async function runHeartbeatOnce(opts: {
       : normalized.text;
 
     if (delivery.channel === "none" || !delivery.to) {
+      await pruneHeartbeatTranscript(transcriptState);
       emitHeartbeatEvent({
         status: "skipped",
         reason: delivery.reason ?? "no-target",
@@ -843,6 +844,7 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      await pruneHeartbeatTranscript(transcriptState);
       emitHeartbeatEvent({
         status: "skipped",
         reason: "alerts-disabled",
@@ -865,6 +867,7 @@ export async function runHeartbeatOnce(opts: {
         deps: opts.deps,
       });
       if (!readiness.ok) {
+        await pruneHeartbeatTranscript(transcriptState);
         emitHeartbeatEvent({
           status: "skipped",
           reason: readiness.reason,
@@ -917,6 +920,7 @@ export async function runHeartbeatOnce(opts: {
       }
     }
 
+    await pruneHeartbeatTranscript(transcriptState);
     emitHeartbeatEvent({
       status: "sent",
       to: delivery.to,

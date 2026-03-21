@@ -100,14 +100,14 @@ describe("heartbeat transcript pruning", () => {
     });
   });
 
-  it("does not prune transcript when heartbeat returns meaningful content", async () => {
+  it("prunes transcript when heartbeat returns meaningful content", async () => {
     await runTranscriptScenario({
       sessionId: "test-session-no-prune",
       reply: {
         text: "Alert: Something needs your attention!",
         usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 },
       },
-      expectPruned: false,
+      expectPruned: true,
     });
   });
 });
