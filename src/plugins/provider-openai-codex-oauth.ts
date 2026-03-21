@@ -52,6 +52,12 @@ export async function loginOpenAICodexOAuth(params: {
     const creds = await loginOpenAICodex({
       onAuth: baseOnAuth,
       onPrompt,
+      onManualCodeInput: isRemote
+        ? async () =>
+            await onPrompt({
+              message: "Paste the authorization code (or full redirect URL):",
+            })
+        : undefined,
       onProgress: (msg: string) => spin.update(msg),
     });
     spin.stop("OpenAI OAuth complete");
