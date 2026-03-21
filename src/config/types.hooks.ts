@@ -129,6 +129,11 @@ export type HooksConfig = {
    */
   allowRequestSessionKey?: boolean;
   /**
+   * Allow non-isolated `sessionTarget` values from external `/hooks/agent` request payloads.
+   * Default: false.
+   */
+  allowRequestSessionTarget?: boolean;
+  /**
    * Optional allowlist for explicit session keys (request + mapping). Example: ["hook:"].
    * Empty/omitted means no prefix restriction.
    */

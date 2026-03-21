@@ -3,7 +3,11 @@ import path from "node:path";
 import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
 import type { HookSessionTarget } from "../config/types.hooks.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
-import type { HookMessageChannel } from "./hooks.js";
+import {
+  getHookSessionTargetError,
+  resolveHookSessionTarget,
+  type HookMessageChannel,
+} from "./hooks.js";
 
 export type HookMappingResolved = {
   id: string;
@@ -106,26 +110,6 @@ type HookTransformResult = Partial<{
 type HookTransformFn = (
   ctx: HookMappingContext,
 ) => HookTransformResult | Promise<HookTransformResult>;
-
-function getHookSessionTargetError() {
-  return 'sessionTarget must be "main", "isolated", "current", or "session:<id>"';
-}
-
-function resolveHookSessionTarget(raw: unknown): HookSessionTarget | null {
-  if (raw === undefined) {
-    return "isolated";
-  }
-  if (raw === "main" || raw === "isolated" || raw === "current") {
-    return raw;
-  }
-  if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    if (trimmed.startsWith("session:") && trimmed.length > "session:".length) {
-      return trimmed as HookSessionTarget;
-    }
-  }
-  return null;
-}
 
 export function resolveHookMappings(
   hooks?: HooksConfig,
@@ -353,8 +337,7 @@ function validateAction(action: HookAction): HookMappingResult {
   if (!sessionTarget) {
     return { ok: false, error: getHookSessionTargetError() };
   }
-  action.sessionTarget = sessionTarget;
-  return { ok: true, action };
+  return { ok: true, action: { ...action, sessionTarget } };
 }
 
 async function loadTransform(transform: HookMappingTransformResolved): Promise<HookTransformFn> {

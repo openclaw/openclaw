@@ -583,6 +583,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "hooks.token": "Hooks Auth Token",
   "hooks.defaultSessionKey": "Hooks Default Session Key",
   "hooks.allowRequestSessionKey": "Hooks Allow Request Session Key",
+  "hooks.allowRequestSessionTarget": "Hooks Allow Request Session Target",
   "hooks.allowedSessionKeyPrefixes": "Hooks Allowed Session Key Prefixes",
   "hooks.allowedAgentIds": "Hooks Allowed Agent IDs",
   "hooks.maxBodyBytes": "Hooks Max Body Bytes",

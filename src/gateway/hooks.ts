@@ -33,6 +33,7 @@ export type HookAgentPolicyResolved = {
 export type HookSessionPolicyResolved = {
   defaultSessionKey?: string;
   allowRequestSessionKey: boolean;
+  allowRequestSessionTarget: boolean;
   allowedSessionKeyPrefixes?: string[];
 };
 
@@ -91,6 +92,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     sessionPolicy: {
       defaultSessionKey,
       allowRequestSessionKey: cfg.hooks?.allowRequestSessionKey === true,
+      allowRequestSessionTarget: cfg.hooks?.allowRequestSessionTarget === true,
       allowedSessionKeyPrefixes,
     },
   };
@@ -302,6 +304,8 @@ export function isHookAgentAllowed(
 export const getHookAgentPolicyError = () => "agentId is not allowed by hooks.allowedAgentIds";
 export const getHookSessionKeyRequestPolicyError = () =>
   "sessionKey is disabled for external /hooks/agent payloads; set hooks.allowRequestSessionKey=true to enable";
+export const getHookSessionTargetRequestPolicyError = () =>
+  'sessionTarget is disabled for external /hooks/agent payloads unless it is "isolated"; set hooks.allowRequestSessionTarget=true to enable non-isolated targets';
 export const getHookSessionKeyPrefixError = (prefixes: string[]) =>
   `sessionKey must start with one of: ${prefixes.join(", ")}`;
 export const getHookSessionTargetError = () =>
@@ -352,6 +356,25 @@ export function resolveHookSessionKey(params: {
     return { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) };
   }
   return { ok: true, value: generated };
+}
+
+export function resolveHookDispatchSessionTarget(params: {
+  hooksConfig: HooksConfigResolved;
+  source: "request" | "mapping";
+  sessionTarget?: HookSessionTarget;
+}): { ok: true; value: HookSessionTarget } | { ok: false; error: string } {
+  const sessionTarget = params.sessionTarget ?? "isolated";
+  if (
+    params.source === "request" &&
+    sessionTarget !== "isolated" &&
+    !params.hooksConfig.sessionPolicy.allowRequestSessionTarget
+  ) {
+    return { ok: false, error: getHookSessionTargetRequestPolicyError() };
+  }
+  if (sessionTarget === "current") {
+    return { ok: true, value: "isolated" };
+  }
+  return { ok: true, value: sessionTarget };
 }
 
 export function normalizeHookDispatchSessionKey(params: {

@@ -1231,6 +1231,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Fallback session key used for hook deliveries when a request does not provide one through allowed channels. Use a stable but scoped key to avoid mixing unrelated automation conversations.",
   "hooks.allowRequestSessionKey":
     "Allows callers to supply a session key in hook requests when true, enabling caller-controlled routing. Keep false unless trusted integrators explicitly need custom session threading.",
+  "hooks.allowRequestSessionTarget":
+    'Allows callers to supply non-isolated hook session targets in direct `/hooks/agent` requests when true. Keep false unless trusted integrators explicitly need to resume `main` or `session:*` targets from request bodies.',
   "hooks.allowedSessionKeyPrefixes":
     "Allowlist of accepted session-key prefixes for inbound hook requests when caller-provided keys are enabled. Use narrow prefixes to prevent arbitrary session-key injection.",
   "hooks.allowedAgentIds":

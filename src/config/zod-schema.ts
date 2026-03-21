@@ -593,6 +593,7 @@ export const OpenClawSchema = z
         token: z.string().optional().register(sensitive),
         defaultSessionKey: z.string().optional(),
         allowRequestSessionKey: z.boolean().optional(),
+        allowRequestSessionTarget: z.boolean().optional(),
         allowedSessionKeyPrefixes: z.array(z.string()).optional(),
         allowedAgentIds: z.array(z.string()).optional(),
         maxBodyBytes: z.number().int().positive().optional(),
