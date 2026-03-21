@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileSecure } from "../infra/json-file.js";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -44,8 +45,7 @@ export function ensureDirForFile(filePath: string): void {
 
 export function writeJsonFileSecure(pathname: string, value: unknown): void {
   ensureDirForFile(pathname);
-  fs.writeFileSync(pathname, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  fs.chmodSync(pathname, 0o600);
+  writeFileSecure(pathname, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 export function readTextFileIfExists(pathname: string): string | null {
@@ -58,8 +58,17 @@ export function readTextFileIfExists(pathname: string): string | null {
 export function writeTextFileAtomic(pathname: string, value: string, mode = 0o600): void {
   ensureDirForFile(pathname);
   const tempPath = `${pathname}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tempPath, value, "utf8");
-  fs.chmodSync(tempPath, mode);
+  const fd = fs.openSync(
+    tempPath,
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC,
+    mode,
+  );
+  try {
+    fs.fchmodSync(fd, mode);
+    fs.writeSync(fd, value, 0, "utf8");
+  } finally {
+    fs.closeSync(fd);
+  }
   fs.renameSync(tempPath, pathname);
 }
 

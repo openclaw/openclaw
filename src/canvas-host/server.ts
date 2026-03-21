@@ -120,6 +120,7 @@ function defaultIndexHTML() {
     const d = ev && ev.detail || {};
     log("Action status: id=" + (d.id || "?") + " ok=" + String(!!d.ok) + (d.error ? (" error=" + d.error) : ""));
   };
+  // Listener is intentionally page-lifetime; cleaned up on page unload/GC.
   window.addEventListener("openclaw:a2ui-action-status", onStatus);
 
   function send(name, sourceComponentId) {
@@ -150,9 +151,6 @@ function defaultIndexHTML() {
 }
 
 function isDisabledByEnv() {
-  if (isTruthyEnvValue(process.env.OPENCLAW_SKIP_CANVAS_HOST)) {
-    return true;
-  }
   if (isTruthyEnvValue(process.env.OPENCLAW_SKIP_CANVAS_HOST)) {
     return true;
   }

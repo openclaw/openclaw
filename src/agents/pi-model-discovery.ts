@@ -5,6 +5,7 @@ import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
+import { writeFileSecure } from "../infra/json-file.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
@@ -85,8 +86,7 @@ function scrubLegacyStaticAuthJsonEntries(pathname: string): void {
     return;
   }
 
-  fs.writeFileSync(pathname, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
-  fs.chmodSync(pathname, 0o600);
+  writeFileSecure(pathname, `${JSON.stringify(parsed, null, 2)}\n`);
 }
 
 function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCredentialMap) {
