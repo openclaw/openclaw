@@ -25,7 +25,7 @@ export function stripMinimaxToolCallXml(text: string): string {
   }
 
   // Remove <invoke ...>...</invoke> blocks (non-greedy to handle multiple).
-  let cleaned = text.replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "");
+  let cleaned = text.replace(MINIMAX_INVOKE_RE, "");
 
   // Remove stray minimax tool tags.
   cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
@@ -458,9 +458,21 @@ type MinimaxToolCallSplitBlock =
   | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> }
   | { type: "text"; text: string };
 
+// MiniMax M2.5 XML format:
+// <minimax:tool_call>
+//   <invoke name="tool_name">
+//     <parameter name="arg_name">arg_value</parameter>
+//   </invoke>
+//   <invoke name="another_tool">...</invoke>
+// </minimax:tool_call>
+const MINIMAX_TOOL_CALL_RE = /<minimax:tool_call>([\s\S]*?)<\/minimax:tool_call>/gi;
+const MINIMAX_INVOKE_RE = /<invoke\b([^>]*?)>([\s\S]*?)<\/invoke>/gi;
+const MINIMAX_PARAM_RE = /<parameter\b[^>]*name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
+
 /**
  * Split text content into text blocks and toolCall blocks by parsing
- * MiniMax-specific <minimax:tool_call> XML structures.
+ * MiniMax-specific <minimax:tool_call> XML structures. Supports multiple
+ * <invoke> blocks within a single <minimax:tool_call> wrapper.
  */
 export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[] | null {
   if (!text || !/minimax:tool_call/i.test(text)) {
@@ -468,22 +480,13 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
   }
 
   const blocks: MinimaxToolCallSplitBlock[] = [];
-  // MiniMax M2.5 XML format:
-  // <minimax:tool_call>
-  //   <invoke name="tool_name">
-  //     <parameter name="arg_name">arg_value</parameter>
-  //   </invoke>
-  // </minimax:tool_call>
-  const toolCallRe =
-    /<minimax:tool_call>[\s\S]*?<invoke\b[^>]*name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/invoke>[\s\S]*?<\/minimax:tool_call>/gi;
-  const paramRe = /<parameter\b[^>]*name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
-
   let cursor = 0;
   let hasToolCall = false;
 
-  for (const match of text.matchAll(toolCallRe)) {
+  MINIMAX_TOOL_CALL_RE.lastIndex = 0;
+  for (const match of text.matchAll(MINIMAX_TOOL_CALL_RE)) {
     const index = match.index ?? 0;
-    const [fullMatch, toolName, invokeBody] = match;
+    const [fullMatch, wrapperBody] = match;
 
     // Push preceding text
     const preceding = text.slice(cursor, index);
@@ -491,33 +494,56 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
       blocks.push({ type: "text", text: preceding });
     }
 
-    // Parse parameters from the <invoke> body
-    const args: Record<string, unknown> = {};
-    for (const pMatch of invokeBody.matchAll(paramRe)) {
-      const [, pName, pValue] = pMatch;
-      const trimmedValue = pValue.trim();
-      try {
-        // Try to parse as JSON if it looks like one (e.g. nested objects/arrays),
-        // otherwise treat as raw string.
-        if (
-          (trimmedValue.startsWith("{") && trimmedValue.endsWith("}")) ||
-          (trimmedValue.startsWith("[") && trimmedValue.endsWith("]"))
-        ) {
-          args[pName] = JSON.parse(trimmedValue);
-        } else {
+    // Parse all <invoke> blocks within this <minimax:tool_call> wrapper
+    MINIMAX_INVOKE_RE.lastIndex = 0;
+    let foundInvokeInWrapper = false;
+    for (const iMatch of wrapperBody.matchAll(MINIMAX_INVOKE_RE)) {
+      const [, attributes, invokeBody] = iMatch;
+
+      // Extract tool name from attributes (e.g., name="Bash")
+      const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
+      const toolName = nameMatch ? nameMatch[1] : undefined;
+
+      if (!toolName) {
+        continue;
+      }
+      foundInvokeInWrapper = true;
+
+      // Parse parameters from the <invoke> body
+      const args: Record<string, unknown> = {};
+      MINIMAX_PARAM_RE.lastIndex = 0;
+      // Note: regex-based XML parsing will truncate if a parameter value contains "</parameter>".
+      // This is a known limitation for this fallback parser.
+      for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
+        const [, pName, pValue] = pMatch;
+        const trimmedValue = pValue.trim();
+        try {
+          if (
+            (trimmedValue.startsWith("{") && trimmedValue.endsWith("}")) ||
+            (trimmedValue.startsWith("[") && trimmedValue.endsWith("]"))
+          ) {
+            args[pName] = JSON.parse(trimmedValue);
+          } else {
+            args[pName] = trimmedValue;
+          }
+        } catch {
           args[pName] = trimmedValue;
         }
-      } catch {
-        args[pName] = trimmedValue;
       }
+
+      blocks.push({
+        type: "toolCall",
+        id: `mc_${Math.random().toString(36).slice(2, 11)}`,
+        name: toolName,
+        arguments: args,
+      });
     }
 
-    blocks.push({
-      type: "toolCall",
-      id: `mc_${Math.random().toString(36).slice(2, 11)}`,
-      name: toolName,
-      arguments: args,
-    });
+    // If no valid <invoke> was found in the wrapper, treat the whole match as text
+    // to avoid losing potentially user-visible content in malformed XML.
+    if (!foundInvokeInWrapper) {
+      blocks.push({ type: "text", text: fullMatch });
+    }
 
     cursor = index + fullMatch.length;
     hasToolCall = true;

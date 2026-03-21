@@ -536,6 +536,24 @@ All done.`;
     expect(msg.content[1]).toMatchObject({ type: "toolCall", name: "T2", arguments: { p: "2" } });
   });
 
+  it("handles multiple invoke blocks within a single MiniMax wrapper", () => {
+    const text = `<minimax:tool_call>
+  <invoke name="T1"><parameter name="p">1</parameter></invoke>
+  <invoke name="T2"><parameter name="p">2</parameter></invoke>
+</minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    expect(msg.content.length).toBe(2);
+    expect(msg.content[0]).toMatchObject({ type: "toolCall", name: "T1", arguments: { p: "1" } });
+    expect(msg.content[1]).toMatchObject({ type: "toolCall", name: "T2", arguments: { p: "2" } });
+  });
+
   it("parses JSON-like arguments correctly", () => {
     const text = `<minimax:tool_call>
   <invoke name="Config">
