@@ -485,7 +485,7 @@ export async function runEmbeddedPiAgent(
         runtimeAuthState.refreshInFlight = (async () => {
           const sourceApiKey = runtimeAuthState?.sourceApiKey.trim() ?? "";
           if (!sourceApiKey) {
-            throw new Error(`Runtime auth refresh requires a source credential.`);
+            throw new Error("Runtime auth refresh requires a source credential.");
           }
           log.debug(`Refreshing runtime auth for ${runtimeModel.provider} (${reason})...`);
           const preparedAuth = await prepareProviderRuntimeAuth({

@@ -92,7 +92,7 @@ export async function createOllamaEmbeddingProvider(
       },
     });
     if (!Array.isArray(json.embedding)) {
-      throw new Error(`Ollama embeddings response missing embedding[]`);
+      throw new Error("Ollama embeddings response missing embedding[]");
     }
     return sanitizeAndNormalizeEmbedding(json.embedding);
   };
