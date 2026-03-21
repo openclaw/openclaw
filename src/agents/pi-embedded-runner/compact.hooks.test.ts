@@ -539,6 +539,34 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(sessionCompactImpl).not.toHaveBeenCalled();
   });
 
+  it("skips compaction when the transcript only contains heartbeat boilerplate and reasoning blocks", async () => {
+    sessionMessages.splice(
+      0,
+      sessionMessages.length,
+      { role: "user", content: "<b>HEARTBEAT_OK</b>", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "checking" }],
+        timestamp: 2,
+      },
+    );
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: false,
+      reason: "no real conversation messages",
+    });
+    expect(sessionCompactImpl).not.toHaveBeenCalled();
+  });
+
   it("does not treat assistant-only tool-call blocks as meaningful conversation", () => {
     expect(
       compactTesting.hasMeaningfulConversationContent({

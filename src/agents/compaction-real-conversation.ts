@@ -3,7 +3,13 @@ import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { isSilentReplyText } from "../auto-reply/tokens.js";
 
 export const TOOL_RESULT_REAL_CONVERSATION_LOOKBACK = 20;
-const TOOL_ONLY_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const NON_CONVERSATION_BLOCK_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "thinking",
+  "reasoning",
+]);
 
 function hasMeaningfulText(text: string): boolean {
   const trimmed = text.trim();
@@ -35,7 +41,9 @@ export function hasMeaningfulConversationContent(message: AgentMessage): boolean
     }
     const type = (block as { type?: unknown }).type;
     if (type !== "text") {
-      if (typeof type === "string" && TOOL_ONLY_BLOCK_TYPES.has(type)) {
+      // Tool-call metadata and internal reasoning blocks do not make a
+      // heartbeat-only transcript count as real conversation.
+      if (typeof type === "string" && NON_CONVERSATION_BLOCK_TYPES.has(type)) {
         continue;
       }
       sawMeaningfulNonTextBlock = true;

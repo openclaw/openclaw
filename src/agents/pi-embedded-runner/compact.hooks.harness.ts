@@ -168,6 +168,7 @@ export function resetCompactHooksHarnessMocks(): void {
 export async function loadCompactHooksHarness(): Promise<{
   compactEmbeddedPiSessionDirect: typeof import("./compact.js").compactEmbeddedPiSessionDirect;
   compactEmbeddedPiSession: typeof import("./compact.js").compactEmbeddedPiSession;
+  __testing: typeof import("./compact.js").__testing;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 }> {
   resetCompactHooksHarnessMocks();

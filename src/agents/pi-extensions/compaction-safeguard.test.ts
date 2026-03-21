@@ -1849,6 +1849,22 @@ describe("compaction-safeguard double-compaction guard", () => {
     ).toBe(false);
   });
 
+  it("does not treat reasoning-only assistant blocks as meaningful conversation", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "checking" }],
+      } as AgentMessage),
+    ).toBe(false);
+
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "reasoning", summary: [] }],
+      } as unknown as AgentMessage),
+    ).toBe(false);
+  });
+
   it("treats markup-wrapped heartbeat tokens as boilerplate", () => {
     expect(
       __testing.hasMeaningfulConversationContent(
