@@ -25,6 +25,11 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
   if (!trimmedModel) {
     return "";
   }
+  // If the model string already contains "/" it is already provider-qualified
+  // (e.g. "ollama/gpt-oss:120b-cloud"); return as-is to avoid double-qualifying.
+  if (trimmedModel.includes("/")) {
+    return trimmedModel;
+  }
   const trimmedProvider = provider?.trim();
   return trimmedProvider ? `${trimmedProvider}/${trimmedModel}` : trimmedModel;
 }

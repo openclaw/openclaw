@@ -54,6 +54,18 @@ describe("chat-model-ref helpers", () => {
     expect(resolveServerChatModelValue("alias-only", null)).toBe("alias-only");
   });
 
+  it("does not double-qualify already-qualified model values", () => {
+    expect(resolveServerChatModelValue("ollama/gpt-oss:120b-cloud", "anthropic")).toBe(
+      "ollama/gpt-oss:120b-cloud",
+    );
+  });
+
+  it("preserves nested vendor/model identifiers", () => {
+    expect(
+      resolveServerChatModelValue("openrouter/anthropic/claude-sonnet-4-6", "openrouter"),
+    ).toBe("openrouter/anthropic/claude-sonnet-4-6");
+  });
+
   it("reports the override resolution source for unique catalog matches", () => {
     expect(resolveChatModelOverride(createChatModelOverride("gpt-5-mini"), catalog)).toEqual({
       value: "openai/gpt-5-mini",
