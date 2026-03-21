@@ -406,6 +406,22 @@ importers:
         specifier: '>=2026.3.2'
         version: 2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.12.5)(node-llama-cpp@3.16.2(typescript@5.9.3))
 
+  extensions/memory-hybrid:
+    dependencies:
+      '@lancedb/lancedb':
+        specifier: ^0.26.2
+        version: 0.26.2(apache-arrow@18.1.0)
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+      openai:
+        specifier: ^6.22.0
+        version: 6.25.0(ws@8.19.0)(zod@4.3.6)
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/memory-lancedb:
     dependencies:
       '@lancedb/lancedb':
