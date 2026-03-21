@@ -7,9 +7,9 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashMap;
-use std::path::Path;
 use std::fs;
 use std::io::Read;
+use std::path::Path;
 
 // =============================================================================
 // STRING PROCESSING
@@ -101,10 +101,13 @@ pub fn compute_hash(data: String, algorithm: Option<String>) -> Result<String> {
             hasher.update(data.as_bytes());
             format!("{:x}", hasher.finalize())
         }
-        "blake3" => {
-            blake3::hash(data.as_bytes()).to_hex().to_string()
+        "blake3" => blake3::hash(data.as_bytes()).to_hex().to_string(),
+        _ => {
+            return Err(Error::new(
+                Status::InvalidArg,
+                format!("Unknown algorithm: {}", algo),
+            ))
         }
-        _ => return Err(Error::new(Status::InvalidArg, format!("Unknown algorithm: {}", algo))),
     };
 
     Ok(hash)
@@ -117,8 +120,12 @@ pub fn hash_file(path: String, algorithm: Option<String>) -> Result<String> {
     // Use shared validate_path for consistency with other file operations
     validate_path(&path)?;
 
-    let metadata = fs::metadata(&path)
-        .map_err(|e| Error::new(Status::GenericFailure, format!("Failed to access file: {}", e)))?;
+    let metadata = fs::metadata(&path).map_err(|e| {
+        Error::new(
+            Status::GenericFailure,
+            format!("Failed to access file: {}", e),
+        )
+    })?;
 
     // Validate file size (max 100MB to prevent DoS)
     const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
@@ -129,8 +136,12 @@ pub fn hash_file(path: String, algorithm: Option<String>) -> Result<String> {
         ));
     }
 
-    let mut file = fs::File::open(&path)
-        .map_err(|e| Error::new(Status::GenericFailure, format!("Failed to open file: {}", e)))?;
+    let mut file = fs::File::open(&path).map_err(|e| {
+        Error::new(
+            Status::GenericFailure,
+            format!("Failed to open file: {}", e),
+        )
+    })?;
 
     match algo.as_str() {
         "sha256" => {
@@ -147,7 +158,10 @@ pub fn hash_file(path: String, algorithm: Option<String>) -> Result<String> {
             hasher.update(&buffer);
             Ok(hasher.finalize().to_hex().to_string())
         }
-        _ => Err(Error::new(Status::InvalidArg, format!("Unsupported: {}", algo))),
+        _ => Err(Error::new(
+            Status::InvalidArg,
+            format!("Unsupported: {}", algo),
+        )),
     }
 }
 
@@ -160,7 +174,9 @@ pub fn generate_uuid() -> String {
 pub fn generate_uuids(count: u32) -> Vec<String> {
     // Prevent OOM by limiting count
     let safe_count = count.min(100_000);
-    (0..safe_count).map(|_| uuid::Uuid::new_v4().to_string()).collect()
+    (0..safe_count)
+        .map(|_| uuid::Uuid::new_v4().to_string())
+        .collect()
 }
 
 // =============================================================================
@@ -227,8 +243,14 @@ pub struct DirEntry {
 pub fn get_file_info(path: String) -> FileInfo {
     if let Err(e) = validate_path(&path) {
         return FileInfo {
-            exists: false, is_file: false, is_dir: false, size: None,
-            readonly: None, name: None, extension: None, error: Some(e.to_string()),
+            exists: false,
+            is_file: false,
+            is_dir: false,
+            size: None,
+            readonly: None,
+            name: None,
+            extension: None,
+            error: Some(e.to_string()),
         };
     }
     let path = Path::new(&path);
@@ -244,12 +266,24 @@ pub fn get_file_info(path: String) -> FileInfo {
             error: None,
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => FileInfo {
-            exists: false, is_file: false, is_dir: false, size: None,
-            readonly: None, name: None, extension: None, error: None,
+            exists: false,
+            is_file: false,
+            is_dir: false,
+            size: None,
+            readonly: None,
+            name: None,
+            extension: None,
+            error: None,
         },
         Err(e) => FileInfo {
-            exists: false, is_file: false, is_dir: false, size: None,
-            readonly: None, name: None, extension: None, error: Some(e.to_string()),
+            exists: false,
+            is_file: false,
+            is_dir: false,
+            size: None,
+            readonly: None,
+            name: None,
+            extension: None,
+            error: Some(e.to_string()),
         },
     }
 }
@@ -257,15 +291,22 @@ pub fn get_file_info(path: String) -> FileInfo {
 #[napi]
 pub fn read_file_string(path: String) -> Result<String> {
     validate_path(&path)?;
-    
+
     // Check file size before reading
-    let metadata = fs::metadata(&path)
-        .map_err(|e| Error::new(Status::GenericFailure, format!("Failed to access file: {}", e)))?;
-    
+    let metadata = fs::metadata(&path).map_err(|e| {
+        Error::new(
+            Status::GenericFailure,
+            format!("Failed to access file: {}", e),
+        )
+    })?;
+
     if metadata.len() > MAX_READ_SIZE {
-        return Err(Error::new(Status::InvalidArg, format!("File too large (max {}MB)", MAX_READ_SIZE / 1024 / 1024)));
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!("File too large (max {}MB)", MAX_READ_SIZE / 1024 / 1024),
+        ));
     }
-    
+
     fs::read_to_string(&path)
         .map_err(|e| Error::new(Status::GenericFailure, format!("Read failed: {}", e)))
 }
@@ -273,15 +314,22 @@ pub fn read_file_string(path: String) -> Result<String> {
 #[napi]
 pub fn read_file_buffer(path: String) -> Result<Buffer> {
     validate_path(&path)?;
-    
+
     // Check file size before reading
-    let metadata = fs::metadata(&path)
-        .map_err(|e| Error::new(Status::GenericFailure, format!("Failed to access file: {}", e)))?;
-    
+    let metadata = fs::metadata(&path).map_err(|e| {
+        Error::new(
+            Status::GenericFailure,
+            format!("Failed to access file: {}", e),
+        )
+    })?;
+
     if metadata.len() > MAX_READ_SIZE {
-        return Err(Error::new(Status::InvalidArg, format!("File too large (max {}MB)", MAX_READ_SIZE / 1024 / 1024)));
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!("File too large (max {}MB)", MAX_READ_SIZE / 1024 / 1024),
+        ));
     }
-    
+
     let bytes = fs::read(&path)
         .map_err(|e| Error::new(Status::GenericFailure, format!("Read failed: {}", e)))?;
     Ok(bytes.into())
@@ -292,7 +340,10 @@ pub fn write_file_buffer(path: String, content: Buffer) -> Result<()> {
     validate_path(&path)?;
     // Limit content size to prevent DoS
     if content.len() > 10_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Content too large (max 10MB)"));
+        return Err(Error::new(
+            Status::InvalidArg,
+            "Content too large (max 10MB)",
+        ));
     }
     let content_bytes = content.as_ref();
     fs::write(&path, content_bytes)
@@ -304,7 +355,10 @@ pub fn write_file_string(path: String, content: String) -> Result<()> {
     validate_path(&path)?;
     // Limit content size to prevent DoS
     if content.len() > 10_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Content too large (max 10MB)"));
+        return Err(Error::new(
+            Status::InvalidArg,
+            "Content too large (max 10MB)",
+        ));
     }
     fs::write(&path, content)
         .map_err(|e| Error::new(Status::GenericFailure, format!("Write failed: {}", e)))
@@ -313,14 +367,21 @@ pub fn write_file_string(path: String, content: String) -> Result<()> {
 #[napi]
 pub fn list_directory(path: String) -> Result<Vec<DirEntry>> {
     validate_path(&path)?;
-    let entries = fs::read_dir(&path)
-        .map_err(|e| Error::new(Status::GenericFailure, format!("Directory read failed: {}", e)))?;
+    let entries = fs::read_dir(&path).map_err(|e| {
+        Error::new(
+            Status::GenericFailure,
+            format!("Directory read failed: {}", e),
+        )
+    })?;
     let mut results = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| Error::new(Status::GenericFailure, format!("Entry error: {}", e)))?;
-        let ft = entry.file_type()
+        let entry =
+            entry.map_err(|e| Error::new(Status::GenericFailure, format!("Entry error: {}", e)))?;
+        let ft = entry
+            .file_type()
             .map_err(|e| Error::new(Status::GenericFailure, format!("File type error: {}", e)))?;
-        let metadata = entry.metadata()
+        let metadata = entry
+            .metadata()
             .map_err(|e| Error::new(Status::GenericFailure, format!("Metadata error: {}", e)))?;
         results.push(DirEntry {
             name: entry.file_name().to_string_lossy().to_string(),
@@ -336,22 +397,34 @@ pub fn list_directory(path: String) -> Result<Vec<DirEntry>> {
 #[napi]
 pub fn create_directory(path: String) -> Result<()> {
     validate_path(&path)?;
-    fs::create_dir_all(&path)
-        .map_err(|e| Error::new(Status::GenericFailure, format!("Failed to create directory: {}", e)))
+    fs::create_dir_all(&path).map_err(|e| {
+        Error::new(
+            Status::GenericFailure,
+            format!("Failed to create directory: {}", e),
+        )
+    })
 }
 
 #[napi]
 pub fn delete_file(path: String) -> Result<()> {
     validate_path(&path)?;
-    fs::remove_file(&path)
-        .map_err(|e| Error::new(Status::GenericFailure, format!("Failed to delete file: {}", e)))
+    fs::remove_file(&path).map_err(|e| {
+        Error::new(
+            Status::GenericFailure,
+            format!("Failed to delete file: {}", e),
+        )
+    })
 }
 
 #[napi]
 pub fn delete_directory(path: String) -> Result<()> {
     validate_path(&path)?;
-    fs::remove_dir_all(&path)
-        .map_err(|e| Error::new(Status::GenericFailure, format!("Failed to delete directory: {}", e)))
+    fs::remove_dir_all(&path).map_err(|e| {
+        Error::new(
+            Status::GenericFailure,
+            format!("Failed to delete directory: {}", e),
+        )
+    })
 }
 
 #[napi]
@@ -369,7 +442,7 @@ pub fn copy_file(from: String, to: String) -> Result<f64> {
 
 #[napi]
 pub fn base64_encode(input: String) -> String {
-    use base64::{Engine, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine};
     STANDARD.encode(input.as_bytes())
 }
 
@@ -379,16 +452,20 @@ pub fn base64_decode(input: String) -> Result<String> {
     if input.len() > 20_000_000 {
         return Err(Error::new(Status::InvalidArg, "Input too large (max 20MB)"));
     }
-    
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    let bytes = STANDARD.decode(input)
+
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let bytes = STANDARD
+        .decode(input)
         .map_err(|e| Error::new(Status::InvalidArg, format!("Invalid base64: {}", e)))?;
-    
+
     // Limit output size
     if bytes.len() > 15_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Decoded data too large (max 15MB)"));
+        return Err(Error::new(
+            Status::InvalidArg,
+            "Decoded data too large (max 15MB)",
+        ));
     }
-    
+
     String::from_utf8(bytes)
         .map_err(|e| Error::new(Status::InvalidArg, format!("Invalid UTF-8: {}", e)))
 }
@@ -399,7 +476,7 @@ pub fn url_decode(input: String) -> Result<String> {
     if input.len() > 10_000_000 {
         return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
     }
-    
+
     urlencoding::decode(&input)
         .map(|s| s.to_string())
         .map_err(|e| Error::new(Status::InvalidArg, format!("URL decode failed: {}", e)))
@@ -416,15 +493,18 @@ pub fn hex_decode(input: String) -> Result<Buffer> {
     if input.len() > 20_000_000 {
         return Err(Error::new(Status::InvalidArg, "Input too large (max 20MB)"));
     }
-    
+
     let bytes = hex::decode(input)
         .map_err(|e| Error::new(Status::InvalidArg, format!("Hex decode failed: {}", e)))?;
-    
+
     // Limit output size
     if bytes.len() > 10_000_000 {
-        return Err(Error::new(Status::InvalidArg, "Decoded data too large (max 10MB)"));
+        return Err(Error::new(
+            Status::InvalidArg,
+            "Decoded data too large (max 10MB)",
+        ));
     }
-    
+
     Ok(bytes.into())
 }
 
@@ -457,7 +537,7 @@ impl DataProcessor {
         let capacity = capacity as usize;
         env.adjust_external_memory(capacity as i64)?;
         Ok(DataProcessor {
-            buffer: Vec::with_capacity(capacity)
+            buffer: Vec::with_capacity(capacity),
         })
     }
 
@@ -466,7 +546,10 @@ impl DataProcessor {
         const MAX_BUFFER_SIZE: usize = 100_000_000; // 100MB limit
 
         let data_len = data.len();
-        let new_len = self.buffer.len().checked_add(data_len)
+        let new_len = self
+            .buffer
+            .len()
+            .checked_add(data_len)
             .ok_or_else(|| Error::new(Status::GenericFailure, "Buffer overflow"))?;
 
         if new_len > MAX_BUFFER_SIZE {
@@ -485,7 +568,10 @@ impl DataProcessor {
     pub fn append_string(&mut self, mut env: Env, data: String) -> Result<()> {
         const MAX_BUFFER_SIZE: usize = 100_000_000;
         let data_len = data.len();
-        let new_len = self.buffer.len().checked_add(data_len)
+        let new_len = self
+            .buffer
+            .len()
+            .checked_add(data_len)
             .ok_or_else(|| Error::new(Status::GenericFailure, "Buffer overflow"))?;
         if new_len > MAX_BUFFER_SIZE {
             return Err(Error::new(
@@ -500,7 +586,13 @@ impl DataProcessor {
 
     #[napi]
     pub fn process(&self) -> Result<Buffer> {
-        Ok(self.buffer.iter().rev().copied().collect::<Vec<u8>>().into())
+        Ok(self
+            .buffer
+            .iter()
+            .rev()
+            .copied()
+            .collect::<Vec<u8>>()
+            .into())
     }
 
     #[napi]
@@ -531,15 +623,16 @@ impl DataProcessor {
 
     #[napi]
     pub fn to_base64(&self) -> String {
-        use base64::{Engine, engine::general_purpose::STANDARD};
+        use base64::{engine::general_purpose::STANDARD, Engine};
         STANDARD.encode(&self.buffer)
     }
 
     #[napi]
     pub fn from_base64(&mut self, mut env: Env, encoded: String) -> Result<()> {
-        use base64::{Engine, engine::general_purpose::STANDARD};
+        use base64::{engine::general_purpose::STANDARD, Engine};
         let old_len = self.buffer.len();
-        self.buffer = STANDARD.decode(encoded)
+        self.buffer = STANDARD
+            .decode(encoded)
             .map_err(|e| Error::new(Status::InvalidArg, format!("Invalid base64: {}", e)))?;
         env.adjust_external_memory((self.buffer.len() as i64) - (old_len as i64))?;
         Ok(())
@@ -555,7 +648,10 @@ impl DataProcessor {
                 Ok(format!("{:x}", hasher.finalize()))
             }
             "blake3" => Ok(blake3::hash(&self.buffer).to_hex().to_string()),
-            _ => Err(Error::new(Status::InvalidArg, format!("Unknown algorithm: {}", algo))),
+            _ => Err(Error::new(
+                Status::InvalidArg,
+                format!("Unknown algorithm: {}", algo),
+            )),
         }
     }
 }
@@ -578,13 +674,17 @@ pub fn regex_find(text: String, pattern: String) -> Result<RegexMatch> {
         return Err(Error::new(Status::InvalidArg, "Text too large (max 10MB)"));
     }
     if pattern.len() > 10_000 {
-        return Err(Error::new(Status::InvalidArg, "Pattern too large (max 10KB)"));
+        return Err(Error::new(
+            Status::InvalidArg,
+            "Pattern too large (max 10KB)",
+        ));
     }
 
     let re = regex::Regex::new(&pattern)
         .map_err(|e| Error::new(Status::InvalidArg, format!("Invalid regex: {}", e)))?;
 
-    let matches: Vec<String> = re.find_iter(&text)
+    let matches: Vec<String> = re
+        .find_iter(&text)
         .map(|m| m.as_str().to_string())
         .collect();
 
@@ -602,7 +702,10 @@ pub fn regex_replace(text: String, pattern: String, replacement: String) -> Resu
         return Err(Error::new(Status::InvalidArg, "Text too large (max 10MB)"));
     }
     if pattern.len() > 10_000 {
-        return Err(Error::new(Status::InvalidArg, "Pattern too large (max 10KB)"));
+        return Err(Error::new(
+            Status::InvalidArg,
+            "Pattern too large (max 10KB)",
+        ));
     }
 
     let re = regex::Regex::new(&pattern)
@@ -617,7 +720,10 @@ pub fn regex_test(text: String, pattern: String) -> Result<bool> {
         return Err(Error::new(Status::InvalidArg, "Text too large (max 10MB)"));
     }
     if pattern.len() > 10_000 {
-        return Err(Error::new(Status::InvalidArg, "Pattern too large (max 10KB)"));
+        return Err(Error::new(
+            Status::InvalidArg,
+            "Pattern too large (max 10KB)",
+        ));
     }
 
     let re = regex::Regex::new(&pattern)
@@ -646,7 +752,10 @@ pub fn validate_json(json_string: String) -> JsonValidation {
     }
 
     match serde_json::from_str::<serde_json::Value>(&json_string) {
-        Ok(_) => JsonValidation { valid: true, error: None },
+        Ok(_) => JsonValidation {
+            valid: true,
+            error: None,
+        },
         Err(e) => JsonValidation {
             valid: false,
             error: Some(e.to_string()),
@@ -692,8 +801,12 @@ pub async fn minify_json(json_string: String) -> Result<String> {
     let value: serde_json::Value = serde_json::from_str(&json_string)
         .map_err(|e| Error::new(Status::InvalidArg, format!("Invalid JSON: {}", e)))?;
 
-    serde_json::to_string(&value)
-        .map_err(|e| Error::new(Status::GenericFailure, format!("Serialization failed: {}", e)))
+    serde_json::to_string(&value).map_err(|e| {
+        Error::new(
+            Status::GenericFailure,
+            format!("Serialization failed: {}", e),
+        )
+    })
 }
 
 #[napi]
@@ -707,27 +820,31 @@ pub async fn prettify_json(json_string: String, indent: Option<u32>) -> Result<S
         .map_err(|e| Error::new(Status::InvalidArg, format!("Invalid JSON: {}", e)))?;
 
     let indent_spaces = indent.unwrap_or(2) as usize;
-    
+
     // Use serde_json's formatter with custom indent
-    let formatted = serde_json::to_string_pretty(&value)
-        .map_err(|e| Error::new(Status::GenericFailure, format!("Serialization failed: {}", e)))?;
-    
+    let formatted = serde_json::to_string_pretty(&value).map_err(|e| {
+        Error::new(
+            Status::GenericFailure,
+            format!("Serialization failed: {}", e),
+        )
+    })?;
+
     // Safe indent replacement: only replace leading spaces on each line
     let lines: Vec<&str> = formatted.lines().collect();
     let mut result = String::new();
-    
+
     for (i, line) in lines.iter().enumerate() {
         if i > 0 {
             result.push('\n');
         }
-        
+
         // Count leading spaces
         let leading_spaces = line.chars().take_while(|&c| c == ' ').count();
-        
+
         // Convert indent depth (2 spaces = 1 level)
         let indent_level = leading_spaces / 2;
         let new_indent = " ".repeat(indent_level * indent_spaces);
-        
+
         // Replace leading spaces with new indent
         let trimmed = line.trim_start();
         result.push_str(&new_indent);
@@ -790,13 +907,12 @@ pub fn benchmark(iterations: u32) -> f64 {
 // ADVANCED NAPI-RS FEATURES
 // =============================================================================
 
+mod advanced;
 mod crypto;
 mod data;
-mod advanced;
 mod pure_logic;
 
 // Re-export commonly used functions
+pub use advanced::*;
 pub use crypto::*;
 pub use data::*;
-pub use advanced::*;
-

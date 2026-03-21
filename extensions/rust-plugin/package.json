@@ -45,20 +45,19 @@
     "test:watch": "vitest watch tests/",
     "version": "napi version"
   },
-  "dependencies": {
-  },
+  "dependencies": {},
   "devDependencies": {
     "@napi-rs/cli": "^3.5.1",
     "vitest": "^2.0.0"
   },
   "optionalDependencies": {
-    "@wayazi/rust-plugin-darwin-x64": "2026.4.0",
-    "@wayazi/rust-plugin-darwin-arm64": "2026.4.0",
-    "@wayazi/rust-plugin-win32-x64-msvc": "2026.4.0",
-    "@wayazi/rust-plugin-linux-x64-gnu": "2026.4.0",
-    "@wayazi/rust-plugin-linux-x64-musl": "2026.4.0",
-    "@wayazi/rust-plugin-linux-arm64-gnu": "2026.4.0",
-    "@wayazi/rust-plugin-linux-arm64-musl": "2026.4.0"
+    "@wayazi/rust-plugin-darwin-x64": "2026.4.1",
+    "@wayazi/rust-plugin-darwin-arm64": "2026.4.1",
+    "@wayazi/rust-plugin-win32-x64-msvc": "2026.4.1",
+    "@wayazi/rust-plugin-linux-x64-gnu": "2026.4.1",
+    "@wayazi/rust-plugin-linux-x64-musl": "2026.4.1",
+    "@wayazi/rust-plugin-linux-arm64-gnu": "2026.4.1",
+    "@wayazi/rust-plugin-linux-arm64-musl": "2026.4.1"
   },
   "napi": {
     "name": "rust_plugin",

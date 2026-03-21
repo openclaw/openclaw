@@ -3,14 +3,14 @@
 //! This module implements production-ready cryptographic operations following
 //! napi-rs best practices and security guidelines.
 
-use napi::bindgen_prelude::*;
-use napi_derive::napi;
 use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm, Nonce,
 };
+use napi::bindgen_prelude::*;
+use napi_derive::napi;
+use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
-use std::sync::Mutex;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -25,19 +25,25 @@ struct NonceTracker {
 }
 
 impl NonceTracker {
-    const MAX_NONCES: usize = 10_000;      // Hard cap on stored nonces
-    const NONCE_TTL_SECS: u64 = 60;         // 1 minute TTL (shorter for security)
-    const CLEANUP_INTERVAL: usize = 100;    // Cleanup every 100 inserts
+    const MAX_NONCES: usize = 10_000; // Hard cap on stored nonces
+    const NONCE_TTL_SECS: u64 = 60; // 1 minute TTL (shorter for security)
+    const CLEANUP_INTERVAL: usize = 100; // Cleanup every 100 inserts
 
     fn insert(&mut self, nonce: Vec<u8>) -> Result<()> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("System clock error - cannot safely track nonces: {}", e),
+                )
+            })?
             .as_secs();
 
         // Cleanup old nonces more frequently to prevent TTL reuse window
         if self.nonces.len().is_multiple_of(Self::CLEANUP_INTERVAL) {
-            self.nonces.retain(|_, entry| now - entry.timestamp < Self::NONCE_TTL_SECS);
+            self.nonces
+                .retain(|_, entry| now - entry.timestamp < Self::NONCE_TTL_SECS);
         }
 
         // Hard cap: if still over limit after cleanup, reject new nonces
@@ -108,32 +114,32 @@ pub fn aes256_gcm_encrypt(
 
     // Generate or use provided nonce (12 bytes for GCM)
     let nonce_vec = if let Some(n) = nonce_hex {
-        let nonce_bytes = hex::decode(&n)
-            .map_err(|_e| Error::new(Status::InvalidArg, "Invalid nonce"))?;
+        let nonce_bytes =
+            hex::decode(&n).map_err(|_e| Error::new(Status::InvalidArg, "Invalid nonce"))?;
         if nonce_bytes.len() != 12 {
             return Err(Error::new(
                 Status::InvalidArg,
                 "Nonce must be 12 bytes (24 hex characters)",
             ));
         }
-        
+
         // Check for nonce reuse (CRITICAL for GCM security)
         {
-            let mut used_nonces = USED_NONCES.lock().unwrap();
+            let mut used_nonces = USED_NONCES.lock();
             used_nonces.insert(nonce_bytes.clone())?;
         }
-        
+
         nonce_bytes
     } else {
         let generated = Aes256Gcm::generate_nonce(&mut OsRng);
         let nonce_bytes = generated.to_vec();
-        
+
         // Track generated nonces too
         {
-            let mut used_nonces = USED_NONCES.lock().unwrap();
+            let mut used_nonces = USED_NONCES.lock();
             used_nonces.insert(nonce_bytes.clone())?;
         }
-        
+
         nonce_bytes
     };
 
@@ -199,7 +205,12 @@ pub fn aes256_gcm_decrypt(
     // Decrypt with authentication (nonce and ciphertext separate)
     let plaintext = cipher
         .decrypt(Nonce::from_slice(&nonce_bytes), ciphertext_bytes.as_slice())
-        .map_err(|e| Error::new(Status::GenericFailure, format!("Decryption failed (authentication tag mismatch): {}", e)))?;
+        .map_err(|e| {
+            Error::new(
+                Status::GenericFailure,
+                format!("Decryption failed (authentication tag mismatch): {}", e),
+            )
+        })?;
 
     Ok(DecryptionResult {
         plaintext: String::from_utf8(plaintext)
@@ -227,13 +238,16 @@ pub fn sha256_hash(data: String, salt: Option<String>) -> Result<String> {
 pub fn blake3_hash_keyed(data: String, key: Option<String>) -> Result<String> {
     let hash = if let Some(k) = key {
         let key_bytes = k.as_bytes();
-        if key_bytes.len() >= 32 {
-            let key_array: [u8; 32] = key_bytes[..32].try_into()
-                .map_err(|_| Error::new(Status::InvalidArg, "Key conversion failed"))?;
-            blake3::keyed_hash(&key_array, data.as_bytes())
-        } else {
-            blake3::hash(data.as_bytes())
+        if key_bytes.len() < 32 {
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Key must be at least 32 bytes for keyed BLAKE3",
+            ));
         }
+        let key_array: [u8; 32] = key_bytes[..32]
+            .try_into()
+            .map_err(|_| Error::new(Status::InvalidArg, "Key conversion failed"))?;
+        blake3::keyed_hash(&key_array, data.as_bytes())
     } else {
         blake3::hash(data.as_bytes())
     };
@@ -245,10 +259,7 @@ pub fn blake3_hash_keyed(data: String, key: Option<String>) -> Result<String> {
 #[napi]
 pub fn secure_random(length: u32) -> Result<String> {
     if length > 1_000_000 {
-        return Err(Error::new(
-            Status::InvalidArg,
-            "Length too large (max 1MB)",
-        ));
+        return Err(Error::new(Status::InvalidArg, "Length too large (max 1MB)"));
     }
 
     use rand::RngCore;
@@ -278,9 +289,12 @@ pub fn argon2_hash(password: String, salt: Option<String>) -> Result<String> {
     let salt_str = if let Some(s) = salt {
         // Limit salt size
         if s.len() > 128 {
-            return Err(Error::new(Status::InvalidArg, "Salt too long (max 128 bytes)"));
+            return Err(Error::new(
+                Status::InvalidArg,
+                "Salt too long (max 128 bytes)",
+            ));
         }
-        SaltString::encode_b64(&s.as_bytes())
+        SaltString::encode_b64(s.as_bytes())
             .map_err(|e| Error::new(Status::InvalidArg, format!("Invalid salt: {}", e)))?
     } else {
         SaltString::generate(&mut OsRng)
@@ -322,9 +336,9 @@ pub fn argon2_verify(password: String, hash: String) -> Result<bool> {
 #[napi]
 pub fn hmac_compute(data: String, key: String, algorithm: Option<String>) -> Result<String> {
     // Size limits to prevent DoS
-    const MAX_DATA_SIZE: usize = 10_000_000;  // 10MB
-    const MAX_KEY_SIZE: usize = 1024;          // 1KB
-    
+    const MAX_DATA_SIZE: usize = 10_000_000; // 10MB
+    const MAX_KEY_SIZE: usize = 1024; // 1KB
+
     if data.len() > MAX_DATA_SIZE {
         return Err(Error::new(
             Status::InvalidArg,
@@ -345,8 +359,8 @@ pub fn hmac_compute(data: String, key: String, algorithm: Option<String>) -> Res
 
     let result = match algo.as_str() {
         "sha256" => {
-            use hmac::Mac;
             use hmac::digest::KeyInit;
+            use hmac::Mac;
             type HmacImpl = Hmac<Sha256>;
             let mut mac = <HmacImpl as KeyInit>::new_from_slice(key.as_bytes())
                 .map_err(|_| Error::new(Status::InvalidArg, "Invalid key"))?;
@@ -375,18 +389,15 @@ pub fn hkdf_derive(
     use hkdf::Hkdf;
     use sha2::Sha256;
 
-    let salt_bytes = hex::decode(&salt)
-        .map_err(|_| Error::new(Status::InvalidArg, "Invalid salt hex"))?;
+    let salt_bytes =
+        hex::decode(&salt).map_err(|_| Error::new(Status::InvalidArg, "Invalid salt hex"))?;
 
     let ikm = input_key.as_bytes();
     let info_bytes = info.as_bytes();
     let okm_length = length.unwrap_or(32) as usize;
 
     if okm_length > 255 * Sha256::output_size() {
-        return Err(Error::new(
-            Status::InvalidArg,
-            "Derived key too long",
-        ));
+        return Err(Error::new(Status::InvalidArg, "Derived key too long"));
     }
 
     let hk = Hkdf::<Sha256>::new(Some(&salt_bytes), ikm);
@@ -459,7 +470,10 @@ impl CryptoBenchmark {
 }
 
 #[napi]
-pub async fn benchmark_crypto(operation: String, iterations: Option<u32>) -> Result<CryptoBenchmark> {
+pub async fn benchmark_crypto(
+    operation: String,
+    iterations: Option<u32>,
+) -> Result<CryptoBenchmark> {
     use std::time::Instant;
     let iters = iterations.unwrap_or(1000).min(10_000);
     let test_data = "Hello, World! This is a test string for cryptographic operations.";
@@ -523,7 +537,8 @@ pub async fn handle_webhook(body: String) -> Result<WebhookResult> {
     }
 
     // Try to parse as JSON
-    let parsed: std::result::Result<serde_json::Value, serde_json::Error> = serde_json::from_str(&body);
+    let parsed: std::result::Result<serde_json::Value, serde_json::Error> =
+        serde_json::from_str(&body);
 
     match parsed {
         Ok(_) => {

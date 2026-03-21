@@ -30,10 +30,7 @@ pub struct DecompressionResult {
 pub fn rle_compress(data: String) -> Result<CompressionResult> {
     // Validate input size
     if data.len() > 10_000_000 {
-        return Err(Error::new(
-            Status::InvalidArg,
-            "Input too large (max 10MB)",
-        ));
+        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
     }
 
     let bytes = data.as_bytes();
@@ -48,7 +45,8 @@ pub fn rle_compress(data: String) -> Result<CompressionResult> {
         // Count consecutive bytes (with bounds check)
         while (i + count as usize) < bytes.len()
             && bytes[i + count as usize] == current_byte
-            && count < 255 {
+            && count < 255
+        {
             count = count.saturating_add(1);
         }
 
@@ -59,10 +57,12 @@ pub fn rle_compress(data: String) -> Result<CompressionResult> {
     }
 
     // Return as base64 to safely encode binary data
-    use base64::{Engine as _, engine::general_purpose};
+    use base64::{engine::general_purpose, Engine as _};
     let compressed_str = general_purpose::STANDARD_NO_PAD.encode(&compressed);
-    let original_size = data.len() as u32;
-    let compressed_size = compressed.len() as u32;
+    let original_size = u32::try_from(data.len())
+        .map_err(|_| Error::new(Status::GenericFailure, "Input size overflow"))?;
+    let compressed_size = u32::try_from(compressed.len())
+        .map_err(|_| Error::new(Status::GenericFailure, "Compressed size overflow"))?;
     let ratio = if original_size > 0 {
         (compressed_size as f64) / (original_size as f64)
     } else {
@@ -82,26 +82,31 @@ pub fn rle_compress(data: String) -> Result<CompressionResult> {
 #[napi]
 pub fn rle_decompress(compressed: String) -> Result<DecompressionResult> {
     // Limit input size
-    const MAX_INPUT: usize = 10_000_000;     // 10MB
-    const MAX_OUTPUT: usize = 20_000_000;    // 20MB
+    const MAX_INPUT: usize = 10_000_000; // 10MB
+    const MAX_OUTPUT: usize = 20_000_000; // 20MB
 
     if compressed.len() > MAX_INPUT {
         return Ok(DecompressionResult {
             data: String::new(),
             success: false,
-            error: Some(format!("Input too large (max {}MB)", MAX_INPUT / 1024 / 1024)),
+            error: Some(format!(
+                "Input too large (max {}MB)",
+                MAX_INPUT / 1024 / 1024
+            )),
         });
     }
 
     // Decode base64 input
-    use base64::{Engine as _, engine::general_purpose};
+    use base64::{engine::general_purpose, Engine as _};
     let compressed_bytes = match general_purpose::STANDARD_NO_PAD.decode(&compressed) {
         Ok(b) => b,
-        Err(e) => return Ok(DecompressionResult {
-            data: String::new(),
-            success: false,
-            error: Some(format!("Invalid base64: {}", e)),
-        }),
+        Err(e) => {
+            return Ok(DecompressionResult {
+                data: String::new(),
+                success: false,
+                error: Some(format!("Invalid base64: {}", e)),
+            })
+        }
     };
 
     let mut decompressed = Vec::new();
@@ -111,7 +116,7 @@ pub fn rle_decompress(compressed: String) -> Result<DecompressionResult> {
     while i + 1 < compressed_bytes.len() {
         let count = compressed_bytes[i] as usize;
         let byte_val = compressed_bytes[i + 1];
-        
+
         // Validate count
         if count == 0 {
             return Ok(DecompressionResult {
@@ -124,11 +129,13 @@ pub fn rle_decompress(compressed: String) -> Result<DecompressionResult> {
         // Check for overflow
         decompressed_size = match decompressed_size.checked_add(count) {
             Some(s) => s,
-            None => return Ok(DecompressionResult {
-                data: String::new(),
-                success: false,
-                error: Some("Decompressed size too large".to_string()),
-            }),
+            None => {
+                return Ok(DecompressionResult {
+                    data: String::new(),
+                    success: false,
+                    error: Some("Decompressed size too large".to_string()),
+                })
+            }
         };
 
         // Validate total size (compression bomb protection)
@@ -136,14 +143,17 @@ pub fn rle_decompress(compressed: String) -> Result<DecompressionResult> {
             return Ok(DecompressionResult {
                 data: String::new(),
                 success: false,
-                error: Some(format!("Decompressed data too large (max {}MB)", MAX_OUTPUT / 1024 / 1024)),
+                error: Some(format!(
+                    "Decompressed data too large (max {}MB)",
+                    MAX_OUTPUT / 1024 / 1024
+                )),
             });
         }
 
         for _ in 0..count {
             decompressed.push(byte_val);
         }
-        
+
         i += 2;
     }
 
@@ -167,10 +177,7 @@ pub fn rle_decompress(compressed: String) -> Result<DecompressionResult> {
 pub fn tokenize(text: String, mode: Option<String>) -> Result<Vec<String>> {
     // Validate input size
     if text.len() > 10_000_000 {
-        return Err(Error::new(
-            Status::InvalidArg,
-            "Input too large (max 10MB)",
-        ));
+        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
     }
 
     let mode_str = mode.unwrap_or_else(|| "words".to_string());
@@ -246,10 +253,7 @@ pub struct ExtendedTextStats {
 pub fn extended_text_stats(text: String) -> Result<ExtendedTextStats> {
     // Validate input size
     if text.len() > 10_000_000 {
-        return Err(Error::new(
-            Status::InvalidArg,
-            "Input too large (max 10MB)",
-        ));
+        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
     }
 
     let characters = text.len() as f64;
@@ -292,10 +296,7 @@ pub fn extended_text_stats(text: String) -> Result<ExtendedTextStats> {
 pub fn transform_text(text: String, operations: Vec<String>) -> Result<String> {
     // Validate input size
     if text.len() > 10_000_000 {
-        return Err(Error::new(
-            Status::InvalidArg,
-            "Input too large (max 10MB)",
-        ));
+        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
     }
 
     // Validate operations count
@@ -314,9 +315,7 @@ pub fn transform_text(text: String, operations: Vec<String>) -> Result<String> {
             "lowercase" => result.to_lowercase(),
             "reverse" => result.chars().rev().collect(),
             "trim" => result.trim().to_string(),
-            "normalize" => {
-                result.split_whitespace().collect::<Vec<_>>().join(" ")
-            }
+            "normalize" => result.split_whitespace().collect::<Vec<_>>().join(" "),
             "deduplicate" => {
                 let mut deduped = String::new();
                 let mut prev_char = None;
@@ -359,7 +358,10 @@ pub fn pattern_match(text: String, pattern: String) -> Result<bool> {
         return Err(Error::new(Status::InvalidArg, "Text too large (max 1MB)"));
     }
     if pattern.len() > 10_000 {
-        return Err(Error::new(Status::InvalidArg, "Pattern too large (max 10KB)"));
+        return Err(Error::new(
+            Status::InvalidArg,
+            "Pattern too large (max 10KB)",
+        ));
     }
 
     let pattern_chars: Vec<char> = pattern.chars().collect();
@@ -378,7 +380,7 @@ pub fn pattern_match(text: String, pattern: String) -> Result<bool> {
     // Handle patterns starting with *
     for i in 1..=m {
         curr_row[0] = pattern_chars[i - 1] == '*' && prev_row[0];
-        
+
         for j in 1..=n {
             match pattern_chars[i - 1] {
                 '*' => {
@@ -395,7 +397,7 @@ pub fn pattern_match(text: String, pattern: String) -> Result<bool> {
                 }
             }
         }
-        
+
         std::mem::swap(&mut prev_row, &mut curr_row);
     }
 
@@ -436,11 +438,9 @@ pub fn validate_data(data: String, rules: HashMap<String, String>) -> Result<Val
             // Simple validation: must contain @ and have at least one . after @
             let at_pos = data.find('@');
             let dot_after_at = data.as_bytes().iter().position(|&b| b == b'.');
-            
-            let has_valid_format = match (at_pos, dot_after_at) {
-                (Some(at), Some(dot)) if dot > at => true,
-                _ => false,
-            };
+
+            let has_valid_format =
+                matches!((at_pos, dot_after_at), (Some(at), Some(dot)) if dot > at);
 
             if !has_valid_format {
                 errors.push("Invalid email format".to_string());
@@ -471,7 +471,7 @@ pub fn levenshtein_distance(string1: String, string2: String) -> Result<u32> {
     // Reduced limit to prevent memory exhaustion
     // 10k chars each with O(n) space = ~40KB instead of 40GB
     const MAX_LEN: usize = 10_000;
-    
+
     if string1.len() > MAX_LEN || string2.len() > MAX_LEN {
         return Err(Error::new(
             Status::InvalidArg,
@@ -486,7 +486,11 @@ pub fn levenshtein_distance(string1: String, string2: String) -> Result<u32> {
 
     // Use space-optimized algorithm: O(min(m,n)) space
     // Swap so we use less space
-    let (shorter, longer) = if m < n { (&chars1, &chars2) } else { (&chars2, &chars1) };
+    let (shorter, longer) = if m < n {
+        (&chars1, &chars2)
+    } else {
+        (&chars2, &chars1)
+    };
     let short_len = shorter.len();
     let _long_len = longer.len();
 
@@ -496,14 +500,14 @@ pub fn levenshtein_distance(string1: String, string2: String) -> Result<u32> {
 
     for (i, long_char) in longer.iter().enumerate() {
         curr_row[0] = (i + 1) as u32;
-        
+
         for (j, short_char) in shorter.iter().enumerate() {
             let cost = if long_char == short_char { 0 } else { 1 };
             curr_row[j + 1] = (prev_row[j + 1] + 1)
                 .min(curr_row[j] + 1)
                 .min(prev_row[j] + cost);
         }
-        
+
         std::mem::swap(&mut prev_row, &mut curr_row);
     }
 
@@ -520,10 +524,7 @@ pub fn find_replace(
 ) -> Result<String> {
     // Validate input sizes
     if text.len() > 10_000_000 {
-        return Err(Error::new(
-            Status::InvalidArg,
-            "Input too large (max 10MB)",
-        ));
+        return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
     }
 
     // Regex is disabled by default for security (no ReDoS)
@@ -540,7 +541,10 @@ pub fn find_replace(
 
         match regex::Regex::new(&pattern) {
             Ok(re) => Ok(re.replace_all(&text, &replacement).to_string()),
-            Err(e) => Err(Error::new(Status::InvalidArg, format!("Invalid regex: {}", e))),
+            Err(e) => Err(Error::new(
+                Status::InvalidArg,
+                format!("Invalid regex: {}", e),
+            )),
         }
     } else {
         Ok(text.replace(&pattern, &replacement))
@@ -552,10 +556,7 @@ pub fn find_replace(
 pub fn deduplicate(items: Vec<String>, case_sensitive: Option<bool>) -> Result<Vec<String>> {
     // Validate batch size
     if items.len() > 100_000 {
-        return Err(Error::new(
-            Status::InvalidArg,
-            "Too many items (max 100k)",
-        ));
+        return Err(Error::new(Status::InvalidArg, "Too many items (max 100k)"));
     }
 
     let case_sensitive_flag = case_sensitive.unwrap_or(true);

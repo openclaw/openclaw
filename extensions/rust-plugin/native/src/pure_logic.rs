@@ -17,7 +17,10 @@ pub fn validate_path(path: &str) -> Result<(), String> {
         return Err("Invalid path: path traversal detected".to_string());
     }
     if path.len() > MAX_PATH_LENGTH {
-        return Err(format!("Path too long (max {} characters)", MAX_PATH_LENGTH));
+        return Err(format!(
+            "Path too long (max {} characters)",
+            MAX_PATH_LENGTH
+        ));
     }
     Ok(())
 }
@@ -36,13 +39,20 @@ pub fn levenshtein_distance(s1: &str, s2: &str) -> Result<u32, String> {
     let len2 = s2.chars().count();
 
     if len1 > MAX_LEVENSHTEIN_LEN || len2 > MAX_LEVENSHTEIN_LEN {
-        return Err(format!("Input too large (max {} chars each)", MAX_LEVENSHTEIN_LEN));
+        return Err(format!(
+            "Input too large (max {} chars each)",
+            MAX_LEVENSHTEIN_LEN
+        ));
     }
 
     let chars1: Vec<char> = s1.chars().collect();
     let chars2: Vec<char> = s2.chars().collect();
 
-    let (shorter, longer) = if len1 < len2 { (&chars1, &chars2) } else { (&chars2, &chars1) };
+    let (shorter, longer) = if len1 < len2 {
+        (&chars1, &chars2)
+    } else {
+        (&chars2, &chars1)
+    };
     let short_len = shorter.len();
 
     let mut prev_row: Vec<u32> = (0..=short_len as u32).collect();
@@ -147,11 +157,15 @@ pub fn rle_decompress(compressed: &str, max_output: usize) -> Result<String, Str
 
         if let Some(char_byte) = bytes.next() {
             let count = count_byte as usize;
-            decompressed_size = decompressed_size.checked_add(count)
+            decompressed_size = decompressed_size
+                .checked_add(count)
                 .ok_or_else(|| "Decompressed size too large".to_string())?;
 
             if decompressed_size > max_output {
-                return Err(format!("Decompressed data too large (max {} bytes)", max_output));
+                return Err(format!(
+                    "Decompressed data too large (max {} bytes)",
+                    max_output
+                ));
             }
 
             let ch = char_byte as char;

@@ -16,7 +16,9 @@ describe("rust-plugin performance benchmarks", () => {
     it("should process 1000 strings quickly", async () => {
       const inputs = Array(1000).fill("hello world test string");
       const start = Date.now();
-      await native.batchProcess(inputs, "uppercase");
+      await 
+const options = { "uppercase": true };
+        native.batchProcess(inputs, options);
       const duration = Date.now() - start;
 
       expect(duration).toBeLessThan(1000); // Should complete in under 1 second
@@ -313,7 +315,7 @@ describe("rust-plugin performance benchmarks", () => {
 
   describe("advanced crypto performance", () => {
     it("should encrypt data efficiently", () => {
-      const key = "0123456789abcdef0123456789abcdef";
+      const key = "0123456789abcdef0123456789abcdef01234567890123456789abcdef";
       const data = "test data for encryption";
       const iterations = 1000;
       const start = Date.now();
@@ -329,7 +331,7 @@ describe("rust-plugin performance benchmarks", () => {
     });
 
     it("should decrypt data efficiently", () => {
-      const key = "0123456789abcdef0123456789abcdef";
+      const key = "0123456789abcdef0123456789abcdef01234567890123456789abcdef";
       const encrypted = native.aes256GcmEncrypt("test data", key);
       const iterations = 1000;
       const start = Date.now();
@@ -428,7 +430,7 @@ describe("rust-plugin performance benchmarks", () => {
       const start = Date.now();
 
       for (let i = 0; i < iterations; i++) {
-        native.textStatistics(text);
+        native.extendedTextStats(text);
       }
 
       const duration = Date.now() - start;
@@ -488,7 +490,9 @@ describe("rust-plugin performance benchmarks", () => {
 
       for (let i = 0; i < iterations; i++) {
         const inputs = [`test${i}`, `data${i}`];
-        promises.push(native.batchProcess(inputs, "uppercase"));
+        promises.push(
+const options = { "uppercase": true };
+        native.batchProcess(inputs, options));
       }
 
       const start = Date.now();

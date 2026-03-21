@@ -5,7 +5,6 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::sync::Arc;
-use parking_lot;
 
 /// String processing task for async execution
 pub struct StringProcessingTask {
@@ -31,8 +30,8 @@ impl Task for StringProcessingTask {
         Ok(output)
     }
 
-    fn reject(&mut self, _env: Env, _err: Error) -> Result<Self::JsValue> {
-        Ok("Error".to_string())
+    fn reject(&mut self, _env: Env, err: Error) -> Result<Self::JsValue> {
+        Err(err)
     }
 }
 
@@ -48,7 +47,7 @@ pub fn cancellable_operation(
 /// Complex data task for async processing
 pub struct ComplexDataTask {
     data: Vec<u8>,
-    oversized: bool,  // Flag to indicate input was too large
+    oversized: bool, // Flag to indicate input was too large
 }
 
 impl Task for ComplexDataTask {
@@ -58,16 +57,11 @@ impl Task for ComplexDataTask {
     fn compute(&mut self) -> Result<Self::Output> {
         // Return error if input was oversized
         if self.oversized {
-            return Err(Error::new(
-                Status::InvalidArg,
-                "Input too large (max 10MB)",
-            ));
+            return Err(Error::new(Status::InvalidArg, "Input too large (max 10MB)"));
         }
-        
+
         // Process data with overflow protection
-        let processed: Vec<u8> = self.data.iter()
-            .map(|b| b.wrapping_add(1))
-            .collect();
+        let processed: Vec<u8> = self.data.iter().map(|b| b.wrapping_add(1)).collect();
         Ok(processed)
     }
 
@@ -83,11 +77,11 @@ impl Task for ComplexDataTask {
 
 #[napi]
 pub fn complex_data_async(data: Vec<u8>) -> AsyncTask<ComplexDataTask> {
-    const MAX_SIZE: usize = 10_000_000;  // 10MB
-    
+    const MAX_SIZE: usize = 10_000_000; // 10MB
+
     let oversized = data.len() > MAX_SIZE;
-    
-    AsyncTask::new(ComplexDataTask { 
+
+    AsyncTask::new(ComplexDataTask {
         data: if oversized { vec![] } else { data },
         oversized,
     })
@@ -125,13 +119,13 @@ pub fn process_buffer_async(buffer: Buffer) -> AsyncTask<BufferProcessor> {
 //     buffer: Vec<u8>,
 //     capacity: usize,
 // }
-// 
+//
 // #[napi]
 // impl StreamingProcessor {
 //     #[napi(constructor)]
 //     pub fn new(mut env: Env, capacity: u32) -> Result<Self> {
 //         let capacity = capacity as usize;
-// 
+//
 //         // Validate capacity
 //         if capacity > 100_000_000 {
 //             return Err(Error::new(
@@ -139,7 +133,7 @@ pub fn process_buffer_async(buffer: Buffer) -> AsyncTask<BufferProcessor> {
 //                 "Capacity too large (max 100MB)",
 //             ));
 //         }
-// 
+//
 //         let buffer = vec![0; capacity];
 //         let buffer_size = buffer.len();
 //         env.adjust_external_memory(buffer_size as i64)?;
@@ -148,11 +142,11 @@ pub fn process_buffer_async(buffer: Buffer) -> AsyncTask<BufferProcessor> {
 //             capacity,
 //         })
 //     }
-// 
+//
 //     #[napi]
 //     pub fn process(&mut self, data: Buffer) -> Result<usize> {
 //         let data_vec: Vec<u8> = data.into();
-// 
+//
 //         // Validate size
 //         if data_vec.len() > 1_000_000 {
 //             return Err(Error::new(
@@ -160,41 +154,41 @@ pub fn process_buffer_async(buffer: Buffer) -> AsyncTask<BufferProcessor> {
 //                 "Data too large (max 1MB)",
 //             ));
 //         }
-// 
+//
 //         let processed: Vec<u8> = data_vec.iter()
 //             .map(|b| b.wrapping_add(1))
 //             .collect();
-// 
+//
 //         // Check for overflow
 //         let new_len = self.buffer.len().checked_add(processed.len())
 //             .ok_or_else(|| Error::new(Status::GenericFailure, "Buffer overflow"))?;
-// 
+//
 //         if new_len > self.capacity {
 //             return Err(Error::new(
 //                 Status::InvalidArg,
 //                 "Buffer capacity exceeded",
 //             ));
 //         }
-// 
+//
 //         let processed_len = processed.len();
 //         self.buffer.extend(processed);
 //         Ok(processed_len)
 //     }
-// 
+//
 //     #[napi]
 //     pub fn get_buffer(&self) -> Buffer {
 //         self.buffer.clone().into()
 //     }
-// 
+//
 //     #[napi(getter)]
 //     pub fn length(&self) -> u32 {
 //         self.buffer.len() as u32
 //     }
-// 
+//
 //     #[napi(setter)]
 //     pub fn set_capacity(&mut self, mut env: Env, new_capacity: u32) -> Result<()> {
 //         let new_capacity = new_capacity as usize;
-// 
+//
 //         // Validate new capacity
 //         if new_capacity > 100_000_000 {
 //             return Err(Error::new(
@@ -202,18 +196,18 @@ pub fn process_buffer_async(buffer: Buffer) -> AsyncTask<BufferProcessor> {
 //                 "Capacity too large (max 100MB)",
 //             ));
 //         }
-// 
+//
 //         // Adjust external memory tracking
 //         let old_len = self.buffer.len();
 //         let diff = new_capacity as isize - old_len as isize;
-// 
+//
 //         env.adjust_external_memory(diff as i64)?;
-// 
+//
 //         self.buffer.resize(new_capacity, 0);
 //         self.capacity = new_capacity;
 //         Ok(())
 //     }
-// 
+//
 //     /// Factory method to create with default capacity
 //     #[napi(factory)]
 //     pub fn with_default_capacity() -> Self {
@@ -222,7 +216,7 @@ pub fn process_buffer_async(buffer: Buffer) -> AsyncTask<BufferProcessor> {
 //             capacity: 1024,
 //         }
 //     }
-// 
+//
 //     // Async process method (commented out - async with mut self not supported)
 //     // #[napi]
 //     // pub async fn process_async(mut self, data: Buffer) -> Result<usize> {
@@ -231,7 +225,7 @@ pub fn process_buffer_async(buffer: Buffer) -> AsyncTask<BufferProcessor> {
 //     //     self.process(data)
 //     // }
 // }
-// 
+//
 // impl ObjectFinalize for StreamingProcessor {
 //     fn finalize(self, mut env: Env) -> Result<()> {
 //         // Clean up external memory
@@ -247,10 +241,7 @@ pub fn parallel_process_items(items: Vec<String>, operation: String) -> Result<V
 
     // Validate input size
     if items.len() > 100_000 {
-        return Err(Error::new(
-            Status::InvalidArg,
-            "Too many items (max 100k)",
-        ));
+        return Err(Error::new(Status::InvalidArg, "Too many items (max 100k)"));
     }
 
     // Validate total size
@@ -262,13 +253,16 @@ pub fn parallel_process_items(items: Vec<String>, operation: String) -> Result<V
         ));
     }
 
-    Ok(items.into_par_iter().map(|item| match operation.as_str() {
-        "uppercase" => item.to_uppercase(),
-        "lowercase" => item.to_lowercase(),
-        "reverse" => item.chars().rev().collect(),
-        "trim" => item.trim().to_string(),
-        _ => item,
-    }).collect::<Vec<_>>())
+    Ok(items
+        .into_par_iter()
+        .map(|item| match operation.as_str() {
+            "uppercase" => item.to_uppercase(),
+            "lowercase" => item.to_lowercase(),
+            "reverse" => item.chars().rev().collect(),
+            "trim" => item.trim().to_string(),
+            _ => item,
+        })
+        .collect::<Vec<_>>())
 }
 
 /// Shared state processor using Arc (thread-safe)
@@ -292,14 +286,13 @@ impl SharedStateProcessor {
 
         // Validate size
         if data_vec.len() > 10_000_000 {
-            return Err(Error::new(
-                Status::InvalidArg,
-                "Data too large (max 10MB)",
-            ));
+            return Err(Error::new(Status::InvalidArg, "Data too large (max 10MB)"));
         }
 
         let mut state = self.state.lock();
-        let new_len = state.len().checked_add(data_vec.len())
+        let new_len = state
+            .len()
+            .checked_add(data_vec.len())
             .ok_or_else(|| Error::new(Status::GenericFailure, "State overflow"))?;
 
         if new_len > 100_000_000 {
@@ -329,6 +322,12 @@ impl SharedStateProcessor {
     }
 }
 
+impl Default for SharedStateProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Typed array operations
 #[napi]
 pub fn process_typed_array(_env: Env, input: Uint32Array) -> Result<Uint32Array> {
@@ -342,10 +341,12 @@ pub fn process_typed_array(_env: Env, input: Uint32Array) -> Result<Uint32Array>
         ));
     }
 
-    let processed: Vec<u32> = slice.iter()
-        .map(|n| n.checked_mul(2).ok_or_else(|| {
-            Error::new(Status::GenericFailure, "Multiplication overflow")
-        }))
+    let processed: Vec<u32> = slice
+        .iter()
+        .map(|n| {
+            n.checked_mul(2)
+                .ok_or_else(|| Error::new(Status::GenericFailure, "Multiplication overflow"))
+        })
         .collect::<Result<Vec<_>>>()?;
 
     Ok(Uint32Array::new(processed))
