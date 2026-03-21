@@ -49,7 +49,23 @@ async function resolveImageRuntime(params: {
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
   const resolvedRef = normalizeModelRef(params.provider, params.model);
-  const model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
+  let model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
+
+  // When the direct registry lookup fails, fall back to the full resolution
+  // pipeline which handles OpenRouter pass-through (with vision heuristics),
+  // inline provider models, and plugin-resolved dynamic models.
+  if (!model) {
+    const { resolveModelWithRegistry } = await import("../../agents/pi-embedded-runner/model.js");
+    model =
+      resolveModelWithRegistry({
+        provider: resolvedRef.provider,
+        modelId: resolvedRef.model,
+        modelRegistry,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+      }) ?? null;
+  }
+
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
