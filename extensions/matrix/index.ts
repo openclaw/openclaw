@@ -46,5 +46,19 @@ export default defineChannelPluginEntry({
       },
       { commands: ["matrix"] },
     );
+
+    void import("./src/matrix/subagent-hooks.js")
+      .then(({ registerMatrixSubagentHooks }) => {
+        try {
+          registerMatrixSubagentHooks(api);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          api.logger.warn?.(`matrix: subagent hooks registration failed: ${message}`);
+        }
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        api.logger.warn?.(`matrix: failed loading subagent hooks: ${message}`);
+      });
   },
 });
