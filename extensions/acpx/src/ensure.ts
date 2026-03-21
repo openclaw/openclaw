@@ -98,6 +98,35 @@ function resolveVersionCheckResult(params: {
   };
 }
 
+function isWindowsCmdWrapperProbeFailure(error: unknown): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return message.includes("wrapper resolved") && message.includes("without shell execution");
+}
+
+function tryResolveVersionFromPackageForWrapperFailure(params: {
+  error: unknown;
+  command: string;
+  cwd: string;
+  expectedVersion?: string;
+  installCommand: string;
+}): AcpxVersionCheckResult | null {
+  if (!isWindowsCmdWrapperProbeFailure(params.error)) {
+    return null;
+  }
+  const installedVersion = resolveVersionFromPackage(params.command, params.cwd);
+  if (!installedVersion) {
+    return null;
+  }
+  return resolveVersionCheckResult({
+    expectedVersion: params.expectedVersion,
+    installedVersion,
+    installCommand: params.installCommand,
+  });
+}
+
 export async function checkAcpxVersion(params: {
   command: string;
   cwd?: string;
@@ -122,13 +151,15 @@ export async function checkAcpxVersion(params: {
       ? await spawnAndCollect(spawnParams, params.spawnOptions)
       : await spawnAndCollect(spawnParams);
   } catch (error) {
-    const installedVersion = resolveVersionFromPackage(params.command, cwd);
-    if (installedVersion) {
-      return resolveVersionCheckResult({
-        expectedVersion,
-        installedVersion,
-        installCommand,
-      });
+    const packageFallback = tryResolveVersionFromPackageForWrapperFailure({
+      error,
+      command: params.command,
+      cwd,
+      expectedVersion,
+      installCommand,
+    });
+    if (packageFallback) {
+      return packageFallback;
     }
     return {
       ok: false,
@@ -150,13 +181,15 @@ export async function checkAcpxVersion(params: {
         installCommand,
       };
     }
-    const installedVersion = resolveVersionFromPackage(params.command, cwd);
-    if (installedVersion) {
-      return resolveVersionCheckResult({
-        expectedVersion,
-        installedVersion,
-        installCommand,
-      });
+    const packageFallback = tryResolveVersionFromPackageForWrapperFailure({
+      error: result.error,
+      command: params.command,
+      cwd,
+      expectedVersion,
+      installCommand,
+    });
+    if (packageFallback) {
+      return packageFallback;
     }
     return {
       ok: false,
