@@ -1,0 +1,120 @@
+name: Preflight (fork)
+
+# Runs on any branch push to teconomix/openclaw (except main).
+# Scoped to checks relevant to our Mattermost patches — avoids pre-existing
+# failures in unrelated extensions (tlon, urbit, etc.) that are not our concern.
+
+on:
+  push:
+    branches-ignore:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  # Format check — fast, no tsgo, no OOM risk
+  format:
+    name: "format check"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.23.0"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          cache: "pnpm"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Format check (oxfmt)
+        run: pnpm format:check
+
+  # Lint checks — boundary guards, no tsgo
+  lint:
+    name: "lint"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.23.0"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          cache: "pnpm"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Lint boundary guards
+        run: |
+          pnpm lint:extensions:no-src-outside-plugin-sdk
+          pnpm lint:extensions:no-plugin-sdk-internal
+          pnpm lint:plugins:no-extension-imports
+          pnpm lint:plugins:no-extension-src-imports
+
+  # Mattermost extension tests — scoped, no full tsgo
+  test-mattermost:
+    name: "mattermost tests"
+    runs-on: ubuntu-latest
+    env:
+      OPENCLAW_CHANGED_EXTENSION: mattermost
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.23.0"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          cache: "pnpm"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Run Mattermost extension tests
+        run: pnpm test:extension mattermost
+
+  # Build smoke — confirms our changes compile
+  build-smoke:
+    name: "build smoke"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.23.0"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          cache: "pnpm"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build dist
+        run: pnpm build
+
+      - name: Smoke test CLI
+        run: node openclaw.mjs --help
