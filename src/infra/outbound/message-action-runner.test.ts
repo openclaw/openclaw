@@ -482,8 +482,7 @@ describe("runMessageAction sendAttachment hydration", () => {
       isConfigured: () => true,
     },
     actions: {
-      listActions: () => ["sendAttachment", "setGroupIcon"],
-      supportsAction: ({ action }) => action === "sendAttachment" || action === "setGroupIcon",
+      describeMessageTool: () => ({ actions: ["sendAttachment", "setGroupIcon"] }),
       handleAction: async ({ params }) =>
         jsonResult({
           ok: true,
@@ -846,8 +845,7 @@ describe("runMessageAction card-only send behavior", () => {
     capabilities: { chatTypes: ["direct"] },
     config: createAlwaysConfiguredPluginConfig(),
     actions: {
-      listActions: () => ["send"],
-      supportsAction: ({ action }) => action === "send",
+      describeMessageTool: () => ({ actions: ["send"] }),
       handleAction,
     },
   };
@@ -926,8 +924,7 @@ describe("runMessageAction components parsing", () => {
     capabilities: { chatTypes: ["direct"] },
     config: createAlwaysConfiguredPluginConfig({}),
     actions: {
-      listActions: () => ["send"],
-      supportsAction: ({ action }) => action === "send",
+      describeMessageTool: () => ({ actions: ["send"] }),
       handleAction,
     },
   };
@@ -1008,7 +1005,7 @@ describe("runMessageAction accountId defaults", () => {
       resolveAccount: () => ({}),
     },
     actions: {
-      listActions: () => ["send"],
+      describeMessageTool: () => ({ actions: ["send"] }),
       handleAction,
     },
   };
