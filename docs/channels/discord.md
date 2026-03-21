@@ -9,6 +9,8 @@ title: "Discord"
 
 Status: ready for DMs and guild channels via the official Discord gateway.
 
+**Transport:** Outbound WebSocket. The gateway maintains a persistent WebSocket connection to Discord's gateway (`wss://gateway.discord.gg`). No inbound HTTP endpoint, reverse proxy, or public URL is needed — all traffic is outbound. Responses are sent via the Discord REST API.
+
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     Discord DMs default to pairing mode.

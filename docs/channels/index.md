@@ -36,6 +36,28 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (plugin, installed separately).
 - [Zalo Personal](/channels/zalouser) — Zalo personal account via QR login (plugin, installed separately).
 
+## Connection architecture
+
+Channels use different transport modes to communicate with their upstream services. Understanding this helps with firewall rules, reverse proxy setup, and debugging.
+
+| Transport | How it works | Inbound infra needed | Channels |
+|---|---|---|---|
+| **Outbound WebSocket** | Gateway opens a persistent WebSocket to the service. All messages flow over this single connection. | None — outbound only. | Discord, Mattermost, Feishu, Slack, Matrix, IRC, Twitch, Tlon |
+| **Long polling** | Gateway repeatedly polls the service API for new messages. | None — outbound only. | Telegram (default), Signal |
+| **Inbound webhook** | Service pushes messages to a URL you expose. Requires a public endpoint (reverse proxy, ALB, tunnel, etc.). | Yes — public HTTPS endpoint. | Telegram (optional), WhatsApp, Google Chat, LINE, Synology Chat, Zalo |
+| **Local API / CLI** | Gateway talks to a local process or REST API on the same machine. | None — localhost only. | BlueBubbles, iMessage (legacy), Signal (signal-cli) |
+| **Browser session** | Gateway maintains a headless or QR-paired browser session. | None — outbound only. | WhatsApp (Baileys), Zalo Personal |
+
+<Note>
+Some channels support multiple transports. For example, Telegram defaults to long polling but can switch to webhook mode by setting `channels.telegram.webhookUrl`. Check each channel's docs for options.
+</Note>
+
+### What this means in practice
+
+- **Outbound-only channels** (Discord, Slack, IRC, etc.) work behind NATs and firewalls with no extra infra. The gateway initiates all connections.
+- **Webhook channels** (Telegram webhook mode, WhatsApp, Google Chat) need a publicly reachable HTTPS endpoint — typically a reverse proxy (nginx, Caddy) or cloud load balancer (ALB, Cloud Run) forwarding to the gateway.
+- **Local channels** (BlueBubbles, signal-cli) need the companion service running on the same host or reachable on the local network.
+
 ## Notes
 
 - Channels can run simultaneously; configure multiple and OpenClaw will route per chat.
