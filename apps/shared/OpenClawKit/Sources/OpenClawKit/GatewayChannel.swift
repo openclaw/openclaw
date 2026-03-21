@@ -2,6 +2,25 @@ import OpenClawProtocol
 import Foundation
 import OSLog
 
+/// Thread-safe one-shot wrapper around CheckedContinuation to prevent double-resume crashes.
+private final class OneShotContinuation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    init(_ continuation: CheckedContinuation<Void, Error>) {
+        self.continuation = continuation
+    }
+
+    func resume(error: Error?) {
+        lock.lock()
+        let cont = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        guard let cont else { return }
+        ThrowingContinuationSupport.resumeVoid(cont, error: error)
+    }
+}
+
 public protocol WebSocketTasking: AnyObject {
     var state: URLSessionTask.State { get }
     func resume()
@@ -44,8 +63,12 @@ public struct WebSocketTaskBox: @unchecked Sendable {
 
     public func sendPing() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            // URLSessionWebSocketTask.sendPing can invoke the handler more than once when
+            // the task is cancelled mid-flight (observed on iOS 18+). Guard with a one-shot
+            // wrapper to avoid a CheckedContinuation double-resume crash.
+            let once = OneShotContinuation(continuation)
             self.task.sendPing { error in
-                ThrowingContinuationSupport.resumeVoid(continuation, error: error)
+                once.resume(error: error)
             }
         }
     }
