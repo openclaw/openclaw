@@ -1,13 +1,26 @@
 import { existsSync } from "node:fs";
 import type { OpenClawConfig } from "../config/types.js";
-import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { probeGateway } from "../gateway/probe.js";
+import type { probeGateway } from "../gateway/probe.js";
 import type { MemoryProviderStatus } from "../memory/types.js";
 import {
   pickGatewaySelfPresence,
   resolveGatewayProbeAuthResolution,
 } from "./status.gateway-probe.js";
+
+let gatewayCallModulePromise: Promise<typeof import("../gateway/call.js")> | undefined;
+let gatewayProbeModulePromise: Promise<typeof import("../gateway/probe.js")> | undefined;
+
+function loadGatewayCallModule() {
+  gatewayCallModulePromise ??= import("../gateway/call.js");
+  return gatewayCallModulePromise;
+}
+
+function loadGatewayProbeModule() {
+  gatewayProbeModulePromise ??= import("../gateway/probe.js");
+  return gatewayProbeModulePromise;
+}
 
 export type MemoryStatusSnapshot = MemoryProviderStatus & {
   agentId: string;
@@ -60,6 +73,7 @@ export async function resolveGatewayProbeSnapshot(params: {
   cfg: OpenClawConfig;
   opts: { timeoutMs?: number; all?: boolean; skipProbe?: boolean };
 }): Promise<GatewayProbeSnapshot> {
+  const { buildGatewayConnectionDetails } = await loadGatewayCallModule();
   const gatewayConnection = buildGatewayConnectionDetails({ config: params.cfg });
   const isRemoteMode = params.cfg.gateway?.mode === "remote";
   const remoteUrlRaw =
@@ -68,7 +82,8 @@ export async function resolveGatewayProbeSnapshot(params: {
   const gatewayMode = isRemoteMode ? "remote" : "local";
   const gatewayProbeAuthResolution = resolveGatewayProbeAuthResolution(params.cfg);
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
-  const gatewayProbe = remoteUrlMissing
+  const { probeGateway } = await loadGatewayProbeModule();
+  const gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null = remoteUrlMissing
     ? null
     : params.opts.skipProbe
       ? null

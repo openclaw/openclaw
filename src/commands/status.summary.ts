@@ -1,5 +1,4 @@
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -17,6 +16,9 @@ import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.typ
 let channelSummaryModulePromise: Promise<typeof import("../infra/channel-summary.js")> | undefined;
 let linkChannelModulePromise: Promise<typeof import("./status.link-channel.js")> | undefined;
 let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
+let channelConfigPresenceModulePromise:
+  | Promise<typeof import("../channels/config-presence.js")>
+  | undefined;
 
 function loadChannelSummaryModule() {
   channelSummaryModulePromise ??= import("../infra/channel-summary.js");
@@ -36,6 +38,11 @@ const loadStatusSummaryRuntimeModule = createLazyRuntimeSurface(
 function loadConfigIoModule() {
   configIoModulePromise ??= import("../config/io.js");
   return configIoModulePromise;
+}
+
+function loadChannelConfigPresenceModule() {
+  channelConfigPresenceModulePromise ??= import("../channels/config-presence.js");
+  return channelConfigPresenceModulePromise;
 }
 
 function parseStatusModelRef(
@@ -178,6 +185,7 @@ export async function getStatusSummary(
   const { classifySessionKey, resolveContextTokensForModel, resolveSessionModelRef } =
     await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? (await loadConfigIoModule()).loadConfig();
+  const { hasPotentialConfiguredChannels } = await loadChannelConfigPresenceModule();
   const needsChannelPlugins = hasPotentialConfiguredChannels(cfg);
   const linkContext = needsChannelPlugins
     ? await loadLinkChannelModule().then(({ resolveLinkChannelContext }) =>
