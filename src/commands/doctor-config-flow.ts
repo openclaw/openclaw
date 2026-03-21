@@ -3,23 +3,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, migrateLegacyConfig } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import {
-  autoPrepareLegacyMatrixCrypto,
-  detectLegacyMatrixCrypto,
-} from "../infra/matrix-legacy-crypto.js";
-import {
-  autoMigrateLegacyMatrixState,
-  detectLegacyMatrixState,
-} from "../infra/matrix-legacy-state.js";
-import {
-  hasActionableMatrixMigration,
-  hasPendingMatrixMigration,
-  maybeCreateMatrixMigrationSnapshot,
-} from "../infra/matrix-migration-snapshot.js";
-import {
-  detectPluginInstallPathIssue,
-  formatPluginInstallPathIssue,
-} from "../infra/plugin-install-path-warnings.js";
+import { detectLegacyMatrixCrypto } from "../infra/matrix-legacy-crypto.js";
+import { detectLegacyMatrixState } from "../infra/matrix-legacy-state.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { note } from "../terminal/note.js";
 import { noteOpencodeProviderOverrides, stripUnknownConfigKeys } from "./doctor-config-analysis.js";
@@ -31,7 +16,13 @@ import {
   scanDiscordNumericIdEntries,
 } from "./doctor/providers/discord.js";
 import {
-  collectTelegramGroupPolicyWarnings,
+  applyMatrixDoctorRepair,
+  collectMatrixInstallPathWarnings,
+  formatMatrixLegacyCryptoPreview,
+  formatMatrixLegacyStatePreview,
+} from "./doctor/providers/matrix.js";
+import {
+  collectTelegramEmptyAllowlistExtraWarnings,
   maybeRepairTelegramAllowFromUsernames,
   scanTelegramAllowFromUsernameEntries,
 } from "./doctor/providers/telegram.js";
@@ -40,7 +31,7 @@ import {
   collectMissingDefaultAccountBindingWarnings,
   collectMissingExplicitDefaultAccountWarnings,
 } from "./doctor/shared/default-account-warnings.js";
-import { collectEmptyAllowlistPolicyWarningsForAccount } from "./doctor/shared/empty-allowlist-policy.js";
+import { scanEmptyAllowlistPolicyWarnings } from "./doctor/shared/empty-allowlist-scan.js";
 import {
   maybeRepairExecSafeBinProfiles,
   scanExecSafeBinCoverage,
@@ -51,149 +42,7 @@ import {
   scanLegacyToolsBySenderKeys,
 } from "./doctor/shared/legacy-tools-by-sender.js";
 import { scanMutableAllowlistEntries } from "./doctor/shared/mutable-allowlist.js";
-import { asObjectRecord } from "./doctor/shared/object.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./doctor/shared/open-policy-allowfrom.js";
-
-function formatMatrixLegacyStatePreview(
-  detection: Exclude<ReturnType<typeof detectLegacyMatrixState>, null | { warning: string }>,
-): string {
-  return [
-    "- Matrix plugin upgraded in place.",
-    `- Legacy sync store: ${detection.legacyStoragePath} -> ${detection.targetStoragePath}`,
-    `- Legacy crypto store: ${detection.legacyCryptoPath} -> ${detection.targetCryptoPath}`,
-    ...(detection.selectionNote ? [`- ${detection.selectionNote}`] : []),
-    '- Run "openclaw doctor --fix" to migrate this Matrix state now.',
-  ].join("\n");
-}
-
-function formatMatrixLegacyCryptoPreview(
-  detection: ReturnType<typeof detectLegacyMatrixCrypto>,
-): string[] {
-  const notes: string[] = [];
-  for (const warning of detection.warnings) {
-    notes.push(`- ${warning}`);
-  }
-  for (const plan of detection.plans) {
-    notes.push(
-      [
-        `- Matrix encrypted-state migration is pending for account "${plan.accountId}".`,
-        `- Legacy crypto store: ${plan.legacyCryptoPath}`,
-        `- New recovery key file: ${plan.recoveryKeyPath}`,
-        `- Migration state file: ${plan.statePath}`,
-        '- Run "openclaw doctor --fix" to extract any saved backup key now. Backed-up room keys will restore automatically on next gateway start.',
-      ].join("\n"),
-    );
-  }
-  return notes;
-}
-
-async function collectMatrixInstallPathWarnings(cfg: OpenClawConfig): Promise<string[]> {
-  const issue = await detectPluginInstallPathIssue({
-    pluginId: "matrix",
-    install: cfg.plugins?.installs?.matrix,
-  });
-  if (!issue) {
-    return [];
-  }
-  return formatPluginInstallPathIssue({
-    issue,
-    pluginLabel: "Matrix",
-    defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
-    repoInstallCommand: "openclaw plugins install ./extensions/matrix",
-    formatCommand: formatCliCommand,
-  }).map((entry) => `- ${entry}`);
-}
-
-/**
- * Scan all channel configs for dmPolicy="allowlist" without any allowFrom entries.
- * This configuration blocks all DMs because no sender can match the empty
- * allowlist. Common after upgrades that remove external allowlist
- * file support.
- */
-function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
-  const channels = cfg.channels;
-  if (!channels || typeof channels !== "object") {
-    return [];
-  }
-
-  const warnings: string[] = [];
-
-  const checkAccount = (
-    account: Record<string, unknown>,
-    prefix: string,
-    parent?: Record<string, unknown>,
-    channelName?: string,
-  ) => {
-    const accountDm = asObjectRecord(account.dm);
-    const parentDm = asObjectRecord(parent?.dm);
-    const dmPolicy =
-      (account.dmPolicy as string | undefined) ??
-      (accountDm?.policy as string | undefined) ??
-      (parent?.dmPolicy as string | undefined) ??
-      (parentDm?.policy as string | undefined) ??
-      undefined;
-    const effectiveAllowFrom =
-      (account.allowFrom as Array<string | number> | undefined) ??
-      (parent?.allowFrom as Array<string | number> | undefined) ??
-      (accountDm?.allowFrom as Array<string | number> | undefined) ??
-      (parentDm?.allowFrom as Array<string | number> | undefined) ??
-      undefined;
-
-    warnings.push(
-      ...collectEmptyAllowlistPolicyWarningsForAccount({
-        account,
-        channelName,
-        doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
-        parent,
-        prefix,
-      }),
-    );
-    if (
-      channelName === "telegram" &&
-      ((account.groupPolicy as string | undefined) ??
-        (parent?.groupPolicy as string | undefined) ??
-        undefined) === "allowlist"
-    ) {
-      warnings.push(
-        ...collectTelegramGroupPolicyWarnings({
-          account,
-          dmPolicy,
-          effectiveAllowFrom,
-          parent,
-          prefix,
-        }),
-      );
-    }
-  };
-
-  for (const [channelName, channelConfig] of Object.entries(
-    channels as Record<string, Record<string, unknown>>,
-  )) {
-    if (!channelConfig || typeof channelConfig !== "object") {
-      continue;
-    }
-    checkAccount(channelConfig, `channels.${channelName}`, undefined, channelName);
-
-    const accounts = channelConfig.accounts;
-    if (accounts && typeof accounts === "object") {
-      for (const [accountId, account] of Object.entries(
-        accounts as Record<string, Record<string, unknown>>,
-      )) {
-        if (!account || typeof account !== "object") {
-          continue;
-        }
-        checkAccount(
-          account,
-          `channels.${channelName}.accounts.${accountId}`,
-          channelConfig,
-          channelName,
-        );
-      }
-    }
-  }
-
-  return warnings;
-}
 
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
@@ -266,80 +115,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     cfg: candidate,
     env: process.env,
   });
-  const pendingMatrixMigration = hasPendingMatrixMigration({
-    cfg: candidate,
-    env: process.env,
-  });
-  const actionableMatrixMigration = hasActionableMatrixMigration({
-    cfg: candidate,
-    env: process.env,
-  });
   if (shouldRepair) {
-    let matrixSnapshotReady = true;
-    if (actionableMatrixMigration) {
-      try {
-        const snapshot = await maybeCreateMatrixMigrationSnapshot({
-          trigger: "doctor-fix",
-          env: process.env,
-        });
-        note(
-          `Matrix migration snapshot ${snapshot.created ? "created" : "reused"} before applying Matrix upgrades.\n- ${snapshot.archivePath}`,
-          "Doctor changes",
-        );
-      } catch (err) {
-        matrixSnapshotReady = false;
-        note(
-          `- Failed creating a Matrix migration snapshot before repair: ${String(err)}`,
-          "Doctor warnings",
-        );
-        note(
-          '- Skipping Matrix migration changes for now. Resolve the snapshot failure, then rerun "openclaw doctor --fix".',
-          "Doctor warnings",
-        );
-      }
-    } else if (pendingMatrixMigration) {
-      note(
-        "- Matrix migration warnings are present, but no on-disk Matrix mutation is actionable yet. No pre-migration snapshot was needed.",
-        "Doctor warnings",
-      );
+    const matrixRepair = await applyMatrixDoctorRepair({
+      cfg: candidate,
+      env: process.env,
+    });
+    for (const change of matrixRepair.changes) {
+      note(change, "Doctor changes");
     }
-    if (matrixSnapshotReady) {
-      const matrixStateRepair = await autoMigrateLegacyMatrixState({
-        cfg: candidate,
-        env: process.env,
-      });
-      if (matrixStateRepair.changes.length > 0) {
-        note(
-          [
-            "Matrix plugin upgraded in place.",
-            ...matrixStateRepair.changes.map((entry) => `- ${entry}`),
-            "- No user action required.",
-          ].join("\n"),
-          "Doctor changes",
-        );
-      }
-      if (matrixStateRepair.warnings.length > 0) {
-        note(matrixStateRepair.warnings.map((entry) => `- ${entry}`).join("\n"), "Doctor warnings");
-      }
-      const matrixCryptoRepair = await autoPrepareLegacyMatrixCrypto({
-        cfg: candidate,
-        env: process.env,
-      });
-      if (matrixCryptoRepair.changes.length > 0) {
-        note(
-          [
-            "Matrix encrypted-state migration prepared.",
-            ...matrixCryptoRepair.changes.map((entry) => `- ${entry}`),
-          ].join("\n"),
-          "Doctor changes",
-        );
-      }
-      if (matrixCryptoRepair.warnings.length > 0) {
-        note(
-          matrixCryptoRepair.warnings.map((entry) => `- ${entry}`).join("\n"),
-          "Doctor warnings",
-        );
-      }
+    for (const warning of matrixRepair.warnings) {
+      note(warning, "Doctor warnings");
     }
   } else if (matrixLegacyState) {
     if ("warning" in matrixLegacyState) {
@@ -408,7 +193,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       cfg = allowlistRepair.config;
     }
 
-    const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
+    const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(candidate, {
+      doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+      extraWarningsForAccount: collectTelegramEmptyAllowlistExtraWarnings,
+    });
     if (emptyAllowlistWarnings.length > 0) {
       note(
         emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"),
@@ -471,7 +259,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       );
     }
 
-    const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
+    const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(candidate, {
+      doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+      extraWarningsForAccount: collectTelegramEmptyAllowlistExtraWarnings,
+    });
     if (emptyAllowlistWarnings.length > 0) {
       note(
         emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"),
