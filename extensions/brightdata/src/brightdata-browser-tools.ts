@@ -28,6 +28,8 @@ const DEFAULT_WAIT_FOR_TIMEOUT_MS = 30_000;
 const PAGE_METADATA_RETRY_DELAY_MS = 250;
 const PAGE_METADATA_RETRY_ATTEMPTS = 3;
 const PAGE_METADATA_WAIT_TIMEOUT_MS = 5_000;
+const BROWSER_SESSION_IDLE_TTL_MS = 10 * 60_000;
+const BROWSER_SESSION_SWEEP_INTERVAL_MS = 60_000;
 
 type PlaywrightModuleLike = {
   chromium: {
@@ -975,9 +977,20 @@ class BrightDataBrowserSession {
 type ScopedBrowserSession = {
   country: string | null;
   session: BrightDataBrowserSession;
+  lastUsedAtMs: number;
+  activeUseCount: number;
 };
 
 const browserSessionsByScope = new Map<string, ScopedBrowserSession>();
+let browserSessionSweeper: ReturnType<typeof setInterval> | null = null;
+
+type BrowserSessionParams = {
+  cfg?: OpenClawConfig;
+  country?: string;
+  context?: OpenClawPluginToolContext;
+  createSession?: (cdpEndpoint: string) => BrightDataBrowserSession;
+  resolveCdpEndpoint?: (params: { cfg?: OpenClawConfig; country?: string }) => Promise<string>;
+};
 
 function resolveBrowserSessionScopeKey(context?: OpenClawPluginToolContext): string {
   const sessionId = context?.sessionId?.trim();
@@ -995,13 +1008,69 @@ function resolveBrowserSessionScopeKey(context?: OpenClawPluginToolContext): str
   return "global";
 }
 
-async function requireBrowserSession(params: {
-  cfg?: OpenClawConfig;
-  country?: string;
-  context?: OpenClawPluginToolContext;
-  createSession?: (cdpEndpoint: string) => BrightDataBrowserSession;
-  resolveCdpEndpoint?: (params: { cfg?: OpenClawConfig; country?: string }) => Promise<string>;
-}): Promise<BrightDataBrowserSession> {
+function touchBrowserSession(entry: ScopedBrowserSession, nowMs = Date.now()): void {
+  entry.lastUsedAtMs = nowMs;
+}
+
+function stopBrowserSessionSweeper(): void {
+  if (!browserSessionSweeper) {
+    return;
+  }
+  clearInterval(browserSessionSweeper);
+  browserSessionSweeper = null;
+}
+
+function ensureBrowserSessionSweeper(): void {
+  if (browserSessionSweeper || browserSessionsByScope.size === 0) {
+    return;
+  }
+  const sweeper = setInterval(() => {
+    void pruneIdleBrowserSessions();
+  }, BROWSER_SESSION_SWEEP_INTERVAL_MS);
+  const unref = (sweeper as { unref?: () => void }).unref;
+  if (typeof unref === "function") {
+    unref.call(sweeper);
+  }
+  browserSessionSweeper = sweeper;
+}
+
+async function closeTrackedBrowserSession(entry: ScopedBrowserSession): Promise<void> {
+  await entry.session.close().catch(() => {});
+}
+
+async function pruneIdleBrowserSessions(nowMs = Date.now()): Promise<void> {
+  const staleEntries = Array.from(browserSessionsByScope.entries()).filter(
+    ([, entry]) =>
+      entry.activeUseCount === 0 && nowMs - entry.lastUsedAtMs >= BROWSER_SESSION_IDLE_TTL_MS,
+  );
+  if (staleEntries.length === 0) {
+    if (browserSessionsByScope.size === 0) {
+      stopBrowserSessionSweeper();
+    }
+    return;
+  }
+
+  for (const [scopeKey] of staleEntries) {
+    browserSessionsByScope.delete(scopeKey);
+  }
+
+  if (browserSessionsByScope.size === 0) {
+    stopBrowserSessionSweeper();
+  }
+
+  await Promise.all(staleEntries.map(([, entry]) => closeTrackedBrowserSession(entry)));
+}
+
+async function resetBrowserSessions(): Promise<void> {
+  const entries = Array.from(browserSessionsByScope.values());
+  browserSessionsByScope.clear();
+  stopBrowserSessionSweeper();
+  await Promise.all(entries.map((entry) => closeTrackedBrowserSession(entry)));
+}
+
+async function requireBrowserSessionEntry(
+  params: BrowserSessionParams,
+): Promise<{ scopeKey: string; entry: ScopedBrowserSession }> {
   const scopeKey = resolveBrowserSessionScopeKey(params.context);
   const existing = browserSessionsByScope.get(scopeKey);
   const normalizedCountry =
@@ -1011,22 +1080,52 @@ async function requireBrowserSession(params: {
   const resolvedCountry = normalizedCountry ?? null;
   const needsNewSession = !existing || resolvedCountry !== existing.country;
   if (needsNewSession) {
-    await existing?.session.close();
+    if (existing) {
+      browserSessionsByScope.delete(scopeKey);
+      await closeTrackedBrowserSession(existing);
+    }
     const resolveCdpEndpoint = params.resolveCdpEndpoint ?? resolveBrightDataBrowserCdpEndpoint;
     const createSession =
       params.createSession ?? ((cdpEndpoint: string) => new BrightDataBrowserSession(cdpEndpoint));
-    const session = createSession(
-      await resolveCdpEndpoint({
-        cfg: params.cfg,
-        ...(resolvedCountry ? { country: resolvedCountry } : {}),
-      }),
-    );
-    browserSessionsByScope.set(scopeKey, {
+    const entry: ScopedBrowserSession = {
       country: resolvedCountry,
-      session,
-    });
+      session: createSession(
+        await resolveCdpEndpoint({
+          cfg: params.cfg,
+          ...(resolvedCountry ? { country: resolvedCountry } : {}),
+        }),
+      ),
+      lastUsedAtMs: Date.now(),
+      activeUseCount: 0,
+    };
+    browserSessionsByScope.set(scopeKey, entry);
+    ensureBrowserSessionSweeper();
+    return { scopeKey, entry };
   }
-  return browserSessionsByScope.get(scopeKey)!.session;
+  touchBrowserSession(existing);
+  ensureBrowserSessionSweeper();
+  return { scopeKey, entry: existing };
+}
+
+async function requireBrowserSession(
+  params: BrowserSessionParams,
+): Promise<BrightDataBrowserSession> {
+  return (await requireBrowserSessionEntry(params)).entry.session;
+}
+
+async function withBrowserSession<T>(
+  params: BrowserSessionParams,
+  run: (session: BrightDataBrowserSession) => Promise<T>,
+): Promise<T> {
+  const { entry } = await requireBrowserSessionEntry(params);
+  entry.activeUseCount += 1;
+  touchBrowserSession(entry);
+  try {
+    return await run(entry.session);
+  } finally {
+    entry.activeUseCount = Math.max(0, entry.activeUseCount - 1);
+    touchBrowserSession(entry);
+  }
 }
 
 export const BRIGHTDATA_BROWSER_TOOL_NAMES = [
@@ -1050,6 +1149,19 @@ export function createBrightDataBrowserTools(
   api: OpenClawPluginApi,
   context?: OpenClawPluginToolContext,
 ) {
+  const withToolBrowserSession = <T>(
+    run: (session: BrightDataBrowserSession) => Promise<T>,
+    options?: { country?: string },
+  ) =>
+    withBrowserSession(
+      {
+        cfg: api.config,
+        context,
+        ...(options?.country ? { country: options.country } : {}),
+      },
+      run,
+    );
+
   return [
     {
       name: "brightdata_browser_navigate",
@@ -1059,30 +1171,30 @@ export function createBrightDataBrowserTools(
       execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
         const url = readStringParam(rawParams, "url", { required: true });
         const country = readStringParam(rawParams, "country");
-        const session = await requireBrowserSession({
-          cfg: api.config,
-          context,
-          ...(country ? { country } : {}),
-        });
-        const page = await session.getPage();
-        session.clearRequests();
-        session.clearSnapshotState();
-        await page.goto(url, {
-          timeout: DEFAULT_NAVIGATION_TIMEOUT_MS,
-          waitUntil: "domcontentloaded",
-        });
-        const metadata = await readPageMetadata(page);
-        return textResult(
-          [
-            `Successfully navigated to ${url}`,
-            `Title: ${metadata.title}`,
-            `URL: ${metadata.url}`,
-          ].join("\n"),
-          {
-            url: metadata.url,
-            title: metadata.title,
-            ...(country ? { country: normalizeCountry(country) } : {}),
+        return await withToolBrowserSession(
+          async (session) => {
+            const page = await session.getPage();
+            session.clearRequests();
+            session.clearSnapshotState();
+            await page.goto(url, {
+              timeout: DEFAULT_NAVIGATION_TIMEOUT_MS,
+              waitUntil: "domcontentloaded",
+            });
+            const metadata = await readPageMetadata(page);
+            return textResult(
+              [
+                `Successfully navigated to ${url}`,
+                `Title: ${metadata.title}`,
+                `URL: ${metadata.url}`,
+              ].join("\n"),
+              {
+                url: metadata.url,
+                title: metadata.title,
+                ...(country ? { country: normalizeCountry(country) } : {}),
+              },
+            );
           },
+          country ? { country } : undefined,
         );
       },
     },
@@ -1091,42 +1203,44 @@ export function createBrightDataBrowserTools(
       label: "Bright Data Browser Go Back",
       description: "Go back to the previous page in the Bright Data browser session.",
       parameters: Type.Object({}, { additionalProperties: false }),
-      execute: async () => {
-        const session = await requireBrowserSession({ cfg: api.config, context });
-        const page = await session.getPage();
-        session.clearRequests();
-        session.clearSnapshotState();
-        await page.goBack();
-        const metadata = await readPageMetadata(page);
-        return textResult(
-          ["Successfully navigated back", `Title: ${metadata.title}`, `URL: ${metadata.url}`].join(
-            "\n",
-          ),
-          { url: metadata.url, title: metadata.title },
-        );
-      },
+      execute: async () =>
+        await withToolBrowserSession(async (session) => {
+          const page = await session.getPage();
+          session.clearRequests();
+          session.clearSnapshotState();
+          await page.goBack();
+          const metadata = await readPageMetadata(page);
+          return textResult(
+            [
+              "Successfully navigated back",
+              `Title: ${metadata.title}`,
+              `URL: ${metadata.url}`,
+            ].join("\n"),
+            { url: metadata.url, title: metadata.title },
+          );
+        }),
     },
     {
       name: "brightdata_browser_go_forward",
       label: "Bright Data Browser Go Forward",
       description: "Go forward to the next page in the Bright Data browser session.",
       parameters: Type.Object({}, { additionalProperties: false }),
-      execute: async () => {
-        const session = await requireBrowserSession({ cfg: api.config, context });
-        const page = await session.getPage();
-        session.clearRequests();
-        session.clearSnapshotState();
-        await page.goForward();
-        const metadata = await readPageMetadata(page);
-        return textResult(
-          [
-            "Successfully navigated forward",
-            `Title: ${metadata.title}`,
-            `URL: ${metadata.url}`,
-          ].join("\n"),
-          { url: metadata.url, title: metadata.title },
-        );
-      },
+      execute: async () =>
+        await withToolBrowserSession(async (session) => {
+          const page = await session.getPage();
+          session.clearRequests();
+          session.clearSnapshotState();
+          await page.goForward();
+          const metadata = await readPageMetadata(page);
+          return textResult(
+            [
+              "Successfully navigated forward",
+              `Title: ${metadata.title}`,
+              `URL: ${metadata.url}`,
+            ].join("\n"),
+            { url: metadata.url, title: metadata.title },
+          );
+        }),
     },
     {
       name: "brightdata_browser_snapshot",
@@ -1136,23 +1250,23 @@ export function createBrightDataBrowserTools(
       parameters: BrowserSnapshotSchema,
       execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
         const filtered = readBooleanParam(rawParams, "filtered") ?? false;
-        const snapshot = await (
-          await requireBrowserSession({ cfg: api.config, context })
-        ).captureSnapshot(filtered);
-        const lines = [
-          `Page: ${snapshot.url}`,
-          `Title: ${snapshot.title}`,
-          "",
-          "Interactive Elements:",
-          snapshot.ariaSnapshot,
-        ];
-        if (snapshot.domSnapshot) {
-          lines.push("", "DOM Interactive Elements:", snapshot.domSnapshot);
-        }
-        return textResult(lines.join("\n"), {
-          url: snapshot.url,
-          title: snapshot.title,
-          filtered,
+        return await withToolBrowserSession(async (session) => {
+          const snapshot = await session.captureSnapshot(filtered);
+          const lines = [
+            `Page: ${snapshot.url}`,
+            `Title: ${snapshot.title}`,
+            "",
+            "Interactive Elements:",
+            snapshot.ariaSnapshot,
+          ];
+          if (snapshot.domSnapshot) {
+            lines.push("", "DOM Interactive Elements:", snapshot.domSnapshot);
+          }
+          return textResult(lines.join("\n"), {
+            url: snapshot.url,
+            title: snapshot.title,
+            filtered,
+          });
         });
       },
     },
@@ -1164,16 +1278,16 @@ export function createBrightDataBrowserTools(
       execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
         const ref = readStringParam(rawParams, "ref", { required: true });
         const element = readStringParam(rawParams, "element", { required: true });
-        const locator = await (
-          await requireBrowserSession({ cfg: api.config, context })
-        ).refLocator({
-          ref,
-          element,
-        });
-        await locator.click({ timeout: 5_000 });
-        return textResult(`Successfully clicked element: ${element} (ref=${ref})`, {
-          ref,
-          element,
+        return await withToolBrowserSession(async (session) => {
+          const locator = await session.refLocator({
+            ref,
+            element,
+          });
+          await locator.click({ timeout: 5_000 });
+          return textResult(`Successfully clicked element: ${element} (ref=${ref})`, {
+            ref,
+            element,
+          });
         });
       },
     },
@@ -1190,20 +1304,20 @@ export function createBrightDataBrowserTools(
           allowEmpty: true,
         });
         const submit = readBooleanParam(rawParams, "submit") ?? false;
-        const locator = await (
-          await requireBrowserSession({ cfg: api.config, context })
-        ).refLocator({
-          ref,
-          element,
+        return await withToolBrowserSession(async (session) => {
+          const locator = await session.refLocator({
+            ref,
+            element,
+          });
+          await locator.fill(text);
+          if (submit) {
+            await locator.press("Enter");
+          }
+          return textResult(
+            `Successfully typed "${text}" into element: ${element} (ref=${ref})${submit ? " and submitted the form" : ""}`,
+            { ref, element, text, submit },
+          );
         });
-        await locator.fill(text);
-        if (submit) {
-          await locator.press("Enter");
-        }
-        return textResult(
-          `Successfully typed "${text}" into element: ${element} (ref=${ref})${submit ? " and submitted the form" : ""}`,
-          { ref, element, text, submit },
-        );
       },
     },
     {
@@ -1213,11 +1327,17 @@ export function createBrightDataBrowserTools(
       parameters: BrowserScreenshotSchema,
       execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
         const fullPage = readBooleanParam(rawParams, "full_page") ?? false;
-        const page = await (await requireBrowserSession({ cfg: api.config, context })).getPage();
-        const buffer = await page.screenshot({ fullPage });
-        return imageResult(`Browser screenshot (${fullPage ? "full page" : "viewport"})`, buffer, {
-          fullPage,
-          url: page.url(),
+        return await withToolBrowserSession(async (session) => {
+          const page = await session.getPage();
+          const buffer = await page.screenshot({ fullPage });
+          return imageResult(
+            `Browser screenshot (${fullPage ? "full page" : "viewport"})`,
+            buffer,
+            {
+              fullPage,
+              url: page.url(),
+            },
+          );
         });
       },
     },
@@ -1228,13 +1348,15 @@ export function createBrightDataBrowserTools(
       parameters: BrowserGetHtmlSchema,
       execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
         const fullPage = readBooleanParam(rawParams, "full_page") ?? false;
-        const page = await (await requireBrowserSession({ cfg: api.config, context })).getPage();
-        const html = fullPage
-          ? await page.content()
-          : String((await page.$eval("body", (body) => (body as HTMLElement).innerHTML)) ?? "");
-        return textResult(html, {
-          url: page.url(),
-          fullPage,
+        return await withToolBrowserSession(async (session) => {
+          const page = await session.getPage();
+          const html = fullPage
+            ? await page.content()
+            : String((await page.$eval("body", (body) => (body as HTMLElement).innerHTML)) ?? "");
+          return textResult(html, {
+            url: page.url(),
+            fullPage,
+          });
         });
       },
     },
@@ -1243,28 +1365,30 @@ export function createBrightDataBrowserTools(
       label: "Bright Data Browser Get Text",
       description: "Get the text content of the current page.",
       parameters: Type.Object({}, { additionalProperties: false }),
-      execute: async () => {
-        const page = await (await requireBrowserSession({ cfg: api.config, context })).getPage();
-        const text = String(
-          (await page.$eval("body", (body) => (body as HTMLElement).innerText)) ?? "",
-        );
-        return textResult(text, { url: page.url() });
-      },
+      execute: async () =>
+        await withToolBrowserSession(async (session) => {
+          const page = await session.getPage();
+          const text = String(
+            (await page.$eval("body", (body) => (body as HTMLElement).innerText)) ?? "",
+          );
+          return textResult(text, { url: page.url() });
+        }),
     },
     {
       name: "brightdata_browser_scroll",
       label: "Bright Data Browser Scroll",
       description: "Scroll to the bottom of the current page.",
       parameters: Type.Object({}, { additionalProperties: false }),
-      execute: async () => {
-        const page = await (await requireBrowserSession({ cfg: api.config, context })).getPage();
-        await page.evaluate(() => {
-          window.scrollTo(0, document.body.scrollHeight);
-        });
-        return textResult("Successfully scrolled to the bottom of the page", {
-          url: page.url(),
-        });
-      },
+      execute: async () =>
+        await withToolBrowserSession(async (session) => {
+          const page = await session.getPage();
+          await page.evaluate(() => {
+            window.scrollTo(0, document.body.scrollHeight);
+          });
+          return textResult("Successfully scrolled to the bottom of the page", {
+            url: page.url(),
+          });
+        }),
     },
     {
       name: "brightdata_browser_scroll_to",
@@ -1275,16 +1399,16 @@ export function createBrightDataBrowserTools(
       execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
         const ref = readStringParam(rawParams, "ref", { required: true });
         const element = readStringParam(rawParams, "element", { required: true });
-        const locator = await (
-          await requireBrowserSession({ cfg: api.config, context })
-        ).refLocator({
-          ref,
-          element,
-        });
-        await locator.scrollIntoViewIfNeeded();
-        return textResult(`Successfully scrolled to element: ${element} (ref=${ref})`, {
-          ref,
-          element,
+        return await withToolBrowserSession(async (session) => {
+          const locator = await session.refLocator({
+            ref,
+            element,
+          });
+          await locator.scrollIntoViewIfNeeded();
+          return textResult(`Successfully scrolled to element: ${element} (ref=${ref})`, {
+            ref,
+            element,
+          });
         });
       },
     },
@@ -1301,17 +1425,17 @@ export function createBrightDataBrowserTools(
           readNumberParam(rawParams, "timeout", {
             integer: true,
           }) ?? DEFAULT_WAIT_FOR_TIMEOUT_MS;
-        const locator = await (
-          await requireBrowserSession({ cfg: api.config, context })
-        ).refLocator({
-          ref,
-          element,
-        });
-        await locator.waitFor({ timeout });
-        return textResult(`Successfully waited for element: ${element} (ref=${ref})`, {
-          ref,
-          element,
-          timeout,
+        return await withToolBrowserSession(async (session) => {
+          const locator = await session.refLocator({
+            ref,
+            element,
+          });
+          await locator.waitFor({ timeout });
+          return textResult(`Successfully waited for element: ${element} (ref=${ref})`, {
+            ref,
+            element,
+            timeout,
+          });
         });
       },
     },
@@ -1320,23 +1444,25 @@ export function createBrightDataBrowserTools(
       label: "Bright Data Browser Network Requests",
       description: "Get network requests recorded since the current page was loaded.",
       parameters: Type.Object({}, { additionalProperties: false }),
-      execute: async () => {
-        const session = await requireBrowserSession({ cfg: api.config, context });
-        const requests = Array.from(session.getRequests().entries()).map(([request, response]) => {
-          const parts = [`[${request.method().toUpperCase()}] ${request.url()}`];
-          if (response) {
-            parts.push(`=> [${response.status()}] ${response.statusText()}`);
+      execute: async () =>
+        await withToolBrowserSession(async (session) => {
+          const requests = Array.from(session.getRequests().entries()).map(
+            ([request, response]) => {
+              const parts = [`[${request.method().toUpperCase()}] ${request.url()}`];
+              if (response) {
+                parts.push(`=> [${response.status()}] ${response.statusText()}`);
+              }
+              return parts.join(" ");
+            },
+          );
+          if (requests.length === 0) {
+            return textResult("No network requests recorded for the current page.", { count: 0 });
           }
-          return parts.join(" ");
-        });
-        if (requests.length === 0) {
-          return textResult("No network requests recorded for the current page.", { count: 0 });
-        }
-        return textResult(
-          [`Network Requests (${requests.length} total):`, "", ...requests].join("\n"),
-          { count: requests.length },
-        );
-      },
+          return textResult(
+            [`Network Requests (${requests.length} total):`, "", ...requests].join("\n"),
+            { count: requests.length },
+          );
+        }),
     },
     {
       name: "brightdata_browser_fill_form",
@@ -1345,31 +1471,32 @@ export function createBrightDataBrowserTools(
       parameters: BrowserFillFormSchema,
       execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
         const fields = readFormFields(rawParams);
-        const session = await requireBrowserSession({ cfg: api.config, context });
-        const results: string[] = [];
+        return await withToolBrowserSession(async (session) => {
+          const results: string[] = [];
 
-        for (const field of fields) {
-          const locator = await session.refLocator({
-            element: field.name,
-            ref: field.ref,
+          for (const field of fields) {
+            const locator = await session.refLocator({
+              element: field.name,
+              ref: field.ref,
+            });
+            if (field.type === "textbox" || field.type === "slider") {
+              await locator.fill(field.value);
+              results.push(`Filled ${field.name} with "${field.value}"`);
+              continue;
+            }
+            if (field.type === "checkbox" || field.type === "radio") {
+              const checked = field.value.trim().toLowerCase() === "true";
+              await locator.setChecked(checked);
+              results.push(`Set ${field.name} to ${checked ? "checked" : "unchecked"}`);
+              continue;
+            }
+            await locator.selectOption({ label: field.value });
+            results.push(`Selected "${field.value}" in ${field.name}`);
+          }
+
+          return textResult(`Successfully filled form:\n${results.join("\n")}`, {
+            filled: fields.length,
           });
-          if (field.type === "textbox" || field.type === "slider") {
-            await locator.fill(field.value);
-            results.push(`Filled ${field.name} with "${field.value}"`);
-            continue;
-          }
-          if (field.type === "checkbox" || field.type === "radio") {
-            const checked = field.value.trim().toLowerCase() === "true";
-            await locator.setChecked(checked);
-            results.push(`Set ${field.name} to ${checked ? "checked" : "unchecked"}`);
-            continue;
-          }
-          await locator.selectOption({ label: field.value });
-          results.push(`Selected "${field.value}" in ${field.name}`);
-        }
-
-        return textResult(`Successfully filled form:\n${results.join("\n")}`, {
-          filled: fields.length,
         });
       },
     },
@@ -1377,15 +1504,19 @@ export function createBrightDataBrowserTools(
 }
 
 export const __testing = {
+  BROWSER_SESSION_IDLE_TTL_MS,
+  BROWSER_SESSION_SWEEP_INTERVAL_MS,
   BRIGHTDATA_BROWSER_TOOL_NAMES,
   buildBrightDataBrowserCdpEndpoint,
   filterAriaSnapshot,
   formatDomElements,
+  getBrowserSessionCount() {
+    return browserSessionsByScope.size;
+  },
+  pruneIdleBrowserSessions,
   readPageMetadata,
   requireBrowserSession,
   resolveBrowserSessionScopeKey,
   resolveBrightDataBrowserCdpEndpoint,
-  resetBrowserSessions() {
-    browserSessionsByScope.clear();
-  },
+  resetBrowserSessions,
 };
