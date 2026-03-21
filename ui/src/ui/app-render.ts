@@ -70,7 +70,7 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
-import { deleteSessionAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
+import { deleteSessionsAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
   installSkill,
   loadSkills,
@@ -477,7 +477,7 @@ export function renderApp(state: AppViewState) {
                 title="${navCollapsed ? t("nav.expand") : t("nav.collapse")}"
                 aria-label="${navCollapsed ? t("nav.expand") : t("nav.collapse")}"
               >
-                <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
+                <span class="nav-collapse-toggle__icon" aria-hidden="true">${navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}</span>
               </button>
             </div>
             <div class="sidebar-shell__body">
@@ -506,7 +506,7 @@ export function renderApp(state: AppViewState) {
                               >
                                 <span class="nav-section__label-text">${t(`nav.${group.label}`)}</span>
                                 <span class="nav-section__chevron">
-                                  ${showItems ? icons.chevronDown : icons.chevronRight}
+                                  ${icons.chevronDown}
                                 </span>
                               </button>
                             `
@@ -737,7 +737,7 @@ export function renderApp(state: AppViewState) {
                   sortDir: state.sessionsSortDir,
                   page: state.sessionsPage,
                   pageSize: state.sessionsPageSize,
-                  actionsOpenKey: state.sessionsActionsOpenKey,
+                  selectedKeys: state.sessionsSelectedKeys,
                   onFiltersChange: (next) => {
                     state.sessionsFilterActive = next.activeMinutes;
                     state.sessionsFilterLimit = next.limit;
@@ -760,12 +760,45 @@ export function renderApp(state: AppViewState) {
                     state.sessionsPageSize = s;
                     state.sessionsPage = 0;
                   },
-                  onActionsOpenChange: (key) => {
-                    state.sessionsActionsOpenKey = key;
-                  },
                   onRefresh: () => loadSessions(state),
                   onPatch: (key, patch) => patchSession(state, key, patch),
-                  onDelete: (key) => deleteSessionAndRefresh(state, key),
+                  onToggleSelect: (key) => {
+                    const next = new Set(state.sessionsSelectedKeys);
+                    if (next.has(key)) {
+                      next.delete(key);
+                    } else {
+                      next.add(key);
+                    }
+                    state.sessionsSelectedKeys = next;
+                  },
+                  onSelectPage: (keys) => {
+                    const next = new Set(state.sessionsSelectedKeys);
+                    for (const k of keys) {
+                      next.add(k);
+                    }
+                    state.sessionsSelectedKeys = next;
+                  },
+                  onDeselectPage: (keys) => {
+                    const next = new Set(state.sessionsSelectedKeys);
+                    for (const k of keys) {
+                      next.delete(k);
+                    }
+                    state.sessionsSelectedKeys = next;
+                  },
+                  onDeselectAll: () => {
+                    state.sessionsSelectedKeys = new Set();
+                  },
+                  onDeleteSelected: async () => {
+                    const keys = [...state.sessionsSelectedKeys];
+                    const deleted = await deleteSessionsAndRefresh(state, keys);
+                    if (deleted.length > 0) {
+                      const next = new Set(state.sessionsSelectedKeys);
+                      for (const k of deleted) {
+                        next.delete(k);
+                      }
+                      state.sessionsSelectedKeys = next;
+                    }
+                  },
                   onNavigateToChat: (sessionKey) => {
                     switchChatSession(state, sessionKey);
                     state.setTab("chat" as import("./navigation.ts").Tab);
