@@ -27,6 +27,8 @@ export type AutoTopicLabelParams = {
   cfg: OpenClawConfig;
   /** Agent ID for model resolution. */
   agentId?: string;
+  /** Routed agent directory for model/auth resolution. */
+  agentDir?: string;
 };
 
 function isTextContentBlock(block: { type: string }): block is TextContent {
@@ -42,17 +44,18 @@ export async function generateTopicLabel(params: {
   prompt: string;
   cfg: OpenClawConfig;
   agentId?: string;
+  agentDir?: string;
 }): Promise<string | null> {
-  const { userMessage, prompt, cfg, agentId } = params;
+  const { userMessage, prompt, cfg, agentId, agentDir } = params;
   const modelRef = resolveDefaultModelForAgent({ cfg, agentId });
-  const resolved = await resolveModelAsync(modelRef.provider, modelRef.model, undefined, cfg);
+  const resolved = await resolveModelAsync(modelRef.provider, modelRef.model, agentDir, cfg);
   if (!resolved.model) {
     logVerbose(`auto-topic-label: failed to resolve model ${modelRef.provider}/${modelRef.model}`);
     return null;
   }
 
   const apiKey = requireApiKey(
-    await getApiKeyForModel({ model: resolved.model, cfg }),
+    await getApiKeyForModel({ model: resolved.model, cfg, agentDir }),
     modelRef.provider,
   );
 

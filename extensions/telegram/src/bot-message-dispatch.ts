@@ -161,6 +161,7 @@ export const dispatchTelegramMessage = async ({
     msg,
     chatId,
     isGroup,
+    groupConfig,
     threadSpec,
     historyKey,
     historyLimit,
@@ -886,8 +887,11 @@ export const dispatchTelegramMessage = async ({
   if (isDmTopic && isFirstTurnInSession) {
     const userMessage = (ctxPayload.RawBody ?? ctxPayload.Body ?? "").slice(0, 500);
     if (userMessage.trim()) {
-      const chatIdStr = String(chatId);
-      const directAutoTopicLabel = cfg.channels?.telegram?.direct?.[chatIdStr]?.autoTopicLabel;
+      const agentDir = resolveAgentDir(cfg, route.agentId);
+      const directAutoTopicLabel =
+        !isGroup && groupConfig && "dmPolicy" in groupConfig
+          ? groupConfig.autoTopicLabel
+          : undefined;
       const accountAutoTopicLabel = telegramCfg?.autoTopicLabel;
       const autoTopicConfig = resolveAutoTopicLabelConfig(
         directAutoTopicLabel,
@@ -902,6 +906,7 @@ export const dispatchTelegramMessage = async ({
               prompt: autoTopicConfig.prompt,
               cfg,
               agentId: route.agentId,
+              agentDir,
             });
             if (!label) {
               logVerbose("auto-topic-label: LLM returned empty label");
