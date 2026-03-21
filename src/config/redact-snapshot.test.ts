@@ -344,11 +344,16 @@ describe("redactConfigSnapshot", () => {
     // synthetic content from failing config.set validation (#48415).
     expect(result.raw).toBeNull();
     // Redacted config is still correct for form-mode editing.
-    const redactedCfg = result.config as Record<string, unknown>;
-    expect((redactedCfg as { gateway?: { mode?: string } }).gateway?.mode).toBe("default");
+    const redactedCfg = result.config as {
+      gateway?: { mode?: string; auth?: { password?: string } };
+      models?: { providers?: { default?: { apiKey?: { id?: string; source?: string } } } };
+    };
+    expect(redactedCfg.gateway?.mode).toBe("default");
+    expect(redactedCfg.gateway?.auth?.password).toBe(REDACTED_SENTINEL);
     // SecretRef id is redacted in the config object.
-    expect(result.raw).toBeNull();
-    expect(result.config).toBeDefined();
+    expect(redactedCfg.models?.providers?.default?.apiKey?.id).toBe(REDACTED_SENTINEL);
+    expect(redactedCfg.models?.providers?.default?.apiKey?.source).toBe("env");
+    expect(JSON.stringify(result.config)).not.toContain("OPENAI_API_KEY");
   });
 
   it("redacts parsed and resolved objects", () => {
