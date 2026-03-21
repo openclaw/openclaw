@@ -115,7 +115,7 @@ blink connector exec microsoft_outlook /me/messages GET '{"$top":"20","$select":
 blink connector exec microsoft_outlook /me/sendMail POST '{"message":{"subject":"Hello","body":{"contentType":"Text","content":"Hi!"},"toRecipients":[{"emailAddress":{"address":"user@example.com"}}]}}'
 
 # LinkedIn — get profile
-blink connector exec linkedin v2/userinfo GET
+blink connector exec linkedin userinfo GET
 
 # Salesforce — SOQL query
 blink connector exec salesforce /services/data/v62.0/query GET '{"q":"SELECT Id,Name,Email FROM Contact LIMIT 20"}'
