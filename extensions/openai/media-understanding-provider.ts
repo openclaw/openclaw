@@ -5,15 +5,15 @@ import {
   type AudioTranscriptionRequest,
   type MediaUnderstandingProvider,
 } from "openclaw/plugin-sdk/media-understanding";
+import { OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL } from "../../src/providers/openai-defaults.js";
 
 export const DEFAULT_OPENAI_AUDIO_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_OPENAI_AUDIO_MODEL = "gpt-4o-mini-transcribe";
 
 export async function transcribeOpenAiAudio(params: AudioTranscriptionRequest) {
   return await transcribeOpenAiCompatibleAudio({
     ...params,
     defaultBaseUrl: DEFAULT_OPENAI_AUDIO_BASE_URL,
-    defaultModel: DEFAULT_OPENAI_AUDIO_MODEL,
+    defaultModel: OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
   });
 }
 
