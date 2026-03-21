@@ -16,6 +16,7 @@ export interface A2AResult {
   error?: string;
   correlationId: string;
   targetSessionKey: string;
+  returnToSessionKey?: string;
   requesterSessionKey?: string;
   skill: string;
   createdAt: number;
