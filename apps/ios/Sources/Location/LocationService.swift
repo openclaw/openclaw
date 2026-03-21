@@ -16,7 +16,6 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
     private var isStreaming = false
     private var significantLocationCallback: (@Sendable (CLLocation) -> Void)?
     private var isMonitoringSignificantChanges = false
-    private(set) var isLocationServicesEnabled = CLLocationManager.locationServicesEnabled()
 
     var locationManager: CLLocationManager {
         self.manager
@@ -135,9 +134,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
-        let servicesEnabled = CLLocationManager.locationServicesEnabled()
         Task { @MainActor in
-            self.isLocationServicesEnabled = servicesEnabled
             if let cont = self.authContinuation {
                 self.authContinuation = nil
                 cont.resume(returning: status)

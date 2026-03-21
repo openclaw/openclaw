@@ -519,10 +519,6 @@ final class NodeAppModel {
         self.locationService.authorizationStatus()
     }
 
-    var isLocationServicesEnabled: Bool {
-        self.locationService.isLocationServicesEnabled
-    }
-
     func requestLocationPermissions(mode: OpenClawLocationMode) async -> Bool {
         guard mode != .off else { return true }
         let status = await self.locationService.ensureAuthorization(mode: mode)

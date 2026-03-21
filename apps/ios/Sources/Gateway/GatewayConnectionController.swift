@@ -895,7 +895,6 @@ final class GatewayConnectionController {
         if let appModel = self.appModel {
             permissions["location"] = Self.isLocationAuthorized(
                 status: appModel.locationAuthorizationStatus())
-                && appModel.isLocationServicesEnabled
         }
         permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
 
