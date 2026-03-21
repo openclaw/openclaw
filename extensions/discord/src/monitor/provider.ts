@@ -92,6 +92,7 @@ import { resolveDiscordPresenceUpdate } from "./presence.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
+import { formatDiscordStartupStatusMessage } from "./startup-status.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 import {
   createNoopThreadBindingManager,
@@ -972,7 +973,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     const botIdentity =
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
-    runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
+    runtime.log?.(
+      formatDiscordStartupStatusMessage({
+        gatewayReady: lifecycleGateway?.isConnected === true,
+        botIdentity: botIdentity || undefined,
+      }),
+    );
     if (lifecycleGateway?.isConnected) {
       opts.setStatus?.(createConnectedChannelStatusPatch());
     }
