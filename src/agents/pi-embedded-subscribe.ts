@@ -661,6 +661,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     resetAssistantMessageState,
     resetForCompactionRetry,
     finalizeAssistantTexts,
+    drainPendingMediaArtifacts,
     trimMessagingToolSent,
     ensureCompactionPromise,
     noteCompactionRetry,

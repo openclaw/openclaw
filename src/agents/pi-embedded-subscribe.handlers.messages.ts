@@ -388,12 +388,22 @@ export function handleMessageEnd(
       replyToTag,
       replyToCurrent,
     } = splitResult;
+    // Drain pending media artifacts so they travel with this reply.
+    const drained = ctx.drainPendingMediaArtifacts();
+    const mergedMediaUrls = [...(mediaUrls ?? []), ...drained.mediaUrls];
+    const mergedAudioAsVoice = audioAsVoice || drained.audioAsVoice;
     // Emit if there's content OR audioAsVoice flag (to propagate the flag).
-    if (hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice })) {
+    if (
+      hasAssistantVisibleReply({
+        text: cleanedText,
+        mediaUrls: mergedMediaUrls,
+        audioAsVoice: mergedAudioAsVoice,
+      })
+    ) {
       emitBlockReplySafely({
         text: cleanedText,
-        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-        audioAsVoice,
+        mediaUrls: mergedMediaUrls.length > 0 ? mergedMediaUrls : undefined,
+        audioAsVoice: mergedAudioAsVoice,
         replyToId,
         replyToTag,
         replyToCurrent,
