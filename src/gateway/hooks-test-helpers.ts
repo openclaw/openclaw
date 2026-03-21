@@ -14,6 +14,7 @@ export function createHooksConfig(): HooksConfigResolved {
     },
     sessionPolicy: {
       allowRequestSessionKey: false,
+      allowRequestSessionTarget: false,
       defaultSessionKey: undefined,
       allowedSessionKeyPrefixes: undefined,
     },

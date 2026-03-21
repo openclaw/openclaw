@@ -42,11 +42,12 @@ export function createGatewayHooksRequestHandler(params: {
   };
 
   const resolveHookAgentRunSessionKey = (value: HookAgentDispatchPayload) => {
-    if (value.sessionTarget === "main") {
+    const sessionTarget = value.sessionTarget ?? "isolated";
+    if (sessionTarget === "main") {
       return "main";
     }
-    if (value.sessionTarget.startsWith("session:")) {
-      const customSessionKey = value.sessionTarget.slice("session:".length).trim();
+    if (sessionTarget.startsWith("session:")) {
+      const customSessionKey = sessionTarget.slice("session:".length).trim();
       if (customSessionKey) {
         return customSessionKey;
       }
