@@ -37,12 +37,18 @@ const {
   resolveQualityGuardMaxRetries,
   extractOpaqueIdentifiers,
   auditSummaryQuality,
+  capCompactionSummary,
+  capCompactionSummaryPreservingSuffix,
+  formatFileOperations,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  MAX_COMPACTION_SUMMARY_CHARS,
+  MAX_FILE_OPS_SECTION_CHARS,
+  SUMMARY_TRUNCATED_MARKER,
 } = __testing;
 
 function stubSessionManager(): ExtensionContext["sessionManager"] {
@@ -252,6 +258,104 @@ describe("compaction-safeguard tool failures", () => {
     const failures = collectToolFailures(messages);
     const section = formatToolFailuresSection(failures);
     expect(section).toBe("");
+  });
+});
+
+describe("compaction-safeguard summary budgets", () => {
+  it("caps file operations summary and reports omitted entries", () => {
+    const readFiles = Array.from(
+      { length: 200 },
+      (_, i) => `docs/very/long/path/${i}-read-file.md`,
+    );
+    const modifiedFiles = Array.from(
+      { length: 200 },
+      (_, i) => `src/features/${i}/nested/component/file-${i}.ts`,
+    );
+
+    const section = formatFileOperations(readFiles, modifiedFiles);
+
+    expect(section).toContain("<read-files>");
+    expect(section).toContain("<modified-files>");
+    expect(section).toContain("...and ");
+    expect(section.length).toBeLessThanOrEqual(MAX_FILE_OPS_SECTION_CHARS);
+  });
+
+  it("caps final compaction summary with a truncation marker", () => {
+    const oversized = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS + 500);
+    const capped = capCompactionSummary(oversized);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain(SUMMARY_TRUNCATED_MARKER.trim());
+    expect(capped.endsWith(SUMMARY_TRUNCATED_MARKER)).toBe(true);
+  });
+
+  it("preserves workspace critical rules suffix when capping", () => {
+    const suffix =
+      "\n\n<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const body = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+
+    const capped = capCompactionSummaryPreservingSuffix(body, suffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain("<workspace-critical-rules>");
+    expect(capped).toContain("## Session Startup");
+    expect(capped.endsWith(suffix)).toBe(true);
+  });
+
+  it("preserves diagnostic sections (tool failures, file ops) when capping oversized body", () => {
+    const diagnosticSuffix =
+      "\n\n## Tool Failures\n- exec: failed\n\n<read-files>\nfoo.ts\n</read-files>\n\n" +
+      "<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const body = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+
+    const capped = capCompactionSummaryPreservingSuffix(body, diagnosticSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain("## Tool Failures");
+    expect(capped).toContain("<read-files>");
+    expect(capped).toContain("<workspace-critical-rules>");
+    expect(capped.endsWith(diagnosticSuffix)).toBe(true);
+  });
+
+  it("keeps section separator when body ends without newline (e.g. buildStructuredFallbackSummary)", () => {
+    const bodyNoNewline = "## Exact identifiers\nNone.";
+    const suffixNoLeadingNewline = "## Tool Failures\n- exec: failed";
+
+    const capped = capCompactionSummaryPreservingSuffix(
+      bodyNoNewline,
+      `\n\n${suffixNoLeadingNewline}`,
+    );
+
+    expect(capped).toContain("None.\n\n## Tool Failures");
+    expect(capped).not.toMatch(/None\.## Tool Failures/);
+  });
+
+  it("keeps body prefix when truncation marker cannot fit (tiny budget)", () => {
+    const body = "## Decisions\nKeep flow.\n## Constraints\nFollow rules.";
+    const tinyBudget = 10; // Smaller than SUMMARY_TRUNCATED_MARKER.length
+    const capped = capCompactionSummary(body, tinyBudget);
+
+    expect(capped.length).toBeLessThanOrEqual(tinyBudget);
+    expect(capped).toContain("## Decis");
+    expect(capped).not.toContain("[Compaction summary truncated");
+  });
+
+  it("preserves tail sections when suffix exceeds cap (workspace rules, diagnostics over preserved turns)", () => {
+    const criticalTail =
+      "\n\n## Tool Failures\n- exec: failed\n\n<read-files>\nfoo.ts\n</read-files>\n\n" +
+      "<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const preservedTurns =
+      "## Recent turns preserved verbatim\n- User: x\n- Assistant: y\n" +
+      "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+    const oversizedSuffix = preservedTurns + criticalTail;
+
+    const capped = capCompactionSummaryPreservingSuffix("short body", oversizedSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain("<workspace-critical-rules>");
+    expect(capped).toContain("## Tool Failures");
+    expect(capped).toContain("<read-files>");
+    expect(capped).toContain("## Session Startup");
   });
 });
 
@@ -1358,17 +1462,20 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(secondCall?.customInstructions).toContain("latest_user_ask_not_reflected");
   });
 
-  it("keeps last successful summary when a quality retry call fails", async () => {
+  it("preserves split-turn and recent-turn suffixes when retry fallback is capped", async () => {
     mockSummarizeInStages.mockReset();
+    const oversizedHistorySummary = "history detail ".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+    const splitTurnPrefixSummary = "split-turn prefix context that must survive capping";
     mockSummarizeInStages
-      .mockResolvedValueOnce("short summary missing headings")
+      .mockResolvedValueOnce(oversizedHistorySummary)
+      .mockResolvedValueOnce(splitTurnPrefixSummary)
       .mockRejectedValueOnce(new Error("retry transient failure"));
 
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, {
       model,
-      recentTurnsPreserve: 0,
+      recentTurnsPreserve: 1,
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 1,
     });
@@ -1384,8 +1491,16 @@ describe("compaction-safeguard recent-turn preservation", () => {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
           { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          { role: "user", content: "latest ask status", timestamp: 3 },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "latest assistant reply" }],
+            timestamp: 4,
+          } as unknown as AgentMessage,
         ],
-        turnPrefixMessages: [],
+        turnPrefixMessages: [
+          { role: "user", content: "prefix request that was split out", timestamp: 0 },
+        ],
         firstKeptEntryId: "entry-1",
         tokensBefore: 1_500,
         fileOps: {
@@ -1395,7 +1510,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
         },
         settings: { reserveTokens: 4_000 },
         previousSummary: undefined,
-        isSplitTurn: false,
+        isSplitTurn: true,
       },
       customInstructions: "",
       signal: new AbortController().signal,
@@ -1407,8 +1522,15 @@ describe("compaction-safeguard recent-turn preservation", () => {
     };
 
     expect(result.cancel).not.toBe(true);
-    expect(result.compaction?.summary).toContain("short summary missing headings");
-    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const summary = result.compaction?.summary ?? "";
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain(SUMMARY_TRUNCATED_MARKER);
+    expect(summary).toContain("**Turn Context (split turn):**");
+    expect(summary).toContain(splitTurnPrefixSummary);
+    expect(summary).toContain("## Recent turns preserved verbatim");
+    expect(summary).toContain("latest ask status");
+    expect(summary).toContain("latest assistant reply");
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(3);
   });
 
   it("keeps required headings when all turns are preserved and history is carried forward", async () => {
