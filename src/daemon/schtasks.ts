@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createConfigIO, resolveConfigPath, resolveGatewayPort } from "../config/config.js";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports.js";
@@ -313,13 +314,26 @@ function launchFallbackTaskScript(scriptPath: string): void {
   child.unref();
 }
 
-function resolveConfiguredGatewayPort(env: GatewayServiceEnv): number | null {
+async function resolveConfiguredGatewayPort(env: GatewayServiceEnv): Promise<number | null> {
   const raw = env.OPENCLAW_GATEWAY_PORT?.trim();
-  if (!raw) {
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  try {
+    const configPath = resolveConfigPath(env, resolveGatewayStateDir(env));
+    const io = createConfigIO({ env, configPath });
+    const snapshot = await io.readConfigFileSnapshot();
+    if (!snapshot.exists || !snapshot.valid) {
+      return null;
+    }
+    const resolved = resolveGatewayPort(snapshot.config, env);
+    return Number.isFinite(resolved) && resolved > 0 ? resolved : null;
+  } catch {
     return null;
   }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function parsePositivePort(raw: string | undefined): number | null {
@@ -359,7 +373,7 @@ async function resolveScheduledTaskPort(env: GatewayServiceEnv): Promise<number 
   return (
     parsePortFromProgramArguments(command?.programArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
-    resolveConfiguredGatewayPort(env)
+    (await resolveConfiguredGatewayPort(env))
   );
 }
 
@@ -490,7 +504,7 @@ async function terminateBusyPortListeners(port: number): Promise<number[]> {
 }
 
 async function resolveFallbackRuntime(env: GatewayServiceEnv): Promise<GatewayServiceRuntime> {
-  const port = (await resolveScheduledTaskPort(env)) ?? resolveConfiguredGatewayPort(env);
+  const port = (await resolveScheduledTaskPort(env)) ?? (await resolveConfiguredGatewayPort(env));
   if (!port) {
     return {
       status: "unknown",
