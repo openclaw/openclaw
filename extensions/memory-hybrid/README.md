@@ -43,6 +43,7 @@ Standard RAG (Retrieval-Augmented Generation) systems use simple vector similari
 | Memory Reflection / User Profile | ❌             | ✅                 |
 | Memory Consolidation             | ❌             | ✅                 |
 | Contradiction Resolution         | ❌             | ✅ (PHOENIX Logic) |
+| JSON-Mode API Optimization       | ❌             | ✅ (Gemma 3 Fix)   |
 | Working Memory Buffer            | ❌             | ✅                 |
 | JSONL Observability Tracer       | ❌             | ✅                 |
 | Prompt injection protection      | ✅             | ✅                 |

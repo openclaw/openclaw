@@ -42,6 +42,14 @@ The current `memory-lancedb` plugin uses pure vector similarity (static recall).
 | **Google Gemini**            | Free embeddings (`gemini-embedding-001`) + chat (`gemma-3-27b-it`)                                                |
 | **Prompt Injection Defense** | Mitigates malicious injection within stored context                                                               |
 
+### Key Additions:
+
+- `stack.ts`: **Conversation Stack** for ~30-word turn compression, enabling long-range context handling without context window exhaust.
+- `tracer.ts`: Out-of-band JSONL execution tracing for observability (logs to `~/.openclaw/memory/traces/thoughts.jsonl`).
+- `capture.ts`: **Smart Capture** engine using LLM to extract rule-based (high-priority) and organic facts.
+- `chat.ts`: **Semantic Contradiction Resolution** (PHOENIX) with strict Grounding (Absolute Trust) and Immutable Facts protection. Also includes **Gemma 3 API Latency Fix** bypassing unsupported JSON-mode to cut response times in half.
+- `plugin.hook.test.ts`: Added to ensure the plugin runtime complies with generic hook interfaces.
+
 ### Tools
 
 | Tool             | Description                                           |

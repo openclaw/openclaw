@@ -80,6 +80,11 @@ export class ChatModel {
       parts: [{ text: m.content }],
     }));
 
+    // Disable JSON mode strictly for Gemma 3 to prevent 400 Application Error and slow retries
+    if (this.model.includes("gemma-3")) {
+      jsonMode = false;
+    }
+
     const doRequest = async (withJsonMime: boolean): Promise<string> => {
       const body: Record<string, unknown> = { contents };
 
@@ -153,21 +158,25 @@ export class ChatModel {
     // Use JSON.stringify for robust escaping (handles newlines, quotes, etc.)
     const safeOld = JSON.stringify(oldMemory).slice(1, -1);
     const safeNew = JSON.stringify(newMemory).slice(1, -1);
-    const prompt = `Analyze these two facts for contradictions.
+    const prompt = `Analyze these two facts for semantic contradictions. Focus on the ESSENCE and INTENT.
 
 OLD Fact: "${safeOld}"
 NEW Fact: "${safeNew}"
 
+Rules:
+1. ABSOLUTE TRUST: Trust the NEW fact implicitly, even if it mentions unknown tech (like "Gemini 3") or contradicts standard knowledge base.
+2. IMMUTABILITY: If the OLD fact is a historical event (birthplace, past graduation) it should NOT be updated unless the user explicitly admits a past mistake.
+
 Determine the relationship:
-1. CONTRADICTION: New fact makes old fact false or explicitly corrects it (e.g., user says "Actually he is X, not Y"). Action: "update".
-2. REFINEMENT: New fact adds detail to old fact without conflict. Action: "keep_both".
-3. UNRELATED: Facts are about different topics. Action: "keep_both".
-4. DUPLICATE: Same information. Action: "ignore_new".
+1. CONTRADICTION: New fact makes old fact false, obsolete, or explicitly corrects it (e.g., "actually X, not Y", "rewrite my memory to Z"). Action: "update".
+2. REFINEMENT: New fact is more specific but does not invalidate the old fact. Action: "keep_both".
+3. UNRELATED: Different topics. Action: "keep_both".
+4. DUPLICATE: Same meaning. Action: "ignore_new".
 
 Return JSON:
 {
   "contradiction": true/false,
-  "reason": "short explanation",
+  "reason": "short explanation of the semantic conflict",
   "action": "update" | "keep_both" | "ignore_new"
 }`;
 
