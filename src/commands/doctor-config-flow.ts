@@ -391,7 +391,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
     const allowFromRepair = maybeRepairOpenPolicyAllowFrom(candidate);
     if (allowFromRepair.changes.length > 0) {
-      note(allowFromRepair.changes.join("\n"), "Doctor changes");
+      note(
+        allowFromRepair.changes.map((line) => sanitizeForLog(line)).join("\n"),
+        "Doctor changes",
+      );
       candidate = allowFromRepair.config;
       pendingChanges = true;
       cfg = allowFromRepair.config;
@@ -407,7 +410,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
     const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
     if (emptyAllowlistWarnings.length > 0) {
-      note(emptyAllowlistWarnings.join("\n"), "Doctor warnings");
+      note(
+        emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"),
+        "Doctor warnings",
+      );
     }
 
     const toolsBySenderRepair = maybeRepairLegacyToolsBySenderKeys(candidate);
@@ -458,7 +464,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     if (allowFromScan.changes.length > 0) {
       note(
         [
-          ...allowFromScan.changes,
+          ...allowFromScan.changes.map((line) => sanitizeForLog(line)),
           `- Run "${formatCliCommand("openclaw doctor --fix")}" to add missing allowFrom wildcards.`,
         ].join("\n"),
         "Doctor warnings",
@@ -467,7 +473,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
     const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
     if (emptyAllowlistWarnings.length > 0) {
-      note(emptyAllowlistWarnings.join("\n"), "Doctor warnings");
+      note(
+        emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"),
+        "Doctor warnings",
+      );
     }
 
     const toolsBySenderHits = scanLegacyToolsBySenderKeys(candidate);

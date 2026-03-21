@@ -816,6 +816,16 @@ describe("doctor config flow", () => {
                 work: {
                   allowFrom: ["alice\u001b[31m\nforged"],
                 },
+                "ops\u001b[31m\nopen": {
+                  dmPolicy: "open",
+                },
+              },
+            },
+            whatsapp: {
+              accounts: {
+                "ops\u001b[31m\nempty": {
+                  groupPolicy: "allowlist",
+                },
               },
             },
           },
@@ -823,15 +833,31 @@ describe("doctor config flow", () => {
         run: loadAndMaybeMigrateDoctorConfig,
       });
 
-      const outputs = noteSpy.mock.calls.map((call) => String(call[0]));
-      expect(outputs.some((line) => line.includes("\u001b"))).toBe(false);
-      expect(outputs.some((line) => line.includes("\nforged"))).toBe(false);
+      const outputs = noteSpy.mock.calls
+        .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
+        .map((call) => String(call[0]));
+      expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
+      expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
       expect(outputs.some((line) => line.includes("resolved @testuser -> 12345"))).toBe(true);
       expect(
         outputs.some(
           (line) =>
             line.includes("channels.slack.accounts.work.allowFrom: aliceforged") &&
             line.includes("mutable allowlist"),
+        ),
+      ).toBe(true);
+      expect(
+        outputs.some(
+          (line) =>
+            line.includes('channels.slack.accounts.opsopen.allowFrom: set to ["*"]') &&
+            line.includes('required by dmPolicy="open"'),
+        ),
+      ).toBe(true);
+      expect(
+        outputs.some(
+          (line) =>
+            line.includes('channels.whatsapp.accounts.opsempty.groupPolicy is "allowlist"') &&
+            line.includes("groupAllowFrom"),
         ),
       ).toBe(true);
     } finally {
