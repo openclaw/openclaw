@@ -523,6 +523,9 @@ export function createNaverWorksPlugin(): ChannelPlugin<NaverWorksAccount> {
               ChatType: "direct",
               SenderName: event.senderName,
               SenderId: event.userId,
+              // Accepted NAVER WORKS DMs have already passed dmPolicy/allowlist checks,
+              // so in-channel control commands like /new should be treated as authorized.
+              CommandAuthorized: true,
               Provider: CHANNEL_ID,
               Surface: CHANNEL_ID,
               OriginatingChannel: CHANNEL_ID,
