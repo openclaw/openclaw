@@ -42,7 +42,13 @@ function isSessionManagerCached(sessionFile: string): boolean {
   }
   const now = Date.now();
   const ttl = getSessionManagerTtl();
-  return now - entry.loadedAt <= ttl;
+  const isFresh = now - entry.loadedAt <= ttl;
+  if (!isFresh) {
+    // Expired entry — delete it to prevent unbounded map growth (memory leak fix)
+    SESSION_MANAGER_CACHE.delete(sessionFile);
+    return false;
+  }
+  return true;
 }
 
 export async function prewarmSessionFile(sessionFile: string): Promise<void> {
