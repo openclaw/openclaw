@@ -1070,6 +1070,36 @@ export async function runEmbeddedPiAgent(
               let timeoutCompactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
               await runOwnsCompactionBeforeHook("timeout recovery");
               try {
+                const timeoutCompactionRuntimeContext = {
+                  ...buildEmbeddedCompactionRuntimeContext({
+                    sessionKey: params.sessionKey,
+                    messageChannel: params.messageChannel,
+                    messageProvider: params.messageProvider,
+                    agentAccountId: params.agentAccountId,
+                    currentChannelId: params.currentChannelId,
+                    currentThreadTs: params.currentThreadTs,
+                    currentMessageId: params.currentMessageId,
+                    authProfileId: lastProfileId,
+                    workspaceDir: resolvedWorkspace,
+                    agentDir,
+                    config: params.config,
+                    skillsSnapshot: params.skillsSnapshot,
+                    senderIsOwner: params.senderIsOwner,
+                    senderId: params.senderId,
+                    provider,
+                    modelId,
+                    thinkLevel,
+                    reasoningLevel: params.reasoningLevel,
+                    bashElevated: params.bashElevated,
+                    extraSystemPrompt: params.extraSystemPrompt,
+                    ownerNumbers: params.ownerNumbers,
+                  }),
+                  runId: params.runId,
+                  trigger: "timeout_recovery",
+                  diagId: timeoutDiagId,
+                  attempt: timeoutCompactionAttempts,
+                  maxAttempts: MAX_TIMEOUT_COMPACTION_ATTEMPTS,
+                };
                 timeoutCompactResult = await contextEngine.compact({
                   sessionId: params.sessionId,
                   sessionKey: params.sessionKey,
@@ -1077,30 +1107,7 @@ export async function runEmbeddedPiAgent(
                   tokenBudget: ctxInfo.tokens,
                   force: true,
                   compactionTarget: "budget",
-                  runtimeContext: {
-                    sessionKey: params.sessionKey,
-                    messageChannel: params.messageChannel,
-                    messageProvider: params.messageProvider,
-                    agentAccountId: params.agentAccountId,
-                    authProfileId: lastProfileId,
-                    workspaceDir: resolvedWorkspace,
-                    agentDir,
-                    config: params.config,
-                    skillsSnapshot: params.skillsSnapshot,
-                    senderIsOwner: params.senderIsOwner,
-                    provider,
-                    model: modelId,
-                    runId: params.runId,
-                    thinkLevel,
-                    reasoningLevel: params.reasoningLevel,
-                    bashElevated: params.bashElevated,
-                    extraSystemPrompt: params.extraSystemPrompt,
-                    ownerNumbers: params.ownerNumbers,
-                    trigger: "timeout_recovery",
-                    diagId: timeoutDiagId,
-                    attempt: timeoutCompactionAttempts,
-                    maxAttempts: MAX_TIMEOUT_COMPACTION_ATTEMPTS,
-                  },
+                  runtimeContext: timeoutCompactionRuntimeContext,
                 });
               } catch (compactErr) {
                 log.warn(
@@ -1111,11 +1118,13 @@ export async function runEmbeddedPiAgent(
               await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
               if (timeoutCompactResult.compacted) {
                 autoCompactionCount += 1;
-                await runPostCompactionSideEffects({
-                  config: params.config,
-                  sessionKey: params.sessionKey,
-                  sessionFile: params.sessionFile,
-                });
+                if (contextEngine.info.ownsCompaction === true) {
+                  await runPostCompactionSideEffects({
+                    config: params.config,
+                    sessionKey: params.sessionKey,
+                    sessionFile: params.sessionFile,
+                  });
+                }
                 log.info(
                   `[timeout-compaction] compaction succeeded for ${provider}/${modelId}; retrying prompt`,
                 );

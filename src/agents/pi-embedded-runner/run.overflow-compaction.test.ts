@@ -67,7 +67,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       truncatedCount: 0,
       reason: "no oversized tool results",
     });
-    mockedPickFallbackThinkingLevel.mockReturnValue(undefined);
+    mockedPickFallbackThinkingLevel.mockReturnValue(null);
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 

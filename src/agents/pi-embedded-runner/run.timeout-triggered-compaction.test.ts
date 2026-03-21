@@ -70,9 +70,9 @@ describe("timeout-triggered compaction", () => {
       truncatedCount: 0,
       reason: "no oversized tool results",
     });
-    mockedPickFallbackThinkingLevel.mockReturnValue(undefined);
+    mockedPickFallbackThinkingLevel.mockReturnValue(null);
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
-    mockedGetApiKeyForModel.mockImplementation(async ({ profileId }) => ({
+    mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => ({
       apiKey: "test-key",
       profileId: profileId ?? "test-profile",
       source: "test",
@@ -148,14 +148,54 @@ describe("timeout-triggered compaction", () => {
 
     // Verify the loop continued (retry happened)
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    // Post-compaction side effects (transcript update, memory sync) should fire
-    expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledTimes(1);
-    expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionFile: "/tmp/session.json",
+    expect(mockedRunPostCompactionSideEffects).not.toHaveBeenCalled();
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("passes channel, thread, message, and sender context into timeout compaction", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        lastAssistant: {
+          usage: { input: 160000 },
+        } as never,
       }),
     );
-    expect(result.meta.error).toBeUndefined();
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "compacted with full runtime context",
+        tokensBefore: 160000,
+        tokensAfter: 60000,
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      messageChannel: "slack",
+      messageProvider: "slack",
+      agentAccountId: "acct-1",
+      currentChannelId: "channel-1",
+      currentThreadTs: "thread-1",
+      currentMessageId: "message-1",
+      senderId: "sender-1",
+      senderIsOwner: true,
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeContext: expect.objectContaining({
+          messageChannel: "slack",
+          messageProvider: "slack",
+          agentAccountId: "acct-1",
+          currentChannelId: "channel-1",
+          currentThreadTs: "thread-1",
+          currentMessageId: "message-1",
+          senderId: "sender-1",
+          senderIsOwner: true,
+        }),
+      }),
+    );
   });
 
   it("falls through to normal handling when timeout compaction fails", async () => {
@@ -389,6 +429,7 @@ describe("timeout-triggered compaction", () => {
         sessionKey: "test-key",
       }),
     );
+    expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledTimes(1);
   });
 
   it("counts compacted:false timeout compactions against the retry cap across profile rotation", async () => {
