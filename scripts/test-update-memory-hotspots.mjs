@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseMemoryTraceSummaryLines } from "./test-parallel-memory.mjs";
+import { normalizeTrackedRepoPath, tryReadJsonFile, writeJsonFile } from "./test-report-utils.mjs";
 import { unitMemoryHotspotManifestPath } from "./test-runner-manifest.mjs";
 
 function parseArgs(argv) {
@@ -57,19 +58,6 @@ function parseArgs(argv) {
   return args;
 }
 
-const normalizeRepoPath = (value) => value.split(path.sep).join("/");
-const repoRoot = path.resolve(process.cwd());
-const normalizeTrackedRepoPath = (value) => {
-  const normalizedValue = typeof value === "string" ? value : String(value ?? "");
-  const repoRelative = path.isAbsolute(normalizedValue)
-    ? path.relative(repoRoot, path.resolve(normalizedValue))
-    : normalizedValue;
-  if (path.isAbsolute(repoRelative) || repoRelative.startsWith("..") || repoRelative === "") {
-    return normalizeRepoPath(normalizedValue);
-  }
-  return normalizeRepoPath(repoRelative);
-};
-
 function mergeHotspotEntry(aggregated, file, value) {
   if (!(Number.isFinite(value?.deltaKb) && value.deltaKb > 0)) {
     return;
@@ -113,13 +101,11 @@ if (opts.logs.length === 0) {
 }
 
 const aggregated = new Map();
-try {
-  const existing = JSON.parse(fs.readFileSync(opts.out, "utf8"));
+const existing = tryReadJsonFile(opts.out, null);
+if (existing) {
   for (const [file, value] of Object.entries(existing.files ?? {})) {
     mergeHotspotEntry(aggregated, file, value);
   }
-} catch {
-  // Start from scratch when the output file does not exist yet.
 }
 for (const logPath of opts.logs) {
   const text = fs.readFileSync(logPath, "utf8");
@@ -160,7 +146,7 @@ const output = {
   files,
 };
 
-fs.writeFileSync(opts.out, `${JSON.stringify(output, null, 2)}\n`);
+writeJsonFile(opts.out, output);
 console.log(
   `[test-update-memory-hotspots] wrote ${String(Object.keys(files).length)} hotspots to ${opts.out}`,
 );

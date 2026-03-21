@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
 
@@ -47,13 +48,6 @@ const TEST_CONFIG = {
     },
   },
 } as OpenClawConfig;
-
-function createRuntimeEnv() {
-  return {
-    log: vi.fn<(message: string) => void>(),
-    error: vi.fn<(message: string) => void>(),
-  };
-}
 
 describe("Zalo polling image handling", () => {
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
