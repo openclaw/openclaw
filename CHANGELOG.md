@@ -89,6 +89,7 @@ Docs: https://docs.openclaw.ai
 - ACP/approvals: use canonical tool identity for prompting decisions and fail closed when conflicting tool identity hints are present. (#46817) Thanks @zpbrent and @vincentkoc.
 - ACP: require admin scope for mutating internal actions. (#46789) Thanks @tdjackey and @vincentkoc.
 - Subagents/follow-ups: require the same controller ownership checks for `/subagents send` as other control actions, so leaf sessions cannot message nested child runs they do not control. (#46801) Thanks @vincentkoc.
+- Web search/onboarding: clarify provider labels, key prompts, and missing-key notes so setup/configure more clearly names the required provider credential for Gemini, Kimi, Grok, Brave Search, Firecrawl, Perplexity, and Tavily. Thanks @vincentkoc.
 - macOS/canvas actions: keep unattended local agent actions on trusted in-app canvas surfaces only, and stop exposing the deep-link fallback key to arbitrary page scripts. (#46790) Thanks @vincentkoc.
 - Agents/compaction: extend the enclosing run deadline once while compaction is actively in flight, and abort the underlying SDK compaction on timeout/cancel so large-session compactions stop freezing mid-run. (#46889) Thanks @asyncjason.
 - Agents/openai-compatible tool calls: deduplicate repeated tool call ids across live assistant messages and replayed history so OpenAI-compatible backends no longer reject duplicate `tool_call_id` values with HTTP 400. (#40996) Thanks @xaeon2026.
