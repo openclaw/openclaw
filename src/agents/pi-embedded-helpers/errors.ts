@@ -14,6 +14,7 @@ export {
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
+import type { SkillSnapshot } from "../skills.js";
 import { stableStringify } from "../stable-stringify.js";
 import {
   isAuthErrorMessage,
@@ -546,6 +547,71 @@ export function isRawApiErrorPayload(raw?: string): boolean {
   return getApiErrorPayloadFingerprint(raw) !== null;
 }
 
+function resolveUnknownToolName(raw: string): string | undefined {
+  return (
+    raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i)?.[1] ??
+    raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i)?.[1]
+  );
+}
+
+function hasVisibleSkillMatch(params: {
+  skillsSnapshot?: SkillSnapshot;
+  toolName: string;
+}): boolean {
+  const normalizedToolName = params.toolName.trim().toLowerCase();
+  if (!normalizedToolName) {
+    return false;
+  }
+  const resolvedSkills = params.skillsSnapshot?.resolvedSkills;
+  if (!resolvedSkills || resolvedSkills.length === 0) {
+    return false;
+  }
+  return resolvedSkills.some((s) => s.name.trim().toLowerCase() === normalizedToolName);
+}
+
+function rewriteUnknownToolAsSkillHint(params: {
+  raw: string;
+  skillsSnapshot?: SkillSnapshot;
+  allowedToolNames?: ReadonlySet<string>;
+}): string | undefined {
+  const toolName = resolveUnknownToolName(params.raw);
+  if (!toolName) {
+    return undefined;
+  }
+  // If the tool name matches an actual tool in the run's tool set, don't
+  // redirect to a skill — the real fix is to enable/load the tool.
+  if (params.allowedToolNames?.has(toolName)) {
+    return undefined;
+  }
+  if (!hasVisibleSkillMatch({ skillsSnapshot: params.skillsSnapshot, toolName })) {
+    return undefined;
+  }
+  const normalizedToolName = toolName.trim().toLowerCase();
+  const canonicalName =
+    params.skillsSnapshot?.resolvedSkills?.find(
+      (s) => s.name.trim().toLowerCase() === normalizedToolName,
+    )?.name ?? toolName;
+  return `Tool "${toolName}" not found. "${canonicalName}" is a skill. Read its SKILL.md first.`;
+}
+
+/**
+ * Rewrites an unknown-tool error message in a tool result to include a skill
+ * hint when the tool name matches a visible skill.  Returns `undefined` when
+ * the message does not look like an unknown-tool error, when no skill match
+ * is found, or when the tool name collides with a real tool in the run's tool
+ * set (caller should leave the result unchanged in that case).
+ */
+export function rewriteToolResultUnknownToolError(params: {
+  errorText: string;
+  skillsSnapshot?: SkillSnapshot;
+  allowedToolNames?: ReadonlySet<string>;
+}): string | undefined {
+  return rewriteUnknownToolAsSkillHint({
+    raw: params.errorText,
+    skillsSnapshot: params.skillsSnapshot,
+    allowedToolNames: params.allowedToolNames,
+  });
+}
 export function formatAssistantErrorText(
   msg: AssistantMessage,
   opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
@@ -559,14 +625,12 @@ export function formatAssistantErrorText(
     return "LLM request failed with an unknown error.";
   }
 
-  const unknownTool =
-    raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
-    raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
-  if (unknownTool?.[1]) {
+  const unknownTool = resolveUnknownToolName(raw);
+  if (unknownTool) {
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
       sessionKey: opts?.sessionKey,
-      toolName: unknownTool[1],
+      toolName: unknownTool,
     });
     if (rewritten) {
       return rewritten;
