@@ -2906,6 +2906,26 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.nested",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.nested.maxConcurrent",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.pdfMaxBytesMb",
       "kind": "core",
       "type": "number",
