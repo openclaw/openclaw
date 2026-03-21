@@ -25,10 +25,18 @@ import { logInfo } from "../logger.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import { sendGatewayAuthFailure } from "./http-common.js";
+import { getBearerToken } from "./http-utils.js";
 import { resolveRequestClientIp } from "./net.js";
 
-/** Event streams to include in SSE output. Empty = all streams. */
-const ALLOWED_STREAMS = new Set(["tool", "lifecycle", "error", "assistant"]);
+/** Event streams to include in SSE output. Empty set = all streams allowed. */
+const ALLOWED_STREAMS = new Set([
+  "tool",
+  "lifecycle",
+  "error",
+  "assistant",
+  "thinking",
+  "compaction",
+]);
 
 /** Maximum events to buffer for new connections (recent history). */
 const MAX_EVENT_BUFFER = 100;
@@ -148,10 +156,13 @@ export async function handleAgentEventsSSE(
 
   // Authorize the request
   const clientIp = resolveRequestClientIp(req, { trustedProxies, allowRealIpFallback });
+  const token = getBearerToken(req);
   const authResult = await authorizeHttpGatewayConnect({
     req,
     auth,
-    clientIp,
+    connectAuth: token ? { token, password: token } : null,
+    trustedProxies,
+    allowRealIpFallback,
     rateLimiter,
   });
 
