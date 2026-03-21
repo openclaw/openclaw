@@ -3,19 +3,17 @@ import {
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createTextPairingAdapter } from "openclaw/plugin-sdk/channel-pairing";
 import {
   composeWarningCollectors,
   createAllowlistProviderGroupPolicyWarningCollector,
   createConditionalWarningCollector,
   createAllowlistProviderOpenWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
+import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { createTopLevelChannelReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import {
-  createAttachedChannelResultAdapter,
   createChannelDirectoryAdapter,
-  createTopLevelChannelReplyToModeResolver,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-runtime";
-import {
   listResolvedDirectoryGroupEntriesFromMapKeys,
   listResolvedDirectoryUserEntriesFromAllowFrom,
 } from "openclaw/plugin-sdk/directory-runtime";

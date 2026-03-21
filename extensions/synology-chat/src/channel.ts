@@ -8,17 +8,17 @@ import {
   createHybridChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { createTextPairingAdapter } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createConditionalWarningCollector,
   projectWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import {
-  attachChannelToResult,
-  createEmptyChannelDirectoryAdapter,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-runtime";
+import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
+import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
+import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
-import { DEFAULT_ACCOUNT_ID, registerPluginHttpRoute, buildChannelConfigSchema } from "../api.js";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { sendMessage, sendFileUrl } from "./client.js";
 import { getSynologyRuntime } from "./runtime.js";

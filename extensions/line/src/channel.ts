@@ -1,20 +1,20 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  createPairingPrefixStripper,
+  createTextPairingAdapter,
+} from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRestrictSendersWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
   createAttachedChannelResultAdapter,
-  createEmptyChannelDirectoryAdapter,
   createEmptyChannelResult,
-  createPairingPrefixStripper,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-send-result";
+import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import {
-  buildChannelConfigSchema,
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
-  LineConfigSchema,
   processLineMessage,
   type ChannelPlugin,
   type ChannelStatusIssue,
@@ -23,23 +23,11 @@ import {
   type OpenClawConfig,
   type ResolvedLineAccount,
 } from "../api.js";
-import { lineConfigAdapter } from "./config-adapter.js";
+import { lineChannelPluginCommon } from "./channel-shared.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { getLineRuntime } from "./runtime.js";
 import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
-
-// LINE channel metadata
-const meta = {
-  id: "line",
-  label: "LINE",
-  selectionLabel: "LINE (Messaging API)",
-  detailLabel: "LINE Bot",
-  docsPath: "/channels/line",
-  docsLabel: "line",
-  blurb: "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
-  systemImage: "message.fill",
-};
 
 const resolveLineDmPolicy = createScopedDmSecurityResolver<ResolvedLineAccount>({
   channelKey: "line",
@@ -63,10 +51,7 @@ const collectLineSecurityWarnings =
 
 export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
   id: "line",
-  meta: {
-    ...meta,
-    quickstartAllowFrom: true,
-  },
+  ...lineChannelPluginCommon,
   pairing: createTextPairingAdapter({
     idLabel: "lineUserId",
     message: "OpenClaw: your access has been approved.",
@@ -83,29 +68,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       });
     },
   }),
-  capabilities: {
-    chatTypes: ["direct", "group"],
-    reactions: false,
-    threads: false,
-    media: true,
-    nativeCommands: false,
-    blockStreaming: true,
-  },
-  reload: { configPrefixes: ["channels.line"] },
-  configSchema: buildChannelConfigSchema(LineConfigSchema),
   setupWizard: lineSetupWizard,
-  config: {
-    ...lineConfigAdapter,
-    isConfigured: (account) =>
-      Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
-      tokenSource: account.tokenSource ?? undefined,
-    }),
-  },
   security: {
     resolveDmPolicy: resolveLineDmPolicy,
     collectWarnings: collectLineSecurityWarnings,

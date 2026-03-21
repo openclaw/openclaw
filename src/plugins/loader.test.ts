@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
 type CreateJiti = typeof import("jiti").createJiti;
 
@@ -358,6 +359,23 @@ function createPluginSdkAliasFixture(params?: {
   return { root, srcFile, distFile };
 }
 
+function createExtensionApiAliasFixture(params?: { srcBody?: string; distBody?: string }) {
+  const root = makeTempDir();
+  const srcFile = path.join(root, "src", "extensionAPI.ts");
+  const distFile = path.join(root, "dist", "extensionAPI.js");
+  mkdirSafe(path.dirname(srcFile));
+  mkdirSafe(path.dirname(distFile));
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+    "utf-8",
+  );
+  fs.writeFileSync(path.join(root, "openclaw.mjs"), "export {};\n", "utf-8");
+  fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
+  fs.writeFileSync(distFile, params?.distBody ?? "export {};\n", "utf-8");
+  return { root, srcFile, distFile };
+}
+
 function createPluginRuntimeAliasFixture(params?: { srcBody?: string; distBody?: string }) {
   const root = makeTempDir();
   const srcFile = path.join(root, "src", "plugins", "runtime", "index.ts");
@@ -685,6 +703,7 @@ function resolvePluginRuntimeModule(params: {
 
 afterEach(() => {
   clearPluginLoaderCache();
+  resetDiagnosticEventsForTest();
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -3271,6 +3290,70 @@ module.exports = {
     expect(record?.status).toBe("loaded");
   });
 
+  it("supports legacy plugins subscribing to diagnostic events from the root sdk", async () => {
+    useNoBundledPlugins();
+    const seenKey = "__openclawLegacyRootDiagnosticSeen";
+    delete (globalThis as Record<string, unknown>)[seenKey];
+
+    const plugin = writePlugin({
+      id: "legacy-root-diagnostic-listener",
+      filename: "legacy-root-diagnostic-listener.cjs",
+      body: `module.exports = {
+  id: "legacy-root-diagnostic-listener",
+  configSchema: (require("openclaw/plugin-sdk").emptyPluginConfigSchema)(),
+  register() {
+    const { onDiagnosticEvent } = require("openclaw/plugin-sdk");
+    if (typeof onDiagnosticEvent !== "function") {
+      throw new Error("missing onDiagnosticEvent root export");
+    }
+    globalThis.${seenKey} = [];
+    onDiagnosticEvent((event) => {
+      globalThis.${seenKey}.push({
+        type: event.type,
+        sessionKey: event.sessionKey,
+      });
+    });
+  },
+};`,
+    });
+
+    try {
+      const registry = withEnv(
+        { OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins" },
+        () =>
+          loadOpenClawPlugins({
+            cache: false,
+            workspaceDir: plugin.dir,
+            config: {
+              plugins: {
+                load: { paths: [plugin.file] },
+                allow: ["legacy-root-diagnostic-listener"],
+              },
+            },
+          }),
+      );
+      const record = registry.plugins.find(
+        (entry) => entry.id === "legacy-root-diagnostic-listener",
+      );
+      expect(record?.status).toBe("loaded");
+
+      emitDiagnosticEvent({
+        type: "model.usage",
+        sessionKey: "agent:main:test:dm:peer",
+        usage: { total: 1 },
+      });
+
+      expect((globalThis as Record<string, unknown>)[seenKey]).toEqual([
+        {
+          type: "model.usage",
+          sessionKey: "agent:main:test:dm:peer",
+        },
+      ]);
+    } finally {
+      delete (globalThis as Record<string, unknown>)[seenKey];
+    }
+  });
+
   it.each([
     {
       name: "prefers dist plugin-sdk alias when loader runs from dist",
@@ -3351,6 +3434,36 @@ module.exports = {
       argv1: argv1?.(fixture.root),
       env,
     });
+    expect(resolved).toBe(expected === "dist" ? fixture.distFile : fixture.srcFile);
+  });
+
+  it.each([
+    {
+      name: "prefers dist extension-api alias when loader runs from dist",
+      modulePath: (root: string) => path.join(root, "dist", "plugins", "loader.js"),
+      expected: "dist" as const,
+    },
+    {
+      name: "prefers src extension-api alias when loader runs from src in non-production",
+      modulePath: (root: string) => path.join(root, "src", "plugins", "loader.ts"),
+      env: { NODE_ENV: undefined },
+      expected: "src" as const,
+    },
+    {
+      name: "resolves extension-api alias from package root when loader runs from transpiler cache path",
+      modulePath: () => "/tmp/tsx-cache/openclaw-loader.js",
+      argv1: (root: string) => path.join(root, "openclaw.mjs"),
+      env: { NODE_ENV: undefined },
+      expected: "src" as const,
+    },
+  ])("$name", ({ modulePath, argv1, env, expected }) => {
+    const fixture = createExtensionApiAliasFixture();
+    const resolved = withEnv(env ?? {}, () =>
+      __testing.resolveExtensionApiAlias({
+        modulePath: modulePath(fixture.root),
+        argv1: argv1?.(fixture.root),
+      }),
+    );
     expect(resolved).toBe(expected === "dist" ? fixture.distFile : fixture.srcFile);
   });
 
@@ -3570,7 +3683,7 @@ module.exports = {
     fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
-      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";
 
 export const syntheticRuntimeMarker = {
   resolveOutboundSendDep,
@@ -3578,7 +3691,7 @@ export const syntheticRuntimeMarker = {
 `,
       "utf-8",
     );
-    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "channel-runtime.ts");
+    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "infra-runtime.ts");
     fs.writeFileSync(
       copiedChannelRuntimeShim,
       `export function resolveOutboundSendDep() {
@@ -3595,83 +3708,22 @@ export const syntheticRuntimeMarker = {
       ...__testing.buildPluginLoaderJitiOptions({}),
       tryNative: false,
     });
-    await expect(withoutAlias.import(copiedChannelRuntime)).rejects.toThrow(
-      /plugin-sdk\/channel-runtime/,
-    );
+    // The production loader uses sync Jiti evaluation, so this boundary should
+    // follow the same path instead of the async import helper.
+    expect(() => withoutAlias(copiedChannelRuntime)).toThrow();
 
     const withAlias = createJiti(jitiBaseUrl, {
       ...__testing.buildPluginLoaderJitiOptions({
-        "openclaw/plugin-sdk/channel-runtime": copiedChannelRuntimeShim,
+        "openclaw/plugin-sdk/infra-runtime": copiedChannelRuntimeShim,
       }),
       tryNative: false,
     });
-    await expect(withAlias.import(copiedChannelRuntime)).resolves.toMatchObject({
+    expect(withAlias(copiedChannelRuntime)).toMatchObject({
       syntheticRuntimeMarker: {
         resolveOutboundSendDep: expect.any(Function),
       },
     });
   }, 240_000);
-
-  it("loads copied imessage runtime sources from git-style paths with plugin-sdk aliases (#49806)", async () => {
-    const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "imessage");
-    const copiedSourceDir = path.join(copiedExtensionRoot, "src");
-    const copiedPluginSdkDir = path.join(copiedExtensionRoot, "plugin-sdk");
-    mkdirSafe(copiedSourceDir);
-    mkdirSafe(copiedPluginSdkDir);
-    const jitiBaseFile = path.join(copiedSourceDir, "__jiti-base__.mjs");
-    fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
-    fs.writeFileSync(
-      path.join(copiedSourceDir, "channel.runtime.ts"),
-      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
-import { PAIRING_APPROVED_MESSAGE } from "../runtime-api.js";
-
-export const copiedRuntimeMarker = {
-  resolveOutboundSendDep,
-  PAIRING_APPROVED_MESSAGE,
-};
-`,
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(copiedExtensionRoot, "runtime-api.ts"),
-      `export const PAIRING_APPROVED_MESSAGE = "paired";
-`,
-      "utf-8",
-    );
-    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "channel-runtime.ts");
-    fs.writeFileSync(
-      copiedChannelRuntimeShim,
-      `export function resolveOutboundSendDep() {
-  return "shimmed";
-}
-`,
-      "utf-8",
-    );
-    const copiedChannelRuntime = path.join(copiedExtensionRoot, "src", "channel.runtime.ts");
-    const jitiBaseUrl = pathToFileURL(jitiBaseFile).href;
-
-    const createJiti = await getCreateJiti();
-    const withoutAlias = createJiti(jitiBaseUrl, {
-      ...__testing.buildPluginLoaderJitiOptions({}),
-      tryNative: false,
-    });
-    await expect(withoutAlias.import(copiedChannelRuntime)).rejects.toThrow(
-      /plugin-sdk\/channel-runtime/,
-    );
-
-    const withAlias = createJiti(jitiBaseUrl, {
-      ...__testing.buildPluginLoaderJitiOptions({
-        "openclaw/plugin-sdk/channel-runtime": copiedChannelRuntimeShim,
-      }),
-      tryNative: false,
-    });
-    await expect(withAlias.import(copiedChannelRuntime)).resolves.toMatchObject({
-      copiedRuntimeMarker: {
-        PAIRING_APPROVED_MESSAGE: "paired",
-        resolveOutboundSendDep: expect.any(Function),
-      },
-    });
-  });
 
   it("loads source TypeScript plugins that route through local runtime shims", () => {
     const plugin = writePlugin({

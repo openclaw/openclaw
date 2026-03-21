@@ -17,7 +17,12 @@ type CacheEntry = {
  */
 const TELEGRAM_SENT_MESSAGES_KEY = Symbol.for("openclaw.telegramSentMessages");
 
-const sentMessages = resolveGlobalMap<string, CacheEntry>(TELEGRAM_SENT_MESSAGES_KEY);
+let sentMessages: Map<string, CacheEntry> | undefined;
+
+function getSentMessages(): Map<string, CacheEntry> {
+  sentMessages ??= resolveGlobalMap<string, CacheEntry>(TELEGRAM_SENT_MESSAGES_KEY);
+  return sentMessages;
+}
 
 function getChatKey(chatId: number | string): string {
   return String(chatId);
@@ -37,6 +42,7 @@ function cleanupExpired(entry: CacheEntry): void {
  */
 export function recordSentMessage(chatId: number | string, messageId: number): void {
   const key = getChatKey(chatId);
+  const sentMessages = getSentMessages();
   let entry = sentMessages.get(key);
   if (!entry) {
     entry = { timestamps: new Map() };
@@ -54,7 +60,7 @@ export function recordSentMessage(chatId: number | string, messageId: number): v
  */
 export function wasSentByBot(chatId: number | string, messageId: number): boolean {
   const key = getChatKey(chatId);
-  const entry = sentMessages.get(key);
+  const entry = getSentMessages().get(key);
   if (!entry) {
     return false;
   }
@@ -67,5 +73,5 @@ export function wasSentByBot(chatId: number | string, messageId: number): boolea
  * Clear all cached entries (for testing).
  */
 export function clearSentMessageCache(): void {
-  sentMessages.clear();
+  getSentMessages().clear();
 }
