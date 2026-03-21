@@ -2803,6 +2803,8 @@
   white-space: pre-wrap;
   font-family: var(--mono);
   font-size: 13px;
+  overflow: auto;
+  max-height: calc(100vh - 300px); 
 }
 
 .exec-approval-meta {
