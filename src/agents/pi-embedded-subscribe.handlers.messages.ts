@@ -16,7 +16,6 @@ import {
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
   formatReasoningMessage,
-  promoteMinimaxToolCallsToBlocks,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
@@ -285,7 +284,6 @@ export function handleMessageEnd(
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }
-  promoteMinimaxToolCallsToBlocks(assistantMessage);
   promoteThinkingTagsToBlocks(assistantMessage);
 
   const rawText = extractAssistantText(assistantMessage);

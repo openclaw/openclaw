@@ -17,10 +17,8 @@ export function stripMinimaxToolCallXml(text: string): string {
     return text;
   }
 
-  // Remove <invoke ...>...</invoke> blocks.
+  // Use explicit inline regex to avoid any constant/scope issues.
   let cleaned = text.replace(/<invoke\b([^>]*?)>([\s\S]*?)<\/invoke>/gi, "");
-
-  // Remove stray minimax tool tags.
   cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
 
   return cleaned;
@@ -29,17 +27,13 @@ export function stripMinimaxToolCallXml(text: string): string {
 /**
  * Strip model control tokens leaked into assistant text output.
  */
-const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
-
 export function stripModelSpecialTokens(text: string): string {
   if (!text) {
     return text;
   }
-  if (!MODEL_SPECIAL_TOKEN_RE.test(text)) {
-    return text;
-  }
-  MODEL_SPECIAL_TOKEN_RE.lastIndex = 0;
-  return text.replace(MODEL_SPECIAL_TOKEN_RE, " ").replace(/  +/g, " ").trim();
+  // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> variants.
+  const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
+  return text.replace(MODEL_SPECIAL_TOKEN_RE, " ").trim();
 }
 
 /**
@@ -275,33 +269,21 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
   let thinkingStart = 0;
   const blocks: ThinkTaggedSplitBlock[] = [];
 
-  const pushText = (value: string) => {
-    if (!value) {
-      return;
-    }
-    blocks.push({ type: "text", text: value });
-  };
-  const pushThinking = (value: string) => {
-    const cleaned = value.trim();
-    if (!cleaned) {
-      return;
-    }
-    blocks.push({ type: "thinking", thinking: cleaned });
-  };
-
   for (const match of text.matchAll(scanRe)) {
     const index = match.index ?? 0;
     const isClose = Boolean(match[1]?.includes("/"));
 
     if (!inThinking && !isClose) {
-      pushText(text.slice(cursor, index));
+      if (index > cursor) {
+        blocks.push({ type: "text", text: text.slice(cursor, index) });
+      }
       thinkingStart = index + match[0].length;
       inThinking = true;
       continue;
     }
 
     if (inThinking && isClose) {
-      pushThinking(text.slice(thinkingStart, index));
+      blocks.push({ type: "thinking", thinking: text.slice(thinkingStart, index).trim() });
       cursor = index + match[0].length;
       inThinking = false;
     }
@@ -310,7 +292,9 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
   if (inThinking) {
     return null;
   }
-  pushText(text.slice(cursor));
+  if (cursor < text.length) {
+    blocks.push({ type: "text", text: text.slice(cursor) });
+  }
 
   const hasThinking = blocks.some((b) => b.type === "thinking");
   if (!hasThinking) {
@@ -334,11 +318,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   let changed = false;
 
   for (const block of message.content) {
-    if (!block || typeof block !== "object" || !("type" in block)) {
-      next.push(block);
-      continue;
-    }
-    if (block.type !== "text") {
+    if (block?.type !== "text") {
       next.push(block);
       continue;
     }
@@ -351,19 +331,15 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
     for (const part of split) {
       if (part.type === "thinking") {
         next.push({ type: "thinking", thinking: part.thinking });
-      } else if (part.type === "text") {
-        const cleaned = part.text.trimStart();
-        if (cleaned) {
-          next.push({ type: "text", text: cleaned });
-        }
+      } else {
+        next.push(part);
       }
     }
   }
 
-  if (!changed) {
-    return;
+  if (changed) {
+    message.content = next;
   }
-  message.content = next;
 }
 
 export function extractThinkingFromTaggedText(text: string): string {
@@ -403,7 +379,7 @@ export function extractThinkingFromTaggedStream(text: string): string {
   }
   const closeMatches = [...text.matchAll(closeRe)];
   const lastOpen = openMatches[openMatches.length - 1];
-  const lastClose = closeMatches[closeMatches.length - 1];
+  const lastClose = closeMatches[lastOpen.index ? openMatches.length - 1 : 0]; // safety
   if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
     return closed;
   }
@@ -417,15 +393,45 @@ export function inferToolMetaFromArgs(toolName: string, args: unknown): string |
 }
 
 /**
- * Basic XML entity unescaper for common entities used in tool calls.
+ * Basic XML entity unescaper for common and numeric entities.
  */
-function unescapeXmlEntities(text: string): string {
+export function unescapeXmlEntities(text: string): string {
   return text
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'");
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)));
+}
+
+/**
+ * Parse a raw XML parameter value into its appropriate type.
+ */
+export function parseXmlParameterValue(value: string): unknown {
+  const trimmed = value.trim();
+  const unescaped = unescapeXmlEntities(trimmed);
+
+  if (unescaped === "true") {
+    return true;
+  }
+  if (unescaped === "false") {
+    return false;
+  }
+
+  if (
+    (unescaped.startsWith("{") && unescaped.endsWith("}")) ||
+    (unescaped.startsWith("[") && unescaped.endsWith("]"))
+  ) {
+    try {
+      return JSON.parse(unescaped);
+    } catch {
+      // Fallback
+    }
+  }
+
+  return unescaped;
 }
 
 type MinimaxToolCallSplitBlock =
@@ -441,6 +447,7 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
     return null;
   }
 
+  // Use local explicit regexes.
   const toolCallRe = /<minimax:tool_call>([\s\S]*?)<\/minimax:tool_call>/gi;
   const invokeRe = /<invoke\b([^>]*?)>([\s\S]*?)<\/invoke>/gi;
   const paramRe = /<parameter\b[^>]*name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
@@ -457,45 +464,50 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
       blocks.push({ type: "text", text: text.slice(cursor, index) });
     }
 
-    let foundInvoke = false;
+    let innerCursor = 0;
     for (const iMatch of wrapperBody.matchAll(invokeRe)) {
-      const [, attributes, invokeBody] = iMatch;
-      const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
-      const toolName = nameMatch ? nameMatch[1] : undefined;
+      const iIndex = iMatch.index ?? 0;
+      const [iFullMatch, attributes, invokeBody] = iMatch;
 
-      if (!toolName) {
-        continue;
-      }
-      foundInvoke = true;
-
-      const args: Record<string, unknown> = {};
-      for (const pMatch of invokeBody.matchAll(paramRe)) {
-        const [, pName, pValue] = pMatch;
-        const val = unescapeXmlEntities(pValue.trim());
-        try {
-          args[pName] =
-            (val.startsWith("{") && val.endsWith("}")) || (val.startsWith("[") && val.endsWith("]"))
-              ? JSON.parse(val)
-              : val;
-        } catch {
-          args[pName] = val;
+      if (iIndex > innerCursor) {
+        const prose = wrapperBody.slice(innerCursor, iIndex);
+        if (prose) {
+          blocks.push({ type: "text", text: prose });
         }
       }
 
-      blocks.push({
-        type: "toolCall",
-        id: `mc_${Math.random().toString(36).slice(2, 11)}`,
-        name: toolName,
-        arguments: args,
-      });
+      const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
+      const toolName = nameMatch ? nameMatch[1] : undefined;
+
+      if (toolName) {
+        const args: Record<string, unknown> = {};
+        for (const pMatch of invokeBody.matchAll(paramRe)) {
+          const [, pName, pValue] = pMatch;
+          args[pName] = parseXmlParameterValue(pValue);
+        }
+
+        blocks.push({
+          type: "toolCall",
+          id: `mc_${Math.random().toString(36).slice(2, 11)}`,
+          name: toolName,
+          arguments: args,
+        });
+        hasToolCall = true;
+      } else {
+        blocks.push({ type: "text", text: iFullMatch });
+      }
+
+      innerCursor = iIndex + iFullMatch.length;
     }
 
-    if (!foundInvoke) {
-      blocks.push({ type: "text", text: fullMatch });
+    if (innerCursor < wrapperBody.length) {
+      const remaining = wrapperBody.slice(innerCursor);
+      if (remaining) {
+        blocks.push({ type: "text", text: remaining });
+      }
     }
 
     cursor = index + fullMatch.length;
-    hasToolCall = true;
   }
 
   if (!hasToolCall) {

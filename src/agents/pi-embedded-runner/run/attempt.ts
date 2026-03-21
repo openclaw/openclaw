@@ -74,6 +74,7 @@ import {
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
+import { promoteMinimaxToolCallsToBlocks } from "../../pi-embedded-utils.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
@@ -1306,6 +1307,48 @@ function shouldRepairMalformedAnthropicToolCallArguments(provider?: string): boo
   return normalizeProviderId(provider ?? "") === "kimi";
 }
 
+/**
+ * Intercept assistant response stream and promote MiniMax XML tool calls to structured blocks.
+ */
+export function wrapStreamPromoteMinimaxXmlToolCalls(baseFn: StreamFn): StreamFn {
+  return (model, context, options) => {
+    const response = baseFn(model, context, options);
+    if (response instanceof Promise) {
+      return (response as Promise<unknown>).then((res) =>
+        wrapStreamEventsForMinimax(res),
+      ) as unknown as ReturnType<StreamFn>;
+    }
+    return wrapStreamEventsForMinimax(response) as ReturnType<StreamFn>;
+  };
+}
+
+function wrapStreamEventsForMinimax(response: unknown): unknown {
+  if (!response || typeof response !== "object" || !("on" in response)) {
+    return response;
+  }
+
+  const emitter = response as {
+    on: (event: string, listener: (...args: unknown[]) => void) => void;
+  };
+  const originalOn = emitter.on.bind(emitter);
+  emitter.on = (event: string, listener: (...args: unknown[]) => void) => {
+    if (event === "message_end") {
+      const originalListener = listener;
+      const interceptor = (evt: unknown) => {
+        const message = (evt as { message?: AgentMessage })?.message;
+        if (message?.role === "assistant") {
+          promoteMinimaxToolCallsToBlocks(message);
+        }
+        return originalListener(evt);
+      };
+      return originalOn(event, interceptor as unknown as (...args: unknown[]) => void);
+    }
+    return originalOn(event, listener);
+  };
+
+  return response;
+}
+
 // ---------------------------------------------------------------------------
 // xAI / Grok: decode HTML entities in tool call arguments
 // ---------------------------------------------------------------------------
@@ -2368,6 +2411,12 @@ export async function runEmbeddedAttempt(
         shouldRepairMalformedAnthropicToolCallArguments(params.provider)
       ) {
         activeSession.agent.streamFn = wrapStreamFnRepairMalformedToolCallArguments(
+          activeSession.agent.streamFn,
+        );
+      }
+
+      if (normalizeProviderId(params.provider) === "minimax-portal") {
+        activeSession.agent.streamFn = wrapStreamPromoteMinimaxXmlToolCalls(
           activeSession.agent.streamFn,
         );
       }
