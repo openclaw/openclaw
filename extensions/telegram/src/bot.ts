@@ -127,17 +127,47 @@ function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
   }
 }
 
-function shouldMarkTelegramNetworkHealthy(response: Response): boolean {
-  if (response.ok) {
-    return true;
-  }
-  if (response.status < 400 || response.status >= 500 || response.status === 407) {
+function shouldMarkTelegramNetworkHealthy(response: unknown): boolean {
+  if (!response || typeof response !== "object") {
     return false;
   }
+
+  const typed = response as {
+    ok?: unknown;
+    status?: unknown;
+    headers?: unknown;
+  };
+
+  if (typed.ok === true) {
+    return true;
+  }
+
+  if (typeof typed.status !== "number" || !Number.isFinite(typed.status)) {
+    return false;
+  }
+
+  if (typed.status < 400 || typed.status === 407) {
+    return false;
+  }
+
+  const headers =
+    typed.headers &&
+    typeof typed.headers === "object" &&
+    "get" in typed.headers &&
+    typeof (typed.headers as { get?: unknown }).get === "function"
+      ? (typed.headers as { get: (name: string) => string | null })
+      : undefined;
+
+  if (!headers) {
+    return false;
+  }
+
   // Telegram Bot API rejections are JSON responses. Proxy-generated 4xx responses
   // such as 407 often come back as plaintext/HTML before the request ever reaches
   // Telegram, so they must not clear the outage streak.
-  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  // JSON 5xx responses also imply round-trip connectivity to Telegram and should
+  // reset the outage streak.
+  const contentType = headers.get("content-type")?.toLowerCase() ?? "";
   return contentType.includes("application/json");
 }
 

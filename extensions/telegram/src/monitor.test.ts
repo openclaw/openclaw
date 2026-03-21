@@ -705,7 +705,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     vi.useRealTimers();
   });
 
-  it("clamps configured poll stall thresholds below the 30s long-poll timeout", async () => {
+  it("clamps configured poll stall thresholds below the long-poll safety floor", async () => {
     const { monitorTelegramProvider } = await import("./monitor.js");
     vi.useFakeTimers({ shouldAdvanceTime: true });
     loadConfig.mockReturnValueOnce({
@@ -725,17 +725,19 @@ describe("monitorTelegramProvider (grammY)", () => {
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
     await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
 
-    vi.advanceTimersByTime(32_000);
+    vi.advanceTimersByTime(40_000);
     await Promise.resolve();
+    expect(stop).not.toHaveBeenCalled();
 
+    vi.advanceTimersByTime(55_000);
     await monitor;
 
-    expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(stop).toHaveBeenCalled();
     expect(runSpy).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
 
-  it("honors configured poll stall thresholds between 31s and 59s", async () => {
+  it("clamps configured poll stall thresholds between 31s and 59s to the safety floor", async () => {
     const { monitorTelegramProvider } = await import("./monitor.js");
     vi.useFakeTimers({ shouldAdvanceTime: true });
     loadConfig.mockReturnValueOnce({
@@ -758,8 +760,11 @@ describe("monitorTelegramProvider (grammY)", () => {
     vi.advanceTimersByTime(40_000);
     await Promise.resolve();
 
-    expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(stop).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(55_000);
     await monitor;
+    expect(stop).toHaveBeenCalled();
     expect(runSpy).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });

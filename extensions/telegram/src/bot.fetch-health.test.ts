@@ -70,6 +70,31 @@ describe("createTelegramBot network-health fetch wrapper", () => {
     expect(noteNetworkHealthySpy).toHaveBeenCalledTimes(1);
   });
 
+  it("marks Telegram JSON 5xx responses as network-healthy", async () => {
+    const baseFetch = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({ ok: false, error_code: 500, description: "Internal Server Error" }),
+        {
+          status: 500,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        },
+      );
+    }) as typeof fetch;
+
+    createTelegramBot({
+      token: "tok",
+      telegramTransport: { fetch: baseFetch } as Parameters<
+        typeof createTelegramBot
+      >[0]["telegramTransport"],
+    });
+
+    const clientFetch = getClientFetch();
+    const response = await clientFetch("https://api.telegram.org/bot123/sendMessage");
+
+    expect(response.status).toBe(500);
+    expect(noteNetworkHealthySpy).toHaveBeenCalledTimes(1);
+  });
+
   it("does not treat proxy-generated 407 responses as Telegram health", async () => {
     const baseFetch = vi.fn(async () => {
       return new Response("Proxy Authentication Required", {
