@@ -901,6 +901,7 @@ openclaw pairing list slack
 
 ## Related
 
+<<<<<<< HEAD
 <CardGroup cols={2}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     Pair a Slack user to the gateway.
@@ -921,3 +922,75 @@ openclaw pairing list slack
     Command catalog and behavior.
   </Card>
 </CardGroup>
+=======
+- [Pairing](/channels/pairing)
+- [Channel routing](/channels/channel-routing)
+- [Troubleshooting](/channels/troubleshooting)
+- [Configuration](/gateway/configuration)
+- [Slash commands](/tools/slash-commands)
+
+## Attachment vision reference
+
+This section documents Slack attachment handling for image and file vision flows, including supported types, the inbound pipeline, and known limits.
+
+### Supported media types
+
+| Media type | Source | Vision pipeline | Notes |
+|------------|--------|-----------------|-------|
+| JPEG / PNG / GIF / WebP images | Slack file URL | ✅ via media-understanding | Size cap: `channels.slack.mediaMaxMb` (default 20 MB) |
+| PDF files | Slack file URL | ✅ via media-understanding | Converted to images before analysis |
+| Other files | Slack file URL | ❌ text extraction only | Binary files stored as-is; vision not applied |
+| Thread-root messages | Inherited context | ✅ images processed | Reply context inherits parent attachments |
+| Multi-image messages | Multiple files | ✅ each processed | Each attachment evaluated independently |
+
+### Inbound pipeline
+
+When a Slack message with file attachments arrives:
+
+1. OpenClaw downloads the file from Slack's private URL using the bot token (`xoxb-...`).
+2. The file is written to the media store on success.
+3. For supported image types, the media-understanding pipeline is invoked.
+4. For PDF files, the file is first converted to images via the configured PDF converter, then passed to vision.
+5. Vision output (extracted text, descriptions, analysis) is injected into the message context.
+6. Thread-root messages propagate their attachments to replies in the same thread via `thread_ts` inheritance.
+
+### Thread-root attachment inheritance
+
+When a message arrives in a thread (has a `thread_ts` parent):
+
+- If the root message contains image/file attachments, those attachments are available to subsequent replies in the thread.
+- The `thread-starter media fallback` logic ensures root-message attachments are included in context even when the reply message itself has no files.
+- This applies to both DM threads and channel threads.
+
+### Multi-attachment handling
+
+When a single Slack message contains multiple file attachments:
+
+- Each attachment is processed independently through the media pipeline.
+- The vision results are aggregated and all are injected into the message context.
+- Processing order follows Slack's file order in the event payload.
+- A failure in one attachment's download or vision processing does not block others.
+
+### Size and format limits
+
+- **Size cap**: Default 20 MB per file. Configurable via `channels.slack.mediaMaxMb`.
+- **Unsupported formats**: Files that Slack cannot serve (expired URLs, quota-exceeded) skip download silently.
+- **Vision model**: Determined by the agent's configured vision provider (e.g., GPT-4o, Claude, Gemini). If no vision-capable model is configured, attachments are stored but not analyzed.
+
+### Known limits
+
+| Scenario | Current behavior | Workaround |
+|----------|-------------------|------------|
+| Expired Slack file URL | File skipped; no error shown | Re-upload the file in Slack |
+| Vision model not configured | Attachments stored; no analysis | Configure a vision-capable model in `llm.providers` |
+| Very large images (> 20 MB) | Skipped per size cap | Increase `mediaMaxMb` if Slack allows |
+| Forwarded/shared attachments | May not preserve original file URL | Re-share directly in the OpenClaw thread |
+| Image-only root thread (no text) | Attachments still processed | ✅ Supported |
+
+### Related documentation
+
+- [Media understanding pipeline](/reference/media-understanding)
+- Epic: [#51349](https://github.com/openclaw/openclaw/issues/51349) — Slack attachment vision enablement
+- Regression tests: [#51353](https://github.com/openclaw/openclaw/issues/51353)
+- Live verification: [#51354](https://github.com/openclaw/openclaw/issues/51354)
+>>>>>>> 0f4e0cf5cc (docs(slack): document attachment vision behavior and known limits)
