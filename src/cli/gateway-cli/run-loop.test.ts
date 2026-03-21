@@ -376,7 +376,7 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("marks gateway draining before flushing inbound debouncers on SIGUSR1", async () => {
+  it("flushes inbound debouncers before marking gateway draining on SIGUSR1", async () => {
     vi.clearAllMocks();
 
     await withIsolatedSignals(async ({ captureSignal }) => {
@@ -399,8 +399,9 @@ describe("runGatewayLoop", () => {
       expect(flushAllInboundDebouncers).toHaveBeenCalledTimes(1);
       expect(flushAllInboundDebouncers).toHaveBeenCalledWith({ timeoutMs: 10_000 });
       expect(waitForFollowupQueueDrain).toHaveBeenCalledWith(5_000);
-      expect(markGatewayDraining.mock.invocationCallOrder[0]).toBeLessThan(
-        flushAllInboundDebouncers.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      // Flush debouncers BEFORE marking draining so flushed messages can enqueue
+      expect(flushAllInboundDebouncers.mock.invocationCallOrder[0]).toBeLessThan(
+        markGatewayDraining.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
       );
       expect(markGatewayDraining.mock.invocationCallOrder[0]).toBeLessThan(
         waitForFollowupQueueDrain.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -412,7 +413,7 @@ describe("runGatewayLoop", () => {
       expect(gatewayLog.info).toHaveBeenCalledWith(
         "flushed 2 pending inbound debounce buffer(s) before restart",
       );
-      expect(gatewayLog.info).toHaveBeenCalledWith("followup queues drained after debounce flush");
+      expect(gatewayLog.info).toHaveBeenCalledWith("followup queues drained before restart");
 
       sigterm();
       await expect(exited).resolves.toBe(0);
@@ -454,11 +455,15 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("skips followup queue drain when no debouncers had buffered messages", async () => {
+  it("always drains followup queue even when no debouncers had buffered messages", async () => {
     vi.clearAllMocks();
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       flushAllInboundDebouncers.mockResolvedValueOnce(0);
+      waitForFollowupQueueDrain.mockResolvedValueOnce({
+        drained: true,
+        remaining: 0,
+      });
 
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       try {
@@ -473,12 +478,13 @@ describe("runGatewayLoop", () => {
 
         expect(flushAllInboundDebouncers).toHaveBeenCalledTimes(1);
         expect(flushAllInboundDebouncers).toHaveBeenCalledWith({ timeoutMs: 10_000 });
-        expect(waitForFollowupQueueDrain).not.toHaveBeenCalled();
+        // Followup queue drain is always called regardless of flushedCount
+        expect(waitForFollowupQueueDrain).toHaveBeenCalledWith(5_000);
         expect(markGatewayDraining).toHaveBeenCalledTimes(1);
         const forceExitCalls = setTimeoutSpy.mock.calls
           .map((call) => call[1])
           .filter((delay): delay is number => typeof delay === "number" && delay >= 95_000);
-        expect(forceExitCalls).toEqual([95_000, 95_000]);
+        expect(forceExitCalls).toEqual([95_000, 100_000]);
 
         sigterm();
         await expect(exited).resolves.toBe(0);
@@ -541,7 +547,10 @@ describe("runGatewayLoop", () => {
         const forceExitCalls = setTimeoutSpy.mock.calls
           .map((call) => call[1])
           .filter((delay): delay is number => typeof delay === "number" && delay >= 95_000);
-        expect(forceExitCalls).toEqual([95_000, 95_000]);
+        // First arm: 1000 + 5000 + 90000 = 96000, delay = 96000 - 1000 = 95000
+        // Second arm (after 20s flush): 21000 + 5000 + 90000 + 5000 = 121000,
+        // delay = 121000 - 21000 = 100000
+        expect(forceExitCalls).toEqual([95_000, 100_000]);
 
         sigterm();
         await expect(exited).resolves.toBe(0);

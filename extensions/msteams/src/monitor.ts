@@ -347,21 +347,29 @@ export async function monitorMSTeamsProvider(
   });
 
   // Start listening and fail fast if bind/listen fails.
-  const httpServer = expressApp.listen(port);
-  await new Promise<void>((resolve, reject) => {
-    const onListening = () => {
-      httpServer.off("error", onError);
-      log.info(`msteams provider started on port ${port}`);
-      resolve();
-    };
-    const onError = (err: unknown) => {
-      httpServer.off("listening", onListening);
-      log.error("msteams server error", { error: formatUnknownError(err) });
-      reject(err);
-    };
-    httpServer.once("listening", onListening);
-    httpServer.once("error", onError);
-  });
+  let httpServer: ReturnType<typeof expressApp.listen>;
+  try {
+    httpServer = expressApp.listen(port);
+    await new Promise<void>((resolve, reject) => {
+      const onListening = () => {
+        httpServer.off("error", onError);
+        log.info(`msteams provider started on port ${port}`);
+        resolve();
+      };
+      const onError = (err: unknown) => {
+        httpServer.off("listening", onListening);
+        log.error("msteams server error", { error: formatUnknownError(err) });
+        reject(err);
+      };
+      httpServer.once("listening", onListening);
+      httpServer.once("error", onError);
+    });
+  } catch (err) {
+    // Clean up the debouncer so it does not linger in the global registry
+    // when the provider fails to start (e.g. port already in use).
+    unregisterDebouncer();
+    throw err;
+  }
   applyMSTeamsWebhookTimeouts(httpServer);
 
   httpServer.on("error", (err) => {

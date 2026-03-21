@@ -54,9 +54,30 @@ export async function flushAllInboundDebouncers(options?: { timeoutMs?: number }
       : undefined;
   const flushedCounts = await Promise.all(
     entries.map(async ([_key, handle]) => {
-      const result = await handle.flushAll({ deadlineMs });
-      // Remove drained debouncers, and auto-evict stale entries whose
-      // owning channel never called unregister() (e.g. after reconnect).
+      let result: DebouncerFlushResult;
+      try {
+        result = await (deadlineMs !== undefined
+          ? Promise.race([
+              handle.flushAll({ deadlineMs }),
+              new Promise<DebouncerFlushResult>((resolve) => {
+                const timer = setTimeout(
+                  () => resolve({ flushedCount: 0, drained: false }),
+                  Math.max(0, deadlineMs - Date.now()),
+                );
+                timer.unref?.();
+              }),
+            ])
+          : handle.flushAll({ deadlineMs }));
+      } catch {
+        // A hung or failing flushAll should not prevent other debouncers
+        // from being swept. Keep the handle registered for a future sweep.
+        return 0;
+      }
+      // Only deregister AFTER the handle confirms all its buffers are
+      // drained. If the deadline hit mid-sweep, keep partially-flushed
+      // handles registered so subsequent sweeps can finish the job.
+      // Also auto-evict stale entries whose owning channel never called
+      // unregister() (e.g. after reconnect).
       if (result.drained || now - handle.lastActivityMs >= STALE_DEBOUNCER_MS) {
         handle.unregister();
       }

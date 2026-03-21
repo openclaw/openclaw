@@ -181,42 +181,31 @@ export async function runGatewayLoop(params: {
         // On restart, wait for in-flight agent turns to finish before
         // tearing down the server so buffered messages are delivered.
         if (isRestart) {
-          // Reject new command-queue work before any awaited restart drain
-          // step so late arrivals fail explicitly instead of being stranded
-          // behind a one-shot debounce flush. This does not block followup
-          // queue enqueues, so flushed inbound work can still drain normally.
-          markGatewayDraining();
-
-          // Flush inbound debounce buffers first. This pushes any messages
-          // waiting in per-channel debounce timers (e.g. the 2500ms collect
-          // window) into the followup queues immediately, preventing silent
-          // message loss when the server reinitializes.
+          // Flush inbound debounce buffers BEFORE marking the gateway as
+          // draining so flushed messages can still enqueue into the command
+          // queue. This pushes any messages waiting in per-channel debounce
+          // timers (e.g. the 2500ms collect window) into the followup queues
+          // immediately, preventing silent message loss on reinit.
           const flushedBuffers = await flushAllInboundDebouncers({
             timeoutMs: INBOUND_DEBOUNCE_FLUSH_TIMEOUT_MS,
           });
-          // Start the restart watchdog budget after the pre-shutdown debounce
-          // flush so slow flush handlers do not steal time from active drain.
-          armForceExitTimer(
-            Date.now() +
-              SHUTDOWN_TIMEOUT_MS +
-              DRAIN_TIMEOUT_MS +
-              (flushedBuffers > 0 ? FOLLOWUP_DRAIN_TIMEOUT_MS : 0),
-          );
           if (flushedBuffers > 0) {
             gatewayLog.info(
               `flushed ${flushedBuffers} pending inbound debounce buffer(s) before restart`,
             );
-            // Give the followup queue drain loops a short window to process
-            // the newly flushed items before the server is torn down.
-            const followupResult = await waitForFollowupQueueDrain(FOLLOWUP_DRAIN_TIMEOUT_MS);
-            if (followupResult.drained) {
-              gatewayLog.info("followup queues drained after debounce flush");
-            } else {
-              gatewayLog.warn(
-                `followup queue drain timeout; ${followupResult.remaining} item(s) still pending`,
-              );
-            }
           }
+
+          // Now reject new command-queue work so late arrivals fail explicitly
+          // instead of being stranded. This does not block followup queue
+          // enqueues, so already-flushed inbound work can still drain normally.
+          markGatewayDraining();
+
+          // Start the restart watchdog budget after the pre-shutdown debounce
+          // flush so slow flush handlers do not steal time from active drain.
+          armForceExitTimer(
+            Date.now() + SHUTDOWN_TIMEOUT_MS + DRAIN_TIMEOUT_MS + FOLLOWUP_DRAIN_TIMEOUT_MS,
+          );
+
           const activeTasks = getActiveTaskCount();
           const activeRuns = getActiveEmbeddedRunCount();
 
@@ -246,6 +235,19 @@ export async function runGatewayLoop(params: {
               // next lifecycle when drain time budget is exhausted.
               abortEmbeddedPiRun(undefined, { mode: "all" });
             }
+          }
+
+          // Drain followup queues AFTER active tasks finish so tasks that
+          // produce followup work have a chance to enqueue before we wait.
+          // Always drain regardless of flushedCount — queued followups are
+          // not contingent on debouncers.
+          const followupResult = await waitForFollowupQueueDrain(FOLLOWUP_DRAIN_TIMEOUT_MS);
+          if (followupResult.drained) {
+            gatewayLog.info("followup queues drained before restart");
+          } else {
+            gatewayLog.warn(
+              `followup queue drain timeout; ${followupResult.remaining} item(s) still pending`,
+            );
           }
         }
 
