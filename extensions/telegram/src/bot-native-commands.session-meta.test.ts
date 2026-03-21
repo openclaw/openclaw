@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ResolvedAgentRoute } from "../../../src/routing/resolve-route.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
@@ -55,6 +55,11 @@ const replyMocks = vi.hoisted(() => ({
 }));
 const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn<DeliverRepliesFn>(async () => ({ delivered: true })),
+}));
+const pluginRuntimeMocks = vi.hoisted(() => ({
+  getPluginCommandSpecs: vi.fn(() => []),
+  matchPluginCommand: vi.fn(() => null),
+  executePluginCommand: vi.fn(async () => ({ text: "ok" })),
 }));
 const sessionBindingMocks = vi.hoisted(() => ({
   resolveByConversation: vi.fn<
@@ -123,27 +128,18 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
     listSkillCommandsForAgents: vi.fn(() => []),
   };
 });
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    getPluginCommandSpecs: pluginRuntimeMocks.getPluginCommandSpecs,
+    matchPluginCommand: pluginRuntimeMocks.matchPluginCommand,
+    executePluginCommand: pluginRuntimeMocks.executePluginCommand,
+  };
+});
 vi.mock("../../../src/config/sessions.js", () => ({
   recordSessionMetaFromInbound: sessionMocks.recordSessionMetaFromInbound,
   resolveStorePath: sessionMocks.resolveStorePath,
-}));
-vi.mock("../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: vi.fn(async () => []),
-}));
-vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
-  getSessionBindingService: () => ({
-    bind: vi.fn(),
-    getCapabilities: vi.fn(),
-    listBySession: vi.fn(),
-    resolveByConversation: (ref: unknown) => sessionBindingMocks.resolveByConversation(ref),
-    touch: (bindingId: string, at?: number) => sessionBindingMocks.touch(bindingId, at),
-    unbind: vi.fn(),
-  }),
-}));
-vi.mock("../../../src/plugins/commands.js", () => ({
-  getPluginCommandSpecs: vi.fn(() => []),
-  matchPluginCommand: vi.fn(() => null),
-  executePluginCommand: vi.fn(async () => ({ text: "ok" })),
 }));
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies: deliveryMocks.deliverReplies,

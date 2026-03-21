@@ -4,12 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
-const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
 const saveMediaBufferSpy = vi.fn();
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadConfig: vi.fn().mockReturnValue({
@@ -23,17 +21,6 @@ vi.mock("../../../src/config/config.js", async (importOriginal) => {
         responsePrefix: undefined,
       },
     }),
-  };
-});
-
-vi.mock("../../../src/pairing/pairing-store.js", () => {
-  return {
-    readChannelAllowFromStore(...args: unknown[]) {
-      return readAllowFromStoreMock(...args);
-    },
-    upsertChannelPairingRequest(...args: unknown[]) {
-      return upsertPairingRequestMock(...args);
-    },
   };
 });
 

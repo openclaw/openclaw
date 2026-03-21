@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const recordChannelActivity = vi.fn();
-vi.mock("../../../../src/infra/channel-activity.js", () => ({
+vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
   recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
 }));
 

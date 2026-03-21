@@ -19,18 +19,22 @@ function resolveTestAuthDir() {
 
 const authDir = resolveTestAuthDir();
 
-vi.mock("../../../src/config/config.js", () => ({
-  loadConfig: () =>
-    ({
-      channels: {
-        whatsapp: {
-          accounts: {
-            default: { enabled: true, authDir: resolveTestAuthDir() },
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  return {
+    ...actual,
+    loadConfig: () =>
+      ({
+        channels: {
+          whatsapp: {
+            accounts: {
+              default: { enabled: true, authDir: resolveTestAuthDir() },
+            },
           },
         },
-      },
-    }) as never,
-}));
+      }) as never,
+  };
+});
 
 vi.mock("./session.js", () => {
   const authDir = resolveTestAuthDir();
