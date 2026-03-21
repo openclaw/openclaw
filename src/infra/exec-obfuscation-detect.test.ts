@@ -55,6 +55,28 @@ describe("detectCommandObfuscation", () => {
       expect(result.detected).toBe(true);
       expect(result.matchedPatterns).toContain("pipe-to-shell");
     });
+
+    it("does NOT flag logical OR (||) with bash as false positive", () => {
+      const result = detectCommandObfuscation(
+        "python3 bin/garmin_health.py 2>/dev/null || bash bin/garmin-health.sh 2>/dev/null",
+      );
+      expect(result.matchedPatterns).not.toContain("pipe-to-shell");
+    });
+
+    it("does NOT flag || sh as a pipe-to-shell false positive", () => {
+      const result = detectCommandObfuscation("do_thing || sh -c 'echo fallback'");
+      expect(result.matchedPatterns).not.toContain("pipe-to-shell");
+    });
+
+    it("does NOT flag || zsh fallback patterns", () => {
+      const result = detectCommandObfuscation("./run.sh || zsh ./fallback.sh");
+      expect(result.matchedPatterns).not.toContain("pipe-to-shell");
+    });
+
+    it("still detects real pipe-to-shell after a logical OR earlier in the command", () => {
+      const result = detectCommandObfuscation("check || cat evil.sh | sh");
+      expect(result.matchedPatterns).toContain("pipe-to-shell");
+    });
   });
 
   describe("escape sequence obfuscation", () => {
