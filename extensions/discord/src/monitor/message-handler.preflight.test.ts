@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../src/media-understanding/audio-preflight.js", () => ({
+vi.mock("./preflight-audio.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
 }));
 import {
@@ -90,6 +90,20 @@ function createThreadClient(params: { threadId: string; parentId: string }): Dis
   } as unknown as DiscordClient;
 }
 
+function createDmClient(channelId: string): DiscordClient {
+  return {
+    fetchChannel: async (id: string) => {
+      if (id === channelId) {
+        return {
+          id: channelId,
+          type: ChannelType.DM,
+        };
+      }
+      return null;
+    },
+  } as unknown as DiscordClient;
+}
+
 async function runThreadBoundPreflight(params: {
   threadId: string;
   parentId: string;
@@ -157,6 +171,25 @@ async function runGuildPreflight(params: {
   });
 }
 
+async function runDmPreflight(params: {
+  channelId: string;
+  message: import("@buape/carbon").Message;
+  discordConfig: DiscordConfig;
+}) {
+  return preflightDiscordMessage({
+    ...createPreflightArgs({
+      cfg: DEFAULT_PREFLIGHT_CFG,
+      discordConfig: params.discordConfig,
+      data: {
+        channel_id: params.channelId,
+        author: params.message.author,
+        message: params.message,
+      } as DiscordMessageEvent,
+      client: createDmClient(params.channelId),
+    }),
+  });
+}
+
 async function runMentionOnlyBotPreflight(params: {
   channelId: string;
   guildId: string;
@@ -196,16 +229,16 @@ describe("resolvePreflightMentionRequirement", () => {
     expect(
       resolvePreflightMentionRequirement({
         shouldRequireMention: true,
-        isBoundThreadSession: false,
+        bypassMentionRequirement: false,
       }),
     ).toBe(true);
   });
 
-  it("disables mention requirement for bound thread sessions", () => {
+  it("disables mention requirement when the route explicitly bypasses mentions", () => {
     expect(
       resolvePreflightMentionRequirement({
         shouldRequireMention: true,
-        isBoundThreadSession: true,
+        bypassMentionRequirement: true,
       }),
     ).toBe(false);
   });
@@ -214,7 +247,7 @@ describe("resolvePreflightMentionRequirement", () => {
     expect(
       resolvePreflightMentionRequirement({
         shouldRequireMention: false,
-        isBoundThreadSession: false,
+        bypassMentionRequirement: false,
       }),
     ).toBe(false);
   });
@@ -258,6 +291,60 @@ describe("preflightDiscordMessage", () => {
     expect(result).toBeNull();
   });
 
+  it("restores direct-message bindings by user target instead of DM channel id", async () => {
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === "user:user-1"
+          ? createThreadBinding({
+              conversation: {
+                channel: "discord",
+                accountId: "default",
+                conversationId: "user:user-1",
+              },
+              metadata: {
+                pluginBindingOwner: "plugin",
+                pluginId: "openclaw-codex-app-server",
+                pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+              },
+            })
+          : null,
+    });
+
+    const result = await runDmPreflight({
+      channelId: "dm-channel-1",
+      message: createDiscordMessage({
+        id: "m-dm-1",
+        channelId: "dm-channel-1",
+        content: "who are you",
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      discordConfig: {
+        allowBots: true,
+        dmPolicy: "open",
+      } as DiscordConfig,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.threadBinding).toMatchObject({
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "user:user-1",
+      },
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+      },
+    });
+  });
+
   it("keeps bound-thread regular bot messages flowing when allowBots=true", async () => {
     const threadBinding = createThreadBinding({
       targetKind: "session",
@@ -289,6 +376,68 @@ describe("preflightDiscordMessage", () => {
 
     expect(result).not.toBeNull();
     expect(result?.boundSessionKey).toBe(threadBinding.targetSessionKey);
+  });
+
+  it("drops hydrated bound-thread webhook echoes after fetching an empty payload", async () => {
+    const threadBinding = createThreadBinding({
+      targetKind: "session",
+      targetSessionKey: "agent:main:acp:discord-thread-1",
+    });
+    const threadId = "thread-webhook-hydrated-1";
+    const parentId = "channel-parent-webhook-hydrated-1";
+    const message = createDiscordMessage({
+      id: "m-webhook-hydrated-1",
+      channelId: threadId,
+      content: "",
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+    });
+    const restGet = vi.fn(async () => ({
+      id: message.id,
+      content: "webhook relay",
+      webhook_id: "wh-1",
+      attachments: [],
+      embeds: [],
+      mentions: [],
+      mention_roles: [],
+      mention_everyone: false,
+      author: {
+        id: "relay-bot-1",
+        username: "Relay",
+        bot: true,
+      },
+    }));
+    const client = {
+      ...createThreadClient({ threadId, parentId }),
+      rest: {
+        get: restGet,
+      },
+    } as unknown as DiscordClient;
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {
+          allowBots: true,
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId: threadId,
+          guildId: "guild-1",
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      threadBindings: {
+        getByThreadId: (id: string) => (id === threadId ? threadBinding : undefined),
+      } as import("./thread-bindings.js").ThreadBindingManager,
+    });
+
+    expect(restGet).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
   });
 
   it("bypasses mention gating in bound threads for allowed bot senders", async () => {
@@ -568,8 +717,8 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    const result = await preflightDiscordMessage(
-      createPreflightArgs({
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
         cfg: {
           ...DEFAULT_PREFLIGHT_CFG,
           messages: {
@@ -587,7 +736,17 @@ describe("preflightDiscordMessage", () => {
         }),
         client,
       }),
-    );
+      guildEntries: {
+        "guild-1": {
+          channels: {
+            [channelId]: {
+              allow: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith(

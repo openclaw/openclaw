@@ -1,14 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const ensureConfiguredAcpBindingSessionMock = vi.hoisted(() => vi.fn());
-const resolveConfiguredAcpBindingRecordMock = vi.hoisted(() => vi.fn());
+const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
+const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../src/acp/persistent-bindings.js", () => ({
-  ensureConfiguredAcpBindingSession: (...args: unknown[]) =>
-    ensureConfiguredAcpBindingSessionMock(...args),
-  resolveConfiguredAcpBindingRecord: (...args: unknown[]) =>
-    resolveConfiguredAcpBindingRecordMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    ensureConfiguredBindingRouteReady: (...args: unknown[]) =>
+      ensureConfiguredBindingRouteReadyMock(...args),
+    resolveConfiguredBindingRoute: (...args: unknown[]) =>
+      resolveConfiguredBindingRouteMock(...args),
+  };
+});
 
 import { __testing as sessionBindingTesting } from "../../../../src/infra/outbound/session-binding-service.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
@@ -48,6 +52,77 @@ function createConfiguredDiscordBinding() {
         mode: "persistent",
         agentId: "codex",
       },
+    },
+  } as const;
+}
+
+function createConfiguredDiscordRoute() {
+  const configuredBinding = createConfiguredDiscordBinding();
+  return {
+    bindingResolution: {
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: CHANNEL_ID,
+      },
+      compiledBinding: {
+        channel: "discord",
+        accountPattern: "default",
+        binding: {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: {
+              kind: "channel",
+              id: CHANNEL_ID,
+            },
+          },
+        },
+        bindingConversationId: CHANNEL_ID,
+        target: {
+          conversationId: CHANNEL_ID,
+        },
+        agentId: "codex",
+        provider: {
+          compileConfiguredBinding: () => ({ conversationId: CHANNEL_ID }),
+          matchInboundConversation: () => ({ conversationId: CHANNEL_ID }),
+        },
+        targetFactory: {
+          driverId: "acp",
+          materialize: () => ({
+            record: configuredBinding.record,
+            statefulTarget: {
+              kind: "stateful",
+              driverId: "acp",
+              sessionKey: configuredBinding.record.targetSessionKey,
+              agentId: configuredBinding.spec.agentId,
+            },
+          }),
+        },
+      },
+      match: {
+        conversationId: CHANNEL_ID,
+      },
+      record: configuredBinding.record,
+      statefulTarget: {
+        kind: "stateful",
+        driverId: "acp",
+        sessionKey: configuredBinding.record.targetSessionKey,
+        agentId: configuredBinding.spec.agentId,
+      },
+    },
+    configuredBinding,
+    boundSessionKey: configuredBinding.record.targetSessionKey,
+    route: {
+      agentId: "codex",
+      accountId: "default",
+      channel: "discord",
+      sessionKey: configuredBinding.record.targetSessionKey,
+      mainSessionKey: "agent:codex:main",
+      matchedBy: "binding.channel",
+      lastRoutePolicy: "bound",
     },
   } as const;
 }
@@ -94,13 +169,10 @@ function createBasePreflightParams(overrides?: Record<string, unknown>) {
 describe("preflightDiscordMessage configured ACP bindings", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    ensureConfiguredAcpBindingSessionMock.mockReset();
-    resolveConfiguredAcpBindingRecordMock.mockReset();
-    resolveConfiguredAcpBindingRecordMock.mockReturnValue(createConfiguredDiscordBinding());
-    ensureConfiguredAcpBindingSessionMock.mockResolvedValue({
-      ok: true,
-      sessionKey: "agent:codex:acp:binding:discord:default:abc123",
-    });
+    ensureConfiguredBindingRouteReadyMock.mockReset();
+    resolveConfiguredBindingRouteMock.mockReset();
+    resolveConfiguredBindingRouteMock.mockReturnValue(createConfiguredDiscordRoute());
+    ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
   });
 
   it("does not initialize configured ACP bindings for rejected messages", async () => {
@@ -121,8 +193,8 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     );
 
     expect(result).toBeNull();
-    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredAcpBindingSessionMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
   });
 
   it("initializes configured ACP bindings only after preflight accepts the message", async () => {
@@ -144,8 +216,176 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     );
 
     expect(result).not.toBeNull();
-    expect(resolveConfiguredAcpBindingRecordMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredAcpBindingSessionMock).toHaveBeenCalledTimes(1);
+    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
     expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
+  });
+
+  it("accepts plain messages in configured ACP-bound channels without a mention", async () => {
+    const message = createDiscordMessage({
+      id: "m-no-mention",
+      channelId: CHANNEL_ID,
+      content: "hello",
+      mentionedUsers: [],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "alice",
+      },
+    });
+
+    const result = await preflightDiscordMessage(
+      createBasePreflightParams({
+        data: createGuildEvent({
+          channelId: CHANNEL_ID,
+          guildId: GUILD_ID,
+          author: message.author,
+          message,
+        }),
+        guildEntries: {
+          [GUILD_ID]: {
+            id: GUILD_ID,
+            channels: {
+              [CHANNEL_ID]: {
+                allow: true,
+                enabled: true,
+                requireMention: true,
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result).not.toBeNull();
+    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
+    expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
+  });
+
+  it("hydrates empty guild message payloads from REST before ensuring configured ACP bindings", async () => {
+    const message = createDiscordMessage({
+      id: "m-rest",
+      channelId: CHANNEL_ID,
+      content: "",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "alice",
+      },
+    });
+    const restGet = vi.fn(async () => ({
+      id: "m-rest",
+      content: "hello from rest",
+      attachments: [],
+      embeds: [],
+      mentions: [],
+      mention_roles: [],
+      mention_everyone: false,
+      author: {
+        id: "user-1",
+        username: "alice",
+      },
+    }));
+    const client = {
+      ...createGuildTextClient(CHANNEL_ID),
+      rest: {
+        get: restGet,
+      },
+    } as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
+
+    const result = await preflightDiscordMessage(
+      createBasePreflightParams({
+        client,
+        data: createGuildEvent({
+          channelId: CHANNEL_ID,
+          guildId: GUILD_ID,
+          author: message.author,
+          message,
+        }),
+        guildEntries: {
+          [GUILD_ID]: {
+            id: GUILD_ID,
+            channels: {
+              [CHANNEL_ID]: {
+                allow: true,
+                enabled: true,
+                requireMention: false,
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(restGet).toHaveBeenCalledTimes(1);
+    expect(result?.messageText).toBe("hello from rest");
+    expect(result?.data.message.content).toBe("hello from rest");
+    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("hydrates sticker-only guild message payloads from REST before ensuring configured ACP bindings", async () => {
+    const message = createDiscordMessage({
+      id: "m-rest-sticker",
+      channelId: CHANNEL_ID,
+      content: "",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "alice",
+      },
+    });
+    const restGet = vi.fn(async () => ({
+      id: "m-rest-sticker",
+      content: "",
+      attachments: [],
+      embeds: [],
+      mentions: [],
+      mention_roles: [],
+      mention_everyone: false,
+      sticker_items: [
+        {
+          id: "sticker-1",
+          name: "wave",
+        },
+      ],
+      author: {
+        id: "user-1",
+        username: "alice",
+      },
+    }));
+    const client = {
+      ...createGuildTextClient(CHANNEL_ID),
+      rest: {
+        get: restGet,
+      },
+    } as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
+
+    const result = await preflightDiscordMessage(
+      createBasePreflightParams({
+        client,
+        data: createGuildEvent({
+          channelId: CHANNEL_ID,
+          guildId: GUILD_ID,
+          author: message.author,
+          message,
+        }),
+        guildEntries: {
+          [GUILD_ID]: {
+            id: GUILD_ID,
+            channels: {
+              [CHANNEL_ID]: {
+                allow: true,
+                enabled: true,
+                requireMention: false,
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(restGet).toHaveBeenCalledTimes(1);
+    expect(result?.messageText).toBe("<media:sticker> (1 sticker)");
+    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
   });
 });

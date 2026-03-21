@@ -3,8 +3,8 @@ import {
   buildChannelKeyCandidates,
   resolveChannelEntryMatchWithFallback,
   type ChannelMatchSource,
-} from "../../../../src/channels/channel-config.js";
-import type { SlackReactionNotificationMode } from "../../../../src/config/config.js";
+} from "openclaw/plugin-sdk/channel-targets";
+import type { SlackReactionNotificationMode } from "openclaw/plugin-sdk/config-runtime";
 import type { SlackMessageEvent } from "../types.js";
 import { allowListMatches, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 

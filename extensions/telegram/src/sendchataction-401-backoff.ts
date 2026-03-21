@@ -1,4 +1,8 @@
-import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../../src/infra/backoff.js";
+import {
+  computeBackoff,
+  sleepWithAbort,
+  type BackoffPolicy,
+} from "openclaw/plugin-sdk/infra-runtime";
 
 export type TelegramSendChatActionLogger = (message: string) => void;
 

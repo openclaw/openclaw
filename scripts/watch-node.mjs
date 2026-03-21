@@ -1,25 +1,31 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import chokidar from "chokidar";
-import { runNodeWatchedPaths } from "./run-node.mjs";
+import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node.mjs";
 
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
 const WATCH_RESTART_SIGNAL = "SIGTERM";
 
 const buildRunnerArgs = (args) => [WATCH_NODE_RUNNER, ...args];
 
-const normalizePath = (filePath) => String(filePath ?? "").replaceAll("\\", "/");
+const normalizePath = (filePath) =>
+  String(filePath ?? "")
+    .replaceAll("\\", "/")
+    .replace(/^\.\/+/, "");
 
-const isIgnoredWatchPath = (filePath) => {
-  const normalizedPath = normalizePath(filePath);
-  return (
-    normalizedPath.endsWith(".test.ts") ||
-    normalizedPath.endsWith(".test.tsx") ||
-    normalizedPath.endsWith("test-helpers.ts")
-  );
+const resolveRepoPath = (filePath, cwd) => {
+  const rawPath = String(filePath ?? "");
+  if (path.isAbsolute(rawPath)) {
+    return normalizePath(path.relative(cwd, rawPath));
+  }
+  return normalizePath(rawPath);
 };
+
+const isIgnoredWatchPath = (filePath, cwd) =>
+  !isRestartRelevantRunNodePath(resolveRepoPath(filePath, cwd));
 
 export async function runWatchMain(params = {}) {
   const deps = {
@@ -52,7 +58,7 @@ export async function runWatchMain(params = {}) {
 
     const watcher = deps.createWatcher(deps.watchPaths, {
       ignoreInitial: true,
-      ignored: (watchPath) => isIgnoredWatchPath(watchPath),
+      ignored: (watchPath) => isIgnoredWatchPath(watchPath, deps.cwd),
     });
 
     const settle = (code) => {
@@ -89,7 +95,7 @@ export async function runWatchMain(params = {}) {
     };
 
     const requestRestart = (changedPath) => {
-      if (shuttingDown || isIgnoredWatchPath(changedPath)) {
+      if (shuttingDown || isIgnoredWatchPath(changedPath, deps.cwd)) {
         return;
       }
       if (!watchProcess) {

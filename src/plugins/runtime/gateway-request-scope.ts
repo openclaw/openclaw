@@ -8,6 +8,7 @@ export type PluginRuntimeGatewayRequestScope = {
   context?: GatewayRequestContext;
   client?: GatewayRequestOptions["client"];
   isWebchatConnect: GatewayRequestOptions["isWebchatConnect"];
+  pluginId?: string;
 };
 
 const PLUGIN_RUNTIME_GATEWAY_REQUEST_SCOPE_KEY: unique symbol = Symbol.for(
@@ -35,6 +36,20 @@ export function withPluginRuntimeGatewayRequestScope<T>(
   run: () => T,
 ): T {
   return pluginRuntimeGatewayRequestScope.run(scope, run);
+}
+
+/**
+ * Runs work under the current gateway request scope while attaching plugin identity.
+ */
+export function withPluginRuntimePluginIdScope<T>(pluginId: string, run: () => T): T {
+  const current = pluginRuntimeGatewayRequestScope.getStore();
+  const scoped: PluginRuntimeGatewayRequestScope = current
+    ? { ...current, pluginId }
+    : {
+        pluginId,
+        isWebchatConnect: () => false,
+      };
+  return pluginRuntimeGatewayRequestScope.run(scoped, run);
 }
 
 /**

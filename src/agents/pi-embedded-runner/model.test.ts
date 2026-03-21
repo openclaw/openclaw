@@ -43,6 +43,7 @@ function buildForwardCompatTemplate(params: {
   provider: string;
   api: "anthropic-messages" | "google-gemini-cli" | "openai-completions" | "openai-responses";
   baseUrl: string;
+  reasoning?: boolean;
   input?: readonly ["text"] | readonly ["text", "image"];
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow?: number;
@@ -54,7 +55,7 @@ function buildForwardCompatTemplate(params: {
     provider: params.provider,
     api: params.api,
     baseUrl: params.baseUrl,
-    reasoning: true,
+    reasoning: params.reasoning ?? true,
     input: params.input ?? (["text", "image"] as const),
     cost: params.cost ?? { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
     contextWindow: params.contextWindow ?? 200000,
@@ -757,6 +758,70 @@ describe("resolveModel", () => {
     });
   });
 
+  it("builds an openai fallback for gpt-5.4 mini from the gpt-5-mini template", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5-mini",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5-mini",
+        name: "GPT-5 mini",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4-mini", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4-mini",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("builds an openai fallback for gpt-5.4 nano from the gpt-5-nano template", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5-nano",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5-nano",
+        name: "GPT-5 nano",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4-nano", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4-nano",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+  });
+
   it("normalizes stale native openai gpt-5.4 completions transport to responses", () => {
     mockDiscoveredModel({
       provider: "openai",
@@ -1129,13 +1194,13 @@ describe("resolveModel", () => {
 
   it("lets provider config override registry-found kimi user agent headers", () => {
     mockDiscoveredModel({
-      provider: "kimi-coding",
-      modelId: "k2p5",
+      provider: "kimi",
+      modelId: "kimi-code",
       templateModel: {
         ...buildForwardCompatTemplate({
-          id: "k2p5",
-          name: "Kimi for Coding",
-          provider: "kimi-coding",
+          id: "kimi-code",
+          name: "Kimi Code",
+          provider: "kimi",
           api: "anthropic-messages",
           baseUrl: "https://api.kimi.com/coding/",
         }),
@@ -1146,7 +1211,7 @@ describe("resolveModel", () => {
     const cfg = {
       models: {
         providers: {
-          "kimi-coding": {
+          kimi: {
             headers: {
               "User-Agent": "custom-kimi-client/1.0",
               "X-Kimi-Tenant": "tenant-a",
@@ -1156,8 +1221,9 @@ describe("resolveModel", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const result = resolveModel("kimi-coding", "k2p5", "/tmp/agent", cfg);
+    const result = resolveModel("kimi", "kimi-code", "/tmp/agent", cfg);
     expect(result.error).toBeUndefined();
+    expect(result.model?.id).toBe("kimi-for-coding");
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
       "User-Agent": "custom-kimi-client/1.0",
       "X-Kimi-Tenant": "tenant-a",

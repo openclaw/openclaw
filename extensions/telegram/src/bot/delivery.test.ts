@@ -1,9 +1,10 @@
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
-import { deliverReplies } from "./delivery.js";
 
-const loadWebMedia = vi.fn();
+const { loadWebMedia } = vi.hoisted(() => ({
+  loadWebMedia: vi.fn(),
+}));
 const triggerInternalHook = vi.hoisted(() => vi.fn(async () => {}));
 const messageHookRunner = vi.hoisted(() => ({
   hasHooks: vi.fn<(name: string) => boolean>(() => false),
@@ -21,10 +22,13 @@ type DeliverWithParams = Omit<
   DeliverRepliesParams,
   "chatId" | "token" | "replyToMode" | "textLimit"
 > &
-  Partial<Pick<DeliverRepliesParams, "replyToMode" | "textLimit">>;
+  Partial<Pick<DeliverRepliesParams, "replyToMode" | "textLimit" | "mediaLoader">>;
 type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 
-vi.mock("../../../whatsapp/src/media.js", () => ({
+vi.mock("openclaw/plugin-sdk/web-media", () => ({
+  loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
+}));
+vi.mock("openclaw/plugin-sdk/web-media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
 }));
 
@@ -41,6 +45,9 @@ vi.mock("../../../../src/hooks/internal-hooks.js", async () => {
     triggerInternalHook,
   };
 });
+
+vi.resetModules();
+const { deliverReplies } = await import("./delivery.js");
 
 vi.mock("grammy", () => ({
   InputFile: class {
@@ -70,6 +77,7 @@ async function deliverWith(params: DeliverWithParams) {
   await deliverReplies({
     ...baseDeliveryParams,
     ...params,
+    mediaLoader: params.mediaLoader ?? loadWebMedia,
   });
 }
 
@@ -207,6 +215,30 @@ describe("deliverReplies", () => {
         channelId: "telegram",
         accountId: "work",
         conversationId: "123",
+      }),
+    );
+  });
+
+  it("sets disable_notification when silent is true", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 5,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+      silent: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({
+        disable_notification: true,
       }),
     );
   });
@@ -642,6 +674,36 @@ describe("deliverReplies", () => {
       "123",
       expect.stringContaining("Hello there"),
       expect.any(Object),
+    );
+  });
+
+  it("keeps disable_notification on voice fallback text when silent is true", async () => {
+    const runtime = createRuntime();
+    const sendVoice = vi.fn().mockRejectedValue(createVoiceMessagesForbiddenError());
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 5,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendVoice, sendMessage });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        { mediaUrl: "https://example.com/note.ogg", text: "Hello there", audioAsVoice: true },
+      ],
+      runtime,
+      bot,
+      silent: true,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Hello there"),
+      expect.objectContaining({
+        disable_notification: true,
+      }),
     );
   });
 

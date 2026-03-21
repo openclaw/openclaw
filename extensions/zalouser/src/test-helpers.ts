@@ -1,4 +1,4 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/zalouser";
+import type { RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedZalouserAccount } from "./types.js";
 
 export function createZalouserRuntimeEnv(): RuntimeEnv {

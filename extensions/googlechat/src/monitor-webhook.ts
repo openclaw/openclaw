@@ -4,7 +4,7 @@ import {
   resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
   type WebhookInFlightLimiter,
-} from "openclaw/plugin-sdk/googlechat";
+} from "../runtime-api.js";
 import { verifyGoogleChatRequest } from "./auth.js";
 import type { WebhookTarget } from "./monitor-types.js";
 import type {
@@ -20,6 +20,9 @@ function extractBearerToken(header: unknown): string {
     ? authHeader.slice("bearer ".length).trim()
     : "";
 }
+
+const ADD_ON_PREAUTH_MAX_BYTES = 16 * 1024;
+const ADD_ON_PREAUTH_TIMEOUT_MS = 3_000;
 
 type ParsedGoogleChatInboundPayload =
   | { ok: true; event: GoogleChatEvent; addOnBearerToken: string }
@@ -112,6 +115,12 @@ export function createGoogleChatWebhookRequestHandler(params: {
             req,
             res,
             profile,
+            ...(profile === "pre-auth"
+              ? {
+                  maxBytes: ADD_ON_PREAUTH_MAX_BYTES,
+                  timeoutMs: ADD_ON_PREAUTH_TIMEOUT_MS,
+                }
+              : {}),
             emptyObjectOnEmpty: false,
             invalidJsonMessage: "invalid payload",
           });

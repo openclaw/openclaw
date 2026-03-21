@@ -1011,7 +1011,7 @@ Options:
   --install-method, --method npm|git   Install via npm (default) or from a git checkout
   --npm                               Shortcut for --install-method npm
   --git, --github                     Shortcut for --install-method git
-  --version <version|dist-tag>         npm install: version (default: latest)
+  --version <version|dist-tag|spec>    npm install target (default: latest; use "main" for GitHub main)
   --beta                               Use beta if available, else latest
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw)
   --no-git-update                      Skip git pull for existing checkout
@@ -1024,7 +1024,7 @@ Options:
 
 Environment variables:
   OPENCLAW_INSTALL_METHOD=git|npm
-  OPENCLAW_VERSION=latest|next|<semver>
+  OPENCLAW_VERSION=latest|next|main|<semver>|<spec>
   OPENCLAW_BETA=0|1
   OPENCLAW_GIT_DIR=...
   OPENCLAW_GIT_UPDATE=0|1
@@ -1040,6 +1040,7 @@ Examples:
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard --verify
+  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --version main
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git --no-onboard
 EOF
 }
@@ -1963,6 +1964,43 @@ resolve_beta_version() {
     echo "$beta"
 }
 
+is_explicit_package_install_spec() {
+    local value="${1:-}"
+    [[ "$value" == *"://"* || "$value" == *"#"* || "$value" =~ ^(file|github|git\+ssh|git\+https|git\+http|git\+file|npm): ]]
+}
+
+can_resolve_registry_package_version() {
+    local value="${1:-}"
+    if [[ -z "$value" ]]; then
+        return 0
+    fi
+    if [[ "${value,,}" == "main" ]]; then
+        return 1
+    fi
+    if is_explicit_package_install_spec "$value"; then
+        return 1
+    fi
+    return 0
+}
+
+resolve_package_install_spec() {
+    local package_name="$1"
+    local value="$2"
+    if [[ "${value,,}" == "main" ]]; then
+        echo "github:openclaw/openclaw#main"
+        return 0
+    fi
+    if is_explicit_package_install_spec "$value"; then
+        echo "$value"
+        return 0
+    fi
+    if [[ "$value" == "latest" ]]; then
+        echo "${package_name}@latest"
+        return 0
+    fi
+    echo "${package_name}@${value}"
+}
+
 install_openclaw() {
     local package_name="openclaw"
     if [[ "$USE_BETA" == "1" ]]; then
@@ -1983,18 +2021,16 @@ install_openclaw() {
     fi
 
     local resolved_version=""
-    resolved_version="$(npm view "${package_name}@${OPENCLAW_VERSION}" version 2>/dev/null || true)"
+    if can_resolve_registry_package_version "${OPENCLAW_VERSION}"; then
+        resolved_version="$(npm view "${package_name}@${OPENCLAW_VERSION}" version 2>/dev/null || true)"
+    fi
     if [[ -n "$resolved_version" ]]; then
         ui_info "Installing OpenClaw v${resolved_version}"
     else
         ui_info "Installing OpenClaw (${OPENCLAW_VERSION})"
     fi
     local install_spec=""
-    if [[ "${OPENCLAW_VERSION}" == "latest" ]]; then
-        install_spec="${package_name}@latest"
-    else
-        install_spec="${package_name}@${OPENCLAW_VERSION}"
-    fi
+    install_spec="$(resolve_package_install_spec "${package_name}" "${OPENCLAW_VERSION}")"
 
     if ! install_openclaw_npm "${install_spec}"; then
         ui_warn "npm install failed; retrying"
