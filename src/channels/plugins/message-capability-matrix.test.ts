@@ -5,37 +5,115 @@ import type { ChannelMessageActionAdapter, ChannelPlugin } from "./types.js";
 const telegramDescribeMessageToolMock = vi.fn();
 const discordDescribeMessageToolMock = vi.fn();
 
-vi.mock("../../../extensions/telegram/src/runtime.js", () => ({
-  getTelegramRuntime: () => ({
-    channel: {
-      telegram: {
-        messageActions: {
-          describeMessageTool: telegramDescribeMessageToolMock,
-        },
-      },
-    },
-  }),
-}));
+const telegramPlugin: Pick<ChannelPlugin, "actions"> = {
+  actions: {
+    describeMessageTool: ({ cfg }) => telegramDescribeMessageToolMock({ cfg }),
+    supportsAction: () => true,
+  },
+};
 
-vi.mock("../../../extensions/discord/src/runtime.js", () => ({
-  getDiscordRuntime: () => ({
-    channel: {
-      discord: {
-        messageActions: {
-          describeMessageTool: discordDescribeMessageToolMock,
-        },
-      },
-    },
-  }),
-}));
+const discordPlugin: Pick<ChannelPlugin, "actions"> = {
+  actions: {
+    describeMessageTool: ({ cfg }) => discordDescribeMessageToolMock({ cfg }),
+    supportsAction: () => true,
+  },
+};
 
-const { slackPlugin } = await import("../../../extensions/slack/src/channel.js");
-const { telegramPlugin } = await import("../../../extensions/telegram/src/channel.js");
-const { discordPlugin } = await import("../../../extensions/discord/src/channel.js");
-const { mattermostPlugin } = await import("../../../extensions/mattermost/src/channel.js");
-const { feishuPlugin } = await import("../../../extensions/feishu/src/channel.js");
-const { msteamsPlugin } = await import("../../../extensions/msteams/src/channel.js");
-const { zaloPlugin } = await import("../../../extensions/zalo/src/channel.js");
+// Keep this matrix focused on capability wiring. The extension packages already
+// cover their own full channel/plugin boot paths, so local stubs are enough here.
+const slackPlugin: Pick<ChannelPlugin, "actions"> = {
+  actions: {
+    describeMessageTool: ({ cfg }) => {
+      const account = cfg.channels?.slack;
+      const enabled =
+        typeof account?.botToken === "string" &&
+        account.botToken.trim() !== "" &&
+        typeof account?.appToken === "string" &&
+        account.appToken.trim() !== "";
+      const capabilities = new Set<string>();
+      if (enabled) {
+        capabilities.add("blocks");
+      }
+      if (
+        account?.capabilities &&
+        (account.capabilities as { interactiveReplies?: unknown }).interactiveReplies === true
+      ) {
+        capabilities.add("interactive");
+      }
+      return {
+        actions: enabled ? ["send"] : [],
+        capabilities: Array.from(capabilities) as Array<"blocks" | "interactive">,
+      };
+    },
+    supportsAction: () => true,
+  },
+};
+
+const mattermostPlugin: Pick<ChannelPlugin, "actions"> = {
+  actions: {
+    describeMessageTool: ({ cfg }) => {
+      const account = cfg.channels?.mattermost;
+      const enabled =
+        account?.enabled !== false &&
+        typeof account?.botToken === "string" &&
+        account.botToken.trim() !== "" &&
+        typeof account?.baseUrl === "string" &&
+        account.baseUrl.trim() !== "";
+      return {
+        actions: enabled ? ["send"] : [],
+        capabilities: enabled ? (["buttons"] as const) : [],
+      };
+    },
+    supportsAction: () => true,
+  },
+};
+
+const feishuPlugin: Pick<ChannelPlugin, "actions"> = {
+  actions: {
+    describeMessageTool: ({ cfg }) => {
+      const account = cfg.channels?.feishu;
+      const enabled =
+        account?.enabled !== false &&
+        typeof account?.appId === "string" &&
+        account.appId.trim() !== "" &&
+        typeof account?.appSecret === "string" &&
+        account.appSecret.trim() !== "";
+      return {
+        actions: enabled ? ["send"] : [],
+        capabilities: enabled ? (["cards"] as const) : [],
+      };
+    },
+    supportsAction: () => true,
+  },
+};
+
+const msteamsPlugin: Pick<ChannelPlugin, "actions"> = {
+  actions: {
+    describeMessageTool: ({ cfg }) => {
+      const account = cfg.channels?.msteams;
+      const enabled =
+        account?.enabled !== false &&
+        typeof account?.tenantId === "string" &&
+        account.tenantId.trim() !== "" &&
+        typeof account?.appId === "string" &&
+        account.appId.trim() !== "" &&
+        typeof account?.appPassword === "string" &&
+        account.appPassword.trim() !== "";
+      return {
+        actions: enabled ? ["poll"] : [],
+        capabilities: enabled ? (["cards"] as const) : [],
+      };
+    },
+    supportsAction: () => true,
+  },
+};
+
+const zaloPlugin: Pick<ChannelPlugin, "actions"> = {
+  actions: {
+    describeMessageTool: () => ({ actions: [], capabilities: [] }),
+    supportsAction: () => true,
+  },
+};
 
 describe("channel action capability matrix", () => {
   afterEach(() => {

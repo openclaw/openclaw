@@ -1,7 +1,7 @@
 import {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-} from "openclaw/plugin-sdk/discord";
+} from "../../extensions/discord/runtime-api.js";
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { IRC_FIELD_HELP } from "./schema.irc.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
@@ -1532,6 +1532,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
   "channels.telegram.silentErrorReplies":
     "When true, Telegram bot replies marked as errors are sent silently (no notification sound). Default: false.",
+  "channels.telegram.apiRoot":
+    "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+  "channels.telegram.autoTopicLabel":
+    "Auto-rename DM forum topics on first message using LLM. Default: true. Set to false to disable, or use object form { enabled: true, prompt: '...' } for custom prompt.",
+  "channels.telegram.autoTopicLabel.enabled":
+    "Whether auto topic labeling is enabled. Default: true.",
+  "channels.telegram.autoTopicLabel.prompt":
+    "Custom prompt for LLM-based topic naming. The user message is appended after the prompt.",
   "channels.telegram.threadBindings.enabled":
     "Enable Telegram conversation binding features (/focus, /unfocus, /agents, and /session idle|max-age). Overrides session.threadBindings.enabled when set.",
   "channels.telegram.threadBindings.idleHours":

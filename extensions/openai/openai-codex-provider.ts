@@ -9,6 +9,7 @@ import {
   listProfilesForProvider,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/provider-auth";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { loginOpenAICodexOAuth } from "openclaw/plugin-sdk/provider-auth-login";
 import {
   DEFAULT_CONTEXT_TOKENS,
@@ -16,9 +17,9 @@ import {
   normalizeProviderId,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-models";
-import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-oauth";
 import { createOpenAIAttributionHeadersWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "../../src/providers/openai-defaults.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 import {
   cloneFirstTemplateModel,
@@ -38,7 +39,6 @@ const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_53_SPARK_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
-const OPENAI_CODEX_DEFAULT_MODEL = `${PROVIDER_ID}/${OPENAI_CODEX_GPT_54_MODEL_ID}`;
 const OPENAI_CODEX_XHIGH_MODEL_IDS = [
   OPENAI_CODEX_GPT_54_MODEL_ID,
   OPENAI_CODEX_GPT_53_MODEL_ID,
