@@ -189,6 +189,8 @@ export async function withSessionStoreLockForTest<T>(
 
 type LoadSessionStoreOptions = {
   skipCache?: boolean;
+  /** Skip the return-path structuredClone — safe when the caller never mutates the result. */
+  readOnly?: boolean;
 };
 
 export function loadSessionStore(
@@ -202,7 +204,7 @@ export function loadSessionStore(
       const currentMtimeMs = getFileMtimeMs(storePath);
       if (currentMtimeMs === cached.mtimeMs) {
         // Return a deep copy to prevent external mutations affecting cache
-        return structuredClone(cached.store);
+        return opts.readOnly ? cached.store : structuredClone(cached.store);
       }
       invalidateSessionStoreCache(storePath);
     }
@@ -276,7 +278,7 @@ export function loadSessionStore(
     });
   }
 
-  return structuredClone(store);
+  return opts.readOnly ? store : structuredClone(store);
 }
 
 export function readSessionUpdatedAt(params: {
