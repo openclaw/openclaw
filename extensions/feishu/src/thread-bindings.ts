@@ -6,6 +6,7 @@ import {
   resolveThreadBindingConversationIdFromBindingId,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
+  type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
@@ -233,11 +234,15 @@ export function createFeishuThreadBindingManager(params: {
         }
       }
       getState().managersByAccountId.delete(accountId);
-      unregisterSessionBindingAdapter({ channel: "feishu", accountId });
+      unregisterSessionBindingAdapter({
+        channel: "feishu",
+        accountId,
+        adapter: sessionBindingAdapter,
+      });
     },
   };
 
-  registerSessionBindingAdapter({
+  const sessionBindingAdapter: SessionBindingAdapter = {
     channel: "feishu",
     accountId,
     capabilities: {
@@ -292,7 +297,9 @@ export function createFeishuThreadBindingManager(params: {
       const removed = manager.unbindConversation(conversationId);
       return removed ? [toSessionBindingRecord(removed, { idleTimeoutMs, maxAgeMs })] : [];
     },
-  });
+  };
+
+  registerSessionBindingAdapter(sessionBindingAdapter);
 
   getState().managersByAccountId.set(accountId, manager);
   return manager;
