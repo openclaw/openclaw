@@ -1,24 +1,48 @@
 import {
-  listSlackDirectoryGroupsLive,
-  listSlackDirectoryPeersLive,
-} from "../../../extensions/slack/src/directory-live.js";
-import { monitorSlackProvider } from "../../../extensions/slack/src/index.js";
-import { probeSlack } from "../../../extensions/slack/src/probe.js";
-import { resolveSlackChannelAllowlist } from "../../../extensions/slack/src/resolve-channels.js";
-import { resolveSlackUserAllowlist } from "../../../extensions/slack/src/resolve-users.js";
-import { sendMessageSlack } from "../../../extensions/slack/src/send.js";
-import { handleSlackAction } from "../../agents/tools/slack-actions.js";
+  createLazyRuntimeMethodBinder,
+  createLazyRuntimeSurface,
+} from "../../shared/lazy-runtime.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
+
+const loadRuntimeSlackOps = createLazyRuntimeSurface(
+  () => import("./runtime-slack-ops.runtime.js"),
+  ({ runtimeSlackOps }) => runtimeSlackOps,
+);
+
+const bindSlackRuntimeMethod = createLazyRuntimeMethodBinder(loadRuntimeSlackOps);
+
+const listDirectoryGroupsLiveLazy = bindSlackRuntimeMethod(
+  (runtimeSlackOps) => runtimeSlackOps.listDirectoryGroupsLive,
+);
+const listDirectoryPeersLiveLazy = bindSlackRuntimeMethod(
+  (runtimeSlackOps) => runtimeSlackOps.listDirectoryPeersLive,
+);
+const probeSlackLazy = bindSlackRuntimeMethod((runtimeSlackOps) => runtimeSlackOps.probeSlack);
+const resolveChannelAllowlistLazy = bindSlackRuntimeMethod(
+  (runtimeSlackOps) => runtimeSlackOps.resolveChannelAllowlist,
+);
+const resolveUserAllowlistLazy = bindSlackRuntimeMethod(
+  (runtimeSlackOps) => runtimeSlackOps.resolveUserAllowlist,
+);
+const sendMessageSlackLazy = bindSlackRuntimeMethod(
+  (runtimeSlackOps) => runtimeSlackOps.sendMessageSlack,
+);
+const monitorSlackProviderLazy = bindSlackRuntimeMethod(
+  (runtimeSlackOps) => runtimeSlackOps.monitorSlackProvider,
+);
+const handleSlackActionLazy = bindSlackRuntimeMethod(
+  (runtimeSlackOps) => runtimeSlackOps.handleSlackAction,
+);
 
 export function createRuntimeSlack(): PluginRuntimeChannel["slack"] {
   return {
-    listDirectoryGroupsLive: listSlackDirectoryGroupsLive,
-    listDirectoryPeersLive: listSlackDirectoryPeersLive,
-    probeSlack,
-    resolveChannelAllowlist: resolveSlackChannelAllowlist,
-    resolveUserAllowlist: resolveSlackUserAllowlist,
-    sendMessageSlack,
-    monitorSlackProvider,
-    handleSlackAction,
+    listDirectoryGroupsLive: listDirectoryGroupsLiveLazy,
+    listDirectoryPeersLive: listDirectoryPeersLiveLazy,
+    probeSlack: probeSlackLazy,
+    resolveChannelAllowlist: resolveChannelAllowlistLazy,
+    resolveUserAllowlist: resolveUserAllowlistLazy,
+    sendMessageSlack: sendMessageSlackLazy,
+    monitorSlackProvider: monitorSlackProviderLazy,
+    handleSlackAction: handleSlackActionLazy,
   };
 }

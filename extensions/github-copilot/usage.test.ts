@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createProviderUsageFetch,
   makeResponse,
-} from "../../src/test-utils/provider-usage-fetch.js";
+} from "../../test/helpers/extensions/provider-usage-fetch.js";
 import { fetchCopilotUsage } from "./usage.js";
 
 describe("fetchCopilotUsage", () => {

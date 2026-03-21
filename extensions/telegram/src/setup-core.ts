@@ -1,18 +1,17 @@
 import {
-  applyAccountNameToChannelSection,
-  migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
-import {
+  createEnvPatchedAccountSetupAdapter,
+  DEFAULT_ACCOUNT_ID,
   patchChannelConfigForAccount,
+  promptResolvedAllowFrom,
   splitSetupEntries,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import { formatCliCommand } from "../../../src/cli/command-format.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
+  type OpenClawConfig,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupAdapter, ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
+import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import type { TelegramNetworkConfig } from "../runtime-api.js";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
-import { fetchTelegramChatId } from "./api-fetch.js";
+import { lookupTelegramChatId } from "./api-fetch.js";
 
 const channel = "telegram" as const;
 
@@ -48,6 +47,9 @@ export function parseTelegramAllowFromId(raw: string): string | null {
 export async function resolveTelegramAllowFromEntries(params: {
   entries: string[];
   credentialValue?: string;
+  apiRoot?: string;
+  proxyUrl?: string;
+  network?: TelegramNetworkConfig;
 }) {
   return await Promise.all(
     params.entries.map(async (entry) => {
@@ -60,9 +62,12 @@ export async function resolveTelegramAllowFromEntries(params: {
         return { input: entry, resolved: false, id: null };
       }
       const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-      const id = await fetchTelegramChatId({
+      const id = await lookupTelegramChatId({
         token: params.credentialValue,
         chatId: username,
+        apiRoot: params.apiRoot,
+        proxyUrl: params.proxyUrl,
+        network: params.network,
       });
       return { input: entry, resolved: Boolean(id), id };
     }),
@@ -71,11 +76,7 @@ export async function resolveTelegramAllowFromEntries(params: {
 
 export async function promptTelegramAllowFromForAccount(params: {
   cfg: OpenClawConfig;
-  prompter: Parameters<
-    NonNullable<
-      import("../../../src/channels/plugins/setup-wizard-types.js").ChannelSetupDmPolicy["promptAllowFrom"]
-    >
-  >[0]["prompter"];
+  prompter: WizardPrompter;
   accountId?: string;
 }) {
   const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
@@ -87,8 +88,6 @@ export async function promptTelegramAllowFromForAccount(params: {
       "Telegram",
     );
   }
-  const { promptResolvedAllowFrom } =
-    await import("../../../src/channels/plugins/setup-wizard-helpers.js");
   const unique = await promptResolvedAllowFrom({
     prompter: params.prompter,
     existing: resolved.config.allowFrom ?? [],
@@ -104,6 +103,9 @@ export async function promptTelegramAllowFromForAccount(params: {
       resolveTelegramAllowFromEntries({
         credentialValue: token,
         entries,
+        apiRoot: resolved.config.apiRoot,
+        proxyUrl: resolved.config.proxy,
+        network: resolved.config.network,
       }),
   });
   return patchChannelConfigForAccount({
@@ -114,78 +116,11 @@ export async function promptTelegramAllowFromForAccount(params: {
   });
 }
 
-export const telegramSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
-  validateInput: ({ accountId, input }) => {
-    if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      return "TELEGRAM_BOT_TOKEN can only be used for the default account.";
-    }
-    if (!input.useEnv && !input.token && !input.tokenFile) {
-      return "Telegram requires token or --token-file (or --use-env).";
-    }
-    return null;
-  },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          telegram: {
-            ...next.channels?.telegram,
-            enabled: true,
-            ...(input.useEnv
-              ? {}
-              : input.tokenFile
-                ? { tokenFile: input.tokenFile }
-                : input.token
-                  ? { botToken: input.token }
-                  : {}),
-          },
-        },
-      };
-    }
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        telegram: {
-          ...next.channels?.telegram,
-          enabled: true,
-          accounts: {
-            ...next.channels?.telegram?.accounts,
-            [accountId]: {
-              ...next.channels?.telegram?.accounts?.[accountId],
-              enabled: true,
-              ...(input.tokenFile
-                ? { tokenFile: input.tokenFile }
-                : input.token
-                  ? { botToken: input.token }
-                  : {}),
-            },
-          },
-        },
-      },
-    };
-  },
-};
+export const telegramSetupAdapter: ChannelSetupAdapter = createEnvPatchedAccountSetupAdapter({
+  channelKey: channel,
+  defaultAccountOnlyEnvError: "TELEGRAM_BOT_TOKEN can only be used for the default account.",
+  missingCredentialError: "Telegram requires token or --token-file (or --use-env).",
+  hasCredentials: (input) => Boolean(input.token || input.tokenFile),
+  buildPatch: (input) =>
+    input.tokenFile ? { tokenFile: input.tokenFile } : input.token ? { botToken: input.token } : {},
+});

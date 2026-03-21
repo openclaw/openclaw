@@ -78,14 +78,35 @@ import {
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createRuntimeDiscord } from "./runtime-discord.js";
 import { createRuntimeIMessage } from "./runtime-imessage.js";
+import { createRuntimeMatrix } from "./runtime-matrix.js";
 import { createRuntimeSignal } from "./runtime-signal.js";
 import { createRuntimeSlack } from "./runtime-slack.js";
 import { createRuntimeTelegram } from "./runtime-telegram.js";
 import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
 import type { PluginRuntime } from "./types.js";
 
+function defineCachedValue<T extends object, K extends PropertyKey>(
+  target: T,
+  key: K,
+  create: () => unknown,
+): void {
+  let cached: unknown;
+  let ready = false;
+  Object.defineProperty(target, key, {
+    configurable: true,
+    enumerable: true,
+    get() {
+      if (!ready) {
+        cached = create();
+        ready = true;
+      }
+      return cached;
+    },
+  });
+}
+
 export function createRuntimeChannel(): PluginRuntime["channel"] {
-  return {
+  const channelRuntime = {
     text: {
       chunkByNewline,
       chunkMarkdownText,
@@ -167,12 +188,6 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       shouldComputeCommandAuthorized,
       shouldHandleTextCommands,
     },
-    discord: createRuntimeDiscord(),
-    slack: createRuntimeSlack(),
-    telegram: createRuntimeTelegram(),
-    signal: createRuntimeSignal(),
-    imessage: createRuntimeIMessage(),
-    whatsapp: createRuntimeWhatsApp(),
     line: {
       listLineAccountIds,
       resolveDefaultLineAccountId,
@@ -190,5 +205,24 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       buildTemplateMessageFromPayload,
       monitorLineProvider,
     },
-  };
+  } satisfies Omit<
+    PluginRuntime["channel"],
+    "discord" | "slack" | "telegram" | "matrix" | "signal" | "imessage" | "whatsapp"
+  > &
+    Partial<
+      Pick<
+        PluginRuntime["channel"],
+        "discord" | "slack" | "telegram" | "matrix" | "signal" | "imessage" | "whatsapp"
+      >
+    >;
+
+  defineCachedValue(channelRuntime, "discord", createRuntimeDiscord);
+  defineCachedValue(channelRuntime, "slack", createRuntimeSlack);
+  defineCachedValue(channelRuntime, "telegram", createRuntimeTelegram);
+  defineCachedValue(channelRuntime, "matrix", createRuntimeMatrix);
+  defineCachedValue(channelRuntime, "signal", createRuntimeSignal);
+  defineCachedValue(channelRuntime, "imessage", createRuntimeIMessage);
+  defineCachedValue(channelRuntime, "whatsapp", createRuntimeWhatsApp);
+
+  return channelRuntime as PluginRuntime["channel"];
 }

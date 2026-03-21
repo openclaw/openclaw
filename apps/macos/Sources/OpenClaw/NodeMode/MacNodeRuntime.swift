@@ -465,6 +465,23 @@ actor MacNodeRuntime {
             ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
             : self.mainSessionKey
         let runId = UUID().uuidString
+        let envOverrideDiagnostics = HostEnvSanitizer.inspectOverrides(
+            overrides: params.env,
+            blockPathOverrides: true)
+        if !envOverrideDiagnostics.blockedKeys.isEmpty || !envOverrideDiagnostics.invalidKeys.isEmpty {
+            var details: [String] = []
+            if !envOverrideDiagnostics.blockedKeys.isEmpty {
+                details.append("blocked override keys: \(envOverrideDiagnostics.blockedKeys.joined(separator: ", "))")
+            }
+            if !envOverrideDiagnostics.invalidKeys.isEmpty {
+                details.append(
+                    "invalid non-portable override keys: \(envOverrideDiagnostics.invalidKeys.joined(separator: ", "))")
+            }
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "SYSTEM_RUN_DENIED: environment override rejected (\(details.joined(separator: "; ")))")
+        }
         let evaluation = await ExecApprovalEvaluator.evaluate(
             command: command,
             rawCommand: params.rawCommand,
@@ -507,8 +524,7 @@ actor MacNodeRuntime {
             persistAllowlist: persistAllowlist,
             security: evaluation.security,
             agentId: evaluation.agentId,
-            command: command,
-            allowlistResolutions: evaluation.allowlistResolutions)
+            allowAlwaysPatterns: evaluation.allowAlwaysPatterns)
 
         if evaluation.security == .allowlist, !evaluation.allowlistSatisfied, !evaluation.skillAllow, !approvedByAsk {
             await self.emitExecEvent(
@@ -795,15 +811,11 @@ extension MacNodeRuntime {
         persistAllowlist: Bool,
         security: ExecSecurity,
         agentId: String?,
-        command: [String],
-        allowlistResolutions: [ExecCommandResolution])
+        allowAlwaysPatterns: [String])
     {
         guard persistAllowlist, security == .allowlist else { return }
         var seenPatterns = Set<String>()
-        for candidate in allowlistResolutions {
-            guard let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: candidate) else {
-                continue
-            }
+        for pattern in allowAlwaysPatterns {
             if seenPatterns.insert(pattern).inserted {
                 ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
             }

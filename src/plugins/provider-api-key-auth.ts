@@ -1,10 +1,7 @@
-import { upsertAuthProfile } from "../agents/auth-profiles.js";
-import { normalizeApiKeyInput, validateApiKeyInput } from "../commands/auth-choice.api-key.js";
-import { ensureApiKeyFromOptionEnvOrPrompt } from "../commands/auth-choice.apply-helpers.js";
-import { buildApiKeyCredential } from "../commands/onboard-auth.credentials.js";
-import { applyAuthProfileConfig } from "../commands/onboard-auth.js";
+import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type {
   ProviderAuthMethod,
@@ -23,6 +20,8 @@ type ProviderApiKeyAuthMethodOptions = {
   envVar: string;
   promptMessage: string;
   profileId?: string;
+  profileIds?: string[];
+  allowProfile?: boolean;
   defaultModel?: string;
   expectedProviders?: string[];
   metadata?: Record<string, string>;
@@ -30,6 +29,11 @@ type ProviderApiKeyAuthMethodOptions = {
   noteTitle?: string;
   applyConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 };
+
+const loadProviderApiKeyAuthRuntime = createLazyRuntimeSurface(
+  () => import("./provider-api-key-auth.runtime.js"),
+  ({ providerApiKeyAuthRuntime }) => providerApiKeyAuthRuntime,
+);
 
 function resolveStringOption(opts: Record<string, unknown> | undefined, optionKey: string) {
   return normalizeOptionalSecretInput(opts?.[optionKey]);
@@ -39,18 +43,40 @@ function resolveProfileId(params: { providerId: string; profileId?: string }) {
   return params.profileId?.trim() || `${params.providerId}:default`;
 }
 
-function applyApiKeyConfig(params: {
+function resolveProfileIds(params: {
+  providerId: string;
+  profileId?: string;
+  profileIds?: string[];
+}) {
+  const explicit = Array.from(
+    new Set((params.profileIds ?? []).map((value) => value.trim()).filter(Boolean)),
+  );
+  if (explicit.length > 0) {
+    return explicit;
+  }
+  return [resolveProfileId(params)];
+}
+
+async function applyApiKeyConfig(params: {
   ctx: ProviderAuthMethodNonInteractiveContext;
   providerId: string;
-  profileId: string;
+  profileIds: string[];
+  defaultModel?: string;
   applyConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 }) {
-  const next = applyAuthProfileConfig(params.ctx.config, {
-    profileId: params.profileId,
-    provider: params.providerId,
-    mode: "api_key",
-  });
-  return params.applyConfig ? params.applyConfig(next) : next;
+  const { applyAuthProfileConfig, applyPrimaryModel } = await loadProviderApiKeyAuthRuntime();
+  let next = params.ctx.config;
+  for (const profileId of params.profileIds) {
+    next = applyAuthProfileConfig(next, {
+      profileId,
+      provider: profileId.split(":", 1)[0]?.trim() || params.providerId,
+      mode: "api_key",
+    });
+  }
+  if (params.applyConfig) {
+    next = params.applyConfig(next);
+  }
+  return params.defaultModel ? applyPrimaryModel(next, params.defaultModel) : next;
 }
 
 export function createProviderApiKeyAuthMethod(
@@ -68,6 +94,12 @@ export function createProviderApiKeyAuthMethod(
       let capturedSecretInput: SecretInput | undefined;
       let capturedCredential = false;
       let capturedMode: "plaintext" | "ref" | undefined;
+      const {
+        buildApiKeyCredential,
+        ensureApiKeyFromOptionEnvOrPrompt,
+        normalizeApiKeyInput,
+        validateApiKeyInput,
+      } = await loadProviderApiKeyAuthRuntime();
 
       await ensureApiKeyFromOptionEnvOrPrompt({
         token: flagValue ?? normalizeOptionalSecretInput(ctx.opts?.token),
@@ -99,19 +131,19 @@ export function createProviderApiKeyAuthMethod(
         throw new Error(`Missing API key input for provider "${params.providerId}".`);
       }
       const credentialInput = capturedSecretInput ?? "";
+      const profileIds = resolveProfileIds(params);
 
       return {
-        profiles: [
-          {
-            profileId: resolveProfileId(params),
-            credential: buildApiKeyCredential(
-              params.providerId,
-              credentialInput,
-              params.metadata,
-              capturedMode ? { secretInputMode: capturedMode } : undefined,
-            ),
-          },
-        ],
+        profiles: profileIds.map((profileId) => ({
+          profileId,
+          credential: buildApiKeyCredential(
+            profileId.split(":", 1)[0]?.trim() || params.providerId,
+            credentialInput,
+            params.metadata,
+            capturedMode ? { secretInputMode: capturedMode } : undefined,
+          ),
+        })),
+        ...(params.applyConfig ? { configPatch: params.applyConfig(ctx.config) } : {}),
         ...(params.defaultModel ? { defaultModel: params.defaultModel } : {}),
       };
     },
@@ -122,32 +154,36 @@ export function createProviderApiKeyAuthMethod(
         flagValue: resolveStringOption(opts, params.optionKey),
         flagName: params.flagName,
         envVar: params.envVar,
+        ...(params.allowProfile === false ? { allowProfile: false } : {}),
       });
       if (!resolved) {
         return null;
       }
 
-      const profileId = resolveProfileId(params);
+      const profileIds = resolveProfileIds(params);
       if (resolved.source !== "profile") {
-        const credential = ctx.toApiKeyCredential({
-          provider: params.providerId,
-          resolved,
-          ...(params.metadata ? { metadata: params.metadata } : {}),
-        });
-        if (!credential) {
-          return null;
+        for (const profileId of profileIds) {
+          const credential = ctx.toApiKeyCredential({
+            provider: profileId.split(":", 1)[0]?.trim() || params.providerId,
+            resolved,
+            ...(params.metadata ? { metadata: params.metadata } : {}),
+          });
+          if (!credential) {
+            return null;
+          }
+          upsertAuthProfile({
+            profileId,
+            credential,
+            agentDir: ctx.agentDir,
+          });
         }
-        upsertAuthProfile({
-          profileId,
-          credential,
-          agentDir: ctx.agentDir,
-        });
       }
 
-      return applyApiKeyConfig({
+      return await applyApiKeyConfig({
         ctx,
         providerId: params.providerId,
-        profileId,
+        profileIds,
+        defaultModel: params.defaultModel,
         applyConfig: params.applyConfig,
       });
     },

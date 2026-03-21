@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as sessions from "../config/sessions.js";
+import * as gateway from "../gateway/call.js";
+import * as sessionUtils from "../gateway/session-utils.fs.js";
+import { recoverOrphanedSubagentSessions } from "./subagent-orphan-recovery.js";
+import * as subagentRegistry from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 // Mock dependencies before importing the module under test
@@ -51,10 +56,6 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("recovers orphaned sessions with abortedLastRun=true", async () => {
-    const sessions = await import("../config/sessions.js");
-    const gateway = await import("../gateway/call.js");
-    const subagentRegistry = await import("./subagent-registry.js");
-
     const sessionEntry = {
       sessionId: "session-abc",
       updatedAt: Date.now(),
@@ -68,8 +69,6 @@ describe("subagent-orphan-recovery", () => {
     const run = createTestRunRecord();
     const activeRuns = new Map<string, SubagentRunRecord>();
     activeRuns.set("run-1", run);
-
-    const { recoverOrphanedSubagentSessions } = await import("./subagent-orphan-recovery.js");
 
     const result = await recoverOrphanedSubagentSessions({
       getActiveRuns: () => activeRuns,
@@ -98,9 +97,6 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("skips sessions that are not aborted", async () => {
-    const sessions = await import("../config/sessions.js");
-    const gateway = await import("../gateway/call.js");
-
     vi.mocked(sessions.loadSessionStore).mockReturnValue({
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
@@ -112,8 +108,6 @@ describe("subagent-orphan-recovery", () => {
     const activeRuns = new Map<string, SubagentRunRecord>();
     activeRuns.set("run-1", createTestRunRecord());
 
-    const { recoverOrphanedSubagentSessions } = await import("./subagent-orphan-recovery.js");
-
     const result = await recoverOrphanedSubagentSessions({
       getActiveRuns: () => activeRuns,
     });
@@ -124,8 +118,6 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("skips runs that have already ended", async () => {
-    const gateway = await import("../gateway/call.js");
-
     const activeRuns = new Map<string, SubagentRunRecord>();
     activeRuns.set(
       "run-1",
@@ -133,8 +125,6 @@ describe("subagent-orphan-recovery", () => {
         endedAt: Date.now() - 1000,
       }),
     );
-
-    const { recoverOrphanedSubagentSessions } = await import("./subagent-orphan-recovery.js");
 
     const result = await recoverOrphanedSubagentSessions({
       getActiveRuns: () => activeRuns,
@@ -145,9 +135,6 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("handles multiple orphaned sessions", async () => {
-    const sessions = await import("../config/sessions.js");
-    const gateway = await import("../gateway/call.js");
-
     vi.mocked(sessions.loadSessionStore).mockReturnValue({
       "agent:main:subagent:session-a": {
         sessionId: "id-a",
@@ -192,8 +179,6 @@ describe("subagent-orphan-recovery", () => {
       }),
     );
 
-    const { recoverOrphanedSubagentSessions } = await import("./subagent-orphan-recovery.js");
-
     const result = await recoverOrphanedSubagentSessions({
       getActiveRuns: () => activeRuns,
     });
@@ -204,9 +189,6 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("handles callGateway failure gracefully and preserves abortedLastRun flag", async () => {
-    const sessions = await import("../config/sessions.js");
-    const gateway = await import("../gateway/call.js");
-
     vi.mocked(sessions.loadSessionStore).mockReturnValue({
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
@@ -219,8 +201,6 @@ describe("subagent-orphan-recovery", () => {
 
     const activeRuns = new Map<string, SubagentRunRecord>();
     activeRuns.set("run-1", createTestRunRecord());
-
-    const { recoverOrphanedSubagentSessions } = await import("./subagent-orphan-recovery.js");
 
     const result = await recoverOrphanedSubagentSessions({
       getActiveRuns: () => activeRuns,
@@ -235,8 +215,6 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("returns empty results when no active runs exist", async () => {
-    const { recoverOrphanedSubagentSessions } = await import("./subagent-orphan-recovery.js");
-
     const result = await recoverOrphanedSubagentSessions({
       getActiveRuns: () => new Map(),
     });
@@ -247,16 +225,11 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("skips sessions with missing session entry in store", async () => {
-    const sessions = await import("../config/sessions.js");
-    const gateway = await import("../gateway/call.js");
-
     // Store has no matching entry
     vi.mocked(sessions.loadSessionStore).mockReturnValue({});
 
     const activeRuns = new Map<string, SubagentRunRecord>();
     activeRuns.set("run-1", createTestRunRecord());
-
-    const { recoverOrphanedSubagentSessions } = await import("./subagent-orphan-recovery.js");
 
     const result = await recoverOrphanedSubagentSessions({
       getActiveRuns: () => activeRuns,
@@ -268,9 +241,6 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("clears abortedLastRun flag after successful resume", async () => {
-    const sessions = await import("../config/sessions.js");
-    const gateway = await import("../gateway/call.js");
-
     // Ensure callGateway succeeds for this test
     vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "resumed-run" } as never);
 
@@ -284,8 +254,6 @@ describe("subagent-orphan-recovery", () => {
 
     const activeRuns = new Map<string, SubagentRunRecord>();
     activeRuns.set("run-1", createTestRunRecord());
-
-    const { recoverOrphanedSubagentSessions } = await import("./subagent-orphan-recovery.js");
 
     await recoverOrphanedSubagentSessions({
       getActiveRuns: () => activeRuns,
@@ -309,9 +277,6 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("truncates long task descriptions in resume message", async () => {
-    const sessions = await import("../config/sessions.js");
-    const gateway = await import("../gateway/call.js");
-
     vi.mocked(sessions.loadSessionStore).mockReturnValue({
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
@@ -323,8 +288,6 @@ describe("subagent-orphan-recovery", () => {
     const longTask = "x".repeat(5000);
     const activeRuns = new Map<string, SubagentRunRecord>();
     activeRuns.set("run-1", createTestRunRecord({ task: longTask }));
-
-    const { recoverOrphanedSubagentSessions } = await import("./subagent-orphan-recovery.js");
 
     await recoverOrphanedSubagentSessions({
       getActiveRuns: () => activeRuns,
@@ -340,10 +303,6 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("includes last human message in resume when available", async () => {
-    const sessions = await import("../config/sessions.js");
-    const gateway = await import("../gateway/call.js");
-    const sessionUtils = await import("../gateway/session-utils.fs.js");
-
     vi.mocked(sessions.loadSessionStore).mockReturnValue({
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
@@ -363,7 +322,6 @@ describe("subagent-orphan-recovery", () => {
     const activeRuns = new Map<string, SubagentRunRecord>();
     activeRuns.set("run-1", createTestRunRecord());
 
-    const { recoverOrphanedSubagentSessions } = await import("./subagent-orphan-recovery.js");
     await recoverOrphanedSubagentSessions({ getActiveRuns: () => activeRuns });
 
     const callArgs = vi.mocked(gateway.callGateway).mock.calls[0];
@@ -374,10 +332,6 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("adds config change hint when assistant messages reference config modifications", async () => {
-    const sessions = await import("../config/sessions.js");
-    const gateway = await import("../gateway/call.js");
-    const sessionUtils = await import("../gateway/session-utils.fs.js");
-
     vi.mocked(sessions.loadSessionStore).mockReturnValue({
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
@@ -394,7 +348,6 @@ describe("subagent-orphan-recovery", () => {
     const activeRuns = new Map<string, SubagentRunRecord>();
     activeRuns.set("run-1", createTestRunRecord());
 
-    const { recoverOrphanedSubagentSessions } = await import("./subagent-orphan-recovery.js");
     await recoverOrphanedSubagentSessions({ getActiveRuns: () => activeRuns });
 
     const callArgs = vi.mocked(gateway.callGateway).mock.calls[0];
@@ -404,9 +357,6 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("prevents duplicate resume when updateSessionStore fails", async () => {
-    const sessions = await import("../config/sessions.js");
-    const gateway = await import("../gateway/call.js");
-
     vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "new-run" } as never);
     vi.mocked(sessions.updateSessionStore).mockRejectedValue(new Error("write failed"));
 
@@ -427,7 +377,6 @@ describe("subagent-orphan-recovery", () => {
       }),
     );
 
-    const { recoverOrphanedSubagentSessions } = await import("./subagent-orphan-recovery.js");
     const result = await recoverOrphanedSubagentSessions({ getActiveRuns: () => activeRuns });
 
     expect(result.recovered).toBe(1);

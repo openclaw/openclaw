@@ -1,10 +1,10 @@
+import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
-import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.js";
 import type {
@@ -16,10 +16,6 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import {
-  resolveBuiltInExplicitTarget,
-  resolveBuiltInTargetChatType,
-} from "./built-in-channel-messaging.js";
 import {
   normalizeDeliverableOutboundChannel,
   resolveOutboundChannelPlugin,
@@ -78,7 +74,7 @@ function parseExplicitTargetWithPlugin(params: {
   return (
     resolveOutboundChannelPlugin({ channel: provider })?.messaging?.parseExplicitTarget?.({
       raw,
-    }) ?? resolveBuiltInExplicitTarget(provider, raw)
+    }) ?? null
   );
 }
 
@@ -422,7 +418,7 @@ function inferChatTypeFromTarget(params: {
   return (
     resolveOutboundChannelPlugin({
       channel: params.channel,
-    })?.messaging?.inferTargetChatType?.({ to }) ?? resolveBuiltInTargetChatType(params.channel, to)
+    })?.messaging?.inferTargetChatType?.({ to }) ?? undefined
   );
 }
 

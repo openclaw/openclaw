@@ -5,9 +5,14 @@ import { discoverOpenClawPlugins } from "../src/plugins/discovery.js";
 // Match exact monolithic-root specifier in any code path:
 // imports/exports, require/dynamic import, and test mocks (vi.mock/jest.mock).
 const ROOT_IMPORT_PATTERN = /["']openclaw\/plugin-sdk["']/;
+const LEGACY_COMPAT_IMPORT_PATTERN = /["']openclaw\/plugin-sdk\/compat["']/;
 
 function hasMonolithicRootImport(content: string): boolean {
   return ROOT_IMPORT_PATTERN.test(content);
+}
+
+function hasLegacyCompatImport(content: string): boolean {
+  return LEGACY_COMPAT_IMPORT_PATTERN.test(content);
 }
 
 function isSourceFile(filePath: string): boolean {
@@ -63,6 +68,27 @@ function collectSharedExtensionSourceFiles(): string[] {
   return collectPluginSourceFiles(path.join(process.cwd(), "extensions", "shared"));
 }
 
+function collectBundledExtensionSourceFiles(): string[] {
+  const extensionsDir = path.join(process.cwd(), "extensions");
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = fs.readdirSync(extensionsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === "shared") {
+      continue;
+    }
+    for (const srcFile of collectPluginSourceFiles(path.join(extensionsDir, entry.name))) {
+      files.push(srcFile);
+    }
+  }
+  return files;
+}
+
 function main() {
   const discovery = discoverOpenClawPlugins({});
   const bundledCandidates = discovery.candidates.filter((c) => c.origin === "bundled");
@@ -76,8 +102,12 @@ function main() {
   for (const sharedFile of collectSharedExtensionSourceFiles()) {
     filesToCheck.add(sharedFile);
   }
+  for (const extensionFile of collectBundledExtensionSourceFiles()) {
+    filesToCheck.add(extensionFile);
+  }
 
-  const offenders: string[] = [];
+  const monolithicOffenders: string[] = [];
+  const legacyCompatOffenders: string[] = [];
   for (const entryFile of filesToCheck) {
     let content = "";
     try {
@@ -86,19 +116,35 @@ function main() {
       continue;
     }
     if (hasMonolithicRootImport(content)) {
-      offenders.push(entryFile);
+      monolithicOffenders.push(entryFile);
+    }
+    if (hasLegacyCompatImport(content)) {
+      legacyCompatOffenders.push(entryFile);
     }
   }
 
-  if (offenders.length > 0) {
-    console.error("Bundled plugin source files must not import monolithic openclaw/plugin-sdk.");
-    for (const file of offenders.toSorted()) {
-      const relative = path.relative(process.cwd(), file) || file;
-      console.error(`- ${relative}`);
+  if (monolithicOffenders.length > 0 || legacyCompatOffenders.length > 0) {
+    if (monolithicOffenders.length > 0) {
+      console.error("Bundled plugin source files must not import monolithic openclaw/plugin-sdk.");
+      for (const file of monolithicOffenders.toSorted()) {
+        const relative = path.relative(process.cwd(), file) || file;
+        console.error(`- ${relative}`);
+      }
     }
-    console.error(
-      "Use openclaw/plugin-sdk/<channel> for channel plugins, /core for startup surfaces, or /compat for broader internals.",
-    );
+    if (legacyCompatOffenders.length > 0) {
+      console.error(
+        "Bundled plugin source files must not import legacy openclaw/plugin-sdk/compat.",
+      );
+      for (const file of legacyCompatOffenders.toSorted()) {
+        const relative = path.relative(process.cwd(), file) || file;
+        console.error(`- ${relative}`);
+      }
+    }
+    if (monolithicOffenders.length > 0 || legacyCompatOffenders.length > 0) {
+      console.error(
+        "Use openclaw/plugin-sdk/<domain> or openclaw/plugin-sdk/<channel> subpaths for bundled plugins; root and compat are legacy surfaces only.",
+      );
+    }
     process.exit(1);
   }
 

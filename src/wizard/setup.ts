@@ -13,6 +13,10 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
+import {
+  buildPluginCompatibilityNotices,
+  formatPluginCompatibilityNotice,
+} from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -100,6 +104,27 @@ export async function runSetupWizard(
     );
     runtime.exit(1);
     return;
+  }
+
+  const compatibilityNotices = snapshot.valid
+    ? buildPluginCompatibilityNotices({ config: baseConfig })
+    : [];
+  if (compatibilityNotices.length > 0) {
+    await prompter.note(
+      [
+        `Detected ${compatibilityNotices.length} plugin compatibility notice${compatibilityNotices.length === 1 ? "" : "s"} in the current config.`,
+        ...compatibilityNotices
+          .slice(0, 4)
+          .map((notice) => `- ${formatPluginCompatibilityNotice(notice)}`),
+        ...(compatibilityNotices.length > 4
+          ? [`- ... +${compatibilityNotices.length - 4} more`]
+          : []),
+        "",
+        `Review: ${formatCliCommand("openclaw doctor")}`,
+        `Inspect: ${formatCliCommand("openclaw plugins inspect --all")}`,
+      ].join("\n"),
+      "Plugin compatibility",
+    );
   }
 
   const quickstartHint = `Configure details later via ${formatCliCommand("openclaw configure")}.`;
@@ -457,11 +482,14 @@ export async function runSetupWizard(
     }
   }
 
-  if (authChoiceFromPrompt && authChoice !== "custom-api-key") {
+  const shouldPromptModelSelection =
+    authChoice !== "custom-api-key" && (authChoiceFromPrompt || authChoice === "ollama");
+  if (shouldPromptModelSelection) {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
       prompter,
-      allowKeep: true,
+      // For ollama, don't allow "keep current" since we may need to download the selected model
+      allowKeep: authChoice !== "ollama",
       ignoreAllowlist: true,
       includeProviderPluginSetups: true,
       preferredProvider: await resolvePreferredProviderForAuthChoice({

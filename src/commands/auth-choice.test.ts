@@ -2,22 +2,41 @@ import fs from "node:fs/promises";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import anthropicPlugin from "../../extensions/anthropic/index.js";
+import chutesPlugin from "../../extensions/chutes/index.js";
+import cloudflareAiGatewayPlugin from "../../extensions/cloudflare-ai-gateway/index.js";
+import googlePlugin from "../../extensions/google/index.js";
 import huggingfacePlugin from "../../extensions/huggingface/index.js";
 import kimiCodingPlugin from "../../extensions/kimi-coding/index.js";
+import minimaxPlugin from "../../extensions/minimax/index.js";
+import mistralPlugin from "../../extensions/mistral/index.js";
+import moonshotPlugin from "../../extensions/moonshot/index.js";
 import ollamaPlugin from "../../extensions/ollama/index.js";
 import openAIPlugin from "../../extensions/openai/index.js";
+import opencodeGoPlugin from "../../extensions/opencode-go/index.js";
+import opencodePlugin from "../../extensions/opencode/index.js";
+import openrouterPlugin from "../../extensions/openrouter/index.js";
+import qianfanPlugin from "../../extensions/qianfan/index.js";
+import qwenPortalAuthPlugin from "../../extensions/qwen-portal-auth/index.js";
+import syntheticPlugin from "../../extensions/synthetic/index.js";
 import togetherPlugin from "../../extensions/together/index.js";
+import venicePlugin from "../../extensions/venice/index.js";
+import vercelAiGatewayPlugin from "../../extensions/vercel-ai-gateway/index.js";
+import xaiPlugin from "../../extensions/xai/index.js";
+import xiaomiPlugin from "../../extensions/xiaomi/index.js";
+import { setDetectZaiEndpointForTesting } from "../../extensions/zai/detect.js";
+import zaiPlugin from "../../extensions/zai/index.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import type { ProviderPlugin } from "../plugins/types.js";
-import { createCapturedPluginRegistration } from "../test-utils/plugin-registration.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
-import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
 import {
   MINIMAX_CN_API_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
-} from "./onboard-auth.js";
+} from "../plugins/provider-model-definitions.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import { registerProviderPlugins } from "../test-utils/plugin-registration.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
+import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
 import type { AuthChoice } from "./onboard-types.js";
 import {
   authProfilePathForAgent,
@@ -64,18 +83,31 @@ type StoredAuthProfile = {
 };
 
 function createDefaultProviderPlugins() {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of [
+  return registerProviderPlugins(
     anthropicPlugin,
+    chutesPlugin,
+    cloudflareAiGatewayPlugin,
+    googlePlugin,
     huggingfacePlugin,
     kimiCodingPlugin,
+    minimaxPlugin,
+    mistralPlugin,
+    moonshotPlugin,
     ollamaPlugin,
     openAIPlugin,
+    opencodeGoPlugin,
+    opencodePlugin,
+    openrouterPlugin,
+    qianfanPlugin,
+    qwenPortalAuthPlugin,
+    syntheticPlugin,
     togetherPlugin,
-  ]) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
+    venicePlugin,
+    vercelAiGatewayPlugin,
+    xaiPlugin,
+    xiaomiPlugin,
+    zaiPlugin,
+  );
 }
 
 describe("applyAuthChoice", () => {
@@ -153,12 +185,14 @@ describe("applyAuthChoice", () => {
     resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
     detectZaiEndpoint.mockReset();
     detectZaiEndpoint.mockResolvedValue(null);
+    setDetectZaiEndpointForTesting(detectZaiEndpoint);
     loginOpenAICodexOAuth.mockReset();
     loginOpenAICodexOAuth.mockResolvedValue(null);
     await lifecycle.cleanup();
     activeStateDir = null;
   });
 
+  setDetectZaiEndpointForTesting(detectZaiEndpoint);
   resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
 
   it("does not throw when openai-codex oauth fails", async () => {
@@ -484,9 +518,9 @@ describe("applyAuthChoice", () => {
       {
         tokenProvider: "KIMI-CODING",
         token: "sk-kimi-token-provider-test",
-        profileId: "kimi-coding:default",
-        provider: "kimi-coding",
-        expectedModelPrefix: "kimi-coding/",
+        profileId: "kimi:default",
+        provider: "kimi",
+        expectedModelPrefix: "kimi/",
       },
       {
         tokenProvider: " GOOGLE  ",
@@ -564,9 +598,9 @@ describe("applyAuthChoice", () => {
     {
       authChoice: "kimi-code-api-key",
       tokenProvider: "kimi-code",
-      profileId: "kimi-coding:default",
-      provider: "kimi-coding",
-      modelPrefix: "kimi-coding/",
+      profileId: "kimi:default",
+      provider: "kimi",
+      modelPrefix: "kimi/",
     },
     {
       authChoice: "xiaomi-api-key",
@@ -978,10 +1012,22 @@ describe("applyAuthChoice", () => {
           provider: scenario.profileProvider,
           mode: "api_key",
         });
-        expect((await readAuthProfile(scenario.profileId))?.key).toBe(scenario.token);
+        const profileStore =
+          scenario.agentId && scenario.agentId !== "default"
+            ? await readAuthProfilesForAgent<{ profiles?: Record<string, StoredAuthProfile> }>(
+                resolveAgentDir(result.config, scenario.agentId),
+              )
+            : await readAuthProfiles();
+        expect(profileStore.profiles?.[scenario.profileId]?.key).toBe(scenario.token);
       }
       if (scenario.extraProfileId) {
-        expect((await readAuthProfile(scenario.extraProfileId))?.key).toBe(scenario.token);
+        const profileStore =
+          scenario.agentId && scenario.agentId !== "default"
+            ? await readAuthProfilesForAgent<{ profiles?: Record<string, StoredAuthProfile> }>(
+                resolveAgentDir(result.config, scenario.agentId),
+              )
+            : await readAuthProfiles();
+        expect(profileStore.profiles?.[scenario.extraProfileId]?.key).toBe(scenario.token);
       }
       if (scenario.expectProviderConfigUndefined) {
         expect(
@@ -1301,7 +1347,7 @@ describe("applyAuthChoice", () => {
 
     const runtime = createExitThrowingRuntime();
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
-      if (params.message === "Paste the redirect URL") {
+      if (params.message.startsWith("Paste the redirect URL")) {
         const runtimeLog = runtime.log as ReturnType<typeof vi.fn>;
         const lastLog = runtimeLog.mock.calls.at(-1)?.[0];
         const urlLine = typeof lastLog === "string" ? lastLog : String(lastLog ?? "");
@@ -1326,7 +1372,7 @@ describe("applyAuthChoice", () => {
 
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Paste the redirect URL",
+        message: expect.stringContaining("Paste the redirect URL"),
       }),
     );
     expect(result.config.auth?.profiles?.["chutes:remote-user"]).toMatchObject({
@@ -1377,7 +1423,7 @@ describe("applyAuthChoice", () => {
         profileId: "minimax-portal:default",
         baseUrl: "https://api.minimax.io/anthropic",
         api: "anthropic-messages",
-        defaultModel: "minimax-portal/MiniMax-M2.5",
+        defaultModel: "minimax-portal/MiniMax-M2.7",
         apiKey: "minimax-oauth", // pragma: allowlist secret
       },
     ];
@@ -1393,6 +1439,7 @@ describe("applyAuthChoice", () => {
               id: scenario.authId,
               label: scenario.authLabel,
               kind: "device_code",
+              wizard: { choiceId: scenario.authChoice },
               run: vi.fn(async () => ({
                 profiles: [
                   {

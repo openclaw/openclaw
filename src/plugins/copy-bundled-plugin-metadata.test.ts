@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   copyBundledPluginMetadata,
   rewritePackageExtensions,
@@ -235,6 +235,47 @@ describe("copyBundledPluginMetadata", () => {
       false,
     );
     expect(fs.existsSync(staleNodeModulesDir)).toBe(false);
+  });
+
+  it("retries transient skill copy races from concurrent runtime postbuilds", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-retry-");
+    const pluginDir = path.join(repoRoot, "extensions", "diffs");
+    fs.mkdirSync(path.join(pluginDir, "skills", "diffs"), { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "skills", "diffs", "SKILL.md"), "# Diffs\n", "utf8");
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "diffs",
+      configSchema: { type: "object" },
+      skills: ["./skills"],
+    });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/diffs",
+      openclaw: { extensions: ["./index.ts"] },
+    });
+
+    const realCpSync = fs.cpSync.bind(fs);
+    let attempts = 0;
+    const cpSyncSpy = vi.spyOn(fs, "cpSync").mockImplementation((...args) => {
+      attempts += 1;
+      if (attempts === 1) {
+        const error = Object.assign(new Error("race"), { code: "EEXIST" });
+        throw error;
+      }
+      return realCpSync(...args);
+    });
+
+    try {
+      copyBundledPluginMetadata({ repoRoot });
+    } finally {
+      cpSyncSpy.mockRestore();
+    }
+
+    expect(attempts).toBe(2);
+    expect(
+      fs.readFileSync(
+        path.join(repoRoot, "dist", "extensions", "diffs", "skills", "diffs", "SKILL.md"),
+        "utf8",
+      ),
+    ).toContain("Diffs");
   });
 
   it("removes generated outputs for plugins no longer present in source", () => {

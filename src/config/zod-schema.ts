@@ -11,7 +11,7 @@ import {
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
-import { InstallRecordShape } from "./zod-schema.installs.js";
+import { PluginInstallRecordShape } from "./zod-schema.installs.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
@@ -155,6 +155,13 @@ const PluginEntrySchema = z
       })
       .strict()
       .optional(),
+    subagent: z
+      .object({
+        allowModelOverride: z.boolean().optional(),
+        allowedModels: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     config: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
@@ -202,6 +209,24 @@ const TalkSchema = z
       });
     }
   });
+
+const McpServerSchema = z
+  .object({
+    command: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+    cwd: z.string().optional(),
+    workingDirectory: z.string().optional(),
+    url: HttpUrlSchema.optional(),
+  })
+  .catchall(z.unknown());
+
+const McpConfigSchema = z
+  .object({
+    servers: z.record(z.string(), McpServerSchema).optional(),
+  })
+  .strict()
+  .optional();
 
 export const OpenClawSchema = z
   .object({
@@ -359,6 +384,7 @@ export const OpenClawSchema = z
               .object({
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
+                userDataDir: z.string().optional(),
                 driver: z
                   .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
                   .optional(),
@@ -371,7 +397,10 @@ export const OpenClawSchema = z
                 {
                   message: "Profile must set cdpPort or cdpUrl",
                 },
-              ),
+              )
+              .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
+                message: 'Profile userDataDir is only supported with driver="existing-session"',
+              }),
           )
           .optional(),
         extraArgs: z.array(z.string()).optional(),
@@ -847,6 +876,7 @@ export const OpenClawSchema = z
       })
       .optional(),
     memory: MemorySchema,
+    mcp: McpConfigSchema,
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
@@ -905,7 +935,7 @@ export const OpenClawSchema = z
             z.string(),
             z
               .object({
-                ...InstallRecordShape,
+                ...PluginInstallRecordShape,
               })
               .strict(),
           )

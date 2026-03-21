@@ -32,11 +32,9 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { resolveLsofCommandSync } from "./ports-lsof.js";
-import {
-  __testing,
-  cleanStaleGatewayProcessesSync,
-  findGatewayPidsOnPortSync,
-} from "./restart-stale-pids.js";
+let __testing: typeof import("./restart-stale-pids.js").__testing;
+let cleanStaleGatewayProcessesSync: typeof import("./restart-stale-pids.js").cleanStaleGatewayProcessesSync;
+let findGatewayPidsOnPortSync: typeof import("./restart-stale-pids.js").findGatewayPidsOnPortSync;
 
 function lsofOutput(entries: Array<{ pid: number; cmd: string }>): string {
   return entries.map(({ pid, cmd }) => `p${pid}\nc${cmd}`).join("\n") + "\n";
@@ -89,6 +87,12 @@ function installInitialBusyPoll(
 
 describe.skipIf(isWindows)("restart-stale-pids", () => {
   beforeEach(() => {
+    vi.resetModules();
+  });
+
+  beforeEach(async () => {
+    ({ __testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
+      await import("./restart-stale-pids.js"));
     mockSpawnSync.mockReset();
     mockResolveGatewayPort.mockReset();
     mockRestartWarn.mockReset();

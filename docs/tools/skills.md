@@ -81,8 +81,8 @@ that up as `<workspace>/skills` on the next session.
 
 ```markdown
 ---
-name: nano-banana-pro
-description: Generate or edit images via Gemini 3 Pro Image
+name: image-lab
+description: Generate or edit images via a provider-backed image workflow
 ---
 ```
 
@@ -109,8 +109,8 @@ OpenClaw **filters skills at load time** using `metadata` (single-line JSON):
 
 ```markdown
 ---
-name: nano-banana-pro
-description: Generate or edit images via Gemini 3 Pro Image
+name: image-lab
+description: Generate or edit images via a provider-backed image workflow
 metadata:
   {
     "openclaw":
@@ -194,7 +194,7 @@ Bundled/managed skills can be toggled and supplied with env values:
 {
   skills: {
     entries: {
-      "nano-banana-pro": {
+      "image-lab": {
         enabled: true,
         apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
         env: {
@@ -213,6 +213,10 @@ Bundled/managed skills can be toggled and supplied with env values:
 ```
 
 Note: if the skill name contains hyphens, quote the key (JSON5 allows quoted keys).
+
+If you want stock image generation/editing inside OpenClaw itself, use the core
+`image_generate` tool with `agents.defaults.imageGenerationModel` instead of a
+bundled skill. Skill examples here are for custom or third-party workflows.
 
 Config keys match the **skill name** by default. If a skill defines
 `metadata.openclaw.skillKey`, use that key under `skills.entries`.

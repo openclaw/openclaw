@@ -1,78 +1,29 @@
-import { normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { withBundledPluginAllowlistCompat } from "./bundled-compat.js";
+import {
+  withBundledPluginAllowlistCompat,
+  withBundledPluginEnablementCompat,
+} from "./bundled-compat.js";
+import { hasExplicitPluginConfig } from "./config-state.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
-const BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS = [
-  "anthropic",
-  "byteplus",
-  "cloudflare-ai-gateway",
-  "copilot-proxy",
-  "github-copilot",
-  "google",
-  "huggingface",
-  "kilocode",
-  "kimi-coding",
-  "minimax",
-  "mistral",
-  "modelstudio",
-  "moonshot",
-  "nvidia",
-  "ollama",
-  "openai",
-  "opencode",
-  "opencode-go",
-  "openrouter",
-  "qianfan",
-  "qwen-portal-auth",
-  "sglang",
-  "synthetic",
-  "together",
-  "venice",
-  "vercel-ai-gateway",
-  "volcengine",
-  "xai",
-  "vllm",
-  "xiaomi",
-  "zai",
-] as const;
-
-function hasExplicitPluginConfig(config: PluginLoadOptions["config"]): boolean {
-  const plugins = config?.plugins;
-  if (!plugins) {
-    return false;
-  }
-  if (typeof plugins.enabled === "boolean") {
-    return true;
-  }
-  if (Array.isArray(plugins.allow) && plugins.allow.length > 0) {
-    return true;
-  }
-  if (Array.isArray(plugins.deny) && plugins.deny.length > 0) {
-    return true;
-  }
-  if (Array.isArray(plugins.load?.paths) && plugins.load.paths.length > 0) {
-    return true;
-  }
-  if (plugins.entries && Object.keys(plugins.entries).length > 0) {
-    return true;
-  }
-  if (plugins.slots && Object.keys(plugins.slots).length > 0) {
-    return true;
-  }
-  return false;
-}
 
 function withBundledProviderVitestCompat(params: {
   config: PluginLoadOptions["config"];
+  pluginIds: readonly string[];
   env?: PluginLoadOptions["env"];
 }): PluginLoadOptions["config"] {
   const env = params.env ?? process.env;
-  if (!env.VITEST || hasExplicitPluginConfig(params.config)) {
+  if (
+    !env.VITEST ||
+    hasExplicitPluginConfig(params.config?.plugins) ||
+    params.pluginIds.length === 0
+  ) {
     return params.config;
   }
 
@@ -81,7 +32,7 @@ function withBundledProviderVitestCompat(params: {
     plugins: {
       ...params.config?.plugins,
       enabled: true,
-      allow: [...BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS],
+      allow: [...params.pluginIds],
       slots: {
         ...params.config?.plugins?.slots,
         memory: "none",
@@ -89,6 +40,34 @@ function withBundledProviderVitestCompat(params: {
     },
   };
 }
+
+function resolveBundledProviderCompatPluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  onlyPluginIds?: string[];
+}): string[] {
+  const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  return registry.plugins
+    .filter(
+      (plugin) =>
+        plugin.origin === "bundled" &&
+        plugin.providers.length > 0 &&
+        (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)),
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export const __testing = {
+  resolveBundledProviderCompatPluginIds,
+  withBundledProviderVitestCompat,
+} as const;
 
 export function resolveOwningPluginIdsForProvider(params: {
   provider: string;
@@ -115,6 +94,33 @@ export function resolveOwningPluginIdsForProvider(params: {
   return pluginIds.length > 0 ? pluginIds : undefined;
 }
 
+export function resolveNonBundledProviderPluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+}): string[] {
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  return registry.plugins
+    .filter(
+      (plugin) =>
+        plugin.origin !== "bundled" &&
+        plugin.providers.length > 0 &&
+        resolveEffectiveEnableState({
+          id: plugin.id,
+          origin: plugin.origin,
+          config: normalizedConfig,
+          rootConfig: params.config,
+        }).enabled,
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -126,18 +132,35 @@ export function resolvePluginProviders(params: {
   activate?: boolean;
   cache?: boolean;
 }): ProviderPlugin[] {
+  const bundledProviderCompatPluginIds =
+    params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
+      ? resolveBundledProviderCompatPluginIds({
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          onlyPluginIds: params.onlyPluginIds,
+        })
+      : [];
   const maybeAllowlistCompat = params.bundledProviderAllowlistCompat
     ? withBundledPluginAllowlistCompat({
         config: params.config,
-        pluginIds: BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS,
+        pluginIds: bundledProviderCompatPluginIds,
       })
     : params.config;
-  const config = params.bundledProviderVitestCompat
+  const maybeVitestCompat = params.bundledProviderVitestCompat
     ? withBundledProviderVitestCompat({
         config: maybeAllowlistCompat,
+        pluginIds: bundledProviderCompatPluginIds,
         env: params.env,
       })
     : maybeAllowlistCompat;
+  const config =
+    params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
+      ? withBundledPluginEnablementCompat({
+          config: maybeVitestCompat,
+          pluginIds: bundledProviderCompatPluginIds,
+        })
+      : maybeVitestCompat;
   const registry = loadOpenClawPlugins({
     config,
     workspaceDir: params.workspaceDir,

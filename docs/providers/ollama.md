@@ -16,15 +16,15 @@ Ollama is a local LLM runtime that makes it easy to run open-source models on yo
 
 ## Quick start
 
-### Onboarding wizard (recommended)
+### Onboarding (recommended)
 
-The fastest way to set up Ollama is through the setup wizard:
+The fastest way to set up Ollama is through onboarding:
 
 ```bash
 openclaw onboard
 ```
 
-Select **Ollama** from the provider list. The wizard will:
+Select **Ollama** from the provider list. Onboarding will:
 
 1. Ask for the Ollama base URL where your instance can be reached (default `http://127.0.0.1:11434`).
 2. Let you choose **Cloud + Local** (cloud models and local models) or **Local** (local models only).

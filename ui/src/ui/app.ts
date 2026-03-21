@@ -562,6 +562,14 @@ export class OpenClawApp extends LitElement {
     );
   }
 
+  setBorderRadius(value: number) {
+    applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
+      ...this.settings,
+      borderRadius: value,
+    });
+    this.requestUpdate();
+  }
+
   buildThemeOrder(active: ThemeName): ThemeName[] {
     const all = [...VALID_THEME_NAMES];
     const rest = all.filter((id) => id !== active);

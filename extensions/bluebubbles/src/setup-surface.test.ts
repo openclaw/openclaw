@@ -3,7 +3,7 @@ import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/chan
 import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import { resolveBlueBubblesAccount } from "./accounts.js";
-import { DEFAULT_WEBHOOK_PATH } from "./monitor-shared.js";
+import { DEFAULT_WEBHOOK_PATH } from "./webhook-shared.js";
 
 async function createBlueBubblesConfigureAdapter() {
   const { blueBubblesSetupAdapter, blueBubblesSetupWizard } = await import("./setup-surface.js");

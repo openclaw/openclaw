@@ -11,39 +11,47 @@ import {
 import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
 import { VoicePlugin } from "@buape/carbon/voice";
 import { Routes } from "discord-api-types/v10";
-import { getAcpSessionManager } from "../../../../src/acp/control-plane/manager.js";
-import { isAcpRuntimeError } from "../../../../src/acp/runtime/errors.js";
-import { resolveTextChunkLimit } from "../../../../src/auto-reply/chunk.js";
-import type { NativeCommandSpec } from "../../../../src/auto-reply/commands-registry.js";
-import { listNativeCommandSpecsForConfig } from "../../../../src/auto-reply/commands-registry.js";
-import type { HistoryEntry } from "../../../../src/auto-reply/reply/history.js";
-import { listSkillCommandsForAgents } from "../../../../src/auto-reply/skill-commands.js";
+import { getAcpSessionManager } from "openclaw/plugin-sdk/acp-runtime";
+import { isAcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
 import {
-  resolveThreadBindingIdleTimeoutMs,
-  resolveThreadBindingMaxAgeMs,
-  resolveThreadBindingsEnabled,
-} from "../../../../src/channels/thread-bindings-policy.js";
+  listNativeCommandSpecsForConfig,
+  listSkillCommandsForAgents,
+  type NativeCommandSpec,
+} from "openclaw/plugin-sdk/command-auth";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
-} from "../../../../src/config/commands.js";
-import type { OpenClawConfig, ReplyToMode } from "../../../../src/config/config.js";
-import { loadConfig } from "../../../../src/config/config.js";
-import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous-name-matching.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "../../../../src/config/runtime-group-policy.js";
-import { createConnectedChannelStatusPatch } from "../../../../src/gateway/channel-status-patches.js";
-import { danger, isVerbose, logVerbose, shouldLogVerbose, warn } from "../../../../src/globals.js";
-import { formatErrorMessage } from "../../../../src/infra/errors.js";
-import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-import { getPluginCommandSpecs } from "../../../../src/plugins/commands.js";
-import { createNonExitingRuntime, type RuntimeEnv } from "../../../../src/runtime.js";
-import { summarizeStringEntries } from "../../../../src/shared/string-sample.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import {
+  resolveThreadBindingIdleTimeoutMs,
+  resolveThreadBindingMaxAgeMs,
+  resolveThreadBindingsEnabled,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
+import { getPluginCommandSpecs } from "openclaw/plugin-sdk/plugin-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  danger,
+  isVerbose,
+  logVerbose,
+  shouldLogVerbose,
+  warn,
+} from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { summarizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
 import { getDiscordGatewayEmitter } from "../monitor.gateway.js";
 import { fetchDiscordApplicationId } from "../probe.js";
@@ -84,6 +92,7 @@ import { resolveDiscordPresenceUpdate } from "./presence.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
+import { formatDiscordStartupStatusMessage } from "./startup-status.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 import {
   createNoopThreadBindingManager,
@@ -300,6 +309,7 @@ async function deployDiscordCommands(params: {
       // errors like Discord 30034 fail fast and don't wedge the provider.
       restClient.options.queueRequests = false;
     }
+    params.runtime.log?.("discord: native commands using Carbon reconcile path");
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         await params.client.handleDeployRequest();
@@ -799,7 +809,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       phase: "deploy-commands:start",
       startAt: startupStartedAt,
       gateway: lifecycleGateway,
-      details: `native=${nativeEnabled ? "on" : "off"} commandCount=${commands.length}`,
+      details: `native=${nativeEnabled ? "on" : "off"} reconcile=on commandCount=${commands.length}`,
     });
     await deployDiscordCommands({
       client,
@@ -963,7 +973,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     const botIdentity =
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
-    runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
+    runtime.log?.(
+      formatDiscordStartupStatusMessage({
+        gatewayReady: lifecycleGateway?.isConnected === true,
+        botIdentity: botIdentity || undefined,
+      }),
+    );
     if (lifecycleGateway?.isConnected) {
       opts.setStatus?.(createConnectedChannelStatusPatch());
     }
