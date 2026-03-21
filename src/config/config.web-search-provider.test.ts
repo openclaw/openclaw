@@ -219,6 +219,53 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("accepts unresolved env placeholders in brave baseUrl config", () => {
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "brave",
+        providerConfig: {
+          apiKey: "test-key", // pragma: allowlist secret
+          baseUrl: "${BRAVE_PROXY_URL}",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("migrates legacy top-level brave baseUrl into plugin-owned config", () => {
+    const res = validateConfigObjectWithPlugins({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "brave",
+            apiKey: "test-key", // pragma: allowlist secret
+            baseUrl: "https://brave-proxy.example.com/resolver/v1/",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+
+    expect(pluginWebSearchApiKey(res.config as Record<string, unknown>, "brave")).toBe("test-key");
+    expect(
+      (
+        res.config.plugins as {
+          entries?: Record<string, { config?: { webSearch?: { baseUrl?: unknown } } }>;
+        }
+      )?.entries?.brave?.config?.webSearch?.baseUrl,
+    ).toBe("https://brave-proxy.example.com/resolver/v1/");
+    expect((res.config.tools?.web?.search as Record<string, unknown> | undefined)?.baseUrl).toBe(
+      undefined,
+    );
+  });
+
   it("accepts gemini provider and config", () => {
     const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({

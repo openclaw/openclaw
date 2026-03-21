@@ -66,7 +66,7 @@ function hasMappedLegacyWebSearchConfig(raw: unknown): boolean {
   if (!search) {
     return false;
   }
-  if (hasOwnKey(search, "apiKey")) {
+  if (hasOwnKey(search, "apiKey") || hasOwnKey(search, "baseUrl")) {
     return true;
   }
   return (Object.keys(LEGACY_PROVIDER_MAP) as LegacyProviderId[]).some((providerId) =>
@@ -123,6 +123,9 @@ export function listLegacyWebSearchConfigPaths(raw: unknown): string[] {
   if ("apiKey" in search) {
     paths.push("tools.web.search.apiKey");
   }
+  if ("baseUrl" in search) {
+    paths.push("tools.web.search.baseUrl");
+  }
   for (const providerId of Object.keys(LEGACY_PROVIDER_MAP) as LegacyProviderId[]) {
     const scoped = search[providerId];
     if (isRecord(scoped)) {
@@ -176,7 +179,7 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
   const changes: string[] = [];
 
   for (const [key, value] of Object.entries(search)) {
-    if (key === "apiKey") {
+    if (key === "apiKey" || key === "baseUrl") {
       continue;
     }
     if (
@@ -197,14 +200,22 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
   if (hasOwnKey(search, "apiKey")) {
     braveConfig.apiKey = search.apiKey;
   }
+  if (hasOwnKey(search, "baseUrl")) {
+    braveConfig.baseUrl = search.baseUrl;
+  }
   if (Object.keys(braveConfig).length > 0) {
     migratePluginWebSearchConfig({
       root: nextRoot,
-      legacyPath: hasOwnKey(search, "apiKey")
-        ? "tools.web.search.apiKey"
-        : "tools.web.search.brave",
+      legacyPath:
+        legacyBraveConfig || (!hasOwnKey(search, "apiKey") && !hasOwnKey(search, "baseUrl"))
+          ? "tools.web.search.brave"
+          : hasOwnKey(search, "apiKey") && hasOwnKey(search, "baseUrl")
+            ? "tools.web.search.{apiKey,baseUrl}"
+            : hasOwnKey(search, "apiKey")
+              ? "tools.web.search.apiKey"
+              : "tools.web.search.baseUrl",
       targetPath:
-        hasOwnKey(search, "apiKey") && !legacyBraveConfig
+        hasOwnKey(search, "apiKey") && !hasOwnKey(search, "baseUrl") && !legacyBraveConfig
           ? "plugins.entries.brave.config.webSearch.apiKey"
           : "plugins.entries.brave.config.webSearch",
       pluginId: LEGACY_PROVIDER_MAP.brave,

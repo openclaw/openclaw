@@ -146,7 +146,7 @@ function resolveBraveEndpoint(baseUrl: string, mode: "web" | "llm-context"): str
     const currentPath = url.pathname.replace(/\/$/, "");
     const suffix = pathname.replace(/^\/res\/v1/, "");
 
-    if (/\/v\d+$/.test(currentPath)) {
+    if (/\/(?:res|resolver)\/v\d+$/.test(currentPath)) {
       url.pathname = `${currentPath}${suffix}`;
       return url.toString();
     }
