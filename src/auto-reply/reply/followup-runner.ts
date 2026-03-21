@@ -143,7 +143,7 @@ export function createFollowupRunner(params: {
           return latestEntry;
         }
         queued.run.sessionId = latestSessionId;
-        const latestSessionFile = latestEntry.sessionFile?.trim();
+        const latestSessionFile = latestEntry?.sessionFile?.trim();
         if (latestSessionFile) {
           queued.run.sessionFile = latestSessionFile;
         }

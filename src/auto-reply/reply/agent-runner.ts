@@ -134,7 +134,7 @@ export async function runReplyAgent(params: {
       return;
     }
     followupRun.run.sessionId = latestSessionId;
-    const latestSessionFile = latestEntry.sessionFile?.trim();
+    const latestSessionFile = latestEntry?.sessionFile?.trim();
     if (latestSessionFile) {
       followupRun.run.sessionFile = latestSessionFile;
     }
