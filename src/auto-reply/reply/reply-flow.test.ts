@@ -646,6 +646,23 @@ describe("parseSlackDirectives", () => {
     ]);
   });
 
+  it("does not strip style-like suffixes from select option values", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_select: Pick | Danger path:workflow:danger, Safe:safe:primary]]",
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "select",
+        placeholder: "Pick",
+        options: [
+          { label: "Danger path", value: "workflow:danger" },
+          { label: "Safe", value: "safe:primary" },
+        ],
+      },
+    ]);
+  });
+
   it("leaves existing slack blocks in channelData and appends shared interactive blocks", () => {
     const result = parseSlackDirectives({
       text: "Act now [[slack_buttons: Retry:retry]]",

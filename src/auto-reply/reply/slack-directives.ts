@@ -12,7 +12,7 @@ type SlackChoice = {
 
 const VALID_BUTTON_STYLES = new Set(["primary", "danger"]);
 
-function parseChoice(raw: string): SlackChoice | null {
+function parseChoice(raw: string, parseStyle?: boolean): SlackChoice | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
@@ -29,24 +29,26 @@ function parseChoice(raw: string): SlackChoice | null {
   if (!label || !rest) {
     return null;
   }
-  // Check for optional style suffix: Label:value:style
-  const lastColon = rest.lastIndexOf(":");
-  if (lastColon > 0) {
-    const maybestyle = rest.slice(lastColon + 1).trim().toLowerCase();
-    if (VALID_BUTTON_STYLES.has(maybestyle)) {
-      const value = rest.slice(0, lastColon).trim();
-      if (value) {
-        return { label, value, style: maybestyle as "primary" | "danger" };
+  // Check for optional style suffix: Label:value:style (buttons only)
+  if (parseStyle) {
+    const lastColon = rest.lastIndexOf(":");
+    if (lastColon > 0) {
+      const maybestyle = rest.slice(lastColon + 1).trim().toLowerCase();
+      if (VALID_BUTTON_STYLES.has(maybestyle)) {
+        const value = rest.slice(0, lastColon).trim();
+        if (value) {
+          return { label, value, style: maybestyle as "primary" | "danger" };
+        }
       }
     }
   }
   return { label, value: rest };
 }
 
-function parseChoices(raw: string, maxItems: number): SlackChoice[] {
+function parseChoices(raw: string, maxItems: number, parseStyle?: boolean): SlackChoice[] {
   return raw
     .split(",")
-    .map((entry) => parseChoice(entry))
+    .map((entry) => parseChoice(entry, parseStyle))
     .filter((entry): entry is SlackChoice => Boolean(entry))
     .slice(0, maxItems);
 }
@@ -64,7 +66,7 @@ function buildTextBlock(
 function buildButtonsBlock(
   raw: string,
 ): NonNullable<ReplyPayload["interactive"]>["blocks"][number] | null {
-  const choices = parseChoices(raw, SLACK_BUTTON_MAX_ITEMS);
+  const choices = parseChoices(raw, SLACK_BUTTON_MAX_ITEMS, true);
   if (choices.length === 0) {
     return null;
   }
