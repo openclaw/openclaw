@@ -1,4 +1,7 @@
-import { coerceStatusIssueAccountId, readStatusIssueFields } from "../../shared/status-issues.js";
+import {
+  coerceStatusIssueAccountId,
+  readStatusIssueFields,
+} from "openclaw/plugin-sdk/extension-shared";
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "./runtime-api.js";
 
 const ZALO_STATUS_FIELDS = ["accountId", "enabled", "configured", "dmPolicy"] as const;

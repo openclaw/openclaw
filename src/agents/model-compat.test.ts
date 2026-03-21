@@ -368,14 +368,14 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode-go", id: "glm-5" })).toBe(true);
-    expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.5" })).toBe(true);
+    expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.7" })).toBe(true);
   });
 
   it("excludes provider-declined modern models", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
-      provider === "opencode" && context.modelId === "minimax-m2.5" ? false : undefined,
+      provider === "opencode" && context.modelId === "minimax-m2.7" ? false : undefined,
     );
 
-    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
+    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.7" })).toBe(false);
   });
 });

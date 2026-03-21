@@ -12,9 +12,25 @@ import {
 } from "@buape/carbon";
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/channel-runtime";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import {
+  resolveCommandAuthorizedFromAuthorizers,
+  resolveNativeCommandSessionTargets,
+} from "openclaw/plugin-sdk/command-auth";
+import {
+  buildCommandTextFromArgs,
+  findCommandByNativeName,
+  listChatCommands,
+  parseCommandArgs,
+  resolveCommandArgChoices,
+  resolveCommandArgMenu,
+  serializeCommandArgs,
+  type ChatCommandDefinition,
+  type CommandArgDefinition,
+  type CommandArgValues,
+  type CommandArgs,
+  type NativeCommandSpec,
+} from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
@@ -25,23 +41,11 @@ import {
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { executePluginCommand, matchPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
-import type {
-  ChatCommandDefinition,
-  CommandArgDefinition,
-  CommandArgValues,
-  CommandArgs,
-  NativeCommandSpec,
-} from "openclaw/plugin-sdk/reply-runtime";
 import {
-  buildCommandTextFromArgs,
-  findCommandByNativeName,
-  listChatCommands,
-  parseCommandArgs,
-  resolveCommandArgChoices,
-  resolveCommandArgMenu,
-  serializeCommandArgs,
-} from "openclaw/plugin-sdk/reply-runtime";
+  resolveSendableOutboundReplyParts,
+  resolveTextChunksWithFallback,
+} from "openclaw/plugin-sdk/reply-payload";
+import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -232,13 +236,7 @@ function isDiscordUnknownInteraction(error: unknown): boolean {
 }
 
 function hasRenderableReplyPayload(payload: ReplyPayload): boolean {
-  if ((payload.text ?? "").trim()) {
-    return true;
-  }
-  if ((payload.mediaUrl ?? "").trim()) {
-    return true;
-  }
-  if (payload.mediaUrls?.some((entry) => entry.trim())) {
+  if (resolveSendableOutboundReplyParts(payload).hasContent) {
     return true;
   }
   const discordData = payload.channelData?.discord as
@@ -772,7 +770,7 @@ async function dispatchDiscordCommandInteraction(params: {
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
   });
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg,
     agentId: effectiveRoute.agentId,
     channel: "discord",
@@ -785,7 +783,7 @@ async function dispatchDiscordCommandInteraction(params: {
     ctx: ctxPayload,
     cfg,
     dispatcherOptions: {
-      ...prefixOptions,
+      ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, effectiveRoute.agentId),
       deliver: async (payload) => {
         if (suppressReplies) {
@@ -887,8 +885,7 @@ async function deliverDiscordInteractionReply(params: {
   chunkMode: "length" | "newline";
 }) {
   const { interaction, payload, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
-  const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-  const text = payload.text ?? "";
+  const reply = resolveSendableOutboundReplyParts(payload);
   const discordData = payload.channelData?.discord as
     | { components?: TopLevelComponents[] }
     | undefined;
@@ -933,9 +930,9 @@ async function deliverDiscordInteractionReply(params: {
     });
   };
 
-  if (mediaList.length > 0) {
+  if (reply.hasMedia) {
     const media = await Promise.all(
-      mediaList.map(async (url) => {
+      reply.mediaUrls.map(async (url) => {
         const loaded = await loadWebMedia(url, {
           localRoots: params.mediaLocalRoots,
         });
@@ -945,14 +942,14 @@ async function deliverDiscordInteractionReply(params: {
         };
       }),
     );
-    const chunks = chunkDiscordTextWithMode(text, {
-      maxChars: textLimit,
-      maxLines: maxLinesPerMessage,
-      chunkMode,
-    });
-    if (!chunks.length && text) {
-      chunks.push(text);
-    }
+    const chunks = resolveTextChunksWithFallback(
+      reply.text,
+      chunkDiscordTextWithMode(reply.text, {
+        maxChars: textLimit,
+        maxLines: maxLinesPerMessage,
+        chunkMode,
+      }),
+    );
     const caption = chunks[0] ?? "";
     await sendMessage(caption, media, firstMessageComponents);
     for (const chunk of chunks.slice(1)) {
@@ -964,17 +961,20 @@ async function deliverDiscordInteractionReply(params: {
     return;
   }
 
-  if (!text.trim() && !firstMessageComponents) {
+  if (!reply.hasText && !firstMessageComponents) {
     return;
   }
-  const chunks = chunkDiscordTextWithMode(text, {
-    maxChars: textLimit,
-    maxLines: maxLinesPerMessage,
-    chunkMode,
-  });
-  if (!chunks.length && (text || firstMessageComponents)) {
-    chunks.push(text);
-  }
+  const chunks =
+    reply.text || firstMessageComponents
+      ? resolveTextChunksWithFallback(
+          reply.text,
+          chunkDiscordTextWithMode(reply.text, {
+            maxChars: textLimit,
+            maxLines: maxLinesPerMessage,
+            chunkMode,
+          }),
+        )
+      : [];
   for (const chunk of chunks) {
     if (!chunk.trim() && !firstMessageComponents) {
       continue;

@@ -21,3 +21,13 @@ export function normalizeGoogleModelId(id: string): string {
   }
   return id;
 }
+
+export function normalizeXaiModelId(id: string): string {
+  if (id === "grok-4.20-experimental-beta-0304-reasoning") {
+    return "grok-4.20-reasoning";
+  }
+  if (id === "grok-4.20-experimental-beta-0304-non-reasoning") {
+    return "grok-4.20-non-reasoning";
+  }
+  return id;
+}

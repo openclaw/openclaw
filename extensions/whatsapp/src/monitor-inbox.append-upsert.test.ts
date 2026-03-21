@@ -12,8 +12,17 @@ describe("append upsert handling (#20952)", () => {
   installWebMonitorInboxUnitTestHooks();
   type InboxOnMessage = NonNullable<Parameters<typeof monitorWebInbox>[0]["onMessage"]>;
 
-  async function tick() {
-    await new Promise((resolve) => setImmediate(resolve));
+  async function settleInboundWork() {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, count: number) {
+    await vi.waitFor(
+      () => {
+        expect(onMessage).toHaveBeenCalledTimes(count);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
   }
 
   async function startInboxMonitor(onMessage: InboxOnMessage) {
@@ -43,7 +52,7 @@ describe("append upsert handling (#20952)", () => {
         },
       ],
     });
-    await tick();
+    await waitForMessageCalls(onMessage, 1);
 
     expect(onMessage).toHaveBeenCalledTimes(1);
 
@@ -67,7 +76,7 @@ describe("append upsert handling (#20952)", () => {
         },
       ],
     });
-    await tick();
+    await settleInboundWork();
 
     expect(onMessage).not.toHaveBeenCalled();
 
@@ -90,7 +99,7 @@ describe("append upsert handling (#20952)", () => {
         },
       ],
     });
-    await tick();
+    await settleInboundWork();
 
     expect(onMessage).not.toHaveBeenCalled();
 
@@ -116,7 +125,7 @@ describe("append upsert handling (#20952)", () => {
         },
       ],
     });
-    await tick();
+    await waitForMessageCalls(onMessage, 1);
 
     expect(onMessage).toHaveBeenCalledTimes(1);
 
@@ -140,7 +149,7 @@ describe("append upsert handling (#20952)", () => {
         },
       ],
     });
-    await tick();
+    await waitForMessageCalls(onMessage, 1);
 
     expect(onMessage).toHaveBeenCalledTimes(1);
 

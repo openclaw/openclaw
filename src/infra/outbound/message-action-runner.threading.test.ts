@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   executeSendAction: vi.fn(),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
@@ -66,8 +66,7 @@ const defaultTelegramToolContext = {
 } as const;
 
 describe("runMessageAction threading auto-injection", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ runMessageAction } = await import("./message-action-runner.js"));
     ({
       installMessageActionRunnerTestRegistry,
@@ -75,6 +74,9 @@ describe("runMessageAction threading auto-injection", () => {
       slackConfig,
       telegramConfig,
     } = await import("./message-action-runner.test-helpers.js"));
+  });
+
+  beforeEach(() => {
     installMessageActionRunnerTestRegistry();
   });
 

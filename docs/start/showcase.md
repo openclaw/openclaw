@@ -1,6 +1,5 @@
 ---
 title: "Showcase"
-description: "Real-world OpenClaw projects from the community"
 summary: "Community-built projects and integrations powered by OpenClaw"
 read_when:
   - Looking for real OpenClaw usage examples

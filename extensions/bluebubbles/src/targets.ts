@@ -1,11 +1,11 @@
+import { isAllowedParsedChatSender } from "openclaw/plugin-sdk/allow-from";
 import {
-  isAllowedParsedChatSender,
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
   type ParsedChatTarget,
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
-} from "./runtime-api.js";
+} from "../../imessage/api.js";
 
 export type BlueBubblesService = "imessage" | "sms" | "auto";
 

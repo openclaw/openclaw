@@ -33,11 +33,6 @@
     },
     "release": {
       "publishToNpm": true
-    },
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "zca-js"
-      ]
     }
   }
 }

@@ -1,11 +1,23 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-actions";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
-import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
-import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-runtime";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-contract";
+import {
+  createPairingPrefixStripper,
+  createTextPairingAdapter,
+} from "openclaw/plugin-sdk/channel-pairing";
+import {
+  createAllowlistProviderGroupPolicyWarningCollector,
+  projectWarningCollector,
+} from "openclaw/plugin-sdk/channel-policy";
+import {
+  createChannelDirectoryAdapter,
+  createRuntimeDirectoryLiveAdapter,
+} from "openclaw/plugin-sdk/directory-runtime";
+import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/infra-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "../runtime-api.js";
 import {
@@ -52,6 +64,24 @@ const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "feishuChannelRuntime",
 );
+
+const collectFeishuSecurityWarnings = createAllowlistProviderGroupPolicyWarningCollector<{
+  cfg: ClawdbotConfig;
+  accountId?: string | null;
+}>({
+  providerConfigPresent: (cfg) => cfg.channels?.feishu !== undefined,
+  resolveGroupPolicy: ({ cfg, accountId }) =>
+    resolveFeishuAccount({ cfg, accountId }).config?.groupPolicy,
+  collect: ({ cfg, accountId, groupPolicy }) => {
+    if (groupPolicy !== "open") {
+      return [];
+    }
+    const account = resolveFeishuAccount({ cfg, accountId });
+    return [
+      `- Feishu[${account.accountId}] groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.feishu.groupPolicy="allowlist" + channels.feishu.groupAllowFrom to restrict senders.`,
+    ];
+  },
+});
 
 function describeFeishuMessageTool({
   cfg,
@@ -355,18 +385,19 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   meta: {
     ...meta,
   },
-  pairing: {
+  pairing: createTextPairingAdapter({
     idLabel: "feishuUserId",
-    normalizeAllowEntry: (entry) => entry.replace(/^(feishu|user|open_id):/i, ""),
-    notifyApproval: async ({ cfg, id }) => {
+    message: PAIRING_APPROVED_MESSAGE,
+    normalizeAllowEntry: createPairingPrefixStripper(/^(feishu|user|open_id):/i),
+    notify: async ({ cfg, id, message }) => {
       const { sendMessageFeishu } = await loadFeishuChannelRuntime();
       await sendMessageFeishu({
         cfg,
         to: id,
-        text: PAIRING_APPROVED_MESSAGE,
+        text: message,
       });
     },
-  },
+  }),
   capabilities: {
     chatTypes: ["direct", "channel"],
     polls: false,
@@ -839,19 +870,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     },
   },
   security: {
-    collectWarnings: ({ cfg, accountId }) => {
-      const account = resolveFeishuAccount({ cfg, accountId });
-      const feishuCfg = account.config;
-      return collectAllowlistProviderRestrictSendersWarnings({
+    collectWarnings: projectWarningCollector(
+      ({ cfg, accountId }: { cfg: ClawdbotConfig; accountId?: string | null }) => ({
         cfg,
-        providerConfigPresent: cfg.channels?.feishu !== undefined,
-        configuredGroupPolicy: feishuCfg?.groupPolicy,
-        surface: `Feishu[${account.accountId}] groups`,
-        openScope: "any member",
-        groupPolicyPath: "channels.feishu.groupPolicy",
-        groupAllowFromPath: "channels.feishu.groupAllowFrom",
-      });
-    },
+        accountId,
+      }),
+      collectFeishuSecurityWarnings,
+    ),
   },
   bindings: {
     compileConfiguredBinding: ({ conversationId }) =>
@@ -873,8 +898,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       hint: "<chatId|user:openId|chat:chatId>",
     },
   },
-  directory: {
-    self: async () => null,
+  directory: createChannelDirectoryAdapter({
     listPeers: async ({ cfg, query, limit, accountId }) =>
       listFeishuDirectoryPeers({
         cfg,
@@ -889,29 +913,38 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         limit: limit ?? undefined,
         accountId: accountId ?? undefined,
       }),
-    listPeersLive: async ({ cfg, query, limit, accountId }) =>
-      (await loadFeishuChannelRuntime()).listFeishuDirectoryPeersLive({
-        cfg,
-        query: query ?? undefined,
-        limit: limit ?? undefined,
-        accountId: accountId ?? undefined,
-      }),
-    listGroupsLive: async ({ cfg, query, limit, accountId }) =>
-      (await loadFeishuChannelRuntime()).listFeishuDirectoryGroupsLive({
-        cfg,
-        query: query ?? undefined,
-        limit: limit ?? undefined,
-        accountId: accountId ?? undefined,
-      }),
-  },
+    ...createRuntimeDirectoryLiveAdapter({
+      getRuntime: loadFeishuChannelRuntime,
+      listPeersLive:
+        (runtime) =>
+        async ({ cfg, query, limit, accountId }) =>
+          await runtime.listFeishuDirectoryPeersLive({
+            cfg,
+            query: query ?? undefined,
+            limit: limit ?? undefined,
+            accountId: accountId ?? undefined,
+          }),
+      listGroupsLive:
+        (runtime) =>
+        async ({ cfg, query, limit, accountId }) =>
+          await runtime.listFeishuDirectoryGroupsLive({
+            cfg,
+            query: query ?? undefined,
+            limit: limit ?? undefined,
+            accountId: accountId ?? undefined,
+          }),
+    }),
+  }),
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
-    sendText: async (params) => (await loadFeishuChannelRuntime()).feishuOutbound.sendText!(params),
-    sendMedia: async (params) =>
-      (await loadFeishuChannelRuntime()).feishuOutbound.sendMedia!(params),
+    ...createRuntimeOutboundDelegates({
+      getRuntime: loadFeishuChannelRuntime,
+      sendText: { resolve: (runtime) => runtime.feishuOutbound.sendText },
+      sendMedia: { resolve: (runtime) => runtime.feishuOutbound.sendMedia },
+    }),
   },
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, { port: null }),

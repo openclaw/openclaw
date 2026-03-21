@@ -3,11 +3,18 @@ import {
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createTextPairingAdapter } from "openclaw/plugin-sdk/channel-pairing";
 import {
-  buildOpenGroupPolicyWarning,
-  collectAllowlistProviderGroupPolicyWarnings,
+  composeWarningCollectors,
+  createAllowlistProviderOpenWarningCollector,
+  createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import { runStoppablePassiveMonitor } from "../../shared/passive-monitor.js";
+import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  createChannelDirectoryAdapter,
+  listResolvedDirectoryEntriesFromSources,
+} from "openclaw/plugin-sdk/directory-runtime";
+import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
 import {
   listIrcAccountIds,
   resolveDefaultIrcAccountId,
@@ -88,6 +95,36 @@ const resolveIrcDmPolicy = createScopedDmSecurityResolver<ResolvedIrcAccount>({
   normalizeEntry: (raw) => normalizeIrcAllowEntry(raw),
 });
 
+const collectIrcGroupPolicyWarnings =
+  createAllowlistProviderOpenWarningCollector<ResolvedIrcAccount>({
+    providerConfigPresent: (cfg) => cfg.channels?.irc !== undefined,
+    resolveGroupPolicy: (account) => account.config.groupPolicy,
+    buildOpenWarning: {
+      surface: "IRC channels",
+      openBehavior: "allows all channels and senders (mention-gated)",
+      remediation: 'Prefer channels.irc.groupPolicy="allowlist" with channels.irc.groups',
+    },
+  });
+
+const collectIrcSecurityWarnings = composeWarningCollectors<{
+  account: ResolvedIrcAccount;
+  cfg: CoreConfig;
+}>(
+  collectIrcGroupPolicyWarnings,
+  createConditionalWarningCollector(
+    ({ account }) =>
+      !account.config.tls &&
+      "- IRC TLS is disabled (channels.irc.tls=false); traffic and credentials are plaintext.",
+    ({ account }) =>
+      account.config.nickserv?.register &&
+      '- IRC NickServ registration is enabled (channels.irc.nickserv.register=true); this sends "REGISTER" on every connect. Disable after first successful registration.',
+    ({ account }) =>
+      account.config.nickserv?.register &&
+      !account.config.nickserv.password?.trim() &&
+      "- IRC NickServ registration is enabled but no NickServ password is resolved; set channels.irc.nickserv.password, channels.irc.nickserv.passwordFile, or IRC_NICKSERV_PASSWORD.",
+  ),
+);
+
 export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
   id: "irc",
   meta: {
@@ -96,17 +133,18 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
   },
   setup: ircSetupAdapter,
   setupWizard: ircSetupWizard,
-  pairing: {
+  pairing: createTextPairingAdapter({
     idLabel: "ircUser",
+    message: PAIRING_APPROVED_MESSAGE,
     normalizeAllowEntry: (entry) => normalizeIrcAllowEntry(entry),
-    notifyApproval: async ({ id }) => {
+    notify: async ({ id, message }) => {
       const target = normalizePairingTarget(id);
       if (!target) {
         throw new Error(`invalid IRC pairing id: ${id}`);
       }
-      await sendMessageIrc(target, PAIRING_APPROVED_MESSAGE);
+      await sendMessageIrc(target, message);
     },
-  },
+  }),
   capabilities: {
     chatTypes: ["direct", "group"],
     media: true,
@@ -131,40 +169,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
   },
   security: {
     resolveDmPolicy: resolveIrcDmPolicy,
-    collectWarnings: ({ account, cfg }) => {
-      const warnings = collectAllowlistProviderGroupPolicyWarnings({
-        cfg,
-        providerConfigPresent: cfg.channels?.irc !== undefined,
-        configuredGroupPolicy: account.config.groupPolicy,
-        collect: (groupPolicy) =>
-          groupPolicy === "open"
-            ? [
-                buildOpenGroupPolicyWarning({
-                  surface: "IRC channels",
-                  openBehavior: "allows all channels and senders (mention-gated)",
-                  remediation:
-                    'Prefer channels.irc.groupPolicy="allowlist" with channels.irc.groups',
-                }),
-              ]
-            : [],
-      });
-      if (!account.config.tls) {
-        warnings.push(
-          "- IRC TLS is disabled (channels.irc.tls=false); traffic and credentials are plaintext.",
-        );
-      }
-      if (account.config.nickserv?.register) {
-        warnings.push(
-          '- IRC NickServ registration is enabled (channels.irc.nickserv.register=true); this sends "REGISTER" on every connect. Disable after first successful registration.',
-        );
-        if (!account.config.nickserv.password?.trim()) {
-          warnings.push(
-            "- IRC NickServ registration is enabled but no NickServ password is resolved; set channels.irc.nickserv.password, channels.irc.nickserv.passwordFile, or IRC_NICKSERV_PASSWORD.",
-          );
-        }
-      }
-      return warnings;
-    },
+    collectWarnings: collectIrcSecurityWarnings,
   },
   groups: {
     resolveRequireMention: ({ cfg, accountId, groupId }) => {
@@ -230,88 +235,58 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
       });
     },
   },
-  directory: {
-    self: async () => null,
-    listPeers: async ({ cfg, accountId, query, limit }) => {
-      const account = resolveIrcAccount({ cfg: cfg as CoreConfig, accountId });
-      const q = query?.trim().toLowerCase() ?? "";
-      const ids = new Set<string>();
-
-      for (const entry of account.config.allowFrom ?? []) {
-        const normalized = normalizePairingTarget(String(entry));
-        if (normalized && normalized !== "*") {
-          ids.add(normalized);
-        }
-      }
-      for (const entry of account.config.groupAllowFrom ?? []) {
-        const normalized = normalizePairingTarget(String(entry));
-        if (normalized && normalized !== "*") {
-          ids.add(normalized);
-        }
-      }
-      for (const group of Object.values(account.config.groups ?? {})) {
-        for (const entry of group.allowFrom ?? []) {
-          const normalized = normalizePairingTarget(String(entry));
-          if (normalized && normalized !== "*") {
-            ids.add(normalized);
-          }
-        }
-      }
-
-      return Array.from(ids)
-        .filter((id) => (q ? id.includes(q) : true))
-        .slice(0, limit && limit > 0 ? limit : undefined)
-        .map((id) => ({ kind: "user", id }));
+  directory: createChannelDirectoryAdapter({
+    listPeers: async (params) =>
+      listResolvedDirectoryEntriesFromSources({
+        ...params,
+        kind: "user",
+        resolveAccount: (cfg, accountId) =>
+          resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }),
+        resolveSources: (account) => [
+          account.config.allowFrom ?? [],
+          account.config.groupAllowFrom ?? [],
+          ...Object.values(account.config.groups ?? {}).map((group) => group.allowFrom ?? []),
+        ],
+        normalizeId: (entry) => normalizePairingTarget(entry) || null,
+      }),
+    listGroups: async (params) => {
+      const entries = listResolvedDirectoryEntriesFromSources({
+        ...params,
+        kind: "group",
+        resolveAccount: (cfg, accountId) =>
+          resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }),
+        resolveSources: (account) => [
+          account.config.channels ?? [],
+          Object.keys(account.config.groups ?? {}),
+        ],
+        normalizeId: (entry) => {
+          const normalized = normalizeIrcMessagingTarget(entry);
+          return normalized && isChannelTarget(normalized) ? normalized : null;
+        },
+      });
+      return entries.map((entry) => ({ ...entry, name: entry.id }));
     },
-    listGroups: async ({ cfg, accountId, query, limit }) => {
-      const account = resolveIrcAccount({ cfg: cfg as CoreConfig, accountId });
-      const q = query?.trim().toLowerCase() ?? "";
-      const groupIds = new Set<string>();
-
-      for (const channel of account.config.channels ?? []) {
-        const normalized = normalizeIrcMessagingTarget(channel);
-        if (normalized && isChannelTarget(normalized)) {
-          groupIds.add(normalized);
-        }
-      }
-      for (const group of Object.keys(account.config.groups ?? {})) {
-        if (group === "*") {
-          continue;
-        }
-        const normalized = normalizeIrcMessagingTarget(group);
-        if (normalized && isChannelTarget(normalized)) {
-          groupIds.add(normalized);
-        }
-      }
-
-      return Array.from(groupIds)
-        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-        .slice(0, limit && limit > 0 ? limit : undefined)
-        .map((id) => ({ kind: "group", id, name: id }));
-    },
-  },
+  }),
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getIrcRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 350,
-    sendText: async ({ cfg, to, text, accountId, replyToId }) => {
-      const result = await sendMessageIrc(to, text, {
-        cfg: cfg as CoreConfig,
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-      });
-      return { channel: "irc", ...result };
-    },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) => {
-      const combined = mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text;
-      const result = await sendMessageIrc(to, combined, {
-        cfg: cfg as CoreConfig,
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-      });
-      return { channel: "irc", ...result };
-    },
+    ...createAttachedChannelResultAdapter({
+      channel: "irc",
+      sendText: async ({ cfg, to, text, accountId, replyToId }) =>
+        await sendMessageIrc(to, text, {
+          cfg: cfg as CoreConfig,
+          accountId: accountId ?? undefined,
+          replyTo: replyToId ?? undefined,
+        }),
+      sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
+        await sendMessageIrc(to, mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text, {
+          cfg: cfg as CoreConfig,
+          accountId: accountId ?? undefined,
+          replyTo: replyToId ?? undefined,
+        }),
+    }),
   },
   status: {
     defaultRuntime: {
