@@ -32,14 +32,6 @@
     "reason": "imports extension-owned file from src/plugins"
   },
   {
-    "file": "src/plugins/runtime/runtime-matrix.ts",
-    "line": 4,
-    "kind": "import",
-    "specifier": "../../../extensions/matrix/runtime-api.js",
-    "resolvedPath": "extensions/matrix/runtime-api.js",
-    "reason": "imports extension-owned file from src/plugins"
-  },
-  {
     "file": "src/plugins/runtime/runtime-slack-ops.runtime.ts",
     "line": 10,
     "kind": "import",
