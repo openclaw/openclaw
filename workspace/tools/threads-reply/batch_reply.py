@@ -67,6 +67,101 @@ REPLY_MAP = {
 _variant_idx = {}
 
 
+def get_post_context(conn, post_id: str) -> dict:
+    """Get the post's content and topic to align replies."""
+    row = conn.execute('SELECT text_content FROM posts WHERE post_id=?', (post_id,)).fetchone()
+    if not row or not row['text_content']:
+        return {"topic": "general", "tone": "neutral", "text": ""}
+
+    text = row['text_content'][:200].lower()
+    topic = "general"
+    tone = "neutral"
+
+    if any(w in text for w in ['台海', '飛彈', '軍事', '國債', '戰爭', 'lng', '封鎖', '愛國者']):
+        topic = "geopolitics"
+        tone = "serious"
+    elif any(w in text for w in ['ai', 'claude', 'gpt', '模型', '程式', 'code', 'agent', 'vibe', 'openclaw']):
+        topic = "tech"
+        tone = "enthusiastic"
+    elif any(w in text for w in ['苗栗', '小吃', '早餐', '咖啡', '跑步', '生日', '兒子']):
+        topic = "life"
+        tone = "warm"
+    elif any(w in text for w in ['創業', '公司', '薪水', '員工', '團隊']):
+        topic = "business"
+        tone = "pragmatic"
+    elif any(w in text for w in ['冥想', '覺察', '能量', '薩古魯', '佛', '心智']):
+        topic = "spiritual"
+        tone = "reflective"
+    elif any(w in text for w in ['女', '關係', '愛', '男', '感情']):
+        topic = "relationships"
+        tone = "empathetic"
+
+    return {"topic": topic, "tone": tone, "text": row['text_content'][:100]}
+
+
+# Context-aware reply variants — keyed by (category, post_topic)
+CONTEXTUAL_REPLIES = {
+    ("substantive_insight", "geopolitics"): [
+        "你的分析有結構。這個角度值得更多人看到。",
+        "同意。數據層面確實如此。",
+        "你提的這點正好補了我原文沒展開的部分。",
+    ],
+    ("substantive_insight", "tech"): [
+        "實務經驗比理論有用。你說的這個場景我也遇過。",
+        "對,工具會變但底層邏輯不變。",
+        "這個技術細節很重要,謝謝補充。",
+    ],
+    ("substantive_insight", "life"): [
+        "生活就是這樣,沒什麼大道理。",
+        "哈,你懂。",
+        "對,日子還是要過。",
+    ],
+    ("substantive_insight", "business"): [
+        "創業路上大家都踩過類似的坑。",
+        "你說的這個我也在經歷。",
+        "現實就是這樣,先活下來再說。",
+    ],
+    ("substantive_insight", "spiritual"): [
+        "這個體悟不是每個人都能到的。",
+        "嗯,練習的人才懂。",
+        "你說的正是那個轉折點。",
+    ],
+    ("substantive_insight", "relationships"): [
+        "感情的事,想太多反而更卡。",
+        "你看到了大多數人看不到的那層。",
+        "對,不是技巧的問題,是理解的問題。",
+    ],
+    ("question_ai", "tech"): [
+        "核心是：先定義問題,再選工具。這個邏輯不會因為模型升級而改變。",
+        "試了就知道。理論不如實戰。",
+    ],
+    ("question_geopolitics", "geopolitics"): [
+        "這個問題的答案在 CBO.gov 跟經濟部能源統計裡。自己查比聽我說更有用。",
+        "取決於你站在什麼時間尺度看。短期跟長期完全不同。",
+    ],
+    ("hostile_with_point", "geopolitics"): [
+        "情緒我理解。但數字不會因為你不喜歡就消失。來源都在原文裡。",
+        "你罵的對象是 CBO 跟經濟部的數據,不是我。",
+    ],
+    ("hostile_with_point", "tech"): [
+        "你的質疑合理。但先試過再評價會更有說服力。",
+        "對,AI 不是萬能。但你說的那個問題,它確實能幫上忙。",
+    ],
+    ("positive_feedback", "geopolitics"): [
+        "謝謝。希望有幫助你理解全局。",
+        "🙌 數據在那裡,歡迎驗證。",
+    ],
+    ("positive_feedback", "tech"): [
+        "🙌 有問題隨時問。",
+        "謝謝。希望對你的專案有用。",
+    ],
+    ("positive_feedback", "life"): [
+        "🙌",
+        "謝啦。",
+    ],
+}
+
+
 def classify(text: str) -> str:
     """Classify a comment into a category."""
     if not text or len(text.strip()) <= 3:
@@ -110,8 +205,20 @@ def classify(text: str) -> str:
     return "fragment"
 
 
-def get_reply(category: str) -> str | None:
-    """Get a reply for this category, rotating variants."""
+def get_reply(category: str, post_context: dict = None) -> str | None:
+    """Get a context-aware reply, falling back to generic if no match."""
+    # Try context-aware first
+    if post_context:
+        topic = post_context.get("topic", "general")
+        key = (category, topic)
+        if key in CONTEXTUAL_REPLIES:
+            templates = CONTEXTUAL_REPLIES[key]
+            idx = _variant_idx.get(str(key), 0)
+            reply = templates[idx % len(templates)]
+            _variant_idx[str(key)] = idx + 1
+            return reply
+
+    # Fallback to generic
     templates = REPLY_MAP.get(category)
     if templates is None:
         return None
@@ -162,7 +269,8 @@ def main():
 
         text = (u['text_content'] or '').strip()
         cat = classify(text)
-        reply = get_reply(cat)
+        post_ctx = get_post_context(conn, u['post_id'])
+        reply = get_reply(cat, post_ctx)
 
         if reply is None:
             # Skip
@@ -173,7 +281,8 @@ def main():
             continue
 
         if dry_run:
-            print(f"  [{cat:20s}] @{u['username']:20s} → {reply[:40]}")
+            topic = post_ctx.get('topic', '?') if post_ctx else '?'
+            print(f"  [{cat:20s}] [{topic:12s}] @{u['username']:20s} → {reply[:40]}")
             sent += 1
         else:
             db.add_reply(conn, u['comment_id'], u['post_id'], reply, status='pending')
