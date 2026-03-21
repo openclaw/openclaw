@@ -196,6 +196,42 @@ describe("discoverOpenClawPlugins", () => {
     expect(ids).toContain("voice-call");
   });
 
+  it("normalizes scoped package aliases before falling back to unscoped names", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "openclawbrain-pack");
+    mkdirSafe(path.join(globalExt, "src"));
+
+    writePluginPackageManifest({
+      packageDir: globalExt,
+      packageName: "@openclawbrain/openclaw",
+      extensions: ["./src/index.ts"],
+    });
+    fs.writeFileSync(
+      path.join(globalExt, "src", "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(globalExt, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "openclawbrain",
+          name: "OpenClawBrain",
+          version: "0.4.0",
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+
+    const ids = candidates.map((c) => c.idHint);
+    expect(ids).toContain("openclawbrain");
+    expect(ids).not.toContain("openclaw");
+  });
+
   it("strips provider suffixes from package-derived ids", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "ollama-provider-pack");
