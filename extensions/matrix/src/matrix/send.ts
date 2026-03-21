@@ -156,7 +156,9 @@ export async function sendMessageMatrix(
         const eventId = await sendContent(content);
         lastMessageId = eventId ?? lastMessageId;
         const textChunks = useVoice ? chunks : rest;
-        const followupRelation = threadId ? relation : undefined;
+        // Voice messages use a generic media body ("Voice message"), so keep any
+        // transcript follow-up attached to the same reply/thread context.
+        const followupRelation = useVoice || threadId ? relation : undefined;
         for (const chunk of textChunks) {
           const text = chunk.trim();
           if (!text) {
