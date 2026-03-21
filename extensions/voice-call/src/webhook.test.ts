@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
-import type { CallRecord } from "./types.js";
+import type { CallRecord, NormalizedEvent } from "./types.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 
 const provider: VoiceCallProvider = {
@@ -348,5 +348,248 @@ describe("VoiceCallWebhookServer start idempotency", () => {
 
     // Should not throw
     await server.stop();
+  });
+});
+
+describe("VoiceCallWebhookServer stream disconnect grace", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("ignores stale stream disconnects after reconnect and only hangs up on current stream disconnect", async () => {
+    const call = createCall(Date.now() - 1_000);
+    call.providerCallId = "CA-stream-1";
+
+    const endCall = vi.fn(async () => ({ success: true }));
+    const speakInitialMessage = vi.fn(async () => {});
+    const getCallByProviderCallId = vi.fn((providerCallId: string) =>
+      providerCallId === "CA-stream-1" ? call : undefined,
+    );
+
+    const manager = {
+      getActiveCalls: () => [call],
+      getCallByProviderCallId,
+      endCall,
+      speakInitialMessage,
+      processEvent: vi.fn(),
+    } as unknown as CallManager;
+
+    let currentStreamSid: string | null = "MZ-new";
+    const twilioProvider = {
+      name: "twilio" as const,
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:test" }),
+      parseWebhookEvent: () => ({ events: [] }),
+      initiateCall: async () => ({ providerCallId: "provider-call", status: "initiated" as const }),
+      hangupCall: async () => {},
+      playTts: async () => {},
+      startListening: async () => {},
+      stopListening: async () => {},
+      getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
+      isValidStreamToken: () => true,
+      registerCallStream: (_callSid: string, streamSid: string) => {
+        currentStreamSid = streamSid;
+      },
+      unregisterCallStream: (_callSid: string, streamSid?: string) => {
+        if (!currentStreamSid) {
+          return;
+        }
+        if (streamSid && currentStreamSid !== streamSid) {
+          return;
+        }
+        currentStreamSid = null;
+      },
+      hasRegisteredStream: () => currentStreamSid !== null,
+      clearTtsQueue: () => {},
+    };
+
+    const config = createConfig({
+      provider: "twilio",
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        openaiApiKey: "test-key",
+      },
+    });
+    const server = new VoiceCallWebhookServer(
+      config,
+      manager,
+      twilioProvider as unknown as VoiceCallProvider,
+    );
+
+    const mediaHandler = server.getMediaStreamHandler() as unknown as {
+      config: {
+        onDisconnect?: (providerCallId: string, streamSid: string) => void;
+        onConnect?: (providerCallId: string, streamSid: string) => void;
+      };
+    };
+    expect(mediaHandler).toBeTruthy();
+
+    mediaHandler.config.onConnect?.("CA-stream-1", "MZ-new");
+    mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-old");
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(endCall).not.toHaveBeenCalled();
+
+    mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-new");
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(endCall).toHaveBeenCalledTimes(1);
+    expect(endCall).toHaveBeenCalledWith(call.callId);
+
+    await server.stop();
+  });
+});
+
+describe("VoiceCallWebhookServer barge-in suppression during initial message", () => {
+  const createTwilioProvider = (clearTtsQueue: ReturnType<typeof vi.fn>) => ({
+    name: "twilio" as const,
+    verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:test" }),
+    parseWebhookEvent: () => ({ events: [] }),
+    initiateCall: async () => ({ providerCallId: "provider-call", status: "initiated" as const }),
+    hangupCall: async () => {},
+    playTts: async () => {},
+    startListening: async () => {},
+    stopListening: async () => {},
+    getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
+    isValidStreamToken: () => true,
+    registerCallStream: () => {},
+    unregisterCallStream: () => {},
+    hasRegisteredStream: () => true,
+    clearTtsQueue,
+  });
+
+  const getMediaCallbacks = (server: VoiceCallWebhookServer) =>
+    server.getMediaStreamHandler() as unknown as {
+      config: {
+        onSpeechStart?: (providerCallId: string) => void;
+        onTranscript?: (providerCallId: string, transcript: string) => void;
+      };
+    };
+
+  it("suppresses barge-in clear while outbound conversation initial message is pending", async () => {
+    const call = createCall(Date.now() - 1_000);
+    call.callId = "call-barge";
+    call.providerCallId = "CA-barge";
+    call.direction = "outbound";
+    call.state = "speaking";
+    call.metadata = {
+      mode: "conversation",
+      initialMessage: "Hi, this is OpenClaw.",
+    };
+
+    const clearTtsQueue = vi.fn();
+    const processEvent = vi.fn((event: NormalizedEvent) => {
+      if (event.type === "call.speech") {
+        // Mirrors manager behavior: call.speech transitions to listening.
+        call.state = "listening";
+      }
+    });
+    const manager = {
+      getActiveCalls: () => [call],
+      getCallByProviderCallId: (providerCallId: string) =>
+        providerCallId === call.providerCallId ? call : undefined,
+      getCall: (callId: string) => (callId === call.callId ? call : undefined),
+      endCall: vi.fn(async () => ({ success: true })),
+      speakInitialMessage: vi.fn(async () => {}),
+      processEvent,
+    } as unknown as CallManager;
+
+    const config = createConfig({
+      provider: "twilio",
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        openaiApiKey: "test-key",
+      },
+    });
+    const server = new VoiceCallWebhookServer(
+      config,
+      manager,
+      createTwilioProvider(clearTtsQueue) as unknown as VoiceCallProvider,
+    );
+    const handleInboundResponse = vi.fn(async () => {});
+    (
+      server as unknown as {
+        handleInboundResponse: (
+          callId: string,
+          transcript: string,
+          timing?: unknown,
+        ) => Promise<void>;
+      }
+    ).handleInboundResponse = handleInboundResponse;
+
+    try {
+      const media = getMediaCallbacks(server);
+      media.config.onSpeechStart?.("CA-barge");
+      media.config.onTranscript?.("CA-barge", "hello");
+      media.config.onSpeechStart?.("CA-barge");
+      media.config.onTranscript?.("CA-barge", "hello again");
+      expect(clearTtsQueue).not.toHaveBeenCalled();
+      expect(handleInboundResponse).not.toHaveBeenCalled();
+      expect(processEvent).not.toHaveBeenCalled();
+
+      if (call.metadata) {
+        delete call.metadata.initialMessage;
+      }
+      call.state = "listening";
+
+      media.config.onSpeechStart?.("CA-barge");
+      media.config.onTranscript?.("CA-barge", "hello after greeting");
+      expect(clearTtsQueue).toHaveBeenCalledTimes(2);
+      expect(handleInboundResponse).toHaveBeenCalledTimes(1);
+      expect(processEvent).toHaveBeenCalledTimes(1);
+      const [calledCallId, calledTranscript] = (handleInboundResponse.mock.calls[0] ??
+        []) as unknown as [string | undefined, string | undefined];
+      expect(calledCallId).toBe(call.callId);
+      expect(calledTranscript).toBe("hello after greeting");
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("keeps barge-in clear enabled for inbound calls", async () => {
+    const call = createCall(Date.now() - 1_000);
+    call.callId = "call-inbound";
+    call.providerCallId = "CA-inbound";
+    call.direction = "inbound";
+    call.metadata = {
+      initialMessage: "Hello from inbound greeting.",
+    };
+
+    const clearTtsQueue = vi.fn();
+    const manager = {
+      getActiveCalls: () => [call],
+      getCallByProviderCallId: (providerCallId: string) =>
+        providerCallId === call.providerCallId ? call : undefined,
+      getCall: (callId: string) => (callId === call.callId ? call : undefined),
+      endCall: vi.fn(async () => ({ success: true })),
+      speakInitialMessage: vi.fn(async () => {}),
+      processEvent: vi.fn(),
+    } as unknown as CallManager;
+
+    const config = createConfig({
+      provider: "twilio",
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        openaiApiKey: "test-key",
+      },
+    });
+    const server = new VoiceCallWebhookServer(
+      config,
+      manager,
+      createTwilioProvider(clearTtsQueue) as unknown as VoiceCallProvider,
+    );
+
+    try {
+      const media = getMediaCallbacks(server);
+      media.config.onSpeechStart?.("CA-inbound");
+      media.config.onTranscript?.("CA-inbound", "hello");
+      expect(clearTtsQueue).toHaveBeenCalledTimes(2);
+    } finally {
+      await server.stop();
+    }
   });
 });

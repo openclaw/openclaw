@@ -75,6 +75,18 @@ function shouldCollectPluginCompatibility(cfg: OpenClawConfig): boolean {
   return existsSync(resolveConfigPath(process.env));
 }
 
+function isMissingConfigColdStart(): boolean {
+  return !existsSync(resolveConfigPath(process.env));
+}
+
+function buildColdStartUpdateResult(): Awaited<ReturnType<typeof getUpdateCheckResult>> {
+  return {
+    root: null,
+    installKind: "unknown",
+    packageManager: "unknown",
+  };
+}
+
 async function resolveChannelsStatus(params: {
   cfg: OpenClawConfig;
   gatewayReachable: boolean;
@@ -142,6 +154,7 @@ async function scanStatusJsonFast(opts: {
   timeoutMs?: number;
   all?: boolean;
 }): Promise<StatusScanResult> {
+  const coldStart = isMissingConfigColdStart();
   const loadedRaw = await readBestEffortConfig();
   const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
     await resolveCommandSecretRefsViaGateway({
@@ -150,18 +163,22 @@ async function scanStatusJsonFast(opts: {
       targetIds: getStatusCommandSecretTargetIds(),
       mode: "read_only_status",
     });
-  if (hasPotentialConfiguredChannels(cfg)) {
+  const hasConfiguredChannels = hasPotentialConfiguredChannels(cfg);
+  if (hasConfiguredChannels) {
     const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
   }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;
-  const updatePromise = getUpdateCheckResult({
-    timeoutMs: updateTimeoutMs,
-    fetchGit: true,
-    includeRegistry: true,
-  });
+  const skipColdStartNetworkChecks = coldStart && !hasConfiguredChannels && opts.all !== true;
+  const updatePromise = skipColdStartNetworkChecks
+    ? Promise.resolve(buildColdStartUpdateResult())
+    : getUpdateCheckResult({
+        timeoutMs: updateTimeoutMs,
+        fetchGit: true,
+        includeRegistry: true,
+      });
   const agentStatusPromise = getAgentLocalStatuses(cfg);
   const summaryPromise = getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
 
@@ -176,7 +193,13 @@ async function scanStatusJsonFast(opts: {
           )
           .catch(() => null);
 
-  const gatewayProbePromise = resolveGatewayProbeSnapshot({ cfg, opts });
+  const gatewayProbePromise = resolveGatewayProbeSnapshot({
+    cfg,
+    opts: {
+      ...opts,
+      ...(skipColdStartNetworkChecks ? { skipProbe: true } : {}),
+    },
+  });
 
   const [tailscaleDns, update, agentStatus, gatewaySnapshot, summary] = await Promise.all([
     tailscaleDnsPromise,
@@ -255,6 +278,7 @@ export async function scanStatus(
       enabled: true,
     },
     async (progress) => {
+      const coldStart = isMissingConfigColdStart();
       progress.setLabel("Loading config…");
       const loadedRaw = await readBestEffortConfig();
       const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
@@ -264,6 +288,8 @@ export async function scanStatus(
           targetIds: getStatusCommandSecretTargetIds(),
           mode: "read_only_status",
         });
+      const hasConfiguredChannels = hasPotentialConfiguredChannels(cfg);
+      const skipColdStartNetworkChecks = coldStart && !hasConfiguredChannels && opts.all !== true;
       const osSummary = resolveOsSummary();
       const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
       const tailscaleDnsPromise =
@@ -278,11 +304,13 @@ export async function scanStatus(
               .catch(() => null);
       const updateTimeoutMs = opts.all ? 6500 : 2500;
       const updatePromise = deferResult(
-        getUpdateCheckResult({
-          timeoutMs: updateTimeoutMs,
-          fetchGit: true,
-          includeRegistry: true,
-        }),
+        skipColdStartNetworkChecks
+          ? Promise.resolve(buildColdStartUpdateResult())
+          : getUpdateCheckResult({
+              timeoutMs: updateTimeoutMs,
+              fetchGit: true,
+              includeRegistry: true,
+            }),
       );
       const agentStatusPromise = deferResult(getAgentLocalStatuses(cfg));
       const summaryPromise = deferResult(
@@ -315,7 +343,13 @@ export async function scanStatus(
         gatewayProbeAuth,
         gatewayProbeAuthWarning,
         gatewayProbe,
-      } = await resolveGatewayProbeSnapshot({ cfg, opts });
+      } = await resolveGatewayProbeSnapshot({
+        cfg,
+        opts: {
+          ...opts,
+          ...(skipColdStartNetworkChecks ? { skipProbe: true } : {}),
+        },
+      });
       const gatewayReachable = gatewayProbe?.ok === true;
       const gatewaySelf = gatewayProbe?.presence
         ? pickGatewaySelfPresence(gatewayProbe.presence)

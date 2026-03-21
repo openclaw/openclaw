@@ -15,10 +15,12 @@ import {
   resolveTestRunExitCode,
 } from "./test-parallel-utils.mjs";
 import {
+  dedupeFilesPreserveOrder,
+  loadUnitMemoryHotspotManifest,
   loadTestRunnerBehavior,
   loadUnitTimingManifest,
+  selectUnitHeavyFileGroups,
   packFilesByDuration,
-  selectTimedHeavyFiles,
 } from "./test-runner-manifest.mjs";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
@@ -27,6 +29,25 @@ const pnpm = "pnpm";
 const behaviorManifest = loadTestRunnerBehavior();
 const existingFiles = (entries) =>
   entries.map((entry) => entry.file).filter((file) => fs.existsSync(file));
+let tempArtifactDir = null;
+const ensureTempArtifactDir = () => {
+  if (tempArtifactDir === null) {
+    tempArtifactDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-parallel-"));
+  }
+  return tempArtifactDir;
+};
+const writeTempJsonArtifact = (name, value) => {
+  const filePath = path.join(ensureTempArtifactDir(), `${name}.json`);
+  fs.writeFileSync(filePath, `${JSON.stringify(value)}\n`, "utf8");
+  return filePath;
+};
+const cleanupTempArtifacts = () => {
+  if (tempArtifactDir === null) {
+    return;
+  }
+  fs.rmSync(tempArtifactDir, { recursive: true, force: true });
+  tempArtifactDir = null;
+};
 const existingUnitConfigFiles = (entries) => existingFiles(entries).filter(isUnitConfigTestFile);
 const unitBehaviorIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.isolated);
 const unitSingletonIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.singletonIsolated);
@@ -61,18 +82,18 @@ const testProfile =
     ? rawTestProfile
     : "normal";
 const isMacMiniProfile = testProfile === "macmini";
-// vmForks is a big win for transform/import heavy suites. Node 24 is stable again
-// for the default unit-fast lane after moving the known flaky files to fork-only
-// isolation, but Node 25+ still falls back to process forks until re-validated.
-// Keep it opt-out via OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
+// Vitest executes Node tests through Vite's SSR/module-runner pipeline, so the
+// shared unit lane still retains transformed ESM/module state even when the
+// tests themselves are not "server rendering" a website. vmForks can win in
+// ideal transform-heavy cases, but for this repo we measured higher aggregate
+// CPU load and fatal heap OOMs on memory-constrained dev machines and CI when
+// unit-fast stayed on vmForks. Keep forks as the default unless that evidence
+// is re-run and replaced:
+// PR: https://github.com/openclaw/openclaw/pull/51145
+// OOM evidence: https://github.com/openclaw/openclaw/pull/51145#issuecomment-4099663958
+// Preserve OPENCLAW_TEST_VM_FORKS=1 as the explicit override/debug escape hatch.
 const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor <= 24 : true;
-const useVmForks =
-  process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
-  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" &&
-    !isWindows &&
-    supportsVmForks &&
-    !lowMemLocalHost &&
-    (isCI || testProfile !== "low"));
+const useVmForks = process.env.OPENCLAW_TEST_VM_FORKS === "1" && supportsVmForks;
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
@@ -262,6 +283,7 @@ const inferTarget = (fileFilter) => {
   return { owner: "base", isolated };
 };
 const unitTimingManifest = loadUnitTimingManifest();
+const unitMemoryHotspotManifest = loadUnitMemoryHotspotManifest();
 const parseEnvNumber = (name, fallback) => {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
@@ -275,7 +297,7 @@ const defaultHeavyUnitFileLimit =
     : isMacMiniProfile
       ? 90
       : testProfile === "low"
-        ? 20
+        ? 36
         : highMemLocalHost
           ? 80
           : 60;
@@ -285,7 +307,7 @@ const defaultHeavyUnitLaneCount =
     : isMacMiniProfile
       ? 6
       : testProfile === "low"
-        ? 2
+        ? 4
         : highMemLocalHost
           ? 5
           : 4;
@@ -298,21 +320,111 @@ const heavyUnitLaneCount = parseEnvNumber(
   defaultHeavyUnitLaneCount,
 );
 const heavyUnitMinDurationMs = parseEnvNumber("OPENCLAW_TEST_HEAVY_UNIT_MIN_MS", 1200);
-const timedHeavyUnitFiles =
-  shouldSplitUnitRuns && heavyUnitFileLimit > 0
-    ? selectTimedHeavyFiles({
+const defaultMemoryHeavyUnitFileLimit =
+  testProfile === "serial" ? 0 : isCI ? 64 : testProfile === "low" ? 8 : 16;
+const memoryHeavyUnitFileLimit = parseEnvNumber(
+  "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_FILE_LIMIT",
+  defaultMemoryHeavyUnitFileLimit,
+);
+const memoryHeavyUnitMinDeltaKb = parseEnvNumber(
+  "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_MIN_KB",
+  unitMemoryHotspotManifest.defaultMinDeltaKb,
+);
+const { memoryHeavyFiles: memoryHeavyUnitFiles, timedHeavyFiles: timedHeavyUnitFiles } =
+  shouldSplitUnitRuns
+    ? selectUnitHeavyFileGroups({
         candidates: allKnownUnitFiles,
-        limit: heavyUnitFileLimit,
-        minDurationMs: heavyUnitMinDurationMs,
-        exclude: unitBehaviorOverrideSet,
+        behaviorOverrides: unitBehaviorOverrideSet,
+        timedLimit: heavyUnitFileLimit,
+        timedMinDurationMs: heavyUnitMinDurationMs,
+        memoryLimit: memoryHeavyUnitFileLimit,
+        memoryMinDeltaKb: memoryHeavyUnitMinDeltaKb,
         timings: unitTimingManifest,
+        hotspots: unitMemoryHotspotManifest,
       })
-    : [];
+    : {
+        memoryHeavyFiles: [],
+        timedHeavyFiles: [],
+      };
+const unitSingletonBatchFiles = dedupeFilesPreserveOrder(
+  unitSingletonIsolatedFiles,
+  new Set(unitBehaviorIsolatedFiles),
+);
+const unitMemorySingletonFiles = dedupeFilesPreserveOrder(
+  memoryHeavyUnitFiles,
+  new Set([...unitBehaviorOverrideSet, ...unitSingletonBatchFiles]),
+);
+const unitSchedulingOverrideSet = new Set([...unitBehaviorOverrideSet, ...memoryHeavyUnitFiles]);
 const unitFastExcludedFiles = [
-  ...new Set([...unitBehaviorOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
+  ...new Set([...unitSchedulingOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
 ];
+const defaultSingletonBatchLaneCount =
+  testProfile === "serial"
+    ? 0
+    : unitSingletonBatchFiles.length === 0
+      ? 0
+      : isCI
+        ? Math.ceil(unitSingletonBatchFiles.length / 6)
+        : testProfile === "low" && highMemLocalHost
+          ? Math.ceil(unitSingletonBatchFiles.length / 8) + 1
+          : highMemLocalHost
+            ? Math.ceil(unitSingletonBatchFiles.length / 8)
+            : lowMemLocalHost
+              ? Math.ceil(unitSingletonBatchFiles.length / 12)
+              : Math.ceil(unitSingletonBatchFiles.length / 10);
+const singletonBatchLaneCount =
+  unitSingletonBatchFiles.length === 0
+    ? 0
+    : Math.min(
+        unitSingletonBatchFiles.length,
+        Math.max(
+          1,
+          parseEnvNumber("OPENCLAW_TEST_SINGLETON_ISOLATED_LANES", defaultSingletonBatchLaneCount),
+        ),
+      );
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
+const unitSingletonBuckets =
+  singletonBatchLaneCount > 0
+    ? packFilesByDuration(unitSingletonBatchFiles, singletonBatchLaneCount, estimateUnitDurationMs)
+    : [];
+const unitFastExcludedFileSet = new Set(unitFastExcludedFiles);
+const unitFastCandidateFiles = allKnownUnitFiles.filter(
+  (file) => !unitFastExcludedFileSet.has(file),
+);
+const defaultUnitFastLaneCount = isCI && !isWindows ? 3 : 1;
+const unitFastLaneCount = Math.max(
+  1,
+  parseEnvNumber("OPENCLAW_TEST_UNIT_FAST_LANES", defaultUnitFastLaneCount),
+);
+// Heap snapshots on current main show long-lived unit-fast workers retaining
+// transformed Vitest/Vite module graphs rather than app objects. Multiple
+// bounded unit-fast lanes only help if we also recycle them serially instead
+// of keeping several transform-heavy workers resident at the same time.
+const unitFastBuckets =
+  unitFastLaneCount > 1
+    ? packFilesByDuration(unitFastCandidateFiles, unitFastLaneCount, estimateUnitDurationMs)
+    : [unitFastCandidateFiles];
+const unitFastEntries = unitFastBuckets
+  .filter((files) => files.length > 0)
+  .map((files, index) => ({
+    name: unitFastBuckets.length === 1 ? "unit-fast" : `unit-fast-${String(index + 1)}`,
+    serialPhase: "unit-fast",
+    env: {
+      OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+        `vitest-unit-fast-include-${String(index + 1)}`,
+        files,
+      ),
+    },
+    args: [
+      "vitest",
+      "run",
+      "--config",
+      "vitest.unit.config.ts",
+      `--pool=${useVmForks ? "vmForks" : "forks"}`,
+      ...(disableIsolation ? ["--isolate=false"] : []),
+    ],
+  }));
 const heavyUnitBuckets = packFilesByDuration(
   timedHeavyUnitFiles,
   heavyUnitLaneCount,
@@ -322,21 +434,31 @@ const unitHeavyEntries = heavyUnitBuckets.map((files, index) => ({
   name: `unit-heavy-${String(index + 1)}`,
   args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
 }));
-const baseRuns = [
-  ...(shouldSplitUnitRuns
+const unitSingletonEntries = unitSingletonBuckets.map((files, index) => ({
+  name:
+    unitSingletonBuckets.length === 1 ? "unit-singleton" : `unit-singleton-${String(index + 1)}`,
+  args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
+}));
+const unitThreadEntries =
+  unitThreadSingletonFiles.length > 0
     ? [
         {
-          name: "unit-fast",
+          name: "unit-threads",
           args: [
             "vitest",
             "run",
             "--config",
             "vitest.unit.config.ts",
-            `--pool=${useVmForks ? "vmForks" : "forks"}`,
-            ...(disableIsolation ? ["--isolate=false"] : []),
-            ...unitFastExcludedFiles.flatMap((file) => ["--exclude", file]),
+            "--pool=threads",
+            ...unitThreadSingletonFiles,
           ],
         },
+      ]
+    : [];
+const baseRuns = [
+  ...(shouldSplitUnitRuns
+    ? [
+        ...unitFastEntries,
         ...(unitBehaviorIsolatedFiles.length > 0
           ? [
               {
@@ -353,7 +475,8 @@ const baseRuns = [
             ]
           : []),
         ...unitHeavyEntries,
-        ...unitSingletonIsolatedFiles.map((file) => ({
+        ...unitSingletonEntries,
+        ...unitMemorySingletonFiles.map((file) => ({
           name: `${path.basename(file, ".test.ts")}-isolated`,
           args: [
             "vitest",
@@ -364,10 +487,7 @@ const baseRuns = [
             file,
           ],
         })),
-        ...unitThreadSingletonFiles.map((file) => ({
-          name: `${path.basename(file, ".test.ts")}-threads`,
-          args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=threads", file],
-        })),
+        ...unitThreadEntries,
         ...unitVmForkSingletonFiles.map((file) => ({
           name: `${path.basename(file, ".test.ts")}-vmforks`,
           args: [
@@ -586,6 +706,24 @@ const topLevelParallelEnabled =
   testProfile !== "serial" &&
   !(!isCI && nodeMajor >= 25) &&
   !isMacMiniProfile;
+const defaultTopLevelParallelLimit =
+  testProfile === "serial"
+    ? 1
+    : testProfile === "low"
+      ? lowMemLocalHost
+        ? 2
+        : 3
+      : testProfile === "max"
+        ? 5
+        : highMemLocalHost
+          ? 4
+          : lowMemLocalHost
+            ? 2
+            : 3;
+const topLevelParallelLimit = Math.max(
+  1,
+  parseEnvNumber("OPENCLAW_TEST_TOP_LEVEL_CONCURRENCY", defaultTopLevelParallelLimit),
+);
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
@@ -600,6 +738,8 @@ const keepGatewaySerial =
   !parallelGatewayEnabled;
 const parallelRuns = keepGatewaySerial ? runs.filter((entry) => entry.name !== "gateway") : runs;
 const serialRuns = keepGatewaySerial ? runs.filter((entry) => entry.name === "gateway") : [];
+const serialPrefixRuns = parallelRuns.filter((entry) => entry.serialPhase);
+const deferredParallelRuns = parallelRuns.filter((entry) => !entry.serialPhase);
 const baseLocalWorkers = Math.max(4, Math.min(16, hostCpuCount));
 const loadAwareDisabledRaw = process.env.OPENCLAW_TEST_LOAD_AWARE?.trim().toLowerCase();
 const loadAwareDisabled = loadAwareDisabledRaw === "0" || loadAwareDisabledRaw === "false";
@@ -670,6 +810,9 @@ const defaultWorkerBudget =
 const maxWorkersForRun = (name) => {
   if (resolvedOverride) {
     return resolvedOverride;
+  }
+  if (name === "unit-singleton" || name.startsWith("unit-singleton-")) {
+    return 1;
   }
   if (isCI && !isMacOS) {
     return null;
@@ -944,7 +1087,12 @@ const runOnce = (entry, extraArgs = []) =>
     try {
       child = spawn(pnpm, args, {
         stdio: ["inherit", "pipe", "pipe"],
-        env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: resolvedNodeOptions },
+        env: {
+          ...process.env,
+          ...entry.env,
+          VITEST_GROUP: entry.name,
+          NODE_OPTIONS: resolvedNodeOptions,
+        },
         shell: isWindows,
       });
       captureTreeSample("spawn");
@@ -1079,8 +1227,10 @@ const runEntriesWithLimit = async (entries, extraArgs = [], concurrency = 1) => 
 
 const runEntries = async (entries, extraArgs = []) => {
   if (topLevelParallelEnabled) {
-    const codes = await Promise.all(entries.map((entry) => run(entry, extraArgs)));
-    return codes.find((code) => code !== 0);
+    // Keep a bounded number of top-level Vitest processes in flight. As the
+    // singleton lane list grows, unbounded Promise.all scheduling turns
+    // isolation into cross-process contention and can reintroduce timeouts.
+    return runEntriesWithLimit(entries, extraArgs, topLevelParallelLimit);
   }
 
   return runEntriesWithLimit(entries, extraArgs);
@@ -1094,6 +1244,7 @@ const shutdown = (signal) => {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("exit", cleanupTempArtifacts);
 
 if (process.env.OPENCLAW_TEST_LIST_LANES === "1") {
   const entriesToPrint = targetedEntries.length > 0 ? targetedEntries : runs;
@@ -1148,15 +1299,36 @@ if (passthroughRequiresSingleRun && passthroughOptionArgs.length > 0) {
   process.exit(2);
 }
 
-if (isMacMiniProfile && targetedEntries.length === 0) {
-  const unitFastEntry = parallelRuns.find((entry) => entry.name === "unit-fast");
-  if (unitFastEntry) {
-    const unitFastCode = await run(unitFastEntry, passthroughOptionArgs);
+if (serialPrefixRuns.length > 0) {
+  const failedSerialPrefix = await runEntriesWithLimit(serialPrefixRuns, passthroughOptionArgs, 1);
+  if (failedSerialPrefix !== undefined) {
+    process.exit(failedSerialPrefix);
+  }
+  const deferredRunConcurrency = isMacMiniProfile ? 3 : testProfile === "low" ? 2 : undefined;
+  const failedDeferredParallel = isMacMiniProfile
+    ? await runEntriesWithLimit(deferredParallelRuns, passthroughOptionArgs, deferredRunConcurrency)
+    : deferredRunConcurrency
+      ? await runEntriesWithLimit(
+          deferredParallelRuns,
+          passthroughOptionArgs,
+          deferredRunConcurrency,
+        )
+      : await runEntries(deferredParallelRuns, passthroughOptionArgs);
+  if (failedDeferredParallel !== undefined) {
+    process.exit(failedDeferredParallel);
+  }
+} else if (isMacMiniProfile && targetedEntries.length === 0) {
+  const unitFastEntriesForMacMini = parallelRuns.filter((entry) =>
+    entry.name.startsWith("unit-fast"),
+  );
+  for (const entry of unitFastEntriesForMacMini) {
+    // eslint-disable-next-line no-await-in-loop
+    const unitFastCode = await run(entry, passthroughOptionArgs);
     if (unitFastCode !== 0) {
       process.exit(unitFastCode);
     }
   }
-  const deferredEntries = parallelRuns.filter((entry) => entry.name !== "unit-fast");
+  const deferredEntries = parallelRuns.filter((entry) => !entry.name.startsWith("unit-fast"));
   const failedMacMiniParallel = await runEntriesWithLimit(
     deferredEntries,
     passthroughOptionArgs,

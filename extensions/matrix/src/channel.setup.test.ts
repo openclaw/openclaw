@@ -1,5 +1,5 @@
-import type { PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 
 const verificationMocks = vi.hoisted(() => ({
   bootstrapMatrixVerification: vi.fn(),
@@ -249,5 +249,32 @@ describe("matrix setup post-write bootstrap", () => {
         }
       }
     }
+  });
+
+  it("clears allowPrivateNetwork when deleting the default Matrix account config", () => {
+    const updated = matrixPlugin.config.deleteAccount?.({
+      cfg: {
+        channels: {
+          matrix: {
+            homeserver: "http://localhost.localdomain:8008",
+            allowPrivateNetwork: true,
+            accounts: {
+              ops: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      } as CoreConfig,
+      accountId: "default",
+    }) as CoreConfig;
+
+    expect(updated.channels?.matrix).toEqual({
+      accounts: {
+        ops: {
+          enabled: true,
+        },
+      },
+    });
   });
 });

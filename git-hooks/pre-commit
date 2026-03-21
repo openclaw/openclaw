@@ -48,5 +48,10 @@ fi
 
 git add -- "${files[@]}"
 
-cd "$ROOT_DIR"
-pnpm check
+# This hook is also exercised from lightweight temp repos in tests, where the
+# staged-file safety behavior matters but the full OpenClaw workspace does not
+# exist. Only run the repo-wide gate inside a real checkout.
+if [[ -f "$ROOT_DIR/package.json" ]] && [[ -f "$ROOT_DIR/pnpm-lock.yaml" ]]; then
+  cd "$ROOT_DIR"
+  pnpm check
+fi
