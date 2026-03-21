@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -23,7 +24,7 @@ vi.mock("../../agents/session-write-lock.js", () => ({
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
-    { provider: "minimax", id: "m2.5", name: "M2.5" },
+    { provider: "minimax", id: "m2.7", name: "M2.7" },
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
   ]),
 }));
@@ -850,11 +851,18 @@ describe("initSessionState RawBody", () => {
 });
 
 describe("initSessionState reset policy", () => {
+  let clearBootstrapSnapshotOnSessionRolloverSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     vi.useFakeTimers();
+    clearBootstrapSnapshotOnSessionRolloverSpy = vi.spyOn(
+      bootstrapCache,
+      "clearBootstrapSnapshotOnSessionRollover",
+    );
   });
 
   afterEach(() => {
+    clearBootstrapSnapshotOnSessionRolloverSpy.mockRestore();
     vi.useRealTimers();
   });
 
@@ -881,6 +889,10 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
+    expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
+      sessionKey,
+      previousSessionId: existingSessionId,
+    });
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
@@ -1057,6 +1069,10 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
+    expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
+      sessionKey,
+      previousSessionId: undefined,
+    });
   });
 });
 
@@ -1272,7 +1288,7 @@ describe("applyResetModelOverride", () => {
     });
 
     expect(sessionEntry.providerOverride).toBe("minimax");
-    expect(sessionEntry.modelOverride).toBe("m2.5");
+    expect(sessionEntry.modelOverride).toBe("m2.7");
     expect(sessionCtx.BodyStripped).toBe("summarize");
   });
 
@@ -1412,6 +1428,63 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("preserves selected auth profile overrides across /new and /reset", async () => {
+    const storePath = await createStorePath("openclaw-reset-model-auth-");
+    const sessionKey = "agent:main:telegram:dm:user-model-auth";
+    const existingSessionId = "existing-session-model-auth";
+    const overrides = {
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+      authProfileOverride: "20251001",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 2,
+    } as const;
+    const cases = [
+      {
+        name: "new preserves selected auth profile overrides",
+        body: "/new",
+      },
+      {
+        name: "reset preserves selected auth profile overrides",
+        body: "/reset",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: { ...overrides },
+      });
+
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "user-model-auth",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession, testCase.name).toBe(true);
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionEntry, testCase.name).toMatchObject(overrides);
+    }
+  });
+
   it("archives the old session store entry on /new", async () => {
     const storePath = await createStorePath("openclaw-archive-old-");
     const sessionKey = "agent:main:telegram:dm:user-archive";
@@ -1455,6 +1528,61 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       }),
     );
     archiveSpy.mockRestore();
+  });
+
+  it("archives the old session transcript on daily/scheduled reset (stale session)", async () => {
+    // Daily resets occur when the session becomes stale (not via /new or /reset command).
+    // Previously, previousSessionEntry was only set when resetTriggered=true, leaving
+    // old transcript files orphaned on disk. Refs #35481.
+    vi.useFakeTimers();
+    try {
+      // Simulate: it is 5am, session was last active at 3am (before 4am daily boundary)
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-stale-archive-");
+      const sessionKey = "agent:main:telegram:dm:archive-stale-user";
+      const existingSessionId = "stale-session-to-be-archived";
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        },
+      });
+
+      const sessionUtils = await import("../../gateway/session-utils.fs.js");
+      const archiveSpy = vi.spyOn(sessionUtils, "archiveSessionTranscripts");
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          From: "user-stale",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(archiveSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: existingSessionId,
+          storePath,
+          reason: "reset",
+        }),
+      );
+      archiveSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("idle-based new session does NOT preserve overrides (no entry to read)", async () => {
@@ -1682,6 +1810,99 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokens).toBe(250_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
+
+  it("accumulates estimatedCostUsd across persisted usage updates", async () => {
+    const storePath = await createStorePath("openclaw-usage-cost-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        estimatedCostUsd: 0.0015,
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT 5.4",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0.5 },
+                  contextWindow: 200_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      usage: { input: 2_000, output: 500, cacheRead: 1_000, cacheWrite: 200 },
+      lastCallUsage: { input: 800, output: 200, cacheRead: 300, cacheWrite: 50 },
+      providerUsed: "openai",
+      modelUsed: "gpt-5.4",
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].estimatedCostUsd).toBeCloseTo(0.009225, 8);
+  });
+
+  it("persists zero estimatedCostUsd for free priced models", async () => {
+    const storePath = await createStorePath("openclaw-usage-free-cost-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      cfg: {
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.3-codex-spark",
+                  name: "GPT 5.3 Codex Spark",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      usage: { input: 5_107, output: 1_827, cacheRead: 1_536, cacheWrite: 0 },
+      lastCallUsage: { input: 5_107, output: 1_827, cacheRead: 1_536, cacheWrite: 0 },
+      providerUsed: "openai-codex",
+      modelUsed: "gpt-5.3-codex-spark",
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].estimatedCostUsd).toBe(0);
+  });
 });
 
 describe("initSessionState stale threadId fallback", () => {
@@ -1871,6 +2092,80 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.to).toBe("group:12345");
   });
 
+  it("preserves persisted external route when webchat views a channel-peer session (fixes #47745)", async () => {
+    // Regression: dashboard/webchat access must not overwrite an established
+    // external delivery route (e.g. Telegram/iMessage) on a channel-scoped session.
+    // Subagent completions should still be delivered to the original channel.
+    const storePath = await createStorePath("webchat-direct-route-preserve-");
+    const sessionKey = "agent:main:imessage:direct:+1555";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-webchat-direct",
+        updatedAt: Date.now(),
+        lastChannel: "imessage",
+        lastTo: "+1555",
+        deliveryContext: {
+          channel: "imessage",
+          to: "+1555",
+        },
+      },
+    });
+    const cfg = {
+      session: { store: storePath, dmScope: "per-channel-peer" },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "reply from control ui",
+        SessionKey: sessionKey,
+        OriginatingChannel: "webchat",
+        OriginatingTo: "session:dashboard",
+        Surface: "webchat",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // External route must be preserved — webchat is admin/monitoring only
+    expect(result.sessionEntry.lastChannel).toBe("imessage");
+    expect(result.sessionEntry.lastTo).toBe("+1555");
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("imessage");
+    expect(result.sessionEntry.deliveryContext?.to).toBe("+1555");
+  });
+
+  it("lets direct webchat turns own routing for sessions with no prior external route", async () => {
+    // Webchat should still own routing for sessions that were created via webchat
+    // (no external channel ever established).
+    const storePath = await createStorePath("webchat-direct-route-noext-");
+    const sessionKey = "agent:main:main";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-webchat-noext",
+        updatedAt: Date.now(),
+      },
+    });
+    const cfg = {
+      session: { store: storePath, dmScope: "per-channel-peer" },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "reply from control ui",
+        SessionKey: sessionKey,
+        OriginatingChannel: "webchat",
+        OriginatingTo: "session:dashboard",
+        Surface: "webchat",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("webchat");
+    expect(result.sessionEntry.lastTo).toBe("session:dashboard");
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("webchat");
+    expect(result.sessionEntry.deliveryContext?.to).toBe("session:dashboard");
+  });
+
   it("keeps persisted external route when OriginatingChannel is non-deliverable", async () => {
     const storePath = await createStorePath("preserve-nondeliverable-route-");
     const sessionKey = "agent:main:discord:channel:24680";
@@ -1960,8 +2255,10 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.lastChannel).toBe("webchat");
   });
 
-  it("does not reuse stale external lastTo for webchat/main turns without destination", async () => {
-    const storePath = await createStorePath("webchat-main-no-stale-lastto-");
+  it("preserves external route for main session when webchat accesses without destination (fixes #47745)", async () => {
+    // Regression: webchat monitoring a main session that has an established WhatsApp
+    // route must not clear that route. Subagents should still deliver to WhatsApp.
+    const storePath = await createStorePath("webchat-main-preserve-external-");
     const sessionKey = "agent:main:main";
     await writeSessionStoreFast(storePath, {
       [sessionKey]: {
@@ -1987,12 +2284,14 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastChannel).toBe("webchat");
-    expect(result.sessionEntry.lastTo).toBeUndefined();
+    expect(result.sessionEntry.lastChannel).toBe("whatsapp");
+    expect(result.sessionEntry.lastTo).toBe("+15555550123");
   });
 
-  it("prefers webchat route over persisted external route for main session turns", async () => {
-    const storePath = await createStorePath("prefer-webchat-main-route-");
+  it("preserves external route for main session when webchat sends with destination (fixes #47745)", async () => {
+    // Regression: webchat sending to a main session with an established WhatsApp route
+    // must not steal that route for webchat delivery.
+    const storePath = await createStorePath("preserve-main-external-webchat-send-");
     const sessionKey = "agent:main:main";
     await writeSessionStoreFast(storePath, {
       [sessionKey]: {
@@ -2019,9 +2318,9 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastChannel).toBe("webchat");
-    expect(result.sessionEntry.lastTo).toBe("session:webchat-main");
-    expect(result.sessionEntry.deliveryContext?.channel).toBe("webchat");
-    expect(result.sessionEntry.deliveryContext?.to).toBe("session:webchat-main");
+    expect(result.sessionEntry.lastChannel).toBe("whatsapp");
+    expect(result.sessionEntry.lastTo).toBe("+15555550123");
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("whatsapp");
+    expect(result.sessionEntry.deliveryContext?.to).toBe("+15555550123");
   });
 });

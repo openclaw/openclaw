@@ -45,27 +45,31 @@ describe("commands registry", () => {
 
   it("filters commands based on config flags", () => {
     const disabled = listChatCommandsForConfig({
-      commands: { config: false, debug: false },
+      commands: { config: false, plugins: false, debug: false },
     });
     expect(disabled.find((spec) => spec.key === "config")).toBeFalsy();
+    expect(disabled.find((spec) => spec.key === "plugins")).toBeFalsy();
     expect(disabled.find((spec) => spec.key === "debug")).toBeFalsy();
 
     const enabled = listChatCommandsForConfig({
-      commands: { config: true, debug: true },
+      commands: { config: true, plugins: true, debug: true },
     });
     expect(enabled.find((spec) => spec.key === "config")).toBeTruthy();
+    expect(enabled.find((spec) => spec.key === "plugins")).toBeTruthy();
     expect(enabled.find((spec) => spec.key === "debug")).toBeTruthy();
 
     const nativeDisabled = listNativeCommandSpecsForConfig({
-      commands: { config: false, debug: false, native: true },
+      commands: { config: false, plugins: false, debug: false, native: true },
     });
     expect(nativeDisabled.find((spec) => spec.name === "config")).toBeFalsy();
+    expect(nativeDisabled.find((spec) => spec.name === "plugins")).toBeFalsy();
     expect(nativeDisabled.find((spec) => spec.name === "debug")).toBeFalsy();
   });
 
   it("does not enable restricted commands from inherited flags", () => {
     const inheritedCommands = Object.create({
       config: true,
+      plugins: true,
       debug: true,
       bash: true,
     }) as Record<string, unknown>;
@@ -73,6 +77,7 @@ describe("commands registry", () => {
       commands: inheritedCommands as never,
     });
     expect(commands.find((spec) => spec.key === "config")).toBeFalsy();
+    expect(commands.find((spec) => spec.key === "plugins")).toBeFalsy();
     expect(commands.find((spec) => spec.key === "debug")).toBeFalsy();
     expect(commands.find((spec) => spec.key === "bash")).toBeFalsy();
   });
@@ -87,14 +92,14 @@ describe("commands registry", () => {
     ];
     const commands = listChatCommandsForConfig(
       {
-        commands: { config: false, debug: false },
+        commands: { config: false, plugins: false, debug: false },
       },
       { skillCommands },
     );
     expect(commands.find((spec) => spec.nativeName === "demo_skill")).toBeTruthy();
 
     const native = listNativeCommandSpecsForConfig(
-      { commands: { config: false, debug: false, native: true } },
+      { commands: { config: false, plugins: false, debug: false, native: true } },
       { skillCommands },
     );
     expect(native.find((spec) => spec.name === "demo_skill")).toBeTruthy();
@@ -196,6 +201,17 @@ describe("commands registry", () => {
       "install",
       "help",
     ]);
+  });
+
+  it("registers fast mode as a first-class options command", () => {
+    const fast = listChatCommands().find((command) => command.key === "fast");
+    expect(fast).toMatchObject({
+      nativeName: "fast",
+      textAliases: ["/fast"],
+      category: "options",
+    });
+    const modeArg = fast?.args?.find((arg) => arg.name === "mode");
+    expect(modeArg?.choices).toEqual(["status", "on", "off"]);
   });
 
   it("detects known text commands", () => {

@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   promptModelAllowlist: vi.fn(),
   promptDefaultModel: vi.fn(),
   promptCustomApiConfig: vi.fn(),
+  resolvePluginProviders: vi.fn(() => []),
+  resolveProviderPluginChoice: vi.fn<() => unknown>(() => null),
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({
@@ -23,7 +25,7 @@ vi.mock("./auth-choice-prompt.js", () => ({
 
 vi.mock("./auth-choice.js", () => ({
   applyAuthChoice: mocks.applyAuthChoice,
-  resolvePreferredProviderForAuthChoice: vi.fn(() => undefined),
+  resolvePreferredProviderForAuthChoice: vi.fn(async () => undefined),
 }));
 
 vi.mock("./model-picker.js", async (importActual) => {
@@ -37,6 +39,14 @@ vi.mock("./model-picker.js", async (importActual) => {
 
 vi.mock("./onboard-custom.js", () => ({
   promptCustomApiConfig: mocks.promptCustomApiConfig,
+}));
+
+vi.mock("../plugins/providers.js", () => ({
+  resolvePluginProviders: mocks.resolvePluginProviders,
+}));
+
+vi.mock("../plugins/provider-wizard.js", () => ({
+  resolveProviderPluginChoice: mocks.resolveProviderPluginChoice,
 }));
 
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -56,8 +66,8 @@ function createKilocodeProvider() {
     baseUrl: "https://api.kilo.ai/api/gateway/",
     api: "openai-completions",
     models: [
-      { id: "anthropic/claude-opus-4.6", name: "Claude Opus 4.6" },
-      { id: "minimax/minimax-m2.5:free", name: "MiniMax M2.5 (Free)" },
+      { id: "kilo/auto", name: "Kilo Auto" },
+      { id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" },
     ],
   };
 }
@@ -67,7 +77,7 @@ function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
     config: {
       agents: {
         defaults: {
-          model: { primary: "kilocode/anthropic/claude-opus-4.6" },
+          model: { primary: "kilocode/kilo/auto" },
         },
       },
       models: {
@@ -78,7 +88,7 @@ function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
                 minimax: {
                   baseUrl: "https://api.minimax.io/anthropic",
                   api: "anthropic-messages",
-                  models: [{ id: "MiniMax-M2.5", name: "MiniMax M2.5" }],
+                  models: [{ id: "MiniMax-M2.7", name: "MiniMax M2.7" }],
                 },
               }
             : {}),
@@ -92,8 +102,10 @@ async function runPromptAuthConfigWithAllowlist(includeMinimaxProvider = false) 
   mocks.promptAuthChoiceGrouped.mockResolvedValue("kilocode-api-key");
   mocks.applyAuthChoice.mockResolvedValue(createApplyAuthChoiceConfig(includeMinimaxProvider));
   mocks.promptModelAllowlist.mockResolvedValue({
-    models: ["kilocode/anthropic/claude-opus-4.6"],
+    models: ["kilocode/kilo/auto"],
   });
+  mocks.resolvePluginProviders.mockReturnValue([]);
+  mocks.resolveProviderPluginChoice.mockReturnValue(null);
 
   return promptAuthConfig({}, makeRuntime(), noopPrompter);
 }
@@ -102,22 +114,47 @@ describe("promptAuthConfig", () => {
   it("keeps Kilo provider models while applying allowlist defaults", async () => {
     const result = await runPromptAuthConfigWithAllowlist();
     expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
-      "anthropic/claude-opus-4.6",
-      "minimax/minimax-m2.5:free",
+      "kilo/auto",
+      "anthropic/claude-sonnet-4",
     ]);
-    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual([
-      "kilocode/anthropic/claude-opus-4.6",
-    ]);
+    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual(["kilocode/kilo/auto"]);
   });
 
   it("does not mutate provider model catalogs when allowlist is set", async () => {
     const result = await runPromptAuthConfigWithAllowlist(true);
     expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
-      "anthropic/claude-opus-4.6",
-      "minimax/minimax-m2.5:free",
+      "kilo/auto",
+      "anthropic/claude-sonnet-4",
     ]);
     expect(result.models?.providers?.minimax?.models?.map((model) => model.id)).toEqual([
-      "MiniMax-M2.5",
+      "MiniMax-M2.7",
     ]);
+  });
+
+  it("uses plugin-owned allowlist metadata for provider auth choices", async () => {
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("token");
+    mocks.applyAuthChoice.mockResolvedValue({ config: {} });
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    mocks.resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "anthropic", label: "Anthropic", auth: [] },
+      method: { id: "setup-token", label: "setup-token", kind: "token" },
+      wizard: {
+        modelAllowlist: {
+          allowedKeys: ["anthropic/claude-sonnet-4-6"],
+          initialSelections: ["anthropic/claude-sonnet-4-6"],
+          message: "Anthropic OAuth models",
+        },
+      },
+    });
+
+    await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedKeys: ["anthropic/claude-sonnet-4-6"],
+        initialSelections: ["anthropic/claude-sonnet-4-6"],
+        message: "Anthropic OAuth models",
+      }),
+    );
   });
 });

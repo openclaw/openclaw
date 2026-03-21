@@ -10,6 +10,9 @@ BUN_INSTALL_DIR="${BUN_INSTALL_DIR:-/opt/bun}"
 INSTALL_BREW="${INSTALL_BREW:-1}"
 BREW_INSTALL_DIR="${BREW_INSTALL_DIR:-/home/linuxbrew/.linuxbrew}"
 FINAL_USER="${FINAL_USER:-sandbox}"
+OPENCLAW_DOCKER_BUILD_USE_BUILDX="${OPENCLAW_DOCKER_BUILD_USE_BUILDX:-0}"
+OPENCLAW_DOCKER_BUILD_CACHE_FROM="${OPENCLAW_DOCKER_BUILD_CACHE_FROM:-}"
+OPENCLAW_DOCKER_BUILD_CACHE_TO="${OPENCLAW_DOCKER_BUILD_CACHE_TO:-}"
 
 if ! docker image inspect "${BASE_IMAGE}" >/dev/null 2>&1; then
   echo "Base image missing: ${BASE_IMAGE}"
@@ -19,7 +22,18 @@ fi
 
 echo "Building ${TARGET_IMAGE} with: ${PACKAGES}"
 
-docker build \
+build_cmd=(docker build)
+if [ "${OPENCLAW_DOCKER_BUILD_USE_BUILDX}" = "1" ]; then
+  build_cmd=(docker buildx build --load)
+  if [ -n "${OPENCLAW_DOCKER_BUILD_CACHE_FROM}" ]; then
+    build_cmd+=(--cache-from "${OPENCLAW_DOCKER_BUILD_CACHE_FROM}")
+  fi
+  if [ -n "${OPENCLAW_DOCKER_BUILD_CACHE_TO}" ]; then
+    build_cmd+=(--cache-to "${OPENCLAW_DOCKER_BUILD_CACHE_TO}")
+  fi
+fi
+
+"${build_cmd[@]}" \
   -t "${TARGET_IMAGE}" \
   -f Dockerfile.sandbox-common \
   --build-arg BASE_IMAGE="${BASE_IMAGE}" \

@@ -5,6 +5,7 @@ struct GatewaySetupPayload: Codable {
     var host: String?
     var port: Int?
     var tls: Bool?
+    var bootstrapToken: String?
     var token: String?
     var password: String?
 }
@@ -39,4 +40,3 @@ enum GatewaySetupCode {
         return String(data: data, encoding: .utf8)
     }
 }
-

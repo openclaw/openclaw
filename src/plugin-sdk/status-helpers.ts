@@ -1,4 +1,12 @@
 import type { ChannelStatusIssue } from "../channels/plugins/types.js";
+export { isRecord } from "../channels/plugins/status-issues/shared.js";
+export {
+  appendMatchMetadata,
+  asString,
+  collectIssuesForEnabledAccounts,
+  formatMatchMetadata,
+  resolveEnabledConfiguredAccountId,
+} from "../channels/plugins/status-issues/shared.js";
 
 type RuntimeLifecycleSnapshot = {
   running?: boolean | null;
@@ -9,6 +17,7 @@ type RuntimeLifecycleSnapshot = {
   lastOutboundAt?: number | null;
 };
 
+/** Create the baseline runtime snapshot shape used by channel/account status stores. */
 export function createDefaultChannelRuntimeState<T extends Record<string, unknown>>(
   accountId: string,
   extra?: T,
@@ -29,6 +38,7 @@ export function createDefaultChannelRuntimeState<T extends Record<string, unknow
   };
 }
 
+/** Normalize a channel-level status summary so missing lifecycle fields become explicit nulls. */
 export function buildBaseChannelStatusSummary(snapshot: {
   configured?: boolean | null;
   running?: boolean | null;
@@ -45,6 +55,7 @@ export function buildBaseChannelStatusSummary(snapshot: {
   };
 }
 
+/** Extend the base summary with probe fields while preserving stable null defaults. */
 export function buildProbeChannelStatusSummary<TExtra extends Record<string, unknown>>(
   snapshot: {
     configured?: boolean | null;
@@ -65,6 +76,7 @@ export function buildProbeChannelStatusSummary<TExtra extends Record<string, unk
   };
 }
 
+/** Build the standard per-account status payload from config metadata plus runtime state. */
 export function buildBaseAccountStatusSnapshot(params: {
   account: {
     accountId: string;
@@ -81,16 +93,50 @@ export function buildBaseAccountStatusSnapshot(params: {
     name: account.name,
     enabled: account.enabled,
     configured: account.configured,
-    running: runtime?.running ?? false,
-    lastStartAt: runtime?.lastStartAt ?? null,
-    lastStopAt: runtime?.lastStopAt ?? null,
-    lastError: runtime?.lastError ?? null,
-    probe,
+    ...buildRuntimeAccountStatusSnapshot({ runtime, probe }),
     lastInboundAt: runtime?.lastInboundAt ?? null,
     lastOutboundAt: runtime?.lastOutboundAt ?? null,
   };
 }
 
+/** Convenience wrapper when the caller already has flattened account fields instead of an account object. */
+export function buildComputedAccountStatusSnapshot(params: {
+  accountId: string;
+  name?: string;
+  enabled?: boolean;
+  configured?: boolean;
+  runtime?: RuntimeLifecycleSnapshot | null;
+  probe?: unknown;
+}) {
+  const { accountId, name, enabled, configured, runtime, probe } = params;
+  return buildBaseAccountStatusSnapshot({
+    account: {
+      accountId,
+      name,
+      enabled,
+      configured,
+    },
+    runtime,
+    probe,
+  });
+}
+
+/** Normalize runtime-only account state into the shared status snapshot fields. */
+export function buildRuntimeAccountStatusSnapshot(params: {
+  runtime?: RuntimeLifecycleSnapshot | null;
+  probe?: unknown;
+}) {
+  const { runtime, probe } = params;
+  return {
+    running: runtime?.running ?? false,
+    lastStartAt: runtime?.lastStartAt ?? null,
+    lastStopAt: runtime?.lastStopAt ?? null,
+    lastError: runtime?.lastError ?? null,
+    probe,
+  };
+}
+
+/** Build token-based channel status summaries with optional mode reporting. */
 export function buildTokenChannelStatusSummary(
   snapshot: {
     configured?: boolean | null;
@@ -120,6 +166,7 @@ export function buildTokenChannelStatusSummary(
   };
 }
 
+/** Convert account runtime errors into the generic channel status issue format. */
 export function collectStatusIssuesFromLastError(
   channel: string,
   accounts: Array<{ accountId: string; lastError?: unknown }>,

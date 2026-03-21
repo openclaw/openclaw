@@ -2,9 +2,11 @@ import crypto from "node:crypto";
 import path from "node:path";
 import {
   buildTelegramTopicConversationId,
+  normalizeConversationText,
   parseTelegramChatIdFromTarget,
 } from "../../acp/conversation-id.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -32,11 +34,12 @@ import { resolveConversationIdFromTargets } from "../../infra/outbound/conversat
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { normalizeMainKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
+import { parseDiscordParentChannelFromSessionKey } from "./discord-parent-channel.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import {
@@ -68,44 +71,21 @@ export type SessionInitResult = {
   triggerBodyNormalized: string;
 };
 
-function normalizeSessionText(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
-    return `${value}`.trim();
-  }
-  return "";
-}
-
-function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
-  const sessionKey = normalizeSessionText(raw);
-  if (!sessionKey) {
-    return undefined;
-  }
-  const scoped = parseAgentSessionKey(sessionKey)?.rest ?? sessionKey.toLowerCase();
-  const match = scoped.match(/(?:^|:)channel:([^:]+)$/);
-  if (!match?.[1]) {
-    return undefined;
-  }
-  return match[1];
-}
-
 function resolveAcpResetBindingContext(ctx: MsgContext): {
   channel: string;
   accountId: string;
   conversationId: string;
   parentConversationId?: string;
 } | null {
-  const channelRaw = normalizeSessionText(
+  const channelRaw = normalizeConversationText(
     ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "",
   ).toLowerCase();
   if (!channelRaw) {
     return null;
   }
-  const accountId = normalizeSessionText(ctx.AccountId) || "default";
+  const accountId = normalizeConversationText(ctx.AccountId) || "default";
   const normalizedThreadId =
-    ctx.MessageThreadId != null ? normalizeSessionText(String(ctx.MessageThreadId)) : "";
+    ctx.MessageThreadId != null ? normalizeConversationText(String(ctx.MessageThreadId)) : "";
 
   if (channelRaw === "telegram") {
     const parentConversationId =
@@ -142,7 +122,7 @@ function resolveAcpResetBindingContext(ctx: MsgContext): {
   }
   let parentConversationId: string | undefined;
   if (channelRaw === "discord" && normalizedThreadId) {
-    const fromContext = normalizeSessionText(ctx.ThreadParentId);
+    const fromContext = normalizeConversationText(ctx.ThreadParentId);
     if (fromContext && fromContext !== conversationId) {
       parentConversationId = fromContext;
     } else {
@@ -171,7 +151,7 @@ function resolveBoundAcpSessionForReset(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
 }): string | undefined {
-  const activeSessionKey = normalizeSessionText(params.ctx.SessionKey);
+  const activeSessionKey = normalizeConversationText(params.ctx.SessionKey);
   const bindingContext = resolveAcpResetBindingContext(params.ctx);
   return resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
@@ -237,6 +217,9 @@ export async function initSessionState(params: {
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
+  let persistedAuthProfileOverride: string | undefined;
+  let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
+  let persistedAuthProfileOverrideCompactionCount: number | undefined;
   let persistedLabel: string | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
@@ -328,7 +311,6 @@ export async function initSessionState(params: {
     sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
   }
   const entry = sessionStore[sessionKey];
-  const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -354,6 +336,15 @@ export async function initSessionState(params: {
   const freshEntry = entry
     ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;
+  // Capture the current session entry before any reset so its transcript can be
+  // archived afterward.  We need to do this for both explicit resets (/new, /reset)
+  // and for scheduled/daily resets where the session has become stale (!freshEntry).
+  // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
+  const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
+  clearBootstrapSnapshotOnSessionRollover({
+    sessionKey,
+    previousSessionId: previousSessionEntry?.sessionId,
+  });
 
   if (!isNewSession && freshEntry) {
     sessionId = entry.sessionId;
@@ -365,6 +356,9 @@ export async function initSessionState(params: {
     persistedTtsAuto = entry.ttsAuto;
     persistedModelOverride = entry.modelOverride;
     persistedProviderOverride = entry.providerOverride;
+    persistedAuthProfileOverride = entry.authProfileOverride;
+    persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
+    persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
     persistedLabel = entry.label;
   } else {
     sessionId = crypto.randomUUID();
@@ -381,6 +375,9 @@ export async function initSessionState(params: {
       persistedTtsAuto = entry.ttsAuto;
       persistedModelOverride = entry.modelOverride;
       persistedProviderOverride = entry.providerOverride;
+      persistedAuthProfileOverride = entry.authProfileOverride;
+      persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
+      persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
       persistedLabel = entry.label;
     }
   }
@@ -432,6 +429,11 @@ export async function initSessionState(params: {
     responseUsage: baseEntry?.responseUsage,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
+    authProfileOverride: persistedAuthProfileOverride ?? baseEntry?.authProfileOverride,
+    authProfileOverrideSource:
+      persistedAuthProfileOverrideSource ?? baseEntry?.authProfileOverrideSource,
+    authProfileOverrideCompactionCount:
+      persistedAuthProfileOverrideCompactionCount ?? baseEntry?.authProfileOverrideCompactionCount,
     label: persistedLabel ?? baseEntry?.label,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
@@ -529,6 +531,7 @@ export async function initSessionState(params: {
     sessionEntry.totalTokens = undefined;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
+    sessionEntry.estimatedCostUsd = undefined;
     sessionEntry.contextTokens = undefined;
   }
   // Preserve per-session overrides while resetting compaction state on /new.

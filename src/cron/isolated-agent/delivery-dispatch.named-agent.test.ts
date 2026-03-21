@@ -96,4 +96,13 @@ describe("resolveCronDeliveryBestEffort", () => {
     } as never;
     expect(resolveCronDeliveryBestEffort(job)).toBe(true);
   });
+
+  it("lets explicit delivery.bestEffort=false override legacy payload bestEffortDeliver=true", async () => {
+    const { resolveCronDeliveryBestEffort } = await import("./delivery-dispatch.js");
+    const job = {
+      delivery: { bestEffort: false },
+      payload: { kind: "agentTurn", bestEffortDeliver: true },
+    } as never;
+    expect(resolveCronDeliveryBestEffort(job)).toBe(false);
+  });
 });

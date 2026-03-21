@@ -6,13 +6,16 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { isDeprecatedAuthChoice, normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
-import { runInteractiveOnboarding } from "./onboard-interactive.js";
-import { runNonInteractiveOnboarding } from "./onboard-non-interactive.js";
+import { runInteractiveSetup } from "./onboard-interactive.js";
+import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
 import type { OnboardOptions, ResetScope } from "./onboard-types.js";
 
 const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
 
-export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv = defaultRuntime) {
+export async function setupWizardCommand(
+  opts: OnboardOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+) {
   assertSupportedRuntime(runtime);
   const originalAuthChoice = opts.authChoice;
   const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice);
@@ -39,8 +42,8 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
       : { ...opts, authChoice: normalizedAuthChoice, flow };
   if (
     normalizedOpts.secretInputMode &&
-    normalizedOpts.secretInputMode !== "plaintext" &&
-    normalizedOpts.secretInputMode !== "ref"
+    normalizedOpts.secretInputMode !== "plaintext" && // pragma: allowlist secret
+    normalizedOpts.secretInputMode !== "ref" // pragma: allowlist secret
   ) {
     runtime.error('Invalid --secret-input-mode. Use "plaintext" or "ref".');
     runtime.exit(1);
@@ -56,7 +59,7 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
   if (normalizedOpts.nonInteractive && normalizedOpts.acceptRisk !== true) {
     runtime.error(
       [
-        "Non-interactive onboarding requires explicit risk acknowledgement.",
+        "Non-interactive setup requires explicit risk acknowledgement.",
         "Read: https://docs.openclaw.ai/security",
         `Re-run with: ${formatCliCommand("openclaw onboard --non-interactive --accept-risk ...")}`,
       ].join("\n"),
@@ -77,7 +80,7 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
   if (process.platform === "win32") {
     runtime.log(
       [
-        "Windows detected — OpenClaw runs great on WSL2!",
+        "Windows detected - OpenClaw runs great on WSL2!",
         "Native Windows might be trickier.",
         "Quick setup: wsl --install (one command, one reboot)",
         "Guide: https://docs.openclaw.ai/windows",
@@ -86,11 +89,14 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
   }
 
   if (normalizedOpts.nonInteractive) {
-    await runNonInteractiveOnboarding(normalizedOpts, runtime);
+    await runNonInteractiveSetup(normalizedOpts, runtime);
     return;
   }
 
-  await runInteractiveOnboarding(normalizedOpts, runtime);
+  await runInteractiveSetup(normalizedOpts, runtime);
 }
 
+export const onboardCommand = setupWizardCommand;
+
 export type { OnboardOptions } from "./onboard-types.js";
+export type { OnboardOptions as SetupWizardOptions } from "./onboard-types.js";

@@ -11,6 +11,50 @@ private struct NodeInvokeRequestPayload: Codable, Sendable {
     var idempotencyKey: String?
 }
 
+private func replaceCanvasCapabilityInScopedHostUrl(scopedUrl: String, capability: String) -> String? {
+    let marker = "/__openclaw__/cap/"
+    guard let markerRange = scopedUrl.range(of: marker) else { return nil }
+    let capabilityStart = markerRange.upperBound
+    let suffix = scopedUrl[capabilityStart...]
+    let nextSlash = suffix.firstIndex(of: "/")
+    let nextQuery = suffix.firstIndex(of: "?")
+    let nextFragment = suffix.firstIndex(of: "#")
+    let capabilityEnd = [nextSlash, nextQuery, nextFragment].compactMap { $0 }.min() ?? scopedUrl.endIndex
+    guard capabilityStart < capabilityEnd else { return nil }
+    return String(scopedUrl[..<capabilityStart]) + capability + String(scopedUrl[capabilityEnd...])
+}
+
+func canonicalizeCanvasHostUrl(raw: String?, activeURL: URL?) -> String? {
+    let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !trimmed.isEmpty else { return nil }
+    guard var parsed = URLComponents(string: trimmed) else { return trimmed }
+
+    let parsedHost = parsed.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let parsedIsLoopback = !parsedHost.isEmpty && LoopbackHost.isLoopback(parsedHost)
+
+    if !parsedHost.isEmpty, !parsedIsLoopback {
+        guard let activeURL else { return trimmed }
+        let isTLS = activeURL.scheme?.lowercased() == "wss"
+        guard isTLS else { return trimmed }
+        parsed.scheme = "https"
+        if parsed.port == nil {
+            let tlsPort = activeURL.port ?? 443
+            parsed.port = (tlsPort == 443) ? nil : tlsPort
+        }
+        return parsed.string ?? trimmed
+    }
+
+    guard let activeURL, let fallbackHost = activeURL.host, !LoopbackHost.isLoopback(fallbackHost) else {
+        return trimmed
+    }
+    let isTLS = activeURL.scheme?.lowercased() == "wss"
+    parsed.scheme = isTLS ? "https" : "http"
+    parsed.host = fallbackHost
+    let fallbackPort = activeURL.port ?? (isTLS ? 443 : 80)
+    parsed.port = ((isTLS && fallbackPort == 443) || (!isTLS && fallbackPort == 80)) ? nil : fallbackPort
+    return parsed.string ?? trimmed
+}
+
 
 public actor GatewayNodeSession {
     private let logger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
@@ -20,6 +64,7 @@ public actor GatewayNodeSession {
     private var channel: GatewayChannelActor?
     private var activeURL: URL?
     private var activeToken: String?
+    private var activeBootstrapToken: String?
     private var activePassword: String?
     private var activeConnectOptionsKey: String?
     private var connectOptions: GatewayConnectOptions?
@@ -150,6 +195,7 @@ public actor GatewayNodeSession {
     public func connect(
         url: URL,
         token: String?,
+        bootstrapToken: String?,
         password: String?,
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
@@ -160,6 +206,7 @@ public actor GatewayNodeSession {
         let nextOptionsKey = self.connectOptionsKey(connectOptions)
         let shouldReconnect = self.activeURL != url ||
             self.activeToken != token ||
+            self.activeBootstrapToken != bootstrapToken ||
             self.activePassword != password ||
             self.activeConnectOptionsKey != nextOptionsKey ||
             self.channel == nil
@@ -177,6 +224,7 @@ public actor GatewayNodeSession {
             let channel = GatewayChannelActor(
                 url: url,
                 token: token,
+                bootstrapToken: bootstrapToken,
                 password: password,
                 session: sessionBox,
                 pushHandler: { [weak self] push in
@@ -189,6 +237,7 @@ public actor GatewayNodeSession {
             self.channel = channel
             self.activeURL = url
             self.activeToken = token
+            self.activeBootstrapToken = bootstrapToken
             self.activePassword = password
             self.activeConnectOptionsKey = nextOptionsKey
         }
@@ -213,6 +262,7 @@ public actor GatewayNodeSession {
         self.channel = nil
         self.activeURL = nil
         self.activeToken = nil
+        self.activeBootstrapToken = nil
         self.activePassword = nil
         self.activeConnectOptionsKey = nil
         self.hasEverConnected = false
@@ -221,6 +271,46 @@ public actor GatewayNodeSession {
 
     public func currentCanvasHostUrl() -> String? {
         self.canvasHostUrl
+    }
+
+    public func refreshNodeCanvasCapability(timeoutMs: Int = 8_000) async -> Bool {
+        guard let channel = self.channel else { return false }
+        do {
+            let data = try await channel.request(
+                method: "node.canvas.capability.refresh",
+                params: [:],
+                timeoutMs: Double(max(timeoutMs, 1)))
+            guard
+                let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let rawCapability = payload["canvasCapability"] as? String
+            else {
+                self.logger.warning("node.canvas.capability.refresh missing canvasCapability")
+                return false
+            }
+            let capability = rawCapability.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !capability.isEmpty else {
+                self.logger.warning("node.canvas.capability.refresh returned empty capability")
+                return false
+            }
+            let scopedUrl = self.canvasHostUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !scopedUrl.isEmpty else {
+                self.logger.warning("node.canvas.capability.refresh missing local canvasHostUrl")
+                return false
+            }
+            guard let refreshed = replaceCanvasCapabilityInScopedHostUrl(
+                scopedUrl: scopedUrl,
+                capability: capability)
+            else {
+                self.logger.warning("node.canvas.capability.refresh could not rewrite scoped canvas URL")
+                return false
+            }
+            self.canvasHostUrl = refreshed
+            return true
+        } catch {
+            self.logger.warning(
+                "node.canvas.capability.refresh failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
     }
 
     public func currentRemoteAddress() -> String? {
@@ -275,7 +365,7 @@ public actor GatewayNodeSession {
         switch push {
         case let .snapshot(ok):
             let raw = ok.canvashosturl?.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.canvasHostUrl = (raw?.isEmpty == false) ? raw : nil
+            self.canvasHostUrl = self.normalizeCanvasHostUrl(raw)
             if self.hasEverConnected {
                 self.broadcastServerEvent(
                     EventFrame(type: "event", event: "seqGap", payload: nil, seq: nil, stateversion: nil))
@@ -342,6 +432,10 @@ public actor GatewayNodeSession {
         await self.onConnected?()
     }
 
+    private func normalizeCanvasHostUrl(_ raw: String?) -> String? {
+        canonicalizeCanvasHostUrl(raw: raw, activeURL: self.activeURL)
+    }
+
     private func handleEvent(_ evt: EventFrame) async {
         self.broadcastServerEvent(evt)
         guard evt.event == "node.invoke.request" else { return }
@@ -350,16 +444,21 @@ public actor GatewayNodeSession {
         do {
             let request = try self.decodeInvokeRequest(from: payload)
             let timeoutLabel = request.timeoutMs.map(String.init) ?? "none"
-            self.logger.info("node invoke request decoded id=\(request.id, privacy: .public) command=\(request.command, privacy: .public) timeoutMs=\(timeoutLabel, privacy: .public)")
+            self.logger.info(
+                "node invoke request decoded id=\(request.id, privacy: .public) command=\(request.command, privacy: .public) timeoutMs=\(timeoutLabel, privacy: .public)")
             guard let onInvoke else { return }
-            let req = BridgeInvokeRequest(id: request.id, command: request.command, paramsJSON: request.paramsJSON)
+            let req = BridgeInvokeRequest(
+                id: request.id,
+                command: request.command,
+                paramsJSON: request.paramsJSON)
             self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
             let response = await Self.invokeWithTimeout(
                 request: req,
                 timeoutMs: request.timeoutMs,
                 onInvoke: onInvoke
             )
-            self.logger.info("node invoke completed id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
+            self.logger.info(
+                "node invoke completed id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
             await self.sendInvokeResult(request: request, response: response)
         } catch {
             self.logger.error("node invoke decode failed: \(error.localizedDescription, privacy: .public)")
@@ -380,7 +479,8 @@ public actor GatewayNodeSession {
 
     private func sendInvokeResult(request: NodeInvokeRequestPayload, response: BridgeInvokeResponse) async {
         guard let channel = self.channel else { return }
-        self.logger.info("node invoke result sending id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
+        self.logger.info(
+            "node invoke result sending id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
         var params: [String: AnyCodable] = [
             "id": AnyCodable(request.id),
             "nodeId": AnyCodable(request.nodeId),
@@ -398,7 +498,8 @@ public actor GatewayNodeSession {
         do {
             try await channel.send(method: "node.invoke.result", params: params)
         } catch {
-            self.logger.error("node invoke result failed id=\(request.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            self.logger.error(
+                "node invoke result failed id=\(request.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
     }
 

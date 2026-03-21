@@ -7,12 +7,13 @@ import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 import {
   connectDeviceAuthReq,
+  disconnectGatewayClient,
   connectGatewayClient,
   getFreeGatewayPort,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
-import { buildOpenAiResponsesProviderConfig } from "./test-openai-responses-model.js";
+import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 let writeConfigFile: typeof import("../config/config.js").writeConfigFile;
 let resolveConfigPath: typeof import("../config/config.js").resolveConfigPath;
@@ -67,13 +68,14 @@ describe("gateway e2e", () => {
       const configDir = path.join(tempHome, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
       const configPath = path.join(configDir, "openclaw.json");
+      const mockProvider = buildMockOpenAiResponsesProvider(openaiBaseUrl);
 
       const cfg = {
         agents: { defaults: { workspace: workspaceDir } },
         models: {
           mode: "replace",
           providers: {
-            openai: buildOpenAiResponsesProviderConfig(openaiBaseUrl),
+            [mockProvider.providerId]: mockProvider.config,
           },
         },
         gateway: { auth: { token } },
@@ -98,7 +100,7 @@ describe("gateway e2e", () => {
 
         await client.request("sessions.patch", {
           key: sessionKey,
-          model: "openai/gpt-5.2",
+          model: mockProvider.modelRef,
         });
 
         const runId = nextGatewayId("run");
@@ -137,7 +139,7 @@ describe("gateway e2e", () => {
         expect(text).toContain(nonceA);
         expect(text).toContain(nonceB);
       } finally {
-        client.stop();
+        await disconnectGatewayClient(client);
         await server.close({ reason: "mock openai test complete" });
         await fs.rm(tempHome, { recursive: true, force: true });
         restore();
@@ -237,7 +239,7 @@ describe("gateway e2e", () => {
           | undefined;
         expect((token?.auth as { token?: string } | undefined)?.token).toBe(wizardToken);
       } finally {
-        client.stop();
+        await disconnectGatewayClient(client);
         await server.close({ reason: "wizard e2e complete" });
       }
 

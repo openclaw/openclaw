@@ -1,11 +1,30 @@
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
   DEFAULT_DIFFS_TOOL_DEFAULTS,
+  diffsPluginConfigSchema,
   resolveDiffImageRenderOptions,
   resolveDiffsPluginDefaults,
   resolveDiffsPluginSecurity,
 } from "./config.js";
+
+const FULL_DEFAULTS = {
+  fontFamily: "JetBrains Mono",
+  fontSize: 17,
+  lineSpacing: 1.8,
+  layout: "split",
+  showLineNumbers: false,
+  diffIndicators: "classic",
+  wordWrap: false,
+  background: false,
+  theme: "light",
+  fileFormat: "pdf",
+  fileQuality: "hq",
+  fileScale: 2.6,
+  fileMaxWidth: 1280,
+  mode: "file",
+} as const;
 
 describe("resolveDiffsPluginDefaults", () => {
   it("returns built-in defaults when config is missing", () => {
@@ -15,39 +34,9 @@ describe("resolveDiffsPluginDefaults", () => {
   it("applies configured defaults from plugin config", () => {
     expect(
       resolveDiffsPluginDefaults({
-        defaults: {
-          fontFamily: "JetBrains Mono",
-          fontSize: 17,
-          lineSpacing: 1.8,
-          layout: "split",
-          showLineNumbers: false,
-          diffIndicators: "classic",
-          wordWrap: false,
-          background: false,
-          theme: "light",
-          fileFormat: "pdf",
-          fileQuality: "hq",
-          fileScale: 2.6,
-          fileMaxWidth: 1280,
-          mode: "file",
-        },
+        defaults: FULL_DEFAULTS,
       }),
-    ).toEqual({
-      fontFamily: "JetBrains Mono",
-      fontSize: 17,
-      lineSpacing: 1.8,
-      layout: "split",
-      showLineNumbers: false,
-      diffIndicators: "classic",
-      wordWrap: false,
-      background: false,
-      theme: "light",
-      fileFormat: "pdf",
-      fileQuality: "hq",
-      fileScale: 2.6,
-      fileMaxWidth: 1280,
-      mode: "file",
-    });
+    ).toEqual(FULL_DEFAULTS);
   });
 
   it("clamps and falls back for invalid line spacing and indicators", () => {
@@ -176,5 +165,15 @@ describe("resolveDiffsPluginSecurity", () => {
     expect(resolveDiffsPluginSecurity({ security: { allowRemoteViewer: true } })).toEqual({
       allowRemoteViewer: true,
     });
+  });
+});
+
+describe("diffs plugin schema surfaces", () => {
+  it("keeps the runtime json schema in sync with the manifest config schema", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as { configSchema?: unknown };
+
+    expect(diffsPluginConfigSchema.jsonSchema).toEqual(manifest.configSchema);
   });
 });

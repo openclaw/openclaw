@@ -36,6 +36,10 @@ openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
 
+If a node retries with changed auth details (role/scopes/public key), the prior
+pending request is superseded and a new `requestId` is created. Re-run
+`openclaw devices list` before approving.
+
 Notes:
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
@@ -53,6 +57,15 @@ forwards `exec` calls to the **node host** when `host=node` is selected.
 - **Gateway host**: receives messages, runs the model, routes tool calls.
 - **Node host**: executes `system.run`/`system.which` on the node machine.
 - **Approvals**: enforced on the node host via `~/.openclaw/exec-approvals.json`.
+
+Approval note:
+
+- Approval-backed node runs bind exact request context.
+- For direct shell/runtime file executions, OpenClaw also best-effort binds one concrete local
+  file operand and denies the run if that file changes before execution.
+- If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command,
+  approval-backed execution is denied instead of pretending full runtime coverage. Use sandboxing,
+  separate hosts, or an explicit trusted allowlist/full workflow for broader interpreter semantics.
 
 ### Start a node host (foreground)
 
@@ -81,8 +94,13 @@ openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node"
 
 Notes:
 
-- The token is `gateway.auth.token` from the gateway config (`~/.openclaw/openclaw.json` on the gateway host).
-- `openclaw node run` reads `OPENCLAW_GATEWAY_TOKEN` for auth.
+- `openclaw node run` supports token or password auth.
+- Env vars are preferred: `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`.
+- Config fallback is `gateway.auth.token` / `gateway.auth.password`.
+- In local mode, node host intentionally ignores `gateway.remote.token` / `gateway.remote.password`.
+- In remote mode, `gateway.remote.token` / `gateway.remote.password` are eligible per remote precedence rules.
+- If active local `gateway.auth.*` SecretRefs are configured but unresolved, node-host auth fails closed.
+- Legacy `CLAWDBOT_GATEWAY_*` env vars are intentionally ignored by node-host auth resolution.
 
 ### Start a node host (service)
 
@@ -100,6 +118,9 @@ openclaw devices list
 openclaw devices approve <requestId>
 openclaw nodes status
 ```
+
+If the node retries with changed auth details, re-run `openclaw devices list`
+and approve the current `requestId`.
 
 Naming options:
 
@@ -214,7 +235,7 @@ Notes:
 
 ## Screen recordings (nodes)
 
-Nodes expose `screen.record` (mp4). Example:
+Supported nodes expose `screen.record` (mp4). Example:
 
 ```bash
 openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
@@ -223,10 +244,9 @@ openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-
 
 Notes:
 
-- `screen.record` requires the node app to be foregrounded.
-- Android will show the system screen-capture prompt before recording.
+- `screen.record` availability depends on node platform.
 - Screen recordings are clamped to `<= 60s`.
-- `--no-audio` disables microphone capture (supported on iOS/Android; macOS uses system capture audio).
+- `--no-audio` disables microphone capture on supported platforms.
 - Use `--screen <index>` to select a display when multiple screens are available.
 
 ## Location (nodes)
@@ -272,8 +292,9 @@ Available families:
 - `photos.latest`
 - `contacts.search`, `contacts.add`
 - `calendar.events`, `calendar.add`
+- `callLog.search`
+- `sms.search`
 - `motion.activity`, `motion.pedometer`
-- `app.update`
 
 Example invokes:
 
@@ -286,7 +307,6 @@ openclaw nodes invoke --node <idOrNameOrIp> --command photos.latest --params '{"
 Notes:
 
 - Motion commands are capability-gated by available sensors.
-- `app.update` is permission + policy gated by the node runtime.
 
 ## System commands (node host / mac node)
 

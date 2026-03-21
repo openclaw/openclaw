@@ -1,11 +1,14 @@
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "./protocol/client-info.js";
+import {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  READ_SCOPE,
+  WRITE_SCOPE,
+} from "./method-scopes.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
-
-const ADMIN_SCOPE = "operator.admin";
-const APPROVALS_SCOPE = "operator.approvals";
-const PAIRING_SCOPE = "operator.pairing";
 
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "exec.approval.requested": [APPROVALS_SCOPE],
@@ -14,6 +17,9 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "device.pair.resolved": [PAIRING_SCOPE],
   "node.pair.requested": [PAIRING_SCOPE],
   "node.pair.resolved": [PAIRING_SCOPE],
+  "sessions.changed": [READ_SCOPE],
+  "session.message": [READ_SCOPE],
+  "session.tool": [READ_SCOPE],
 };
 
 export type GatewayBroadcastStateVersion = {
@@ -51,6 +57,9 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
   const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
   if (scopes.includes(ADMIN_SCOPE)) {
     return true;
+  }
+  if (required.includes(READ_SCOPE)) {
+    return scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE);
   }
   return required.some((scope) => scopes.includes(scope));
 }

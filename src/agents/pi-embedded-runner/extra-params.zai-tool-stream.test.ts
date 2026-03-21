@@ -1,7 +1,7 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { applyExtraParamsToAgent } from "./extra-params.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { runExtraParamsCase } from "./extra-params.test-support.js";
 
 // Mock streamSimple for testing
 vi.mock("@mariozechner/pi-ai", () => ({
@@ -15,27 +15,22 @@ type ToolStreamCase = {
   applyProvider: string;
   applyModelId: string;
   model: Model<"openai-completions">;
-  cfg?: Parameters<typeof applyExtraParamsToAgent>[1];
+  cfg?: OpenClawConfig;
   options?: SimpleStreamOptions;
 };
 
 function runToolStreamCase(params: ToolStreamCase) {
-  const payload: Record<string, unknown> = { model: params.model.id, messages: [] };
-  const baseStreamFn: StreamFn = (_model, _context, options) => {
-    options?.onPayload?.(payload);
-    return {} as ReturnType<StreamFn>;
-  };
-  const agent = { streamFn: baseStreamFn };
-
-  applyExtraParamsToAgent(agent, params.cfg, params.applyProvider, params.applyModelId);
-
-  const context: Context = { messages: [] };
-  void agent.streamFn?.(params.model, context, params.options ?? {});
-
-  return payload;
+  return runExtraParamsCase({
+    applyModelId: params.applyModelId,
+    applyProvider: params.applyProvider,
+    cfg: params.cfg,
+    model: params.model,
+    options: params.options,
+    payload: { model: params.model.id, messages: [] },
+  }).payload as Record<string, unknown>;
 }
 
-describe("extra-params: Z.AI tool_stream support", () => {
+describe("extra-params: provider tool_stream support", () => {
   it("injects tool_stream=true for zai provider by default", () => {
     const payload = runToolStreamCase({
       applyProvider: "zai",
@@ -50,7 +45,21 @@ describe("extra-params: Z.AI tool_stream support", () => {
     expect(payload.tool_stream).toBe(true);
   });
 
-  it("does not inject tool_stream for non-zai providers", () => {
+  it("injects tool_stream=true for xai provider by default", () => {
+    const payload = runToolStreamCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4-1-fast-reasoning",
+      model: {
+        api: "openai-completions",
+        provider: "xai",
+        id: "grok-4-1-fast-reasoning",
+      } as Model<"openai-completions">,
+    });
+
+    expect(payload.tool_stream).toBe(true);
+  });
+
+  it("does not inject tool_stream for providers that do not need it", () => {
     const payload = runToolStreamCase({
       applyProvider: "openai",
       applyModelId: "gpt-5",
@@ -64,7 +73,7 @@ describe("extra-params: Z.AI tool_stream support", () => {
     expect(payload).not.toHaveProperty("tool_stream");
   });
 
-  it("allows disabling tool_stream via params", () => {
+  it("allows disabling zai tool_stream via params", () => {
     const payload = runToolStreamCase({
       applyProvider: "zai",
       applyModelId: "glm-5",
@@ -78,6 +87,33 @@ describe("extra-params: Z.AI tool_stream support", () => {
           defaults: {
             models: {
               "zai/glm-5": {
+                params: {
+                  tool_stream: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(payload).not.toHaveProperty("tool_stream");
+  });
+
+  it("allows disabling xai tool_stream via params", () => {
+    const payload = runToolStreamCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4-1-fast-reasoning",
+      model: {
+        api: "openai-completions",
+        provider: "xai",
+        id: "grok-4-1-fast-reasoning",
+      } as Model<"openai-completions">,
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "xai/grok-4-1-fast-reasoning": {
                 params: {
                   tool_stream: false,
                 },

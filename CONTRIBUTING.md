@@ -15,7 +15,7 @@ Welcome to the lobster tank! 🦞
   - GitHub: [@steipete](https://github.com/steipete) · X: [@steipete](https://x.com/steipete)
 
 - **Shadow** - Discord subsystem, Discord admin, Clawhub, all community moderation
-  - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shad0wed](https://x.com/4shad0wed)
+  - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shadowed](https://x.com/4shadowed)
 
 - **Vignesh** - Memory (QMD), formal modeling, TUI, IRC, and Lobster
   - GitHub: [@vignesh07](https://github.com/vignesh07) · X: [@\_vgnsh](https://x.com/_vgnsh)
@@ -23,7 +23,7 @@ Welcome to the lobster tank! 🦞
 - **Jos** - Telegram, API, Nix mode
   - GitHub: [@joshp123](https://github.com/joshp123) · X: [@jjpcodes](https://x.com/jjpcodes)
 
-- **Ayaan Zaidi** - Telegram subsystem, iOS app
+- **Ayaan Zaidi** - Telegram subsystem, Android app
   - GitHub: [@obviyus](https://github.com/obviyus) · X: [@0bviyus](https://x.com/0bviyus)
 
 - **Tyler Yust** - Agents/subagents, cron, BlueBubbles, macOS app
@@ -47,7 +47,7 @@ Welcome to the lobster tank! 🦞
 - **Christoph Nakazawa** - JS Infra
   - GitHub: [@cpojer](https://github.com/cpojer) · X: [@cnakazawa](https://x.com/cnakazawa)
 
-- **Gustavo Madeira Santana** - Multi-agents, CLI, web UI
+- **Gustavo Madeira Santana** - Multi-agents, CLI, Performance, Plugins, Matrix
   - GitHub: [@gumadeiras](https://github.com/gumadeiras) · X: [@gumadeiras](https://x.com/gumadeiras)
 
 - **Onur Solmaz** - Agents, dev workflows, ACP integrations, MS Teams
@@ -57,24 +57,69 @@ Welcome to the lobster tank! 🦞
   - GitHub: [@joshavant](https://github.com/joshavant) · X: [@joshavant](https://x.com/joshavant)
 
 - **Jonathan Taylor** - ACP subsystem, Gateway features/bugs, Gog/Mog/Sog CLI's, SEDMAT
-  - Github [@visionik](https://github.com/visionik) · X: [@visionik](https://x.com/visionik)
+  - GitHub [@visionik](https://github.com/visionik) · X: [@visionik](https://x.com/visionik)
 - **Josh Lehman** - Compaction, Tlon/Urbit subsystem
-  - Github [@jalehman](https://github.com/jalehman) · X: [@jlehman\_](https://x.com/jlehman_)
+  - GitHub [@jalehman](https://github.com/jalehman) · X: [@jlehman\_](https://x.com/jlehman_)
+
+- **Radek Sienkiewicz** - Docs, Control UI
+  - GitHub [@velvet-shark](https://github.com/velvet-shark) · X: [@velvet_shark](https://twitter.com/velvet_shark)
+
+- **Muhammed Mukhthar** - Mattermost, CLI
+  - GitHub [@mukhtharcm](https://github.com/mukhtharcm) · X: [@mukhtharcm](https://x.com/mukhtharcm)
+
+- **Altay** - Agents, CLI, error handling
+  - GitHub [@altaywtf](https://github.com/altaywtf) · X: [@altaywtf](https://x.com/altaywtf)
+
+- **Robin Waslander** - Security, PR triage, bug fixes
+  - GitHub: [@hydro13](https://github.com/hydro13) · X: [@Robin_waslander](https://x.com/Robin_waslander)
+
+- **Tengji (George) Zhang** - Chinese model APIs, cloud, pi
+  - GitHub: [@odysseus0](https://github.com/odysseus0) · X: [@odysseus0z](https://x.com/odysseus0z)
+
+- **Andrew (Bubbles) Demczuk** - Agents/Gateway/TTS/VTT
+  - GitHub: [@ademczuk](https://github.com/ademczuk) · X: [@ademczuk](https://x.com/ademczuk)
 
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
 2. **New features / architecture** → Start a [GitHub Discussion](https://github.com/openclaw/openclaw/discussions) or ask in Discord first
-3. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
+3. **Refactor-only PRs** → Don't open a PR. We are not accepting refactor-only changes unless a maintainer explicitly asks for them as part of a concrete fix.
+4. **Test/CI-only PRs for known `main` failures** → Don't open a PR. The Maintainer team is already tracking those failures, and PRs that only tweak tests or CI to chase them will be closed unless they are required to validate a new fix.
+5. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
 
 ## Before You PR
 
 - Test locally with your OpenClaw instance
 - Run tests: `pnpm build && pnpm check && pnpm test`
+- For extension/plugin changes, run the fast local lane first:
+  - `pnpm test:extension <extension-name>`
+  - `pnpm test:extension --list` to see valid extension ids
+  - If you changed shared plugin or channel surfaces, run `pnpm test:contracts`
+  - For targeted shared-surface work, use `pnpm test:contracts:channels` or `pnpm test:contracts:plugins`
+  - If you changed broader runtime behavior, still run the relevant wider lanes (`pnpm test:extensions`, `pnpm test:channels`, or `pnpm test`) before asking for review
+- If you have access to Codex, run `codex review --base origin/main` locally before opening or updating your PR. Treat this as the current highest standard of AI review, even if GitHub Codex review also runs.
+- Do not submit refactor-only PRs unless a maintainer explicitly requested that refactor for an active fix or deliverable.
+- Do not submit test or CI-config fixes for failures already red on `main` CI. If a failure is already visible in the [main branch CI runs](https://github.com/openclaw/openclaw/actions), it's a known issue the Maintainer team is tracking, and a PR that only addresses those failures will be closed automatically. If you spot a _new_ regression not yet shown in main CI, report it as an issue first.
+- Do not submit test-only PRs that just try to make known `main` CI failures pass. Test changes are acceptable when they are required to validate a new fix or cover new behavior in the same PR.
 - Ensure CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
+- Reply to or resolve bot review conversations you addressed before asking for review again
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
+- Use American English spelling and grammar in code, comments, docs, and UI strings
+- Do not edit files covered by `CODEOWNERS` security ownership unless a listed owner explicitly asked for the change or is already reviewing it with you. Treat those paths as restricted review surfaces, not opportunistic cleanup targets.
+
+## Review Conversations Are Author-Owned
+
+If a review bot leaves review conversations on your PR, you are expected to handle the follow-through:
+
+- Resolve the conversation yourself once the code or explanation fully addresses the bot's concern
+- Reply and leave it open only when you need maintainer or reviewer judgment
+- Do not leave "fixed" bot review conversations for maintainers to clean up for you
+- If Codex leaves comments, address every relevant one or resolve it with a short explanation when it is not applicable to your change
+- If GitHub Codex review does not trigger for some reason, run `codex review --base origin/main` locally anyway and treat that output as required review work
+
+This applies to both human-authored and AI-assisted PRs.
 
 ## Control UI Decorators
 
@@ -101,8 +146,10 @@ Please include in your PR:
 - [ ] Note the degree of testing (untested / lightly tested / fully tested)
 - [ ] Include prompts or session logs if possible (super helpful!)
 - [ ] Confirm you understand what the code does
+- [ ] If you have access to Codex, run `codex review --base origin/main` locally and address the findings before asking for review
+- [ ] Resolve or reply to bot review conversations after you address them
 
-AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for.
+AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for. If you are using an LLM coding agent, instruct it to resolve bot review conversations it has addressed instead of leaving them for maintainers.
 
 ## Current Focus & Roadmap 🗺
 
