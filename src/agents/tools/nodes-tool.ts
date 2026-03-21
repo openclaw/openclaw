@@ -189,7 +189,7 @@ export function createNodesTool(options?: {
           case "status":
             return jsonResult(await callGatewayTool("node.list", gatewayOpts, {}));
           case "describe": {
-            const node = readStringParam(params, "node", { trim: true });
+            const node = readStringParam(params, "node");
             const nodeId = await resolveNodeId(gatewayOpts, node, true);
             return jsonResult(await callGatewayTool("node.describe", gatewayOpts, { nodeId }));
           }
