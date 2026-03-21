@@ -45,9 +45,25 @@ async function getMemoryManagerContext(params: { cfg: OpenClawConfig; agentId: s
       error: string | undefined;
     }
 > {
+  return await getMemoryManagerContextWithPurpose({ ...params, purpose: undefined });
+}
+
+async function getMemoryManagerContextWithPurpose(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  purpose?: "default" | "status";
+}): Promise<
+  | {
+      manager: NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
+    }
+  | {
+      error: string | undefined;
+    }
+> {
   const { manager, error } = await getMemorySearchManager({
     cfg: params.cfg,
     agentId: params.agentId,
+    purpose: params.purpose,
   });
   return manager ? { manager } : { error };
 }
@@ -149,7 +165,11 @@ export function createMemoryGetTool(options: {
         const relPath = readStringParam(params, "path", { required: true });
         const from = readNumberParam(params, "from", { integer: true });
         const lines = readNumberParam(params, "lines", { integer: true });
-        const memory = await getMemoryManagerContext({ cfg, agentId });
+        const memory = await getMemoryManagerContextWithPurpose({
+          cfg,
+          agentId,
+          purpose: "status",
+        });
         if ("error" in memory) {
           return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
         }
