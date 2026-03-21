@@ -20,6 +20,7 @@ import {
   detectPluginInstallPathIssue,
   formatPluginInstallPathIssue,
 } from "../infra/plugin-install-path-warnings.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { note } from "../terminal/note.js";
 import { noteOpencodeProviderOverrides, stripUnknownConfigKeys } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
@@ -390,7 +391,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
     const allowFromRepair = maybeRepairOpenPolicyAllowFrom(candidate);
     if (allowFromRepair.changes.length > 0) {
-      note(allowFromRepair.changes.join("\n"), "Doctor changes");
+      note(
+        allowFromRepair.changes.map((line) => sanitizeForLog(line)).join("\n"),
+        "Doctor changes",
+      );
       candidate = allowFromRepair.config;
       pendingChanges = true;
       cfg = allowFromRepair.config;
@@ -406,7 +410,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
     const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
     if (emptyAllowlistWarnings.length > 0) {
-      note(emptyAllowlistWarnings.join("\n"), "Doctor warnings");
+      note(
+        emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"),
+        "Doctor warnings",
+      );
     }
 
     const toolsBySenderRepair = maybeRepairLegacyToolsBySenderKeys(candidate);
@@ -430,9 +437,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   } else {
     const hits = scanTelegramAllowFromUsernameEntries(candidate);
     if (hits.length > 0) {
+      const sampleEntry = sanitizeForLog(hits[0]?.entry ?? "@");
       note(
         [
-          `- Telegram allowFrom contains ${hits.length} non-numeric entries (e.g. ${hits[0]?.entry ?? "@"}); Telegram authorization requires numeric sender IDs.`,
+          `- Telegram allowFrom contains ${hits.length} non-numeric entries (e.g. ${sampleEntry}); Telegram authorization requires numeric sender IDs.`,
           `- Run "${formatCliCommand("openclaw doctor --fix")}" to auto-resolve @username entries to numeric IDs (requires a Telegram bot token).`,
         ].join("\n"),
         "Doctor warnings",
@@ -441,9 +449,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
     const discordHits = scanDiscordNumericIdEntries(candidate);
     if (discordHits.length > 0) {
+      const samplePath = sanitizeForLog(discordHits[0]?.path ?? "channels.discord.allowFrom");
+      const sampleEntry = sanitizeForLog(String(discordHits[0]?.entry ?? ""));
       note(
         [
-          `- Discord allowlists contain ${discordHits.length} numeric entries (e.g. ${discordHits[0]?.path}=${discordHits[0]?.entry}).`,
+          `- Discord allowlists contain ${discordHits.length} numeric entries (e.g. ${samplePath}=${sampleEntry}).`,
           `- Discord IDs must be strings; run "${formatCliCommand("openclaw doctor --fix")}" to convert numeric IDs to quoted strings.`,
         ].join("\n"),
         "Doctor warnings",
@@ -454,7 +464,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     if (allowFromScan.changes.length > 0) {
       note(
         [
-          ...allowFromScan.changes,
+          ...allowFromScan.changes.map((line) => sanitizeForLog(line)),
           `- Run "${formatCliCommand("openclaw doctor --fix")}" to add missing allowFrom wildcards.`,
         ].join("\n"),
         "Doctor warnings",
@@ -463,13 +473,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
     const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
     if (emptyAllowlistWarnings.length > 0) {
-      note(emptyAllowlistWarnings.join("\n"), "Doctor warnings");
+      note(
+        emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"),
+        "Doctor warnings",
+      );
     }
 
     const toolsBySenderHits = scanLegacyToolsBySenderKeys(candidate);
     if (toolsBySenderHits.length > 0) {
       const sample = toolsBySenderHits[0];
-      const sampleLabel = sample ? `${sample.pathLabel}.${sample.key}` : "toolsBySender";
+      const sampleLabel = sanitizeForLog(
+        sample ? `${sample.pathLabel}.${sample.key}` : "toolsBySender",
+      );
       note(
         [
           `- Found ${toolsBySenderHits.length} legacy untyped toolsBySender key${toolsBySenderHits.length === 1 ? "" : "s"} (for example ${sampleLabel}).`,
@@ -488,7 +503,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       if (interpreterHits.length > 0) {
         for (const hit of interpreterHits.slice(0, 5)) {
           lines.push(
-            `- ${hit.scopePath}.safeBins includes interpreter/runtime '${hit.bin}' without profile.`,
+            `- ${sanitizeForLog(hit.scopePath)}.safeBins includes interpreter/runtime '${sanitizeForLog(hit.bin)}' without profile.`,
           );
         }
         if (interpreterHits.length > 5) {
@@ -500,7 +515,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       if (customHits.length > 0) {
         for (const hit of customHits.slice(0, 5)) {
           lines.push(
-            `- ${hit.scopePath}.safeBins entry '${hit.bin}' is missing safeBinProfiles.${hit.bin}.`,
+            `- ${sanitizeForLog(hit.scopePath)}.safeBins entry '${sanitizeForLog(hit.bin)}' is missing safeBinProfiles.${sanitizeForLog(hit.bin)}.`,
           );
         }
         if (customHits.length > 5) {
@@ -521,7 +536,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         .slice(0, 5)
         .map(
           (hit) =>
-            `- ${hit.scopePath}.safeBins entry '${hit.bin}' resolves to '${hit.resolvedPath}' outside trusted safe-bin dirs.`,
+            `- ${sanitizeForLog(hit.scopePath)}.safeBins entry '${sanitizeForLog(hit.bin)}' resolves to '${sanitizeForLog(hit.resolvedPath)}' outside trusted safe-bin dirs.`,
         );
       if (safeBinTrustedDirHints.length > 5) {
         lines.push(
@@ -540,7 +555,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const channels = Array.from(new Set(mutableAllowlistHits.map((hit) => hit.channel))).toSorted();
     const exampleLines = mutableAllowlistHits
       .slice(0, 8)
-      .map((hit) => `- ${hit.path}: ${hit.entry}`)
+      .map((hit) => `- ${sanitizeForLog(hit.path)}: ${sanitizeForLog(hit.entry)}`)
       .join("\n");
     const remaining =
       mutableAllowlistHits.length > 8
@@ -549,8 +564,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const flagPaths = Array.from(new Set(mutableAllowlistHits.map((hit) => hit.dangerousFlagPath)));
     const flagHint =
       flagPaths.length === 1
-        ? flagPaths[0]
-        : `${flagPaths[0]} (and ${flagPaths.length - 1} other scope flags)`;
+        ? sanitizeForLog(flagPaths[0] ?? "")
+        : `${sanitizeForLog(flagPaths[0] ?? "")} (and ${flagPaths.length - 1} other scope flags)`;
     note(
       [
         `- Found ${mutableAllowlistHits.length} mutable allowlist ${mutableAllowlistHits.length === 1 ? "entry" : "entries"} across ${channels.join(", ")} while name matching is disabled by default.`,
