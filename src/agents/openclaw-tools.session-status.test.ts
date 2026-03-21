@@ -408,4 +408,23 @@ describe("session_status tool", () => {
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();
   });
+
+  it("shows the runtime session model instead of the agent default", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        modelProvider: "anthropic",
+        model: "claude-sonnet-4-5",
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call7", {});
+    const details = result.details as { ok?: boolean; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.statusText).toContain("🧠 Model: anthropic/claude-sonnet-4-5");
+    expect(details.statusText).not.toContain("🧠 Model: anthropic/claude-opus-4-5");
+  });
 });
