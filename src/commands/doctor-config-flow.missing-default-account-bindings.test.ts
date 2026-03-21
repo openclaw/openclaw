@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectMissingDefaultAccountBindingWarnings } from "./doctor-config-flow.js";
+import { collectMissingDefaultAccountBindingWarnings } from "./doctor/shared/default-account-warnings.js";
 
 describe("collectMissingDefaultAccountBindingWarnings", () => {
   it("warns when named accounts exist without default and no valid binding exists", () => {
