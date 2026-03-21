@@ -594,6 +594,23 @@ export function buildChatModelOptions(
   }));
 }
 
+export function rememberResolvedChatModelRecent(patched?: {
+  resolved?: { modelProvider?: string | null; model?: string | null } | null;
+}) {
+  const resolvedModel = resolveServerChatModelValue(
+    patched?.resolved?.model ?? undefined,
+    patched?.resolved?.modelProvider ?? undefined,
+  );
+  if (!resolvedModel) {
+    return;
+  }
+  try {
+    rememberRecentChatModel(resolvedModel);
+  } catch {
+    // Non-critical: local storage may be unavailable or quota-limited.
+  }
+}
+
 function renderChatModelSelect(state: AppViewState) {
   const currentOverride = resolveModelOverrideValue(state);
   const defaultModel = resolveDefaultModelValue(state);
@@ -650,17 +667,13 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
     [targetSessionKey]: createChatModelOverride(nextModel),
   };
   try {
-    await state.client.request("sessions.patch", {
+    const patched = await state.client.request<{
+      resolved?: { modelProvider?: string | null; model?: string | null } | null;
+    }>("sessions.patch", {
       key: targetSessionKey,
       model: nextModel || null,
     });
-    if (nextModel) {
-      try {
-        rememberRecentChatModel(nextModel);
-      } catch {
-        // Non-critical: local storage may be unavailable or quota-limited.
-      }
-    }
+    rememberResolvedChatModelRecent(patched);
     await refreshSessionOptions(state);
   } catch (err) {
     // Roll back so the picker reflects the actual server model.
