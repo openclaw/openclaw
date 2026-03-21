@@ -1,21 +1,11 @@
-import {
-  inspectTelegramAccount,
-  isNumericTelegramUserId,
-  listTelegramAccountIds,
-  lookupTelegramChatId,
-  normalizeTelegramAllowFromEntry,
-} from "../../extensions/telegram/api.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
-import { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, migrateLegacyConfig } from "../config/config.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import {
@@ -45,7 +35,6 @@ import {
   formatPluginInstallPathIssue,
 } from "../infra/plugin-install-path-warnings.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
-import { resolveTelegramAccount } from "../plugin-sdk/account-resolution.js";
 import {
   formatChannelAccountsDefaultPath,
   formatSetExplicitDefaultInstruction,
@@ -56,7 +45,6 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../routing/session-key.js";
-import { describeUnknownError } from "../secrets/shared.js";
 import {
   isDiscordMutableAllowEntry,
   isGoogleChatMutableAllowEntry,
@@ -77,19 +65,11 @@ import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import {
-  collectTelegramAccountScopes,
-  collectTelegramAllowFromLists,
+  maybeRepairTelegramAllowFromUsernames,
   scanTelegramAllowFromUsernameEntries,
 } from "./doctor/providers/telegram.js";
 import { hasAllowFromEntries } from "./doctor/shared/allowlist.js";
 import { collectEmptyAllowlistPolicyWarningsForAccount } from "./doctor/shared/empty-allowlist-policy.js";
-
-type ResolvedTelegramLookupAccount = {
-  token: string;
-  apiRoot?: string;
-  proxyUrl?: string;
-  network?: TelegramNetworkConfig;
-};
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -289,173 +269,6 @@ async function collectMatrixInstallPathWarnings(cfg: OpenClawConfig): Promise<st
     repoInstallCommand: "openclaw plugins install ./extensions/matrix",
     formatCommand: formatCliCommand,
   }).map((entry) => `- ${entry}`);
-}
-
-async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promise<{
-  config: OpenClawConfig;
-  changes: string[];
-}> {
-  const hits = scanTelegramAllowFromUsernameEntries(cfg);
-  if (hits.length === 0) {
-    return { config: cfg, changes: [] };
-  }
-
-  const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
-    config: cfg,
-    commandName: "doctor --fix",
-    targetIds: getChannelsCommandSecretTargetIds(),
-    mode: "read_only_status",
-  });
-  const hasConfiguredUnavailableToken = listTelegramAccountIds(cfg).some((accountId) => {
-    const inspected = inspectTelegramAccount({ cfg, accountId });
-    return inspected.enabled && inspected.tokenStatus === "configured_unavailable";
-  });
-  const tokenResolutionWarnings: string[] = [];
-  const lookupAccounts: ResolvedTelegramLookupAccount[] = [];
-  const seenLookupAccounts = new Set<string>();
-  for (const accountId of listTelegramAccountIds(resolvedConfig)) {
-    let account: NonNullable<ReturnType<typeof resolveTelegramAccount>>;
-    try {
-      account = resolveTelegramAccount({ cfg: resolvedConfig, accountId });
-    } catch (error) {
-      tokenResolutionWarnings.push(
-        `- Telegram account ${accountId}: failed to inspect bot token (${describeUnknownError(error)}).`,
-      );
-      continue;
-    }
-    const token = account.tokenSource === "none" ? "" : account.token.trim();
-    if (!token) {
-      continue;
-    }
-    const apiRoot = account.config.apiRoot?.trim() || undefined;
-    const proxyUrl = account.config.proxy?.trim() || undefined;
-    const network = account.config.network;
-    const cacheKey = `${token}::${apiRoot ?? ""}::${proxyUrl ?? ""}::${JSON.stringify(network ?? {})}`;
-    if (seenLookupAccounts.has(cacheKey)) {
-      continue;
-    }
-    seenLookupAccounts.add(cacheKey);
-    lookupAccounts.push({ token, apiRoot, proxyUrl, network });
-  }
-
-  if (lookupAccounts.length === 0) {
-    return {
-      config: cfg,
-      changes: [
-        ...tokenResolutionWarnings,
-        hasConfiguredUnavailableToken
-          ? `- Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path; cannot auto-resolve (start the gateway or make the secret source available, then rerun doctor --fix).`
-          : `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run setup or replace with numeric sender IDs).`,
-      ],
-    };
-  }
-
-  const resolveUserId = async (raw: string): Promise<string | null> => {
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      return null;
-    }
-    const stripped = normalizeTelegramAllowFromEntry(trimmed);
-    if (!stripped || stripped === "*") {
-      return null;
-    }
-    if (isNumericTelegramUserId(stripped)) {
-      return stripped;
-    }
-    if (/\s/.test(stripped)) {
-      return null;
-    }
-    const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-    for (const account of lookupAccounts) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4000);
-      try {
-        const id = await lookupTelegramChatId({
-          token: account.token,
-          chatId: username,
-          signal: controller.signal,
-          apiRoot: account.apiRoot,
-          proxyUrl: account.proxyUrl,
-          network: account.network,
-        });
-        if (id) {
-          return id;
-        }
-      } catch {
-        // ignore and try next token
-      } finally {
-        clearTimeout(timeout);
-      }
-    }
-    return null;
-  };
-
-  const changes: string[] = [];
-  const next = structuredClone(cfg);
-
-  const repairList = async (pathLabel: string, holder: Record<string, unknown>, key: string) => {
-    const raw = holder[key];
-    if (!Array.isArray(raw)) {
-      return;
-    }
-    const out: Array<string | number> = [];
-    const replaced: Array<{ from: string; to: string }> = [];
-    for (const entry of raw) {
-      const normalized = normalizeTelegramAllowFromEntry(entry);
-      if (!normalized) {
-        continue;
-      }
-      if (normalized === "*") {
-        out.push("*");
-        continue;
-      }
-      if (isNumericTelegramUserId(normalized)) {
-        out.push(normalized);
-        continue;
-      }
-      const resolved = await resolveUserId(String(entry));
-      if (resolved) {
-        out.push(resolved);
-        replaced.push({ from: String(entry).trim(), to: resolved });
-      } else {
-        out.push(String(entry).trim());
-      }
-    }
-    const deduped: Array<string | number> = [];
-    const seen = new Set<string>();
-    for (const entry of out) {
-      const k = String(entry).trim();
-      if (!k || seen.has(k)) {
-        continue;
-      }
-      seen.add(k);
-      deduped.push(entry);
-    }
-    holder[key] = deduped;
-    if (replaced.length > 0) {
-      for (const rep of replaced.slice(0, 5)) {
-        changes.push(`- ${pathLabel}: resolved ${rep.from} -> ${rep.to}`);
-      }
-      if (replaced.length > 5) {
-        changes.push(`- ${pathLabel}: resolved ${replaced.length - 5} more @username entries`);
-      }
-    }
-  };
-
-  const repairAccount = async (prefix: string, account: Record<string, unknown>) => {
-    for (const ref of collectTelegramAllowFromLists(prefix, account)) {
-      await repairList(ref.pathLabel, ref.holder, ref.key);
-    }
-  };
-
-  for (const scope of collectTelegramAccountScopes(next)) {
-    await repairAccount(scope.prefix, scope.account);
-  }
-
-  if (changes.length === 0) {
-    return { config: cfg, changes: [] };
-  }
-  return { config: next, changes };
 }
 
 type DiscordNumericIdHit = { path: string; entry: number };
