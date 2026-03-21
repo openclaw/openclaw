@@ -48,7 +48,9 @@ describe("memory manager sync failures", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath },
+            store: { path: indexPath, vector: { enabled: false } },
+            cache: { enabled: false },
+            query: { minScore: 0, hybrid: { enabled: false } },
             sync: { watch: true, watchDebounceMs: 1, onSessionStart: false, onSearch: false },
           },
         },

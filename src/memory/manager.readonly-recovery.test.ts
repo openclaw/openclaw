@@ -21,7 +21,9 @@ describe("memory manager readonly recovery", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath },
+            store: { path: indexPath, vector: { enabled: false } },
+            cache: { enabled: false },
+            query: { minScore: 0, hybrid: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: false },
           },
         },
