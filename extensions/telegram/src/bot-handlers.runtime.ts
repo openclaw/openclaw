@@ -80,6 +80,11 @@ import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
+import {
+  isUnknownGroupPolicyBlock,
+  resolveUnknownGroupConfig,
+  UnknownGroupCooldownTracker,
+} from "./unknown-group.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
@@ -111,6 +116,7 @@ export const registerTelegramHandlers = ({
   logger,
   telegramDeps = defaultTelegramBotDeps,
 }: RegisterTelegramHandlerParams) => {
+  const unknownGroupCooldown = new UnknownGroupCooldownTracker();
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
@@ -496,6 +502,8 @@ export const registerTelegramHandlers = ({
         senderUsername,
       }));
 
+  type SkipGroupMessageResult = { skip: false } | { skip: true; isUnknownGroup: boolean };
+
   const shouldSkipGroupMessage = (params: {
     isGroup: boolean;
     chatId: string | number;
@@ -507,7 +515,7 @@ export const registerTelegramHandlers = ({
     hasGroupAllowOverride: boolean;
     groupConfig?: TelegramGroupConfig;
     topicConfig?: TelegramTopicConfig;
-  }) => {
+  }): SkipGroupMessageResult => {
     const {
       isGroup,
       chatId,
@@ -534,21 +542,21 @@ export const registerTelegramHandlers = ({
     if (!baseAccess.allowed) {
       if (baseAccess.reason === "group-disabled") {
         logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
-        return true;
+        return { skip: true, isUnknownGroup: false };
       }
       if (baseAccess.reason === "topic-disabled") {
         logVerbose(
           `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
         );
-        return true;
+        return { skip: true, isUnknownGroup: false };
       }
       logVerbose(
         `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`,
       );
-      return true;
+      return { skip: true, isUnknownGroup: false };
     }
     if (!isGroup) {
-      return false;
+      return { skip: false };
     }
     const policyAccess = evaluateTelegramGroupPolicyAccess({
       isGroup,
@@ -569,28 +577,29 @@ export const registerTelegramHandlers = ({
       checkChatAllowlist: true,
     });
     if (!policyAccess.allowed) {
+      const isUnknownGroup = isUnknownGroupPolicyBlock(policyAccess.reason);
       if (policyAccess.reason === "group-policy-disabled") {
         logVerbose("Blocked telegram group message (groupPolicy: disabled)");
-        return true;
+        return { skip: true, isUnknownGroup: false };
       }
       if (policyAccess.reason === "group-policy-allowlist-no-sender") {
         logVerbose("Blocked telegram group message (no sender ID, groupPolicy: allowlist)");
-        return true;
+        return { skip: true, isUnknownGroup: false };
       }
       if (policyAccess.reason === "group-policy-allowlist-empty") {
         logVerbose(
           "Blocked telegram group message (groupPolicy: allowlist, no group allowlist entries)",
         );
-        return true;
+        return { skip: true, isUnknownGroup };
       }
       if (policyAccess.reason === "group-policy-allowlist-unauthorized") {
         logVerbose(`Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`);
-        return true;
+        return { skip: true, isUnknownGroup: false };
       }
       logger.info({ chatId, title: chatTitle, reason: "not-allowed" }, "skipping group message");
-      return true;
+      return { skip: true, isUnknownGroup };
     }
-    return false;
+    return { skip: false };
   };
 
   type TelegramGroupAllowContext = Awaited<ReturnType<typeof resolveTelegramGroupAllowFromContext>>;
@@ -685,20 +694,19 @@ export const registerTelegramHandlers = ({
       deniedDmReason,
       deniedGroupReason,
     } = authRules;
-    if (
-      shouldSkipGroupMessage({
-        isGroup,
-        chatId,
-        chatTitle,
-        resolvedThreadId,
-        senderId,
-        senderUsername,
-        effectiveGroupAllow,
-        hasGroupAllowOverride,
-        groupConfig,
-        topicConfig,
-      })
-    ) {
+    const skipGroupMessage = shouldSkipGroupMessage({
+      isGroup,
+      chatId,
+      chatTitle,
+      resolvedThreadId,
+      senderId,
+      senderUsername,
+      effectiveGroupAllow,
+      hasGroupAllowOverride,
+      groupConfig,
+      topicConfig,
+    });
+    if (skipGroupMessage.skip) {
       return { allowed: false, reason: "group-policy" };
     }
 
@@ -1623,20 +1631,47 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      if (
-        shouldSkipGroupMessage({
-          isGroup: event.isGroup,
-          chatId: event.chatId,
-          chatTitle: event.msg.chat.title,
-          resolvedThreadId,
-          senderId: event.senderId,
-          senderUsername: event.senderUsername,
-          effectiveGroupAllow,
-          hasGroupAllowOverride,
-          groupConfig,
-          topicConfig,
-        })
-      ) {
+      const skipResult = shouldSkipGroupMessage({
+        isGroup: event.isGroup,
+        chatId: event.chatId,
+        chatTitle: event.msg.chat.title,
+        resolvedThreadId,
+        senderId: event.senderId,
+        senderUsername: event.senderUsername,
+        effectiveGroupAllow,
+        hasGroupAllowOverride,
+        groupConfig,
+        topicConfig,
+      });
+      if (skipResult.skip) {
+        if (skipResult.isUnknownGroup) {
+          const { action, message, cooldownMs } = resolveUnknownGroupConfig(telegramCfg);
+          if (
+            action !== "ignore" &&
+            !unknownGroupCooldown.isOnCooldown(event.chatId, cooldownMs)
+          ) {
+            unknownGroupCooldown.record(event.chatId);
+            if (message) {
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                runtime,
+                fn: () =>
+                  bot.api.sendMessage(
+                    event.chatId,
+                    message,
+                    resolvedThreadId ? { message_thread_id: resolvedThreadId } : undefined,
+                  ),
+              }).catch(() => {});
+            }
+            if (action === "leave") {
+              await withTelegramApiErrorLogging({
+                operation: "leaveChat",
+                runtime,
+                fn: () => bot.api.leaveChat(event.chatId),
+              }).catch(() => {});
+            }
+          }
+        }
         return;
       }
 

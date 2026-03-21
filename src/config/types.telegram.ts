@@ -216,6 +216,21 @@ export type TelegramAccountConfig = {
    * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
    */
   ackReaction?: string;
+  /**
+   * Action to take when a message arrives from an unregistered group (one not
+   * in the `groups` allowlist and not covered by policy):
+   * - "ignore" (default): silently skip
+   * - "warn": send unknownGroupMessage once per cooldown window
+   * - "leave": send unknownGroupMessage (if set) then leave the chat
+   */
+  unknownGroupAction?: "ignore" | "warn" | "leave";
+  /** Message text sent to the group for "warn" and "leave" actions. */
+  unknownGroupMessage?: string;
+  /**
+   * Minimum milliseconds between consecutive warn/leave actions for the same
+   * chat. Defaults to 60000 (1 minute). Set to 0 to act on every message.
+   */
+  unknownGroupCooldownMs?: number;
 };
 
 export type TelegramTopicConfig = {
