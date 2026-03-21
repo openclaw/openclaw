@@ -671,6 +671,85 @@ describe("channel-health-monitor", () => {
       monitor.stop();
     });
 
+    it("skips restart when account is removed during drain", async () => {
+      const now = Date.now();
+      let callCount = 0;
+      const manager = createMockChannelManager({
+        getRuntimeSnapshot: vi.fn(() => {
+          callCount++;
+          // After the initial health check + first drain poll, simulate account removal.
+          const removed = callCount >= 3;
+          return snapshotWith(
+            removed
+              ? {}
+              : {
+                  discord: {
+                    default: {
+                      running: true,
+                      connected: false,
+                      enabled: true,
+                      configured: true,
+                      lastStartAt: now - 300_000,
+                      activeRuns: callCount >= 3 ? 0 : 1,
+                      busy: true,
+                      lastRunActivityAt: now - 5_000,
+                    },
+                  },
+                },
+          );
+        }),
+      });
+      const monitor = startDefaultMonitor(manager, { checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS });
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      // Drain polls until activeRuns=0 / account removed.
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
+    it("skips restart when health monitor is disabled during drain", async () => {
+      const now = Date.now();
+      let callCount = 0;
+      let monitorEnabled = true;
+      const manager = createMockChannelManager({
+        getRuntimeSnapshot: vi.fn(() => {
+          callCount++;
+          const drained = callCount >= 4;
+          return snapshotWith({
+            discord: {
+              default: {
+                running: true,
+                connected: false,
+                enabled: true,
+                configured: true,
+                lastStartAt: now - 300_000,
+                activeRuns: drained ? 0 : 1,
+                busy: !drained,
+                lastRunActivityAt: now - 5_000,
+              },
+            },
+          });
+        }),
+        isHealthMonitorEnabled: vi.fn(() => {
+          // Disable after drain starts (simulating operator hot-reload).
+          if (!monitorEnabled) {
+            return false;
+          }
+          return true;
+        }),
+      });
+      const monitor = startDefaultMonitor(manager, { checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS });
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+      // Disable health monitor while drain is in progress.
+      monitorEnabled = false;
+      // Drain finishes after a few polls.
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
     it("skips drain when channel has no active runs", async () => {
       const now = Date.now();
       const snapshotFn = vi.fn(() =>

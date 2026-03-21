@@ -253,6 +253,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
               // or reconnected while we were waiting. Only proceed if still unhealthy.
               const postDrainSnap = channelManager.getRuntimeSnapshot();
               const postDrainStatus = postDrainSnap.channelAccounts[channelId]?.[accountId];
+              // Account was removed during drain (config hot-reload) — do not resurrect it.
+              if (!postDrainStatus) {
+                log.debug?.(
+                  `[${channelId}:${accountId}] health-monitor: account removed during drain, skipping restart`,
+                );
+                continue;
+              }
               if (postDrainStatus) {
                 const postDrainHealth = evaluateChannelHealth(postDrainStatus, {
                   ...healthPolicy,
@@ -264,6 +271,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
                   );
                   continue;
                 }
+              }
+              // Re-check monitor enablement after drain — operator may have disabled it.
+              if (!channelManager.isHealthMonitorEnabled(channelId as ChannelId, accountId)) {
+                log.info?.(
+                  `[${channelId}:${accountId}] health-monitor: monitor disabled during drain, skipping restart`,
+                );
+                continue;
               }
               // Re-prune the hourly bucket with a fresh timestamp so that entries
               // which aged out during the drain window are not counted against the cap.
