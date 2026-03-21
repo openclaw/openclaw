@@ -1310,6 +1310,9 @@ function shouldRepairMalformedAnthropicToolCallArguments(provider?: string): boo
   return normalizeProviderId(provider ?? "") === "kimi";
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const castAny = (v: any): any => v;
+
 /**
  * Intercept assistant response stream and promote MiniMax XML tool calls to structured blocks.
  */
@@ -1330,11 +1333,11 @@ function wrapStreamEventsForMinimax(response: unknown): unknown {
     return response;
   }
 
-  const emitter = response as {
-    on: (event: string, listener: (...args: unknown[]) => void) => void;
-  };
-  const originalOn = emitter.on.bind(emitter);
-  emitter.on = (event: string, listener: (...args: unknown[]) => void) => {
+  const stream = response as unknown as ReturnType<typeof streamSimple>;
+
+  // Patch .on() for event emitters
+  const originalOn = castAny(stream).on.bind(stream);
+  castAny(stream).on = (event: string, listener: (...args: unknown[]) => void) => {
     if (event === "message_end") {
       const originalListener = listener;
       const interceptor = (evt: unknown) => {
@@ -1343,9 +1346,9 @@ function wrapStreamEventsForMinimax(response: unknown): unknown {
           // IMPORTANT: Promote thinking tags FIRST. MiniMax XML tool calls can be
           // nested inside thinking tags. If we promote XML first, it splits the
           // text block and breaks thinking tag recognition.
-          const assistantMessage = message;
-          promoteThinkingTagsToBlocks(assistantMessage);
-          promoteMinimaxToolCallsToBlocks(assistantMessage);
+          const msg = castAny(message);
+          promoteThinkingTagsToBlocks(msg);
+          promoteMinimaxToolCallsToBlocks(msg);
         }
         return originalListener(evt);
       };
@@ -1354,7 +1357,48 @@ function wrapStreamEventsForMinimax(response: unknown): unknown {
     return originalOn(event, listener);
   };
 
-  return response;
+  // Patch .result() for the final message promise
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    if (message?.role === "assistant") {
+      const msg = castAny(message);
+      promoteThinkingTagsToBlocks(msg);
+      promoteMinimaxToolCallsToBlocks(msg);
+    }
+    return message;
+  };
+
+  // Patch async iterator for consumers reading deltas
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  castAny(stream)[Symbol.asyncIterator] = function () {
+    const iterator = originalAsyncIterator();
+    return {
+      async next() {
+        const result = await iterator.next();
+        if (!result.done && result.value && typeof result.value === "object") {
+          const event = result.value as { type?: string; message?: unknown };
+          if (event.type === "message_end") {
+            const message = event.message as AgentMessage;
+            if (message?.role === "assistant") {
+              const msg = castAny(message);
+              promoteThinkingTagsToBlocks(msg);
+              promoteMinimaxToolCallsToBlocks(msg);
+            }
+          }
+        }
+        return result;
+      },
+      async return(value?: unknown) {
+        return iterator.return?.(value) ?? { done: true as const, value: undefined };
+      },
+      async throw(error?: unknown) {
+        return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+      },
+    };
+  };
+
+  return stream;
 }
 
 // ---------------------------------------------------------------------------

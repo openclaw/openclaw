@@ -348,6 +348,102 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   }
 }
 
+/**
+ * Scan assistant message content for MiniMax-specific XML tool calls.
+ */
+export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void {
+  if (!message) {
+    return;
+  }
+
+  const messageContent: unknown = message.content;
+
+  // Handle string-form assistant content by converting it to a block array first.
+  if (typeof messageContent === "string") {
+    if (!messageContent.toLowerCase().includes("minimax:tool_call")) {
+      return;
+    }
+    const split = splitMinimaxToolCalls(messageContent);
+    if (!split) {
+      return;
+    }
+    const next: AssistantMessage["content"] = [];
+    for (const part of split) {
+      if (part.type === "toolCall") {
+        next.push({
+          type: "toolCall",
+          id: part.id,
+          name: part.name,
+          arguments: part.arguments,
+        } as unknown as AssistantMessage["content"][number]);
+      } else {
+        next.push({ type: "text", text: part.text });
+      }
+    }
+    message.content = next;
+    return;
+  }
+
+  if (!Array.isArray(messageContent)) {
+    return;
+  }
+
+  const next: AssistantMessage["content"] = [];
+  let changed = false;
+
+  for (const block of messageContent) {
+    if (!block || typeof block !== "object") {
+      next.push(block);
+      continue;
+    }
+
+    const type = block.type as string;
+    // Handle both text and thinking blocks as sources for XML tool calls.
+    const textValue =
+      type === "text"
+        ? (block as { text: string }).text
+        : type === "thinking"
+          ? (block as { thinking: string }).thinking
+          : null;
+
+    if (typeof textValue !== "string") {
+      next.push(block);
+      continue;
+    }
+
+    const split = splitMinimaxToolCalls(textValue);
+    if (!split) {
+      next.push(block);
+      continue;
+    }
+
+    changed = true;
+    for (const part of split) {
+      if (part.type === "toolCall") {
+        next.push({
+          type: "toolCall",
+          id: part.id,
+          name: part.name,
+          arguments: part.arguments,
+        } as unknown as AssistantMessage["content"][number]);
+      } else {
+        if (type === "thinking") {
+          next.push({
+            type: "thinking",
+            thinking: part.text,
+          } as unknown as AssistantMessage["content"][number]);
+        } else {
+          next.push({ type: "text", text: part.text });
+        }
+      }
+    }
+  }
+
+  if (changed) {
+    message.content = next;
+  }
+}
+
 export function extractThinkingFromTaggedText(text: string): string {
   if (!text) {
     return "";
@@ -437,7 +533,6 @@ export function parseXmlParameterValue(value: string): unknown {
     }
   }
 
-  // Return the full unescaped value without trimming to preserve whitespace
   return unescaped;
 }
 
@@ -448,9 +543,6 @@ type MinimaxToolCallSplitBlock =
 /**
  * Split text content into text blocks and toolCall blocks by parsing
  * MiniMax-specific <minimax:tool_call> XML structures.
- *
- * This version supports malformed XML that may only have a closing tag
- * or interleaved text and tags.
  */
 export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[] | null {
   if (!text || !/minimax:tool_call/i.test(text)) {
@@ -470,7 +562,6 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
     const index = match.index ?? 0;
     const [fullMatch, invokeMatch, attributes, invokeBody] = match;
 
-    // Push preceding text prose
     if (index > cursor) {
       const prose = text.slice(cursor, index);
       if (prose) {
@@ -479,7 +570,6 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
     }
 
     if (invokeMatch) {
-      // Handle <invoke> block
       const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
       const toolName = nameMatch ? nameMatch[1] : undefined;
 
@@ -498,9 +588,7 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
         });
         hasToolCall = true;
       }
-      // Malformed invokes are discarded by simply advancing cursor past them.
     }
-    // MiniMax marker tags (</?minimax:tool_call>) are also discarded by advancing cursor.
 
     cursor = index + fullMatch.length;
   }
@@ -513,65 +601,4 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
   }
 
   return blocks;
-}
-
-/**
- * Scan assistant message content for MiniMax-specific XML tool calls.
- */
-export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void {
-  if (!Array.isArray(message.content)) {
-    return;
-  }
-
-  const next: AssistantMessage["content"] = [];
-  let changed = false;
-
-  for (const block of message.content) {
-    if (!block || typeof block !== "object") {
-      next.push(block);
-      continue;
-    }
-
-    const type = block.type as string;
-    // Handle both text and thinking blocks as sources for XML tool calls.
-    // @ts-expect-error - accessing properties on union type
-    const textValue = type === "text" ? block.text : type === "thinking" ? block.thinking : null;
-
-    if (typeof textValue !== "string") {
-      next.push(block);
-      continue;
-    }
-
-    const split = splitMinimaxToolCalls(textValue);
-    if (!split) {
-      next.push(block);
-      continue;
-    }
-
-    changed = true;
-    for (const part of split) {
-      if (part.type === "toolCall") {
-        next.push({
-          type: "toolCall",
-          id: part.id,
-          name: part.name,
-          arguments: part.arguments,
-        } as unknown as AssistantMessage["content"][number]);
-      } else {
-        // Map back to the original block type (text or thinking)
-        if (type === "thinking") {
-          next.push({
-            type: "thinking",
-            thinking: part.text,
-          } as unknown as AssistantMessage["content"][number]);
-        } else {
-          next.push({ type: "text", text: part.text });
-        }
-      }
-    }
-  }
-
-  if (changed) {
-    message.content = next;
-  }
 }

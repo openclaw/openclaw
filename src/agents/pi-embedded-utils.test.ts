@@ -419,6 +419,26 @@ All done.`;
     expect(msg.content[0]).toEqual({ type: "text", text: text });
   });
 
+  it("handles string-form content", () => {
+    const text = `<minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: text as unknown as AssistantMessage["content"],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    expect(Array.isArray(msg.content)).toBe(true);
+    const toolCall = (msg.content as unknown as Array<{ type: string } | string>).find(
+      (c) => c && typeof c === "object" && c.type === "toolCall",
+    );
+    expect(toolCall).toMatchObject({
+      type: "toolCall",
+      name: "exec",
+    });
+  });
+
   it("normalizes tool names", () => {
     const text = `<minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call>`;
     const msg = makeAssistantMessage({
