@@ -43,7 +43,10 @@ export const handlePluginCommand: CommandHandler = async (
     to: command.to,
     accountId: params.ctx.AccountId ?? undefined,
     messageThreadId:
-      typeof params.ctx.MessageThreadId === "number" ? params.ctx.MessageThreadId : undefined,
+      typeof params.ctx.MessageThreadId === "string" ||
+      typeof params.ctx.MessageThreadId === "number"
+        ? params.ctx.MessageThreadId
+        : undefined,
   });
 
   return {

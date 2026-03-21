@@ -126,6 +126,28 @@ private func sendUserMessage(_ vm: OpenClawChatViewModel, text: String = "hi") a
     }
 }
 
+@discardableResult
+private func sendMessageAndEmitFinal(
+    transport: TestChatTransport,
+    vm: OpenClawChatViewModel,
+    text: String,
+    sessionKey: String = "main") async throws -> String
+{
+    await sendUserMessage(vm, text: text)
+    try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+
+    let runId = try #require(await transport.lastSentRunId())
+    transport.emit(
+        .chat(
+            OpenClawChatEventPayload(
+                runId: runId,
+                sessionKey: sessionKey,
+                state: "final",
+                message: nil,
+                errorMessage: nil)))
+    return runId
+}
+
 private func emitAssistantText(
     transport: TestChatTransport,
     runId: String,
@@ -437,6 +459,141 @@ extension TestChatTransportState {
         }
         #expect(await MainActor.run { vm.streamingAssistantText } == nil)
         #expect(await MainActor.run { vm.pendingToolCalls.isEmpty })
+    }
+
+    @Test func keepsOptimisticUserMessageWhenFinalRefreshReturnsOnlyAssistantHistory() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let history1 = historyPayload(sessionId: sessionId)
+        let history2 = historyPayload(
+            sessionId: sessionId,
+            messages: [
+                chatTextMessage(
+                    role: "assistant",
+                    text: "final answer",
+                    timestamp: now + 1),
+            ])
+
+        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+        try await sendMessageAndEmitFinal(
+            transport: transport,
+            vm: vm,
+            text: "hello from mac webchat")
+
+        try await waitUntil("assistant history refreshes without dropping user message") {
+            await MainActor.run {
+                let texts = vm.messages.map { message in
+                    (message.role, message.content.compactMap(\.text).joined(separator: "\n"))
+                }
+                return texts.contains(where: { $0.0 == "assistant" && $0.1 == "final answer" }) &&
+                    texts.contains(where: { $0.0 == "user" && $0.1 == "hello from mac webchat" })
+            }
+        }
+    }
+
+    @Test func keepsOptimisticUserMessageWhenFinalRefreshHistoryIsTemporarilyEmpty() async throws {
+        let sessionId = "sess-main"
+        let history1 = historyPayload(sessionId: sessionId)
+        let history2 = historyPayload(sessionId: sessionId, messages: [])
+
+        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+        try await sendMessageAndEmitFinal(
+            transport: transport,
+            vm: vm,
+            text: "hello from mac webchat")
+
+        try await waitUntil("empty refresh does not clear optimistic user message") {
+            await MainActor.run {
+                vm.messages.contains { message in
+                    message.role == "user" &&
+                        message.content.compactMap(\.text).joined(separator: "\n") == "hello from mac webchat"
+                }
+            }
+        }
+    }
+
+    @Test func doesNotDuplicateUserMessageWhenRefreshReturnsCanonicalTimestamp() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let history1 = historyPayload(sessionId: sessionId)
+        let history2 = historyPayload(
+            sessionId: sessionId,
+            messages: [
+                chatTextMessage(
+                    role: "user",
+                    text: "hello from mac webchat",
+                    timestamp: now + 5_000),
+                chatTextMessage(
+                    role: "assistant",
+                    text: "final answer",
+                    timestamp: now + 6_000),
+            ])
+
+        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+        try await sendMessageAndEmitFinal(
+            transport: transport,
+            vm: vm,
+            text: "hello from mac webchat")
+
+        try await waitUntil("canonical refresh keeps one user message") {
+            await MainActor.run {
+                let userMessages = vm.messages.filter { message in
+                    message.role == "user" &&
+                        message.content.compactMap(\.text).joined(separator: "\n") == "hello from mac webchat"
+                }
+                let hasAssistant = vm.messages.contains { message in
+                    message.role == "assistant" &&
+                        message.content.compactMap(\.text).joined(separator: "\n") == "final answer"
+                }
+                return hasAssistant && userMessages.count == 1
+            }
+        }
+    }
+
+    @Test func preservesRepeatedOptimisticUserMessagesWithIdenticalContentDuringRefresh() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let history1 = historyPayload(sessionId: sessionId)
+        let history2 = historyPayload(
+            sessionId: sessionId,
+            messages: [
+                chatTextMessage(
+                    role: "user",
+                    text: "retry",
+                    timestamp: now + 5_000),
+                chatTextMessage(
+                    role: "assistant",
+                    text: "first answer",
+                    timestamp: now + 6_000),
+            ])
+
+        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2, history2])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+        try await sendMessageAndEmitFinal(
+            transport: transport,
+            vm: vm,
+            text: "retry")
+        try await sendMessageAndEmitFinal(
+            transport: transport,
+            vm: vm,
+            text: "retry")
+
+        try await waitUntil("repeated optimistic user message is preserved") {
+            await MainActor.run {
+                let retryMessages = vm.messages.filter { message in
+                    message.role == "user" &&
+                        message.content.compactMap(\.text).joined(separator: "\n") == "retry"
+                }
+                let hasAssistant = vm.messages.contains { message in
+                    message.role == "assistant" &&
+                        message.content.compactMap(\.text).joined(separator: "\n") == "first answer"
+                }
+                return hasAssistant && retryMessages.count == 2
+            }
+        }
     }
 
     @Test func acceptsCanonicalSessionKeyEventsForOwnPendingRun() async throws {

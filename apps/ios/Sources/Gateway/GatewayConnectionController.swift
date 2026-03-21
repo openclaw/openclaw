@@ -174,7 +174,12 @@ final class GatewayConnectionController {
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         if resolvedUseTLS, stored == nil {
             guard let url = self.buildGatewayURL(host: host, port: resolvedPort, useTLS: true) else { return }
-            guard let fp = await self.probeTLSFingerprint(url: url) else { return }
+            guard let fp = await self.probeTLSFingerprint(url: url) else {
+                self.appModel?.gatewayStatusText =
+                    "TLS handshake failed for \(host):\(resolvedPort). "
+                    + "Remote gateways must use HTTPS/WSS."
+                return
+            }
             self.pendingTrustConnect = (url: url, stableID: stableID, isManual: true)
             self.pendingTrustPrompt = TrustPrompt(
                 stableID: stableID,
