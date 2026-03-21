@@ -340,17 +340,12 @@ export function coerceToFailoverError(
 const DEFAULT_FALLBACK_STATUS_CODES = [408, 429, 500, 502, 503, 504, 404];
 
 /**
- * All HTTP status codes that could trigger fallback (including client errors).
- */
-const ALL_FALLBACK_STATUS_CODES = [400, 401, 402, 403, 404, 405, 408, 410, 429, 500, 502, 503, 504];
-
-/**
  * Check if an error should trigger fallback based on the configured error codes.
  *
  * @param err - The error to check
  * @param fallbackOnErrors - Configuration for which errors should trigger fallback
- *   - "default": Use default behavior (server errors + rate limits)
- *   - "all": All errors trigger fallback
+ *   - "default": Use default behavior (server errors + rate limits + timeout + not found)
+ *   - "all": All HTTP errors (4xx and 5xx) trigger fallback
  *   - number[]: Custom list of status codes
  * @returns true if the error should trigger fallback
  */
@@ -363,29 +358,21 @@ export function shouldTriggerFallback(
   // If no status code found, try to determine from error reason
   if (status === undefined) {
     const reason = resolveFailoverReasonFromError(err);
-    // Default behavior: non-null reason means it's a recognized failover error
-    if (fallbackOnErrors === undefined || fallbackOnErrors === "default") {
-      return reason !== null;
-    }
-    // For "all", any reason (including null) should trigger fallback
-    if (fallbackOnErrors === "all") {
-      return true;
-    }
-    // For custom codes, we can't determine without status
-    return false;
+    // For any mode, only trigger fallback if we have a recognized failover reason
+    // This prevents unrelated runtime errors (parse errors, filesystem errors) from triggering fallback
+    return reason !== null;
   }
 
-  // Determine which status codes to use
-  let allowedCodes: number[];
+  // Determine if status code should trigger fallback
   if (fallbackOnErrors === undefined || fallbackOnErrors === "default") {
-    allowedCodes = DEFAULT_FALLBACK_STATUS_CODES;
+    return DEFAULT_FALLBACK_STATUS_CODES.includes(status);
   } else if (fallbackOnErrors === "all") {
-    allowedCodes = ALL_FALLBACK_STATUS_CODES;
+    // "all" means all HTTP errors (4xx and 5xx)
+    return status >= 400;
   } else {
-    allowedCodes = fallbackOnErrors;
+    // Custom list of status codes
+    return fallbackOnErrors.includes(status);
   }
-
-  return allowedCodes.includes(status);
 }
 
 /**

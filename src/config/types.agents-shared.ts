@@ -7,12 +7,12 @@ import type {
 
 /**
  * HTTP status codes that should trigger model fallback.
- * Default behavior only triggers fallback on server errors (5xx) and rate limits (429).
- * Users can extend this to include client errors like 400, 401, 403, etc.
+ * Default behavior triggers fallback on server errors, rate limits, timeouts, and not-found errors.
+ * Users can extend this to include all client errors with "all" or specify custom codes.
  */
 export type FallbackOnErrorCodes =
-  | "all" // All errors trigger fallback
-  | "default" // Server errors + rate limits only (500, 502, 503, 429, 408)
+  | "all" // All HTTP errors (4xx and 5xx) trigger fallback
+  | "default" // Server errors (500, 502, 503, 504) + rate limits (429) + timeout (408) + not found (404)
   | number[]; // Custom list of HTTP status codes
 
 export type AgentModelConfig =
@@ -24,8 +24,8 @@ export type AgentModelConfig =
       fallbacks?: string[];
       /**
        * HTTP status codes that should trigger fallback to next model.
-       * - "default": Server errors (5xx) + rate limits (429) + timeout (408) [default]
-       * - "all": All errors trigger fallback (including 400, 401, 403, 404)
+       * - "default": Server errors (500, 502, 503, 504) + rate limits (429) + timeout (408) + not found (404) [default]
+       * - "all": All HTTP errors (4xx and 5xx) trigger fallback
        * - number[]: Custom list of status codes (e.g., [400, 401, 403, 429, 500, 502, 503])
        *
        * @example
