@@ -28,6 +28,7 @@ import {
   parseMergeForwardContent,
   parseMessageContent,
   resolveFeishuGroupSession,
+  parseMediaKeys,
   resolveFeishuMediaList,
   toMessageResourceType,
 } from "./bot-content.js";
@@ -425,13 +426,42 @@ export async function handleFeishuMessage(params: {
       // agent sessions — buffering here would cause duplicate replay when this account
       // later becomes active via buildPendingHistoryContextFromMap.
       if (!broadcastAgents && chatHistories && groupHistoryKey) {
+        // Download media for file/image messages even when bot isn't mentioned
+        // so that downloaded file paths are included in the history context.
+        let historyBody = `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content}`;
+        const historyMediaTypes = ["image", "file", "audio", "video", "sticker"];
+        if (historyMediaTypes.includes(event.message.message_type)) {
+          try {
+            const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024;
+            const mediaList = await resolveFeishuMediaList({
+              cfg,
+              messageId: ctx.messageId,
+              messageType: event.message.message_type,
+              content: event.message.content,
+              maxBytes: mediaMaxBytes,
+              log,
+              accountId: account.accountId,
+            });
+            if (mediaList.length > 0) {
+              const mediaPaths = mediaList.map((m) => m.path).join(", ");
+              const mediaKeys = parseMediaKeys(event.message.content, event.message.message_type);
+              const fileName = mediaKeys.fileName || "attachment";
+              historyBody = `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content} [File saved: ${fileName} → ${mediaPaths}]`;
+            }
+          } catch (err) {
+            log(
+              `feishu[${account.accountId}]: failed to download media for history entry: ${String(err)}`,
+            );
+          }
+        }
+
         recordPendingHistoryEntryIfEnabled({
           historyMap: chatHistories,
           historyKey: groupHistoryKey,
           limit: historyLimit,
           entry: {
             sender: ctx.senderOpenId,
-            body: `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content}`,
+            body: historyBody,
             timestamp: Date.now(),
             messageId: ctx.messageId,
           },
@@ -682,9 +712,43 @@ export async function handleFeishuMessage(params: {
           accountId: account.accountId,
         });
         if (quotedMessageInfo) {
-          quotedContent = quotedMessageInfo.content;
+          // If the quoted message contains media, download and attach it
+          const quotedMediaTypes = ["image", "file", "audio", "video", "sticker", "post"];
+          if (quotedMediaTypes.includes(quotedMessageInfo.contentType)) {
+            const quotedMediaList = await resolveFeishuMediaList({
+              cfg,
+              messageId: quotedMessageInfo.messageId,
+              messageType: quotedMessageInfo.contentType,
+              content: quotedMessageInfo.content,
+              maxBytes: mediaMaxBytes,
+              log,
+              accountId: account.accountId,
+            });
+            if (quotedMediaList.length > 0) {
+              const existingPaths = mediaPayload.MediaPaths ?? [];
+              const existingTypes = mediaPayload.MediaTypes ?? [];
+              for (const qm of quotedMediaList) {
+                existingPaths.push(qm.path);
+                if (qm.contentType) existingTypes.push(qm.contentType);
+              }
+              if (!mediaPayload.MediaPath) {
+                mediaPayload.MediaPath = quotedMediaList[0].path;
+                mediaPayload.MediaType = quotedMediaList[0].contentType;
+                mediaPayload.MediaUrl = quotedMediaList[0].path;
+              }
+              mediaPayload.MediaPaths = existingPaths;
+              mediaPayload.MediaUrls = existingPaths;
+              mediaPayload.MediaTypes = existingTypes.length > 0 ? existingTypes : undefined;
+              log(
+                `feishu[${account.accountId}]: resolved ${quotedMediaList.length} media from quoted message`,
+              );
+            }
+            quotedContent = `<media:${quotedMessageInfo.contentType}>`;
+          } else {
+            quotedContent = quotedMessageInfo.content;
+          }
           log(
-            `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
+            `feishu[${account.accountId}]: fetched quoted message (${quotedMessageInfo.contentType}): ${(quotedContent ?? "").slice(0, 100)}`,
           );
         }
       } catch (err) {
