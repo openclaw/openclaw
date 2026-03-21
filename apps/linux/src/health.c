@@ -19,8 +19,15 @@
 #include <string.h>
 #include "state.h"
 
+static gboolean pending_health_probe = FALSE;
+static gboolean pending_deep_probe = FALSE;
+
+static void internal_health_probe_gateway(gboolean is_eager);
+static void internal_health_run_deep_probe(gboolean is_eager);
+
 void health_init(void) {
-    // Initial state is empty
+    pending_health_probe = FALSE;
+    pending_deep_probe = FALSE;
 }
 
 static gchar** resolve_openclaw_argv(const gchar *subcommand) {
@@ -213,13 +220,13 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
     
     g_subprocess_communicate_utf8_finish(subprocess, res, &stdout_buf, &stderr_buf, &error);
     
+    state_set_health_in_flight(FALSE);
+    
     if (launch_gen != state_get_health_generation()) {
         g_free(stdout_buf);
         g_free(stderr_buf);
-        return;
+        goto check_pending;
     }
-    
-    state_set_health_in_flight(FALSE);
     
     if (error || !g_subprocess_get_if_exited(subprocess) || g_subprocess_get_exit_status(subprocess) != 0) {
         HealthState hs = {0};
@@ -227,7 +234,7 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
         state_update_health(&hs);
         g_free(stdout_buf);
         g_free(stderr_buf);
-        return;
+        goto check_pending;
     }
     
     g_autoptr(JsonParser) parser = json_parser_new();
@@ -237,7 +244,7 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
         state_update_health(&hs);
         g_free(stdout_buf);
         g_free(stderr_buf);
-        return;
+        goto check_pending;
     }
     
     JsonNode *root = json_parser_get_root(parser);
@@ -247,7 +254,7 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
         state_update_health(&hs);
         g_free(stdout_buf);
         g_free(stderr_buf);
-        return;
+        goto check_pending;
     }
 
     JsonObject *root_obj = json_node_get_object(root);
@@ -306,10 +313,22 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
     g_free(hs.probe_url);
     g_free(stdout_buf);
     g_free(stderr_buf);
+
+check_pending:
+    if (pending_health_probe) {
+        pending_health_probe = FALSE;
+        internal_health_probe_gateway(TRUE);
+    }
 }
 
-void health_probe_gateway(void) {
-    if (state_get_health()->in_flight) return;
+static void internal_health_probe_gateway(gboolean is_eager) {
+    if (state_get_health()->in_flight) {
+        if (is_eager) {
+            pending_health_probe = TRUE;
+        }
+        return;
+    }
+    pending_health_probe = FALSE;
     
     // Gate periodic probes on an installed supported user service.
     // Stopped services should not keep spawning periodic CLI probes because they are already known offline.
@@ -338,6 +357,14 @@ void health_probe_gateway(void) {
     g_object_unref(subprocess);
 }
 
+void health_probe_gateway(void) {
+    internal_health_probe_gateway(FALSE);
+}
+
+void health_probe_gateway_eager(void) {
+    internal_health_probe_gateway(TRUE);
+}
+
 static void on_deep_probe_finished(GObject *source_object, GAsyncResult *res, gpointer user_data) {
     guint64 launch_gen = 0;
     if (user_data) {
@@ -352,14 +379,13 @@ static void on_deep_probe_finished(GObject *source_object, GAsyncResult *res, gp
     
     g_subprocess_communicate_utf8_finish(subprocess, res, &stdout_buf, &stderr_buf, &error);
     
+    state_set_probe_in_flight(FALSE);
+    
     if (launch_gen != state_get_health_generation()) {
-        state_set_probe_in_flight(FALSE);
         g_free(stdout_buf);
         g_free(stderr_buf);
-        return;
+        goto check_pending;
     }
-    
-    state_set_probe_in_flight(FALSE);
     
     ProbeState ps = {0};
     ps.ran = TRUE;
@@ -371,7 +397,7 @@ static void on_deep_probe_finished(GObject *source_object, GAsyncResult *res, gp
         g_free(ps.summary);
         g_free(stdout_buf);
         g_free(stderr_buf);
-        return;
+        goto check_pending;
     }
     
     if (stdout_buf) {
@@ -409,10 +435,22 @@ static void on_deep_probe_finished(GObject *source_object, GAsyncResult *res, gp
     g_free(ps.summary);
     g_free(stdout_buf);
     g_free(stderr_buf);
+
+check_pending:
+    if (pending_deep_probe) {
+        pending_deep_probe = FALSE;
+        internal_health_run_deep_probe(TRUE);
+    }
 }
 
-void health_run_deep_probe(void) {
-    if (state_get_probe()->in_flight) return;
+static void internal_health_run_deep_probe(gboolean is_eager) {
+    if (state_get_probe()->in_flight) {
+        if (is_eager) {
+            pending_deep_probe = TRUE;
+        }
+        return;
+    }
+    pending_deep_probe = FALSE;
 
     // Gate periodic probes on an installed supported user service.
     // Stopped services should not keep spawning periodic CLI probes because they are already known offline.
@@ -441,4 +479,12 @@ void health_run_deep_probe(void) {
     state_set_probe_in_flight(TRUE);
     g_subprocess_communicate_utf8_async(subprocess, NULL, NULL, on_deep_probe_finished, launch_gen);
     g_object_unref(subprocess);
+}
+
+void health_run_deep_probe(void) {
+    internal_health_run_deep_probe(FALSE);
+}
+
+void health_run_deep_probe_eager(void) {
+    internal_health_run_deep_probe(TRUE);
 }

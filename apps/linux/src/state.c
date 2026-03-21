@@ -14,8 +14,8 @@
 #include <glib.h>
 #include "state.h"
 
-extern void health_probe_gateway(void);
-extern void health_run_deep_probe(void);
+extern void health_probe_gateway_eager(void);
+extern void health_run_deep_probe_eager(void);
 
 static AppState current_state = STATE_NOT_INSTALLED;
 static SystemdState current_sys_state = {0};
@@ -86,13 +86,13 @@ static void trigger_updates(AppState new_state) {
 
 static gboolean idle_trigger_health_probe(gpointer user_data) {
     (void)user_data;
-    health_probe_gateway();
+    health_probe_gateway_eager();
     return G_SOURCE_REMOVE;
 }
 
 static gboolean idle_trigger_deep_probe(gpointer user_data) {
     (void)user_data;
-    health_run_deep_probe();
+    health_run_deep_probe_eager();
     return G_SOURCE_REMOVE;
 }
 
