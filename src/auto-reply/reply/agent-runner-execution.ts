@@ -206,8 +206,7 @@ export async function runAgentTurnWithFallback(params: {
       const blockReplyHandler = params.opts?.onBlockReply
         ? createBlockReplyDeliveryHandler({
             onBlockReply: params.opts.onBlockReply,
-            currentMessageId:
-              params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+            currentMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
             normalizeStreamingText,
             applyReplyToMode: params.applyReplyToMode,
             normalizeMediaPaths: normalizeReplyMediaPaths,
