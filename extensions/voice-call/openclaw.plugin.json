@@ -160,6 +160,18 @@
     }
   },
   "configSchema": {
+    "$defs": {
+      "secretRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": { "type": "string", "enum": ["env", "file", "exec"] },
+          "provider": { "type": "string" },
+          "id": { "type": "string" }
+        },
+        "required": ["source", "provider", "id"]
+      }
+    },
     "type": "object",
     "additionalProperties": false,
     "properties": {
@@ -189,12 +201,8 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "accountSid": {
-            "type": "string"
-          },
-          "authToken": {
-            "type": "string"
-          }
+          "accountSid": { "anyOf": [{ "type": "string" }, { "$ref": "#/$defs/secretRef" }] },
+          "authToken": { "anyOf": [{ "type": "string" }, { "$ref": "#/$defs/secretRef" }] }
         }
       },
       "plivo": {
