@@ -280,6 +280,7 @@ export const TelegramAccountSchemaBase = z
     silentErrorReplies: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    apiRoot: z.string().url().optional(),
   })
   .strict();
 
