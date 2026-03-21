@@ -219,6 +219,8 @@ describe("scanStatusJsonFast", () => {
       expect(mocks.readBestEffortConfig).not.toHaveBeenCalled();
       expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
       expect(mocks.getStatusSummary).not.toHaveBeenCalled();
+      expect(mocks.buildGatewayConnectionDetails).not.toHaveBeenCalled();
+      expect(mocks.probeGateway).not.toHaveBeenCalled();
       expect(result.summary).toEqual(
         expect.objectContaining({
           heartbeat: expect.objectContaining({ defaultAgentId: "main", agents: [] }),

@@ -103,33 +103,34 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-type FileReferencePatterns = {
-  fileReferencePattern: RegExp;
-  orphanedTldPattern: RegExp;
-};
-
-let cachedFileReferencePatterns: FileReferencePatterns | null = null;
-
-function getFileReferencePatterns(): FileReferencePatterns {
-  if (cachedFileReferencePatterns) {
-    return cachedFileReferencePatterns;
-  }
-  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
-  cachedFileReferencePatterns = {
-    fileReferencePattern: new RegExp(
-      `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${fileExtensionsPattern}))(?=$|[^a-zA-Z0-9_\\-/])`,
-      "gi",
-    ),
-    orphanedTldPattern: new RegExp(
-      `([^a-zA-Z0-9]|^)([A-Za-z]\\.(?:${fileExtensionsPattern}))(?=[^a-zA-Z0-9/]|$)`,
-      "g",
-    ),
-  };
-  return cachedFileReferencePatterns;
-}
-
 const AUTO_LINKED_ANCHOR_PATTERN = /<a\s+href="https?:\/\/([^"]+)"[^>]*>\1<\/a>/gi;
 const HTML_TAG_PATTERN = /(<\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*?>/gi;
+let fileReferencePattern: RegExp | undefined;
+let orphanedTldPattern: RegExp | undefined;
+
+function getFileReferencePattern(): RegExp {
+  if (fileReferencePattern) {
+    return fileReferencePattern;
+  }
+  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
+  fileReferencePattern = new RegExp(
+    `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${fileExtensionsPattern}))(?=$|[^a-zA-Z0-9_\\-/])`,
+    "gi",
+  );
+  return fileReferencePattern;
+}
+
+function getOrphanedTldPattern(): RegExp {
+  if (orphanedTldPattern) {
+    return orphanedTldPattern;
+  }
+  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
+  orphanedTldPattern = new RegExp(
+    `([^a-zA-Z0-9]|^)([A-Za-z]\\.(?:${fileExtensionsPattern}))(?=[^a-zA-Z0-9/]|$)`,
+    "g",
+  );
+  return orphanedTldPattern;
+}
 
 function wrapStandaloneFileRef(match: string, prefix: string, filename: string): string {
   if (filename.startsWith("//")) {
@@ -150,9 +151,8 @@ function wrapSegmentFileRefs(
   if (!text || codeDepth > 0 || preDepth > 0 || anchorDepth > 0) {
     return text;
   }
-  const { fileReferencePattern, orphanedTldPattern } = getFileReferencePatterns();
-  const wrappedStandalone = text.replace(fileReferencePattern, wrapStandaloneFileRef);
-  return wrappedStandalone.replace(orphanedTldPattern, (match, prefix: string, tld: string) =>
+  const wrappedStandalone = text.replace(getFileReferencePattern(), wrapStandaloneFileRef);
+  return wrappedStandalone.replace(getOrphanedTldPattern(), (match, prefix: string, tld: string) =>
     prefix === ">" ? match : `${prefix}<code>${escapeHtml(tld)}</code>`,
   );
 }
