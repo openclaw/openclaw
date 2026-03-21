@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { PrivacyDetector } from "./detector.js";
-import { EXTENDED_RULES } from "./rules.js";
+import { BASIC_RULES, EXTENDED_RULES, resolveRules } from "./rules.js";
 
 const detector = new PrivacyDetector("extended");
 
@@ -18,6 +18,20 @@ function expectType(text: string, type: string) {
     );
   }
 }
+
+describe("resolveRules", () => {
+  it('returns no rules for preset "none"', () => {
+    expect(resolveRules("none")).toEqual([]);
+  });
+
+  it('returns basic rules for preset "basic"', () => {
+    expect(resolveRules("basic")).toBe(BASIC_RULES);
+  });
+
+  it('returns extended rules for preset "extended"', () => {
+    expect(resolveRules("extended")).toBe(EXTENDED_RULES);
+  });
+});
 
 describe("all rule types coverage", () => {
   // ─── Email & Phone ───

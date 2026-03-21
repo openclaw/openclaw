@@ -310,6 +310,16 @@ function restoreStreamChunk(
     }
   }
 
+  if (
+    (chunk.type === "text_start" || chunk.type === "text_end") &&
+    typeof chunk.content === "string"
+  ) {
+    const restored = restoreText(chunk.content, ctx);
+    if (restored !== chunk.content) {
+      return { ...chunk, content: restored };
+    }
+  }
+
   // Handle content blocks with text.
   if (chunk.type === "content_block_delta" && chunk.delta && typeof chunk.delta === "object") {
     const delta = chunk.delta as Record<string, unknown>;

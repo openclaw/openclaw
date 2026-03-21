@@ -491,6 +491,9 @@ export const EXTENDED_RULES: PrivacyRule[] = [
 
 /** Resolve rules by preset name or custom file path. */
 export function resolveRules(preset: string): PrivacyRule[] {
+  if (preset === "none") {
+    return [];
+  }
   if (preset === "basic") {
     return BASIC_RULES;
   }
