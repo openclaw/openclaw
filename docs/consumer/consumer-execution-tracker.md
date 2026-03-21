@@ -1,6 +1,6 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-20
+Last updated: 2026-03-21
 Owner: consumer execution team
 Status: Active
 
@@ -24,6 +24,7 @@ Use these documents in this order when there is any ambiguity:
   4. Browserbase (currently credential-blocked; run when creds arrive)
 - Benchmark output path is `docs/consumer/browser-spike-results.md`.
 - Benchmark protocol is 2 runs per approach/task, using median time.
+- This tracker is the handoff doc for context compaction. Update it before ending a major debugging block.
 
 ## Workstream registry (single source)
 
@@ -72,9 +73,48 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
     - Task 2 run 1 passed on both profiles (`user`: `63.1s`, `openclaw`: `78.8s`) when the task used a concrete public form target.
     - Task 3 runs 1-2 passed on `profile=user` with median `39.0s`.
     - Task 3 runs 1-2 passed on `profile=openclaw` with median `33.9s`.
-    - Existing-session selector/frame snapshot requests now degrade to full-page snapshot with warning (compatibility patch landed on this branch), instead of failing the snapshot call.
-    - The benchmark gateway must stay alive in a persistent terminal session; backgrounding it from a short-lived exec shell causes false "silent exit" failures.
-    - Port `19001` is currently owned by the desktop Consumer app runtime, so the isolated benchmark lane is now on `19011` to avoid token mismatch noise.
+  - Existing-session selector/frame snapshot requests now degrade to full-page snapshot with warning (compatibility patch landed on this branch), instead of failing the snapshot call.
+  - The benchmark gateway must stay alive in a persistent terminal session; backgrounding it from a short-lived exec shell causes false "silent exit" failures.
+  - Port `19001` is currently owned by the desktop Consumer app runtime, so the isolated benchmark lane is now on `19011` to avoid token mismatch noise.
+  - Current hardening loop status:
+    - Session-path rebasing fixes landed for isolated benchmark runs; stale absolute `sessionFile` paths no longer bleed bench transcripts into shared runtime state.
+    - Browser availability/status timeouts were widened; both `profile=user` and `profile=openclaw` pass direct `status` checks on the isolated benchmark gateway.
+    - `profile=user` `new_page` now honors a `45000ms` timeout budget and reaches Emirates reliably; this step previously failed at the old 10-20s window.
+    - Existing-session interaction helpers now forward `timeoutMs` instead of dropping or rejecting it for `click`, `fill`, `fill_form`, `hover`, `drag`, and `press`.
+    - Screenshots are confirmed in real runs (`[agents/tool-images] Image resized ...`), so screenshot-first prompts are actually taking effect.
+    - Upstream evidence confirms the Chrome/user-lane timeout pattern is already known and not just local environment noise:
+      - `openclaw/openclaw#48182`
+      - `openclaw/openclaw#46495`
+      - `openclaw/openclaw#49295`
+      - `ChromeDevTools/chrome-devtools-mcp#116`
+      - `ChromeDevTools/chrome-devtools-mcp#863`
+
+## Phase B hardening tracker
+
+Current objective: convert the Chrome/user Emirates flow from "transport works but task flakes" into a clean benchmarkable run with trustworthy artifacts.
+
+### Confirmed fixed
+
+- [x] Existing-session attach path reaches explicit CDP Chrome via `OPENCLAW_CHROME_MCP_BROWSER_URL`
+- [x] Existing-session `new_page` uses the widened timeout budget
+- [x] Existing-session action helpers accept and forward `timeoutMs`
+- [x] Screenshot-first prompts produce image artifacts during real runs
+- [x] Isolated bench session state no longer leaks into shared runtime state
+
+### Still open
+
+- [ ] Capture one clean `profile=user` Emirates result artifact on the latest dist
+- [ ] Capture one clean `profile=openclaw` Emirates result artifact on the latest dist
+- [ ] Clean up benchmark artifact capture so JSON results are not polluted by service log lines
+- [ ] Decide whether remaining failures are browser-lane bugs or benchmark-harness bugs
+
+### Immediate next 5 actions
+
+1. Keep benchmark lane on `/tmp/openclaw-consumer-bench` and port `19011`; do not reuse the desktop Consumer app runtime.
+2. Start gateway only after killing stale wrapper shells from this worktree, then verify listeners on `19011` and `19013`.
+3. Re-run screenshots-first Emirates flow on `profile=user` and record whether the earlier `5110ms` interaction timeout is gone on the fresh dist.
+4. Re-run the same prompt on `profile=openclaw` as the stability baseline.
+5. Once both runs are captured cleanly, update `docs/consumer/browser-spike-results.md` before any commit.
 
 ## Execution phases and gates
 
@@ -258,32 +298,36 @@ Out of scope:
     - `profile=user status` PASS
     - `profile=openclaw start` PASS
     - `profile=openclaw status` PASS
-  - Captured first real benchmark artifacts for Task 3:
-    - `profile=user` runs 1-2: PASS, median `39.0s`
-    - `profile=openclaw` runs 1-2: PASS, median `33.9s`
-  - Captured Task 1 run 1 artifacts:
-    - `profile=user` run 1: PASS in `107.2s`
-    - `profile=openclaw` run 1: PASS in `85.4s`
-  - Landed existing-session snapshot compatibility patch: selector/frame snapshot requests no longer fail hard; they now fallback to full-page snapshot with warning.
+
+### 2026-03-21
+
+- Done:
+  - Confirmed the existing tracker remains the single source of truth and upgraded it into the explicit compaction handoff doc.
+  - Verified that screenshots are being taken during the Emirates runs.
+  - Proved the first Chrome/user timeout fix is real: `new_page` now runs with `timeoutMs=45000` and completes on Emirates instead of dying at the old open-page timeout.
+  - Found and fixed the next deeper timeout bug: existing-session interaction helpers were silently dropping `timeoutMs` for `click`, `fill`, `fill_form`, `hover`, `drag`, and `press`.
+  - Fixed the current test drift in `src/browser/chrome-mcp.test.ts` so the timeout-plumbing patch is asserted against the real MCP call signature.
+  - Cleared stale wrapper shells from this worktree that were polluting the benchmark lane and contributing to false startup/debug noise.
+  - Re-established the isolated benchmark lane after cleanup:
+    - dedicated CDP Chrome on `9333`
+    - benchmark gateway on `19011`
+    - browser control on `19013`
+    - managed `openclaw` browser started and healthy
+  - Re-ran screenshot-first Emirates flows on both lanes and pushed the failure boundary deeper than transport.
 - Blocked:
-  - Phase B still needs the remaining task matrix beyond Task 3.
-  - Existing-session path still emits a browser-tool limitation warning: selector/frame snapshots are unsupported for `profile=user`.
+  - Clean benchmark artifact capture is still messy; `stdout.log` can be polluted by service logs instead of a single JSON line or end on `toolUse` without a clean summary payload.
+  - `profile=user` is still non-deterministic on the heavy Emirates prompt:
+    - one rerun ended with `LLM request timed out`
+    - a fresh spot check regressed to `Chrome MCP attach timed out for profile "user" after 15000ms`
+  - `profile=openclaw` gets further into the booking flow, but still hits repeated-field ambiguity and short interaction timeouts on real Emirates form controls.
 - Evidence links:
-  - `.artifacts/browser-spike-20260320-114824/runs/user_task3_r1/agent.json`
-  - `.artifacts/browser-spike-20260320-114824/runs/user_task3_r1/agent.stderr.log`
-  - `.artifacts/browser-spike-20260320-114824/runs/user_task3_r2/agent.json`
-  - `.artifacts/browser-spike-20260320-114824/runs/user_task3_r2/result.tsv`
-  - `.artifacts/browser-spike-20260320-114824/runs/user_task1_r1/agent.json`
-  - `.artifacts/browser-spike-20260320-114824/runs/user_task1_r1/result.tsv`
-  - `.artifacts/browser-spike-20260320-114824/runs/openclaw_task3_r1/agent.json`
-  - `.artifacts/browser-spike-20260320-114824/runs/openclaw_task3_r1/agent.stderr.log`
-  - `.artifacts/browser-spike-20260320-114824/runs/openclaw_task3_r2/agent.json`
-  - `.artifacts/browser-spike-20260320-114824/runs/openclaw_task1_r1/agent.json`
-  - `.artifacts/browser-spike-20260320-114824/runs/openclaw_task1_r1/result.tsv`
+  - `/tmp/openclaw-bench-stage.log`
+  - `.artifacts/browser-spike-20260321-emirates-clean/runs/user_task6_final/`
+  - `.artifacts/browser-spike-20260321-emirates-clean/runs/user_task6_final_r2/`
+  - `.artifacts/browser-spike-20260321-emirates-clean/runs/user_task6_final_r3/`
+  - `.artifacts/browser-spike-20260321-emirates-clean/runs/openclaw_task6_final/`
   - `docs/consumer/browser-spike-results.md`
 - Next 3 actions:
-  - Run Task 1 run 2 on both profiles for median timing.
-  - Run Task 2 form-fill on both profiles to see whether `profile=user` snapshot limitations turn into real failures.
-  - Decide whether `profile=user` needs a prompt/tool workaround for snapshot limitations before attempting the multi-step task.
-  - Run phase-B benchmark tasks on `profile=openclaw` immediately while existing-session is being stabilized.
-  - Keep benchmark/debug runs on `node dist/entry.js ...` until the rebuild-churn path is out of the picture.
+  - Finish validating the timeout/session hardening patch set with targeted tests plus `pnpm build`.
+  - Commit the hardening code and latest docs once validation is green.
+  - Decide whether the next engineering loop should target model/runtime timeout on the heavy `user` prompt or repeated-field disambiguation on real booking pages.

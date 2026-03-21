@@ -1,6 +1,6 @@
 # Browser Spike Results (Week 1)
 
-Last updated: 2026-03-20
+Last updated: 2026-03-21
 Owner: consumer execution team
 Status: In progress
 
@@ -66,6 +66,9 @@ Legend:
   - `profile=user` Task 3 passed; the warning may still appear as compatibility guidance but is no longer a hard error path.
   - The desktop Consumer app owns port `19001`, so the isolated benchmark gateway now runs on `19011` to avoid token mismatches and cross-runtime noise.
   - `profile=openclaw` is currently faster on the completed flight and web-summary tasks, but `profile=user` is now also passing real flight and form tasks on the dedicated CDP Chrome.
+  - 2026-03-21 hardening reruns moved the blocker deeper:
+    - `profile=user` no longer dies first on browser attach or `new_page`; the latest Emirates rerun instead failed later with `LLM request timed out`.
+    - `profile=openclaw` reaches real interaction attempts on Emirates, but still hits repeated-field ambiguity (`Selector "button" matched 248 elements`) plus element interaction timeouts before the flow completes.
 
 Interpretation:
 
@@ -165,6 +168,45 @@ Supplemental real-site commerce smoke, early read:
 - `openclaw` on Emirates booking flow:
   - status: `INCOMPLETE`
   - note: run 1 reached the booking form, then hit selector ambiguity on repeated airport fields before a clean completion/failure summary was produced; run 2 used an explicit screenshot/snapshot-first prompt and avoided the immediate selector failure, but still did not finish cleanly inside the benchmark window
+
+## 2026-03-21 hardening reruns
+
+Artifact root:
+
+- `.artifacts/browser-spike-20260321-emirates-clean`
+
+Validated setup:
+
+- benchmark runtime: `/tmp/openclaw-consumer-bench`
+- gateway: `ws://127.0.0.1:19011`
+- browser control: `http://127.0.0.1:19013`
+- `profile=user` attach target: `OPENCLAW_CHROME_MCP_BROWSER_URL=http://127.0.0.1:9333`
+- screenshots/snapshots were explicitly required before each major step
+
+Hardening verified before reruns:
+
+- isolated bench sessions no longer reuse stale absolute `sessionFile` paths from the shared Consumer app runtime
+- browser availability/status checks were widened so healthy browsers stop being marked unavailable too aggressively
+- existing-session `new_page` forwards the larger timeout budget and now gets past the old early-navigation failure mode
+- existing-session action tools (`click`, `fill`, `fill_form`, `hover`, `drag`, `press`) now forward `timeoutMs` instead of silently falling back to a short default
+
+Emirates rerun status:
+
+- `user`
+  - artifact: `.artifacts/browser-spike-20260321-emirates-clean/runs/user_task6_final_r2/`
+  - result: `FAIL`
+  - note: this rerun no longer failed on browser attach or the first `new_page`; it failed later with repeated `LLM request timed out`, so the active blocker shifted from browser transport to model/runtime completion on the heavy prompt
+  - latest spot check: `.artifacts/browser-spike-20260321-emirates-clean/runs/user_task6_final_r3/`
+  - latest spot-check note: the lane is still non-deterministic; a fresh rerun regressed to `Chrome MCP attach timed out for profile "user" after 15000ms`
+- `openclaw`
+  - artifact: `.artifacts/browser-spike-20260321-emirates-clean/runs/openclaw_task6_final/`
+  - result: `FAIL`
+  - note: browser actions progressed further than before, but the run still collapsed under real booking-page ambiguity and interaction limits (`Selector "button" matched 248 elements`, `locator.fill: Timeout 5000ms exceeded`, `locator.click: Timeout 5000ms exceeded`)
+
+Current read:
+
+- `profile=user` is materially healthier than it was on 2026-03-20, but the Emirates end-to-end is still non-deterministic: one rerun reached model/runtime timeout after getting past earlier browser failures, while a later spot check still regressed to attach timeout.
+- `profile=openclaw` remains the more reliable interaction baseline, but still needs better repeated-field disambiguation for real commerce/travel sites.
 
 Task 5, run 1:
 
