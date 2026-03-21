@@ -438,3 +438,127 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
     await server.stop();
   });
 });
+
+describe("VoiceCallWebhookServer barge-in suppression during initial message", () => {
+  const createTwilioProvider = (clearTtsQueue: ReturnType<typeof vi.fn>) => ({
+    name: "twilio" as const,
+    verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:test" }),
+    parseWebhookEvent: () => ({ events: [] }),
+    initiateCall: async () => ({ providerCallId: "provider-call", status: "initiated" as const }),
+    hangupCall: async () => {},
+    playTts: async () => {},
+    startListening: async () => {},
+    stopListening: async () => {},
+    getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
+    isValidStreamToken: () => true,
+    registerCallStream: () => {},
+    unregisterCallStream: () => {},
+    hasRegisteredStream: () => true,
+    clearTtsQueue,
+  });
+
+  const getMediaCallbacks = (server: VoiceCallWebhookServer) =>
+    server.getMediaStreamHandler() as unknown as {
+      config: {
+        onSpeechStart?: (providerCallId: string) => void;
+        onTranscript?: (providerCallId: string, transcript: string) => void;
+      };
+    };
+
+  it("suppresses barge-in clear while outbound conversation initial message is pending", async () => {
+    const call = createCall(Date.now() - 1_000);
+    call.callId = "call-barge";
+    call.providerCallId = "CA-barge";
+    call.direction = "outbound";
+    call.metadata = {
+      mode: "conversation",
+      initialMessage: "Hi, this is OpenClaw.",
+    };
+
+    const clearTtsQueue = vi.fn();
+    const manager = {
+      getActiveCalls: () => [call],
+      getCallByProviderCallId: (providerCallId: string) =>
+        providerCallId === call.providerCallId ? call : undefined,
+      getCall: (callId: string) => (callId === call.callId ? call : undefined),
+      endCall: vi.fn(async () => ({ success: true })),
+      speakInitialMessage: vi.fn(async () => {}),
+      processEvent: vi.fn(),
+    } as unknown as CallManager;
+
+    const config = createConfig({
+      provider: "twilio",
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        openaiApiKey: "test-key",
+      },
+    });
+    const server = new VoiceCallWebhookServer(
+      config,
+      manager,
+      createTwilioProvider(clearTtsQueue) as unknown as VoiceCallProvider,
+    );
+
+    try {
+      const media = getMediaCallbacks(server);
+      media.config.onSpeechStart?.("CA-barge");
+      media.config.onTranscript?.("CA-barge", "hello");
+      expect(clearTtsQueue).not.toHaveBeenCalled();
+
+      if (call.metadata) {
+        delete call.metadata.initialMessage;
+      }
+
+      media.config.onSpeechStart?.("CA-barge");
+      media.config.onTranscript?.("CA-barge", "hello again");
+      expect(clearTtsQueue).toHaveBeenCalledTimes(2);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("keeps barge-in clear enabled for inbound calls", async () => {
+    const call = createCall(Date.now() - 1_000);
+    call.callId = "call-inbound";
+    call.providerCallId = "CA-inbound";
+    call.direction = "inbound";
+    call.metadata = {
+      initialMessage: "Hello from inbound greeting.",
+    };
+
+    const clearTtsQueue = vi.fn();
+    const manager = {
+      getActiveCalls: () => [call],
+      getCallByProviderCallId: (providerCallId: string) =>
+        providerCallId === call.providerCallId ? call : undefined,
+      getCall: (callId: string) => (callId === call.callId ? call : undefined),
+      endCall: vi.fn(async () => ({ success: true })),
+      speakInitialMessage: vi.fn(async () => {}),
+      processEvent: vi.fn(),
+    } as unknown as CallManager;
+
+    const config = createConfig({
+      provider: "twilio",
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        openaiApiKey: "test-key",
+      },
+    });
+    const server = new VoiceCallWebhookServer(
+      config,
+      manager,
+      createTwilioProvider(clearTtsQueue) as unknown as VoiceCallProvider,
+    );
+
+    try {
+      const media = getMediaCallbacks(server);
+      media.config.onSpeechStart?.("CA-inbound");
+      media.config.onTranscript?.("CA-inbound", "hello");
+      expect(clearTtsQueue).toHaveBeenCalledTimes(2);
+    } finally {
+      await server.stop();
+    }
+  });
+});

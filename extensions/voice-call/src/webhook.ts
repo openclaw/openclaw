@@ -13,7 +13,7 @@ import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
-import type { NormalizedEvent, WebhookContext } from "./types.js";
+import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
@@ -99,6 +99,21 @@ export class VoiceCallWebhookServer {
     this.pendingDisconnectHangups.delete(providerCallId);
   }
 
+  private shouldSuppressBargeInForInitialMessage(call: CallRecord | undefined): boolean {
+    if (!call || call.direction !== "outbound") {
+      return false;
+    }
+
+    const mode = (call.metadata?.mode as string | undefined) ?? "conversation";
+    if (mode !== "conversation") {
+      return false;
+    }
+
+    const initialMessage =
+      typeof call.metadata?.initialMessage === "string" ? call.metadata.initialMessage.trim() : "";
+    return initialMessage.length > 0;
+  }
+
   /**
    * Initialize media streaming with OpenAI Realtime STT.
    */
@@ -140,14 +155,15 @@ export class VoiceCallWebhookServer {
       },
       onTranscript: (providerCallId, transcript) => {
         console.log(`[voice-call] Transcript for ${providerCallId}: ${transcript}`);
+        const call = this.manager.getCallByProviderCallId(providerCallId);
+        const suppressBargeIn = this.shouldSuppressBargeInForInitialMessage(call);
 
         // Clear TTS queue on barge-in (user started speaking, interrupt current playback)
-        if (this.provider.name === "twilio") {
+        if (this.provider.name === "twilio" && !suppressBargeIn) {
           (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
         }
 
         // Look up our internal call ID from the provider call ID
-        const call = this.manager.getCallByProviderCallId(providerCallId);
         if (!call) {
           console.warn(`[voice-call] No active call found for provider ID: ${providerCallId}`);
           return;
@@ -175,9 +191,14 @@ export class VoiceCallWebhookServer {
         }
       },
       onSpeechStart: (providerCallId) => {
-        if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
+        if (this.provider.name !== "twilio") {
+          return;
         }
+        const call = this.manager.getCallByProviderCallId(providerCallId);
+        if (this.shouldSuppressBargeInForInitialMessage(call)) {
+          return;
+        }
+        (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
       },
       onPartialTranscript: (callId, partial) => {
         console.log(`[voice-call] Partial for ${callId}: ${partial}`);
