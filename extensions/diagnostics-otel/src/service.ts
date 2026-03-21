@@ -767,6 +767,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           // OpenTelemetry GenAI semantic conventions (primary)
           "gen_ai.request.model": evt.model ?? "unknown",
           "gen_ai.system": evt.provider ?? "unknown",
+          // Current GenAI registry attributes (gen_ai.system is deprecated)
+          "gen_ai.provider.name": evt.provider ?? "unknown",
+          "gen_ai.operation.name": "chat",
           "gen_ai.usage.input_tokens": usage.promptTokens ?? usage.input ?? 0,
           "gen_ai.usage.output_tokens": usage.output ?? 0,
         };
