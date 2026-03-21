@@ -3080,8 +3080,8 @@ export async function runEmbeddedAttempt(
                 success: !aborted && !promptError,
                 error: promptError ? describeUnknownError(promptError) : undefined,
                 durationMs: Date.now() - promptStartedAt,
-                sessionKey: params.sessionKey,
-                agentId: hookAgentId,
+                ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                ...(hookAgentId ? { agentId: hookAgentId } : {}),
               },
               {
                 agentId: hookAgentId,

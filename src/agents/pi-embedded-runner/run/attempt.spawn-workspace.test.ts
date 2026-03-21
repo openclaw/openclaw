@@ -659,6 +659,62 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
   });
 });
 
+describe("runEmbeddedAttempt legacy agent_end hook payload", () => {
+  const tempPaths: string[] = [];
+
+  beforeEach(() => {
+    resetEmbeddedAttemptHarness();
+  });
+
+  afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
+  });
+
+  it("omits missing sessionKey from the agent_end event", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-end-workspace-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-end-agent-"));
+    const sessionFile = path.join(workspaceDir, "session.jsonl");
+    tempPaths.push(workspaceDir, agentDir);
+    await fs.writeFile(sessionFile, "", "utf8");
+
+    const runAgentEnd = vi.fn(async () => undefined);
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: (hookName: string) => hookName === "agent_end",
+      runAgentEnd,
+    });
+
+    hoisted.createAgentSessionMock.mockImplementation(async () => ({
+      session: createDefaultEmbeddedSession(),
+    }));
+
+    const result = await runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionFile,
+      workspaceDir,
+      agentDir,
+      config: {} as OpenClawConfig,
+      prompt: "hello",
+      timeoutMs: 10_000,
+      runId: "run-agent-end-omit-session-key",
+      provider: "openai",
+      modelId: "gpt-test",
+      model: testModel,
+      authStorage: {} as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableMessageTool: true,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(runAgentEnd).toHaveBeenCalledTimes(1);
+    const event = runAgentEnd.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(event).toBeDefined();
+    expect(event).toMatchObject({ success: true });
+    expect(event).not.toHaveProperty("sessionKey");
+  });
+});
+
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const tempPaths: string[] = [];
   const sessionKey = "agent:main:discord:channel:test-ctx-engine";
