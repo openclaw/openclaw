@@ -411,27 +411,29 @@ export function unescapeXmlEntities(text: string): string {
  * Parse a raw XML parameter value into its appropriate type.
  */
 export function parseXmlParameterValue(value: string): unknown {
-  const trimmed = value.trim();
-  const unescaped = unescapeXmlEntities(trimmed);
+  const unescaped = unescapeXmlEntities(value);
+  const trimmed = unescaped.trim();
 
-  if (unescaped === "true") {
+  if (trimmed === "true") {
     return true;
   }
-  if (unescaped === "false") {
+  if (trimmed === "false") {
     return false;
   }
 
   if (
-    (unescaped.startsWith("{") && unescaped.endsWith("}")) ||
-    (unescaped.startsWith("[") && unescaped.endsWith("]"))
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"))
   ) {
     try {
-      return JSON.parse(unescaped);
+      return JSON.parse(trimmed);
     } catch {
       // Fallback
     }
   }
 
+  // Return the full unescaped value without trimming to preserve whitespace
+  // sensitive content like indentation or multiline messages.
   return unescaped;
 }
 
@@ -494,8 +496,6 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
           arguments: args,
         });
         hasToolCall = true;
-      } else {
-        blocks.push({ type: "text", text: iFullMatch });
       }
 
       innerCursor = iIndex + iFullMatch.length;

@@ -320,6 +320,53 @@ All done.`;
     });
   });
 
+  it("preserves leading/trailing whitespace in arguments", () => {
+    const text = `<minimax:tool_call>
+  <invoke name="Message">
+    <parameter name="text">
+  line 1
+  line 2
+</parameter>
+  </invoke>
+</minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
+    // The exact content inside <parameter> tags should be preserved (unescaped but not trimmed)
+    const args = (toolCall as { arguments?: { text?: string } })?.arguments;
+    expect(args?.text).toBe("\n  line 1\n  line 2\n");
+  });
+
+  it("strips malformed sibling invoke blocks inside wrapper", () => {
+    const text = `<minimax:tool_call>
+  <invoke name="Valid"><parameter name="p">1</parameter></invoke>
+  <invoke>Malformed (no name)</invoke>
+</minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    // The valid one should be promoted, the malformed one should be stripped entirely
+    const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toMatchObject({ type: "toolCall", name: "valid" });
+
+    const textBlocks = msg.content.filter((c) => c && typeof c === "object" && c.type === "text");
+    const fullText = textBlocks.map((b) => (b as { text: string }).text).join("");
+    expect(fullText).not.toContain("<invoke>");
+    expect(fullText).not.toContain("Malformed");
+  });
+
   it("preserves prose inside the MiniMax wrapper", () => {
     const text = `<minimax:tool_call>Checking system...<invoke name="Bash"><parameter name="cmd">ls</parameter></invoke>Done.</minimax:tool_call>`;
     const msg = makeAssistantMessage({
