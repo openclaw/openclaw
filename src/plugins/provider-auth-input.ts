@@ -1,4 +1,4 @@
-import { resolveEnvApiKey } from "../agents/model-auth.js";
+import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   isValidEnvSecretRefId,
