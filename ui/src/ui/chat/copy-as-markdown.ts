@@ -17,11 +17,31 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
     return false;
   }
 
+  // Try modern Clipboard API first, then fall back to execCommand for
+  // browsers (e.g. Edge) that block clipboard.writeText outside a secure
+  // context or without explicit permission.
   try {
     await navigator.clipboard.writeText(text);
     return true;
   } catch {
+    return copyViaExecCommand(text);
+  }
+}
+
+function copyViaExecCommand(text: string): boolean {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
     return false;
+  } finally {
+    document.body.removeChild(textarea);
   }
 }
 
