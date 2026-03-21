@@ -41,6 +41,8 @@ export type UiSettings = {
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
   borderRadius: number; // Corner roundness (0–100, default 50)
   locale?: string;
+  terminalTabEnabled?: boolean; // Show Terminal tab in control nav (default: true)
+  browserTabEnabled?: boolean; // Show Browser tab in control nav (default: true)
 };
 
 function isViteDevPage(): boolean {
@@ -256,6 +258,10 @@ export function loadSettings(): UiSettings {
           ? parsed.borderRadius
           : defaults.borderRadius,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
+      terminalTabEnabled:
+        typeof parsed.terminalTabEnabled === "boolean" ? parsed.terminalTabEnabled : undefined,
+      browserTabEnabled:
+        typeof parsed.browserTabEnabled === "boolean" ? parsed.browserTabEnabled : undefined,
     };
     if ("token" in parsed) {
       persistSettings(settings);
@@ -316,6 +322,8 @@ function persistSettings(next: UiSettings) {
     navGroupsCollapsed: next.navGroupsCollapsed,
     borderRadius: next.borderRadius,
     sessionsByGateway,
+    terminalTabEnabled: next.terminalTabEnabled,
+    browserTabEnabled: next.browserTabEnabled,
     ...(next.locale ? { locale: next.locale } : {}),
   };
   const serialized = JSON.stringify(persisted);

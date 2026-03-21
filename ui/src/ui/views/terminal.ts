@@ -1,5 +1,10 @@
 import { html, nothing } from "lit";
 
+/** Strip characters that tmux session names cannot contain (spaces, dots, colons, etc.) */
+function sanitizeSessionName(raw: string): string {
+  return raw.replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
 export type TerminalProps = {
   loading: boolean;
   error: string | null;
@@ -37,27 +42,39 @@ export function renderTerminal(props: TerminalProps) {
         </div>
       </div>
 
-      <div class="row" style="margin-top:12px; gap:8px;">
-        <input
-          class="input input-sm"
-          style="flex:1;"
-          placeholder="Session name (e.g. geo-task)"
-          .value=${props.newSessionName}
-          @input=${(e: Event) => props.onNewSessionNameChange((e.target as HTMLInputElement).value)}
-          @keydown=${(e: KeyboardEvent) => {
-            if (e.key === "Enter") {
-              props.onCreate();
-            }
-          }}
-          ?disabled=${props.actionBusy}
-        />
-        <button
-          class="btn btn-sm btn-primary"
-          @click=${props.onCreate}
-          ?disabled=${props.actionBusy || !props.newSessionName.trim()}
-        >
-          ${props.actionBusy ? "Working…" : "New Session"}
-        </button>
+      <div class="row" style="margin-top:12px; gap:8px; flex-direction:column;">
+        <div class="row" style="gap:8px;">
+          <input
+            class="input input-sm"
+            style="flex:1;"
+            placeholder="Session name (letters, numbers, - and _ only)"
+            .value=${props.newSessionName}
+            @input=${(e: Event) => {
+              const raw = (e.target as HTMLInputElement).value;
+              const sanitized = sanitizeSessionName(raw);
+              // Update the input value to the sanitized version in place
+              (e.target as HTMLInputElement).value = sanitized;
+              props.onNewSessionNameChange(sanitized);
+            }}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === "Enter") {
+                props.onCreate();
+              }
+            }}
+            ?disabled=${props.actionBusy}
+          />
+          <button
+            class="btn btn-sm btn-primary"
+            @click=${props.onCreate}
+            ?disabled=${props.actionBusy || !props.newSessionName.trim()}
+          >
+            ${props.actionBusy ? "Working…" : "New Session"}
+          </button>
+        </div>
+        <div style="font-size:0.78rem; color:var(--fg-muted); margin-top:-4px;">
+          Only letters, numbers, hyphens <code>-</code> and underscores <code>_</code> are
+          allowed. Spaces and special characters are removed automatically.
+        </div>
       </div>
 
       ${
@@ -99,12 +116,21 @@ export function renderTerminal(props: TerminalProps) {
                   </span>
                 </div>
               </div>
-              <div class="row" style="gap:8px; align-items:center;">
+              <div class="row" style="gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
                 <code
                   style="background:var(--bg-muted); padding:4px 8px; border-radius:4px; font-size:0.8rem; user-select:all;"
                 >
                   tmux attach -t ${s.name}
                 </code>
+                <button
+                  class="btn btn-sm"
+                  title="Copy attach command to clipboard"
+                  @click=${() => {
+                    void navigator.clipboard.writeText(`tmux attach -t ${s.name}`);
+                  }}
+                >
+                  Copy
+                </button>
                 <button
                   class="btn btn-sm btn-danger"
                   @click=${() => props.onKill(s.name)}

@@ -49,8 +49,12 @@ export type ConfigProps = {
   themeMode: ThemeMode;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
-  borderRadius: number;
-  setBorderRadius: (value: number) => void;
+  borderRadius?: number;
+  setBorderRadius?: (value: number) => void;
+  terminalTabEnabled?: boolean;
+  setTerminalTabEnabled?: (value: boolean) => void;
+  browserTabEnabled?: boolean;
+  setBrowserTabEnabled?: (value: boolean) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
@@ -574,23 +578,52 @@ function renderAppearanceSection(props: ConfigProps) {
             .value=${String(props.borderRadius)}
             @input=${(e: Event) => {
               const v = Number((e.target as HTMLInputElement).value);
-              props.setBorderRadius(v);
+              props.setBorderRadius?.(v);
             }}
           />
           <div class="settings-slider__preview">
             <div
               class="settings-slider__preview-swatch"
-              style="border-radius: ${Math.round(10 * (props.borderRadius / 50))}px"
+              style="border-radius: ${Math.round(10 * ((props.borderRadius ?? 50) / 50))}px"
             ></div>
             <div
               class="settings-slider__preview-swatch"
-              style="border-radius: ${Math.round(14 * (props.borderRadius / 50))}px"
+              style="border-radius: ${Math.round(14 * ((props.borderRadius ?? 50) / 50))}px"
             ></div>
             <div
               class="settings-slider__preview-swatch"
-              style="border-radius: ${Math.round(20 * (props.borderRadius / 50))}px"
+              style="border-radius: ${Math.round(20 * ((props.borderRadius ?? 50) / 50))}px"
             ></div>
           </div>
+        </div>
+      </div>
+
+      <div class="settings-appearance__section">
+        <h3 class="settings-appearance__heading">Control Tabs</h3>
+        <p class="settings-appearance__hint">Toggle optional control panel tabs on or off.</p>
+        <div style="display:flex; flex-direction:column; gap:10px; margin-top:8px;">
+          <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-size:0.9rem;">
+            <input
+              type="checkbox"
+              .checked=${props.terminalTabEnabled}
+              @change=${(e: Event) => props.setTerminalTabEnabled?.((e.target as HTMLInputElement).checked)}
+            />
+            <span>
+              <strong>Terminal</strong>
+              <span style="color:var(--fg-muted); margin-left:6px;">Co-working tmux sessions</span>
+            </span>
+          </label>
+          <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-size:0.9rem;">
+            <input
+              type="checkbox"
+              .checked=${props.browserTabEnabled}
+              @change=${(e: Event) => props.setBrowserTabEnabled?.((e.target as HTMLInputElement).checked)}
+            />
+            <span>
+              <strong>Browser</strong>
+              <span style="color:var(--fg-muted); margin-left:6px;">Agent browser sessions</span>
+            </span>
+          </label>
         </div>
       </div>
 

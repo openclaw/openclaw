@@ -496,7 +496,20 @@ export function renderApp(state: AppViewState) {
               <nav class="sidebar-nav">
                 ${TAB_GROUPS.map((group) => {
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
-                  const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
+                  // Filter tabs based on feature toggles
+                  const visibleTabs = group.tabs.filter((tab) => {
+                    if (tab === "terminal") {
+                      return state.settings.terminalTabEnabled !== false;
+                    }
+                    if (tab === "browser") {
+                      return state.settings.browserTabEnabled !== false;
+                    }
+                    return true;
+                  });
+                  if (visibleTabs.length === 0) {
+                    return nothing;
+                  }
+                  const hasActiveTab = visibleTabs.some((tab) => tab === state.tab);
                   const showItems = navCollapsed || hasActiveTab || !isGroupCollapsed;
 
                   return html`
@@ -525,7 +538,7 @@ export function renderApp(state: AppViewState) {
                           : nothing
                       }
                       <div class="nav-section__items">
-                        ${group.tabs.map((tab) => renderTab(state, tab, { collapsed: navCollapsed }))}
+                        ${visibleTabs.map((tab) => renderTab(state, tab, { collapsed: navCollapsed }))}
                       </div>
                     </section>
                   `;
@@ -1714,6 +1727,12 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
+                terminalTabEnabled: state.settings.terminalTabEnabled !== false,
+                setTerminalTabEnabled: (v) =>
+                  state.applySettings({ ...state.settings, terminalTabEnabled: v }),
+                browserTabEnabled: state.settings.browserTabEnabled !== false,
+                setBrowserTabEnabled: (v) =>
+                  state.applySettings({ ...state.settings, browserTabEnabled: v }),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
