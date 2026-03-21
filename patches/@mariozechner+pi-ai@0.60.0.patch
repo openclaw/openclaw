@@ -1,0 +1,15 @@
+diff --git a/dist/providers/anthropic.js b/dist/providers/anthropic.js
+index 0000000..1111111 100644
+--- a/dist/providers/anthropic.js
++++ b/dist/providers/anthropic.js
+@@ -616,7 +616,9 @@ export class AnthropicProvider extends BaseProvider {
+                     else {
+                         blocks.push({
+                             type: "thinking",
+-                            thinking: sanitizeSurrogates(block.thinking),
++                            // DO NOT sanitize signed thinking blocks: modifying the text
++                            // invalidates the Anthropic signature → API rejection (#27825)
++                            thinking: block.thinking,
+                             signature: block.thinkingSignature,
+                         });
+                     }
