@@ -774,7 +774,10 @@ export async function runTui(opts: TuiOptions) {
         ? `${sessionInfo.modelProvider}/${sessionInfo.model}`
         : sessionInfo.model
       : "unknown";
-    const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
+    const tokens = formatTokens(
+      sessionInfo.totalTokens ?? sessionInfo.totalTokensEstimate ?? null,
+      sessionInfo.contextTokens ?? null,
+    );
     const think = sessionInfo.thinkingLevel ?? "off";
     const fast = sessionInfo.fastMode === true;
     const verbose = sessionInfo.verboseLevel ?? "off";

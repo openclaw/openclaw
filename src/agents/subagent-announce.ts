@@ -1,3 +1,4 @@
+import { resolveTotalTokens } from "../shared/subagents-format.js";
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
@@ -550,7 +551,7 @@ async function buildCompactAnnounceStatsLine(params: {
   const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;
   const output = typeof entry?.outputTokens === "number" ? entry.outputTokens : 0;
   const ioTotal = input + output;
-  const promptCache = typeof entry?.totalTokens === "number" ? entry.totalTokens : undefined;
+  const promptCache = resolveTotalTokens(entry as any);
   const runtimeMs =
     typeof params.startedAt === "number" && typeof params.endedAt === "number"
       ? Math.max(0, params.endedAt - params.startedAt)

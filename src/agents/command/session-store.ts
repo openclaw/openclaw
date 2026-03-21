@@ -68,10 +68,18 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: Date.now(),
     contextTokens,
   };
+  const modelChanged =
+    (entry.model !== undefined && entry.model !== modelUsed) ||
+    (entry.modelProvider !== undefined && entry.modelProvider !== providerUsed);
   setSessionRuntimeModel(next, {
     provider: providerUsed,
     model: modelUsed,
   });
+  if (modelChanged) {
+    next.totalTokens = undefined;
+    next.totalTokensFresh = false;
+    next.totalTokensEstimate = undefined;
+  }
   if (isCliProvider(providerUsed, cfg)) {
     const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
     if (cliSessionId) {
@@ -105,9 +113,18 @@ export async function updateSessionStoreAfterAgentRun(params: {
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
       next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
+      next.totalTokensEstimate = totalTokens;
     } else {
       next.totalTokens = undefined;
       next.totalTokensFresh = false;
+      // If we have a new valid estimate, use it.
+      if (typeof totalTokens === "number" && Number.isFinite(totalTokens)) {
+        next.totalTokensEstimate = totalTokens;
+      } else if (!modelChanged && next.totalTokensEstimate === undefined) {
+        // Otherwise, if this is an upgraded session without an estimate,
+        // preserve the last known totalTokens as the estimate baseline.
+        next.totalTokensEstimate = entry.totalTokens;
+      }
     }
     next.cacheRead = usage.cacheRead ?? 0;
     next.cacheWrite = usage.cacheWrite ?? 0;
@@ -115,6 +132,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
       next.estimatedCostUsd =
         (resolveNonNegativeNumber(entry.estimatedCostUsd) ?? 0) + runEstimatedCostUsd;
     }
+  } else {
+    next.inputTokens = undefined;
+    next.outputTokens = undefined;
+    next.totalTokens = undefined;
+    next.totalTokensFresh = false;
+    next.cacheRead = undefined;
+    next.cacheWrite = undefined;
   }
   if (compactionsThisRun > 0) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;

@@ -1084,13 +1084,19 @@ export function buildGatewaySessionRow(params: {
           fallbackModel: model,
         })
       : null;
+  const freshTotal = resolveFreshSessionTotalTokens(entry);
+  const transcriptTotal = resolvePositiveNumber(transcriptUsage?.totalTokens);
+  const transcriptFresh = transcriptUsage?.totalTokensFresh === true;
+
   const totalTokens =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
-    resolvePositiveNumber(transcriptUsage?.totalTokens);
+    resolvePositiveNumber(freshTotal) ??
+    (transcriptFresh ? transcriptTotal : undefined) ??
+    resolvePositiveNumber(entry?.totalTokensEstimate) ??
+    transcriptTotal;
+
   const totalTokensFresh =
-    typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
-      ? true
-      : transcriptUsage?.totalTokensFresh === true;
+    (typeof freshTotal === "number" && Number.isFinite(freshTotal) && freshTotal > 0) ||
+    (transcriptFresh && typeof transcriptTotal === "number" && transcriptTotal > 0);
   const childSessions = resolveChildSessionKeys(key, store);
   const estimatedCostUsd =
     resolveEstimatedSessionCostUsd({
@@ -1154,6 +1160,7 @@ export function buildGatewaySessionRow(params: {
     outputTokens: entry?.outputTokens,
     totalTokens,
     totalTokensFresh,
+    totalTokensEstimate: entry?.totalTokensEstimate,
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,

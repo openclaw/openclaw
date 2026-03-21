@@ -14,6 +14,7 @@ import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  resolveFreshSessionTotalTokens,
   resolveMainSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -460,7 +461,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   let outputTokens = entry?.outputTokens;
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
-  let totalTokens = entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
+  const freshTotal = resolveFreshSessionTotalTokens(entry);
+  let totalTokens = freshTotal ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
 
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
@@ -474,7 +476,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     );
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;
-      if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
+      if (logUsage.totalTokensFresh || !totalTokens || totalTokens === 0 || candidate > totalTokens) {
         totalTokens = candidate;
       }
       if (!entry?.model && logUsage.model) {
@@ -538,8 +540,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;
 
+  const displayTotal = totalTokens || entry?.totalTokensEstimate;
   const contextLine = [
-    `Context: ${formatTokens(totalTokens, contextTokens ?? null)}`,
+    `Context: ${formatTokens(displayTotal, contextTokens ?? null)}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
   ]
     .filter(Boolean)

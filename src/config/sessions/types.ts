@@ -143,6 +143,11 @@ export type SessionEntry = {
   outputTokens?: number;
   totalTokens?: number;
   /**
+   * Last known total tokens (including summaries), used for display when
+   * a fresh model-reported count is unavailable.
+   */
+  totalTokensEstimate?: number;
+  /**
    * Whether totalTokens reflects a fresh context snapshot for the latest run.
    * Undefined means legacy/unknown freshness; false forces consumers to treat
    * totalTokens as stale/unknown for context-utilization displays.

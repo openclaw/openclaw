@@ -4,7 +4,10 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "../../agents/pi-embedded-helpers.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
-import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import {
+  resolveFreshSessionTotalTokens,
+  type SessionSystemPromptReport,
+} from "../../config/sessions/types.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -96,8 +99,11 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   }
 
   const report = await resolveContextReport(params);
+  const totalTokens = resolveFreshSessionTotalTokens(params.sessionEntry) ?? params.sessionEntry?.totalTokensEstimate;
   const session = {
-    totalTokens: params.sessionEntry?.totalTokens ?? null,
+    totalTokens: totalTokens ?? null,
+    totalTokensFresh:
+      params.sessionEntry?.totalTokensFresh ?? (params.sessionEntry?.totalTokens != null),
     inputTokens: params.sessionEntry?.inputTokens ?? null,
     outputTokens: params.sessionEntry?.outputTokens ?? null,
     contextTokens: params.contextTokens ?? null,
