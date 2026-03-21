@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
+import { loadSessionStore, resolveMainSessionKey, updateSessionStore } from "../config/sessions.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import {
   ErrorCodes,
@@ -52,6 +52,13 @@ export async function resolveSessionKeyFromResolveParams(params: {
     }
     const legacyKey = target.storeKeys.find((candidate) => store[candidate]);
     if (!legacyKey) {
+      // Fresh install: sessions.json may not exist yet, but sessions.list
+      // advertises a synthetic main session via ensureMainSessionKey.
+      // Accept the main session key so resolve stays consistent with list.
+      const mainKey = resolveMainSessionKey(cfg);
+      if (mainKey && target.canonicalKey === mainKey) {
+        return { ok: true, key: mainKey };
+      }
       return {
         ok: false,
         error: errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${key}`),
