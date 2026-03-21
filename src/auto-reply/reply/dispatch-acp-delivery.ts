@@ -156,6 +156,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         to: params.originatingTo,
         sessionKey: params.ctx.SessionKey,
         accountId: params.ctx.AccountId,
+        workspaceOverride: params.ctx.WorkspaceOverride,
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,
       });

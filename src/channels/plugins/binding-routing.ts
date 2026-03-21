@@ -79,6 +79,8 @@ export function resolveConfiguredBindingRoute(
         mainSessionKey: params.route.mainSessionKey,
       }),
       matchedBy: "binding.channel",
+      // Clear workspace override — bound session agent uses its own workspace config.
+      workspaceOverride: undefined,
     },
   };
 }

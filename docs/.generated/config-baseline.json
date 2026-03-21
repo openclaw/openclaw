@@ -7823,6 +7823,19 @@
       "hasChildren": false
     },
     {
+      "path": "bindings.*.workspace",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Binding Workspace Override",
+      "hasChildren": false
+    },
+    {
       "path": "broadcast",
       "kind": "core",
       "type": "object",

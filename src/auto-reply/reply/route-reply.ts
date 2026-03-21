@@ -54,6 +54,8 @@ export type RouteReplyParams = {
   isGroup?: boolean;
   /** Group or channel identifier for correlation with received events */
   groupId?: string;
+  /** Workspace override from binding resolution; persisted on Discord components. */
+  workspaceOverride?: string;
 };
 
 export type RouteReplyResult = {
@@ -178,6 +180,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       cfg,
       agentId: resolvedAgentId,
       sessionKey: params.sessionKey,
+      workspaceOverride: params.workspaceOverride,
     });
     const results = await deliverOutboundPayloads({
       cfg,

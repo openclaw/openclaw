@@ -6,6 +6,8 @@ export type OutboundSessionContext = {
   key?: string;
   /** Active agent id used for workspace-scoped media roots. */
   agentId?: string;
+  /** Workspace override from binding resolution; persisted on Discord components. */
+  workspaceOverride?: string;
 };
 
 function normalizeOptionalString(value?: string | null): string | undefined {
@@ -20,9 +22,11 @@ export function buildOutboundSessionContext(params: {
   cfg: OpenClawConfig;
   sessionKey?: string | null;
   agentId?: string | null;
+  workspaceOverride?: string | null;
 }): OutboundSessionContext | undefined {
   const key = normalizeOptionalString(params.sessionKey);
   const explicitAgentId = normalizeOptionalString(params.agentId);
+  const workspaceOverride = normalizeOptionalString(params.workspaceOverride);
   const derivedAgentId = key
     ? resolveSessionAgentId({ sessionKey: key, config: params.cfg })
     : undefined;
@@ -33,5 +37,6 @@ export function buildOutboundSessionContext(params: {
   return {
     ...(key ? { key } : {}),
     ...(agentId ? { agentId } : {}),
+    ...(workspaceOverride ? { workspaceOverride } : {}),
   };
 }

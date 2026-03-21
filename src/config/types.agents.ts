@@ -41,6 +41,8 @@ export type AgentRouteBinding = {
   agentId: string;
   comment?: string;
   match: AgentBindingMatch;
+  /** Override the agent workspace for this binding (project-specific context isolation). */
+  workspace?: string;
 };
 
 export type AgentAcpBinding = {

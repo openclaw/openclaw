@@ -487,6 +487,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     MediaUrl: mediaPath,
     OriginatingChannel: "zalo",
     OriginatingTo: `zalo:${chatId}`,
+    WorkspaceOverride: route.workspaceOverride,
   });
 
   await core.channel.session.recordInboundSession({

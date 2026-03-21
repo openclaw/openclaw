@@ -96,5 +96,9 @@ export function resolveDiscordEffectiveRoute(params: {
       mainSessionKey: params.route.mainSessionKey,
     }),
     ...(params.matchedBy ? { matchedBy: params.matchedBy } : {}),
+    // Clear workspace override when rebinding to a bound session — the bound
+    // session's agent has its own workspace config and should not inherit the
+    // conversation binding's workspace.
+    workspaceOverride: undefined,
   };
 }

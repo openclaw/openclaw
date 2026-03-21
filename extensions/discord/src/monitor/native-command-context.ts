@@ -33,6 +33,7 @@ export type BuildDiscordNativeCommandContextParams = {
     tag?: string;
   };
   timestampMs?: number;
+  workspaceOverride?: string;
 };
 
 export function buildDiscordNativeCommandContext(params: BuildDiscordNativeCommandContextParams) {
@@ -89,5 +90,6 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
       ? `user:${params.user.id}`
       : `channel:${params.channelId}`,
     ThreadParentId: params.isThreadChannel ? params.threadParentId : undefined,
+    WorkspaceOverride: params.workspaceOverride,
   });
 }

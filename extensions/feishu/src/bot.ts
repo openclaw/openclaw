@@ -608,6 +608,8 @@ export async function handleFeishuMessage(params: {
           ...route,
           sessionKey: boundSessionKey,
           agentId: resolveAgentIdFromSessionKey(boundSessionKey) || route.agentId,
+          // Clear workspace override — bound session agent uses its own workspace config.
+          workspaceOverride: undefined,
           lastRoutePolicy: deriveLastRoutePolicy({
             sessionKey: boundSessionKey,
             mainSessionKey: route.mainSessionKey,
@@ -922,6 +924,7 @@ export async function handleFeishuMessage(params: {
         CommandAuthorized: commandAuthorized,
         OriginatingChannel: "feishu" as const,
         OriginatingTo: feishuTo,
+        WorkspaceOverride: route.workspaceOverride,
         GroupSystemPrompt: isGroup ? groupConfig?.systemPrompt?.trim() || undefined : undefined,
         ...mediaPayload,
       });
