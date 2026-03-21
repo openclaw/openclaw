@@ -82,6 +82,46 @@ describe("loadWorkspaceSkillEntries", () => {
     expect(entries.map((entry) => entry.skill.name)).toContain("prose");
   });
 
+  it("loads repo-style nested skills from the managed skills root", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const repoDir = path.join(managedDir, "kepano-obsidian-skills");
+
+    await writeSkill({
+      dir: path.join(repoDir, "skills", "defuddle"),
+      name: "defuddle",
+      description: "Extract clean markdown",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("defuddle");
+  });
+
+  it("loads repo-style nested skills from the workspace skills root", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const managedDir = path.join(workspaceDir, ".managed");
+    const repoDir = path.join(workspaceDir, "skills", "kepano-obsidian-skills");
+
+    await writeSkill({
+      dir: path.join(repoDir, "skills", "defuddle"),
+      name: "defuddle",
+      description: "Extract clean markdown",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("defuddle");
+  });
+
   it("excludes plugin-shipped skills when the plugin is not allowed", async () => {
     const { workspaceDir, managedDir, bundledDir } = await setupWorkspaceWithProsePlugin();
 
@@ -173,6 +213,30 @@ describe("loadWorkspaceSkillEntries", () => {
       });
 
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "avoids recursive loops when repo-style nested skills symlink back to an already visited root",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const skillsRoot = path.join(workspaceDir, "skills");
+      const repoDir = path.join(skillsRoot, "loop-repo");
+
+      await writeSkill({
+        dir: path.join(skillsRoot, "real-skill"),
+        name: "real-skill",
+        description: "Real skill",
+      });
+      await fs.mkdir(repoDir, { recursive: true });
+      await fs.symlink(skillsRoot, path.join(repoDir, "skills"), "dir");
+
+      const entries = loadWorkspaceSkillEntries(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      });
+
+      expect(entries.map((entry) => entry.skill.name)).toContain("real-skill");
     },
   );
 });
