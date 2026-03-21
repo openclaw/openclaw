@@ -26,16 +26,6 @@
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.d.ts",
-  "files": [
-    "src/",
-    "native/",
-    "index.linux-x64-gnu.node",
-    "package.json",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md",
-    "openclaw.plugin.json"
-  ],
   "scripts": {
     "artifacts": "napi artifacts",
     "build": "napi build --platform --release ./native",
@@ -46,6 +36,7 @@
     "version": "napi version"
   },
   "dependencies": {
+    "@wayazi/rust-plugin": "^2026.3.19"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.5.1",

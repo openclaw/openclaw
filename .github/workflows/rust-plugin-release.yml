@@ -139,8 +139,8 @@ jobs:
         working-directory: extensions/rust-plugin
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          if npm view @openclaw/rust-plugin@$VERSION version >/dev/null 2>&1; then
-            echo "@openclaw/rust-plugin@$VERSION is already published"
+          if npm view @wayazi/rust-plugin@$VERSION version >/dev/null 2>&1; then
+            echo "@wayazi/rust-plugin@$VERSION is already published"
             exit 1
           fi
 

@@ -1,0 +1,9 @@
+{
+  "name": "@wayazi/rust-plugin-native",
+  "version": "2026.4.0",
+  "license": "MIT",
+  "author": "Wayazi",
+  "repository": "https://github.com/Wayazi/openclaw",
+  "main": "index.cjs",
+  "types": "index.d.ts"
+}
