@@ -34,6 +34,23 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it("normalizes Google/Gemini usageMetadata format", () => {
+    const usage = normalizeUsage({
+      usageMetadata: {
+        promptTokenCount: 500,
+        candidatesTokenCount: 150,
+        totalTokenCount: 650,
+      },
+    });
+    expect(usage).toEqual({
+      input: 500,
+      output: 150,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 650,
+    });
+  });
+
   it("returns undefined for empty usage objects", () => {
     expect(normalizeUsage({})).toBeUndefined();
   });

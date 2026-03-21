@@ -24,6 +24,12 @@ export type UsageLike = {
   total_tokens?: number;
   cache_read?: number;
   cache_write?: number;
+  // Google/Gemini usageMetadata format.
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    totalTokenCount?: number;
+  };
 };
 
 export type NormalizedUsage = {
@@ -90,11 +96,19 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     return undefined;
   }
 
+  // Google/Gemini usageMetadata mapping.
+  const googleUsage = raw.usageMetadata;
+
   // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
   // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
   // negative, which is nonsensical.  Clamp to 0.
   const rawInput = asFiniteNumber(
-    raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
+    raw.input ??
+      raw.inputTokens ??
+      raw.input_tokens ??
+      raw.promptTokens ??
+      raw.prompt_tokens ??
+      googleUsage?.promptTokenCount,
   );
   const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
   const output = asFiniteNumber(
@@ -102,7 +116,8 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.outputTokens ??
       raw.output_tokens ??
       raw.completionTokens ??
-      raw.completion_tokens,
+      raw.completion_tokens ??
+      googleUsage?.candidatesTokenCount,
   );
   const cacheRead = asFiniteNumber(
     raw.cacheRead ??
@@ -114,7 +129,9 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   const cacheWrite = asFiniteNumber(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
-  const total = asFiniteNumber(raw.total ?? raw.totalTokens ?? raw.total_tokens);
+  const total = asFiniteNumber(
+    raw.total ?? raw.totalTokens ?? raw.total_tokens ?? googleUsage?.totalTokenCount,
+  );
 
   if (
     input === undefined &&
