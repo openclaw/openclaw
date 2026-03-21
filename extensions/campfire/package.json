@@ -1,0 +1,30 @@
+{
+  "name": "@openclaw/campfire",
+  "version": "2026.3.14",
+  "description": "OpenClaw Campfire channel plugin",
+  "type": "module",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "campfire",
+      "label": "Campfire",
+      "selectionLabel": "Campfire (Webhook)",
+      "detailLabel": "Campfire",
+      "docsPath": "/channels/campfire",
+      "docsLabel": "campfire",
+      "blurb": "Self-hosted Campfire bot webhook integration.",
+      "order": 65
+    },
+    "install": {
+      "npmSpec": "@openclaw/campfire",
+      "localPath": "extensions/campfire",
+      "defaultChoice": "npm"
+    }
+  }
+}

@@ -1,3 +1,4 @@
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { registerCampfireWebhookRoute, type CampfireInboundHandler } from "../http/index.js";
 import { sendCampfireText } from "../send.js";
@@ -20,8 +21,8 @@ type CampfireGatewayContext = {
   account: ResolvedCampfireAccount;
   abortSignal: AbortSignal;
   runtime?: unknown;
-  getStatus?: () => Record<string, unknown>;
-  setStatus?: (next: Record<string, unknown>) => void;
+  getStatus?: () => ChannelAccountSnapshot;
+  setStatus?: (next: ChannelAccountSnapshot) => void;
   log?: {
     info?: (message: string) => void;
     warn?: (message: string) => void;
