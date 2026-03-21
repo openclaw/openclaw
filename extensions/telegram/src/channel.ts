@@ -3,22 +3,27 @@ import {
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  createPairingPrefixStripper,
+  createTextPairingAdapter,
+} from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
-  createChannelDirectoryAdapter,
-  createPairingPrefixStripper,
-  createTopLevelChannelReplyToModeResolver,
-  createTextPairingAdapter,
-  normalizeMessageChannel,
-  type OutboundSendDeps,
-  resolveOutboundSendDep,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/channel-send-result";
+import { createTopLevelChannelReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
+import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
 import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/infra-runtime";
-import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
+import { resolveOutboundSendDep, type OutboundSendDeps } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  buildOutboundBaseSessionKey,
+  normalizeMessageChannel,
+  normalizeOutboundThreadId,
+  resolveThreadSessionKeys,
+  type RoutePeer,
+} from "openclaw/plugin-sdk/routing";
 import { parseTelegramTopicConversation } from "../runtime-api.js";
 import {
   buildTokenChannelStatusSummary,
@@ -581,6 +586,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         accountId: account.accountId,
         proxyUrl: account.config.proxy,
         network: account.config.network,
+        apiRoot: account.config.apiRoot,
       }),
     formatCapabilitiesProbe: ({ probe }) => {
       const lines = [];
@@ -632,6 +638,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         groupIds,
         proxyUrl: account.config.proxy,
         network: account.config.network,
+        apiRoot: account.config.apiRoot,
         timeoutMs,
       });
       return { ...audit, unresolvedGroups, hasWildcardUnmentionedGroups };
@@ -699,6 +706,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
           accountId: account.accountId,
           proxyUrl: account.config.proxy,
           network: account.config.network,
+          apiRoot: account.config.apiRoot,
         });
         const username = probe.ok ? probe.bot?.username?.trim() : null;
         if (username) {

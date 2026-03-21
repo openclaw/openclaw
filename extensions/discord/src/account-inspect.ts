@@ -2,7 +2,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/secret-input";
 import {
   mergeDiscordAccountConfig,
   resolveDefaultDiscordAccountId,

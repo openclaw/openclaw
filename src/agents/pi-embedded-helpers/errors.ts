@@ -5,6 +5,7 @@ import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
+  parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 export {
   extractLeadingHttpStatus,
@@ -61,6 +62,57 @@ function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isOverloadedErrorMessage(raw)) {
     return OVERLOADED_ERROR_USER_MESSAGE;
   }
+  return undefined;
+}
+
+function formatTransportErrorCopy(raw: string): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const lower = raw.toLowerCase();
+
+  if (
+    /\beconnrefused\b/i.test(raw) ||
+    lower.includes("connection refused") ||
+    lower.includes("actively refused")
+  ) {
+    return "LLM request failed: connection refused by the provider endpoint.";
+  }
+
+  if (
+    /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i.test(raw) ||
+    lower.includes("socket hang up") ||
+    lower.includes("connection reset") ||
+    lower.includes("connection aborted")
+  ) {
+    return "LLM request failed: network connection was interrupted.";
+  }
+
+  if (
+    /\benotfound\b|\beai_again\b/i.test(raw) ||
+    lower.includes("getaddrinfo") ||
+    lower.includes("no such host") ||
+    lower.includes("dns")
+  ) {
+    return "LLM request failed: DNS lookup for the provider endpoint failed.";
+  }
+
+  if (
+    /\benetunreach\b|\behostunreach\b|\behostdown\b/i.test(raw) ||
+    lower.includes("network is unreachable") ||
+    lower.includes("host is unreachable")
+  ) {
+    return "LLM request failed: the provider endpoint is unreachable from this host.";
+  }
+
+  if (
+    lower.includes("fetch failed") ||
+    lower.includes("connection error") ||
+    lower.includes("network request failed")
+  ) {
+    return "LLM request failed: network connection error.";
+  }
+
   return undefined;
 }
 
@@ -223,9 +275,6 @@ export function extractObservedOverflowTokenCount(errorMessage?: string): number
   return undefined;
 }
 
-// Allow provider-wrapped API payloads such as "Ollama API error 400: {...}".
-const ERROR_PAYLOAD_PREFIX_RE =
-  /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)(?:\s+\d{3})?[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
@@ -482,63 +531,6 @@ function shouldRewriteContextOverflowText(raw: string): boolean {
   );
 }
 
-type ErrorPayload = Record<string, unknown>;
-
-function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return false;
-  }
-  const record = payload as ErrorPayload;
-  if (record.type === "error") {
-    return true;
-  }
-  if (typeof record.request_id === "string" || typeof record.requestId === "string") {
-    return true;
-  }
-  if ("error" in record) {
-    const err = record.error;
-    if (err && typeof err === "object" && !Array.isArray(err)) {
-      const errRecord = err as ErrorPayload;
-      if (
-        typeof errRecord.message === "string" ||
-        typeof errRecord.type === "string" ||
-        typeof errRecord.code === "string"
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function parseApiErrorPayload(raw: string): ErrorPayload | null {
-  if (!raw) {
-    return null;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const candidates = [trimmed];
-  if (ERROR_PAYLOAD_PREFIX_RE.test(trimmed)) {
-    candidates.push(trimmed.replace(ERROR_PAYLOAD_PREFIX_RE, "").trim());
-  }
-  for (const candidate of candidates) {
-    if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(candidate) as unknown;
-      if (isErrorPayloadObject(parsed)) {
-        return parsed;
-      }
-    } catch {
-      // ignore parse errors
-    }
-  }
-  return null;
-}
-
 export function getApiErrorPayloadFingerprint(raw?: string): string | null {
   if (!raw) {
     return null;
@@ -625,6 +617,11 @@ export function formatAssistantErrorText(
     return transientCopy;
   }
 
+  const transportCopy = formatTransportErrorCopy(raw);
+  if (transportCopy) {
+    return transportCopy;
+  }
+
   if (isTimeoutErrorMessage(raw)) {
     return "LLM request timed out.";
   }
@@ -684,6 +681,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
       const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
       if (prefixedCopy) {
         return prefixedCopy;
+      }
+      const transportCopy = formatTransportErrorCopy(trimmed);
+      if (transportCopy) {
+        return transportCopy;
       }
       if (isTimeoutErrorMessage(trimmed)) {
         return "LLM request timed out.";
