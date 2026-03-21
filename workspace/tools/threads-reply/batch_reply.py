@@ -229,6 +229,66 @@ def get_reply(category: str, post_context: dict = None) -> str | None:
     return reply
 
 
+def quality_gate_1_semantic(comment_text: str, reply: str, post_ctx: dict) -> tuple[bool, str]:
+    """Gate 1: Does the reply address the commenter's point?"""
+    # Check if reply is about the same domain as the comment
+    comment_lower = (comment_text or '').lower()
+    reply_lower = reply.lower()
+
+    # If comment mentions specific things, reply should not be completely generic
+    specific_terms = ['%', '萬', '億', '天', '年', '月']
+    comment_has_specifics = any(t in comment_lower for t in specific_terms)
+    reply_is_generic = reply in ['🙌', '同感。', '你說的對。', '😄', '收到。']
+
+    if comment_has_specifics and len(comment_text) > 50 and reply_is_generic:
+        return False, "substantive comment got generic reply"
+
+    return True, "ok"
+
+
+def quality_gate_2_dedup(conn, username: str, reply: str) -> tuple[bool, str]:
+    """Gate 2: Has this person received the same reply before?"""
+    existing = conn.execute('''
+        SELECT r.reply_text FROM replies r
+        JOIN comments c ON r.comment_id = c.comment_id
+        JOIN profiles p ON c.user_id = p.user_id
+        WHERE p.username = ? AND r.status = 'sent'
+        ORDER BY r.sent_at DESC LIMIT 10
+    ''', (username,)).fetchall()
+
+    for e in existing:
+        if e['reply_text'] == reply:
+            return False, f"duplicate: already sent '{reply[:20]}' to this user"
+
+    return True, "ok"
+
+
+def quality_gate_3_voice(reply: str) -> tuple[bool, str]:
+    """Gate 3: Would Cruz say this? Filter out things that sound robotic."""
+    banned = [
+        '歡迎指出', '歡迎挑戰', '數據面前人人平等', '回到數據',
+        '如果您有', '請問您', '很高興為您', '希望這對您有幫助',
+        '根據我的分析', '作為一個',
+    ]
+    for b in banned:
+        if b in reply:
+            return False, f"banned phrase: {b}"
+
+    # Too long for a casual reply
+    if len(reply) > 100:
+        return False, "too long for batch reply"
+
+    return True, "ok"
+
+
+def track_reply_wave(conn, comment_id: str, reply: str):
+    """Gate 4 setup: record for wave tracking (post-send)."""
+    conn.execute('''
+        INSERT OR IGNORE INTO reply_waves (comment_id, reply_text, sent_at, wave_response)
+        VALUES (?, ?, datetime('now'), NULL)
+    ''', (comment_id, reply))
+
+
 def main():
     dry_run = "--dry-run" in sys.argv or "--send" not in sys.argv
     limit = 20
@@ -237,6 +297,17 @@ def main():
             limit = int(sys.argv[i + 1])
 
     conn = db.get_conn()
+
+    # Create wave tracking table if not exists
+    conn.execute('''CREATE TABLE IF NOT EXISTS reply_waves (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        comment_id TEXT NOT NULL,
+        reply_text TEXT,
+        sent_at TEXT,
+        wave_response TEXT,
+        UNIQUE(comment_id)
+    )''')
+    conn.commit()
 
     unreplied = conn.execute('''
         SELECT c.comment_id, c.post_id, c.text_content, p.username
@@ -260,9 +331,11 @@ def main():
         action = "SKIP" if REPLY_MAP.get(cat) is None else "REPLY"
         print(f"  {cat:25s}: {count:4d} → {action}")
 
-    # Process
+    # Process with quality gates
     sent = 0
     skipped = 0
+    rejected = {"semantic": 0, "dedup": 0, "voice": 0}
+
     for u in unreplied:
         if sent >= limit:
             break
@@ -273,12 +346,49 @@ def main():
         reply = get_reply(cat, post_ctx)
 
         if reply is None:
-            # Skip
             if not dry_run:
                 db.add_reply(conn, u['comment_id'], u['post_id'], f'[BATCH_{cat.upper()}]', status='failed')
                 conn.commit()
             skipped += 1
             continue
+
+        # ❶ Semantic check
+        ok, reason = quality_gate_1_semantic(text, reply, post_ctx)
+        if not ok:
+            # Try to upgrade: get a different variant
+            for _ in range(3):
+                reply = get_reply(cat, post_ctx)
+                ok, reason = quality_gate_1_semantic(text, reply, post_ctx)
+                if ok:
+                    break
+            if not ok:
+                # Still bad — generate a more specific fallback
+                post_text = post_ctx.get('text', '')[:30] if post_ctx else ''
+                reply = f"你的觀點跟這篇的核心有關。值得展開。"
+                rejected["semantic"] += 1
+
+        # ❷ Dedup check
+        ok, reason = quality_gate_2_dedup(conn, u['username'], reply)
+        if not ok:
+            # Rotate to next variant
+            for _ in range(5):
+                reply = get_reply(cat, post_ctx)
+                ok, _ = quality_gate_2_dedup(conn, u['username'], reply)
+                if ok:
+                    break
+            if not ok:
+                rejected["dedup"] += 1
+                if not dry_run:
+                    db.add_reply(conn, u['comment_id'], u['post_id'], '[DEDUP_SKIP]', status='failed')
+                    conn.commit()
+                skipped += 1
+                continue
+
+        # ❸ Voice check
+        ok, reason = quality_gate_3_voice(reply)
+        if not ok:
+            rejected["voice"] += 1
+            reply = '🙌'  # Safe fallback
 
         if dry_run:
             topic = post_ctx.get('topic', '?') if post_ctx else '?'
@@ -297,6 +407,9 @@ def main():
                     if rid:
                         db.mark_reply_sent(conn, rid['reply_id'])
                         conn.commit()
+                    # ❹ Track for wave response
+                    track_reply_wave(conn, u['comment_id'], reply)
+                    conn.commit()
                     sent += 1
                 else:
                     conn.execute('DELETE FROM replies WHERE status="pending"')
@@ -312,10 +425,14 @@ def main():
     remaining = conn.execute('''SELECT COUNT(*) FROM comments c LEFT JOIN replies r ON c.comment_id=r.comment_id
         JOIN profiles p ON c.user_id=p.user_id WHERE r.reply_id IS NULL AND p.username != ?''',
                               (tr.MY_USERNAME,)).fetchone()[0]
+
+    # Wave tracking report
+    waves = conn.execute('SELECT COUNT(*) FROM reply_waves').fetchone()[0]
     conn.close()
 
     print(f"\n{'[DRY RUN] ' if dry_run else ''}Sent: {sent} | Skipped: {skipped}")
-    print(f"Coverage: {s}/{t2} = {round(s / max(t2, 1) * 100)}% | Remaining: {remaining}")
+    print(f"Quality gates rejected: semantic={rejected['semantic']} dedup={rejected['dedup']} voice={rejected['voice']}")
+    print(f"Coverage: {s}/{t2} = {round(s / max(t2, 1) * 100)}% | Remaining: {remaining} | Wave tracking: {waves}")
 
 
 if __name__ == "__main__":
