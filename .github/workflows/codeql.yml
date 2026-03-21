@@ -116,7 +116,7 @@ jobs:
       - name: Build Android for CodeQL
         if: matrix.language == 'java-kotlin'
         working-directory: apps/android
-        run: ./gradlew --no-daemon :app:assembleDebug
+        run: ./gradlew --no-daemon :app:assemblePlayDebug
 
       - name: Build Swift for CodeQL
         if: matrix.language == 'swift'

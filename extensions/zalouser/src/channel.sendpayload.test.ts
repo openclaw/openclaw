@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { primeChannelOutboundSendMock } from "../../../src/channels/plugins/contracts/suites.js";
 import "./accounts.test-mocks.js";
+import "./zalo-js.test-mocks.js";
 import type { ReplyPayload } from "../runtime-api.js";
 import { zalouserPlugin } from "./channel.js";
 import { setZalouserRuntime } from "./runtime.js";

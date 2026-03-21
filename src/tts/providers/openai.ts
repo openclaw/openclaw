@@ -21,7 +21,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         baseUrl: req.config.openai.baseUrl,
         model: req.overrides?.openai?.model ?? req.config.openai.model,
         voice: req.overrides?.openai?.voice ?? req.config.openai.voice,
-        speed: req.config.openai.speed,
+        speed: req.overrides?.openai?.speed ?? req.config.openai.speed,
         instructions: req.config.openai.instructions,
         responseFormat,
         timeoutMs: req.config.timeoutMs,

@@ -155,13 +155,6 @@ function createBotMenuEvent(params: { eventKey: string; timestamp: string }) {
   };
 }
 
-async function settleAsyncWork(): Promise<void> {
-  for (let i = 0; i < 6; i += 1) {
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-}
-
 async function setupLifecycleMonitor() {
   const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
     handlers = registered;
@@ -190,6 +183,7 @@ async function setupLifecycleMonitor() {
 
 describe("Feishu bot-menu lifecycle", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     handlers = {};
     lastRuntime = null;
@@ -292,6 +286,7 @@ describe("Feishu bot-menu lifecycle", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
       return;
@@ -307,9 +302,13 @@ describe("Feishu bot-menu lifecycle", () => {
     });
 
     await onBotMenu(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    });
     await onBotMenu(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
     expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
@@ -332,9 +331,16 @@ describe("Feishu bot-menu lifecycle", () => {
     sendCardFeishuMock.mockRejectedValueOnce(new Error("boom"));
 
     await onBotMenu(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    });
     await onBotMenu(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+      expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
+    });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
     expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);

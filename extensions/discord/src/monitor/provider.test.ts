@@ -88,20 +88,17 @@ describe("monitorDiscordProvider", () => {
   const getConstructedEventQueue = (): { listenerTimeout?: number } | undefined => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
     const opts = clientConstructorOptionsMock.mock.calls[0]?.[0] as {
-      commandDeploymentMode?: string;
       eventQueue?: { listenerTimeout?: number };
     };
     return opts.eventQueue;
   };
 
   const getConstructedClientOptions = (): {
-    commandDeploymentMode?: string;
     eventQueue?: { listenerTimeout?: number };
   } => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
     return (
       (clientConstructorOptionsMock.mock.calls[0]?.[0] as {
-        commandDeploymentMode?: string;
         eventQueue?: { listenerTimeout?: number };
       }) ?? {}
     );
@@ -553,7 +550,7 @@ describe("monitorDiscordProvider", () => {
     );
   });
 
-  it("configures Carbon reconcile deployment by default", async () => {
+  it("configures Carbon native deploy by default", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
 
     await monitorDiscordProvider({
@@ -562,7 +559,7 @@ describe("monitorDiscordProvider", () => {
     });
 
     expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
-    expect(getConstructedClientOptions().commandDeploymentMode).toBe("reconcile");
+    expect(getConstructedClientOptions().eventQueue?.listenerTimeout).toBe(120_000);
   });
 
   it("reports connected status on startup and shutdown", async () => {
