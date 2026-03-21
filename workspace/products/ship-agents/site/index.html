@@ -3,11 +3,263 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Ship AI Agents to Production</title>
+    <title>
+      Ship AI Agents to Production | Claude Code Architecture & Multi-Agent Orchestration
+    </title>
     <meta
       name="description"
-      content="21 production files. 14,000+ lines. The system that keeps AI agents running 24/7 without babysitting."
+      content="21 production-tested files for running Claude Code agents 24/7. SOUL.md identity, self-healing monitoring, 4-layer memory tower. Get the production blueprints."
     />
+    <meta
+      name="keywords"
+      content="claude code production, ai agent production, claude code architecture, claude code template, ai agent monitoring, multi agent orchestration, claude code best practices, how to run ai agents in production, claude code soul.md, ai agent self healing, claude code memory persistence"
+    />
+    <meta name="author" content="Cruz Tang" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://thinker.cafe/" />
+    <link rel="alternate" hreflang="en" href="https://thinker.cafe/" />
+    <link rel="alternate" hreflang="x-default" href="https://thinker.cafe/" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="product" />
+    <meta property="og:title" content="Ship AI Agents to Production | Claude Code Architecture" />
+    <meta
+      property="og:description"
+      content="21 production-tested files for running Claude Code agents 24/7. Identity architecture, self-healing monitoring, 4-layer memory tower, multi-agent orchestration. Battle-tested over 90+ days."
+    />
+    <meta property="og:url" content="https://thinker.cafe/" />
+    <meta property="og:site_name" content="thinker.cafe" />
+    <meta property="og:image" content="https://thinker.cafe/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="Ship AI Agents to Production - 21 production files for Claude Code architecture"
+    />
+    <meta property="og:locale" content="en_US" />
+    <meta property="product:price:amount" content="47" />
+    <meta property="product:price:currency" content="USD" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Ship AI Agents to Production | Claude Code Architecture" />
+    <meta
+      name="twitter:description"
+      content="21 production-tested files for running Claude Code agents 24/7. Self-healing monitoring, 4-layer memory tower, multi-agent orchestration."
+    />
+    <meta name="twitter:image" content="https://thinker.cafe/og-image.png" />
+    <meta
+      name="twitter:image:alt"
+      content="Ship AI Agents to Production - Claude Code architecture toolkit"
+    />
+    <meta name="twitter:site" content="@thinker_cafe" />
+
+    <!-- JSON-LD: Product Schema -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Product",
+        "name": "Ship AI Agents to Production",
+        "description": "21 production-tested files and 14,000+ lines of config, code, and documentation for running Claude Code AI agents in production 24/7. Includes SOUL.md identity architecture, self-healing monitoring daemon, 4-layer memory tower, and multi-agent orchestration patterns.",
+        "image": "https://thinker.cafe/og-image.png",
+        "url": "https://thinker.cafe/",
+        "brand": {
+          "@type": "Brand",
+          "name": "thinker.cafe"
+        },
+        "author": {
+          "@type": "Person",
+          "name": "Cruz Tang",
+          "url": "https://dev.to/cruz_tang_1da62c7857b85ed"
+        },
+        "offers": [
+          {
+            "@type": "Offer",
+            "name": "Pro",
+            "price": "47",
+            "priceCurrency": "USD",
+            "availability": "https://schema.org/InStock",
+            "url": "https://thinker.cafe/#pricing"
+          },
+          {
+            "@type": "Offer",
+            "name": "Complete",
+            "price": "97",
+            "priceCurrency": "USD",
+            "availability": "https://schema.org/InStock",
+            "url": "https://thinker.cafe/#pricing"
+          }
+        ],
+        "category": "Software > Developer Tools > AI Agent Architecture",
+        "additionalProperty": [
+          { "@type": "PropertyValue", "name": "Files Included", "value": "21" },
+          { "@type": "PropertyValue", "name": "Lines of Code", "value": "14000+" },
+          { "@type": "PropertyValue", "name": "Production Uptime", "value": "90+ days" }
+        ]
+      }
+    </script>
+
+    <!-- JSON-LD: FAQ Schema (AEO) -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "What is Claude Code production architecture?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "A system design pattern for running AI agents 24/7 using SOUL.md for identity, CONSTITUTION.md for boundaries, HEARTBEAT.md for scheduled tasks, and a 4-layer memory tower. Battle-tested running 10 agents for 90+ days."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "How do you run AI agents in production without babysitting?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Four patterns: identity architecture (SOUL.md + CONSTITUTION.md + HEARTBEAT.md), identity isolation for multi-agent systems, self-healing sentinel daemon that auto-restarts crashed agents, and a 4-layer memory tower."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What AI provider does this work with?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Built on Claude Code / Anthropic, but provider-agnostic. The patterns (SOUL, CONSTITUTION, memory tower, reconciler) work with any LLM. You're buying system design, not provider-specific prompts."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What is SOUL.md in Claude Code?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "SOUL.md defines who an AI agent is -- personality, expertise, communication style, and directives. With CONSTITUTION.md (boundaries) and HEARTBEAT.md (scheduled tasks), it creates stable identity that persists across restarts."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "How does multi-agent orchestration work?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Each agent gets its own workspace with separate SOUL.md, CONSTITUTION.md, and memory files to prevent identity contamination. A central gateway routes messages and a sentinel daemon monitors health and auto-recovery."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What is the 4-layer memory tower for AI agents?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Four layers: Working Memory (session context), Episodic (daily summaries), Semantic (extracted patterns), Archival (long-term knowledge). Automated pruning and promotion between layers keeps the system efficient."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Do I need specific infrastructure to run AI agents in production?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "No. Runs on a Mac Mini. No Kubernetes, no Docker, no cloud required. If your machine can make an LLM API call, it can run this system."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "How do you prevent AI agent hallucination in production?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Three mechanisms: CONSTITUTION.md defines strict behavioral boundaries, a sentinel daemon detects anomalous outputs and auto-restarts agents, and the memory tower provides persistent context to reduce hallucination-causing gaps."
+            }
+          }
+        ]
+      }
+    </script>
+
+    <!-- JSON-LD: Article (for AEO cross-referencing) -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Article",
+        "headline": "How to Run AI Agents in Production 24/7",
+        "author": {
+          "@type": "Person",
+          "name": "Cruz Tang"
+        },
+        "publisher": {
+          "@type": "Organization",
+          "name": "thinker.cafe"
+        },
+        "description": "Four battle-tested patterns for running Claude Code AI agents in production: identity architecture, multi-agent orchestration, self-healing monitoring, and the 4-layer memory tower.",
+        "url": "https://dev.to/cruz_tang_1da62c7857b85ed/how-i-run-10-ai-agents-in-production-247-for-90-days-3d6h",
+        "mainEntityOfPage": "https://thinker.cafe/"
+      }
+    </script>
+
+    <!-- JSON-LD: Organization -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "name": "thinker.cafe",
+        "url": "https://thinker.cafe/",
+        "founder": {
+          "@type": "Person",
+          "name": "Cruz Tang"
+        },
+        "description": "Production-tested architecture and blueprints for running AI agents 24/7.",
+        "sameAs": ["https://dev.to/cruz_tang_1da62c7857b85ed"]
+      }
+    </script>
+
+    <!-- JSON-LD: SoftwareApplication -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Ship AI Agents to Production",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Any",
+        "offers": {
+          "@type": "Offer",
+          "price": "47",
+          "priceCurrency": "USD"
+        },
+        "description": "21 production-tested files for running Claude Code AI agents 24/7. Identity architecture, self-healing monitoring, 4-layer memory tower, multi-agent orchestration.",
+        "author": { "@type": "Person", "name": "Cruz Tang" },
+        "url": "https://thinker.cafe/"
+      }
+    </script>
+
+    <!-- JSON-LD: HowTo (AEO step-by-step snippets) -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "HowTo",
+        "name": "How to Run AI Agents in Production 24/7",
+        "description": "Four-step guide to deploying Claude Code AI agents that run without babysitting.",
+        "step": [
+          {
+            "@type": "HowToStep",
+            "name": "Define Agent Identity",
+            "text": "Create SOUL.md to define who the agent is, CONSTITUTION.md for hard behavioral boundaries, and HEARTBEAT.md for scheduled autonomous tasks."
+          },
+          {
+            "@type": "HowToStep",
+            "name": "Isolate Agent Contexts",
+            "text": "Give each agent its own workspace directory with separate identity files. Use a shared BULLETIN.md for cross-agent communication without context contamination."
+          },
+          {
+            "@type": "HowToStep",
+            "name": "Add Self-Healing Monitoring",
+            "text": "Deploy a sentinel daemon that checks agent health every 5 minutes, auto-restarts crashed services with exponential backoff, and uses budget-aware AI diagnosis."
+          },
+          {
+            "@type": "HowToStep",
+            "name": "Build the Memory Tower",
+            "text": "Implement 4-layer memory: working memory for current session, episodic for daily summaries, semantic for extracted patterns, archival for long-term principles. Add automated pruning."
+          }
+        ]
+      }
+    </script>
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -959,419 +1211,440 @@
     </style>
   </head>
   <body>
-    <!-- ============================================================
+    <main>
+      <!-- ============================================================
          1. HERO
          ============================================================ -->
-    <section class="hero">
-      <div class="container">
-        <div class="hero-text">
-          <h1>
-            Your agent works great.<br />
-            <span class="dim">For 15 minutes.</span><span class="cursor"></span>
-          </h1>
-          <p>
-            You built something with Claude Code. It was magic. The agent understood context, wrote
-            clean code, handled edge cases.
-          </p>
-          <p>Then reality hit.</p>
-          <p>
-            It hallucinated at 2am. Sent garbage to a real customer. Forgot everything from
-            yesterday. Every morning, a stranger you have to re-brief.
-          </p>
-          <p>You'll spend 3 months figuring this out alone. Or you could skip to the end.</p>
-          <p class="hero-bold">You're not running AI agents. You're babysitting them.</p>
-          <a href="#pricing" class="btn btn-primary">Get the production blueprints &#8595;</a>
+      <section class="hero">
+        <div class="container">
+          <div class="hero-text">
+            <h1>
+              Ship AI Agents to Production.<br />
+              <span class="dim">Stop babysitting Claude Code.</span><span class="cursor"></span>
+            </h1>
+            <p>
+              You built something with Claude Code. It was magic. The agent understood context,
+              wrote clean code, handled edge cases.
+            </p>
+            <p>Then reality hit.</p>
+            <p>
+              It hallucinated at 2am. Sent garbage to a real customer. Forgot everything from
+              yesterday. Every morning, a stranger you have to re-brief.
+            </p>
+            <p>You'll spend 3 months figuring this out alone. Or you could skip to the end.</p>
+            <p class="hero-bold">You're not running AI agents. You're babysitting them.</p>
+            <a
+              href="#pricing"
+              class="btn btn-primary"
+              aria-label="View pricing and get the production blueprints"
+              >Get the production blueprints &#8595;</a
+            >
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- ============================================================
+      <!-- ============================================================
          2. PROBLEM
          ============================================================ -->
-    <section class="section reveal">
-      <div class="container">
-        <div class="section-label">THE GAP NOBODY TALKS ABOUT</div>
-        <h2>Five ways agents fail in production</h2>
-        <div class="terminal">
-          <div class="terminal-line red">
-            <span class="prompt">$</span> <span class="cmd">HALLUCINATION</span
-            ><span class="comment"
-              >&nbsp;&nbsp;&nbsp;# 2am. Sent garbage to a real customer. 6 hours unnoticed.</span
-            >
-          </div>
-          <div class="terminal-line red">
-            <span class="prompt">$</span> <span class="cmd">AMNESIA</span
-            ><span class="comment"
-              >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Forgot everything from
-              yesterday. Every morning, a stranger.</span
-            >
-          </div>
-          <div class="terminal-line red">
-            <span class="prompt">$</span> <span class="cmd">CONTEXT_LEAK</span
-            ><span class="comment"
-              >&nbsp;&nbsp;&nbsp;# Second agent started leaking first agent's context.</span
-            >
-          </div>
-          <div class="terminal-line yellow">
-            <span class="prompt">$</span> <span class="cmd">SPAGHETTI_CONFIG</span
-            ><span class="comment"># CLAUDE.md is 200 lines. Add a rule, something breaks.</span>
-          </div>
-          <div class="terminal-line yellow">
-            <span class="prompt">$</span> <span class="cmd">MANUAL_RESTART</span
-            ><span class="comment">&nbsp;&nbsp;# You check Telegram at midnight. You hope.</span>
-          </div>
-          <div class="terminal-line green">
-            <span class="prompt">$</span> <span class="cmd">STATUS:</span
-            ><span class="comment"> you need architecture, not more prompts.</span>
+      <section class="section reveal">
+        <div class="container">
+          <div class="section-label">THE GAP NOBODY TALKS ABOUT</div>
+          <h2>Five ways agents fail in production</h2>
+          <div class="terminal">
+            <div class="terminal-line red">
+              <span class="prompt">$</span> <span class="cmd">HALLUCINATION</span
+              ><span class="comment"
+                >&nbsp;&nbsp;&nbsp;# 2am. Sent garbage to a real customer. 6 hours unnoticed.</span
+              >
+            </div>
+            <div class="terminal-line red">
+              <span class="prompt">$</span> <span class="cmd">AMNESIA</span
+              ><span class="comment"
+                >&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Forgot everything from
+                yesterday. Every morning, a stranger.</span
+              >
+            </div>
+            <div class="terminal-line red">
+              <span class="prompt">$</span> <span class="cmd">CONTEXT_LEAK</span
+              ><span class="comment"
+                >&nbsp;&nbsp;&nbsp;# Second agent started leaking first agent's context.</span
+              >
+            </div>
+            <div class="terminal-line yellow">
+              <span class="prompt">$</span> <span class="cmd">SPAGHETTI_CONFIG</span
+              ><span class="comment"># CLAUDE.md is 200 lines. Add a rule, something breaks.</span>
+            </div>
+            <div class="terminal-line yellow">
+              <span class="prompt">$</span> <span class="cmd">MANUAL_RESTART</span
+              ><span class="comment">&nbsp;&nbsp;# You check Telegram at midnight. You hope.</span>
+            </div>
+            <div class="terminal-line green">
+              <span class="prompt">$</span> <span class="cmd">STATUS:</span
+              ><span class="comment"> you need architecture, not more prompts.</span>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- ============================================================
+      <!-- ============================================================
          3. SOLUTION
          ============================================================ -->
-    <section class="section reveal">
-      <div class="container">
-        <div class="section-label">THE SYSTEM</div>
-        <h2>There's a system that doesn't break.</h2>
-        <div class="solution-text">
-          <p>
-            After 90+ days of running 10 AI agents in production, handling real customers, real
-            money, real consequences, we extracted the patterns that actually work.
-          </p>
-          <p>
-            Not theories. Not blog posts. Battle-tested architecture files from a system that runs
-            24/7 without human intervention.
-          </p>
-          <p>
-            Every crash, every hallucination, every 2am incident became a design constraint baked
-            into these files.
-          </p>
+      <section class="section reveal">
+        <div class="container">
+          <div class="section-label">THE SYSTEM</div>
+          <h2>There's a system that doesn't break.</h2>
+          <div class="solution-text">
+            <p>
+              After 90+ days of running 10 AI agents in production, handling real customers, real
+              money, real consequences, we extracted the patterns that actually work.
+            </p>
+            <p>
+              Not theories. Not blog posts. Battle-tested architecture files from a system that runs
+              24/7 without human intervention.
+            </p>
+            <p>
+              Every crash, every hallucination, every 2am incident became a design constraint baked
+              into these files.
+            </p>
+          </div>
+          <div class="stats-row">
+            <div class="stat">
+              <div class="stat-number">10+</div>
+              <div class="stat-label">Agents</div>
+            </div>
+            <div class="stat">
+              <div class="stat-number">90+</div>
+              <div class="stat-label">Days uptime</div>
+            </div>
+            <div class="stat">
+              <div class="stat-number">2,000+</div>
+              <div class="stat-label">Facts processed</div>
+            </div>
+            <div class="stat">
+              <div class="stat-number">24/7</div>
+              <div class="stat-label">Unsupervised</div>
+            </div>
+          </div>
         </div>
-        <div class="stats-row">
-          <div class="stat">
-            <div class="stat-number">10+</div>
-            <div class="stat-label">Agents</div>
-          </div>
-          <div class="stat">
-            <div class="stat-number">90+</div>
-            <div class="stat-label">Days uptime</div>
-          </div>
-          <div class="stat">
-            <div class="stat-number">2,000+</div>
-            <div class="stat-label">Facts processed</div>
-          </div>
-          <div class="stat">
-            <div class="stat-number">24/7</div>
-            <div class="stat-label">Unsupervised</div>
-          </div>
-        </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- ============================================================
+      <!-- ============================================================
          4. WHAT'S INSIDE
          ============================================================ -->
-    <section class="section reveal">
-      <div class="container">
-        <div class="section-label">WHAT'S INSIDE</div>
-        <h2>21 production files. 14,000+ lines.</h2>
-        <p style="color: #a1a1a1; margin-bottom: 8px">
-          Not a course. Not a prompt pack. Copy, customize, deploy.
-        </p>
+      <section class="section reveal">
+        <div class="container">
+          <div class="section-label">WHAT'S INSIDE</div>
+          <h2>21 production files. 14,000+ lines.</h2>
+          <p style="color: #a1a1a1; margin-bottom: 8px">
+            Not a course. Not a prompt pack. Copy, customize, deploy.
+          </p>
 
-        <div class="cards-grid">
-          <div class="card">
-            <div class="card-icon">&gt;_</div>
-            <h3>Agent Architecture</h3>
-            <p>
-              SOUL.md defines personality. CONSTITUTION.md sets hard rules. HEARTBEAT.md schedules
-              autonomous actions. KNOWLEDGE/ stores domain expertise. Two complete production agent
-              examples included.
-            </p>
-            <div class="card-meta">6 files &middot; the foundation</div>
+          <div class="cards-grid">
+            <div class="card">
+              <div class="card-icon">&gt;_</div>
+              <h3>Agent Architecture</h3>
+              <p>
+                SOUL.md defines personality. CONSTITUTION.md sets hard rules. HEARTBEAT.md schedules
+                autonomous actions. KNOWLEDGE/ stores domain expertise. Two complete production
+                agent examples included.
+              </p>
+              <div class="card-meta">6 files &middot; the foundation</div>
+            </div>
+            <div class="card">
+              <div class="card-icon">&equiv;</div>
+              <h3>Multi-Agent Orchestration</h3>
+              <p>
+                3 coordination patterns that prevent context leaks. Identity isolation so agents
+                never bleed into each other. Shared memory protocol for cross-agent knowledge flow.
+              </p>
+              <div class="card-meta">3 files &middot; the coordination layer</div>
+            </div>
+            <div class="card">
+              <div class="card-icon">&hearts;</div>
+              <h3>Self-Healing Monitoring</h3>
+              <p>
+                Level-triggered reconciliation (not edge-triggered). Health checks with exponential
+                backoff. Flap detection to prevent restart loops. The watchdog that lets you sleep.
+              </p>
+              <div class="card-meta">1 file &middot; the watchdog</div>
+            </div>
+            <div class="card">
+              <div class="card-icon">&loz;</div>
+              <h3>Memory Architecture</h3>
+              <p>
+                4-layer memory tower: working, episodic, semantic, archival. Automatic pruning so
+                context windows never overflow. Experience capture that turns crashes into
+                institutional knowledge.
+              </p>
+              <div class="card-meta">1 file &middot; the long-term brain</div>
+            </div>
           </div>
-          <div class="card">
-            <div class="card-icon">&equiv;</div>
-            <h3>Multi-Agent Orchestration</h3>
+
+          <!-- Crown Jewel -->
+          <div class="card card-crown">
+            <div class="card-icon">&starf;</div>
+            <h3>The Crown Jewel: CLAUDE.md.production</h3>
             <p>
-              3 coordination patterns that prevent context leaks. Identity isolation so agents never
-              bleed into each other. Shared memory protocol for cross-agent knowledge flow.
+              350 lines. Production-grade master config that orchestrates everything above. Context
+              management, error recovery, identity boundaries, tool permissions, memory lifecycle.
+              Every line earned through a production incident.
             </p>
-            <div class="card-meta">3 files &middot; the coordination layer</div>
-          </div>
-          <div class="card">
-            <div class="card-icon">&hearts;</div>
-            <h3>Self-Healing Monitoring</h3>
-            <p>
-              Level-triggered reconciliation (not edge-triggered). Health checks with exponential
-              backoff. Flap detection to prevent restart loops. The watchdog that lets you sleep.
+            <p class="crown-highlight" style="margin-top: 12px">
+              This single file is worth the price.
             </p>
-            <div class="card-meta">1 file &middot; the watchdog</div>
-          </div>
-          <div class="card">
-            <div class="card-icon">&loz;</div>
-            <h3>Memory Architecture</h3>
-            <p>
-              4-layer memory tower: working, episodic, semantic, archival. Automatic pruning so
-              context windows never overflow. Experience capture that turns crashes into
-              institutional knowledge.
-            </p>
-            <div class="card-meta">1 file &middot; the long-term brain</div>
           </div>
         </div>
+      </section>
 
-        <!-- Crown Jewel -->
-        <div class="card card-crown">
-          <div class="card-icon">&starf;</div>
-          <h3>The Crown Jewel: CLAUDE.md.production</h3>
-          <p>
-            350 lines. Production-grade master config that orchestrates everything above. Context
-            management, error recovery, identity boundaries, tool permissions, memory lifecycle.
-            Every line earned through a production incident.
-          </p>
-          <p class="crown-highlight" style="margin-top: 12px">
-            This single file is worth the price.
-          </p>
-        </div>
-      </div>
-    </section>
-
-    <!-- ============================================================
+      <!-- ============================================================
          5. PRICING
          ============================================================ -->
-    <section class="section reveal" id="pricing">
-      <div class="container">
-        <div class="section-label">PRICING</div>
-        <h2 style="text-align: center">Two options. Both include everything.</h2>
+      <section class="section reveal" id="pricing">
+        <div class="container">
+          <div class="section-label">PRICING</div>
+          <h2 style="text-align: center">Two options. Both include everything.</h2>
 
-        <div class="pricing-wrap">
-          <!-- PRO -->
-          <div class="price-card featured">
-            <div class="price-badge">MOST POPULAR</div>
-            <div class="price-tier">PRO</div>
-            <div class="price-amount">$47</div>
-            <p class="price-desc">The full system. 21 production files.</p>
-            <ul class="price-list">
-              <li>Agent architecture templates (SOUL, CONSTITUTION, HEARTBEAT, KNOWLEDGE)</li>
-              <li>2 complete production agent examples</li>
-              <li>Multi-agent orchestration patterns</li>
-              <li>Identity isolation framework</li>
-              <li>Shared memory protocol</li>
-              <li>Self-healing monitoring system</li>
-              <li>4-layer memory tower architecture</li>
-              <li>CLAUDE.md.production (350 lines)</li>
-              <li>Lifetime updates</li>
-            </ul>
-            <button class="btn btn-primary" onclick="checkout('price_pro')">Get Pro &rarr;</button>
+          <div class="pricing-wrap">
+            <!-- PRO -->
+            <div class="price-card featured">
+              <div class="price-badge">MOST POPULAR</div>
+              <div class="price-tier">PRO</div>
+              <div class="price-amount">$47</div>
+              <p class="price-desc">The full system. 21 production files.</p>
+              <ul class="price-list">
+                <li>Agent architecture templates (SOUL, CONSTITUTION, HEARTBEAT, KNOWLEDGE)</li>
+                <li>2 complete production agent examples</li>
+                <li>Multi-agent orchestration patterns</li>
+                <li>Identity isolation framework</li>
+                <li>Shared memory protocol</li>
+                <li>Self-healing monitoring system</li>
+                <li>4-layer memory tower architecture</li>
+                <li>CLAUDE.md.production (350 lines)</li>
+                <li>Lifetime updates</li>
+              </ul>
+              <button
+                class="btn btn-primary"
+                onclick="checkout('price_pro')"
+                aria-label="Purchase Pro tier for $47"
+              >
+                Get Pro &rarr;
+              </button>
+            </div>
+
+            <!-- COMPLETE -->
+            <div class="price-card">
+              <div class="price-tier">COMPLETE</div>
+              <div class="price-amount">$97</div>
+              <p class="price-desc">Everything in Pro + video walkthrough + bonus.</p>
+              <ul class="price-list">
+                <li>Everything in Pro</li>
+                <li>30-minute video walkthrough</li>
+                <li>Live terminal demo</li>
+                <li>Architecture decision explanations</li>
+                <li>BONUS: 90-day production log analysis</li>
+                <li>Lifetime updates</li>
+              </ul>
+              <button
+                class="btn btn-secondary"
+                onclick="checkout('price_complete')"
+                aria-label="Purchase Complete tier for $97"
+              >
+                Get Complete &rarr;
+              </button>
+            </div>
           </div>
 
-          <!-- COMPLETE -->
-          <div class="price-card">
-            <div class="price-tier">COMPLETE</div>
-            <div class="price-amount">$97</div>
-            <p class="price-desc">Everything in Pro + video walkthrough + bonus.</p>
-            <ul class="price-list">
-              <li>Everything in Pro</li>
-              <li>30-minute video walkthrough</li>
-              <li>Live terminal demo</li>
-              <li>Architecture decision explanations</li>
-              <li>BONUS: 90-day production log analysis</li>
-              <li>Lifetime updates</li>
-            </ul>
-            <button class="btn btn-secondary" onclick="checkout('price_complete')">
-              Get Complete &rarr;
-            </button>
+          <div class="pricing-footer">
+            <p>One-time purchase &middot; No subscription &middot; Lifetime updates</p>
+            <p>You'll spend 3 months learning this the hard way. Or $47.</p>
           </div>
         </div>
+      </section>
 
-        <div class="pricing-footer">
-          <p>One-time purchase &middot; No subscription &middot; Lifetime updates</p>
-          <p>You'll spend 3 months learning this the hard way. Or $47.</p>
-        </div>
-      </div>
-    </section>
-
-    <!-- ============================================================
+      <!-- ============================================================
          6. PROOF
          ============================================================ -->
-    <section class="section reveal">
-      <div class="container">
-        <div class="section-label">WHO BUILT THIS</div>
-        <h2>Not a weekend project.</h2>
-        <div class="proof-block">
-          <p>
-            Someone who got tired of demo agents that work in screencasts and break in production.
-          </p>
-          <p>
-            Ran <strong>10+ agents</strong> simultaneously across customer service, data analytics,
-            internal ops, and content management. Real users. Real money on the line.
-          </p>
-          <p>
-            Processed <strong>2,000+</strong> atomic facts through a 4-layer memory system. Built
-            self-healing monitoring that survived internet outages, API rate limits, and 3am kernel
-            panics.
-          </p>
-          <p class="green-bold">Production. Not a hackathon.</p>
+      <section class="section reveal">
+        <div class="container">
+          <div class="section-label">WHO BUILT THIS</div>
+          <h2>Not a weekend project.</h2>
+          <div class="proof-block">
+            <p>
+              Someone who got tired of demo agents that work in screencasts and break in production.
+            </p>
+            <p>
+              Ran <strong>10+ agents</strong> simultaneously across customer service, data
+              analytics, internal ops, and content management. Real users. Real money on the line.
+            </p>
+            <p>
+              Processed <strong>2,000+</strong> atomic facts through a 4-layer memory system. Built
+              self-healing monitoring that survived internet outages, API rate limits, and 3am
+              kernel panics.
+            </p>
+            <p class="green-bold">Production. Not a hackathon.</p>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- ============================================================
+      <!-- ============================================================
          7. WHO THIS IS FOR
          ============================================================ -->
-    <section class="section reveal">
-      <div class="container">
-        <div class="section-label">IS THIS FOR YOU</div>
-        <h2>Who this is for</h2>
-        <div class="for-grid">
-          <div class="for-col">
-            <h3 class="yes">Yes, if you:</h3>
-            <ul>
-              <li>
-                <span class="icon-yes">&#10003;</span> Have built an agent that works in demos but
-                fails in production
-              </li>
-              <li>
-                <span class="icon-yes">&#10003;</span> Are tired of prompt-engineering your way out
-                of architecture problems
-              </li>
-              <li>
-                <span class="icon-yes">&#10003;</span> Want agents that run unsupervised without 2am
-                panic checks
-              </li>
-              <li>
-                <span class="icon-yes">&#10003;</span> Prefer copying proven files over reading
-                another "how I built an agent" blog post
-              </li>
-            </ul>
-          </div>
-          <div class="for-col">
-            <h3 class="no">Not for you, if you:</h3>
-            <ul>
-              <li>
-                <span class="icon-no">&#10007;</span> Haven't built an agent yet (start with the
-                basics first)
-              </li>
-              <li>
-                <span class="icon-no">&#10007;</span> Want a plug-and-play SaaS product (these are
-                architecture files, not an app)
-              </li>
-              <li>
-                <span class="icon-no">&#10007;</span> Are looking for a course with hand-holding
-                (these are files, not lessons)
-              </li>
-            </ul>
+      <section class="section reveal">
+        <div class="container">
+          <div class="section-label">IS THIS FOR YOU</div>
+          <h2>Who this is for</h2>
+          <div class="for-grid">
+            <div class="for-col">
+              <h3 class="yes">Yes, if you:</h3>
+              <ul>
+                <li>
+                  <span class="icon-yes">&#10003;</span> Have built an agent that works in demos but
+                  fails in production
+                </li>
+                <li>
+                  <span class="icon-yes">&#10003;</span> Are tired of prompt-engineering your way
+                  out of architecture problems
+                </li>
+                <li>
+                  <span class="icon-yes">&#10003;</span> Want agents that run unsupervised without
+                  2am panic checks
+                </li>
+                <li>
+                  <span class="icon-yes">&#10003;</span> Prefer copying proven files over reading
+                  another "how I built an agent" blog post
+                </li>
+              </ul>
+            </div>
+            <div class="for-col">
+              <h3 class="no">Not for you, if you:</h3>
+              <ul>
+                <li>
+                  <span class="icon-no">&#10007;</span> Haven't built an agent yet (start with the
+                  basics first)
+                </li>
+                <li>
+                  <span class="icon-no">&#10007;</span> Want a plug-and-play SaaS product (these are
+                  architecture files, not an app)
+                </li>
+                <li>
+                  <span class="icon-no">&#10007;</span> Are looking for a course with hand-holding
+                  (these are files, not lessons)
+                </li>
+              </ul>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- ============================================================
+      <!-- ============================================================
          8. FAQ
          ============================================================ -->
-    <section class="section reveal">
-      <div class="container">
-        <div class="section-label">FAQ</div>
-        <h2>Questions</h2>
-        <div class="faq-list">
-          <div class="faq-item">
-            <button class="faq-btn" onclick="toggleFaq(this)" aria-expanded="false">
-              <span>What AI provider does this work with?</span>
-              <span class="faq-indicator">+</span>
-            </button>
-            <div class="faq-answer">
-              <div class="faq-answer-inner">
-                Built on Claude Code / Anthropic, but the architecture is provider-agnostic. The
-                patterns (SOUL, CONSTITUTION, memory tower, reconciler) work with any LLM. You're
-                buying the system design, not provider-specific prompts.
+      <section class="section reveal">
+        <div class="container">
+          <div class="section-label">FAQ</div>
+          <h2>Questions</h2>
+          <div class="faq-list">
+            <div class="faq-item">
+              <button class="faq-btn" onclick="toggleFaq(this)" aria-expanded="false">
+                <span>What AI provider does this work with?</span>
+                <span class="faq-indicator">+</span>
+              </button>
+              <div class="faq-answer">
+                <div class="faq-answer-inner">
+                  Built on Claude Code / Anthropic, but the architecture is provider-agnostic. The
+                  patterns (SOUL, CONSTITUTION, memory tower, reconciler) work with any LLM. You're
+                  buying the system design, not provider-specific prompts.
+                </div>
               </div>
             </div>
-          </div>
 
-          <div class="faq-item">
-            <button class="faq-btn" onclick="toggleFaq(this)" aria-expanded="false">
-              <span>Do I need specific infrastructure?</span>
-              <span class="faq-indicator">+</span>
-            </button>
-            <div class="faq-answer">
-              <div class="faq-answer-inner">
-                No. The entire system runs on a Mac Mini. No Kubernetes, no Docker, no cloud
-                infrastructure required. If your machine can run an LLM API call, it can run this.
+            <div class="faq-item">
+              <button class="faq-btn" onclick="toggleFaq(this)" aria-expanded="false">
+                <span>Do I need specific infrastructure?</span>
+                <span class="faq-indicator">+</span>
+              </button>
+              <div class="faq-answer">
+                <div class="faq-answer-inner">
+                  No. The entire system runs on a Mac Mini. No Kubernetes, no Docker, no cloud
+                  infrastructure required. If your machine can run an LLM API call, it can run this.
+                </div>
               </div>
             </div>
-          </div>
 
-          <div class="faq-item">
-            <button class="faq-btn" onclick="toggleFaq(this)" aria-expanded="false">
-              <span>Is this a framework I install?</span>
-              <span class="faq-indicator">+</span>
-            </button>
-            <div class="faq-answer">
-              <div class="faq-answer-inner">
-                No. These are files you copy into your project. No npm install. No dependencies. No
-                lock-in. Read them, understand them, customize them for your use case.
+            <div class="faq-item">
+              <button class="faq-btn" onclick="toggleFaq(this)" aria-expanded="false">
+                <span>Is this a framework I install?</span>
+                <span class="faq-indicator">+</span>
+              </button>
+              <div class="faq-answer">
+                <div class="faq-answer-inner">
+                  No. These are files you copy into your project. No npm install. No dependencies.
+                  No lock-in. Read them, understand them, customize them for your use case.
+                </div>
               </div>
             </div>
-          </div>
 
-          <div class="faq-item">
-            <button class="faq-btn" onclick="toggleFaq(this)" aria-expanded="false">
-              <span>How is this different from blog posts about agents?</span>
-              <span class="faq-indicator">+</span>
-            </button>
-            <div class="faq-answer">
-              <div class="faq-answer-inner">
-                Blog posts tell you what to do. These files show you how. The difference between
-                "you should have a memory system" and the actual 4-layer memory tower implementation
-                with pruning, archival, and cross-agent knowledge flow.
+            <div class="faq-item">
+              <button class="faq-btn" onclick="toggleFaq(this)" aria-expanded="false">
+                <span>How is this different from blog posts about agents?</span>
+                <span class="faq-indicator">+</span>
+              </button>
+              <div class="faq-answer">
+                <div class="faq-answer-inner">
+                  Blog posts tell you what to do. These files show you how. The difference between
+                  "you should have a memory system" and the actual 4-layer memory tower
+                  implementation with pruning, archival, and cross-agent knowledge flow.
+                </div>
               </div>
             </div>
-          </div>
 
-          <div class="faq-item">
-            <button class="faq-btn" onclick="toggleFaq(this)" aria-expanded="false">
-              <span>What if I'm not using agents for customer service?</span>
-              <span class="faq-indicator">+</span>
-            </button>
-            <div class="faq-answer">
-              <div class="faq-answer-inner">
-                The architecture works for any domain. The included examples happen to be CS agents,
-                but the patterns (identity isolation, memory tower, self-healing, orchestration)
-                apply to coding agents, data agents, ops agents, or anything else.
+            <div class="faq-item">
+              <button class="faq-btn" onclick="toggleFaq(this)" aria-expanded="false">
+                <span>What if I'm not using agents for customer service?</span>
+                <span class="faq-indicator">+</span>
+              </button>
+              <div class="faq-answer">
+                <div class="faq-answer-inner">
+                  The architecture works for any domain. The included examples happen to be CS
+                  agents, but the patterns (identity isolation, memory tower, self-healing,
+                  orchestration) apply to coding agents, data agents, ops agents, or anything else.
+                </div>
               </div>
             </div>
-          </div>
 
-          <div class="faq-item">
-            <button class="faq-btn" onclick="toggleFaq(this)" aria-expanded="false">
-              <span>Can I use this for client projects?</span>
-              <span class="faq-indicator">+</span>
-            </button>
-            <div class="faq-answer">
-              <div class="faq-answer-inner">
-                Yes. Use these files in as many projects as you want. No attribution required. Build
-                products, charge clients, ship to production.
+            <div class="faq-item">
+              <button class="faq-btn" onclick="toggleFaq(this)" aria-expanded="false">
+                <span>Can I use this for client projects?</span>
+                <span class="faq-indicator">+</span>
+              </button>
+              <div class="faq-answer">
+                <div class="faq-answer-inner">
+                  Yes. Use these files in as many projects as you want. No attribution required.
+                  Build products, charge clients, ship to production.
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- ============================================================
+      <!-- ============================================================
          9. FINAL CTA
          ============================================================ -->
-    <section class="final-cta reveal">
-      <div class="container">
-        <h2>Stop babysitting. Start shipping.</h2>
-        <p>21 production files. Copy, customize, deploy.</p>
-        <a href="#pricing" class="btn btn-primary">Get the production blueprints &rarr;</a>
-        <p class="small-text">$47 &middot; one-time &middot; lifetime updates</p>
-      </div>
-    </section>
-
+      <section class="final-cta reveal">
+        <div class="container">
+          <h2>Stop babysitting. Start shipping.</h2>
+          <p>21 production files. Copy, customize, deploy.</p>
+          <a
+            href="#pricing"
+            class="btn btn-primary"
+            aria-label="View pricing and get the production blueprints"
+            >Get the production blueprints &rarr;</a
+          >
+          <p class="small-text">$47 &middot; one-time &middot; lifetime updates</p>
+        </div>
+      </section>
+    </main>
     <!-- ============================================================
          FOOTER
          ============================================================ -->
@@ -1849,7 +2122,12 @@
 
           sending = true;
           sendBtn.disabled = true;
-          input.value = "";
+
+          // Force clear input (some browsers need explicit handling)
+          var chatField = document.getElementById("chatInput");
+          chatField.value = "";
+          chatField.setAttribute("value", "");
+          chatField.dispatchEvent(new Event("input"));
 
           addMsg("user", text);
           showTyping();

@@ -1,0 +1,136 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        width: 1200px;
+        height: 630px;
+        background: #0a0a0a;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        position: relative;
+      }
+      /* Subtle grid pattern */
+      body::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image:
+          linear-gradient(rgba(34, 197, 94, 0.03) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(34, 197, 94, 0.03) 1px, transparent 1px);
+        background-size: 40px 40px;
+      }
+      /* Green glow */
+      .glow {
+        position: absolute;
+        width: 400px;
+        height: 400px;
+        background: radial-gradient(circle, rgba(34, 197, 94, 0.12) 0%, transparent 70%);
+        top: -100px;
+        right: -50px;
+        border-radius: 50%;
+      }
+      .content {
+        position: relative;
+        z-index: 1;
+        padding: 80px;
+        width: 100%;
+      }
+      .badge {
+        display: inline-block;
+        background: rgba(34, 197, 94, 0.15);
+        color: #22c55e;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        padding: 8px 16px;
+        border-radius: 6px;
+        border: 1px solid rgba(34, 197, 94, 0.3);
+        margin-bottom: 32px;
+      }
+      h1 {
+        font-size: 56px;
+        font-weight: 800;
+        color: #e5e5e5;
+        line-height: 1.15;
+        margin-bottom: 24px;
+        max-width: 900px;
+      }
+      h1 span {
+        color: #22c55e;
+      }
+      .subtitle {
+        font-size: 22px;
+        color: #a1a1a1;
+        line-height: 1.5;
+        max-width: 700px;
+        margin-bottom: 40px;
+      }
+      .stats {
+        display: flex;
+        gap: 48px;
+      }
+      .stat-num {
+        font-size: 32px;
+        font-weight: 800;
+        color: #22c55e;
+      }
+      .stat-label {
+        font-size: 13px;
+        color: #666;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-top: 4px;
+      }
+      .domain {
+        position: absolute;
+        bottom: 40px;
+        right: 80px;
+        font-size: 18px;
+        color: #444;
+        font-weight: 600;
+        letter-spacing: 1px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="glow"></div>
+    <div class="content">
+      <div class="badge">Production Architecture</div>
+      <h1>Ship <span>AI Agents</span> to Production</h1>
+      <p class="subtitle">
+        21 battle-tested files for running Claude Code agents 24/7. Identity, memory, monitoring,
+        orchestration.
+      </p>
+      <div class="stats">
+        <div>
+          <div class="stat-num">21</div>
+          <div class="stat-label">Files</div>
+        </div>
+        <div>
+          <div class="stat-num">14K+</div>
+          <div class="stat-label">Lines</div>
+        </div>
+        <div>
+          <div class="stat-num">90+</div>
+          <div class="stat-label">Days Uptime</div>
+        </div>
+        <div>
+          <div class="stat-num">10+</div>
+          <div class="stat-label">Agents</div>
+        </div>
+      </div>
+    </div>
+    <div class="domain">thinker.cafe</div>
+  </body>
+</html>
