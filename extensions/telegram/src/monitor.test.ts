@@ -180,7 +180,7 @@ async function runMonitorAndCaptureStartupOrder(params?: { persistedOffset?: num
   return { order };
 }
 
-function mockRunOnceWithStalledPollingRunner(): {
+function mockRunOnceWithStalledPollingRunner(options?: { size?: () => number }): {
   stop: ReturnType<typeof vi.fn<() => void | Promise<void>>>;
   waitForTaskStart: () => Promise<void>;
 } {
@@ -211,6 +211,7 @@ function mockRunOnceWithStalledPollingRunner(): {
         }),
       stop,
       isRunning: () => running,
+      size: options?.size ?? (() => 0),
     }),
   );
   return {
@@ -836,6 +837,26 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(stop).not.toHaveBeenCalled();
     abort.abort();
     await monitor;
+    vi.useRealTimers();
+  });
+
+  it("forces restart when in-flight updates remain stuck for too long", async () => {
+    const { monitorTelegramProvider } = await import("./monitor.js");
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const { stop } = mockRunOnceWithStalledPollingRunner({
+      size: () => 1,
+    });
+    mockRunOnceAndAbort(abort);
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+
+    vi.advanceTimersByTime(11 * 60_000);
+    await monitor;
+
+    expect(stop).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
 
