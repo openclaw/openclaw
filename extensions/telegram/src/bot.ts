@@ -127,6 +127,20 @@ function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
   }
 }
 
+function shouldMarkTelegramNetworkHealthy(response: Response): boolean {
+  if (response.ok) {
+    return true;
+  }
+  if (response.status < 400 || response.status >= 500 || response.status === 407) {
+    return false;
+  }
+  // Telegram Bot API rejections are JSON responses. Proxy-generated 4xx responses
+  // such as 407 often come back as plaintext/HTML before the request ever reaches
+  // Telegram, so they must not clear the outage streak.
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  return contentType.includes("application/json");
+}
+
 export function createTelegramBot(opts: TelegramBotOptions) {
   const botRuntime = telegramBotRuntimeForTest ?? DEFAULT_TELEGRAM_BOT_RUNTIME;
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
@@ -232,7 +246,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     finalFetch = ((input: TelegramFetchInput, init?: TelegramFetchInit) => {
       return Promise.resolve(baseFetch(input, init))
         .then((response) => {
-          if (response.ok || (response.status >= 400 && response.status < 500)) {
+          if (shouldMarkTelegramNetworkHealthy(response)) {
             noteTelegramNetworkHealthy?.();
           }
           return response;
