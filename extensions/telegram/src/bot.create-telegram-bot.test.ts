@@ -575,7 +575,13 @@ describe("createTelegramBot", () => {
 
   it("resets typing network streaks when another Telegram API fetch succeeds", async () => {
     vi.useFakeTimers();
-    const fetchSpy = vi.fn(async () => new Response("{}", { status: 200 }));
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: true, result: true }), {
+          status: 200,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        }),
+    );
     try {
       const onRecoverableSendChatActionNetworkFailure = vi.fn();
       sendChatActionSpy.mockRejectedValue(
