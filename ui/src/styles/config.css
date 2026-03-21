@@ -185,7 +185,7 @@
 .config-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   padding: 10px 20px;
   background: var(--bg-accent);

@@ -1037,6 +1037,8 @@
 }
 
 /* Hide mobile-only chat toggle on desktop */
-.topbar-status .chat-mobile-controls-wrapper {
-  display: none !important;
+@media (min-width: 769px) {
+  .topbar-status .chat-mobile-controls-wrapper {
+    display: none;
+  }
 }
