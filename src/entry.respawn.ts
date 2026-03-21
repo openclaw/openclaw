@@ -1,4 +1,4 @@
-import { resolveAutoNodeExtraCaCerts } from "./bootstrap/node-extra-ca-certs.js";
+import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
 import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
 import { isTruthyEnvValue } from "./infra/env.js";
 
@@ -45,10 +45,11 @@ export function buildCliRespawnPlan(
 
   const autoNodeExtraCaCerts =
     params.autoNodeExtraCaCerts ??
-    resolveAutoNodeExtraCaCerts({
+    resolveNodeStartupTlsEnvironment({
       env,
       execPath,
-    });
+      includeDarwinDefaults: false,
+    }).NODE_EXTRA_CA_CERTS;
   if (
     autoNodeExtraCaCerts &&
     !isTruthyEnvValue(env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]) &&
