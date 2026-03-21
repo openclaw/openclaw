@@ -50,8 +50,17 @@ describe("tryRouteCli", () => {
     }
   });
 
-  it("passes suppressDoctorStdout=true for routed --json commands", async () => {
+  it("skips the heavy config guard for lean routed status --json", async () => {
     await expect(tryRouteCli(["node", "openclaw", "status", "--json"])).resolves.toBe(true);
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("still runs config guard for non-lean routed status json modes", async () => {
+    await expect(tryRouteCli(["node", "openclaw", "status", "--json", "--all"])).resolves.toBe(
+      true,
+    );
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -5,6 +5,19 @@ import { getCommandPathWithRootOptions, hasFlag, hasHelpOrVersion } from "./argv
 import { emitCliBanner } from "./banner.js";
 import { findRoutedCommand } from "./program/routes.js";
 
+function shouldSkipConfigGuardForLeanStatusJson(params: {
+  argv: string[];
+  commandPath: string[];
+}): boolean {
+  return (
+    params.commandPath[0] === "status" &&
+    hasFlag(params.argv, "--json") &&
+    !hasFlag(params.argv, "--all") &&
+    !hasFlag(params.argv, "--deep") &&
+    !hasFlag(params.argv, "--usage")
+  );
+}
+
 async function prepareRoutedCommand(params: {
   argv: string[];
   commandPath: string[];
@@ -12,12 +25,14 @@ async function prepareRoutedCommand(params: {
 }) {
   const suppressDoctorStdout = hasFlag(params.argv, "--json");
   emitCliBanner(VERSION, { argv: params.argv });
-  const { ensureConfigReady } = await import("./program/config-guard.js");
-  await ensureConfigReady({
-    runtime: defaultRuntime,
-    commandPath: params.commandPath,
-    ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
-  });
+  if (!shouldSkipConfigGuardForLeanStatusJson(params)) {
+    const { ensureConfigReady } = await import("./program/config-guard.js");
+    await ensureConfigReady({
+      runtime: defaultRuntime,
+      commandPath: params.commandPath,
+      ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+    });
+  }
   const shouldLoadPlugins =
     typeof params.loadPlugins === "function" ? params.loadPlugins(params.argv) : params.loadPlugins;
   if (shouldLoadPlugins) {
