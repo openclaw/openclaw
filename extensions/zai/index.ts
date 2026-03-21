@@ -112,6 +112,7 @@ async function runZaiApiKeyAuth(
         ? (ctx.secretInputMode ?? "plaintext")
         : ctx.secretInputMode,
     config: ctx.config,
+    agentDir: ctx.agentDir,
     expectedProviders: [PROVIDER_ID, "z-ai"],
     provider: PROVIDER_ID,
     envLabel: "ZAI_API_KEY",

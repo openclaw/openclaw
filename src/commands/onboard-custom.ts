@@ -204,6 +204,19 @@ function buildEndpointIdFromUrl(baseUrl: string): string {
   }
 }
 
+function buildEndpointAuthHintFromUrl(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    const host = url.hostname.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    const port = url.port ? `-${url.port}` : "";
+    const path = url.pathname.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    const candidate = `custom-${host}${port}${path ? `-${path}` : ""}`;
+    return normalizeEndpointId(candidate) || "custom";
+  } catch {
+    return "custom";
+  }
+}
+
 function resolveUniqueEndpointId(params: {
   requestedId: string;
   baseUrl: string;
@@ -448,7 +461,7 @@ async function promptBaseUrlAndKey(params: {
     },
   });
   const baseUrl = baseUrlInput.trim();
-  const providerHint = buildEndpointIdFromUrl(baseUrl) || "custom";
+  const providerHint = buildEndpointAuthHintFromUrl(baseUrl) || "custom";
   let apiKeyInput: SecretInput | undefined;
   const resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
