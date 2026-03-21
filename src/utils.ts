@@ -297,13 +297,23 @@ export function resolveConfigDir(
   if (explicitHome && ALL_STATE_DIRNAMES.has(path.basename(resolvedHome))) {
     // Backward compat: if a nested config dir already exists from the old
     // buggy behavior, prefer it so we don't orphan existing config data.
-    const nestedConfig = path.join(resolvedHome, ".openclaw");
-    try {
-      if (fs.existsSync(nestedConfig)) {
-        return nestedConfig;
+    // Mirror resolveStateDir ordering: .openclaw first (canonical migration
+    // target), then self-named dir, then others.
+    const selfName = path.basename(resolvedHome);
+    const orderedNames = [
+      ".openclaw",
+      ...(selfName !== ".openclaw" ? [selfName] : []),
+      ...[...ALL_STATE_DIRNAMES].filter(n => n !== ".openclaw" && n !== selfName),
+    ];
+    for (const nestedName of orderedNames) {
+      const nestedConfig = path.join(resolvedHome, nestedName);
+      try {
+        if (fs.existsSync(nestedConfig)) {
+          return nestedConfig;
+        }
+      } catch {
+        // best-effort
       }
-    } catch {
-      // best-effort
     }
     return resolvedHome;
   }

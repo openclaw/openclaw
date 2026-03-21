@@ -171,6 +171,34 @@ describe("resolveConfigDir", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("prefers .openclaw nested dir over self-named when both exist under OPENCLAW_HOME (.clawdbot)", () => {
+    const tmpDir = path.join(os.tmpdir(), `openclaw-test-config-${Date.now()}`);
+    const homeDir = path.join(tmpDir, ".clawdbot");
+    const openclawNested = path.join(homeDir, ".openclaw");
+    const selfNested = path.join(homeDir, ".clawdbot");
+    fs.mkdirSync(openclawNested, { recursive: true });
+    fs.mkdirSync(selfNested, { recursive: true });
+    try {
+      const env = { OPENCLAW_HOME: homeDir } as NodeJS.ProcessEnv;
+      expect(resolveConfigDir(env)).toBe(openclawNested);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to self-named nested dir when .openclaw is absent (#45765)", () => {
+    const tmpDir = path.join(os.tmpdir(), `openclaw-test-config-${Date.now()}`);
+    const homeDir = path.join(tmpDir, ".clawdbot");
+    const selfNested = path.join(homeDir, ".clawdbot");
+    fs.mkdirSync(selfNested, { recursive: true });
+    try {
+      const env = { OPENCLAW_HOME: homeDir } as NodeJS.ProcessEnv;
+      expect(resolveConfigDir(env)).toBe(selfNested);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("resolveHomeDir", () => {

@@ -191,14 +191,14 @@ describe("resolveStateDir nesting guard (#45765)", () => {
     vi.restoreAllMocks();
   });
 
-  it("prioritizes self-named nested dir over config-only .openclaw when OPENCLAW_HOME ends in .clawdbot", () => {
+  it("prefers .openclaw nested dir over self-named when both exist under OPENCLAW_HOME (.clawdbot)", () => {
     const env = { OPENCLAW_HOME: "/home/user/.clawdbot" } as NodeJS.ProcessEnv;
     const selfNested = path.resolve("/home/user/.clawdbot/.clawdbot");
-    const configOnly = path.resolve("/home/user/.clawdbot/.openclaw");
+    const openclawNested = path.resolve("/home/user/.clawdbot/.openclaw");
     vi.spyOn(fsSync, "existsSync").mockImplementation(
-      (p) => String(p) === selfNested || String(p) === configOnly,
+      (p) => String(p) === selfNested || String(p) === openclawNested,
     );
-    expect(resolveStateDir(env)).toBe(selfNested);
+    expect(resolveStateDir(env)).toBe(openclawNested);
     vi.restoreAllMocks();
   });
 });
