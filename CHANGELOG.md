@@ -58,6 +58,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/topics: auto-rename DM forum topics on first message with LLM-generated labels, with per-account and per-DM `autoTopicLabel` overrides. (#51502) Thanks @Lukavyi.
 - Docs/plugins: add the community wecom plugin listing to the docs catalog. (#29905) Thanks @sliverp.
 - Models/GitHub Copilot: allow forward-compat dynamic model ids without code updates, while preserving configured provider and per-model overrides for those synthetic models. (#51325) Thanks @fuller-stack-dev.
+- Agents/tools: replace tool media delivery payloads to use `details.media` (instead of `details.reply`) for media artifacts; plugins should emit `details.media` for attachments. (#51731) Thanks @christianklotz.
 
 ### Fixes
 
