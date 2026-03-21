@@ -11,10 +11,10 @@ const mocks = vi.hoisted(() => ({
 
 registerGetReplyCommonMocks();
 
-vi.mock("../../link-understanding/apply.js", () => ({
+vi.mock("../../link-understanding/apply.runtime.js", () => ({
   applyLinkUnderstanding: vi.fn(async () => undefined),
 }));
-vi.mock("../../media-understanding/apply.js", () => ({
+vi.mock("../../media-understanding/apply.runtime.js", () => ({
   applyMediaUnderstanding: vi.fn(async () => undefined),
 }));
 vi.mock("./commands-core.js", () => ({
