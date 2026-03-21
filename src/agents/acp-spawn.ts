@@ -425,6 +425,7 @@ function registerAcpSubagentRun(params: {
   label?: string;
   spawnMode: SpawnAcpMode;
   cfg: OpenClawConfig;
+  parentRelay?: AcpSpawnParentRelayHandle;
 }): void {
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
   const displayKey = resolveDisplaySessionKey({
@@ -446,6 +447,7 @@ function registerAcpSubagentRun(params: {
       expectsCompletionMessage: false,
     });
   } catch (err) {
+    params.parentRelay?.dispose();
     log.warn("Failed to register ACP subagent run", {
       runId: params.runId,
       error: String(err),
@@ -746,11 +748,7 @@ export async function spawnAcpDirect(
     isDeliverableMessageChannel(requesterOrigin.channel) &&
     !isInternalMessageChannel(requesterOrigin.channel);
   const useExternalRunDelivery =
-    !useInlineDelivery &&
-    !effectiveStreamToParent &&
-    spawnMode === "run" &&
-    isExternalChannel &&
-    hasDeliveryTarget;
+    !effectiveStreamToParent && spawnMode === "run" && isExternalChannel && hasDeliveryTarget;
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   const streamLogPath =
@@ -833,6 +831,7 @@ export async function spawnAcpDirect(
       label: params.label,
       spawnMode,
       cfg,
+      parentRelay,
     });
     return {
       status: "accepted",
