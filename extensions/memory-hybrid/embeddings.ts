@@ -13,6 +13,8 @@ export const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
   "gemini-embedding-001": 3072,
+  "text-embedding-004": 768,
+  "gemini-embedding-2-preview": 3072,
 };
 
 export function vectorDimsForModel(model: string): number {
@@ -38,13 +40,15 @@ export class Embeddings {
   private openai?: OpenAI;
   // Simple in-memory cache ("Myelination") to avoid redundant API calls
   private cache = new Map<string, number[]>();
+  private readonly provider: EmbeddingProvider;
   private readonly maxCacheSize = 100;
 
   constructor(
     private readonly apiKey: string,
     private readonly model: string,
-    private readonly provider: EmbeddingProvider,
+    private readonly outputDimensionality?: number,
   ) {
+    this.provider = detectProvider(model);
     if (this.provider === "openai") {
       this.openai = new OpenAI({ apiKey });
     }
@@ -64,7 +68,9 @@ export class Embeddings {
     if (this.provider === "openai") {
       vector = await this.embedOpenAI(text);
     } else {
-      vector = await this.embedGoogle(text);
+      // Pass dimension if supported (Matryoshka)
+      const dims = this.outputDimensionality ?? EMBEDDING_DIMENSIONS[this.model];
+      vector = await this.embedGoogle(text, dims);
     }
 
     // Update cache
@@ -88,18 +94,24 @@ export class Embeddings {
     });
   }
 
-  private async embedGoogle(text: string): Promise<number[]> {
+  private async embedGoogle(text: string, dimensions?: number): Promise<number[]> {
     return this.withRetry(async () => {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:embedContent?key=${this.apiKey}`;
+
+      const body: any = {
+        model: `models/${this.model}`,
+        content: { parts: [{ text }] },
+        taskType: "RETRIEVAL_DOCUMENT",
+      };
+
+      if (dimensions) {
+        body.outputDimensionality = dimensions;
+      }
 
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: `models/${this.model}`,
-          content: { parts: [{ text }] },
-          taskType: "RETRIEVAL_DOCUMENT",
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {

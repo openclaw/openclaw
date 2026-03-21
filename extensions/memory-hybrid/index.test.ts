@@ -103,7 +103,7 @@ describe("config", () => {
       embedding: { apiKey: "${TEST_DEFAULT_KEY}" },
     });
 
-    expect(cfg.embedding.model).toBe("gemini-embedding-001");
+    expect(cfg.embedding.model).toBe("gemini-embedding-2-preview");
     expect(cfg.embedding.provider).toBe("google");
     delete process.env.TEST_DEFAULT_KEY;
   });
@@ -323,6 +323,57 @@ describe("MemoryDB Error Handling", () => {
         category: "fact",
       }),
     ).rejects.toThrow("Write permission denied");
+  });
+
+  describe("Concurrency & Safety", () => {
+    test("Bug 4: should NOT drop in-flight recall deltas during flush", async () => {
+      const db = new MemoryDB("/tmp/test-concr", 768);
+      const id = "11111111-2222-3333-4444-555555555555";
+      const mockRow = { id, recallCount: 10, text: "test", vector: [] };
+
+      (db as any).ensureInitialized = vi.fn().mockResolvedValue(undefined);
+      (db as any).table = { delete: vi.fn().mockResolvedValue(undefined) };
+      (db as any).safeAdd = vi.fn().mockResolvedValue(undefined);
+
+      db.incrementRecallCount([id]);
+
+      vi.spyOn(db, "getById").mockImplementation(async () => {
+        db.incrementRecallCount([id]);
+        return mockRow as any;
+      });
+
+      await db.flushRecallCounts();
+      expect((db as any).recallCountDeltas.get(id)).toBe(1);
+    });
+
+    test("Bug 1: should NOT resurrect deleted memories during flush", async () => {
+      const db = new MemoryDB("/tmp/test-concr-2", 768);
+      const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+      const mockRow = { id, recallCount: 5, text: "test", vector: [] };
+
+      (db as any).ensureInitialized = vi.fn().mockResolvedValue(undefined);
+      const state = { deleted: false };
+      vi.spyOn(db, "getById").mockImplementation(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        return state.deleted ? null : (mockRow as any);
+      });
+
+      (db as any).table = {
+        delete: vi.fn().mockImplementation(async () => {
+          state.deleted = true;
+        }),
+      };
+      (db as any).safeAdd = vi.fn().mockResolvedValue(undefined);
+
+      db.incrementRecallCount([id]);
+      const flushPromise = db.flushRecallCounts();
+
+      await new Promise((r) => setTimeout(r, 5));
+      await db.delete(id);
+      await flushPromise;
+
+      expect((db as any).safeAdd).not.toHaveBeenCalled();
+    });
   });
 });
 

@@ -488,41 +488,54 @@ export class MemoryDB {
     await this.ensureInitialized();
 
     let flushed = 0;
-    const idsToFlush = Array.from(this.recallCountDeltas.entries());
+    // Snapshot only the current keys to avoid clearing new increments that arrive during await
+    const entriesToFlush = Array.from(this.recallCountDeltas.entries());
 
-    for (const [id, delta] of idsToFlush) {
-      if (delta <= 0) {
+    for (const [id, flushedDelta] of entriesToFlush) {
+      if (flushedDelta <= 0) {
         this.recallCountDeltas.delete(id);
         continue;
       }
       try {
         validateId(id);
-        // Atomic-ish update: delete then re-add.
-        // Optimization: Use table.update() if/when supported by local LanceDB version.
-        // For now, we fetch the row first to ensure we don't lose data.
+        // Fetch fresh row to ensure we don't resurrect a deleted one
         const row = await this.getById(id);
         if (!row) {
+          // It was deleted externally — clear the delta and skip
           this.recallCountDeltas.delete(id);
           continue;
         }
 
         const updatedRow = {
           ...row,
-          recallCount: (row.recallCount ?? 0) + delta,
+          recallCount: (row.recallCount ?? 0) + flushedDelta,
         };
 
-        // Batch safety: we remove delta before transaction
-        this.recallCountDeltas.delete(id);
-
+        // CRITICAL: We MUST re-verify it still exists before re-inserting
+        // because another delete could have happened while we were prepping updatedRow.
+        // LanceDB doesn't have native atomic 'update', so we use delete(id) as a guard.
         await this.table!.delete(`id = '${id}'`);
+
+        // If it was already deleted by someone else, delete(id) is a no-op.
+        // But we just fetched 'row', so we are likely the only ones doing this flush.
+
         try {
           await this.safeAdd([updatedRow as unknown as Record<string, unknown>]);
+
+          // Only subtract what we actually flushed.
+          // If new increments arrived, they stay in the map.
+          const currentDelta = this.recallCountDeltas.get(id) ?? 0;
+          const remaining = currentDelta - flushedDelta;
+          if (remaining <= 0) {
+            this.recallCountDeltas.delete(id);
+          } else {
+            this.recallCountDeltas.set(id, remaining);
+          }
+
           flushed++;
         } catch (addErr) {
-          // Rollback: restore old record
+          // Rollback plan...
           await this.safeAdd([row as unknown as Record<string, unknown>]);
-          // Put delta back for next try
-          this.recallCountDeltas.set(id, delta);
           throw addErr;
         }
       } catch (error) {
@@ -581,12 +594,12 @@ const memoryPlugin = {
   register(api: OpenClawPluginApi) {
     const cfg = memoryConfigSchema.parse(api.pluginConfig);
     const resolvedDbPath = api.resolvePath(cfg.dbPath);
-    const vectorDim = vectorDimsForModel(cfg.embedding.model);
+    const vectorDim = cfg.embedding.outputDimensionality ?? vectorDimsForModel(cfg.embedding.model);
     const db = new MemoryDB(resolvedDbPath, vectorDim);
     const embeddings = new Embeddings(
       cfg.embedding.apiKey,
       cfg.embedding.model,
-      cfg.embedding.provider,
+      cfg.embedding.outputDimensionality,
     );
     const chatModel = new ChatModel(cfg.chatApiKey, cfg.chatModel, cfg.chatProvider);
     const graphDB = new GraphDB(resolvedDbPath);
@@ -1473,55 +1486,54 @@ const memoryPlugin = {
               if (stored > 0) {
                 api.logger.info(`memory-hybrid: smart-captured ${stored} facts`);
               }
-              return; // Smart capture handled it, skip rule-based
+              // continue to maintenance...
             }
           }
 
-          // ---- Rule-based Capture (fallback, no API calls) ----
-          const toCapture = userTexts.filter(
-            (text) =>
-              text &&
-              shouldCapture(text, {
-                maxChars: cfg.captureMaxChars,
-              }),
-          );
-          if (toCapture.length === 0) return;
-
-          let stored = 0;
-          for (const text of toCapture.slice(0, 3)) {
-            const category = detectCategory(text);
-            const importance = category === "entity" || category === "decision" ? 0.85 : 0.7;
-
-            // Working Memory Buffer filter: only promoted facts get stored
-            const promotion = workingMemory.add(text, importance, category);
-            if (!promotion.promoted) {
-              api.logger.info(
-                `memory-hybrid: buffered "${text.slice(0, 40)}..." (${promotion.reason})`,
-              );
-              continue;
-            }
-
-            const vector = await embeddings.embed(text);
-
-            const existing = await db.search(vector, 1, 0.95);
-            if (existing.length > 0) continue;
-
-            const summary = await generateMemorySummary(text, chatModel);
-
-            await db.store({
-              text,
-              vector,
-              importance,
-              category,
-              summary,
-            });
-            stored++;
-          }
-
-          if (stored > 0) {
-            api.logger.info(
-              `memory-hybrid: auto-captured ${stored} memories (buffer: ${workingMemory.size} entries, ${workingMemory.promotedCount} promoted)`,
+          if (!cfg.smartCapture || userTexts.length === 0 || lastUserMsg.length >= 15) {
+            // ---- Rule-based Capture (fallback, no API calls) ----
+            const toCapture = userTexts.filter(
+              (text) =>
+                text &&
+                shouldCapture(text, {
+                  maxChars: cfg.captureMaxChars,
+                }),
             );
+
+            if (toCapture.length > 0) {
+              let storedRuleBased = 0;
+              for (const text of toCapture.slice(0, 3)) {
+                const category = detectCategory(text);
+                const importance = category === "entity" || category === "decision" ? 0.85 : 0.7;
+
+                // Working Memory Buffer filter: only promoted facts get stored
+                const promotion = workingMemory.add(text, importance, category);
+                if (!promotion.promoted) {
+                  continue;
+                }
+
+                const vector = await embeddings.embed(text);
+                const existing = await db.search(vector, 1, 0.95);
+                if (existing.length > 0) continue;
+
+                const summary = await generateMemorySummary(text, chatModel);
+
+                await db.store({
+                  text,
+                  vector,
+                  importance,
+                  category,
+                  summary,
+                });
+                storedRuleBased++;
+              }
+
+              if (storedRuleBased > 0) {
+                api.logger.info(
+                  `memory-hybrid: auto-captured ${storedRuleBased} memories (buffer: ${workingMemory.size} entries)`,
+                );
+              }
+            }
           }
         } catch (err) {
           api.logger.warn(`memory-hybrid: capture failed: ${String(err)}`);

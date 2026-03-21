@@ -19,6 +19,7 @@ export type MemoryConfig = {
     provider: EmbeddingProvider;
     model: string;
     apiKey: string;
+    outputDimensionality?: number;
   };
   chatModel: string;
   chatApiKey: string;
@@ -37,7 +38,7 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 // Defaults
 // ============================================================================
 
-const DEFAULT_MODEL = "gemini-embedding-001";
+const DEFAULT_MODEL = "gemini-embedding-2-preview";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 
 const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb");
@@ -101,7 +102,11 @@ export const memoryConfigSchema = {
     if (!embedding || typeof embedding.apiKey !== "string") {
       throw new Error("embedding.apiKey is required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model", "provider"], "embedding config");
+    assertAllowedKeys(
+      embedding,
+      ["apiKey", "model", "provider", "outputDimensionality"],
+      "embedding config",
+    );
 
     const model = typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
 
@@ -155,6 +160,10 @@ export const memoryConfigSchema = {
         provider,
         model,
         apiKey: resolvedEmbeddingApiKey,
+        outputDimensionality:
+          typeof embedding.outputDimensionality === "number"
+            ? embedding.outputDimensionality
+            : undefined,
       },
       chatModel,
       chatApiKey,
@@ -177,7 +186,13 @@ export const memoryConfigSchema = {
     "embedding.model": {
       label: "Embedding Model",
       placeholder: DEFAULT_MODEL,
-      help: "Embedding model: gemini-embedding-001 (Google, free) or text-embedding-3-small (OpenAI)",
+      help: "Embedding model: gemini-embedding-2-preview (Google, free, 3072 dims) or text-embedding-004 (768 dims)",
+    },
+    "embedding.outputDimensionality": {
+      label: "Output Dimensionality",
+      help: "Override model dimensions (Matryoshka). Options: 3072, 1536, 768. Recommended: 768 for efficiency.",
+      advanced: true,
+      placeholder: "auto",
     },
     chatModel: {
       label: "Chat Model",
