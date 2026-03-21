@@ -1,3 +1,4 @@
+import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -69,6 +70,10 @@ import {
   validateRuntimeOptionPatch,
 } from "./runtime-options.js";
 import { SessionActorQueue } from "./session-actor-queue.js";
+
+const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
+const ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS = 2_000;
+const ACP_TURN_TIMEOUT_REASON = "turn-timeout";
 
 export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
@@ -621,6 +626,7 @@ export class AcpSessionManager {
         let activeTurnStarted = false;
         let sawTurnOutput = false;
         let retryFreshHandle = false;
+        let skipPostTurnCleanup = false;
         try {
           const ensured = await this.ensureRuntimeHandle({
             cfg: input.cfg,
@@ -667,26 +673,56 @@ export class AcpSessionManager {
             input.signal && typeof AbortSignal.any === "function"
               ? AbortSignal.any([input.signal, internalAbortController.signal])
               : internalAbortController.signal;
-          for await (const event of runtime.runTurn({
-            handle,
-            text: input.text,
-            attachments: input.attachments,
-            mode: input.mode,
-            requestId: input.requestId,
-            signal: combinedSignal,
-          })) {
-            if (event.type === "error") {
-              streamError = new AcpRuntimeError(
-                normalizeAcpErrorCode(event.code),
-                event.message?.trim() || "ACP turn failed before completion.",
-              );
-            } else if (event.type === "text_delta" || event.type === "tool_call") {
-              sawTurnOutput = true;
+          const eventGate = { open: true };
+          const turnPromise = (async () => {
+            for await (const event of runtime.runTurn({
+              handle,
+              text: input.text,
+              attachments: input.attachments,
+              mode: input.mode,
+              requestId: input.requestId,
+              signal: combinedSignal,
+            })) {
+              if (!eventGate.open) {
+                continue;
+              }
+              if (event.type === "error") {
+                streamError = new AcpRuntimeError(
+                  normalizeAcpErrorCode(event.code),
+                  event.message?.trim() || "ACP turn failed before completion.",
+                );
+              } else if (event.type === "text_delta" || event.type === "tool_call") {
+                sawTurnOutput = true;
+              }
+              if (input.onEvent) {
+                await input.onEvent(event);
+              }
             }
-            if (input.onEvent) {
-              await input.onEvent(event);
+            if (eventGate.open && streamError) {
+              throw streamError;
             }
-          }
+          })();
+          const turnTimeoutMs = this.resolveTurnTimeoutMs({
+            cfg: input.cfg,
+            meta,
+          });
+          await this.awaitTurnWithTimeout({
+            sessionKey,
+            turnPromise,
+            timeoutMs: turnTimeoutMs + ACP_TURN_TIMEOUT_GRACE_MS,
+            timeoutLabelMs: turnTimeoutMs,
+            onTimeout: async () => {
+              eventGate.open = false;
+              skipPostTurnCleanup = true;
+              if (!activeTurn) {
+                return;
+              }
+              await this.cleanupTimedOutTurn({
+                sessionKey,
+                activeTurn,
+              });
+            },
+          });
           if (streamError) {
             throw streamError;
           }
@@ -735,7 +771,14 @@ export class AcpSessionManager {
           if (activeTurn && this.activeTurnBySession.get(actorKey) === activeTurn) {
             this.activeTurnBySession.delete(actorKey);
           }
-          if (!retryFreshHandle && runtime && handle && meta && meta.mode !== "oneshot") {
+          if (
+            !retryFreshHandle &&
+            !skipPostTurnCleanup &&
+            runtime &&
+            handle &&
+            meta &&
+            meta.mode !== "oneshot"
+          ) {
             ({ handle } = await this.reconcileRuntimeSessionIdentifiers({
               cfg: input.cfg,
               sessionKey,
@@ -745,7 +788,14 @@ export class AcpSessionManager {
               failOnStatusError: false,
             }));
           }
-          if (!retryFreshHandle && runtime && handle && meta && meta.mode === "oneshot") {
+          if (
+            !retryFreshHandle &&
+            !skipPostTurnCleanup &&
+            runtime &&
+            handle &&
+            meta &&
+            meta.mode === "oneshot"
+          ) {
             try {
               await runtime.close({
                 handle,
@@ -765,6 +815,173 @@ export class AcpSessionManager {
         }
       }
     });
+  }
+
+  private resolveTurnTimeoutMs(params: { cfg: OpenClawConfig; meta: SessionAcpMeta }): number {
+    const runtimeTimeoutSeconds = resolveRuntimeOptionsFromMeta(params.meta).timeoutSeconds;
+    if (
+      typeof runtimeTimeoutSeconds === "number" &&
+      Number.isFinite(runtimeTimeoutSeconds) &&
+      runtimeTimeoutSeconds > 0
+    ) {
+      return Math.max(1_000, Math.round(runtimeTimeoutSeconds * 1_000));
+    }
+    return resolveAgentTimeoutMs({
+      cfg: params.cfg,
+      minMs: 1_000,
+    });
+  }
+
+  private async awaitTurnWithTimeout<T>(params: {
+    sessionKey: string;
+    turnPromise: Promise<T>;
+    timeoutMs: number;
+    timeoutLabelMs: number;
+    onTimeout: () => Promise<void>;
+  }): Promise<T> {
+    const observedTurnPromise: Promise<
+      | {
+          kind: "value";
+          value: T;
+        }
+      | {
+          kind: "error";
+          error: unknown;
+        }
+    > = params.turnPromise.then(
+      (value) => ({
+        kind: "value" as const,
+        value,
+      }),
+      (error) => ({
+        kind: "error" as const,
+        error,
+      }),
+    );
+
+    if (params.timeoutMs <= 0) {
+      const outcome = await observedTurnPromise;
+      if (outcome.kind === "error") {
+        throw outcome.error;
+      }
+      return outcome.value;
+    }
+
+    const timeoutToken = Symbol("acp-turn-timeout");
+    let timer: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<typeof timeoutToken>((resolve) => {
+      timer = setTimeout(() => resolve(timeoutToken), params.timeoutMs);
+      timer.unref?.();
+    });
+
+    try {
+      const outcome = await Promise.race([observedTurnPromise, timeoutPromise]);
+      if (outcome === timeoutToken) {
+        void observedTurnPromise.then((lateOutcome) => {
+          if (lateOutcome.kind === "error") {
+            logVerbose(
+              `acp-manager: detached late turn error after timeout for ${params.sessionKey}: ${String(lateOutcome.error)}`,
+            );
+          }
+        });
+        await params.onTimeout();
+        throw new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          `ACP turn timed out after ${Math.max(1, Math.round(params.timeoutLabelMs / 1_000))}s.`,
+        );
+      }
+      if (outcome.kind === "error") {
+        throw outcome.error;
+      }
+      return outcome.value;
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  private async cleanupTimedOutTurn(params: {
+    sessionKey: string;
+    activeTurn: ActiveTurnState;
+  }): Promise<void> {
+    params.activeTurn.abortController.abort();
+    if (!params.activeTurn.cancelPromise) {
+      params.activeTurn.cancelPromise = params.activeTurn.runtime.cancel({
+        handle: params.activeTurn.handle,
+        reason: ACP_TURN_TIMEOUT_REASON,
+      });
+    }
+    await this.awaitCleanupWithGrace({
+      sessionKey: params.sessionKey,
+      label: "cancel",
+      promise: params.activeTurn.cancelPromise,
+    });
+    await this.awaitCleanupWithGrace({
+      sessionKey: params.sessionKey,
+      label: "close",
+      promise: params.activeTurn.runtime.close({
+        handle: params.activeTurn.handle,
+        reason: ACP_TURN_TIMEOUT_REASON,
+      }),
+    });
+    this.clearCachedRuntimeState(params.sessionKey);
+  }
+
+  private async awaitCleanupWithGrace(params: {
+    sessionKey: string;
+    label: "cancel" | "close";
+    promise: Promise<unknown>;
+  }): Promise<void> {
+    const observedCleanupPromise: Promise<
+      | {
+          kind: "done";
+        }
+      | {
+          kind: "error";
+          error: unknown;
+        }
+    > = params.promise.then(
+      () => ({
+        kind: "done" as const,
+      }),
+      (error) => ({
+        kind: "error" as const,
+        error,
+      }),
+    );
+    const timeoutToken = Symbol(`acp-timeout-${params.label}`);
+    let timer: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<typeof timeoutToken>((resolve) => {
+      timer = setTimeout(() => resolve(timeoutToken), ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS);
+      timer.unref?.();
+    });
+
+    try {
+      const outcome = await Promise.race([observedCleanupPromise, timeoutPromise]);
+      if (outcome === timeoutToken) {
+        void observedCleanupPromise.then((lateOutcome) => {
+          if (lateOutcome.kind === "error") {
+            logVerbose(
+              `acp-manager: detached timed-out turn ${params.label} cleanup failed for ${params.sessionKey}: ${String(lateOutcome.error)}`,
+            );
+          }
+        });
+        logVerbose(
+          `acp-manager: timed-out turn ${params.label} cleanup exceeded ${ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS}ms for ${params.sessionKey}`,
+        );
+        return;
+      }
+      if (outcome.kind === "error") {
+        logVerbose(
+          `acp-manager: timed-out turn ${params.label} cleanup failed for ${params.sessionKey}: ${String(outcome.error)}`,
+        );
+      }
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
   }
 
   async cancelSession(params: {

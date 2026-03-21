@@ -98,7 +98,7 @@ function createRuntime(): {
   };
 }
 
-function readySessionMeta() {
+function readySessionMeta(overrides: Partial<SessionAcpMeta> = {}): SessionAcpMeta {
   return {
     backend: "acpx",
     agent: "codex",
@@ -106,6 +106,7 @@ function readySessionMeta() {
     mode: "persistent" as const,
     state: "idle" as const,
     lastActivityAt: Date.now(),
+    ...overrides,
   };
 }
 
@@ -270,70 +271,91 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
 
-  it("reproduces queue starvation when a runtime turn never completes", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
+  it("times out a hung runtime turn and lets queued work continue", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtimeState = createRuntime();
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockReturnValue({
+        sessionKey: "agent:codex:acp:session-1",
+        storeSessionKey: "agent:codex:acp:session-1",
+        acp: readySessionMeta(),
+      });
 
-    let releaseFirstTurn!: () => void;
-    const firstTurnGate = new Promise<void>((resolve) => {
-      releaseFirstTurn = resolve;
-    });
-    let firstTurnStarted = false;
+      let firstTurnStarted = false;
+      runtimeState.runTurn.mockImplementation(async function* (input: { requestId: string }) {
+        if (input.requestId === "r1") {
+          firstTurnStarted = true;
+          await new Promise(() => {});
+        }
+        yield { type: "done" as const };
+      });
 
-    runtimeState.runTurn.mockImplementation(async function* (input: { requestId: string }) {
-      if (input.requestId === "r1") {
-        firstTurnStarted = true;
-        await firstTurnGate;
-      }
-      yield { type: "done" as const };
-    });
+      const manager = new AcpSessionManager();
+      const cfg = {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            timeoutSeconds: 1,
+          },
+        },
+      } as OpenClawConfig;
 
-    const manager = new AcpSessionManager();
-    const first = manager.runTurn({
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "first",
-      mode: "prompt",
-      requestId: "r1",
-    });
+      const first = manager.runTurn({
+        cfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "first",
+        mode: "prompt",
+        requestId: "r1",
+      });
+      void first.catch(() => undefined);
+      await vi.waitFor(() => {
+        expect(firstTurnStarted).toBe(true);
+      });
 
-    while (!firstTurnStarted) {
-      await new Promise((resolve) => setTimeout(resolve, 1));
+      const second = manager.runTurn({
+        cfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      });
+
+      await vi.advanceTimersByTimeAsync(3_500);
+
+      await expect(first).rejects.toMatchObject({
+        code: "ACP_TURN_FAILED",
+        message: "ACP turn timed out after 1s.",
+      });
+      await expect(second).resolves.toBeUndefined();
+
+      expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+      expect(runtimeState.cancel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "turn-timeout",
+        }),
+      );
+      expect(runtimeState.close).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "turn-timeout",
+        }),
+      );
+      expect(manager.getObservabilitySnapshot(cfg).turns).toMatchObject({
+        active: 0,
+        queueDepth: 0,
+        completed: 1,
+        failed: 1,
+      });
+
+      const states = extractStatesFromUpserts();
+      expect(states).toContain("error");
+      expect(states.at(-1)).toBe("idle");
+    } finally {
+      vi.useRealTimers();
     }
-
-    const second = manager.runTurn({
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "second",
-      mode: "prompt",
-      requestId: "r2",
-    });
-    let secondSettled = false;
-    void second.finally(() => {
-      secondSettled = true;
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    expect(manager.getObservabilitySnapshot(baseCfg).turns).toMatchObject({
-      active: 1,
-      queueDepth: 2,
-    });
-    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
-    expect(secondSettled).toBe(false);
-
-    releaseFirstTurn();
-    await Promise.all([first, second]);
-
-    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
 
   it("runs turns for different ACP sessions in parallel", async () => {
