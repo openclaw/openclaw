@@ -11,21 +11,14 @@ export function isAssistantMessage(msg: AgentMessage | undefined): msg is Assist
 
 /**
  * Strip malformed Minimax tool invocations that leak into text content.
- * Minimax sometimes embeds tool calls as XML in text blocks instead of
- * proper structured tool calls. This removes:
- * - <invoke name="...">...</invoke> blocks
- * - </minimax:tool_call> closing tags
  */
 export function stripMinimaxToolCallXml(text: string): string {
-  if (!text) {
-    return text;
-  }
-  if (!/minimax:tool_call/i.test(text)) {
+  if (!text || !/minimax:tool_call/i.test(text)) {
     return text;
   }
 
-  // Remove <invoke ...>...</invoke> blocks (non-greedy to handle multiple).
-  let cleaned = text.replace(MINIMAX_INVOKE_RE, "");
+  // Remove <invoke ...>...</invoke> blocks.
+  let cleaned = text.replace(/<invoke\b([^>]*?)>([\s\S]*?)<\/invoke>/gi, "");
 
   // Remove stray minimax tool tags.
   cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
@@ -35,17 +28,7 @@ export function stripMinimaxToolCallXml(text: string): string {
 
 /**
  * Strip model control tokens leaked into assistant text output.
- *
- * Models like GLM-5 and DeepSeek sometimes emit internal delimiter tokens
- * (e.g. `<|assistant|>`, `<|tool_call_result_begin|>`, `<｜begin▁of▁sentence｜>`)
- * in their responses. These use the universal `<|...|>` convention (ASCII or
- * full-width pipe variants) and should never reach end users.
- *
- * This is a provider bug — no upstream fix tracked yet.
- * Remove this function when upstream providers stop leaking tokens.
- * @see https://github.com/openclaw/openclaw/issues/40020
  */
-// Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
 
 export function stripModelSpecialTokens(text: string): string {
@@ -60,10 +43,7 @@ export function stripModelSpecialTokens(text: string): string {
 }
 
 /**
- * Strip downgraded tool call text representations that leak into text content.
- * When replaying history to Gemini, tool calls without `thought_signature` are
- * downgraded to text blocks like `[Tool Call: name (ID: ...)]`. These should
- * not be shown to users.
+ * Strip downgraded tool call text representations.
  */
 export function stripDowngradedToolCallText(text: string): string {
   if (!text) {
@@ -212,13 +192,8 @@ export function stripDowngradedToolCallText(text: string): string {
     return result;
   };
 
-  // Remove [Tool Call: name (ID: ...)] blocks and their Arguments.
   let cleaned = stripToolCalls(text);
-
-  // Remove [Tool Result for ID ...] blocks and their content.
   cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");
-
-  // Remove [Historical context: ...] markers (self-contained within brackets).
   cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, "");
 
   return cleaned.trim();
@@ -226,8 +201,6 @@ export function stripDowngradedToolCallText(text: string): string {
 
 /**
  * Strip thinking tags and their content from text.
- * This is a safety net for cases where the model outputs <think> tags
- * that slip through other filtering mechanisms.
  */
 export function stripThinkingTagsFromText(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
@@ -243,10 +216,6 @@ export function extractAssistantText(msg: AssistantMessage): string {
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
     }) ?? "";
-  // Only apply keyword-based error rewrites when the assistant message is actually an error.
-  // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.
-  // Gate on stopReason only — a non-error response with an errorMessage set (e.g. from a
-  // background tool failure) should not have its content rewritten (#13935).
   const errorContext = msg.stopReason === "error";
   return sanitizeUserFacingText(extracted, { errorContext });
 }
@@ -275,10 +244,6 @@ export function formatReasoningMessage(text: string): string {
   if (!trimmed) {
     return "";
   }
-  // Show reasoning in italics (cursive) for markdown-friendly surfaces (Discord, etc.).
-  // Keep the plain "Reasoning:" prefix so existing parsing/detection keeps working.
-  // Note: Underscore markdown cannot span multiple lines on Telegram, so we wrap
-  // each non-empty line separately.
   const italicLines = trimmed
     .split("\n")
     .map((line) => (line ? `_${line}_` : line))
@@ -292,9 +257,6 @@ type ThinkTaggedSplitBlock =
 
 export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const trimmedStart = text.trimStart();
-  // Avoid false positives: only treat it as structured thinking when it begins
-  // with a think tag (common for local/OpenAI-compat providers that emulate
-  // reasoning blocks via tags).
   if (!trimmedStart.startsWith("<")) {
     return null;
   }
@@ -470,76 +432,53 @@ type MinimaxToolCallSplitBlock =
   | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> }
   | { type: "text"; text: string };
 
-// MiniMax M2.5 XML format:
-// <minimax:tool_call>
-//   <invoke name="tool_name">
-//     <parameter name="arg_name">arg_value</parameter>
-//   </invoke>
-//   <invoke name="another_tool">...</invoke>
-// </minimax:tool_call>
-const MINIMAX_TOOL_CALL_RE = /<minimax:tool_call>([\s\S]*?)<\/minimax:tool_call>/gi;
-const MINIMAX_INVOKE_RE = /<invoke\b([^>]*?)>([\s\S]*?)<\/invoke>/gi;
-const MINIMAX_PARAM_RE = /<parameter\b[^>]*name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
-
 /**
  * Split text content into text blocks and toolCall blocks by parsing
- * MiniMax-specific <minimax:tool_call> XML structures. Supports multiple
- * <invoke> blocks within a single <minimax:tool_call> wrapper.
+ * MiniMax-specific <minimax:tool_call> XML structures.
  */
 export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[] | null {
   if (!text || !/minimax:tool_call/i.test(text)) {
     return null;
   }
 
+  const toolCallRe = /<minimax:tool_call>([\s\S]*?)<\/minimax:tool_call>/gi;
+  const invokeRe = /<invoke\b([^>]*?)>([\s\S]*?)<\/invoke>/gi;
+  const paramRe = /<parameter\b[^>]*name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
+
   const blocks: MinimaxToolCallSplitBlock[] = [];
   let cursor = 0;
   let hasToolCall = false;
 
-  MINIMAX_TOOL_CALL_RE.lastIndex = 0;
-  for (const match of text.matchAll(MINIMAX_TOOL_CALL_RE)) {
+  for (const match of text.matchAll(toolCallRe)) {
     const index = match.index ?? 0;
     const [fullMatch, wrapperBody] = match;
 
-    // Push preceding text
-    const preceding = text.slice(cursor, index);
-    if (preceding) {
-      blocks.push({ type: "text", text: preceding });
+    if (index > cursor) {
+      blocks.push({ type: "text", text: text.slice(cursor, index) });
     }
 
-    // Parse all <invoke> blocks within this <minimax:tool_call> wrapper
-    MINIMAX_INVOKE_RE.lastIndex = 0;
-    let foundInvokeInWrapper = false;
-    for (const iMatch of wrapperBody.matchAll(MINIMAX_INVOKE_RE)) {
+    let foundInvoke = false;
+    for (const iMatch of wrapperBody.matchAll(invokeRe)) {
       const [, attributes, invokeBody] = iMatch;
-
-      // Extract tool name from attributes (e.g., name="Bash")
       const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
       const toolName = nameMatch ? nameMatch[1] : undefined;
 
       if (!toolName) {
         continue;
       }
-      foundInvokeInWrapper = true;
+      foundInvoke = true;
 
-      // Parse parameters from the <invoke> body
       const args: Record<string, unknown> = {};
-      MINIMAX_PARAM_RE.lastIndex = 0;
-      // Note: regex-based XML parsing will truncate if a parameter value contains "</parameter>".
-      // This is a known limitation for this fallback parser.
-      for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
+      for (const pMatch of invokeBody.matchAll(paramRe)) {
         const [, pName, pValue] = pMatch;
-        const unescapedValue = unescapeXmlEntities(pValue.trim());
+        const val = unescapeXmlEntities(pValue.trim());
         try {
-          if (
-            (unescapedValue.startsWith("{") && unescapedValue.endsWith("}")) ||
-            (unescapedValue.startsWith("[") && unescapedValue.endsWith("]"))
-          ) {
-            args[pName] = JSON.parse(unescapedValue);
-          } else {
-            args[pName] = unescapedValue;
-          }
+          args[pName] =
+            (val.startsWith("{") && val.endsWith("}")) || (val.startsWith("[") && val.endsWith("]"))
+              ? JSON.parse(val)
+              : val;
         } catch {
-          args[pName] = unescapedValue;
+          args[pName] = val;
         }
       }
 
@@ -551,9 +490,7 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
       });
     }
 
-    // If no valid <invoke> was found in the wrapper, treat the whole match as text
-    // to avoid losing potentially user-visible content in malformed XML.
-    if (!foundInvokeInWrapper) {
+    if (!foundInvoke) {
       blocks.push({ type: "text", text: fullMatch });
     }
 
@@ -564,19 +501,15 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
   if (!hasToolCall) {
     return null;
   }
-
-  // Push remaining text after the last tool call
-  const remaining = text.slice(cursor);
-  if (remaining) {
-    blocks.push({ type: "text", text: remaining });
+  if (cursor < text.length) {
+    blocks.push({ type: "text", text: text.slice(cursor) });
   }
 
   return blocks;
 }
 
 /**
- * Scan assistant message content for MiniMax-specific XML tool calls and
- * promote them to structured toolCall blocks.
+ * Scan assistant message content for MiniMax-specific XML tool calls.
  */
 export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void {
   if (!Array.isArray(message.content)) {
@@ -587,11 +520,7 @@ export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void
   let changed = false;
 
   for (const block of message.content) {
-    if (!block || typeof block !== "object" || !("type" in block)) {
-      next.push(block);
-      continue;
-    }
-    if (block.type !== "text") {
+    if (block?.type !== "text") {
       next.push(block);
       continue;
     }
@@ -605,7 +534,6 @@ export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void
     changed = true;
     for (const part of split) {
       if (part.type === "toolCall") {
-        // Promote MiniMax-style tool calls to a structured block format compatible with AssistantMessage.
         next.push({
           type: "toolCall",
           id: part.id,
