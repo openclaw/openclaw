@@ -180,20 +180,22 @@ const saveSessionToMemory: HookHandler = async (event) => {
       }
     }
 
-    // If no slug, use timestamp with a random suffix to avoid collisions.
-    // Second-resolution (HHMMSS) alone can collide when automated or
-    // multi-channel setups emit rapid /new or /reset commands within the
-    // same second — both writes target the same filename and the later
-    // one silently overwrites the earlier memory entry.
+    // If no slug, use a timestamp-based fallback. The uniqueSuffix appended
+    // below handles collision avoidance for all paths (LLM and fallback).
     if (!slug) {
       const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
-      const rand = crypto.randomUUID().replace(/-/g, "").slice(0, 4);
-      slug = `${timeSlug.slice(0, 6)}-${rand}`;
+      slug = timeSlug.slice(0, 6);
       log.debug("Using fallback timestamp slug", { slug });
     }
 
-    // Create filename with date and slug
-    const filename = `${dateStr}-${slug}.md`;
+    // Append a short random suffix to guarantee filename uniqueness.
+    // LLM-generated slugs are descriptive but not unique — two similar
+    // sessions on the same day can produce identical slugs, causing the
+    // second write to silently overwrite the first. A 4-char hex suffix
+    // (16 bits of entropy) makes collisions vanishingly unlikely even
+    // under rapid automated /new or multi-channel workloads.
+    const uniqueSuffix = crypto.randomUUID().replace(/-/g, "").slice(0, 4);
+    const filename = `${dateStr}-${slug}-${uniqueSuffix}.md`;
     const memoryFilePath = path.join(memoryDir, filename);
     log.debug("Memory file path resolved", {
       filename,
