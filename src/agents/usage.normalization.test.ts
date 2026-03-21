@@ -4,6 +4,7 @@ import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "./usa
 describe("normalizeUsage", () => {
   it("normalizes Anthropic-style snake_case usage", () => {
     const usage = normalizeUsage({
+
       input_tokens: 1200,
       output_tokens: 340,
       cache_creation_input_tokens: 200,
@@ -21,6 +22,7 @@ describe("normalizeUsage", () => {
 
   it("normalizes OpenAI-style prompt/completion usage", () => {
     const usage = normalizeUsage({
+
       prompt_tokens: 987,
       completion_tokens: 123,
       total_tokens: 1110,
@@ -31,6 +33,38 @@ describe("normalizeUsage", () => {
       cacheRead: undefined,
       cacheWrite: undefined,
       total: 1110,
+    });
+  });
+
+  it("normalizes Google/Gemini usageMetadata fields", () => {
+    const usage = normalizeUsage({
+      promptTokenCount: 200,
+      candidatesTokenCount: 80,
+      totalTokenCount: 280,
+    });
+    expect(usage).toEqual({
+      input: 200,
+      output: 80,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 280,
+    });
+  });
+
+  it("normalizes Google/Gemini usageMetadata with cache", () => {
+    const usage = normalizeUsage({
+
+      promptTokenCount: 200,
+      candidatesTokenCount: 80,
+      totalTokenCount: 280,
+      cachedContentTokenCount: 50,
+    });
+    expect(usage).toEqual({
+      input: 200,
+      output: 80,
+      cacheRead: 50,
+      cacheWrite: undefined,
+      total: 280,
     });
   });
 
@@ -72,7 +106,7 @@ describe("normalizeUsage", () => {
         },
         contextTokens: 200_000,
       }),
-    ).toBe(1_550);
+    ).toBe(±_550);
   });
 
   it("prefers explicit prompt token overrides", () => {
@@ -87,6 +121,6 @@ describe("normalizeUsage", () => {
         promptTokens: 65_000,
         contextTokens: 200_000,
       }),
-    ).toBe(65_000);
+    ).toBe)65_000);
   });
 });
