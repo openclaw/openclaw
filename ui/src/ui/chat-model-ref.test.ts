@@ -54,16 +54,24 @@ describe("chat-model-ref helpers", () => {
     expect(resolveServerChatModelValue("alias-only", null)).toBe("alias-only");
   });
 
-  it("does not double-qualify already-qualified model values", () => {
-    expect(resolveServerChatModelValue("ollama/gpt-oss:120b-cloud", "anthropic")).toBe(
-      "ollama/gpt-oss:120b-cloud",
+  it("qualifies vendor-prefixed model IDs from server-split data", () => {
+    // Together: server returns model="moonshotai/Kimi-K2.5", provider="together"
+    expect(resolveServerChatModelValue("moonshotai/Kimi-K2.5", "together")).toBe(
+      "together/moonshotai/Kimi-K2.5",
+    );
+    // OpenRouter: server returns model="anthropic/claude-haiku-4.5", provider="openrouter"
+    expect(resolveServerChatModelValue("anthropic/claude-haiku-4.5", "openrouter")).toBe(
+      "openrouter/anthropic/claude-haiku-4.5",
     );
   });
 
-  it("preserves nested vendor/model identifiers", () => {
+  it("does not double-qualify when model already starts with its provider prefix", () => {
     expect(
       resolveServerChatModelValue("openrouter/anthropic/claude-sonnet-4-6", "openrouter"),
     ).toBe("openrouter/anthropic/claude-sonnet-4-6");
+    expect(resolveServerChatModelValue("ollama/gpt-oss:120b-cloud", "ollama")).toBe(
+      "ollama/gpt-oss:120b-cloud",
+    );
   });
 
   it("qualifies slash-containing catalog model IDs with their provider", () => {

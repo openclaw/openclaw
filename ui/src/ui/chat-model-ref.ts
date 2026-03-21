@@ -93,13 +93,18 @@ export function resolveServerChatModelValue(
   if (!trimmed) {
     return "";
   }
-  // Values from the model picker are already provider-qualified (e.g.,
-  // "ollama/gpt-oss:120b-cloud", "together/moonshotai/Kimi-K2.5").
-  // Return as-is to avoid double-qualifying with a different default provider.
-  if (trimmed.includes("/")) {
+  const trimmedProvider = provider?.trim();
+  if (!trimmedProvider) {
     return trimmed;
   }
-  return buildQualifiedChatModelValue(trimmed, provider);
+  // Server-split data: model may contain "/" as part of the model ID (e.g.,
+  // "moonshotai/Kimi-K2.5" from Together, "anthropic/claude-haiku-4.5" from
+  // OpenRouter). Only skip qualification when the model already starts with
+  // the given provider prefix to avoid double-qualifying.
+  if (trimmed.startsWith(trimmedProvider + "/")) {
+    return trimmed;
+  }
+  return `${trimmedProvider}/${trimmed}`;
 }
 
 export function resolvePreferredServerChatModel(
