@@ -301,6 +301,75 @@ describe("mattermostPlugin", () => {
         }),
       );
     });
+
+    it("falls back to toolContext.currentThreadTs when no replyTo param is provided", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.({
+        channel: "mattermost",
+        action: "send",
+        params: { to: "channel:CHAN1", message: "hello" },
+        cfg,
+        accountId: "default",
+        toolContext: {
+          currentThreadTs: "thread-root-id",
+          currentChannelId: "channel:CHAN1",
+          replyToMode: "all",
+        },
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({ replyToId: "thread-root-id" }),
+      );
+    });
+
+    it("explicit replyTo param wins over toolContext.currentThreadTs", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.({
+        channel: "mattermost",
+        action: "send",
+        params: { to: "channel:CHAN1", message: "hello", replyTo: "explicit-root" },
+        cfg,
+        accountId: "default",
+        toolContext: {
+          currentThreadTs: "session-thread-id",
+          currentChannelId: "channel:CHAN1",
+          replyToMode: "all",
+        },
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({ replyToId: "explicit-root" }),
+      );
+    });
+
+    it("does not inherit thread context when sending to a different channel", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.({
+        channel: "mattermost",
+        action: "send",
+        params: { to: "channel:OTHER", message: "hello" },
+        cfg,
+        accountId: "default",
+        toolContext: {
+          currentThreadTs: "thread-root-id",
+          currentChannelId: "channel:CHAN1",
+          replyToMode: "all",
+        },
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:OTHER",
+        "hello",
+        expect.objectContaining({ replyToId: undefined }),
+      );
+    });
   });
 
   describe("outbound", () => {
