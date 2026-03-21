@@ -48,6 +48,10 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     const safeErrorText =
       buildTextObservationFields(errorText).textPreview ?? "LLM request failed.";
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
+    const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
+    const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
+    const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
+    const rawErrorConsoleSuffix = safeRawErrorPreview ? ` rawError=${safeRawErrorPreview}` : "";
     ctx.log.warn("embedded run agent end", {
       event: "embedded_run_agent_end",
       tags: ["error_handling", "lifecycle", "agent_end", "assistant_error"],
@@ -55,10 +59,10 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       isError: true,
       error: safeErrorText,
       failoverReason,
-      provider: lastAssistant.provider,
       model: lastAssistant.model,
+      provider: lastAssistant.provider,
       ...observedError,
-      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true error=${safeErrorText}`,
+      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}${rawErrorConsoleSuffix}`,
     });
     emitAgentEvent({
       runId: ctx.params.runId,

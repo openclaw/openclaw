@@ -202,7 +202,6 @@ export function buildAgentSystemPrompt(params: {
   userTime?: string;
   userTimeFormat?: ResolvedTimeFormat;
   contextFiles?: EmbeddedContextFile[];
-  bootstrapTruncationWarningLines?: string[];
   skillsPrompt?: string;
   heartbeatPrompt?: string;
   docsPath?: string;
@@ -269,6 +268,7 @@ export function buildAgentSystemPrompt(params: {
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     image: "Analyze an image with the configured image model",
+    image_generate: "Generate images with the configured image-generation model",
   };
 
   const toolOrder = [
@@ -296,6 +296,7 @@ export function buildAgentSystemPrompt(params: {
     "subagents",
     "session_status",
     "image",
+    "image_generate",
   ];
 
   const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
@@ -464,6 +465,9 @@ export function buildAgentSystemPrompt(params: {
     "Keep narration brief and value-dense; avoid repeating obvious steps.",
     "Use plain human language for narration unless in a technical context.",
     "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
+    "When exec returns approval-pending, include the concrete /approve command from tool output (with allow-once|allow-always|deny) and do not ask for a different or rotated code.",
+    "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
+    "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
     "",
     ...safetySection,
     "## OpenClaw CLI Quick Reference",
@@ -611,13 +615,10 @@ export function buildAgentSystemPrompt(params: {
   }
 
   const contextFiles = params.contextFiles ?? [];
-  const bootstrapTruncationWarningLines = (params.bootstrapTruncationWarningLines ?? []).filter(
-    (line) => line.trim().length > 0,
-  );
   const validContextFiles = contextFiles.filter(
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
-  if (validContextFiles.length > 0 || bootstrapTruncationWarningLines.length > 0) {
+  if (validContextFiles.length > 0) {
     lines.push("# Project Context", "");
     if (validContextFiles.length > 0) {
       const hasSoulFile = validContextFiles.some((file) => {
@@ -630,13 +631,6 @@ export function buildAgentSystemPrompt(params: {
         lines.push(
           "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
         );
-      }
-      lines.push("");
-    }
-    if (bootstrapTruncationWarningLines.length > 0) {
-      lines.push("⚠ Bootstrap truncation warning:");
-      for (const warningLine of bootstrapTruncationWarningLines) {
-        lines.push(`- ${warningLine}`);
       }
       lines.push("");
     }

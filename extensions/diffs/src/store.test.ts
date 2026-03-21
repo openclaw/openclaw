@@ -1,21 +1,25 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiffArtifactStore } from "./store.js";
+import { createDiffStoreHarness } from "./test-helpers.js";
 
 describe("DiffArtifactStore", () => {
   let rootDir: string;
   let store: DiffArtifactStore;
+  let cleanupRootDir: () => Promise<void>;
 
   beforeEach(async () => {
-    rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-diffs-store-"));
-    store = new DiffArtifactStore({ rootDir });
+    ({
+      rootDir,
+      store,
+      cleanup: cleanupRootDir,
+    } = await createDiffStoreHarness("openclaw-diffs-store-"));
   });
 
   afterEach(async () => {
     vi.useRealTimers();
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await cleanupRootDir();
   });
 
   it("creates and retrieves an artifact", async () => {
@@ -24,10 +28,22 @@ describe("DiffArtifactStore", () => {
       title: "Demo",
       inputKind: "before_after",
       fileCount: 1,
+      context: {
+        agentId: "main",
+        sessionId: "session-123",
+        messageChannel: "discord",
+        agentAccountId: "default",
+      },
     });
 
     const loaded = await store.getArtifact(artifact.id, artifact.token);
     expect(loaded?.id).toBe(artifact.id);
+    expect(loaded?.context).toEqual({
+      agentId: "main",
+      sessionId: "session-123",
+      messageChannel: "discord",
+      agentAccountId: "default",
+    });
     expect(await store.readHtml(artifact.id)).toBe("<html>demo</html>");
   });
 
@@ -93,10 +109,19 @@ describe("DiffArtifactStore", () => {
   });
 
   it("creates standalone file artifacts with managed metadata", async () => {
-    const standalone = await store.createStandaloneFileArtifact();
+    const standalone = await store.createStandaloneFileArtifact({
+      context: {
+        agentId: "main",
+        sessionId: "session-123",
+      },
+    });
     expect(standalone.filePath).toMatch(/preview\.png$/);
     expect(standalone.filePath).toContain(rootDir);
     expect(Date.parse(standalone.expiresAt)).toBeGreaterThan(Date.now());
+    expect(standalone.context).toEqual({
+      agentId: "main",
+      sessionId: "session-123",
+    });
   });
 
   it("expires standalone file artifacts using ttl metadata", async () => {

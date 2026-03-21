@@ -1,9 +1,9 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk/msteams";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
+import { SILENT_REPLY_TOKEN, type PluginRuntime } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareOneDrive: vi.fn(),
@@ -50,9 +50,14 @@ const runtimeStub: PluginRuntime = createPluginRuntimeMock({
   },
 });
 
+const noopUpdateActivity = async () => {};
+const noopDeleteActivity = async () => {};
+
 const createNoopAdapter = (): MSTeamsAdapter => ({
   continueConversation: async () => {},
   process: async () => {},
+  updateActivity: noopUpdateActivity,
+  deleteActivity: noopDeleteActivity,
 });
 
 const createRecordedSendActivity = (
@@ -81,6 +86,8 @@ const createFallbackAdapter = (proactiveSent: string[]): MSTeamsAdapter => ({
     });
   },
   process: async () => {},
+  updateActivity: noopUpdateActivity,
+  deleteActivity: noopDeleteActivity,
 });
 
 describe("msteams messenger", () => {
@@ -139,6 +146,22 @@ describe("msteams messenger", () => {
   });
 
   describe("sendMSTeamsMessages", () => {
+    function createRevokedThreadContext(params?: { failAfterAttempt?: number; sent?: string[] }) {
+      let attempt = 0;
+      return {
+        sendActivity: async (activity: unknown) => {
+          const { text } = activity as { text?: string };
+          const content = text ?? "";
+          attempt += 1;
+          if (params?.failAfterAttempt && attempt < params.failAfterAttempt) {
+            params.sent?.push(content);
+            return { id: `id:${content}` };
+          }
+          throw new TypeError(REVOCATION_ERROR);
+        },
+      };
+    }
+
     const baseRef: StoredConversationReference = {
       activityId: "activity123",
       user: { id: "user123", name: "User" },
@@ -179,6 +202,8 @@ describe("msteams messenger", () => {
           });
         },
         process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
       };
 
       const ids = await sendMSTeamsMessages({
@@ -305,13 +330,7 @@ describe("msteams messenger", () => {
 
     it("falls back to proactive messaging when thread context is revoked", async () => {
       const proactiveSent: string[] = [];
-
-      const ctx = {
-        sendActivity: async () => {
-          throw new TypeError(REVOCATION_ERROR);
-        },
-      };
-
+      const ctx = createRevokedThreadContext();
       const adapter = createFallbackAdapter(proactiveSent);
 
       const ids = await sendMSTeamsMessages({
@@ -331,21 +350,7 @@ describe("msteams messenger", () => {
     it("falls back only for remaining thread messages after context revocation", async () => {
       const threadSent: string[] = [];
       const proactiveSent: string[] = [];
-      let attempt = 0;
-
-      const ctx = {
-        sendActivity: async (activity: unknown) => {
-          const { text } = activity as { text?: string };
-          const content = text ?? "";
-          attempt += 1;
-          if (attempt === 1) {
-            threadSent.push(content);
-            return { id: `id:${content}` };
-          }
-          throw new TypeError(REVOCATION_ERROR);
-        },
-      };
-
+      const ctx = createRevokedThreadContext({ failAfterAttempt: 2, sent: threadSent });
       const adapter = createFallbackAdapter(proactiveSent);
 
       const ids = await sendMSTeamsMessages({
@@ -370,6 +375,8 @@ describe("msteams messenger", () => {
           await logic({ sendActivity: createRecordedSendActivity(attempts, 503) });
         },
         process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
       };
 
       const ids = await sendMSTeamsMessages({

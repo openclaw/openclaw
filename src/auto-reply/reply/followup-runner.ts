@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { lookupContextTokens } from "../../agents/context.js";
@@ -81,13 +85,12 @@ export function createFollowupRunner(params: {
     }
 
     for (const payload of payloads) {
-      if (!payload?.text && !payload?.mediaUrl && !payload?.mediaUrls?.length) {
+      if (!payload || !hasOutboundReplyContent(payload)) {
         continue;
       }
       if (
         isSilentReplyText(payload.text, SILENT_REPLY_TOKEN) &&
-        !payload.mediaUrl &&
-        !payload.mediaUrls?.length
+        !resolveSendableOutboundReplyParts(payload).hasMedia
       ) {
         continue;
       }
@@ -145,7 +148,7 @@ export function createFollowupRunner(params: {
           isControlUiVisible: shouldSurfaceToControlUi,
         });
       }
-      let autoCompactionCompleted = false;
+      let autoCompactionCount = 0;
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
@@ -168,68 +171,82 @@ export function createFollowupRunner(params: {
           }),
           run: async (provider, model, runOptions) => {
             const authProfile = resolveRunAuthProfile(queued.run, provider);
-            const result = await runEmbeddedPiAgent({
-              sessionId: queued.run.sessionId,
-              sessionKey: queued.run.sessionKey,
-              agentId: queued.run.agentId,
-              trigger: "user",
-              messageChannel: queued.originatingChannel ?? undefined,
-              messageProvider: queued.run.messageProvider,
-              agentAccountId: queued.run.agentAccountId,
-              messageTo: queued.originatingTo,
-              messageThreadId: queued.originatingThreadId,
-              currentChannelId: queued.originatingTo,
-              currentThreadTs:
-                queued.originatingThreadId != null ? String(queued.originatingThreadId) : undefined,
-              groupId: queued.run.groupId,
-              groupChannel: queued.run.groupChannel,
-              groupSpace: queued.run.groupSpace,
-              senderId: queued.run.senderId,
-              senderName: queued.run.senderName,
-              senderUsername: queued.run.senderUsername,
-              senderE164: queued.run.senderE164,
-              senderIsOwner: queued.run.senderIsOwner,
-              sessionFile: queued.run.sessionFile,
-              agentDir: queued.run.agentDir,
-              workspaceDir: queued.run.workspaceDir,
-              config: queued.run.config,
-              skillsSnapshot: queued.run.skillsSnapshot,
-              prompt: queued.prompt,
-              extraSystemPrompt: queued.run.extraSystemPrompt,
-              ownerNumbers: queued.run.ownerNumbers,
-              enforceFinalTag: queued.run.enforceFinalTag,
-              provider,
-              model,
-              ...authProfile,
-              thinkLevel: queued.run.thinkLevel,
-              verboseLevel: queued.run.verboseLevel,
-              reasoningLevel: queued.run.reasoningLevel,
-              suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
-              execOverrides: queued.run.execOverrides,
-              bashElevated: queued.run.bashElevated,
-              timeoutMs: queued.run.timeoutMs,
-              runId,
-              allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-              blockReplyBreak: queued.run.blockReplyBreak,
-              bootstrapPromptWarningSignaturesSeen,
-              bootstrapPromptWarningSignature:
-                bootstrapPromptWarningSignaturesSeen[
-                  bootstrapPromptWarningSignaturesSeen.length - 1
-                ],
-              onAgentEvent: (evt) => {
-                if (evt.stream !== "compaction") {
-                  return;
-                }
-                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                if (phase === "end") {
-                  autoCompactionCompleted = true;
-                }
-              },
-            });
-            bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-              result.meta?.systemPromptReport,
-            );
-            return result;
+            let attemptCompactionCount = 0;
+            try {
+              const result = await runEmbeddedPiAgent({
+                allowGatewaySubagentBinding: true,
+                sessionId: queued.run.sessionId,
+                sessionKey: queued.run.sessionKey,
+                agentId: queued.run.agentId,
+                trigger: "user",
+                messageChannel: queued.originatingChannel ?? undefined,
+                messageProvider: queued.run.messageProvider,
+                agentAccountId: queued.run.agentAccountId,
+                messageTo: queued.originatingTo,
+                messageThreadId: queued.originatingThreadId,
+                currentChannelId: queued.originatingTo,
+                currentThreadTs:
+                  queued.originatingThreadId != null
+                    ? String(queued.originatingThreadId)
+                    : undefined,
+                groupId: queued.run.groupId,
+                groupChannel: queued.run.groupChannel,
+                groupSpace: queued.run.groupSpace,
+                senderId: queued.run.senderId,
+                senderName: queued.run.senderName,
+                senderUsername: queued.run.senderUsername,
+                senderE164: queued.run.senderE164,
+                senderIsOwner: queued.run.senderIsOwner,
+                sessionFile: queued.run.sessionFile,
+                agentDir: queued.run.agentDir,
+                workspaceDir: queued.run.workspaceDir,
+                config: queued.run.config,
+                skillsSnapshot: queued.run.skillsSnapshot,
+                prompt: queued.prompt,
+                extraSystemPrompt: queued.run.extraSystemPrompt,
+                ownerNumbers: queued.run.ownerNumbers,
+                enforceFinalTag: queued.run.enforceFinalTag,
+                provider,
+                model,
+                ...authProfile,
+                thinkLevel: queued.run.thinkLevel,
+                verboseLevel: queued.run.verboseLevel,
+                reasoningLevel: queued.run.reasoningLevel,
+                suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
+                execOverrides: queued.run.execOverrides,
+                bashElevated: queued.run.bashElevated,
+                timeoutMs: queued.run.timeoutMs,
+                runId,
+                allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+                blockReplyBreak: queued.run.blockReplyBreak,
+                bootstrapPromptWarningSignaturesSeen,
+                bootstrapPromptWarningSignature:
+                  bootstrapPromptWarningSignaturesSeen[
+                    bootstrapPromptWarningSignaturesSeen.length - 1
+                  ],
+                onAgentEvent: (evt) => {
+                  if (evt.stream !== "compaction") {
+                    return;
+                  }
+                  const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                  const completed = evt.data?.completed === true;
+                  if (phase === "end" && completed) {
+                    attemptCompactionCount += 1;
+                  }
+                },
+              });
+              bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                result.meta?.systemPromptReport,
+              );
+              const resultCompactionCount = Math.max(
+                0,
+                result.meta?.agentMeta?.compactionCount ?? 0,
+              );
+              attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
+              return result;
+            } finally {
+              autoCompactionCount += attemptCompactionCount;
+            }
           },
         });
         runResult = fallbackResult.result;
@@ -254,6 +271,7 @@ export function createFollowupRunner(params: {
         await persistRunSessionUsage({
           storePath,
           sessionKey,
+          cfg: queued.run.config,
           usage,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
@@ -275,7 +293,7 @@ export function createFollowupRunner(params: {
           return [payload];
         }
         const stripped = stripHeartbeatToken(text, { mode: "message" });
-        const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+        const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
         if (stripped.shouldSkip && !hasMedia) {
           return [];
         }
@@ -326,12 +344,13 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      if (autoCompactionCompleted) {
+      if (autoCompactionCount > 0) {
         const count = await incrementRunCompactionCount({
           sessionEntry,
           sessionStore,
           sessionKey,
           storePath,
+          amount: autoCompactionCount,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
         });

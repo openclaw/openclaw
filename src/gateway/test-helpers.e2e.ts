@@ -104,6 +104,10 @@ export async function connectGatewayClient(params: {
   });
 }
 
+export async function disconnectGatewayClient(client: GatewayClient): Promise<void> {
+  await client.stopAndWait();
+}
+
 export async function connectDeviceAuthReq(params: { url: string; token?: string }) {
   const ws = new WebSocket(params.url);
   const connectNoncePromise = new Promise<string>((resolve, reject) => {

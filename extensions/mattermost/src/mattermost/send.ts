@@ -1,9 +1,9 @@
-import { loadOutboundMediaFromUrl, type OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
+import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
-  createMattermostDirectChannel,
+  createMattermostDirectChannelWithRetry,
   createMattermostPost,
   fetchMattermostChannelByName,
   fetchMattermostMe,
@@ -12,6 +12,7 @@ import {
   normalizeMattermostBaseUrl,
   uploadMattermostFile,
   type MattermostUser,
+  type CreateDmChannelRetryOptions,
 } from "./client.js";
 import {
   buildButtonProps,
@@ -19,6 +20,7 @@ import {
   setInteractionSecret,
   type MattermostInteractiveButtonInput,
 } from "./interactions.js";
+import { isMattermostId, resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
 export type MattermostSendOpts = {
   cfg?: OpenClawConfig;
@@ -31,6 +33,8 @@ export type MattermostSendOpts = {
   props?: Record<string, unknown>;
   buttons?: Array<unknown>;
   attachmentText?: string;
+  /** Retry options for DM channel creation */
+  dmRetryOptions?: CreateDmChannelRetryOptions;
 };
 
 export type MattermostSendResult = {
@@ -50,6 +54,7 @@ type MattermostTarget =
 const botUserCache = new Map<string, MattermostUser>();
 const userByNameCache = new Map<string, MattermostUser>();
 const channelByNameCache = new Map<string, string>();
+const dmChannelCache = new Map<string, string>();
 
 const getCore = () => getMattermostRuntime();
 
@@ -66,12 +71,6 @@ function normalizeMessage(text: string, mediaUrl?: string): string {
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
-
-/** Mattermost IDs are 26-character lowercase alphanumeric strings. */
-function isMattermostId(value: string): boolean {
-  return /^[a-z0-9]{26}$/.test(value);
-}
-
 export function parseMattermostTarget(raw: string): MattermostTarget {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -186,11 +185,40 @@ async function resolveChannelIdByName(params: {
   throw new Error(`Mattermost channel "#${name}" not found in any team the bot belongs to`);
 }
 
-async function resolveTargetChannelId(params: {
+type ResolveTargetChannelIdParams = {
   target: MattermostTarget;
   baseUrl: string;
   token: string;
-}): Promise<string> {
+  dmRetryOptions?: CreateDmChannelRetryOptions;
+  logger?: { debug?: (msg: string) => void; warn?: (msg: string) => void };
+};
+
+function mergeDmRetryOptions(
+  base?: CreateDmChannelRetryOptions,
+  override?: CreateDmChannelRetryOptions,
+): CreateDmChannelRetryOptions | undefined {
+  const merged: CreateDmChannelRetryOptions = {
+    maxRetries: override?.maxRetries ?? base?.maxRetries,
+    initialDelayMs: override?.initialDelayMs ?? base?.initialDelayMs,
+    maxDelayMs: override?.maxDelayMs ?? base?.maxDelayMs,
+    timeoutMs: override?.timeoutMs ?? base?.timeoutMs,
+    onRetry: override?.onRetry,
+  };
+
+  if (
+    merged.maxRetries === undefined &&
+    merged.initialDelayMs === undefined &&
+    merged.maxDelayMs === undefined &&
+    merged.timeoutMs === undefined &&
+    merged.onRetry === undefined
+  ) {
+    return undefined;
+  }
+
+  return merged;
+}
+
+async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Promise<string> {
   if (params.target.kind === "channel") {
     return params.target.id;
   }
@@ -208,12 +236,31 @@ async function resolveTargetChannelId(params: {
         token: params.token,
         username: params.target.username ?? "",
       });
+  const dmKey = `${cacheKey(params.baseUrl, params.token)}::dm::${userId}`;
+  const cachedDm = dmChannelCache.get(dmKey);
+  if (cachedDm) {
+    return cachedDm;
+  }
   const botUser = await resolveBotUser(params.baseUrl, params.token);
   const client = createMattermostClient({
     baseUrl: params.baseUrl,
     botToken: params.token,
   });
-  const channel = await createMattermostDirectChannel(client, [botUser.id, userId]);
+
+  const channel = await createMattermostDirectChannelWithRetry(client, [botUser.id, userId], {
+    ...params.dmRetryOptions,
+    onRetry: (attempt, delayMs, error) => {
+      // Call user's onRetry if provided
+      params.dmRetryOptions?.onRetry?.(attempt, delayMs, error);
+      // Log if verbose mode is enabled
+      if (params.logger) {
+        params.logger.warn?.(
+          `DM channel creation retry ${attempt} after ${delayMs}ms: ${error.message}`,
+        );
+      }
+    },
+  });
+  dmChannelCache.set(dmKey, channel.id);
   return channel.id;
 }
 
@@ -230,6 +277,7 @@ async function resolveMattermostSendContext(
   opts: MattermostSendOpts = {},
 ): Promise<MattermostSendContext> {
   const core = getCore();
+  const logger = core.logging.getChildLogger({ module: "mattermost" });
   const cfg = opts.cfg ?? core.config.loadConfig();
   const account = resolveMattermostAccount({
     cfg,
@@ -248,11 +296,35 @@ async function resolveMattermostSendContext(
     );
   }
 
-  const target = parseMattermostTarget(to);
+  const trimmedTo = to?.trim() ?? "";
+  const opaqueTarget = await resolveMattermostOpaqueTarget({
+    input: trimmedTo,
+    token,
+    baseUrl,
+  });
+  const target =
+    opaqueTarget?.kind === "user"
+      ? { kind: "user" as const, id: opaqueTarget.id }
+      : opaqueTarget?.kind === "channel"
+        ? { kind: "channel" as const, id: opaqueTarget.id }
+        : parseMattermostTarget(trimmedTo);
+  // Build retry options from account config, allowing opts to override
+  const accountRetryConfig: CreateDmChannelRetryOptions | undefined = account.config.dmChannelRetry
+    ? {
+        maxRetries: account.config.dmChannelRetry.maxRetries,
+        initialDelayMs: account.config.dmChannelRetry.initialDelayMs,
+        maxDelayMs: account.config.dmChannelRetry.maxDelayMs,
+        timeoutMs: account.config.dmChannelRetry.timeoutMs,
+      }
+    : undefined;
+  const dmRetryOptions = mergeDmRetryOptions(accountRetryConfig, opts.dmRetryOptions);
+
   const channelId = await resolveTargetChannelId({
     target,
     baseUrl,
     token,
+    dmRetryOptions,
+    logger: core.logging.shouldLogVerbose() ? logger : undefined,
   });
 
   return {

@@ -1,10 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "../agents/subagent-registry.js";
+import { clearConfigCache, writeConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { withEnv } from "../test-utils/env.js";
 import {
   capArrayByJsonBytes,
   classifySessionKey,
@@ -12,6 +18,7 @@ import {
   listAgentsForGateway,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
+  loadSessionEntry,
   parseGroupKey,
   pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -19,6 +26,10 @@ import {
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "./session-utils.js";
+
+function resolveSyncRealpath(filePath: string): string {
+  return fs.realpathSync.native(filePath);
+}
 
 function createSymlinkOrSkip(targetPath: string, linkPath: string): boolean {
   try {
@@ -76,6 +87,10 @@ function createLegacyRuntimeStore(model: string): Record<string, SessionEntry> {
 }
 
 describe("gateway session utils", () => {
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+  });
+
   test("capArrayByJsonBytes trims from the front", () => {
     const res = capArrayByJsonBytes(["a", "b", "c"], 10);
     expect(res.items).toEqual(["b", "c"]);
@@ -262,6 +277,66 @@ describe("gateway session utils", () => {
     expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:MAIN"]));
   });
 
+  test("resolveGatewaySessionStoreTarget preserves discovered store paths for non-round-tripping agent dirs", async () => {
+    await withStateDirEnv("session-utils-discovered-store-", async ({ stateDir }) => {
+      const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
+      fs.mkdirSync(retiredSessionsDir, { recursive: true });
+      const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
+      fs.writeFileSync(
+        retiredStorePath,
+        JSON.stringify({
+          "agent:retired-agent:main": { sessionId: "sess-retired", updatedAt: 1 },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:retired-agent:main" });
+
+      expect(target.storePath).toBe(resolveSyncRealpath(retiredStorePath));
+    });
+  });
+
+  test("loadSessionEntry reads discovered stores from non-round-tripping agent dirs", async () => {
+    clearConfigCache();
+    try {
+      await withStateDirEnv("session-utils-load-entry-", async ({ stateDir }) => {
+        const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
+        fs.mkdirSync(retiredSessionsDir, { recursive: true });
+        const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
+        fs.writeFileSync(
+          retiredStorePath,
+          JSON.stringify({
+            "agent:retired-agent:main": { sessionId: "sess-retired", updatedAt: 7 },
+          }),
+          "utf8",
+        );
+        await writeConfigFile({
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { list: [{ id: "main", default: true }] },
+        });
+        clearConfigCache();
+
+        const loaded = loadSessionEntry("agent:retired-agent:main");
+
+        expect(loaded.storePath).toBe(resolveSyncRealpath(retiredStorePath));
+        expect(loaded.entry?.sessionId).toBe("sess-retired");
+      });
+    } finally {
+      clearConfigCache();
+    }
+  });
+
   test("pruneLegacyStoreKeys removes alias and case-variant ghost keys", () => {
     const store: Record<string, unknown> = {
       "agent:ops:work": { sessionId: "canonical", updatedAt: 3 },
@@ -349,7 +424,7 @@ describe("resolveSessionModelRef", () => {
 
   test("preserves openrouter provider when model contains vendor prefix", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "openrouter/minimax/minimax-m2.5",
+      primary: "openrouter/minimax/minimax-m2.7",
     });
 
     const resolved = resolveSessionModelRef(cfg, {
@@ -762,12 +837,657 @@ describe("listSessionsFromStore search", () => {
     expect(missing?.totalTokens).toBeUndefined();
     expect(missing?.totalTokensFresh).toBe(false);
   });
+
+  test("includes estimated session cost when model pricing is configured", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.4",
+                label: "GPT 5.4",
+                baseUrl: "https://api.openai.com/v1",
+                cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0.5 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "openai",
+          model: "gpt-5.4",
+          inputTokens: 2_000,
+          outputTokens: 500,
+          cacheRead: 1_000,
+          cacheWrite: 200,
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(0.007725, 8);
+  });
+
+  test("prefers persisted estimated session cost from the store", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-store-cost-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    fs.writeFileSync(
+      path.join(tmpDir, "sess-main.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 2_000,
+              output: 500,
+              cacheRead: 1_200,
+              cost: { total: 0.007725 },
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const result = listSessionsFromStore({
+        cfg: baseCfg,
+        storePath,
+        store: {
+          "agent:main:main": {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            modelProvider: "anthropic",
+            model: "claude-sonnet-4-6",
+            estimatedCostUsd: 0.1234,
+            totalTokens: 0,
+            totalTokensFresh: false,
+          } as SessionEntry,
+        },
+        opts: {},
+      });
+
+      expect(result.sessions[0]?.estimatedCostUsd).toBe(0.1234);
+      expect(result.sessions[0]?.totalTokens).toBe(3_200);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps zero estimated session cost when configured model pricing resolves to free", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+      models: {
+        providers: {
+          "openai-codex": {
+            models: [
+              {
+                id: "gpt-5.3-codex-spark",
+                label: "GPT 5.3 Codex Spark",
+                baseUrl: "https://api.openai.com/v1",
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "openai-codex",
+          model: "gpt-5.3-codex-spark",
+          inputTokens: 5_107,
+          outputTokens: 1_827,
+          cacheRead: 1_536,
+          cacheWrite: 0,
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.estimatedCostUsd).toBe(0);
+  });
+
+  test("falls back to transcript usage for totalTokens and zero estimatedCostUsd", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-zero-cost-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    fs.writeFileSync(
+      path.join(tmpDir, "sess-main.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "openai-codex",
+            model: "gpt-5.3-codex-spark",
+            usage: {
+              input: 5_107,
+              output: 1_827,
+              cacheRead: 1_536,
+              cost: { total: 0 },
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const result = listSessionsFromStore({
+        cfg: baseCfg,
+        storePath,
+        store: {
+          "agent:main:main": {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            modelProvider: "openai-codex",
+            model: "gpt-5.3-codex-spark",
+            totalTokens: 0,
+            totalTokensFresh: false,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          } as SessionEntry,
+        },
+        opts: {},
+      });
+
+      expect(result.sessions[0]?.totalTokens).toBe(6_643);
+      expect(result.sessions[0]?.totalTokensFresh).toBe(true);
+      expect(result.sessions[0]?.estimatedCostUsd).toBe(0);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("falls back to transcript usage for totalTokens and estimatedCostUsd, and derives contextTokens from the resolved model", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [{ id: "main", default: true }],
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    fs.writeFileSync(
+      path.join(tmpDir, "sess-main.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 2_000,
+              output: 500,
+              cacheRead: 1_200,
+              cost: { total: 0.007725 },
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const result = listSessionsFromStore({
+        cfg,
+        storePath,
+        store: {
+          "agent:main:main": {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            modelProvider: "anthropic",
+            model: "claude-sonnet-4-6",
+            totalTokens: 0,
+            totalTokensFresh: false,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          } as SessionEntry,
+        },
+        opts: {},
+      });
+
+      expect(result.sessions[0]?.totalTokens).toBe(3_200);
+      expect(result.sessions[0]?.totalTokensFresh).toBe(true);
+      expect(result.sessions[0]?.contextTokens).toBe(1_048_576);
+      expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(0.007725, 8);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("uses subagent run model immediately for child sessions while transcript usage fills live totals", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-subagent-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const now = Date.now();
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [{ id: "main", default: true }],
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    fs.writeFileSync(
+      path.join(tmpDir, "sess-child.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-child" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 2_000,
+              output: 500,
+              cacheRead: 1_200,
+              cost: { total: 0.007725 },
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    addSubagentRunForTests({
+      runId: "run-child-live",
+      childSessionKey: "agent:main:subagent:child-live",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "child task",
+      cleanup: "keep",
+      createdAt: now - 5_000,
+      startedAt: now - 4_000,
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    try {
+      const result = listSessionsFromStore({
+        cfg,
+        storePath,
+        store: {
+          "agent:main:subagent:child-live": {
+            sessionId: "sess-child",
+            updatedAt: now,
+            spawnedBy: "agent:main:main",
+            totalTokens: 0,
+            totalTokensFresh: false,
+          } as SessionEntry,
+        },
+        opts: {},
+      });
+
+      expect(result.sessions[0]).toMatchObject({
+        key: "agent:main:subagent:child-live",
+        status: "running",
+        modelProvider: "anthropic",
+        model: "claude-sonnet-4-6",
+        totalTokens: 3_200,
+        totalTokensFresh: true,
+        contextTokens: 1_048_576,
+      });
+      expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(0.007725, 8);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("listSessionsFromStore subagent metadata", () => {
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+  });
+  beforeEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+  });
+
+  const cfg = {
+    session: { mainKey: "main" },
+    agents: { list: [{ id: "main", default: true }] },
+  } as OpenClawConfig;
+
+  test("includes subagent status timing and direct child session keys", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+      "agent:main:subagent:parent": {
+        sessionId: "sess-parent",
+        updatedAt: now - 2_000,
+        spawnedBy: "agent:main:main",
+      } as SessionEntry,
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: now - 1_000,
+        spawnedBy: "agent:main:subagent:parent",
+      } as SessionEntry,
+      "agent:main:subagent:failed": {
+        sessionId: "sess-failed",
+        updatedAt: now - 500,
+        spawnedBy: "agent:main:main",
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-parent",
+      childSessionKey: "agent:main:subagent:parent",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "parent task",
+      cleanup: "keep",
+      createdAt: now - 10_000,
+      startedAt: now - 9_000,
+      model: "openai/gpt-5.4",
+    });
+    addSubagentRunForTests({
+      runId: "run-child",
+      childSessionKey: "agent:main:subagent:child",
+      controllerSessionKey: "agent:main:subagent:parent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "child task",
+      cleanup: "keep",
+      createdAt: now - 8_000,
+      startedAt: now - 7_500,
+      endedAt: now - 2_500,
+      outcome: { status: "ok" },
+      model: "openai/gpt-5.4",
+    });
+    addSubagentRunForTests({
+      runId: "run-failed",
+      childSessionKey: "agent:main:subagent:failed",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "failed task",
+      cleanup: "keep",
+      createdAt: now - 6_000,
+      startedAt: now - 5_500,
+      endedAt: now - 500,
+      outcome: { status: "error", error: "boom" },
+      model: "openai/gpt-5.4",
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const main = result.sessions.find((session) => session.key === "agent:main:main");
+    expect(main?.childSessions).toEqual([
+      "agent:main:subagent:parent",
+      "agent:main:subagent:failed",
+    ]);
+    expect(main?.status).toBeUndefined();
+
+    const parent = result.sessions.find((session) => session.key === "agent:main:subagent:parent");
+    expect(parent?.status).toBe("running");
+    expect(parent?.startedAt).toBe(now - 9_000);
+    expect(parent?.endedAt).toBeUndefined();
+    expect(parent?.runtimeMs).toBeGreaterThanOrEqual(9_000);
+    expect(parent?.childSessions).toEqual(["agent:main:subagent:child"]);
+
+    const child = result.sessions.find((session) => session.key === "agent:main:subagent:child");
+    expect(child?.status).toBe("done");
+    expect(child?.startedAt).toBe(now - 7_500);
+    expect(child?.endedAt).toBe(now - 2_500);
+    expect(child?.runtimeMs).toBe(5_000);
+    expect(child?.childSessions).toBeUndefined();
+
+    const failed = result.sessions.find((session) => session.key === "agent:main:subagent:failed");
+    expect(failed?.status).toBe("failed");
+    expect(failed?.runtimeMs).toBe(5_000);
+  });
+
+  test("preserves original session timing across follow-up replacement runs", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:subagent:followup": {
+        sessionId: "sess-followup",
+        updatedAt: now,
+        spawnedBy: "agent:main:main",
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-followup-new",
+      childSessionKey: "agent:main:subagent:followup",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "follow-up task",
+      cleanup: "keep",
+      createdAt: now - 10_000,
+      startedAt: now - 30_000,
+      sessionStartedAt: now - 150_000,
+      accumulatedRuntimeMs: 120_000,
+      model: "openai/gpt-5.4",
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const followup = result.sessions.find(
+      (session) => session.key === "agent:main:subagent:followup",
+    );
+    expect(followup?.status).toBe("running");
+    expect(followup?.startedAt).toBe(now - 150_000);
+    expect(followup?.runtimeMs).toBeGreaterThanOrEqual(150_000);
+  });
+
+  test("uses persisted active subagent runs when the local worker only has terminal snapshots", async () => {
+    await withStateDirEnv("openclaw-session-utils-subagent-", async ({ stateDir }) => {
+      const now = Date.now();
+      const childSessionKey = "agent:main:subagent:disk-live";
+      const registryPath = path.join(stateDir, "subagents", "runs.json");
+      fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+      fs.writeFileSync(
+        registryPath,
+        JSON.stringify(
+          {
+            version: 2,
+            runs: {
+              "run-complete": {
+                runId: "run-complete",
+                childSessionKey,
+                requesterSessionKey: "agent:main:main",
+                requesterDisplayKey: "main",
+                task: "finished too early",
+                cleanup: "keep",
+                createdAt: now - 2_000,
+                startedAt: now - 1_900,
+                endedAt: now - 1_800,
+                outcome: { status: "ok" },
+              },
+              "run-live": {
+                runId: "run-live",
+                childSessionKey,
+                requesterSessionKey: "agent:main:main",
+                requesterDisplayKey: "main",
+                task: "still running",
+                cleanup: "keep",
+                createdAt: now - 10_000,
+                startedAt: now - 9_000,
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const row = withEnv({ VITEST: undefined, NODE_ENV: "development" }, () => {
+        const result = listSessionsFromStore({
+          cfg,
+          storePath: "/tmp/sessions.json",
+          store: {
+            [childSessionKey]: {
+              sessionId: "sess-disk-live",
+              updatedAt: now,
+              spawnedBy: "agent:main:main",
+              status: "done",
+              endedAt: now - 1_800,
+              runtimeMs: 100,
+            } as SessionEntry,
+          },
+          opts: {},
+        });
+        return result.sessions.find((session) => session.key === childSessionKey);
+      });
+
+      expect(row?.status).toBe("running");
+      expect(row?.startedAt).toBe(now - 9_000);
+      expect(row?.endedAt).toBeUndefined();
+      expect(row?.runtimeMs).toBeGreaterThanOrEqual(9_000);
+    });
+  });
+
+  test("includes explicit parentSessionKey relationships for dashboard child sessions", () => {
+    resetSubagentRegistryForTests({ persist: false });
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+      "agent:main:dashboard:child": {
+        sessionId: "sess-child",
+        updatedAt: now - 1_000,
+        parentSessionKey: "agent:main:main",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const main = result.sessions.find((session) => session.key === "agent:main:main");
+    const child = result.sessions.find((session) => session.key === "agent:main:dashboard:child");
+    expect(main?.childSessions).toEqual(["agent:main:dashboard:child"]);
+    expect(child?.parentSessionKey).toBe("agent:main:main");
+  });
+
+  test("falls back to persisted subagent timing after run archival", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:subagent:archived": {
+        sessionId: "sess-archived",
+        updatedAt: now,
+        spawnedBy: "agent:main:main",
+        startedAt: now - 20_000,
+        endedAt: now - 5_000,
+        runtimeMs: 15_000,
+        status: "done",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const archived = result.sessions.find(
+      (session) => session.key === "agent:main:subagent:archived",
+    );
+    expect(archived?.status).toBe("done");
+    expect(archived?.startedAt).toBe(now - 20_000);
+    expect(archived?.endedAt).toBe(now - 5_000);
+    expect(archived?.runtimeMs).toBe(15_000);
+  });
+
+  test("maps timeout outcomes to timeout status and clamps negative runtime", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:subagent:timeout": {
+        sessionId: "sess-timeout",
+        updatedAt: now,
+        spawnedBy: "agent:main:main",
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-timeout",
+      childSessionKey: "agent:main:subagent:timeout",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "timeout task",
+      cleanup: "keep",
+      createdAt: now - 10_000,
+      startedAt: now - 1_000,
+      endedAt: now - 2_000,
+      outcome: { status: "timeout" },
+      model: "openai/gpt-5.4",
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const timeout = result.sessions.find(
+      (session) => session.key === "agent:main:subagent:timeout",
+    );
+    expect(timeout?.status).toBe("timeout");
+    expect(timeout?.runtimeMs).toBe(0);
+  });
 });
 
 describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)", () => {
   test("ACP agent sessions are visible even when agents.list is configured", async () => {
     await withStateDirEnv("openclaw-acp-vis-", async ({ stateDir }) => {
-      const agentsDir = path.join(stateDir, "agents");
+      const customRoot = path.join(stateDir, "custom-state");
+      const agentsDir = path.join(customRoot, "agents");
       const mainDir = path.join(agentsDir, "main", "sessions");
       const codexDir = path.join(agentsDir, "codex", "sessions");
       fs.mkdirSync(mainDir, { recursive: true });
@@ -792,7 +1512,7 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       const cfg = {
         session: {
           mainKey: "main",
-          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
         },
         agents: {
           list: [{ id: "main", default: true }],

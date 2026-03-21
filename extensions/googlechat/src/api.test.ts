@@ -13,6 +13,21 @@ const account = {
   config: {},
 } as ResolvedGoogleChatAccount;
 
+function stubSuccessfulSend(name: string) {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(new Response(JSON.stringify({ name }), { status: 200 }));
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+async function expectDownloadToRejectForResponse(response: Response) {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+  await expect(
+    downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
+  ).rejects.toThrow(/max bytes/i);
+}
+
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -29,11 +44,7 @@ describe("downloadGoogleChatMedia", () => {
       status: 200,
       headers: { "content-length": "50", "content-type": "application/octet-stream" },
     });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
-
-    await expect(
-      downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
-    ).rejects.toThrow(/max bytes/i);
+    await expectDownloadToRejectForResponse(response);
   });
 
   it("rejects when streamed payload exceeds max bytes", async () => {
@@ -52,11 +63,7 @@ describe("downloadGoogleChatMedia", () => {
       status: 200,
       headers: { "content-type": "application/octet-stream" },
     });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
-
-    await expect(
-      downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
-    ).rejects.toThrow(/max bytes/i);
+    await expectDownloadToRejectForResponse(response);
   });
 });
 
@@ -66,12 +73,7 @@ describe("sendGoogleChatMessage", () => {
   });
 
   it("adds messageReplyOption when sending to an existing thread", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ name: "spaces/AAA/messages/123" }), { status: 200 }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/123");
 
     await sendGoogleChatMessage({
       account,
@@ -89,12 +91,7 @@ describe("sendGoogleChatMessage", () => {
   });
 
   it("does not set messageReplyOption for non-thread sends", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ name: "spaces/AAA/messages/124" }), { status: 200 }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/124");
 
     await sendGoogleChatMessage({
       account,
