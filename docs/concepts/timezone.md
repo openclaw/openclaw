@@ -14,7 +14,7 @@ OpenClaw standardizes timestamps so the model sees a **single reference time**.
 
 Inbound messages are wrapped in an envelope like:
 
-```
+```json
 [Provider ... 2026-01-05 16:26 PST] message text
 ```
 
@@ -44,19 +44,19 @@ You can override this with:
 
 **Local (default):**
 
-```
+```json
 [Signal Alice +1555 2026-01-18 00:19 PST] hello
 ```
 
 **Fixed timezone:**
 
-```
+```json
 [Signal Alice +1555 2026-01-18 06:19 GMT+1] hello
 ```
 
 **Elapsed time:**
 
-```
+```json
 [Signal Alice +1555 +2m 2026-01-18T05:19Z] follow-up
 ```
 

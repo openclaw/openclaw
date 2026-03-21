@@ -196,7 +196,7 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 
 Then run:
 
-```
+```text
 /tts summary off
 ```
 
@@ -255,7 +255,7 @@ the audio.
 
 Example reply payload:
 
-```
+```text
 Here you go.
 
 [[tts:voiceId=pMsXgVXv3BLzUgSXRplE model=eleven_v3 speed=1.1]]
@@ -347,7 +347,7 @@ is skipped and the normal text reply is sent.
 
 ## Flow diagram
 
-```
+```text
 Reply -> TTS enabled?
   no  -> send text
   yes -> has media / MEDIA: / short?
@@ -368,7 +368,7 @@ See [Slash commands](/tools/slash-commands) for enablement details.
 Discord note: `/tts` is a built-in Discord command, so OpenClaw registers
 `/voice` as the native command there. Text `/tts ...` still works.
 
-```
+```text
 /tts off
 /tts always
 /tts inbound

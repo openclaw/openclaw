@@ -20,7 +20,7 @@ This is handy when you need to toggle obscure settings without editing `openclaw
 
 Examples:
 
-```
+```text
 /debug show
 /debug set messages.responsePrefix="[openclaw]"
 /debug unset messages.responsePrefix

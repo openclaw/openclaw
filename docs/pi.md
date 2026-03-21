@@ -41,7 +41,7 @@ OpenClaw uses the pi SDK to embed an AI coding agent into its messaging gateway 
 
 ## File Structure
 
-```
+```text
 src/agents/
 ├── pi-embedded-runner.ts          # Re-exports from pi-embedded-runner/
 ├── pi-embedded-runner/

@@ -212,7 +212,7 @@ Secrets reference details: [Secrets Management](/gateway/secrets).
 
 If Google Cloud Logs Explorer shows errors like:
 
-```
+```text
 status code: 405, reason phrase: HTTP error response: HTTP/1.1 405 Method Not Allowed
 ```
 

@@ -425,7 +425,7 @@ If we want to get fancier later, common next steps are Reciprocal Rank Fusion (R
 After merging vector and keyword scores, two optional post-processing stages
 refine the result list before it reaches the agent:
 
-```
+```text
 Vector + Keyword -> Weighted Merge -> Temporal Decay -> Sort -> MMR -> Top-K Results
 ```
 
@@ -456,7 +456,7 @@ The `lambda` parameter controls the trade-off:
 
 Given these memory files:
 
-```
+```text
 memory/2026-02-10.md  -> "Configured Omada router, set VLAN 10 for IoT devices"
 memory/2026-02-08.md  -> "Configured Omada router, moved IoT to VLAN 10"
 memory/2026-02-05.md  -> "Set up AdGuard DNS on 192.168.10.2"
@@ -465,7 +465,7 @@ memory/network.md     -> "Router: Omada ER605, AdGuard: 192.168.10.2, VLAN 10: I
 
 Without MMR -- top 3 results:
 
-```
+```text
 1. memory/2026-02-10.md  (score: 0.92)  <- router + VLAN
 2. memory/2026-02-08.md  (score: 0.89)  <- router + VLAN (near-duplicate!)
 3. memory/network.md     (score: 0.85)  <- reference doc
@@ -473,7 +473,7 @@ Without MMR -- top 3 results:
 
 With MMR (lambda=0.7) -- top 3 results:
 
-```
+```text
 1. memory/2026-02-10.md  (score: 0.92)  <- router + VLAN
 2. memory/network.md     (score: 0.85)  <- reference doc (diverse!)
 3. memory/2026-02-05.md  (score: 0.78)  <- AdGuard DNS (diverse!)
@@ -492,7 +492,7 @@ a well-worded note from six months ago can outrank yesterday's update on the sam
 **Temporal decay** applies an exponential multiplier to scores based on the age of each result,
 so recent memories naturally rank higher while old ones fade:
 
-```
+```text
 decayedScore = score x e^(-lambda x ageInDays)
 ```
 
@@ -519,7 +519,7 @@ Other sources (e.g., session transcripts) fall back to file modification time (`
 
 Given these memory files (today is Feb 10):
 
-```
+```text
 memory/2025-09-15.md  -> "Rod works Mon-Fri, standup at 10am, pairing at 2pm"  (148 days old)
 memory/2026-02-10.md  -> "Rod has standup at 14:15, 1:1 with Zeb at 14:45"    (today)
 memory/2026-02-03.md  -> "Rod started new team, standup moved to 14:15"        (7 days old)
@@ -527,7 +527,7 @@ memory/2026-02-03.md  -> "Rod started new team, standup moved to 14:15"        (
 
 Without decay:
 
-```
+```text
 1. memory/2025-09-15.md  (score: 0.91)  <- best semantic match, but stale!
 2. memory/2026-02-10.md  (score: 0.82)
 3. memory/2026-02-03.md  (score: 0.80)
@@ -535,7 +535,7 @@ Without decay:
 
 With decay (halfLife=30):
 
-```
+```text
 1. memory/2026-02-10.md  (score: 0.82 x 1.00 = 0.82)  <- today, no decay
 2. memory/2026-02-03.md  (score: 0.80 x 0.85 = 0.68)  <- 7 days, mild decay
 3. memory/2025-09-15.md  (score: 0.91 x 0.03 = 0.03)  <- 148 days, nearly gone

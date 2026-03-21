@@ -85,14 +85,14 @@ Notes:
 
 All CLI backends live under:
 
-```
+```text
 agents.defaults.cliBackends
 ```
 
 Each entry is keyed by a **provider id** (e.g. `claude-cli`, `my-cli`).
 The provider id becomes the left side of your model ref:
 
-```
+```text
 <provider>/<model>
 ```
 

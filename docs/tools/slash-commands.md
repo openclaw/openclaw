@@ -166,7 +166,7 @@ Notes:
 
 Examples:
 
-```
+```text
 /model
 /model list
 /model 3
@@ -188,7 +188,7 @@ Notes:
 
 Examples:
 
-```
+```text
 /debug show
 /debug set messages.responsePrefix="[openclaw]"
 /debug set channels.whatsapp.allowFrom=["+1555","+4477"]
@@ -207,7 +207,7 @@ Notes:
 
 Examples:
 
-```
+```text
 /config show
 /config show messages.responsePrefix
 /config get messages.responsePrefix

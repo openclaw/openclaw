@@ -38,19 +38,19 @@ Full Linux server guide: [Linux Server](/vps). Step-by-step VPS example: [exe.de
 
 Use one of these:
 
-```
+```bash
 openclaw onboard --install-daemon
 ```
 
 Or:
 
-```
+```bash
 openclaw gateway install
 ```
 
 Or:
 
-```
+```bash
 openclaw configure
 ```
 
@@ -58,7 +58,7 @@ Select **Gateway service** when prompted.
 
 Repair/migrate:
 
-```
+```bash
 openclaw doctor
 ```
 
@@ -72,7 +72,7 @@ Minimal setup:
 
 Create `~/.config/systemd/user/openclaw-gateway[-<profile>].service`:
 
-```
+```json
 [Unit]
 Description=OpenClaw Gateway (profile: <profile>, v<version>)
 After=network-online.target
@@ -89,6 +89,6 @@ WantedBy=default.target
 
 Enable it:
 
-```
+```bash
 systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```

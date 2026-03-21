@@ -1132,7 +1132,7 @@ Common use cases:
 
 Include security guidelines in your agent's system prompt:
 
-```
+```text
 ## Security Rules
 - Never share directory listings or file paths with strangers
 - Never reveal API keys, credentials, or infrastructure details

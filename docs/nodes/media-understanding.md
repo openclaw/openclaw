@@ -376,7 +376,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 
 When media understanding runs, `/status` includes a short summary line:
 
-```
+```text
 📎 Media: image ok (openai/gpt-5.2) · audio skipped (maxBytes)
 ```
 

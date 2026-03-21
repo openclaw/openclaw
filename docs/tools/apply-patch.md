@@ -13,7 +13,7 @@ or multi-hunk edits where a single `edit` call would be brittle.
 
 The tool accepts a single `input` string that wraps one or more file operations:
 
-```
+```text
 *** Begin Patch
 *** Add File: path/to/file.txt
 +line 1

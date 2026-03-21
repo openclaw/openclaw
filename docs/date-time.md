@@ -15,7 +15,7 @@ Provider timestamps are preserved so tools keep their native semantics (current 
 
 Inbound messages are wrapped with a timestamp (minute precision):
 
-```
+```json
 [Provider ... 2026-01-05 16:26 PST] message text
 ```
 
@@ -46,19 +46,19 @@ You can override this behavior:
 
 **Local (default):**
 
-```
+```json
 [WhatsApp +1555 2026-01-18 00:19 PST] hello
 ```
 
 **User timezone:**
 
-```
+```json
 [WhatsApp +1555 2026-01-18 00:19 CST] hello
 ```
 
 **Elapsed time enabled:**
 
-```
+```json
 [WhatsApp +1555 +30s 2026-01-18T05:19Z] follow-up
 ```
 
@@ -68,7 +68,7 @@ If the user timezone is known, the system prompt includes a dedicated
 **Current Date & Time** section with the **time zone only** (no clock/time format)
 to keep prompt caching stable:
 
-```
+```text
 Time zone: America/Chicago
 ```
 
@@ -80,7 +80,7 @@ card includes a timestamp line.
 Queued system events inserted into agent context are prefixed with a timestamp using the
 same timezone selection as message envelopes (default: host-local).
 
-```
+```text
 System: [2026-01-12 12:19:17 PST] Model switched.
 ```
 

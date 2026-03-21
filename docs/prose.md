@@ -39,7 +39,7 @@ OpenProse registers `/prose` as a user-invocable skill command. It routes to the
 
 Common commands:
 
-```
+```text
 /prose help
 /prose run <file.prose>
 /prose run <handle/slug>
@@ -78,7 +78,7 @@ context: { findings, draft }
 
 OpenProse keeps state under `.prose/` in your workspace:
 
-```
+```text
 .prose/
 ├── .env
 ├── runs/
@@ -92,7 +92,7 @@ OpenProse keeps state under `.prose/` in your workspace:
 
 User-level persistent agents live at:
 
-```
+```text
 ~/.prose/agents/
 ```
 

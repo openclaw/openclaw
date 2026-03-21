@@ -29,7 +29,7 @@ Translation: allowlisted senders can trigger OpenClaw by mentioning it.
 
 Quick flow (what happens to a group message):
 
-```
+```text
 groupPolicy? disabled -> drop
 groupPolicy? allowlist -> group allowed? no -> drop
 requireMention? yes -> mentioned? no -> store for context only

@@ -14,7 +14,7 @@ streaming, and reasoning visibility.
 
 ## Message flow (high level)
 
-```
+```text
 Inbound message
   -> routing/bindings -> session key
   -> queue (if a run is active)

@@ -65,7 +65,7 @@ Other surfaces:
 
 Costs are estimated from your model pricing config:
 
-```
+```text
 models.providers.<provider>.models[].cost
 ```
 

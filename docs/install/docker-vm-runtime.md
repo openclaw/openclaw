@@ -95,7 +95,7 @@ docker compose exec openclaw-gateway which wacli
 
 Expected output:
 
-```
+```text
 /usr/local/bin/gog
 /usr/local/bin/goplaces
 /usr/local/bin/wacli
@@ -109,7 +109,7 @@ docker compose logs -f openclaw-gateway
 
 Expected output:
 
-```
+```json
 [gateway] listening on ws://0.0.0.0:18789
 ```
 

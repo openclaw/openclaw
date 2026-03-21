@@ -708,7 +708,7 @@ The `groupId` query parameter in Teams URLs is **NOT** the team ID used for conf
 
 **Team URL:**
 
-```
+```text
 https://teams.microsoft.com/l/team/19%3ABk4j...%40thread.tacv2/conversations?groupId=...
                                     └────────────────────────────┘
                                     Team ID (URL-decode this)
@@ -716,7 +716,7 @@ https://teams.microsoft.com/l/team/19%3ABk4j...%40thread.tacv2/conversations?gro
 
 **Channel URL:**
 
-```
+```text
 https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?groupId=...
                                       └─────────────────────────┘
                                       Channel ID (URL-decode this)

@@ -75,7 +75,7 @@ Put standing orders in `AGENTS.md` to guarantee they're loaded every session. Th
 
 Standing orders define **what** the agent is authorized to do. [Cron jobs](/automation/cron-jobs) define **when** it happens. They work together:
 
-```
+```text
 Standing Order: "You own the daily inbox triage"
     ↓
 Cron Job (8 AM daily): "Execute inbox triage per standing orders"

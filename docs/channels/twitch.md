@@ -274,7 +274,7 @@ openclaw channels status --probe
 
 **Check logs for refresh events:**
 
-```
+```text
 Using env token source for mybot
 Access token refreshed for user 123456 (expires in 14400s)
 ```

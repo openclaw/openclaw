@@ -185,7 +185,7 @@ Inbound attachments (images/audio/docs) can be surfaced to your command via temp
 
 Outbound attachments from the agent: include `MEDIA:<path-or-url>` on its own line (no spaces). Example:
 
-```
+```text
 Here’s the screenshot.
 MEDIA:https://example.com/screenshot.png
 ```

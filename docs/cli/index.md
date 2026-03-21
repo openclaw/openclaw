@@ -92,7 +92,7 @@ Palette source of truth: `src/terminal/palette.ts` (the “lobster palette”).
 
 ## Command tree
 
-```
+```bash
 openclaw [--dev] [--profile <name>] <command>
   setup
   onboard

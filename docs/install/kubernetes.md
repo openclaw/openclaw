@@ -83,7 +83,7 @@ open http://localhost:18789
 
 ## What gets deployed
 
-```
+```text
 Namespace: openclaw (configurable via OPENCLAW_NAMESPACE)
 ├── Deployment/openclaw        # Single pod, init container + gateway
 ├── Service/openclaw           # ClusterIP on port 18789
@@ -178,7 +178,7 @@ This deletes the namespace and all resources in it, including the PVC.
 
 ## File structure
 
-```
+```text
 scripts/k8s/
 ├── deploy.sh                   # Creates namespace + secret, deploys via kustomize
 ├── create-kind.sh              # Local Kind cluster (auto-detects docker/podman)

@@ -65,7 +65,7 @@ Nothing is explicitly out of scope for this threat model.
 
 ### 2.1 Trust Boundaries
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                    UNTRUSTED ZONE                                │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
@@ -514,21 +514,21 @@ Current patterns in `moderation.ts`:
 
 **Attack Chain 1: Skill-Based Data Theft**
 
-```
+```text
 T-PERSIST-001 → T-EVADE-001 → T-EXFIL-003
 (Publish malicious skill) → (Evade moderation) → (Harvest credentials)
 ```
 
 **Attack Chain 2: Prompt Injection to RCE**
 
-```
+```text
 T-EXEC-001 → T-EXEC-004 → T-IMPACT-001
 (Inject prompt) → (Bypass exec approval) → (Execute commands)
 ```
 
 **Attack Chain 3: Indirect Injection via Fetched Content**
 
-```
+```text
 T-EXEC-002 → T-EXFIL-001 → External exfiltration
 (Poison URL content) → (Agent fetches & follows instructions) → (Data sent to attacker)
 ```

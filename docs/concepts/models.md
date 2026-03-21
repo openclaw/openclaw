@@ -66,7 +66,7 @@ If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` an
 session overrides. When a user selects a model that isn’t in that allowlist,
 OpenClaw returns:
 
-```
+```text
 Model "provider/model" is not allowed. Use /model to list available models.
 ```
 
@@ -95,7 +95,7 @@ Example allowlist config:
 
 You can switch models for the current session without restarting:
 
-```
+```text
 /model
 /model list
 /model 3

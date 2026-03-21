@@ -10,8 +10,8 @@ title: "Browser Troubleshooting"
 
 OpenClaw's browser control server fails to launch Chrome/Brave/Edge/Chromium with the error:
 
-```
-{"error":"Error: Failed to start Chrome CDP on port 18800 for profile \"openclaw\"."}
+```json
+{ "error": "Error: Failed to start Chrome CDP on port 18800 for profile \"openclaw\"." }
 ```
 
 ### Root Cause
@@ -20,7 +20,7 @@ On Ubuntu (and many Linux distros), the default Chromium installation is a **sna
 
 The `apt install chromium` command installs a stub package that redirects to snap:
 
-```
+```text
 Note, selecting 'chromium-browser' instead of 'chromium'
 chromium-browser is already the newest version (2:1snap1-0ubuntu2).
 ```

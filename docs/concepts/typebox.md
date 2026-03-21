@@ -31,7 +31,7 @@ methods (e.g. `health`, `send`, `chat.send`) and subscribe to events (e.g.
 
 Connection flow (minimal):
 
-```
+```text
 Client                    Gateway
   |---- req:connect -------->|
   |<---- res:hello-ok --------|

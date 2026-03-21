@@ -403,7 +403,7 @@ fly ips allocate-v6 --private -a my-openclaw
 
 After this, `fly ips list` should show only a `private` type IP:
 
-```
+```text
 VERSION  IP                   TYPE             REGION
 v6       fdaa:x:x:x:x::x      private          global
 ```

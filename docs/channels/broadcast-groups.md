@@ -26,7 +26,7 @@ Broadcast groups are evaluated after channel allowlists and group activation rul
 
 Deploy multiple agents with atomic, focused responsibilities:
 
-```
+```text
 Group: "Development Team"
 Agents:
   - CodeReviewer (reviews code snippets)
@@ -39,7 +39,7 @@ Each agent processes the same message and provides its specialized perspective.
 
 ### 2. Multi-Language Support
 
-```
+```text
 Group: "International Support"
 Agents:
   - Agent_EN (responds in English)
@@ -49,7 +49,7 @@ Agents:
 
 ### 3. Quality Assurance Workflows
 
-```
+```text
 Group: "Customer Support"
 Agents:
   - SupportAgent (provides answer)
@@ -58,7 +58,7 @@ Agents:
 
 ### 4. Task Automation
 
-```
+```text
 Group: "Project Management"
 Agents:
   - TaskTracker (updates task database)
@@ -189,7 +189,7 @@ In group `120363403215116621@g.us` with agents `["alfred", "baerbel"]`:
 
 **Alfred's context:**
 
-```
+```text
 Session: agent:alfred:whatsapp:group:120363403215116621@g.us
 History: [user message, alfred's previous responses]
 Workspace: /Users/pascal/openclaw-alfred/
@@ -198,7 +198,7 @@ Tools: read, write, exec
 
 **Bärbel's context:**
 
-```
+```text
 Session: agent:baerbel:whatsapp:group:120363403215116621@g.us
 History: [user message, baerbel's previous responses]
 Workspace: /Users/pascal/openclaw-baerbel/
@@ -265,7 +265,7 @@ With many agents, consider:
 
 Agents fail independently. One agent's error doesn't block others:
 
-```
+```text
 Message → [Agent A ✓, Agent B ✗ error, Agent C ✓]
 Result: Agent A and C respond, Agent B logs error
 ```

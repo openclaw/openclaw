@@ -28,7 +28,7 @@ If you have a Claude Max subscription and want to use it with OpenAI-compatible 
 
 ## How It Works
 
-```
+```text
 Your App → claude-max-api-proxy → Claude Code CLI → Anthropic (via subscription)
      (OpenAI format)              (converts format)      (uses your login)
 ```

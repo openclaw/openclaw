@@ -211,7 +211,7 @@ Flags are case-insensitive and support wildcards (e.g. `telegram.*` or `*`).
 
 Env override (one-off):
 
-```
+```text
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 ```
 

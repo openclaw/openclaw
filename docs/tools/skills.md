@@ -279,7 +279,7 @@ When skills are eligible, OpenClaw injects a compact XML list of available skill
 
 Formula (characters):
 
-```
+```text
 total = 195 + Σ (97 + len(name_escaped) + len(description_escaped) + len(location_escaped))
 ```
 
