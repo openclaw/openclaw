@@ -203,6 +203,59 @@ describe("session_status tool", () => {
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
   });
 
+  it("resolves sessionKey=current to the requester session", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call-current", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("main");
+  });
+
+  it("resolves sessionKey=current to the requester agent session", async () => {
+    loadSessionStoreMock.mockClear();
+    updateSessionStoreMock.mockClear();
+    callGatewayMock.mockClear();
+    loadCombinedSessionStoreForGatewayMock.mockClear();
+    const stores = new Map<string, Record<string, unknown>>([
+      [
+        "/tmp/main/sessions.json",
+        {
+          "agent:main:main": { sessionId: "s-main", updatedAt: 10 },
+        },
+      ],
+      [
+        "/tmp/support/sessions.json",
+        {
+          main: { sessionId: "s-support", updatedAt: 20 },
+        },
+      ],
+    ]);
+    loadSessionStoreMock.mockImplementation((storePath: string) => {
+      return stores.get(storePath) ?? {};
+    });
+    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(multiple)",
+      store: Object.fromEntries([...stores.values()].flatMap((s) => Object.entries(s))),
+    });
+
+    const tool = getSessionStatusTool("agent:support:main");
+
+    // "current" resolves to the support agent's own session via the "main" alias.
+    const result = await tool.execute("call-current-child", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    // The resolved key is "main" within the support agent's store scope.
+    expect(details.sessionKey).toBe("main");
+  });
+
   it("resolves sessionId inputs", async () => {
     const sessionId = "sess-main";
     resetSessionStore({

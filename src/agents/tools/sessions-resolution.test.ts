@@ -67,6 +67,23 @@ describe("session key display/internal mapping", () => {
       resolveInternalSessionKey({ key: "agent:ops:main", alias: "global", mainKey: "main" }),
     ).toBe("agent:ops:main");
   });
+
+  it("maps current to requester session key", () => {
+    expect(
+      resolveInternalSessionKey({
+        key: "current",
+        alias: "global",
+        mainKey: "main",
+        requesterInternalKey: "agent:support:main",
+      }),
+    ).toBe("agent:support:main");
+  });
+
+  it("maps current to alias when no requester key is provided", () => {
+    expect(resolveInternalSessionKey({ key: "current", alias: "global", mainKey: "main" })).toBe(
+      "global",
+    );
+  });
 });
 
 describe("session reference shape detection", () => {
@@ -77,6 +94,7 @@ describe("session reference shape detection", () => {
 
   it("detects canonical session key families", () => {
     expect(looksLikeSessionKey("main")).toBe(true);
+    expect(looksLikeSessionKey("current")).toBe(true);
     expect(looksLikeSessionKey("agent:main:main")).toBe(true);
     expect(looksLikeSessionKey("cron:daily-report")).toBe(true);
     expect(looksLikeSessionKey("node:macbook")).toBe(true);
@@ -86,6 +104,7 @@ describe("session reference shape detection", () => {
 
   it("treats non-keys as session-id candidates", () => {
     expect(shouldResolveSessionIdInput("agent:main:main")).toBe(false);
+    expect(shouldResolveSessionIdInput("current")).toBe(false);
     expect(shouldResolveSessionIdInput("d4f5a5a1-9f75-42cf-83a6-8d170e6a1538")).toBe(true);
     expect(shouldResolveSessionIdInput("random-slug")).toBe(true);
   });

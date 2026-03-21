@@ -56,6 +56,7 @@ function resolveSessionEntry(params: {
   keyRaw: string;
   alias: string;
   mainKey: string;
+  requesterInternalKey?: string;
 }): { key: string; entry: SessionEntry } | null {
   const keyRaw = params.keyRaw.trim();
   if (!keyRaw) {
@@ -65,6 +66,7 @@ function resolveSessionEntry(params: {
     key: keyRaw,
     alias: params.alias,
     mainKey: params.mainKey,
+    requesterInternalKey: params.requesterInternalKey,
   });
 
   const candidates = new Set<string>([keyRaw, internal]);
@@ -72,7 +74,7 @@ function resolveSessionEntry(params: {
     candidates.add(`agent:${DEFAULT_AGENT_ID}:${keyRaw}`);
     candidates.add(`agent:${DEFAULT_AGENT_ID}:${internal}`);
   }
-  if (keyRaw === "main") {
+  if (keyRaw === "main" || keyRaw === "current") {
     candidates.add(
       buildAgentMainSessionKey({
         agentId: DEFAULT_AGENT_ID,
@@ -251,6 +253,12 @@ export function createSessionStatusTool(opts?: {
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
+      // Normalize "current" to the requester's own session key. The "main"
+      // alias is already scoped to the requester agent's store, so this gives
+      // every caller their own session regardless of agent identity.
+      if (requestedKeyRaw.trim().toLowerCase() === "current") {
+        requestedKeyRaw = "main";
+      }
       const ensureAgentAccess = (targetAgentId: string) => {
         if (targetAgentId === requesterAgentId) {
           return;
@@ -290,6 +298,7 @@ export function createSessionStatusTool(opts?: {
         keyRaw: requestedKeyRaw,
         alias,
         mainKey,
+        requesterInternalKey: effectiveRequesterKey,
       });
 
       if (!resolved && shouldResolveSessionIdInput(requestedKeyRaw)) {
@@ -310,6 +319,7 @@ export function createSessionStatusTool(opts?: {
             keyRaw: requestedKeyRaw,
             alias,
             mainKey,
+            requesterInternalKey: effectiveRequesterKey,
           });
         }
       }

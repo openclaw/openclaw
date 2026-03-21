@@ -25,7 +25,16 @@ export function resolveDisplaySessionKey(params: { key: string; alias: string; m
   return params.key;
 }
 
-export function resolveInternalSessionKey(params: { key: string; alias: string; mainKey: string }) {
+export function resolveInternalSessionKey(params: {
+  key: string;
+  alias: string;
+  mainKey: string;
+  requesterInternalKey?: string;
+}) {
+  if (params.key === "current") {
+    // "current" resolves to the requester's own session, falling back to alias.
+    return params.requesterInternalKey ?? params.alias;
+  }
   if (params.key === "main") {
     return params.alias;
   }
@@ -121,7 +130,7 @@ export function looksLikeSessionKey(value: string): boolean {
     return false;
   }
   // These are canonical key shapes that should never be treated as sessionIds.
-  if (raw === "main" || raw === "global" || raw === "unknown") {
+  if (raw === "main" || raw === "global" || raw === "unknown" || raw === "current") {
     return true;
   }
   if (isAcpSessionKey(raw)) {
@@ -264,7 +273,11 @@ export async function resolveSessionReference(params: {
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
 }): Promise<SessionReferenceResolution> {
-  const raw = params.sessionKey.trim();
+  const rawInput = params.sessionKey.trim();
+  // Normalize "current" to the requester's own session key so every session
+  // tool resolves it consistently without per-tool special-casing.
+  const raw =
+    rawInput === "current" && params.requesterInternalKey ? params.requesterInternalKey : rawInput;
   if (shouldResolveSessionIdInput(raw)) {
     // Prefer key resolution to avoid misclassifying custom keys as sessionIds.
     const resolvedByKey = await resolveSessionKeyFromKey({
@@ -290,6 +303,7 @@ export async function resolveSessionReference(params: {
     key: raw,
     alias: params.alias,
     mainKey: params.mainKey,
+    requesterInternalKey: params.requesterInternalKey,
   });
   const displayKey = resolveDisplaySessionKey({
     key: resolvedKey,
