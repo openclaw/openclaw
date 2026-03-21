@@ -124,9 +124,12 @@ describe("scheduleRestartSentinelWake", () => {
         bestEffort: false,
       }),
     );
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
-      sessionKey: "agent:main:main",
-    });
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      "restart message",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+      }),
+    );
     expect(mocks.requestHeartbeatNow).toHaveBeenCalledWith({
       reason: "wake",
       sessionKey: "agent:main:main",

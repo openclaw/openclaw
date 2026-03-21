@@ -21,8 +21,20 @@ const log = createSubsystemLogger("gateway/restart-sentinel");
 const OUTBOUND_RETRY_DELAY_MS = 750;
 const OUTBOUND_MAX_ATTEMPTS = 2;
 
-function enqueueRestartSentinelWake(message: string, sessionKey: string) {
-  enqueueSystemEvent(message, { sessionKey });
+function enqueueRestartSentinelWake(
+  message: string,
+  sessionKey: string,
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  },
+) {
+  enqueueSystemEvent(message, {
+    sessionKey,
+    ...(deliveryContext ? { deliveryContext } : {}),
+  });
   requestHeartbeatNow({ reason: "wake", sessionKey });
 }
 
@@ -91,14 +103,18 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
   const summary = summarizeRestartSentinel(payload);
+  const wakeDeliveryContext = mergeDeliveryContext(
+    payload.deliveryContext,
+    payload.threadId != null ? { threadId: payload.threadId } : undefined,
+  );
 
   if (!sessionKey) {
     const mainSessionKey = resolveMainSessionKeyFromConfig();
-    enqueueRestartSentinelWake(message, mainSessionKey);
+    enqueueRestartSentinelWake(message, mainSessionKey, wakeDeliveryContext);
     return;
   }
 
-  enqueueRestartSentinelWake(message, sessionKey);
+  enqueueRestartSentinelWake(message, sessionKey, wakeDeliveryContext);
 
   const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
 
