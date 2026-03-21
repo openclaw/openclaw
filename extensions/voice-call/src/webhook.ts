@@ -177,17 +177,21 @@ export class VoiceCallWebhookServer {
           `[voice-call] Transcript for ${providerCallId}: ${safeTranscript} (chars=${transcript.length})`,
         );
         const call = this.manager.getCallByProviderCallId(providerCallId);
-        const suppressBargeIn = this.shouldSuppressBargeInForInitialMessage(call);
-
-        // Clear TTS queue on barge-in (user started speaking, interrupt current playback)
-        if (this.provider.name === "twilio" && !suppressBargeIn) {
-          (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
-        }
-
-        // Look up our internal call ID from the provider call ID
         if (!call) {
           console.warn(`[voice-call] No active call found for provider ID: ${providerCallId}`);
           return;
+        }
+        const suppressBargeIn = this.shouldSuppressBargeInForInitialMessage(call);
+        if (suppressBargeIn) {
+          console.log(
+            `[voice-call] Ignoring barge transcript while initial message is still playing (${providerCallId})`,
+          );
+          return;
+        }
+
+        // Clear TTS queue on barge-in (user started speaking, interrupt current playback)
+        if (this.provider.name === "twilio") {
+          (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
         }
 
         // Create a speech event and process it through the manager
@@ -206,12 +210,6 @@ export class VoiceCallWebhookServer {
         const callMode = call.metadata?.mode as string | undefined;
         const shouldRespond = call.direction === "inbound" || callMode === "conversation";
         if (shouldRespond) {
-          if (suppressBargeIn) {
-            console.log(
-              `[voice-call] Skipping auto-response while initial message is still playing (${providerCallId})`,
-            );
-            return;
-          }
           this.handleInboundResponse(call.callId, transcript).catch((err) => {
             console.warn(`[voice-call] Failed to auto-respond:`, err);
           });

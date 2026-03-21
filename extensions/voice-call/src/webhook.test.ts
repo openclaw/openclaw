@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
-import type { CallRecord } from "./types.js";
+import type { CallRecord, NormalizedEvent } from "./types.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 
 const provider: VoiceCallProvider = {
@@ -477,6 +477,12 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
     };
 
     const clearTtsQueue = vi.fn();
+    const processEvent = vi.fn((event: NormalizedEvent) => {
+      if (event.type === "call.speech") {
+        // Mirrors manager behavior: call.speech transitions to listening.
+        call.state = "listening";
+      }
+    });
     const manager = {
       getActiveCalls: () => [call],
       getCallByProviderCallId: (providerCallId: string) =>
@@ -484,7 +490,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       getCall: (callId: string) => (callId === call.callId ? call : undefined),
       endCall: vi.fn(async () => ({ success: true })),
       speakInitialMessage: vi.fn(async () => {}),
-      processEvent: vi.fn(),
+      processEvent,
     } as unknown as CallManager;
 
     const config = createConfig({
@@ -515,19 +521,26 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       const media = getMediaCallbacks(server);
       media.config.onSpeechStart?.("CA-barge");
       media.config.onTranscript?.("CA-barge", "hello");
+      media.config.onSpeechStart?.("CA-barge");
+      media.config.onTranscript?.("CA-barge", "hello again");
       expect(clearTtsQueue).not.toHaveBeenCalled();
       expect(handleInboundResponse).not.toHaveBeenCalled();
+      expect(processEvent).not.toHaveBeenCalled();
 
+      if (call.metadata) {
+        delete call.metadata.initialMessage;
+      }
       call.state = "listening";
 
       media.config.onSpeechStart?.("CA-barge");
-      media.config.onTranscript?.("CA-barge", "hello again");
+      media.config.onTranscript?.("CA-barge", "hello after greeting");
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
       expect(handleInboundResponse).toHaveBeenCalledTimes(1);
+      expect(processEvent).toHaveBeenCalledTimes(1);
       const [calledCallId, calledTranscript] = (handleInboundResponse.mock.calls[0] ??
         []) as unknown as [string | undefined, string | undefined];
       expect(calledCallId).toBe(call.callId);
-      expect(calledTranscript).toBe("hello again");
+      expect(calledTranscript).toBe("hello after greeting");
     } finally {
       await server.stop();
     }
