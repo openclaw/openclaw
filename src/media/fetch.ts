@@ -24,6 +24,24 @@ export class MediaFetchError extends Error {
   }
 }
 
+export const SAFE_MEDIA_FETCH_ERROR_MESSAGE = "⚠️ Media failed: unable to fetch attachment.";
+
+/** Detect MediaFetchError instances or errors wrapping one in the cause chain. */
+export function isMediaFetchError(err: unknown): boolean {
+  if (err instanceof MediaFetchError) {
+    return true;
+  }
+  if (err instanceof Error) {
+    if (err.message.includes("MediaFetchError")) {
+      return true;
+    }
+    if (err.cause) {
+      return isMediaFetchError(err.cause);
+    }
+  }
+  return false;
+}
+
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 export type FetchDispatcherAttempt = {
