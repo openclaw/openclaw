@@ -128,7 +128,7 @@ my-plugin/
     **Provider plugin:**
 
     ```typescript
-    import { definePluginEntry } from "openclaw/plugin-sdk/core";
+    import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
     export default definePluginEntry({
       id: "my-provider",
@@ -144,7 +144,7 @@ my-plugin/
     **Multi-capability plugin** (provider + tool):
 
     ```typescript
-    import { definePluginEntry } from "openclaw/plugin-sdk/core";
+    import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
     export default definePluginEntry({
       id: "my-plugin",
@@ -157,8 +157,14 @@ my-plugin/
     });
     ```
 
-    Use `defineChannelPluginEntry` for channel plugins and `definePluginEntry`
-    for everything else. A single plugin can register as many capabilities as needed.
+    Use `defineChannelPluginEntry` from `plugin-sdk/core` for channel plugins
+    and `definePluginEntry` from `plugin-sdk/plugin-entry` for everything else.
+    A single plugin can register as many capabilities as needed.
+
+    For chat-style channels, `plugin-sdk/core` also exposes
+    `createChatChannelPlugin(...)` so you can compose common DM security,
+    text pairing, reply threading, and attached outbound send results without
+    wiring each adapter separately.
 
   </Step>
 
@@ -173,7 +179,7 @@ my-plugin/
 
     ```typescript
     // Correct: focused subpaths
-    import { definePluginEntry } from "openclaw/plugin-sdk/core";
+    import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
     import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
     import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-oauth";
 
@@ -187,7 +193,8 @@ my-plugin/
     <Accordion title="Common subpaths reference">
       | Subpath | Purpose |
       | --- | --- |
-      | `plugin-sdk/core` | Plugin entry definitions and base types |
+      | `plugin-sdk/plugin-entry` | Canonical `definePluginEntry` helper + provider/plugin entry types |
+      | `plugin-sdk/core` | Channel entry helpers, channel builders, and shared base types |
       | `plugin-sdk/channel-setup` | Setup wizard adapters |
       | `plugin-sdk/channel-pairing` | DM pairing primitives |
       | `plugin-sdk/channel-reply-pipeline` | Reply prefix + typing wiring |

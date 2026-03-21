@@ -39,6 +39,7 @@ import * as lazyRuntimeSdk from "openclaw/plugin-sdk/lazy-runtime";
 import * as matrixRuntimeSharedSdk from "openclaw/plugin-sdk/matrix-runtime-shared";
 import * as mediaRuntimeSdk from "openclaw/plugin-sdk/media-runtime";
 import * as ollamaSetupSdk from "openclaw/plugin-sdk/ollama-setup";
+import * as pluginEntrySdk from "openclaw/plugin-sdk/plugin-entry";
 import * as providerAuthSdk from "openclaw/plugin-sdk/provider-auth";
 import * as providerModelsSdk from "openclaw/plugin-sdk/provider-models";
 import * as providerSetupSdk from "openclaw/plugin-sdk/provider-setup";
@@ -140,12 +141,17 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof coreSdk.definePluginEntry).toBe("function");
     expect(typeof coreSdk.defineChannelPluginEntry).toBe("function");
     expect(typeof coreSdk.defineSetupPluginEntry).toBe("function");
+    expect(typeof coreSdk.createChatChannelPlugin).toBe("function");
     expect(typeof coreSdk.createChannelPluginBase).toBe("function");
     expect(typeof coreSdk.isSecretRef).toBe("function");
     expect(typeof coreSdk.optionalStringEnum).toBe("function");
     expect("runPassiveAccountLifecycle" in asExports(coreSdk)).toBe(false);
     expect("createLoggerBackedRuntime" in asExports(coreSdk)).toBe(false);
     expect("registerSandboxBackend" in asExports(coreSdk)).toBe(false);
+  });
+
+  it("re-exports the canonical plugin entry helper from core", () => {
+    expect(coreSdk.definePluginEntry).toBe(pluginEntrySdk.definePluginEntry);
   });
 
   it("exports routing helpers from the dedicated subpath", () => {
