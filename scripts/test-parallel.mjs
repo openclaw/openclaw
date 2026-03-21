@@ -297,7 +297,7 @@ const defaultHeavyUnitFileLimit =
     : isMacMiniProfile
       ? 90
       : testProfile === "low"
-        ? 32
+        ? 36
         : highMemLocalHost
           ? 80
           : 60;
@@ -307,7 +307,7 @@ const defaultHeavyUnitLaneCount =
     : isMacMiniProfile
       ? 6
       : testProfile === "low"
-        ? 3
+        ? 4
         : highMemLocalHost
           ? 5
           : 4;
@@ -365,11 +365,13 @@ const defaultSingletonBatchLaneCount =
       ? 0
       : isCI
         ? Math.ceil(unitSingletonBatchFiles.length / 6)
-        : highMemLocalHost
-          ? Math.ceil(unitSingletonBatchFiles.length / 8)
-          : lowMemLocalHost
-            ? Math.ceil(unitSingletonBatchFiles.length / 12)
-            : Math.ceil(unitSingletonBatchFiles.length / 10);
+        : testProfile === "low" && highMemLocalHost
+          ? Math.ceil(unitSingletonBatchFiles.length / 8) + 1
+          : highMemLocalHost
+            ? Math.ceil(unitSingletonBatchFiles.length / 8)
+            : lowMemLocalHost
+              ? Math.ceil(unitSingletonBatchFiles.length / 12)
+              : Math.ceil(unitSingletonBatchFiles.length / 10);
 const singletonBatchLaneCount =
   unitSingletonBatchFiles.length === 0
     ? 0
@@ -708,7 +710,9 @@ const defaultTopLevelParallelLimit =
   testProfile === "serial"
     ? 1
     : testProfile === "low"
-      ? 2
+      ? lowMemLocalHost
+        ? 2
+        : 3
       : testProfile === "max"
         ? 5
         : highMemLocalHost
