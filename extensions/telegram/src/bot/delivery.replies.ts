@@ -491,9 +491,7 @@ async function maybePinFirstDeliveredMessage(params: {
   }
 }
 
-function emitMessageSentHooks(params: {
-  hookRunner: ReturnType<typeof getGlobalHookRunner>;
-  enabled: boolean;
+type EmitMessageSentHookParams = {
   sessionKeyForInternalHooks?: string;
   chatId: string;
   accountId?: string;
@@ -503,11 +501,10 @@ function emitMessageSentHooks(params: {
   messageId?: number;
   isGroup?: boolean;
   groupId?: string;
-}): void {
-  if (!params.enabled && !params.sessionKeyForInternalHooks) {
-    return;
-  }
-  const canonical = buildCanonicalSentMessageHookContext({
+};
+
+function buildTelegramSentHookContext(params: EmitMessageSentHookParams) {
+  return buildCanonicalSentMessageHookContext({
     to: params.chatId,
     content: params.content,
     success: params.success,
@@ -519,20 +516,13 @@ function emitMessageSentHooks(params: {
     isGroup: params.isGroup,
     groupId: params.groupId,
   });
-  if (params.enabled) {
-    fireAndForgetHook(
-      Promise.resolve(
-        params.hookRunner!.runMessageSent(
-          toPluginMessageSentEvent(canonical),
-          toPluginMessageContext(canonical),
-        ),
-      ),
-      "telegram: message_sent plugin hook failed",
-    );
-  }
+}
+
+export function emitInternalMessageSentHook(params: EmitMessageSentHookParams): void {
   if (!params.sessionKeyForInternalHooks) {
     return;
   }
+  const canonical = buildTelegramSentHookContext(params);
   fireAndForgetHook(
     triggerInternalHook(
       createInternalHookEvent(
@@ -544,6 +534,30 @@ function emitMessageSentHooks(params: {
     ),
     "telegram: message:sent internal hook failed",
   );
+}
+
+function emitMessageSentHooks(
+  params: EmitMessageSentHookParams & {
+    hookRunner: ReturnType<typeof getGlobalHookRunner>;
+    enabled: boolean;
+  },
+): void {
+  if (!params.enabled && !params.sessionKeyForInternalHooks) {
+    return;
+  }
+  const canonical = buildTelegramSentHookContext(params);
+  if (params.enabled) {
+    fireAndForgetHook(
+      Promise.resolve(
+        params.hookRunner!.runMessageSent(
+          toPluginMessageSentEvent(canonical),
+          toPluginMessageContext(canonical),
+        ),
+      ),
+      "telegram: message_sent plugin hook failed",
+    );
+  }
+  emitInternalMessageSentHook(params);
 }
 
 export async function deliverReplies(params: {

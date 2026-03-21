@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { CONFIG_DIR } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import type { CronStoreFile } from "./types.js";
 
 export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
@@ -26,7 +26,7 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
     const raw = await fs.promises.readFile(storePath, "utf-8");
     let parsed: unknown;
     try {
-      parsed = JSON5.parse(raw);
+      parsed = parseJsonWithJson5Fallback(raw);
     } catch (err) {
       throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
         cause: err,
