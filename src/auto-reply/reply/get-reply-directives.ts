@@ -11,6 +11,7 @@ import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
+import { resolveTrustedExecSecurity } from "./commands-trust.js";
 import { buildCommandContext } from "./commands.js";
 import { type InlineDirectives, parseInlineDirectives } from "./directive-handling.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
@@ -73,6 +74,7 @@ function resolveExecOverrides(params: {
     params.directives.execHost ?? (params.sessionEntry?.execHost as ExecOverrides["host"]);
   const security =
     params.directives.execSecurity ??
+    resolveTrustedExecSecurity(params.sessionEntry?.sessionId) ??
     (params.sessionEntry?.execSecurity as ExecOverrides["security"]);
   const ask = params.directives.execAsk ?? (params.sessionEntry?.execAsk as ExecOverrides["ask"]);
   const node = params.directives.execNode ?? params.sessionEntry?.execNode;
