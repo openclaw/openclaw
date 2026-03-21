@@ -177,6 +177,65 @@ describe("sendMessageMatrix media", () => {
     expect(uploadContent).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps reply context on voice transcript follow-ups outside threads", async () => {
+    const { client, sendMessage } = makeClient();
+    mediaKindFromMimeMock.mockReturnValue("audio");
+    isVoiceCompatibleAudioMock.mockReturnValue(true);
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("audio"),
+      fileName: "clip.mp3",
+      contentType: "audio/mpeg",
+      kind: "audio",
+    });
+
+    await sendMessageMatrix("room:!room:example", "voice caption", {
+      client,
+      mediaUrl: "file:///tmp/clip.mp3",
+      audioAsVoice: true,
+      replyToId: "$reply",
+    });
+
+    const transcriptContent = sendMessage.mock.calls[1]?.[1] as {
+      body?: string;
+      "m.relates_to"?: {
+        "m.in_reply_to"?: { event_id?: string };
+      };
+    };
+
+    expect(transcriptContent.body).toBe("voice caption");
+    expect(transcriptContent["m.relates_to"]).toMatchObject({
+      "m.in_reply_to": { event_id: "$reply" },
+    });
+  });
+
+  it("keeps regular audio payload when audioAsVoice media is incompatible", async () => {
+    const { client, sendMessage } = makeClient();
+    mediaKindFromMimeMock.mockReturnValue("audio");
+    isVoiceCompatibleAudioMock.mockReturnValue(false);
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("audio"),
+      fileName: "clip.wav",
+      contentType: "audio/wav",
+      kind: "audio",
+    });
+
+    await sendMessageMatrix("room:!room:example", "voice caption", {
+      client,
+      mediaUrl: "file:///tmp/clip.wav",
+      audioAsVoice: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const mediaContent = sendMessage.mock.calls[0]?.[1] as {
+      msgtype?: string;
+      body?: string;
+      "org.matrix.msc3245.voice"?: Record<string, never>;
+    };
+    expect(mediaContent.msgtype).toBe("m.audio");
+    expect(mediaContent.body).toBe("voice caption");
+    expect(mediaContent["org.matrix.msc3245.voice"]).toBeUndefined();
+  });
+
   it("uploads thumbnail metadata for unencrypted large images", async () => {
     const { client, sendMessage, uploadContent } = makeClient();
     getImageMetadataMock
