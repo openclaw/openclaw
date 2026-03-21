@@ -1,5 +1,5 @@
 import { ensureAuthProfileStore, listProfilesForProvider } from "openclaw/plugin-sdk/agent-runtime";
-import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk/core";
+import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
 import { githubCopilotLoginCommand } from "openclaw/plugin-sdk/provider-auth-login";
 import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
