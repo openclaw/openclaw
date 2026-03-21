@@ -104,8 +104,9 @@ function extractAckEmoji(value: unknown): string | undefined {
  * ackReaction would silently change behaviour for users who set messages.ackReaction for
  * other channels but leave WhatsApp ackReaction.emoji unset.
  *
- * Returns "" (no reaction) when channels.whatsapp.ackReaction is absent entirely, preserving
- * the existing default of no reaction for unconfigured WhatsApp setups.
+ * Returns "" (no reaction) when channels.whatsapp.ackReaction is absent at both the
+ * channel and account level, preserving the existing default of no reaction for
+ * unconfigured WhatsApp setups.
  */
 export function resolveWhatsAppAckEmoji(
   cfg: OpenClawConfig,
@@ -116,22 +117,27 @@ export function resolveWhatsAppAckEmoji(
     | Record<string, unknown>
     | undefined;
 
-  // Preserve existing default: no ackReaction config at all → no reaction.
-  if (!waConfig?.ackReaction) {
+  const accounts = waConfig?.accounts as Record<string, Record<string, unknown>> | undefined;
+  const accountAck = opts?.accountId ? accounts?.[opts.accountId]?.ackReaction : undefined;
+
+  // Preserve existing default: no ackReaction config at either level → no reaction.
+  if (!waConfig?.ackReaction && accountAck === undefined) {
     return "";
   }
 
-  // L1: account-level ackReaction.emoji
-  if (opts?.accountId) {
-    const accounts = waConfig.accounts as Record<string, Record<string, unknown>> | undefined;
-    const accountEmoji = extractAckEmoji(accounts?.[opts.accountId]?.ackReaction);
+  // L1: account-level ackReaction takes full precedence when present.
+  // If account ackReaction is configured but has no emoji, skip channel-level and
+  // fall directly to agent identity — account config wins at its level.
+  if (accountAck !== undefined) {
+    const accountEmoji = extractAckEmoji(accountAck);
     if (accountEmoji !== undefined) {
       return accountEmoji.trim();
     }
+    return resolveAgentIdentity(cfg, agentId)?.emoji?.trim() ?? "";
   }
 
   // L2: channel-level ackReaction.emoji
-  const channelEmoji = extractAckEmoji(waConfig.ackReaction);
+  const channelEmoji = extractAckEmoji(waConfig?.ackReaction);
   if (channelEmoji !== undefined) {
     return channelEmoji.trim();
   }

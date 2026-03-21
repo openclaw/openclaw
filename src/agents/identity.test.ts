@@ -197,6 +197,35 @@ describe("resolveWhatsAppAckEmoji", () => {
     expect(resolveWhatsAppAckEmoji(cfg, "kit")).toBe("🎸");
   });
 
+  it("resolves account-level emoji when no channel-level ackReaction is configured", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main", identity: { emoji: "🔥" } }] },
+      channels: {
+        whatsapp: {
+          // oxlint-disable-next-line typescript/no-explicit-any
+          accounts: { personal: { ackReaction: { emoji: "🌟" } as any } },
+          // no channel-level ackReaction
+        },
+      },
+    };
+
+    expect(resolveWhatsAppAckEmoji(cfg, "main", { accountId: "personal" })).toBe("🌟");
+  });
+
+  it("falls to agent identity when account ackReaction has no emoji and no channel ackReaction", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main", identity: { emoji: "🔥" } }] },
+      channels: {
+        whatsapp: {
+          // oxlint-disable-next-line typescript/no-explicit-any
+          accounts: { personal: { ackReaction: { direct: false } as any } },
+        },
+      },
+    };
+
+    expect(resolveWhatsAppAckEmoji(cfg, "main", { accountId: "personal" })).toBe("🔥");
+  });
+
   it("prefers account-level emoji over channel-level", () => {
     const cfg: OpenClawConfig = {
       agents: { list: [{ id: "main", identity: { emoji: "🔥" } }] },
