@@ -97,6 +97,9 @@ export function validateHighEntropy(s: string): boolean {
   if (s.length < 16) {
     return false;
   }
+  if (isLikelyHashIdentifier(s)) {
+    return false;
+  }
   const entropy = shannonEntropy(s);
   if (entropy < HIGH_ENTROPY_THRESHOLD) {
     return false;
@@ -108,6 +111,14 @@ export function validateHighEntropy(s: string): boolean {
   }
 
   return true;
+}
+
+function isLikelyHashIdentifier(s: string): boolean {
+  if (!/^[A-Fa-f0-9]+$/.test(s)) {
+    return false;
+  }
+  const commonDigestLengths = new Set([32, 40, 56, 64, 96, 128]);
+  return commonDigestLengths.has(s.length);
 }
 
 /**

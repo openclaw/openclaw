@@ -50,6 +50,11 @@ export function createPrivacyFilterContext(
   };
   const detector = new PrivacyDetector(cfg.rules);
   const replacer = new PrivacyReplacer(sessionId);
+  if (cfg.encryption.algorithm !== "aes-256-gcm") {
+    throw new Error(
+      `[privacy] Unsupported encryption algorithm "${cfg.encryption.algorithm}". Supported: aes-256-gcm`,
+    );
+  }
   const resolvedStorePath = cfg.mappings.storePath
     ? resolveUserPath(cfg.mappings.storePath)
     : undefined;
@@ -446,15 +451,19 @@ function filterUserMessage(msg: UserMessage, ctx: PrivacyFilterContext): UserMes
 
   let changed = false;
   const nextContent = msg.content.map((block) => {
-    if (block.type !== "text") {
+    if (block.type !== "text" && block.type !== "input_text" && block.type !== "output_text") {
       return block;
     }
-    const replaced = filterText(block.text, ctx);
-    if (replaced === block.text) {
+    const blockRecord = block as Record<string, unknown>;
+    if (typeof blockRecord.text !== "string") {
+      return block;
+    }
+    const replaced = filterText(blockRecord.text, ctx);
+    if (replaced === blockRecord.text) {
       return block;
     }
     changed = true;
-    return { ...block, text: replaced } satisfies TextContent;
+    return { ...blockRecord, text: replaced };
   });
 
   return changed ? { ...msg, content: nextContent } : msg;

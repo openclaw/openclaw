@@ -214,7 +214,7 @@ describe("PrivacyDetector", () => {
 
   describe("high entropy string detection", () => {
     it("detects random alphanumeric strings", () => {
-      const result = detector.detect("7f2a9c4b1e8d6a3f5c0b9e2d4a1f8c6b");
+      const result = detector.detect("A9f_2KxP0mQ7vT3nL8yR1wC6uH5zJ4d");
       expect(result.matches.some((m) => m.type === "high_entropy_string")).toBe(true);
     });
 
@@ -225,6 +225,11 @@ describe("PrivacyDetector", () => {
 
     it("rejects repeated characters", () => {
       const result = detector.detect("aaaaaaaaaaaaaaaa");
+      expect(result.matches.some((m) => m.type === "high_entropy_string")).toBe(false);
+    });
+
+    it("does not flag git commit SHAs as high entropy secrets", () => {
+      const result = detector.detect("ece2dab06df56b4f3771f3b28e863c216a4afae0");
       expect(result.matches.some((m) => m.type === "high_entropy_string")).toBe(false);
     });
   });

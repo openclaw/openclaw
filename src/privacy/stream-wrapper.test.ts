@@ -83,6 +83,14 @@ describe("stream-wrapper integration", () => {
         rmSync(tmpHome, { recursive: true, force: true });
       }
     });
+
+    it("rejects unsupported encryption algorithms", () => {
+      expect(() =>
+        createPrivacyFilterContext("bad-algo", {
+          encryption: { algorithm: "aes-192-gcm" },
+        }),
+      ).toThrow(/Unsupported encryption algorithm/);
+    });
   });
 
   describe("filterText + restoreText round-trip", () => {
@@ -143,6 +151,21 @@ describe("stream-wrapper integration", () => {
       const filtered = filterMessages(messages, ctx);
       const msg = filtered[0] as { role: string; content: Array<{ type: string; text: string }> };
       expect(msg.content[0].text).not.toContain("sk-abcdefghijklmnopqrstuvwxyz1234567890");
+    });
+
+    it("filters user input_text/output_text content blocks", () => {
+      const ctx = createPrivacyFilterContext("test-session");
+      const messages: Message[] = [
+        userMessage([
+          { type: "input_text", text: "token sk-proj1234567890abcdefghijklm" } as never,
+          { type: "output_text", text: "email admin@company.com" } as never,
+        ]),
+      ];
+
+      const filtered = filterMessages(messages, ctx);
+      const msg = filtered[0] as unknown as { content: Array<{ text?: string }> };
+      expect(String(msg.content[0]?.text)).not.toContain("sk-proj1234567890abcdefghijklm");
+      expect(String(msg.content[1]?.text)).not.toContain("admin@company.com");
     });
 
     it("filters assistant toolCall arguments before replay", () => {
