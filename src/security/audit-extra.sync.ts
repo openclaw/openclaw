@@ -757,10 +757,10 @@ export function collectGatewayHttpNoAuthFindings(
   const remoteExposure = isGatewayRemotelyExposed(cfg);
   const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
   
-  // Note: mode=none with tailscale serve is now blocked at startup (server-runtime-config.ts),
+  // Note: mode=none with tailscale serve/funnel is now blocked at startup (server-runtime-config.ts),
   // but this audit check still catches mode=none with loopback bind (intentionally allowed for
   // local-only deployments) or misconfigured setups.
-  const isTailscaleServeBlocked = tailscaleMode === "serve";
+  const isTailscaleRemoteBlocked = tailscaleMode === "serve" || tailscaleMode === "funnel";
   
   findings.push({
     checkId: "gateway.http.no_auth",
@@ -769,8 +769,8 @@ export function collectGatewayHttpNoAuthFindings(
     detail:
       `gateway.auth.mode="none" leaves ${enabledEndpoints.join(", ")} callable without a shared secret. ` +
       `Current exposure: bind=${bind}, tailscale=${tailscaleMode}. ` +
-      (isTailscaleServeBlocked 
-        ? "Note: mode=none with tailscale serve is now blocked at startup." 
+      (isTailscaleRemoteBlocked 
+        ? "Note: mode=none with tailscale serve/funnel is blocked at startup." 
         : "Treat this as trusted-local only and avoid exposing the gateway beyond loopback."),
     remediation:
       "Set gateway.auth.mode to token/password (recommended). If you intentionally keep mode=none, keep gateway.bind=loopback, disable tailscale serve/funnel, and disable optional HTTP endpoints.",

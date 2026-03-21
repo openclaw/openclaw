@@ -291,6 +291,21 @@ describe("resolveGatewayRuntimeConfig", () => {
       expect(result.authMode).toBe("none");
       expect(result.tailscaleMode).toBe("off");
     });
+
+    it("allows mode=token with tailscale serve", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback" as const,
+            auth: { mode: "token" as const, token: "test-token" },
+            tailscale: { mode: "serve" as const },
+          },
+        },
+        port: 18789,
+      });
+      expect(result.authMode).toBe("token");
+      expect(result.tailscaleMode).toBe("serve");
+    });
   });
 
   describe("HTTP security headers", () => {
