@@ -208,6 +208,25 @@ Current read:
 - `profile=user` is materially healthier than it was on 2026-03-20, but the Emirates end-to-end is still non-deterministic: one rerun reached model/runtime timeout after getting past earlier browser failures, while a later spot check still regressed to attach timeout.
 - `profile=openclaw` remains the more reliable interaction baseline, but still needs better repeated-field disambiguation for real commerce/travel sites.
 
+Proof-oriented reruns (same task, stricter stop-and-prove prompt):
+
+- `user`
+  - artifact: `.artifacts/browser-spike-20260321-emirates-clean/runs/user_task6_proof_r8/agent.json`
+  - result: `FAIL`
+  - duration: `107.7s`
+  - note: this rerun did not reach passenger details or payment. It stopped on the visible `Flights to London (LON)` booking widget with validation text including `Please fill all mandatory fields` and `Please choose a departure date`, while the visible button remained `Search flights`.
+- `openclaw`
+  - artifact: `.artifacts/browser-spike-20260321-emirates-clean/runs/openclaw_task6_proof_r1/agent.json`
+  - result: `FAIL`
+  - duration: `235.1s`
+  - note: this rerun got farther than `user`, reaching the visible `Book a flight` multi-city form with visible `Flight 1` / `Flight 2` sections and one departure date set to `21 Mar 26`, but it still failed before passenger details because Emirates airport autocomplete/selection remained unresolved (`Please choose a destination`, `Please choose an origin`).
+
+Corrected interpretation after proof reruns:
+
+- The earlier `user_task6_final_r7` `PASS` is not strong enough to claim passenger-details progress. The stronger proof-oriented rerun contradicted it.
+- Neither browser lane currently has proof that it reached passenger details or payment on Emirates.
+- `openclaw` currently appears to get farther than `user` on this exact hostile commerce flow, but it still does not complete the safe pre-payment path.
+
 Task 5, run 1:
 
 - `user`
