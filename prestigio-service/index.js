@@ -570,6 +570,73 @@ async function readyForProduction(fields) {
   });
 }
 
+async function prepInProgress(fields) {
+  const mode = normalizeFields(fields);
+
+  const rows = await supabaseGet('order_item_prep_state', [
+    'select=id,sidemark,item_name,project_name,client_name,category,quantity,target_completion_date,missing_spec_keys,warning_keys,next_action_lane,fabric_review_status,frame_ready,drawing_approved,all_fabric_received,fabric_inspected,external_deps_clear,spec_complete',
+    '&prep_bucket=eq.prep_in_progress',
+    '&on_hold=eq.false',
+    '&production_started_at=is.null',
+    '&order=target_completion_date.asc.nullslast',
+    '&limit=100'
+  ].join(''));
+
+  const itemIds = rows.map(r => r.id);
+  let specsByItem = {};
+
+  if (itemIds.length > 0) {
+    const specs = await supabaseGet('item_specs', [
+      'select=id,order_item_id,spec_type,cushion_type,fill_material,insert_type',
+      `&order_item_id=in.(${itemIds.join(',')})`,
+      '&order=created_at.asc'
+    ].join(''));
+
+    specsByItem = {};
+    for (const s of specs) {
+      if (!specsByItem[s.order_item_id]) specsByItem[s.order_item_id] = [];
+      specsByItem[s.order_item_id].push(s);
+    }
+  }
+
+  const results = rows.map(r => {
+    const base = {
+      id: r.id,
+      sidemark: r.sidemark || r.item_name,
+      category: r.category,
+      project: r.project_name,
+      client: r.client_name,
+      quantity: r.quantity,
+      target_completion: r.target_completion_date,
+      missing_spec_keys: r.missing_spec_keys,
+      next_action_lane: r.next_action_lane,
+      frame_ready: r.frame_ready,
+      drawing_approved: r.drawing_approved,
+      all_fabric_received: r.all_fabric_received,
+      fabric_inspected: r.fabric_inspected,
+      specs: (specsByItem[r.id] || []).map(s => ({
+        id: s.id,
+        cushion_type: s.cushion_type,
+        fill_material: s.fill_material,
+        insert_type: s.insert_type
+      }))
+    };
+
+    if (mode === 'lean') {
+      delete base.id;
+      delete base.specs;
+    }
+
+    return base;
+  });
+
+  return makeQueryResult(results, {
+    count: results.length,
+    total: results.length,
+    truncated: hasReachedLimit(rows, 100)
+  });
+}
+
 async function waitingOnFabric(fields) {
   const mode = normalizeFields(fields);
   const rows = await supabaseGet('order_item_readiness', [
@@ -1444,6 +1511,7 @@ async function handleQuery(type, params = {}, fields = 'lean') {
     case 'quote_lookup': return quoteLookup(params.search, mode);
     case 'invoiced_items': return invoicedItems(params.search, mode);
     case 'ready_for_production': return readyForProduction(mode);
+    case 'prep_in_progress': return prepInProgress(mode);
     case 'waiting_on_fabric': return waitingOnFabric(mode);
     case 'in_production': return inProduction(params.department, mode);
     case 'drawings_needing_review': return drawingsNeedingReview(mode);
