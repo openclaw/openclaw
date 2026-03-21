@@ -153,6 +153,64 @@ function readExportStatements(path: string): string[] {
   });
 }
 
+/**
+ * Collect all non-test TypeScript source files inside `extensions/<id>/src/`.
+ * These are the production files that must respect the extension package boundary.
+ */
+function collectExtensionSourceFiles(): string[] {
+  const extensionsDir = resolve(ROOT_DIR, "..", "extensions");
+  const files: string[] = [];
+  const stack = [extensionsDir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const fullPath = resolve(current, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
+          continue;
+        }
+        stack.push(fullPath);
+        continue;
+      }
+      if (
+        !entry.isFile() ||
+        !entry.name.endsWith(".ts") ||
+        entry.name.endsWith(".test.ts") ||
+        entry.name.endsWith(".d.ts")
+      ) {
+        continue;
+      }
+      const relPath = relative(resolve(ROOT_DIR, ".."), fullPath).replaceAll("\\", "/");
+      // Only check files inside extensions/<id>/src/
+      if (/^extensions\/[^/]+\/src\//.test(relPath)) {
+        files.push(relPath);
+      }
+    }
+  }
+  return files;
+}
+
+/**
+ * Find import/export-from statements that reference paths outside the extension
+ * package root (e.g. `../../../src/plugin-sdk/slack.js`).  These break in the
+ * Docker runtime image because `/app/src/` is not copied to the final stage.
+ */
+function findCrossBoundaryImports(filePath: string): string[] {
+  const sourceText = readFileSync(resolve(ROOT_DIR, "..", filePath), "utf8");
+  const violations: string[] = [];
+  // Match import/export from statements with paths that escape to src/ via relative traversal.
+  const importPattern =
+    /(?:import|export)\s+(?:type\s+)?(?:\{[^}]*\}|[^;]*)\s+from\s+["'](\.\.[/"'][^"']*src\/[^"']*)["']/g;
+  let match: RegExpExecArray | null;
+  while ((match = importPattern.exec(sourceText)) !== null) {
+    violations.push(match[1]);
+  }
+  return violations;
+}
+
 describe("runtime api guardrails", () => {
   it("keeps runtime api surfaces on an explicit export allowlist", () => {
     const runtimeApiFiles = collectRuntimeApiFiles();
@@ -163,6 +221,44 @@ describe("runtime api guardrails", () => {
     for (const file of Object.keys(RUNTIME_API_EXPORT_GUARDS).toSorted()) {
       expect(readExportStatements(file), `${file} runtime api exports changed`).toEqual(
         RUNTIME_API_EXPORT_GUARDS[file],
+      );
+    }
+  });
+
+  it("extension source files do not import outside their package root via relative paths", () => {
+    // Pre-existing cross-boundary imports in other extensions (tracked under #47411).
+    // These should be fixed in follow-up PRs; this allowlist prevents regressions.
+    const KNOWN_VIOLATIONS = new Set([
+      "extensions/bluebubbles/src/runtime-api.ts",
+      "extensions/discord/src/runtime-api.ts",
+      "extensions/irc/src/runtime-api.ts",
+      "extensions/matrix/src/runtime-api.ts",
+      "extensions/signal/src/runtime-api.ts",
+      "extensions/telegram/src/bot-native-commands.menu-test-support.ts",
+      "extensions/whatsapp/src/runtime-api.ts",
+    ]);
+
+    const extensionFiles = collectExtensionSourceFiles();
+    expect(extensionFiles.length).toBeGreaterThan(0);
+
+    const violations: Array<{ file: string; imports: string[] }> = [];
+    for (const file of extensionFiles) {
+      if (KNOWN_VIOLATIONS.has(file)) {
+        continue;
+      }
+      const crossBoundary = findCrossBoundaryImports(file);
+      if (crossBoundary.length > 0) {
+        violations.push({ file, imports: crossBoundary });
+      }
+    }
+
+    if (violations.length > 0) {
+      const summary = violations
+        .map((v) => `  ${v.file}:\n${v.imports.map((i) => `    - ${i}`).join("\n")}`)
+        .join("\n");
+      expect.fail(
+        `Extension source files must not import outside the package root via relative paths.\n` +
+          `Use openclaw/plugin-sdk/<subpath> or local extension barrels instead.\n\n${summary}`,
       );
     }
   });

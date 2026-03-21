@@ -1,4 +1,9 @@
 import type { ChannelStatusIssue } from "../channels/plugins/types.js";
+export {
+  projectCredentialSnapshotFields,
+  resolveConfiguredFromCredentialStatuses,
+  resolveConfiguredFromRequiredCredentialStatuses,
+} from "../channels/account-snapshot-fields.js";
 export { isRecord } from "../channels/plugins/status-issues/shared.js";
 export {
   appendMatchMetadata,

@@ -11,3 +11,4 @@ export {
   MarkdownConfigSchema,
 } from "../config/zod-schema.core.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
+export { SlackConfigSchema } from "../config/zod-schema.providers-core.js";
