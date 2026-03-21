@@ -2,6 +2,7 @@ import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { buildMemoryPromptSection } from "../memory/prompt-section.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -43,33 +44,10 @@ function buildMemorySection(params: {
   if (params.isMinimal) {
     return [];
   }
-  if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
-    return [];
-  }
-  const lines = [
-    "## Memory Recall",
-    "",
-    "CRITICAL: You MUST call memory_search BEFORE answering ANY question that references:",
-    "- Past conversations, decisions, or commitments",
-    "- People, dates, deadlines, or project status",
-    "- User preferences or prior feedback",
-    "- TODO items or action items",
-    "",
-    "If you answer from recall without searching, your answer may be stale or wrong.",
-    "After searching, use memory_get to pull only the needed lines and keep context small.",
-    "Use multiple search queries with different phrasings if the first returns few results.",
-  ];
-  if (params.citationsMode === "off") {
-    lines.push(
-      "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
-    );
-  } else {
-    lines.push(
-      'After searching, cite the source: "From memory/2026-03-10.md#L42" when it helps the user verify.',
-    );
-  }
-  lines.push("");
-  return lines;
+  return buildMemoryPromptSection({
+    availableTools: params.availableTools,
+    citationsMode: params.citationsMode,
+  });
 }
 
 export function buildChannelSection(params: {
