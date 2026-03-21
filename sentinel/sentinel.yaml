@@ -20,9 +20,11 @@ tasks:
   memory_tower_nightly: { schedule: "00:00", enabled: true }
   session_digest: { schedule: "23:30", enabled: true }
   threads_sync: { schedule: "every 6h", enabled: true }
-  threads_patrol: { schedule: "every 12h", enabled: true }
+  thinker_news: { schedule: "06:50", enabled: true }
+  threads_patrol: { schedule: "07:00", enabled: true }
   hormone_eval: { schedule: "every 15m", enabled: true }
-  content_brain_pulse: { schedule: "every 6h", enabled: true }
+  content_brain_pulse: { schedule: "07:10", enabled: true }
+  product_watchdog: { schedule: "every 1h", enabled: true }
 notifications:
   telegram_bridge: "http://localhost:18796"
   cruz_chat_id: "448345880"
