@@ -1,8 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const readLatestAssistantReplyMock = vi.fn<(sessionKey: string) => Promise<string | undefined>>(
-  async (_sessionKey: string) => undefined,
-);
 const chatHistoryMock = vi.fn<(sessionKey: string) => Promise<{ messages?: Array<unknown> }>>(
   async (_sessionKey: string) => ({ messages: [] }),
 );
@@ -15,10 +12,6 @@ vi.mock("../gateway/call.js", () => ({
     }
     return {};
   }),
-}));
-
-vi.mock("./tools/agent-step.js", () => ({
-  readLatestAssistantReply: readLatestAssistantReplyMock,
 }));
 
 describe("captureSubagentCompletionReply", () => {
@@ -40,23 +33,27 @@ describe("captureSubagentCompletionReply", () => {
   });
 
   beforeEach(() => {
-    readLatestAssistantReplyMock.mockReset().mockResolvedValue(undefined);
     chatHistoryMock.mockReset().mockResolvedValue({ messages: [] });
   });
 
-  it("returns immediate assistant output without polling", async () => {
-    readLatestAssistantReplyMock.mockResolvedValueOnce("Immediate assistant completion");
+  it("returns immediate assistant output from history without polling", async () => {
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Immediate assistant completion" }],
+        },
+      ],
+    });
 
     const result = await captureSubagentCompletionReply("agent:main:subagent:child");
 
     expect(result).toBe("Immediate assistant completion");
-    expect(readLatestAssistantReplyMock).toHaveBeenCalledTimes(1);
-    expect(chatHistoryMock).not.toHaveBeenCalled();
+    expect(chatHistoryMock).toHaveBeenCalledTimes(1);
   });
 
   it("polls briefly and returns late tool output once available", async () => {
     vi.useFakeTimers();
-    readLatestAssistantReplyMock.mockResolvedValue(undefined);
     chatHistoryMock.mockResolvedValueOnce({ messages: [] }).mockResolvedValueOnce({
       messages: [
         {
@@ -82,7 +79,6 @@ describe("captureSubagentCompletionReply", () => {
 
   it("returns undefined when no completion output arrives before retry window closes", async () => {
     vi.useFakeTimers();
-    readLatestAssistantReplyMock.mockResolvedValue(undefined);
     chatHistoryMock.mockResolvedValue({ messages: [] });
 
     const pending = captureSubagentCompletionReply("agent:main:subagent:child");
@@ -92,5 +88,27 @@ describe("captureSubagentCompletionReply", () => {
     expect(result).toBeUndefined();
     expect(chatHistoryMock).toHaveBeenCalled();
     vi.useRealTimers();
+  });
+
+  it("returns partial assistant progress when the latest assistant turn is tool-only", async () => {
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Mapped the modules." },
+            { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-2", name: "exec", arguments: {} }],
+        },
+      ],
+    });
+
+    const result = await captureSubagentCompletionReply("agent:main:subagent:child");
+
+    expect(result).toBe("Mapped the modules.");
   });
 });
