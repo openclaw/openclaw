@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import {
   createTestWizardPrompter,
+  runSetupWizardConfigure,
   type WizardPrompter,
 } from "../../../test/helpers/extensions/setup-wizard.js";
 import { synologyChatPlugin } from "./channel.js";
@@ -31,14 +31,11 @@ describe("synology-chat setup wizard", () => {
       }) as WizardPrompter["text"],
     });
 
-    const result = await synologyChatConfigureAdapter.configure({
+    const result = await runSetupWizardConfigure({
+      configure: synologyChatConfigureAdapter.configure,
       cfg: {} as OpenClawConfig,
-      runtime: createRuntimeEnv(),
       prompter,
       options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.accountId).toBe("default");
@@ -68,13 +65,11 @@ describe("synology-chat setup wizard", () => {
       }) as WizardPrompter["text"],
     });
 
-    const result = await synologyChatConfigureAdapter.configure({
+    const result = await runSetupWizardConfigure({
+      configure: synologyChatConfigureAdapter.configure,
       cfg: {} as OpenClawConfig,
-      runtime: createRuntimeEnv(),
       prompter,
       options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
       forceAllowFrom: true,
     });
 
