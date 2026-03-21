@@ -1,4 +1,4 @@
-import { Reactions } from "./zca-client.js";
+import { Reactions } from "./zca-constants.js";
 
 const REACTION_ALIAS_MAP = new Map<string, string>([
   ["like", Reactions.LIKE],

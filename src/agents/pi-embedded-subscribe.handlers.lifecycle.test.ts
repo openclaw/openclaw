@@ -58,14 +58,16 @@ describe("handleAgentEnd", () => {
     expect(warn.mock.calls[0]?.[1]).toMatchObject({
       event: "embedded_run_agent_end",
       runId: "run-1",
-      error: "connection refused",
+      error: "LLM request failed: connection refused by the provider endpoint.",
       rawErrorPreview: "connection refused",
+      consoleMessage:
+        "embedded run agent end: runId=run-1 isError=true model=unknown provider=unknown error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
     });
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: "connection refused",
+        error: "LLM request failed: connection refused by the provider endpoint.",
       },
     });
   });
@@ -92,7 +94,7 @@ describe("handleAgentEnd", () => {
       failoverReason: "overloaded",
       providerErrorType: "overloaded_error",
       consoleMessage:
-        "embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment.",
+        'embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment. rawError={"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
     });
   });
 
@@ -112,7 +114,7 @@ describe("handleAgentEnd", () => {
     const meta = warn.mock.calls[0]?.[1];
     expect(meta).toMatchObject({
       consoleMessage:
-        "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=connection refused",
+        "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
     });
     expect(meta?.consoleMessage).not.toContain("\n");
     expect(meta?.consoleMessage).not.toContain("\r");

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { sendMessageMatrix } from "../../runtime-api.js";
+import type { SessionBindingAdapter } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   readJsonFileWithFallback,
   registerSessionBindingAdapter,
@@ -11,6 +11,7 @@ import {
 import { resolveMatrixStoragePaths } from "./client/storage.js";
 import type { MatrixAuth } from "./client/types.js";
 import type { MatrixClient } from "./sdk.js";
+import { sendMessageMatrix } from "./send.js";
 import {
   deleteMatrixThreadBindingManagerEntry,
   getMatrixThreadBindingManager,
@@ -367,6 +368,7 @@ export async function createMatrixThreadBindingManager(params: {
       unregisterSessionBindingAdapter({
         channel: "matrix",
         accountId: params.accountId,
+        adapter: sessionBindingAdapter,
       });
       if (getMatrixThreadBindingManagerEntry(params.accountId)?.manager === manager) {
         deleteMatrixThreadBindingManagerEntry(params.accountId);
@@ -413,7 +415,7 @@ export async function createMatrixThreadBindingManager(params: {
     return removed.map((record) => toSessionBindingRecord(record, defaults));
   };
 
-  registerSessionBindingAdapter({
+  const sessionBindingAdapter: SessionBindingAdapter = {
     channel: "matrix",
     accountId: params.accountId,
     capabilities: { placements: ["current", "child"], bindSupported: true, unbindSupported: true },
@@ -512,7 +514,9 @@ export async function createMatrixThreadBindingManager(params: {
       );
       return removed;
     },
-  });
+  };
+
+  registerSessionBindingAdapter(sessionBindingAdapter);
 
   if (params.enableSweeper !== false) {
     sweepTimer = setInterval(() => {

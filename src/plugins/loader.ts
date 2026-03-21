@@ -71,7 +71,24 @@ export type PluginLoadOptions = {
    */
   preferSetupRuntimeForChannelPlugins?: boolean;
   activate?: boolean;
+  throwOnLoadError?: boolean;
 };
+
+export class PluginLoadFailureError extends Error {
+  readonly pluginIds: string[];
+  readonly registry: PluginRegistry;
+
+  constructor(registry: PluginRegistry) {
+    const failedPlugins = registry.plugins.filter((entry) => entry.status === "error");
+    const summary = failedPlugins
+      .map((entry) => `${entry.id}: ${entry.error ?? "unknown plugin load error"}`)
+      .join("; ");
+    super(`plugin load failed: ${summary}`);
+    this.name = "PluginLoadFailureError";
+    this.pluginIds = failedPlugins.map((entry) => entry.id);
+    this.registry = registry;
+  }
+}
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
 const registryCache = new Map<string, PluginRegistry>();
@@ -113,11 +130,41 @@ const resolvePluginSdkAlias = (params: LoaderModuleResolveParams = {}): string |
 
 function buildPluginLoaderAliasMap(modulePath: string): Record<string, string> {
   const pluginSdkAlias = resolvePluginSdkAlias({ modulePath });
+  const extensionApiAlias = resolveExtensionApiAlias({ modulePath });
   return {
+    ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
     ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
     ...resolvePluginSdkScopedAliasMap({ modulePath }),
   };
 }
+
+const resolveExtensionApiAlias = (params: LoaderModuleResolveParams = {}): string | null => {
+  try {
+    const modulePath = resolveLoaderModulePath(params);
+    const packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
+    if (!packageRoot) {
+      return null;
+    }
+
+    const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+      modulePath,
+      isProduction: process.env.NODE_ENV === "production",
+    });
+    const candidateMap = {
+      src: path.join(packageRoot, "src", "extensionAPI.ts"),
+      dist: path.join(packageRoot, "dist", "extensionAPI.js"),
+    } as const;
+    for (const kind of orderedKinds) {
+      const candidate = candidateMap[kind];
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+};
 
 function resolvePluginRuntimeModulePath(params: LoaderModuleResolveParams = {}): string | null {
   try {
@@ -153,6 +200,7 @@ export const __testing = {
   buildPluginLoaderAliasMap,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
+  resolveExtensionApiAlias,
   resolvePluginSdkScopedAliasMap,
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
@@ -411,6 +459,19 @@ function recordPluginError(params: {
 
 function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]) {
   diagnostics.push(...append);
+}
+
+function maybeThrowOnPluginLoadError(
+  registry: PluginRegistry,
+  throwOnLoadError: boolean | undefined,
+): void {
+  if (!throwOnLoadError) {
+    return;
+  }
+  if (!registry.plugins.some((entry) => entry.status === "error")) {
+    return;
+  }
+  throw new PluginLoadFailureError(registry);
 }
 
 type PathMatcher = {
@@ -1252,6 +1313,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     logger,
     env,
   });
+
+  maybeThrowOnPluginLoadError(registry, options.throwOnLoadError);
 
   if (cacheEnabled) {
     setCachedPluginRegistry(cacheKey, registry);

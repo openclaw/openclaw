@@ -69,6 +69,18 @@ describe("resolveProviderCapabilities", () => {
       geminiThoughtSignatureModelHints: [],
       dropThinkingBlockModelHints: ["claude"],
     });
+    expect(resolveProviderCapabilities("anthropic-vertex")).toEqual({
+      anthropicToolSchemaMode: "native",
+      anthropicToolChoiceMode: "native",
+      providerFamily: "anthropic",
+      preserveAnthropicThinkingSignatures: true,
+      openAiCompatTurnValidation: true,
+      geminiThoughtSignatureSanitization: false,
+      transcriptToolCallIdMode: "default",
+      transcriptToolCallIdModelHints: [],
+      geminiThoughtSignatureModelHints: [],
+      dropThinkingBlockModelHints: ["claude"],
+    });
     expect(resolveProviderCapabilities("amazon-bedrock")).toEqual({
       anthropicToolSchemaMode: "native",
       anthropicToolChoiceMode: "native",
@@ -136,11 +148,18 @@ describe("resolveProviderCapabilities", () => {
 
   it("tracks provider families and model-specific transcript quirks in the registry", () => {
     expect(isOpenAiProviderFamily("openai")).toBe(true);
+    expect(isAnthropicProviderFamily("anthropic-vertex")).toBe(true);
     expect(isAnthropicProviderFamily("amazon-bedrock")).toBe(true);
     expect(
       shouldDropThinkingBlocksForModel({
         provider: "anthropic",
         modelId: "claude-opus-4-6",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "anthropic-vertex",
+        modelId: "claude-sonnet-4-6",
       }),
     ).toBe(true);
     expect(

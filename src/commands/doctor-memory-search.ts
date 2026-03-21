@@ -156,8 +156,8 @@ export async function noteMemorySearchHealth(
 
   note(
     [
-      "Memory search is enabled but no embedding provider is configured.",
-      "Semantic recall will not work without an embedding provider.",
+      "Memory search is enabled, but no embedding provider is ready.",
+      "Semantic recall needs at least one embedding provider.",
       gatewayProbeWarning ? gatewayProbeWarning : null,
       "",
       "Fix (pick one):",
