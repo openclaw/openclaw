@@ -1,4 +1,3 @@
-import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
@@ -10,9 +9,35 @@ import {
   type SessionRef,
   type SessionStateValue,
 } from "./diagnostic-session-state.js";
-import { createSubsystemLogger } from "./subsystem.js";
+import { createSubsystemLogger, type SubsystemLogger } from "./subsystem.js";
 
-const diag = createSubsystemLogger("diagnostic");
+let diagnosticLoggerInstance: SubsystemLogger | null = null;
+let cachedLoadedDiagnosticConfig: OpenClawConfig | undefined;
+let diagnosticConfigRefreshPromise: Promise<void> | null = null;
+
+function getDiagnosticLogger(): SubsystemLogger {
+  diagnosticLoggerInstance ??= createSubsystemLogger("diagnostic");
+  return diagnosticLoggerInstance;
+}
+
+const diag = new Proxy({} as SubsystemLogger, {
+  get(_target, prop, receiver) {
+    return Reflect.get(getDiagnosticLogger() as object, prop, receiver);
+  },
+});
+
+function refreshDiagnosticConfigSnapshot(): void {
+  diagnosticConfigRefreshPromise ??= import("../config/config.js")
+    .then(({ loadConfig }) => {
+      cachedLoadedDiagnosticConfig = loadConfig();
+    })
+    .catch(() => {
+      cachedLoadedDiagnosticConfig = undefined;
+    })
+    .finally(() => {
+      diagnosticConfigRefreshPromise = null;
+    });
+}
 
 const webhookStats = {
   received: 0,
@@ -335,13 +360,9 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
     return;
   }
   heartbeatInterval = setInterval(() => {
-    let heartbeatConfig = config;
-    if (!heartbeatConfig) {
-      try {
-        heartbeatConfig = loadConfig();
-      } catch {
-        heartbeatConfig = undefined;
-      }
+    let heartbeatConfig = config ?? cachedLoadedDiagnosticConfig;
+    if (!heartbeatConfig && !diagnosticConfigRefreshPromise) {
+      refreshDiagnosticConfigSnapshot();
     }
     const stuckSessionWarnMs = resolveStuckSessionWarnMs(heartbeatConfig);
     const now = Date.now();
@@ -427,6 +448,9 @@ export function resetDiagnosticStateForTest(): void {
   webhookStats.errors = 0;
   webhookStats.lastReceived = 0;
   lastActivityAt = 0;
+  cachedLoadedDiagnosticConfig = undefined;
+  diagnosticConfigRefreshPromise = null;
+  diagnosticLoggerInstance = null;
   stopDiagnosticHeartbeat();
 }
 
