@@ -32,9 +32,20 @@ final class LiveActivityManager {
     func startActivity(agentName: String, sessionKey: String) {
         self.hydrateCurrentAndPruneDuplicates()
 
-        if self.currentActivity != nil {
-            self.handleConnecting()
-            return
+        if let current = self.currentActivity {
+            if current.attributes.agentName == agentName,
+               current.attributes.sessionKey == sessionKey
+            {
+                self.handleConnecting()
+                return
+            }
+
+            Task {
+                await current.end(
+                    ActivityContent(state: self.disconnectedState(), staleDate: nil),
+                    dismissalPolicy: .immediate)
+            }
+            self.currentActivity = nil
         }
 
         let authInfo = ActivityAuthorizationInfo()
@@ -80,7 +91,7 @@ final class LiveActivityManager {
     func handleWorking(task: String?) {
         if let task {
             self.updateCurrent(state: self.workingState(task: task))
-            self.logger.info("live activity → working task=\(task, privacy: .public)")
+            self.logger.info("live activity → working task=\(task, privacy: .private)")
         } else {
             // Restore the last known connection state rather than blindly going to idle.
             // This prevents overwriting a disconnected/connecting state if the connection
@@ -176,8 +187,6 @@ final class LiveActivityManager {
             isConnecting: false,
             isWorking: true,
             taskDescription: task,
-            // Use `.now` so the elapsed-time timer in the Dynamic Island measures
-            // task duration, not time since the Live Activity was created.
-            startedAt: .now)
+            startedAt: self.activityStartDate)
     }
 }

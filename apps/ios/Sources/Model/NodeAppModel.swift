@@ -1722,8 +1722,11 @@ private extension NodeAppModel {
             self.cameraHUDKind = kind
         }
 
-        // Mirror transient camera/recording activity to the Dynamic Island.
-        LiveActivityManager.shared.handleWorking(task: text)
+        // Mirror transient camera/recording activity to the Dynamic Island, but do not
+        // surface raw error strings on the lock screen / Dynamic Island.
+        if kind != .error {
+            LiveActivityManager.shared.handleWorking(task: text)
+        }
 
         guard let autoHideSeconds else { return }
         self.cameraHUDDismissTask = Task { @MainActor in
