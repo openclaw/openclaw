@@ -105,7 +105,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads[0]?.replyToTag).toBe(true);
   });
 
-  it("does not stamp plain assistant replies with replyToCurrent=false", async () => {
+  it("does not stamp plain assistant replies with replyToCurrent", () => {
     const payloads = buildPayloads({
       assistantTexts: ["plain hello"],
       currentMessageId: "wa-msg-123",
@@ -114,6 +114,14 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("plain hello");
     expect(payloads[0]?.replyToCurrent).toBeUndefined();
+    expect(payloads[0]?.replyToId).toBeUndefined();
+  });
+
+  it("buildReplyPayloads stamps replyToId from currentMessageId when replyToMode is all", async () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["plain hello"],
+      currentMessageId: "wa-msg-123",
+    });
 
     const { replyPayloads } = await buildReplyPayloads({
       payloads,
