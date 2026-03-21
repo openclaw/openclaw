@@ -1667,7 +1667,7 @@ describe("compaction-safeguard extension model fallback", () => {
     expect(retrieved?.model).toEqual(model);
   });
 
-  it("cancels compaction when both ctx.model and runtime.model are undefined", async () => {
+  it("falls back to built-in compaction when both ctx.model and runtime.model are undefined", async () => {
     const sessionManager = stubSessionManager();
 
     // Do NOT set runtime.model (both ctx.model and runtime.model will be undefined)
@@ -1688,31 +1688,18 @@ describe("compaction-safeguard extension model fallback", () => {
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to built-in compaction when model is undefined (returns undefined, not cancel)", async () => {
-    const sessionManager = stubSessionManager();
-    // Do NOT set runtime model
-    const mockEvent = createCompactionEvent({ messageText: "test", tokensBefore: 500 });
-    const { result, getApiKeyMock } = await runCompactionScenario({
-      sessionManager,
-      event: mockEvent,
-      apiKey: null,
-    });
-    expect(result).toBeUndefined();
-    expect(getApiKeyMock).not.toHaveBeenCalled();
-  });
-
   it("falls back to built-in compaction when API key is missing (returns undefined, not cancel)", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model });
     const mockEvent = createCompactionEvent({ messageText: "test", tokensBefore: 500 });
-    const { result, getApiKeyMock } = await runCompactionScenario({
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
       apiKey: null,
     });
     expect(result).toBeUndefined();
-    expect(getApiKeyMock).toHaveBeenCalledWith(model);
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
   });
 });
 
@@ -1845,8 +1832,8 @@ describe("compaction-safeguard double-compaction guard", () => {
       apiKey: null,
     });
     // Should NOT take the boundary fast-path — falls through to normal compaction
-    // (which cancels due to no API key, but that's the expected normal path)
-    expect(result).toEqual({ cancel: true });
+    // (which falls back to built-in compaction due to no API key)
+    expect(result).toBeUndefined();
   });
 
   it("continues when messages include real conversation content", async () => {
