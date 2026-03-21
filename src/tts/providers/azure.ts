@@ -2,6 +2,7 @@ import type { SpeechProviderPlugin } from "../../plugins/types.js";
 import type { SpeechVoiceOption } from "../provider-types.js";
 
 const DEFAULT_AZURE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_TIMEOUT_MS = 30000;
 
 type AzureVoiceListEntry = {
   Name?: string;
@@ -20,6 +21,14 @@ function normalizeAzureBaseUrl(baseUrl: string | undefined): string {
     return "https://eastus.tts.speech.microsoft.com";
   }
   return trimmed.replace(/\/+$/, "");
+}
+
+function getFileExtension(outputFormat: string): string {
+  if (outputFormat.includes("mp3")) return ".mp3";
+  if (outputFormat.includes("wav")) return ".wav";
+  if (outputFormat.includes("ogg")) return ".ogg";
+  if (outputFormat.includes("webm")) return ".webm";
+  return ".mp3"; // default to mp3
 }
 
 export async function listAzureVoices(params: {
@@ -91,8 +100,8 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
     },
     isConfigured: ({ config }) =>
       Boolean(
-        (config as any)?.azure?.apiKey ||
-          process.env.AZURE_SPEECH_API_KEY,
+        ((config as any)?.azure?.apiKey || process.env.AZURE_SPEECH_API_KEY) &&
+        ((config as any)?.azure?.voice || (config as any)?.azure?.lang)
       ),
     synthesize: async (req) => {
       const apiKey =
@@ -108,15 +117,21 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         ? `${normalizeAzureBaseUrl(baseUrl)}/cognitiveservices/v1`
         : `https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`;
 
-      const voice = (req.config as any)?.azure?.voice;
-      const lang = (req.config as any)?.azure?.lang;
+      // Apply directive overrides if provided
+      const azureOverride = (req.overrides as any)?.azure;
+      const voice = azureOverride?.voice || (req.config as any)?.azure?.voice;
+      const lang = azureOverride?.lang || (req.config as any)?.azure?.lang;
       const outputFormat =
+        azureOverride?.outputFormat ??
         (req.config as any)?.azure?.outputFormat ??
         DEFAULT_AZURE_OUTPUT_FORMAT;
 
       if (!voice) {
-        throw new Error("Azure voice not configured");
+        throw new Error("Azure voice not configured. Set voice in config or use [[tts:voice=zh-HK-HiuMaanNeural]] directive");
       }
+
+      // Use timeout from config, directive, or default
+      const timeoutMs = (req.config as any)?.azure?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
       const ssml = buildAzureSSML(req.text, voice, lang);
 
@@ -128,7 +143,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
           "X-Microsoft-OutputFormat": outputFormat,
         },
         body: ssml,
-        signal: AbortSignal.timeout((req.config as any)?.azure?.timeoutMs ?? 30000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
 
       if (!response.ok) {
@@ -139,7 +154,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
       return {
         audioBuffer: Buffer.from(audioBuffer),
         outputFormat,
-        fileExtension: outputFormat.includes("mp3") ? ".mp3" : ".wav",
+        fileExtension: getFileExtension(outputFormat),
         voiceCompatible: true,
       };
     },

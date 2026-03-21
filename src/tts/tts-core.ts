@@ -176,6 +176,20 @@ export function parseTtsDirectives(
               warnings.push(`invalid OpenAI voice "${rawValue}"`);
             }
             break;
+
+          case "azure_voice":
+          case "azurevoice":
+            if (!policy.allowVoice) {
+              break;
+            }
+            // Azure voice names are ShortName format like "zh-HK-HiuMaanNeural"
+            // Basic validation: non-empty string
+            if (rawValue && rawValue.trim().length > 0) {
+              overrides.azure = { ...overrides.azure, voice: rawValue };
+            } else {
+              warnings.push(`invalid Azure voice "${rawValue}"`);
+            }
+            break;
           case "voiceid":
           case "voice_id":
           case "elevenlabs_voice":
