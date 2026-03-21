@@ -247,7 +247,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
               );
               // If the monitor was stopped during the drain window, abort the restart.
               if (stopped) {
-                break;
+                return;
               }
               // Re-evaluate channel health after drain: the channel may have recovered
               // or reconnected while we were waiting. Only proceed if still unhealthy.
