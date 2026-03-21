@@ -1271,30 +1271,35 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       registrationMode,
     });
 
-    try {
-      const result = register(api);
-      if (result && typeof result.then === "function") {
-        registry.diagnostics.push({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: "plugin register returned a promise; async registration is ignored",
+    if (shouldActivate) {
+      try {
+        const result = register(api);
+        if (result && typeof result.then === "function") {
+          registry.diagnostics.push({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message: "plugin register returned a promise; async registration is ignored",
+          });
+        }
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
+      } catch (err) {
+        recordPluginError({
+          logger,
+          registry,
+          record,
+          seenIds,
+          pluginId,
+          origin: candidate.origin,
+          error: err,
+          logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
+          diagnosticMessagePrefix: "plugin failed during register: ",
         });
       }
+    } else {
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
-    } catch (err) {
-      recordPluginError({
-        logger,
-        registry,
-        record,
-        seenIds,
-        pluginId,
-        origin: candidate.origin,
-        error: err,
-        logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
-        diagnosticMessagePrefix: "plugin failed during register: ",
-      });
     }
   }
 

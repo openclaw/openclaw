@@ -586,6 +586,32 @@ describe("model-selection", () => {
       });
       expect(resolved?.alias).toBe("kimi");
     });
+
+    it("resolves alias in model part of qualified ref (Control UI picker bug #51608)", () => {
+      const index = {
+        byAlias: new Map([
+          [
+            "bailian",
+            {
+              alias: "bailian",
+              ref: { provider: "custom-dashscope-aliyuncs-com", model: "qwen3.5-flash" },
+            },
+          ],
+        ]),
+        byKey: new Map(),
+      };
+
+      const resolved = resolveModelRefFromString({
+        raw: "custom-dashscope-aliyuncs-com/bailian",
+        defaultProvider: "minimax-cn",
+        aliasIndex: index,
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "custom-dashscope-aliyuncs-com",
+        model: "qwen3.5-flash",
+      });
+      expect(resolved?.alias).toBe("bailian");
+    });
   });
 
   describe("resolveConfiguredModelRef", () => {

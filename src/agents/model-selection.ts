@@ -268,6 +268,16 @@ export function resolveModelRefFromString(params: {
   if (!parsed) {
     return null;
   }
+  if (params.aliasIndex) {
+    const modelAliasKey = normalizeAliasKey(parsed.model);
+    const modelAliasMatch = params.aliasIndex.byAlias.get(modelAliasKey);
+    if (modelAliasMatch) {
+      return {
+        ref: { provider: parsed.provider, model: modelAliasMatch.ref.model },
+        alias: modelAliasMatch.alias,
+      };
+    }
+  }
   return { ref: parsed };
 }
 

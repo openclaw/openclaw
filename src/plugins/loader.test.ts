@@ -1177,7 +1177,7 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     });
 
     expect(scoped.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
-    expect(scoped.commands.map((entry) => entry.command.name)).toEqual(["pair"]);
+    expect(scoped.commands.map((entry) => entry.command.name)).toEqual([]);
     expect(getPluginCommandSpecs("telegram")).toEqual([]);
 
     const active = loadOpenClawPlugins({
