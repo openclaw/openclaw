@@ -1820,22 +1820,21 @@
 }
 
 .data-table-container {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: 70vh;
 }
 
 .data-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 13px;
 }
 
-.data-table thead {
+.data-table th {
   position: sticky;
   top: 0;
-  z-index: 1;
-}
-
-.data-table th {
+  z-index: 3;
   padding: 10px 12px;
   text-align: left;
   font-weight: 600;
@@ -1937,6 +1936,80 @@
   background: var(--bg-hover);
 }
 
+/* Checkbox column */
+.data-table-checkbox-col {
+  width: 1%;
+  padding-left: 12px !important;
+  padding-right: 4px !important;
+  text-align: center;
+  vertical-align: middle;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+}
+
+.data-table th.data-table-checkbox-col {
+  z-index: 4;
+  background: var(--bg-elevated);
+}
+
+td.data-table-checkbox-col {
+  background: var(--card);
+}
+
+.data-table tbody tr:hover td.data-table-checkbox-col {
+  background: var(--bg-hover);
+}
+
+.data-table-checkbox-col input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+/* Sticky Key column (second column, after checkbox) */
+.data-table .data-table-key-col {
+  position: sticky;
+  left: 36px;
+  z-index: 2;
+  min-width: 180px;
+}
+
+.data-table th.data-table-key-col {
+  z-index: 4;
+  background: var(--bg-elevated);
+}
+
+td.data-table-key-col {
+  background: var(--card);
+  box-shadow: 2px 0 4px rgba(0, 0, 0, 0.08);
+}
+
+.data-table tbody tr:hover td.data-table-key-col {
+  background: var(--bg-hover);
+}
+
+/* Bulk action bar */
+.data-table-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-subtle);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.data-table-bulk-bar .btn svg {
+  width: 14px;
+  height: 14px;
+}
+
 /* Pagination */
 .data-table-pagination {
   display: flex;
@@ -1977,93 +2050,6 @@
 .data-table-pagination__controls button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-
-/* Row actions */
-.data-table-row-actions {
-  position: relative;
-}
-
-.data-table-row-actions__trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    border-color var(--duration-fast) ease;
-}
-
-.data-table-row-actions__trigger svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
-}
-
-.data-table-row-actions__trigger:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-  border-color: var(--border);
-}
-
-.data-table-row-actions__menu {
-  position: absolute;
-  right: 0;
-  top: 100%;
-  z-index: 42;
-  min-width: 140px;
-  background: var(--popover);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
-  padding: 4px;
-  animation: fade-in var(--duration-fast) ease;
-}
-
-.data-table-row-actions__menu a,
-.data-table-row-actions__menu button {
-  display: block;
-  width: 100%;
-  padding: 8px 12px;
-  font-size: 13px;
-  text-align: left;
-  text-decoration: none;
-  color: var(--text);
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background var(--duration-fast) ease;
-}
-
-.data-table-row-actions__menu a:hover,
-.data-table-row-actions__menu button:hover {
-  background: var(--bg-hover);
-}
-
-.data-table-row-actions__menu button.danger {
-  color: var(--danger);
-}
-
-.data-table-row-actions__menu button.danger:hover {
-  background: var(--danger-subtle);
-}
-
-/* Click-away overlay for open menus */
-.data-table-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  background: transparent;
 }
 
 /* Inline form fields for filter bars */
@@ -4072,6 +4058,29 @@ details[open] > .ov-expandable-toggle::after {
     grid-template-columns: 1fr;
     gap: 6px;
   }
+}
+
+/* ── Shared collapse chevron ── */
+
+.collapse-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform var(--duration-fast) ease;
+}
+
+.collapse-chevron svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.collapse-chevron--collapsed {
+  transform: rotate(-90deg);
 }
 
 @media (max-width: 600px) {
