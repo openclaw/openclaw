@@ -358,7 +358,7 @@ sequence again: define the core capability first, then let vendor plugins
 register implementations against it.
 
 Need a concrete rollout checklist? See
-[Capability Cookbook](/tools/capability-cookbook).
+[Adding a new capability](#adding-a-new-capability).
 
 ## Contracts and enforcement
 
@@ -1300,7 +1300,7 @@ Recommended sequence:
    Add tests so ownership and registration shape stay explicit over time.
 
 This is how OpenClaw stays opinionated without becoming hardcoded to one
-provider's worldview. See the [Capability Cookbook](/tools/capability-cookbook)
+provider's worldview. See the [Capability checklist](#capability-checklist)
 for a concrete file checklist and worked example.
 
 ### Capability checklist
