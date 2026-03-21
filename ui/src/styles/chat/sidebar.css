@@ -126,6 +126,14 @@
   width: fit-content;
 }
 
+.sidebar-markdown .half-block-art pre code {
+  color: inherit;
+  line-height: inherit;
+  font-family: var(--mono);
+  background: none;
+  padding: 0;
+}
+
 .sidebar-markdown pre {
   background: rgba(0, 0, 0, 0.12);
   border-radius: 4px;

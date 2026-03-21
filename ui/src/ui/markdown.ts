@@ -176,11 +176,10 @@ function normalizeMarkdownImageLabel(text?: string | null): string {
 }
 
 // Half-block characters used in UTF-8 QR codes and block-art:
-// U+2580 ▀ upper half, U+2584 ▄ lower half, U+2588 █ full block,
-// plus shades ░▒▓ and partial blocks ▌▐.
+// U+2580 ▀ upper half, U+2584 ▄ lower half, U+2588 █ full block.
 const HALF_BLOCK_RE = /[\u2580\u2584\u2588]/;
 
-function looksLikeHalfBlockArt(text: string): boolean {
+export function looksLikeHalfBlockArt(text: string): boolean {
   const lines = text.trim().split("\n");
   if (lines.length < 10) {
     return false;
