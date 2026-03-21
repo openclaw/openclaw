@@ -8,6 +8,7 @@ import {
 } from "../../agents/model-auth.js";
 import { normalizeModelRef } from "../../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
+import { resolveProviderAttributionHeaders } from "../../agents/provider-attribution.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
 import type {
   ImageDescriptionRequest,
@@ -188,6 +189,7 @@ export async function describeImagesWithModel(
   }
 
   const context = buildImageContext(prompt, params.images);
+  const attributionHeaders = resolveProviderAttributionHeaders(model.provider);
   const controller = new AbortController();
   const timeout =
     typeof params.timeoutMs === "number" &&
@@ -199,6 +201,7 @@ export async function describeImagesWithModel(
     apiKey,
     maxTokens: resolveImageToolMaxTokens(model.maxTokens, params.maxTokens ?? 512),
     signal: controller.signal,
+    ...(attributionHeaders ? { headers: attributionHeaders } : {}),
   }).finally(() => {
     clearTimeout(timeout);
   });
