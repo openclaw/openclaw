@@ -515,7 +515,7 @@ export async function preflightDiscordMessage(
   const bypassMentionRequirement =
     (isBoundThreadSession &&
       shouldBypassMentionRequirementForBinding(threadBinding, Boolean(author.bot))) ||
-    shouldBypassMentionRequirementForBinding(configuredBinding?.record, Boolean(author.bot));
+    Boolean(configuredBinding);
   if (
     isBoundThreadBotSystemMessage({
       isBoundThreadSession,
