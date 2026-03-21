@@ -382,7 +382,7 @@ function generateZshCompletion(program: Command): string {
 # Ensure zsh completion system is initialized.
 # When sourced via \`source <(openclaw completion --shell zsh)\`,
 # compdef may not be available unless compinit has been called first.
-if (( ! \$+functions[compdef] )); then
+if (( ! $+functions[compdef] )); then
   autoload -Uz compinit
   compinit -C
 fi
