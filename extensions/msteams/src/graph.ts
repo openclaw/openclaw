@@ -74,13 +74,19 @@ export async function fetchGraphJson<T>(params: {
   token: string;
   path: string;
   headers?: Record<string, string>;
+  /** HTTP method; defaults to "GET" */
+  method?: string;
+  /** Request body (serialized as JSON). Only used for non-GET methods. */
+  body?: unknown;
 }): Promise<T> {
   const res = await requestGraph({
     token: params.token,
     path: params.path,
+    method: params.method as "GET" | "POST" | "DELETE" | undefined,
+    body: params.body,
     headers: params.headers,
   });
-  return (await res.json()) as T;
+  return await readOptionalGraphJson<T>(res);
 }
 
 export async function resolveGraphToken(cfg: unknown): Promise<string> {
