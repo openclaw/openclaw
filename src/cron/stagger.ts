@@ -6,15 +6,39 @@ function parseCronFields(expr: string) {
   return expr.trim().split(/\s+/).filter(Boolean);
 }
 
+/**
+ * Returns true when the minute field includes minute 0 as a firing point.
+ * Does not match wildcard ("*") since every-minute crons don't benefit from
+ * top-of-hour stagger — they already fire 60 times per hour.
+ */
+function minuteFieldIncludesZero(field: string): boolean {
+  if (field === "0") {
+    return true;
+  }
+  if (field.startsWith("*/")) {
+    const step = parseInt(field.slice(2), 10);
+    // step=1 is equivalent to "*" — skip stagger for every-minute expressions
+    return Number.isFinite(step) && step > 1;
+  }
+  if (field.includes(",")) {
+    return field.split(",").some((v) => v.trim() === "0");
+  }
+  if (field.includes("-")) {
+    const [start] = field.split("-").map(Number);
+    return start === 0;
+  }
+  return parseInt(field, 10) === 0;
+}
+
 export function isRecurringTopOfHourCronExpr(expr: string) {
   const fields = parseCronFields(expr);
   if (fields.length === 5) {
     const [minuteField, hourField] = fields;
-    return minuteField === "0" && hourField.includes("*");
+    return minuteFieldIncludesZero(minuteField) && hourField.includes("*");
   }
   if (fields.length === 6) {
     const [secondField, minuteField, hourField] = fields;
-    return secondField === "0" && minuteField === "0" && hourField.includes("*");
+    return secondField === "0" && minuteFieldIncludesZero(minuteField) && hourField.includes("*");
   }
   return false;
 }

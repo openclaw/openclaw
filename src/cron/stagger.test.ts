@@ -15,6 +15,30 @@ describe("cron stagger helpers", () => {
     expect(isRecurringTopOfHourCronExpr("15 * * * *")).toBe(false);
   });
 
+  it("detects step expressions that include minute 0", () => {
+    // every 15 min fires at :00, :15, :30, :45 — includes top-of-hour
+    expect(isRecurringTopOfHourCronExpr("*/15 * * * *")).toBe(true);
+    // every 30 min fires at :00 and :30 — includes top-of-hour
+    expect(isRecurringTopOfHourCronExpr("*/30 * * * *")).toBe(true);
+    // every 2 min fires at :00, :02, ... — includes top-of-hour
+    expect(isRecurringTopOfHourCronExpr("*/2 * * * *")).toBe(true);
+    // every minute — too frequent, skip stagger
+    expect(isRecurringTopOfHourCronExpr("* * * * *")).toBe(false);
+    expect(isRecurringTopOfHourCronExpr("*/1 * * * *")).toBe(false);
+  });
+
+  it("detects comma lists that include minute 0", () => {
+    // fires at :00 and :30 — includes top-of-hour
+    expect(isRecurringTopOfHourCronExpr("0,30 * * * *")).toBe(true);
+    // fires at :15 and :45 — does not include top-of-hour
+    expect(isRecurringTopOfHourCronExpr("15,45 * * * *")).toBe(false);
+  });
+
+  it("detects range expressions starting at 0", () => {
+    expect(isRecurringTopOfHourCronExpr("0-30 * * * *")).toBe(true);
+    expect(isRecurringTopOfHourCronExpr("5-30 * * * *")).toBe(false);
+  });
+
   it("normalizes explicit stagger values", () => {
     expect(normalizeCronStaggerMs("30000")).toBe(30_000);
     expect(normalizeCronStaggerMs(42.8)).toBe(42);
@@ -27,11 +51,15 @@ describe("cron stagger helpers", () => {
     expect(resolveCronStaggerMs({ kind: "cron", expr: "0 * * * *" })).toBe(
       DEFAULT_TOP_OF_HOUR_STAGGER_MS,
     );
+    expect(resolveCronStaggerMs({ kind: "cron", expr: "*/15 * * * *" })).toBe(
+      DEFAULT_TOP_OF_HOUR_STAGGER_MS,
+    );
     expect(resolveCronStaggerMs({ kind: "cron", expr: "0 * * * *", staggerMs: 30_000 })).toBe(
       30_000,
     );
     expect(resolveCronStaggerMs({ kind: "cron", expr: "0 * * * *", staggerMs: 0 })).toBe(0);
     expect(resolveCronStaggerMs({ kind: "cron", expr: "15 * * * *" })).toBe(0);
+    expect(resolveCronStaggerMs({ kind: "cron", expr: "* * * * *" })).toBe(0);
   });
 
   it("handles missing runtime expr values without throwing", () => {
