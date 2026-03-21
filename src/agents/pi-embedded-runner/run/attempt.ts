@@ -29,6 +29,8 @@ import type {
 } from "../../../plugins/types.js";
 import {
   createPrivacyFilterContext,
+  filterMessages,
+  filterPrompt,
   wrapStreamFnPrivacyFilter,
   type PrivacyFilterContext,
 } from "../../../privacy/stream-wrapper.js";
@@ -2009,12 +2011,65 @@ export async function runEmbeddedAttempt(
         effectiveWorkspace,
       );
 
+      const privacyEnabled = params.config?.privacy?.enabled !== false;
+      let privacyCtx: PrivacyFilterContext | undefined;
+      if (privacyEnabled) {
+        try {
+          privacyCtx = createPrivacyFilterContext(params.sessionId, params.config?.privacy);
+        } catch (err) {
+          // Degrade gracefully — filtering is a hardening layer, not a critical path.
+          // A read-only $HOME or unwritable storePath should not abort the entire run.
+          log.warn(
+            `[privacy] Failed to initialize privacy filter, continuing without: ${(err as Error).message}`,
+          );
+        }
+      }
+
+      const sanitizeCacheTracePayload = (
+        payload: Record<string, unknown>,
+      ): Record<string, unknown> => {
+        if (!privacyCtx) {
+          return payload;
+        }
+        let changed = false;
+        const next: Record<string, unknown> = { ...payload };
+        const messages = payload.messages;
+        if (Array.isArray(messages)) {
+          const filtered = filterMessages(
+            messages as Parameters<typeof filterMessages>[0],
+            privacyCtx,
+          );
+          if (filtered !== messages) {
+            next.messages = filtered as unknown;
+            changed = true;
+          }
+        }
+        if (typeof payload.system === "string") {
+          const filteredSystem = filterPrompt(payload.system, privacyCtx);
+          if (filteredSystem !== payload.system) {
+            next.system = filteredSystem;
+            changed = true;
+          }
+        }
+        if (typeof payload.prompt === "string") {
+          const filteredPrompt = filterPrompt(payload.prompt, privacyCtx);
+          if (filteredPrompt !== payload.prompt) {
+            next.prompt = filteredPrompt;
+            changed = true;
+          }
+        }
+        return changed ? next : payload;
+      };
+
       if (cacheTrace) {
-        cacheTrace.recordStage("session:loaded", {
-          messages: activeSession.messages,
-          system: systemPromptText,
-          note: "after session create",
-        });
+        cacheTrace.recordStage(
+          "session:loaded",
+          sanitizeCacheTracePayload({
+            messages: activeSession.messages,
+            system: systemPromptText,
+            note: "after session create",
+          }),
+        );
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
       }
 
@@ -2135,22 +2190,11 @@ export async function runEmbeddedAttempt(
       }
 
       // Privacy filter: replace sensitive content before sending to LLM API.
-      const privacyEnabled = params.config?.privacy?.enabled !== false;
-      let privacyCtx: PrivacyFilterContext | undefined;
-      if (privacyEnabled) {
-        try {
-          privacyCtx = createPrivacyFilterContext(params.sessionId, params.config?.privacy);
-          activeSession.agent.streamFn = wrapStreamFnPrivacyFilter(
-            activeSession.agent.streamFn,
-            privacyCtx,
-          );
-        } catch (err) {
-          // Degrade gracefully — filtering is a hardening layer, not a critical path.
-          // A read-only $HOME or unwritable storePath should not abort the entire run.
-          log.warn(
-            `[privacy] Failed to initialize privacy filter, continuing without: ${(err as Error).message}`,
-          );
-        }
+      if (privacyCtx) {
+        activeSession.agent.streamFn = wrapStreamFnPrivacyFilter(
+          activeSession.agent.streamFn,
+          privacyCtx,
+        );
       }
 
       if (anthropicPayloadLogger && !useReplacedContentInLogs) {
@@ -2173,7 +2217,10 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           policy: transcriptPolicy,
         });
-        cacheTrace?.recordStage("session:sanitized", { messages: prior });
+        cacheTrace?.recordStage(
+          "session:sanitized",
+          sanitizeCacheTracePayload({ messages: prior }),
+        );
         const validatedGemini = transcriptPolicy.validateGeminiTurns
           ? validateGeminiTurns(prior)
           : prior;
@@ -2190,7 +2237,10 @@ export async function runEmbeddedAttempt(
         const limited = transcriptPolicy.repairToolUseResultPairing
           ? sanitizeToolUseResultPairing(truncated)
           : truncated;
-        cacheTrace?.recordStage("session:limited", { messages: limited });
+        cacheTrace?.recordStage(
+          "session:limited",
+          sanitizeCacheTracePayload({ messages: limited }),
+        );
         if (limited.length > 0) {
           activeSession.agent.replaceMessages(limited);
         }
@@ -2503,10 +2553,13 @@ export async function runEmbeddedAttempt(
         }
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
-        cacheTrace?.recordStage("prompt:before", {
-          prompt: effectivePrompt,
-          messages: activeSession.messages,
-        });
+        cacheTrace?.recordStage(
+          "prompt:before",
+          sanitizeCacheTracePayload({
+            prompt: effectivePrompt,
+            messages: activeSession.messages,
+          }),
+        );
 
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
         const leafEntry = sessionManager.getLeafEntry();
@@ -2551,11 +2604,14 @@ export async function runEmbeddedAttempt(
                 : undefined,
           });
 
-          cacheTrace?.recordStage("prompt:images", {
-            prompt: effectivePrompt,
-            messages: activeSession.messages,
-            note: `images: prompt=${imageResult.images.length}`,
-          });
+          cacheTrace?.recordStage(
+            "prompt:images",
+            sanitizeCacheTracePayload({
+              prompt: effectivePrompt,
+              messages: activeSession.messages,
+              note: `images: prompt=${imageResult.images.length}`,
+            }),
+          );
 
           // Diagnostic: log context sizes before prompt to help debug early overflow errors.
           if (log.isEnabled("debug")) {
@@ -2816,14 +2872,17 @@ export async function runEmbeddedAttempt(
           }
         }
 
-        cacheTrace?.recordStage("session:after", {
-          messages: messagesSnapshot,
-          note: timedOutDuringCompaction
-            ? "compaction timeout"
-            : promptError
-              ? "prompt error"
-              : undefined,
-        });
+        cacheTrace?.recordStage(
+          "session:after",
+          sanitizeCacheTracePayload({
+            messages: messagesSnapshot,
+            note: timedOutDuringCompaction
+              ? "compaction timeout"
+              : promptError
+                ? "prompt error"
+                : undefined,
+          }),
+        );
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
         // Run agent_end hooks to allow plugins to analyze the conversation

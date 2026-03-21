@@ -16,6 +16,10 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
+import {
+  createPrivacyFilterContext,
+  wrapStreamFnPrivacyFilter,
+} from "../privacy/stream-wrapper.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -292,7 +296,21 @@ export async function runBtwSideQuestion(
     await blockEmitChain;
   };
 
-  const stream = streamSimple(
+  const privacyEnabled = params.cfg?.privacy?.enabled !== false;
+  let streamFn = streamSimple;
+  if (privacyEnabled) {
+    try {
+      const privacyCtx = createPrivacyFilterContext(
+        `btw:${params.sessionEntry?.sessionId ?? "ephemeral"}`,
+        params.cfg?.privacy,
+      );
+      streamFn = wrapStreamFnPrivacyFilter(streamFn, privacyCtx);
+    } catch (error) {
+      diag.debug(`btw privacy filter init skipped: ${String(error)}`);
+    }
+  }
+
+  const stream = streamFn(
     model,
     {
       systemPrompt: buildBtwSystemPrompt(),

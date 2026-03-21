@@ -15,6 +15,8 @@ const requireApiKeyMock = vi.fn();
 const resolveSessionAuthProfileOverrideMock = vi.fn();
 const getActiveEmbeddedRunSnapshotMock = vi.fn();
 const diagDebugMock = vi.fn();
+const createPrivacyFilterContextMock = vi.fn();
+const wrapStreamFnPrivacyFilterMock = vi.fn();
 
 vi.mock("@mariozechner/pi-ai", () => ({
   streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
@@ -64,6 +66,11 @@ vi.mock("../logging/diagnostic.js", () => ({
   },
 }));
 
+vi.mock("../privacy/stream-wrapper.js", () => ({
+  createPrivacyFilterContext: (...args: unknown[]) => createPrivacyFilterContextMock(...args),
+  wrapStreamFnPrivacyFilter: (...args: unknown[]) => wrapStreamFnPrivacyFilterMock(...args),
+}));
+
 const { runBtwSideQuestion } = await import("./btw.js");
 
 function makeAsyncEvents(events: unknown[]) {
@@ -101,6 +108,8 @@ describe("runBtwSideQuestion", () => {
     resolveSessionAuthProfileOverrideMock.mockReset();
     getActiveEmbeddedRunSnapshotMock.mockReset();
     diagDebugMock.mockReset();
+    createPrivacyFilterContextMock.mockReset();
+    wrapStreamFnPrivacyFilterMock.mockReset();
 
     buildSessionContextMock.mockReturnValue({
       messages: [{ role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 }],
@@ -115,6 +124,8 @@ describe("runBtwSideQuestion", () => {
     requireApiKeyMock.mockReturnValue("secret");
     resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-1");
     getActiveEmbeddedRunSnapshotMock.mockReturnValue(undefined);
+    createPrivacyFilterContextMock.mockReturnValue({ test: true });
+    wrapStreamFnPrivacyFilterMock.mockImplementation((streamFn: unknown) => streamFn);
   });
 
   it("streams blocks without persisting BTW data to disk", async () => {
@@ -235,6 +246,50 @@ describe("runBtwSideQuestion", () => {
     });
 
     expect(result).toEqual({ text: "Final answer." });
+  });
+
+  it("applies privacy wrapper for BTW stream calls when privacy is enabled", async () => {
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Final answer." }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
+
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "What changed?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
+
+    expect(result).toEqual({ text: "Final answer." });
+    expect(createPrivacyFilterContextMock).toHaveBeenCalledTimes(1);
+    expect(wrapStreamFnPrivacyFilterMock).toHaveBeenCalledTimes(1);
   });
 
   it("fails when the current branch has no messages", async () => {

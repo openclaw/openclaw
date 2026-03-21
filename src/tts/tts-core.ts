@@ -12,6 +12,7 @@ import {
 import { createConfiguredOllamaStreamFn } from "../agents/ollama-stream.js";
 import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createPrivacyFilterContext, filterText, restoreText } from "../privacy/stream-wrapper.js";
 import type {
   ResolvedTtsConfig,
   ResolvedTtsModelOverrides,
@@ -467,6 +468,18 @@ export async function summarizeText(params: {
     await getApiKeyForModel({ model: resolved.model, cfg }),
     ref.provider,
   );
+  const privacyEnabled = cfg.privacy?.enabled !== false;
+  let summaryPromptText = text;
+  let privacyCtx: ReturnType<typeof createPrivacyFilterContext> | undefined;
+  if (privacyEnabled) {
+    try {
+      privacyCtx = createPrivacyFilterContext(`tts-summary:${Date.now()}`, cfg.privacy);
+      summaryPromptText = filterText(text, privacyCtx);
+    } catch {
+      privacyCtx = undefined;
+      summaryPromptText = text;
+    }
+  }
 
   try {
     const controller = new AbortController();
@@ -496,7 +509,7 @@ export async function summarizeText(params: {
                 `You are an assistant that summarizes texts concisely while keeping the most important information. ` +
                 `Summarize the text to approximately ${targetLength} characters. Maintain the original tone and style. ` +
                 `Reply only with the summary, without additional explanations.\n\n` +
-                `<text_to_summarize>\n${text}\n</text_to_summarize>`,
+                `<text_to_summarize>\n${summaryPromptText}\n</text_to_summarize>`,
               timestamp: Date.now(),
             },
           ],
@@ -515,16 +528,17 @@ export async function summarizeText(params: {
         .filter(Boolean)
         .join(" ")
         .trim();
+      const restoredSummary = privacyCtx && summary ? restoreText(summary, privacyCtx) : summary;
 
-      if (!summary) {
+      if (!restoredSummary) {
         throw new Error("No summary returned");
       }
 
       return {
-        summary,
+        summary: restoredSummary,
         latencyMs: Date.now() - startTime,
         inputLength: text.length,
-        outputLength: summary.length,
+        outputLength: restoredSummary.length,
       };
     } finally {
       clearTimeout(timeout);

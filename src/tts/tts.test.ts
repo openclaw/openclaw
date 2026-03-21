@@ -6,6 +6,9 @@ import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
+const createPrivacyFilterContextMock = vi.fn();
+const filterTextMock = vi.fn((text: string) => text);
+const restoreTextMock = vi.fn((text: string) => text);
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
@@ -58,6 +61,12 @@ vi.mock("../agents/model-auth.js", () => ({
 
 vi.mock("../agents/custom-api-registry.js", () => ({
   ensureCustomApiRegistered: vi.fn(),
+}));
+
+vi.mock("../privacy/stream-wrapper.js", () => ({
+  createPrivacyFilterContext: (...args: unknown[]) => createPrivacyFilterContextMock(...args),
+  filterText: (...args: unknown[]) => filterTextMock(...args),
+  restoreText: (...args: unknown[]) => restoreTextMock(...args),
 }));
 
 const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
@@ -119,6 +128,9 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
 describe("tts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    createPrivacyFilterContextMock.mockReturnValue({ test: true });
+    filterTextMock.mockImplementation((text: string) => text);
+    restoreTextMock.mockImplementation((text: string) => text);
     vi.mocked(completeSimple).mockResolvedValue(
       mockAssistantMessage([{ type: "text", text: "Summary" }]),
     );
@@ -428,6 +440,30 @@ describe("tts", () => {
       expect(callArgs?.[2]?.maxTokens).toBe(250);
       expect(callArgs?.[2]?.temperature).toBe(0.3);
       expect(getApiKeyForModelForTest).toHaveBeenCalledTimes(1);
+    });
+
+    it("applies privacy filtering to summary input and restores output", async () => {
+      const baseConfig = resolveTtsConfigForTest(baseCfg);
+      filterTextMock.mockReturnValue("MASKED_INPUT");
+      restoreTextMock.mockImplementation((text: string) => text.replace("MASKED", "RESTORED"));
+      vi.mocked(completeSimpleForTest).mockResolvedValue(
+        mockAssistantMessage([{ type: "text", text: "MASKED summary" }]),
+      );
+
+      const result = await summarizeTextForTest({
+        text: "user@example.com details",
+        targetLength: 500,
+        cfg: baseCfg,
+        config: baseConfig,
+        timeoutMs: 30_000,
+      });
+
+      const callArgs = vi.mocked(completeSimpleForTest).mock.calls[0];
+      expect(JSON.stringify(callArgs?.[1]?.messages?.[0]?.content)).toContain("MASKED_INPUT");
+      expect(result.summary).toContain("RESTORED summary");
+      expect(createPrivacyFilterContextMock).toHaveBeenCalledTimes(1);
+      expect(filterTextMock).toHaveBeenCalledTimes(1);
+      expect(restoreTextMock).toHaveBeenCalledTimes(1);
     });
 
     it("uses summaryModel override when configured", async () => {
