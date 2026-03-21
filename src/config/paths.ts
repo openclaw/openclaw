@@ -243,8 +243,10 @@ export function resolveDefaultConfigCandidates(
   // Added AFTER defaultDirs so that existing nested configs (e.g.
   // ~/.clawdbot/.openclaw/openclaw.json) are found before flat candidates
   // (e.g. ~/.clawdbot/clawdbot.json), matching resolveStateDir()'s preference.
+  // Skip when OPENCLAW_STATE_DIR is active — config should follow the
+  // overridden state dir, not fall back to a stale OPENCLAW_HOME flat file.
   const explicitHome = env.OPENCLAW_HOME?.trim();
-  if (explicitHome) {
+  if (explicitHome && !openclawStateDir) {
     const home = effectiveHomedir();
     if (ALL_STATE_DIRNAMES.has(path.basename(home))) {
       candidates.push(path.join(home, CONFIG_FILENAME));
