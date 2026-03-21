@@ -122,4 +122,36 @@ describe("describeSseMcpServerLaunchConfig", () => {
       "https://mcp.example.com/sse",
     );
   });
+
+  it("redacts embedded credentials", () => {
+    const result = describeSseMcpServerLaunchConfig({
+      url: "https://user:pass@mcp.example.com/sse",
+    });
+    expect(result).toContain("***:***@");
+    expect(result).not.toContain("user");
+    expect(result).not.toContain("pass@");
+  });
+
+  it("redacts all sensitive query params", () => {
+    const sensitiveParams = [
+      "token",
+      "key",
+      "api_key",
+      "apikey",
+      "secret",
+      "access_token",
+      "password",
+      "pass",
+      "auth",
+      "client_secret",
+      "refresh_token",
+    ];
+    for (const param of sensitiveParams) {
+      const result = describeSseMcpServerLaunchConfig({
+        url: `https://mcp.example.com/sse?${param}=supersecret`,
+      });
+      expect(result).toContain(`${param}=***`);
+      expect(result).not.toContain("supersecret");
+    }
+  });
 });
