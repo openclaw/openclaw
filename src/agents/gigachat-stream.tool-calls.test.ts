@@ -340,6 +340,79 @@ describe("createGigachatStreamFn tool calling", () => {
     expect(event.content).toEqual([{ type: "text", text: "final tail" }]);
   });
 
+  it("accepts SSE data frames without a space after data:", async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream([
+        'data:{"choices":[{"delta":{"content":"nospace ok"}}]}',
+        "data:[DONE]",
+      ]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      { messages: [], tools: [] } as never,
+      { apiKey: "token" } as never,
+    );
+
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "nospace ok" }],
+    });
+  });
+
+  it("assembles multi-line SSE events before parsing JSON", async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream([
+        'data: {"choices":[{"delta":{"function_call":',
+        'data: {"name":"llm_task","arguments":"{\\"prompt\\":\\"hi\\"}"}}}]}',
+        "",
+        "data: [DONE]",
+      ]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      {
+        messages: [],
+        tools: [
+          {
+            name: "llm-task",
+            description: "Run a task",
+            parameters: {
+              type: "object",
+              properties: {
+                prompt: { type: "string" },
+              },
+            },
+          },
+        ],
+      } as never,
+      { apiKey: "token" } as never,
+    );
+
+    await expect(stream.result()).resolves.toMatchObject({
+      stopReason: "toolUse",
+      content: [
+        expect.objectContaining({
+          type: "toolCall",
+          name: "llm-task",
+          arguments: { prompt: "hi" },
+        }),
+      ],
+    });
+  });
+
   it("reuses a cached token across turns for the same GigaChat credentials", async () => {
     initialAccessToken = undefined;
     refreshedAccessToken = "cached-after-refresh";
@@ -846,6 +919,107 @@ describe("createGigachatStreamFn tool calling", () => {
       }),
     );
     expect(event.content).toEqual([{ type: "text", text: "done" }]);
+  });
+
+  it("replays repeated same-tool calls next to their matching tool results", async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream(['data: {"choices":[{"delta":{"content":"done"}}]}', "data: [DONE]"]),
+    });
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      {
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Searching twice" },
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "web_search",
+                arguments: { query: "first" },
+              },
+              {
+                type: "toolCall",
+                id: "call_2",
+                name: "web_search",
+                arguments: { query: "second" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "web_search",
+            content: '{"result":"first"}',
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_2",
+            toolName: "web_search",
+            content: '{"result":"second"}',
+          },
+        ],
+        tools: [
+          {
+            name: "web_search",
+            description: "Search the web",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+            },
+          },
+        ],
+      } as never,
+      { apiKey: "token" } as never,
+    );
+
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "done" }],
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              role: "assistant",
+              content: "Searching twice",
+              function_call: expect.objectContaining({
+                name: "gpt2giga_user_search_web",
+                arguments: { query: "first" },
+              }),
+            }),
+            expect.objectContaining({
+              role: "function",
+              name: "gpt2giga_user_search_web",
+              content: '{"result":"first"}',
+            }),
+            expect.objectContaining({
+              role: "assistant",
+              content: "",
+              function_call: expect.objectContaining({
+                name: "gpt2giga_user_search_web",
+                arguments: { query: "second" },
+              }),
+            }),
+            expect.objectContaining({
+              role: "function",
+              name: "gpt2giga_user_search_web",
+              content: '{"result":"second"}',
+            }),
+          ],
+        }),
+      }),
+    );
   });
 
   it("rejects tool-name sanitization collisions before sending the request", async () => {

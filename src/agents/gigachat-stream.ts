@@ -39,6 +39,14 @@ export type GigachatStreamOptions = {
   scope?: string;
 };
 
+type HistoricalToolReplayEntry = {
+  id?: string;
+  toolName: string;
+  gigaToolName: string;
+  arguments: Record<string, unknown>;
+  assistantContent: string;
+};
+
 function stripLeakedFunctionCallPrelude(text: string): string {
   return text.replace(/^\s*assistant\s+function\s+call(?:\s*([A-Za-z0-9_.:/-]+))?\s*\{\s*/i, "");
 }
@@ -50,6 +58,18 @@ function resolveGigachatModelHeaders(model: {
     return undefined;
   }
   return model.headers as Record<string, string>;
+}
+
+function resolveHistoricalToolResultCallId(message: {
+  toolCallId?: unknown;
+  toolUseId?: unknown;
+}): string | undefined {
+  const toolCallId = typeof message.toolCallId === "string" ? message.toolCallId.trim() : undefined;
+  if (toolCallId) {
+    return toolCallId;
+  }
+  const toolUseId = typeof message.toolUseId === "string" ? message.toolUseId.trim() : undefined;
+  return toolUseId || undefined;
 }
 
 // ── Function name sanitization ──────────────────────────────────────────────
@@ -738,15 +758,77 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
         const toolNameToGiga = new Map<string, string>();
         const gigaToToolName = new Map<string, string>();
         const gigaToolSchemas = new Map<string, unknown>();
+        const pendingHistoricalToolCalls: HistoricalToolReplayEntry[] = [];
 
         // Build messages for GigaChat format
         const messages: Message[] = [];
+
+        const pushHistoricalToolCall = (toolCall: HistoricalToolReplayEntry) => {
+          messages.push({
+            role: "assistant",
+            content: toolCall.assistantContent,
+            function_call: {
+              name: toolCall.gigaToolName,
+              arguments: toolCall.arguments,
+            },
+          });
+        };
+
+        const takePendingHistoricalToolCall = (params: {
+          toolCallId?: string;
+          toolName?: string;
+        }): HistoricalToolReplayEntry | undefined => {
+          if (pendingHistoricalToolCalls.length === 0) {
+            return undefined;
+          }
+
+          let matchIndex = -1;
+          if (params.toolCallId) {
+            matchIndex = pendingHistoricalToolCalls.findIndex(
+              (toolCall) => toolCall.id === params.toolCallId,
+            );
+          }
+          if (matchIndex < 0 && params.toolName) {
+            matchIndex = pendingHistoricalToolCalls.findIndex(
+              (toolCall) => toolCall.toolName === params.toolName,
+            );
+          }
+          if (matchIndex < 0) {
+            matchIndex = 0;
+          }
+          const [toolCall] = pendingHistoricalToolCalls.splice(matchIndex, 1);
+          return toolCall;
+        };
+
+        const flushPendingHistoricalToolCall = (params: {
+          toolCallId?: string;
+          toolName?: string;
+        }): HistoricalToolReplayEntry | undefined => {
+          const toolCall = takePendingHistoricalToolCall(params);
+          if (toolCall) {
+            pushHistoricalToolCall(toolCall);
+          }
+          return toolCall;
+        };
+
+        const flushPendingHistoricalToolCalls = () => {
+          while (pendingHistoricalToolCalls.length > 0) {
+            const nextToolCall = pendingHistoricalToolCalls.shift();
+            if (nextToolCall) {
+              pushHistoricalToolCall(nextToolCall);
+            }
+          }
+        };
 
         if (context.systemPrompt) {
           messages.push({ role: "system", content: sanitizeContent(context.systemPrompt) });
         }
 
         for (const msg of context.messages ?? []) {
+          if (pendingHistoricalToolCalls.length > 0 && msg.role !== "toolResult") {
+            flushPendingHistoricalToolCalls();
+          }
+
           if (msg.role === "user") {
             const content = msg.content;
             if (typeof content === "string") {
@@ -777,13 +859,12 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
                   gigaToToolName,
                   toolCall.name,
                 );
-                messages.push({
-                  role: "assistant",
-                  content: index === 0 && text ? sanitizeContent(text) : "",
-                  function_call: {
-                    name: gigaToolName,
-                    arguments: toolCall.arguments ?? {},
-                  },
+                pendingHistoricalToolCalls.push({
+                  id: toolCall.id,
+                  toolName: toolCall.name,
+                  gigaToolName,
+                  arguments: toolCall.arguments ?? {},
+                  assistantContent: index === 0 && text ? sanitizeContent(text) : "",
                 });
               }
             } else if (toolCalls.length > 0 && !functionsEnabled) {
@@ -804,11 +885,13 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
             if (functionsEnabled) {
               const resultContent = extractToolResultTextContent(msg.content);
               const coercedContent = ensureJsonObjectStr(resultContent || "ok", toolName);
-              const gigaToolName = rememberToolNameMapping(
-                toolNameToGiga,
-                gigaToToolName,
+              const historicalToolCall = flushPendingHistoricalToolCall({
+                toolCallId: resolveHistoricalToolResultCallId(msg),
                 toolName,
-              );
+              });
+              const gigaToolName =
+                historicalToolCall?.gigaToolName ??
+                rememberToolNameMapping(toolNameToGiga, gigaToToolName, toolName);
               messages.push({
                 role: "function",
                 content: coercedContent,
@@ -822,6 +905,7 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
             }
           }
         }
+        flushPendingHistoricalToolCalls();
 
         // Build functions with schema cleaning and name sanitization
         const functions: GigaFunction[] = [];
@@ -940,10 +1024,12 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
         let promptTokens = 0;
         let completionTokens = 0;
 
-        // Our own SSE parsing that handles `: ` in JSON correctly and keeps
-        // UTF-8 code points intact when TCP chunks split multibyte characters.
+        // Assemble streamed JSON payloads across split UTF-8 chunks and across
+        // multi-line `data:` frames, while still tolerating the line-oriented
+        // mock streams used throughout our tests.
         let sseBuffer = "";
         const sseDecoder = new TextDecoder();
+        const pendingSseDataLines: string[] = [];
         const flushFunctionCallBuffer = () => {
           if (!functionCallBuffer?.name) {
             functionCallBuffer = null;
@@ -952,59 +1038,80 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
           resolvedFunctionCalls.push(functionCallBuffer);
           functionCallBuffer = null;
         };
-        const consumeSseLine = (line: string) => {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith(":")) {
-            return;
-          }
-          if (trimmed === "data: [DONE]") {
-            return;
-          }
-          if (trimmed.startsWith("data: ")) {
-            // Fix: only split on first `: ` occurrence
-            const jsonStr = trimmed.slice(6); // Remove "data: " prefix
-            try {
-              const parsed = JSON.parse(jsonStr) as ExtendedChatCompletionChunk;
-              const choice = parsed.choices?.[0];
+        const consumeParsedSseChunk = (parsed: ExtendedChatCompletionChunk) => {
+          const choice = parsed.choices?.[0];
 
-              if (choice?.delta?.content) {
-                accumulatedContent += choice.delta.content;
-              }
-              if (choice?.delta?.function_call) {
-                if (choice.delta.function_call.name && functionCallBuffer?.arguments) {
-                  // A new tool name after arguments indicates the previous streamed
-                  // function call is complete and a new call has begun.
-                  flushFunctionCallBuffer();
-                }
-                if (!functionCallBuffer) {
-                  functionCallBuffer = { name: "", arguments: "" };
-                }
-                if (choice.delta.function_call.name) {
-                  functionCallBuffer.name += choice.delta.function_call.name;
-                }
-                if (choice.delta.function_call.arguments) {
-                  const args = choice.delta.function_call.arguments;
-                  functionCallBuffer.arguments +=
-                    typeof args === "string" ? args : JSON.stringify(args);
-                }
-              }
-              if (choice?.finish_reason === "function_call") {
-                flushFunctionCallBuffer();
-              }
-              if (parsed.usage) {
-                promptTokens = parsed.usage.prompt_tokens ?? 0;
-                completionTokens = parsed.usage.completion_tokens ?? 0;
-              }
-            } catch (e) {
+          if (choice?.delta?.content) {
+            accumulatedContent += choice.delta.content;
+          }
+          if (choice?.delta?.function_call) {
+            if (choice.delta.function_call.name && functionCallBuffer?.arguments) {
+              // A new tool name after arguments indicates the previous streamed
+              // function call is complete and a new call has begun.
+              flushFunctionCallBuffer();
+            }
+            if (!functionCallBuffer) {
+              functionCallBuffer = { name: "", arguments: "" };
+            }
+            if (choice.delta.function_call.name) {
+              functionCallBuffer.name += choice.delta.function_call.name;
+            }
+            if (choice.delta.function_call.arguments) {
+              const args = choice.delta.function_call.arguments;
+              functionCallBuffer.arguments +=
+                typeof args === "string" ? args : JSON.stringify(args);
+            }
+          }
+          if (choice?.finish_reason === "function_call") {
+            flushFunctionCallBuffer();
+          }
+          if (parsed.usage) {
+            promptTokens = parsed.usage.prompt_tokens ?? 0;
+            completionTokens = parsed.usage.completion_tokens ?? 0;
+          }
+        };
+        const flushPendingSseEvent = (force: boolean) => {
+          if (pendingSseDataLines.length === 0) {
+            return;
+          }
+          const payload = pendingSseDataLines.join("\n");
+          if (payload.trim() === "[DONE]") {
+            pendingSseDataLines.length = 0;
+            return;
+          }
+          try {
+            consumeParsedSseChunk(JSON.parse(payload) as ExtendedChatCompletionChunk);
+            pendingSseDataLines.length = 0;
+          } catch (e) {
+            if (force) {
               log.warn(`Failed to parse SSE chunk: ${String(e)}`);
+              pendingSseDataLines.length = 0;
             }
           }
         };
+        const consumeSseLine = (rawLine: string) => {
+          const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+          if (line.trim().length === 0) {
+            flushPendingSseEvent(true);
+            return;
+          }
+          if (line.startsWith(":") || !line.startsWith("data:")) {
+            return;
+          }
+          let payload = line.slice(5);
+          if (payload.startsWith(" ")) {
+            payload = payload.slice(1);
+          }
+          pendingSseDataLines.push(payload);
+          flushPendingSseEvent(false);
+        };
         for await (const chunk of response.data as AsyncIterable<string | Uint8Array>) {
-          sseBuffer +=
-            typeof chunk === "string"
-              ? `${sseDecoder.decode()}${chunk}`
-              : sseDecoder.decode(chunk, { stream: true });
+          if (typeof chunk === "string") {
+            sseBuffer += sseDecoder.decode();
+            sseBuffer += chunk;
+          } else {
+            sseBuffer += sseDecoder.decode(chunk, { stream: true });
+          }
           const lines = sseBuffer.split("\n");
           sseBuffer = lines.pop() ?? "";
 
@@ -1013,9 +1120,10 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
           }
         }
         sseBuffer += sseDecoder.decode();
-        if (sseBuffer.trim()) {
+        if (sseBuffer.length > 0) {
           consumeSseLine(sseBuffer);
         }
+        flushPendingSseEvent(true);
 
         flushFunctionCallBuffer();
         if (resolvedFunctionCalls.length > 0) {
