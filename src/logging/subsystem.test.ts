@@ -144,4 +144,48 @@ describe("createSubsystemLogger().isEnabled", () => {
 
     expect(warn).toHaveBeenCalledTimes(1);
   });
+
+  it("routes info-level logs to stderr when stdout is not a TTY", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const logSpy = vi.fn();
+    const errorSpy = vi.fn();
+    loggingState.rawConsole = {
+      log: logSpy,
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: errorSpy,
+    };
+    const originalIsTTY = process.stdout.isTTY;
+    Object.defineProperty(process.stdout, "isTTY", { value: undefined, configurable: true });
+    try {
+      const log = createSubsystemLogger("plugins");
+      log.info("graphiti-kg: registered");
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(logSpy).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process.stdout, "isTTY", { value: originalIsTTY, configurable: true });
+    }
+  });
+
+  it("routes info-level logs to stdout when stdout is a TTY", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const logSpy = vi.fn();
+    const errorSpy = vi.fn();
+    loggingState.rawConsole = {
+      log: logSpy,
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: errorSpy,
+    };
+    const originalIsTTY = process.stdout.isTTY;
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    try {
+      const log = createSubsystemLogger("plugins");
+      log.info("graphiti-kg: registered");
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process.stdout, "isTTY", { value: originalIsTTY, configurable: true });
+    }
+  });
 });

@@ -245,6 +245,10 @@ function writeConsoleLine(level: LogLevel, line: string) {
     (sink.error ?? console.error)(sanitized);
   } else if (level === "warn") {
     (sink.warn ?? console.warn)(sanitized);
+  } else if (!process.stdout.isTTY) {
+    // When stdout is piped/captured, route subsystem diagnostic logs to stderr
+    // so stdout stays clean for command data output (runtime.log / JSON results).
+    (sink.error ?? console.error)(sanitized);
   } else {
     (sink.log ?? console.log)(sanitized);
   }

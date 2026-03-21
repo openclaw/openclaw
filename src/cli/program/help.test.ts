@@ -91,7 +91,7 @@ describe("configureProgramHelp", () => {
   }
 
   function expectVersionExit(params: { expectedVersion: string }) {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`exit:${code ?? ""}`);
     }) as typeof process.exit);
@@ -99,10 +99,10 @@ describe("configureProgramHelp", () => {
     try {
       const program = makeProgramWithCommands();
       expect(() => configureProgramHelp(program, testProgramContext)).toThrow("exit:0");
-      expect(logSpy).toHaveBeenCalledWith(params.expectedVersion);
+      expect(stdoutSpy).toHaveBeenCalledWith(`${params.expectedVersion}\n`);
       expect(exitSpy).toHaveBeenCalledWith(0);
     } finally {
-      logSpy.mockRestore();
+      stdoutSpy.mockRestore();
       exitSpy.mockRestore();
     }
   }
