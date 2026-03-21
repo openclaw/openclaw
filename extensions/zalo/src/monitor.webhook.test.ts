@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import {
   clearZaloWebhookSecurityStateForTest,
@@ -26,6 +27,13 @@ async function withServer(handler: RequestListener, fn: (baseUrl: string) => Pro
     await fn(`http://127.0.0.1:${address.port}`);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+async function settleAsyncWork(): Promise<void> {
+  for (let i = 0; i < 6; i += 1) {
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
 }
 
@@ -259,6 +267,114 @@ describe("handleZaloWebhookRequest", () => {
     } finally {
       unregister();
     }
+  });
+
+  it("downloads inbound image media from webhook photo_url and preserves display_name", async () => {
+    const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
+    const recordInboundSessionMock = vi.fn(async () => undefined);
+    const fetchRemoteMediaMock = vi.fn(async () => ({
+      buffer: Buffer.from("image-bytes"),
+      contentType: "image/jpeg",
+    }));
+    const saveMediaBufferMock = vi.fn(async () => ({
+      path: "/tmp/zalo-photo.jpg",
+      contentType: "image/jpeg",
+    }));
+    const core = createPluginRuntimeMock({
+      channel: {
+        media: {
+          fetchRemoteMedia:
+            fetchRemoteMediaMock as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
+          saveMediaBuffer:
+            saveMediaBufferMock as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
+        },
+        reply: {
+          finalizeInboundContext:
+            finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(
+            async () => undefined,
+          ) as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
+        },
+        session: {
+          recordInboundSession:
+            recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(
+            () => false,
+          ) as unknown as PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"],
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(
+            () => false,
+          ) as unknown as PluginRuntime["channel"]["commands"]["resolveCommandAuthorizedFromAuthorizers"],
+          isControlCommandMessage: vi.fn(
+            () => false,
+          ) as unknown as PluginRuntime["channel"]["commands"]["isControlCommandMessage"],
+        },
+      },
+    });
+    const unregister = registerTarget({
+      path: "/hook-image",
+      core,
+      account: {
+        ...DEFAULT_ACCOUNT,
+        config: {
+          dmPolicy: "open",
+        },
+      },
+    });
+
+    const payload = {
+      event_name: "message.image.received",
+      message: {
+        date: 1774086023728,
+        chat: { chat_type: "PRIVATE", id: "chat-123" },
+        caption: "",
+        message_id: "msg-123",
+        message_type: "CHAT_PHOTO",
+        from: { id: "user-123", is_bot: false, display_name: "Test User" },
+        photo_url: "https://example.com/test-image.jpg",
+      },
+    };
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/hook-image`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(200);
+        await settleAsyncWork();
+      });
+    } finally {
+      unregister();
+    }
+
+    expect(fetchRemoteMediaMock).toHaveBeenCalledWith({
+      url: "https://example.com/test-image.jpg",
+      maxBytes: 5 * 1024 * 1024,
+    });
+    expect(saveMediaBufferMock).toHaveBeenCalledTimes(1);
+    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SenderName: "Test User",
+        MediaPath: "/tmp/zalo-photo.jpg",
+        MediaType: "image/jpeg",
+      }),
+    );
+    expect(recordInboundSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          SenderName: "Test User",
+          MediaPath: "/tmp/zalo-photo.jpg",
+          MediaType: "image/jpeg",
+        }),
+      }),
+    );
   });
 
   it("returns 429 when per-path request rate exceeds threshold", async () => {
