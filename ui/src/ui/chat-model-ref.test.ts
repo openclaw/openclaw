@@ -27,7 +27,7 @@ describe("chat-model-ref helpers", () => {
     );
   });
 
-  it("keeps ambiguous raw overrides unchanged", () => {
+  it("keeps ambiguous raw overrides unchanged when no preferred provider", () => {
     const ambiguousCatalog: ModelCatalogEntry[] = [
       { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
       { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openrouter" },
@@ -36,6 +36,30 @@ describe("chat-model-ref helpers", () => {
     expect(
       normalizeChatModelOverrideValue(createChatModelOverride("gpt-5-mini"), ambiguousCatalog),
     ).toBe("gpt-5-mini");
+  });
+
+  it("resolves ambiguous raw overrides using preferred provider", () => {
+    const ambiguousCatalog: ModelCatalogEntry[] = [
+      { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
+      { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openrouter" },
+    ];
+
+    // When preferred provider is specified, should use it
+    expect(
+      normalizeChatModelOverrideValue(
+        createChatModelOverride("gpt-5-mini"),
+        ambiguousCatalog,
+        "openrouter",
+      ),
+    ).toBe("openrouter/gpt-5-mini");
+
+    expect(
+      normalizeChatModelOverrideValue(
+        createChatModelOverride("gpt-5-mini"),
+        ambiguousCatalog,
+        "openai",
+      ),
+    ).toBe("openai/gpt-5-mini");
   });
 
   it("formats qualified model refs consistently for default labels", () => {

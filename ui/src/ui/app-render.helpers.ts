@@ -528,8 +528,12 @@ function resolveActiveSessionRow(state: AppViewState) {
 function resolveModelOverrideValue(state: AppViewState): string {
   // Prefer the local cache — it reflects in-flight patches before sessionsResult refreshes.
   const cached = state.chatModelOverrides[state.sessionKey];
+  // Get the current session's provider to use as preference when resolving ambiguous model IDs
+  const activeRow = resolveActiveSessionRow(state);
+  const preferredProvider = activeRow?.modelProvider;
+
   if (cached) {
-    return normalizeChatModelOverrideValue(cached, state.chatModelCatalog ?? []);
+    return normalizeChatModelOverrideValue(cached, state.chatModelCatalog ?? [], preferredProvider);
   }
   // cached === null means explicitly cleared to default.
   if (cached === null) {
@@ -537,7 +541,6 @@ function resolveModelOverrideValue(state: AppViewState): string {
   }
   // No local override recorded yet — fall back to server data.
   // Include provider prefix so the value matches option keys (provider/model).
-  const activeRow = resolveActiveSessionRow(state);
   if (activeRow && typeof activeRow.model === "string" && activeRow.model.trim()) {
     return resolveServerChatModelValue(activeRow.model, activeRow.modelProvider);
   }

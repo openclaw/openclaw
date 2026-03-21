@@ -33,6 +33,7 @@ export function createChatModelOverride(value: string): ChatModelOverride | null
 export function normalizeChatModelOverrideValue(
   override: ChatModelOverride | null | undefined,
   catalog: ModelCatalogEntry[],
+  preferredProvider?: string | null,
 ): string {
   if (!override) {
     return "";
@@ -46,19 +47,42 @@ export function normalizeChatModelOverrideValue(
   }
 
   let matchedValue = "";
+  let preferredMatch = "";
+  const trimmedPreferredProvider = preferredProvider?.trim().toLowerCase();
+
   for (const entry of catalog) {
     if (entry.id.trim().toLowerCase() !== trimmed.toLowerCase()) {
       continue;
     }
     const candidate = buildQualifiedChatModelValue(entry.id, entry.provider);
+
+    // Check if this entry matches the preferred provider
+    if (
+      trimmedPreferredProvider &&
+      entry.provider?.trim().toLowerCase() === trimmedPreferredProvider
+    ) {
+      preferredMatch = candidate;
+    }
+
     if (!matchedValue) {
       matchedValue = candidate;
       continue;
     }
     if (matchedValue.toLowerCase() !== candidate.toLowerCase()) {
+      // Multiple providers have this model - use preferred if available
+      if (preferredMatch) {
+        return preferredMatch;
+      }
+      // Otherwise return the raw value and let the caller handle it
       return trimmed;
     }
   }
+
+  // If we have a preferred match, use it
+  if (preferredMatch) {
+    return preferredMatch;
+  }
+
   return matchedValue || trimmed;
 }
 
