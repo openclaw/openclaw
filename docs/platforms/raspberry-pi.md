@@ -30,7 +30,7 @@ Perfect for:
 | **Pi 3B+**      | 1GB     | ⚠️ Slow  | Works but sluggish                 |
 | **Pi Zero 2 W** | 512MB   | ❌       | Not recommended                    |
 
-**Minimum specs:** 1GB RAM, 1 core, 500MB disk  
+**Minimum specs:** 1GB RAM, 1 core, 500MB disk
 **Recommended:** 2GB+ RAM, 64-bit OS, 16GB+ SD card (or USB SSD)
 
 ## What you need

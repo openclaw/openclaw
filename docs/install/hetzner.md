@@ -38,7 +38,7 @@ The Gateway can be accessed via:
 - SSH port forwarding from your laptop
 - Direct port exposure if you manage firewalling and tokens yourself
 
-This guide assumes Ubuntu or Debian on Hetzner.  
+This guide assumes Ubuntu or Debian on Hetzner.
 If you are on another Linux VPS, map packages accordingly.
 For the generic Docker flow, see [Docker](/install/docker).
 
