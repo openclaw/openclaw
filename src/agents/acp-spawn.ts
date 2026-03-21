@@ -49,6 +49,14 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import {
+  buildSessionsSpawnDedupKey,
+  getSpawnDedupMinuteEpoch,
+  logSessionsSpawnDedupHit,
+  peekSessionsSpawnDedup,
+  recordSessionsSpawnDedup,
+  SESSIONS_SPAWN_DEDUP_TTL_MS,
+} from "./sessions-spawn-dedup.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
@@ -97,6 +105,8 @@ export type SpawnAcpResult = {
   teamId?: string | null;
   capability?: string | null;
   roleAliasUsed?: boolean;
+  /** True when this response reused a child from a recent identical spawn (see sessions-spawn-dedup). */
+  deduplicated?: boolean;
 };
 
 export const ACP_SPAWN_ACCEPTED_NOTE =
@@ -577,6 +587,56 @@ export async function spawnAcpDirect(
     };
   }
 
+  const trimmedAcpTask = params.task.trim();
+  const shouldAttemptAcpSpawnDedup = trimmedAcpTask.length > 0 && !params.resumeSessionId?.trim();
+  let acpSpawnDedupKey: string | undefined;
+  if (shouldAttemptAcpSpawnDedup) {
+    const minuteEpoch = getSpawnDedupMinuteEpoch();
+    const acpDedupVariant = [
+      "acp",
+      `mode:${spawnMode}`,
+      `thread:${requestThreadBinding}`,
+      `stp:${effectiveStreamToParent}`,
+      `label:${params.label?.trim() ?? ""}`,
+      `cwd:${params.cwd?.trim() ?? ""}`,
+    ].join("|");
+    acpSpawnDedupKey = buildSessionsSpawnDedupKey({
+      requesterInternalKey,
+      targetAgentId,
+      objectiveText: trimmedAcpTask,
+      minuteEpoch,
+      variant: acpDedupVariant,
+    });
+    const acpDedupHit = peekSessionsSpawnDedup({ dedupKey: acpSpawnDedupKey });
+    if (acpDedupHit) {
+      logSessionsSpawnDedupHit({
+        targetAgentId,
+        requesterInternalKey,
+        childSessionKey: acpDedupHit.childSessionKey,
+        runId: acpDedupHit.runId,
+        minuteEpoch,
+        objectiveCharCount: trimmedAcpTask.length,
+      });
+      const dedupSuffix = `(deduplicated: reused spawn from the last ${SESSIONS_SPAWN_DEDUP_TTL_MS / 1000}s)`;
+      const dedupNote =
+        spawnMode === "session"
+          ? `${ACP_SPAWN_SESSION_ACCEPTED_NOTE} ${dedupSuffix}`
+          : `${ACP_SPAWN_ACCEPTED_NOTE} ${dedupSuffix}`;
+      return {
+        status: "accepted",
+        childSessionKey: acpDedupHit.childSessionKey,
+        runId: acpDedupHit.runId,
+        mode: spawnMode,
+        note: dedupNote,
+        deduplicated: true,
+        resolvedAgentId: targetAgentId,
+        teamId: resolvedTeamId,
+        capability: resolvedCapability,
+        roleAliasUsed,
+      };
+    }
+  }
+
   const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
   const runtimeMode = resolveAcpSessionMode(spawnMode);
 
@@ -805,6 +865,13 @@ export async function spawnAcpDirect(
       });
     }
     parentRelay?.notifyStarted();
+    if (acpSpawnDedupKey) {
+      recordSessionsSpawnDedup({
+        dedupKey: acpSpawnDedupKey,
+        childSessionKey: sessionKey,
+        runId: childRunId,
+      });
+    }
     return {
       status: "accepted",
       childSessionKey: sessionKey,
@@ -817,6 +884,14 @@ export async function spawnAcpDirect(
       capability: resolvedCapability,
       roleAliasUsed,
     };
+  }
+
+  if (acpSpawnDedupKey) {
+    recordSessionsSpawnDedup({
+      dedupKey: acpSpawnDedupKey,
+      childSessionKey: sessionKey,
+      runId: childRunId,
+    });
   }
 
   return {

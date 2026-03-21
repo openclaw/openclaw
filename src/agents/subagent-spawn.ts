@@ -18,6 +18,14 @@ import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import {
+  buildSessionsSpawnDedupKey,
+  getSpawnDedupMinuteEpoch,
+  logSessionsSpawnDedupHit,
+  peekSessionsSpawnDedup,
+  recordSessionsSpawnDedup,
+  SESSIONS_SPAWN_DEDUP_TTL_MS,
+} from "./sessions-spawn-dedup.js";
+import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
@@ -119,6 +127,8 @@ export type SpawnSubagentResult = {
     files: Array<{ name: string; bytes: number; sha256: string }>;
     relDir: string;
   };
+  /** True when this response reused a child from a recent identical spawn (see sessions-spawn-dedup). */
+  deduplicated?: boolean;
 };
 
 export function splitModelRef(ref?: string) {
@@ -469,6 +479,62 @@ export async function spawnSubagentDirect(
       };
     }
   }
+
+  const trimmedTask = task.trim();
+  const shouldAttemptSpawnDedup =
+    trimmedTask.length > 0 &&
+    !(params.attachments && params.attachments.length > 0) &&
+    !sanitizeMountPathHint(params.attachMountPath);
+  let subagentSpawnDedupKey: string | undefined;
+  if (shouldAttemptSpawnDedup) {
+    const minuteEpoch = getSpawnDedupMinuteEpoch();
+    const dedupVariant = [
+      "subagent",
+      `mode:${spawnMode}`,
+      `thread:${requestThreadBinding}`,
+      `sandbox:${sandboxMode}`,
+      `label:${label}`,
+    ].join("|");
+    subagentSpawnDedupKey = buildSessionsSpawnDedupKey({
+      requesterInternalKey,
+      targetAgentId,
+      objectiveText: trimmedTask,
+      minuteEpoch,
+      variant: dedupVariant,
+    });
+    const dedupHit = peekSessionsSpawnDedup({ dedupKey: subagentSpawnDedupKey });
+    if (dedupHit) {
+      logSessionsSpawnDedupHit({
+        targetAgentId,
+        requesterInternalKey,
+        childSessionKey: dedupHit.childSessionKey,
+        runId: dedupHit.runId,
+        minuteEpoch,
+        objectiveCharCount: trimmedTask.length,
+      });
+      const isCronSession = isCronSessionKey(ctx.agentSessionKey);
+      const dedupSuffix = `(deduplicated: reused spawn from the last ${SESSIONS_SPAWN_DEDUP_TTL_MS / 1000}s)`;
+      const note =
+        spawnMode === "session"
+          ? `${SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE} ${dedupSuffix}`
+          : isCronSession
+            ? dedupSuffix
+            : `${SUBAGENT_SPAWN_ACCEPTED_NOTE} ${dedupSuffix}`;
+      return {
+        status: "accepted",
+        childSessionKey: dedupHit.childSessionKey,
+        runId: dedupHit.runId,
+        mode: spawnMode,
+        note,
+        deduplicated: true,
+        resolvedAgentId: targetAgentId,
+        teamId: resolvedTeamId,
+        capability: resolvedCapability,
+        roleAliasUsed,
+      };
+    }
+  }
+
   const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg,
@@ -865,6 +931,14 @@ export async function spawnSubagentDirect(
     } catch {
       // Spawn should still return accepted if spawn lifecycle hooks fail.
     }
+  }
+
+  if (subagentSpawnDedupKey) {
+    recordSessionsSpawnDedup({
+      dedupKey: subagentSpawnDedupKey,
+      childSessionKey,
+      runId: childRunId,
+    });
   }
 
   // Check if we're in a cron isolated session - don't add "do not poll" note

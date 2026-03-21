@@ -7,6 +7,7 @@ import {
   prepareProviderExtraParams,
   wrapProviderStreamFn,
 } from "../../plugins/provider-runtime.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
@@ -35,6 +36,42 @@ import {
 } from "./openai-stream-wrappers.js";
 import { createZaiToolStreamWrapper } from "./zai-stream-wrappers.js";
 
+function resolveAgentToolsMaxResponseTokensCap(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string,
+): number | undefined {
+  if (!cfg?.agents?.list || !agentId?.trim()) {
+    return undefined;
+  }
+  const id = normalizeAgentId(agentId);
+  const entry = cfg.agents.list.find((agent) => normalizeAgentId(agent.id) === id);
+  const tools = entry?.tools;
+  if (!tools || typeof tools !== "object") {
+    return undefined;
+  }
+  const raw = (tools as { maxResponseTokens?: unknown }).maxResponseTokens;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
+    return undefined;
+  }
+  return Math.floor(raw);
+}
+
+function applyAgentToolsMaxResponseTokensCap(
+  merged: Record<string, unknown>,
+  cfg: OpenClawConfig | undefined,
+  agentId?: string,
+): void {
+  const cap = resolveAgentToolsMaxResponseTokensCap(cfg, agentId);
+  if (cap === undefined) {
+    return;
+  }
+  const prior =
+    typeof merged.maxTokens === "number" && Number.isFinite(merged.maxTokens)
+      ? merged.maxTokens
+      : undefined;
+  merged.maxTokens = prior !== undefined ? Math.min(prior, cap) : cap;
+}
+
 /**
  * Resolve provider-specific extra params from model config.
  * Used to pass through stream params like temperature/maxTokens.
@@ -55,11 +92,11 @@ export function resolveExtraParams(params: {
       ? params.cfg.agents.list.find((agent) => agent.id === params.agentId)?.params
       : undefined;
 
-  if (!globalParams && !agentParams) {
-    return undefined;
-  }
-
-  const merged = Object.assign({}, globalParams, agentParams);
+  const merged: Record<string, unknown> = Object.assign(
+    {},
+    globalParams ? { ...globalParams } : {},
+    agentParams ? { ...agentParams } : {},
+  );
   const resolvedParallelToolCalls = resolveAliasedParamValue(
     [globalParams, agentParams],
     "parallel_tool_calls",
@@ -70,7 +107,9 @@ export function resolveExtraParams(params: {
     delete merged.parallelToolCalls;
   }
 
-  return merged;
+  applyAgentToolsMaxResponseTokensCap(merged, params.cfg, params.agentId);
+
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
@@ -302,6 +341,7 @@ export function applyExtraParamsToAgent(
         )
       : undefined;
   const merged = Object.assign({}, resolvedExtraParams, override);
+  applyAgentToolsMaxResponseTokensCap(merged, cfg, agentId);
   const effectiveExtraParams =
     prepareProviderExtraParams({
       provider,

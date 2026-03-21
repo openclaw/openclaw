@@ -299,6 +299,12 @@ export type FsToolsConfig = {
 };
 
 export type AgentToolsConfig = {
+  /**
+   * Upper bound on completion/output tokens for this agent's model stream.
+   * When set, OpenClaw applies `min(existing maxTokens, maxResponseTokens)` so model
+   * catalog defaults and `params.maxTokens` remain compatible but cannot exceed this cap.
+   */
+  maxResponseTokens?: number;
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
   allow?: string[];

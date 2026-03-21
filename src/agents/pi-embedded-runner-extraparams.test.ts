@@ -235,6 +235,46 @@ describe("resolveExtraParams", () => {
 
     expect(result).toBeUndefined();
   });
+
+  it("applies agents.list tools.maxResponseTokens when no other params exist", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          list: [{ id: "leaf", tools: { maxResponseTokens: 2000 } }],
+        },
+      },
+      provider: "openai",
+      modelId: "gpt-5",
+      agentId: "leaf",
+    });
+
+    expect(result).toEqual({ maxTokens: 2000 });
+  });
+
+  it("caps merged maxTokens with tools.maxResponseTokens", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {
+                params: { maxTokens: 8192, temperature: 0.2 },
+              },
+            },
+          },
+          list: [{ id: "dept", tools: { maxResponseTokens: 4000 } }],
+        },
+      },
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      agentId: "dept",
+    });
+
+    expect(result).toEqual({
+      temperature: 0.2,
+      maxTokens: 4000,
+    });
+  });
 });
 
 describe("applyExtraParamsToAgent", () => {
@@ -345,6 +385,33 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls).toHaveLength(1);
     return calls[0]?.headers;
   }
+
+  it("applyExtraParamsToAgent caps override maxTokens with tools.maxResponseTokens", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        list: [{ id: "orch", tools: { maxResponseTokens: 2000 } }],
+      },
+    };
+    applyExtraParamsToAgent(
+      agent,
+      cfg as Parameters<typeof applyExtraParamsToAgent>[1],
+      "anthropic",
+      "claude-sonnet-4-6",
+      { maxTokens: 9000 },
+      undefined,
+      "orch",
+      "anthropic-messages",
+    );
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.maxTokens).toBe(2000);
+  });
 
   it("does not inject reasoning when thinkingLevel is off (default) for OpenRouter", () => {
     // Regression: "off" is a truthy string, so the old code injected

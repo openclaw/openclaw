@@ -586,6 +586,7 @@ const CommonToolPolicyFields = {
 
 export const AgentToolsSchema = z
   .object({
+    maxResponseTokens: z.number().int().positive().optional(),
     ...CommonToolPolicyFields,
     elevated: z
       .object({
