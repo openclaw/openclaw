@@ -48,7 +48,7 @@ export function getShellConfig(): { shell: string; args: string[] } {
     // PowerShell properly captures and redirects their output to stdout.
     return {
       shell: resolvePowerShellPath(),
-      args: ["-NoProfile", "-NonInteractive", "-Command"],
+      args: ["-NonInteractive", "-Command"],
     };
   }
 
