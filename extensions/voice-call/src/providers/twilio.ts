@@ -692,12 +692,18 @@ export class TwilioProvider implements VoiceCallProvider {
         clearInterval(keepAlive);
       }
 
+      let chunkAttempts = 0;
+      let chunkDelivered = 0;
       let nextChunkDueAt = Date.now() + CHUNK_DELAY_MS;
       for (const chunk of chunkAudio(muLawAudio, CHUNK_SIZE)) {
         if (signal.aborted) {
           break;
         }
-        sendAudioChunk(chunk);
+        chunkAttempts += 1;
+        const chunkResult = sendAudioChunk(chunk);
+        if (chunkResult.sent) {
+          chunkDelivered += 1;
+        }
 
         // Drift-corrected pacing: schedule against an absolute clock to avoid cumulative delay.
         const waitMs = nextChunkDueAt - Date.now();
@@ -710,9 +716,21 @@ export class TwilioProvider implements VoiceCallProvider {
         }
       }
 
+      let markSent = true;
       if (!signal.aborted) {
         // Send a mark to track when audio finishes
-        sendPlaybackMark(`tts-${Date.now()}`);
+        markSent = sendPlaybackMark(`tts-${Date.now()}`).sent;
+      }
+
+      if (!signal.aborted && chunkAttempts > 0 && (chunkDelivered === 0 || !markSent)) {
+        const failures: string[] = [];
+        if (chunkDelivered === 0) {
+          failures.push("no audio chunks delivered");
+        }
+        if (!markSent) {
+          failures.push("completion mark not delivered");
+        }
+        throw new Error(`Telephony stream playback failed: ${failures.join("; ")}`);
       }
     });
   }

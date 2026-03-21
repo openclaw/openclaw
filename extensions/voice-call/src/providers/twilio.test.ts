@@ -241,4 +241,37 @@ describe("TwilioProvider", () => {
       vi.useRealTimers();
     }
   });
+
+  it("fails stream playback when all audio sends and completion mark are dropped", async () => {
+    const provider = createProvider();
+    provider.registerCallStream("CA-dropped", "MZ-dropped");
+
+    const sendAudio = vi.fn(() => ({ sent: false }));
+    const sendMark = vi.fn(() => ({ sent: false }));
+    const mediaStreamHandler = {
+      queueTts: async (
+        _streamSid: string,
+        playFn: (signal: AbortSignal) => Promise<void>,
+      ): Promise<void> => {
+        await playFn(new AbortController().signal);
+      },
+      sendAudio,
+      sendMark,
+    };
+
+    provider.setMediaStreamHandler(mediaStreamHandler as never);
+    provider.setTTSProvider({
+      synthesizeForTelephony: async () => Buffer.alloc(320),
+    });
+
+    await expect(
+      provider.playTts({
+        callId: "call-dropped",
+        providerCallId: "CA-dropped",
+        text: "Dropped audio",
+      }),
+    ).rejects.toThrow("Telephony stream playback failed");
+    expect(sendAudio).toHaveBeenCalled();
+    expect(sendMark).toHaveBeenCalledTimes(1);
+  });
 });
