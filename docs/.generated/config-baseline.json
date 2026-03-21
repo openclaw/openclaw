@@ -8347,8 +8347,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/bluebubbles",
-      "help": "BlueBubbles channel provider configuration used for Apple messaging bridge integrations. Keep DM policy aligned with your trusted sender model in shared deployments.",
+      "label": "BlueBubbles",
+      "help": "iMessage via the BlueBubbles mac app + REST API.",
       "hasChildren": true
     },
     {
@@ -9317,8 +9317,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/discord",
-      "help": "Discord channel provider configuration for bot auth, retry policy, streaming, thread bindings, and optional voice capabilities. Keep privileged intents and advanced features disabled unless needed.",
+      "label": "Discord",
+      "help": "very well supported right now.",
       "hasChildren": true
     },
     {
@@ -15229,7 +15229,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/feishu",
+      "label": "Feishu",
+      "help": "飞书/Lark enterprise messaging with doc/wiki/drive tools.",
       "hasChildren": true
     },
     {
@@ -17230,7 +17231,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/googlechat",
+      "label": "Google Chat",
+      "help": "Google Workspace Chat app via HTTP webhooks.",
       "hasChildren": true
     },
     {
@@ -18616,8 +18618,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/imessage",
-      "help": "iMessage channel provider configuration for CLI integration and DM access policy handling. Use explicit CLI paths when runtime environments have non-standard binary locations.",
+      "label": "iMessage",
+      "help": "this is still a work in progress.",
       "hasChildren": true
     },
     {
@@ -19974,8 +19976,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/irc",
-      "help": "IRC channel provider configuration and compatibility settings for classic IRC transport workflows. Use this section when bridging legacy chat infrastructure into OpenClaw.",
+      "label": "IRC",
+      "help": "classic IRC networks with DM/channel routing and pairing controls.",
       "hasChildren": true
     },
     {
@@ -21497,7 +21499,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/line",
+      "label": "LINE",
+      "help": "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
       "hasChildren": true
     },
     {
@@ -22065,7 +22068,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/matrix",
+      "label": "Matrix",
+      "help": "open protocol; install the plugin to enable.",
       "hasChildren": true
     },
     {
@@ -23122,8 +23126,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/mattermost",
-      "help": "Mattermost channel provider configuration for bot credentials, base URL, and message trigger modes. Keep mention/trigger rules strict in high-volume team channels.",
+      "label": "Mattermost",
+      "help": "self-hosted Slack-style chat; install the plugin to enable.",
       "hasChildren": true
     },
     {
@@ -24253,8 +24257,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/msteams",
-      "help": "Microsoft Teams channel provider configuration and provider-specific policy toggles. Use this section to isolate Teams behavior from other enterprise chat providers.",
+      "label": "Microsoft Teams",
+      "help": "Bot Framework; enterprise support.",
       "hasChildren": true
     },
     {
@@ -25185,7 +25189,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/nextcloud-talk",
+      "label": "Nextcloud Talk",
+      "help": "Self-hosted chat via Nextcloud Talk webhook bots.",
       "hasChildren": true
     },
     {
@@ -26405,7 +26410,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/nostr",
+      "label": "Nostr",
+      "help": "Decentralized protocol; encrypted DMs via NIP-04.",
       "hasChildren": true
     },
     {
@@ -26633,8 +26639,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/signal",
-      "help": "Signal channel provider configuration including account identity and DM policy behavior. Keep account mapping explicit so routing remains stable across multi-device setups.",
+      "label": "Signal",
+      "help": "signal-cli linked device; more setup (David Reagans: \"Hop on Discord.\").",
       "hasChildren": true
     },
     {
@@ -28180,8 +28186,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/slack",
-      "help": "Slack channel provider configuration for bot/app tokens, streaming behavior, and DM policy controls. Keep token handling and thread behavior explicit to avoid noisy workspace interactions.",
+      "label": "Slack",
+      "help": "supported (Socket Mode).",
       "hasChildren": true
     },
     {
@@ -31012,7 +31018,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/synology-chat",
+      "label": "Synology Chat",
+      "help": "Connect your Synology NAS Chat to OpenClaw with full agent capabilities.",
       "hasChildren": true
     },
     {
@@ -31035,8 +31042,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/telegram",
-      "help": "Telegram channel provider configuration including auth tokens, retry behavior, and message rendering controls. Use this section to tune bot behavior for Telegram-specific API semantics.",
+      "label": "Telegram",
+      "help": "simplest way to get started — register a bot with @BotFather and get going.",
       "hasChildren": true
     },
     {
@@ -31176,6 +31183,49 @@
         "number",
         "string"
       ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.apiRoot",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.accounts.*.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -31470,6 +31520,39 @@
         "number",
         "string"
       ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -33086,6 +33169,69 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.apiRoot",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram API Root URL",
+      "help": "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram Auto Topic Label",
+      "help": "Auto-rename DM forum topics on first message using LLM. Default: true. Set to false to disable, or use object form { enabled: true, prompt: '...' } for custom prompt.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram Auto Topic Label Enabled",
+      "help": "Whether auto topic labeling is enabled. Default: true.",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram Auto Topic Label Prompt",
+      "help": "Custom prompt for LLM-based topic naming. The user message is appended after the prompt.",
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.blockStreaming",
       "kind": "channel",
       "type": "boolean",
@@ -33410,6 +33556,39 @@
         "number",
         "string"
       ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.direct.*.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.direct.*.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.direct.*.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -35027,7 +35206,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/tlon",
+      "label": "Tlon",
+      "help": "decentralized messaging on Urbit; install the plugin to enable.",
       "hasChildren": true
     },
     {
@@ -35465,7 +35645,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/twitch",
+      "label": "Twitch",
+      "help": "Twitch chat integration",
       "hasChildren": true
     },
     {
@@ -35854,8 +36035,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/whatsapp",
-      "help": "WhatsApp channel provider configuration for access policy and message batching behavior. Use this section to tune responsiveness and direct-message routing safety for WhatsApp chats.",
+      "label": "WhatsApp",
+      "help": "works with your own number; recommend a separate phone + eSIM.",
       "hasChildren": true
     },
     {
@@ -37222,7 +37403,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/zalo",
+      "label": "Zalo",
+      "help": "Vietnam-focused messaging platform with Bot API.",
       "hasChildren": true
     },
     {
@@ -37802,7 +37984,8 @@
         "channels",
         "network"
       ],
-      "label": "@openclaw/zalouser",
+      "label": "Zalo Personal",
+      "help": "Zalo personal account via QR code login.",
       "hasChildren": true
     },
     {
