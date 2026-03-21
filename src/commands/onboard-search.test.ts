@@ -121,7 +121,7 @@ async function runQuickstartPerplexitySetup(
 }
 
 describe("setupSearch", () => {
-  it("returns config unchanged when user skips", async () => {
+  it("keeps config unchanged when user skips", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({ selectValue: "__skip__" });
     const result = await setupSearch(cfg, runtime, prompter);
