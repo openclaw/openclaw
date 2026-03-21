@@ -726,14 +726,14 @@ export async function runWithModelFallback<T>(params: {
         throw err;
       }
       const normalized = params.fallbackOnErrors
-        ? coerceToFailoverErrorWithConfig(err, params.fallbackOnErrors, {
+        ? (coerceToFailoverErrorWithConfig(err, params.fallbackOnErrors, {
             provider: candidate.provider,
             model: candidate.model,
-          }) ?? err
-        : coerceToFailoverError(err, {
+          }) ?? err)
+        : (coerceToFailoverError(err, {
             provider: candidate.provider,
             model: candidate.model,
-          }) ?? err;
+          }) ?? err);
 
       // Even unrecognized errors should not abort the fallback loop when
       // there are remaining candidates.  Only abort/context-overflow errors
