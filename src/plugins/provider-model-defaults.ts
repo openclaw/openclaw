@@ -1,10 +1,18 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { OPENAI_DEFAULT_MODEL } from "../providers/openai-defaults.js";
+import {
+  OPENAI_CODEX_DEFAULT_MODEL,
+  OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
+  OPENAI_DEFAULT_MODEL,
+} from "../providers/openai-defaults.js";
 import { ensureModelAllowlistEntry } from "./provider-model-allowlist.js";
 import { applyAgentDefaultPrimaryModel } from "./provider-model-primary.js";
 
 export const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
-export { OPENAI_DEFAULT_MODEL } from "../providers/openai-defaults.js";
+export {
+  OPENAI_CODEX_DEFAULT_MODEL,
+  OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
+  OPENAI_DEFAULT_MODEL,
+} from "../providers/openai-defaults.js";
 export const OPENCODE_GO_DEFAULT_MODEL_REF = "opencode-go/kimi-k2.5";
 export const OPENCODE_ZEN_DEFAULT_MODEL = "opencode/claude-opus-4-6";
 
