@@ -29,6 +29,7 @@ type ChromeMcpSession = {
 type ChromeMcpSessionFactory = (
   profileName: string,
   userDataDir?: string,
+  cdpPort?: number,
 ) => Promise<ChromeMcpSession>;
 
 const DEFAULT_CHROME_MCP_COMMAND = "npx";
@@ -260,12 +261,16 @@ async function createRealSession(
       }
     } catch (err) {
       await client.close().catch(() => {});
-      const targetLabel = userDataDir
-        ? `the configured Chromium user data dir (${userDataDir})`
-        : "Google Chrome's default profile";
+      const targetLabel =
+        cdpPort && cdpPort > 0
+          ? `Chrome running on debug port ${cdpPort}`
+          : userDataDir
+            ? `the configured Chromium user data dir (${userDataDir})`
+            : "Google Chrome's default profile";
       throw new BrowserProfileUnavailableError(
         `Chrome MCP existing-session attach failed for profile "${profileName}". ` +
-          `Make sure ${targetLabel} is running locally with remote debugging enabled. ` +
+          `Make sure ${targetLabel} is running locally with remote debugging enabled` +
+          `${cdpPort && cdpPort > 0 ? ` (--remote-debugging-port=${cdpPort})` : ""}. ` +
           `Details: ${String(err)}`,
       );
     }

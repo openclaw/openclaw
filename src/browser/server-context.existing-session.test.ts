@@ -99,17 +99,24 @@ describe("browser server-context existing-session profile", () => {
     expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
       "chrome-live",
       "/tmp/brave-profile",
+      18801,
     );
-    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith("chrome-live", "/tmp/brave-profile");
+    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith(
+      "chrome-live",
+      "/tmp/brave-profile",
+      18801,
+    );
     expect(chromeMcp.openChromeMcpTab).toHaveBeenCalledWith(
       "chrome-live",
       "https://openclaw.ai",
       "/tmp/brave-profile",
+      18801,
     );
     expect(chromeMcp.focusChromeMcpTab).toHaveBeenCalledWith(
       "chrome-live",
       "7",
       "/tmp/brave-profile",
+      18801,
     );
     expect(chromeMcp.closeChromeMcpSession).toHaveBeenCalledWith("chrome-live");
   });
