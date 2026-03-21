@@ -1,4 +1,9 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import {
+  createLocalSetupIntent,
+  resolveLocalSetupExecutionPlan,
+} from "../commands/onboard-local-plan.js";
+import { createLocalOnboardingPlan } from "../commands/onboard-plan.js";
 import type {
   GatewayAuthChoice,
   OnboardMode,
@@ -481,6 +486,14 @@ export async function runSetupWizard(
   }
 
   await warnIfModelConfigLooksOff(nextConfig, prompter);
+  // Freeze the shared local setup intent here before later wizard steps add
+  // more branching, so finalize can reason from the same inputs as CLI setup.
+  const setupIntent = createLocalSetupIntent({
+    workspaceDir,
+    authChoice,
+    installDaemon: opts.installDaemon,
+    skipHealth: opts.skipHealth,
+  });
 
   const { configureGatewayForSetup } = await import("./setup.gateway-config.js");
   const gateway = await configureGatewayForSetup({
@@ -495,8 +508,21 @@ export async function runSetupWizard(
   });
   nextConfig = gateway.nextConfig;
   const settings = gateway.settings;
+  const onboardingPlan = createLocalOnboardingPlan({
+    executionMode: "interactive",
+    flow,
+    intent: setupIntent,
+    gatewayState: settings,
+    executionPlan: resolveLocalSetupExecutionPlan({
+      intent: setupIntent,
+      executionMode: "interactive",
+      flow,
+      platform: process.platform,
+    }),
+    opts,
+  });
 
-  if (opts.skipChannels ?? opts.skipProviders) {
+  if (onboardingPlan.steps.channels.decision === "skip") {
     await prompter.note("Skipping channel setup.", "Channels");
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");
@@ -524,7 +550,7 @@ export async function runSetupWizard(
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
   });
 
-  if (opts.skipSearch) {
+  if (onboardingPlan.steps.search.decision === "skip") {
     await prompter.note("Skipping search setup.", "Search");
   } else {
     const { setupSearch } = await import("../commands/onboard-search.js");
@@ -534,7 +560,7 @@ export async function runSetupWizard(
     });
   }
 
-  if (opts.skipSkills) {
+  if (onboardingPlan.steps.skills.decision === "skip") {
     await prompter.note("Skipping skills setup.", "Skills");
   } else {
     const { setupSkills } = await import("../commands/onboard-skills.js");
@@ -555,6 +581,8 @@ export async function runSetupWizard(
     baseConfig,
     nextConfig,
     workspaceDir,
+    intent: setupIntent,
+    onboardingPlan,
     settings,
     prompter,
     runtime,

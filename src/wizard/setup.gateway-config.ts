@@ -7,6 +7,7 @@ import {
   randomToken,
   validateGatewayPasswordInput,
 } from "../commands/onboard-helpers.js";
+import type { LocalGatewaySetupState } from "../commands/onboard-local-gateway.js";
 import type { GatewayAuthChoice, SecretInputMode } from "../commands/onboard-types.js";
 import type { GatewayBindMode, GatewayTailscaleMode, OpenClawConfig } from "../config/config.js";
 import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../config/gateway-control-ui-origins.js";
@@ -46,7 +47,7 @@ type ConfigureGatewayOptions = {
 
 type ConfigureGatewayResult = {
   nextConfig: OpenClawConfig;
-  settings: GatewayWizardSettings;
+  settings: LocalGatewaySetupState;
 };
 
 export async function configureGatewayForSetup(
@@ -158,6 +159,7 @@ export async function configureGatewayForSetup(
 
   let gatewayToken: string | undefined;
   let gatewayTokenInput: SecretInput | undefined;
+  let gatewayPassword: string | undefined;
   if (authMode === "token") {
     const quickstartTokenString = normalizeSecretInputString(quickstartGateway.token);
     const quickstartTokenRef = resolveSecretInputRef({
@@ -225,6 +227,19 @@ export async function configureGatewayForSetup(
   if (authMode === "password") {
     let password: SecretInput | undefined =
       flow === "quickstart" && quickstartGateway.password ? quickstartGateway.password : undefined;
+    if (password) {
+      try {
+        gatewayPassword =
+          (await resolveSetupSecretInputString({
+            config: nextConfig,
+            value: password,
+            path: "gateway.auth.password",
+            env: process.env,
+          })) ?? "";
+      } catch {
+        gatewayPassword = undefined;
+      }
+    }
     if (!password) {
       const selectedMode = await resolveSecretInputModeForEnvSelection({
         prompter,
@@ -247,13 +262,15 @@ export async function configureGatewayForSetup(
           },
         });
         password = resolved.ref;
+        gatewayPassword = resolved.resolvedValue;
       } else {
-        password = String(
+        gatewayPassword = String(
           (await prompter.text({
             message: "Gateway password",
             validate: validateGatewayPasswordInput,
           })) ?? "",
         ).trim();
+        password = gatewayPassword;
       }
     }
     nextConfig = {
@@ -329,11 +346,13 @@ export async function configureGatewayForSetup(
   return {
     nextConfig,
     settings: {
+      mode: "local",
       port,
       bind: bind as GatewayBindMode,
       customBindHost: bind === "custom" ? customBindHost : undefined,
       authMode,
       gatewayToken,
+      gatewayPassword,
       tailscaleMode: tailscaleMode as GatewayTailscaleMode,
       tailscaleResetOnExit,
     },

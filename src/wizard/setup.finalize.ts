@@ -19,8 +19,16 @@ import {
   openUrl,
   probeGatewayReachable,
   waitForGatewayReachable,
-  resolveControlUiLinks,
 } from "../commands/onboard-helpers.js";
+import {
+  resolveLocalGatewayLinks,
+  resolveLocalGatewayReachabilityAuth,
+} from "../commands/onboard-local-gateway.js";
+import {
+  resolveLocalSetupExecutionPlan,
+  type LocalSetupIntent,
+} from "../commands/onboard-local-plan.js";
+import { createLocalOnboardingPlan, type OnboardingPlan } from "../commands/onboard-plan.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
@@ -32,7 +40,6 @@ import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
-import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
 
 type FinalizeOnboardingOptions = {
@@ -41,6 +48,8 @@ type FinalizeOnboardingOptions = {
   baseConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
   workspaceDir: string;
+  intent: LocalSetupIntent;
+  onboardingPlan: OnboardingPlan;
   settings: GatewayWizardSettings;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -89,28 +98,64 @@ export async function finalizeSetupWizard(
     });
   }
 
-  const explicitInstallDaemon =
-    typeof opts.installDaemon === "boolean" ? opts.installDaemon : undefined;
-  let installDaemon: boolean;
-  if (explicitInstallDaemon !== undefined) {
-    installDaemon = explicitInstallDaemon;
-  } else if (process.platform === "linux" && !systemdAvailable) {
-    installDaemon = false;
-  } else if (flow === "quickstart") {
-    installDaemon = true;
-  } else {
-    installDaemon = await prompter.confirm({
+  // Resolve the wizard's execution plan from the shared local intent instead of
+  // re-deriving defaults inline, so quickstart/advanced behavior stays inspectable.
+  let setupPlan = resolveLocalSetupExecutionPlan({
+    intent: options.intent,
+    executionMode: "interactive",
+    flow,
+    platform: process.platform,
+    systemdAvailable,
+  });
+  let onboardingPlan = options.onboardingPlan;
+  // Linux systemd availability is only known here, so finalize recomputes the
+  // pure plan once with that fact before executing any daemon/health branches.
+  onboardingPlan = createLocalOnboardingPlan({
+    executionMode: "interactive",
+    flow,
+    intent: onboardingPlan.intent,
+    gatewayState: settings,
+    executionPlan: setupPlan,
+    opts,
+  });
+  let installDaemon = onboardingPlan.steps.daemon.decision === "install";
+  if (setupPlan.daemonDecision === "prompt") {
+    const installConfirmed = await prompter.confirm({
       message: "Install Gateway service (recommended)",
       initialValue: true,
     });
+    // Interactive finalize is the only place that is allowed to turn the
+    // shared pure plan into a user decision. Once confirmed, recompute the
+    // plan and keep executing from the updated intent instead of branching ad hoc.
+    setupPlan = resolveLocalSetupExecutionPlan({
+      intent: {
+        ...options.intent,
+        daemonPreference: installConfirmed ? "install" : "skip",
+      },
+      executionMode: "interactive",
+      flow,
+      platform: process.platform,
+      systemdAvailable,
+    });
+    onboardingPlan = createLocalOnboardingPlan({
+      executionMode: "interactive",
+      flow,
+      intent: {
+        ...options.intent,
+        daemonPreference: installConfirmed ? "install" : "skip",
+      },
+      gatewayState: settings,
+      executionPlan: setupPlan,
+      opts,
+    });
+    installDaemon = onboardingPlan.steps.daemon.decision === "install";
   }
 
-  if (process.platform === "linux" && !systemdAvailable && installDaemon) {
+  if (setupPlan.daemonDecisionReason === "systemd-unavailable") {
     await prompter.note(
       "Systemd user services are unavailable; skipping service install. Use your container supervisor or `docker compose up -d`.",
       "Gateway service",
     );
-    installDaemon = false;
   }
 
   if (installDaemon) {
@@ -223,17 +268,20 @@ export async function finalizeSetupWizard(
     }
   }
 
-  if (!opts.skipHealth) {
-    const probeLinks = resolveControlUiLinks({
-      bind: nextConfig.gateway?.bind ?? "loopback",
-      port: settings.port,
-      customBindHost: nextConfig.gateway?.customBindHost,
-      basePath: undefined,
+  if (onboardingPlan.steps.health.decision === "run") {
+    const probeLinks = resolveLocalGatewayLinks({
+      state: settings,
+    });
+    const probeAuth = await resolveLocalGatewayReachabilityAuth({
+      state: settings,
+      config: nextConfig,
+      env: process.env,
     });
     // Daemon install/restart can briefly flap the WS; wait a bit so health check doesn't false-fail.
     await waitForGatewayReachable({
       url: probeLinks.wsUrl,
-      token: settings.gatewayToken,
+      token: probeAuth.token,
+      password: probeAuth.password,
       deadlineMs: 15_000,
     });
     try {
@@ -253,7 +301,7 @@ export async function finalizeSetupWizard(
 
   const controlUiEnabled =
     nextConfig.gateway?.controlUi?.enabled ?? baseConfig.gateway?.controlUi?.enabled ?? true;
-  if (!opts.skipUi && controlUiEnabled) {
+  if (onboardingPlan.steps.ui.decision !== "skip" && controlUiEnabled) {
     const controlUiAssets = await ensureControlUiAssetsBuilt(runtime);
     if (!controlUiAssets.ok && controlUiAssets.message) {
       runtime.error(controlUiAssets.message);
@@ -272,41 +320,39 @@ export async function finalizeSetupWizard(
 
   const controlUiBasePath =
     nextConfig.gateway?.controlUi?.basePath ?? baseConfig.gateway?.controlUi?.basePath;
-  const links = resolveControlUiLinks({
-    bind: settings.bind,
-    port: settings.port,
-    customBindHost: settings.customBindHost,
+  const links = resolveLocalGatewayLinks({
+    state: settings,
     basePath: controlUiBasePath,
   });
   const authedUrl =
     settings.authMode === "token" && settings.gatewayToken
       ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
       : links.httpUrl;
-  let resolvedGatewayPassword = "";
-  if (settings.authMode === "password") {
-    try {
-      resolvedGatewayPassword =
-        (await resolveSetupSecretInputString({
-          config: nextConfig,
-          value: nextConfig.gateway?.auth?.password,
-          path: "gateway.auth.password",
-          env: process.env,
-        })) ?? "";
-    } catch (error) {
-      await prompter.note(
-        [
-          "Could not resolve gateway.auth.password SecretRef for setup auth.",
-          error instanceof Error ? error.message : String(error),
-        ].join("\n"),
-        "Gateway auth",
-      );
-    }
+  let gatewayAuth = { token: settings.gatewayToken, password: "" };
+  try {
+    const resolvedAuth = await resolveLocalGatewayReachabilityAuth({
+      state: settings,
+      config: nextConfig,
+      env: process.env,
+    });
+    gatewayAuth = {
+      token: resolvedAuth.token,
+      password: resolvedAuth.password ?? "",
+    };
+  } catch (error) {
+    await prompter.note(
+      [
+        "Could not resolve gateway.auth.password SecretRef for setup auth.",
+        error instanceof Error ? error.message : String(error),
+      ].join("\n"),
+      "Gateway auth",
+    );
   }
 
   const gatewayProbe = await probeGatewayReachable({
     url: links.wsUrl,
-    token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-    password: settings.authMode === "password" ? resolvedGatewayPassword : "",
+    token: gatewayAuth.token,
+    password: gatewayAuth.password,
   });
   const gatewayStatusLine = gatewayProbe.ok
     ? "Gateway: reachable"
@@ -341,7 +387,7 @@ export async function finalizeSetupWizard(
   let hatchChoice: "tui" | "web" | "later" | null = null;
   let launchedTui = false;
 
-  if (!opts.skipUi && gatewayProbe.ok) {
+  if (onboardingPlan.steps.ui.decision !== "skip" && gatewayProbe.ok) {
     if (hasBootstrap) {
       await prompter.note(
         [
@@ -381,8 +427,8 @@ export async function finalizeSetupWizard(
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
       await runTui({
         url: links.wsUrl,
-        token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-        password: settings.authMode === "password" ? resolvedGatewayPassword : "",
+        token: gatewayAuth.token,
+        password: gatewayAuth.password,
         // Safety: setup TUI should not auto-deliver to lastProvider/lastTo.
         deliver: false,
         message: hasBootstrap ? "Wake up, my friend!" : undefined,
@@ -424,7 +470,7 @@ export async function finalizeSetupWizard(
         "Later",
       );
     }
-  } else if (opts.skipUi) {
+  } else if (onboardingPlan.steps.ui.decision === "skip") {
     await prompter.note("Skipping Control UI/TUI prompts.", "Control UI");
   }
 
@@ -444,7 +490,7 @@ export async function finalizeSetupWizard(
   await setupWizardShellCompletion({ flow, prompter });
 
   const shouldOpenControlUi =
-    !opts.skipUi &&
+    onboardingPlan.steps.ui.decision !== "skip" &&
     settings.authMode === "token" &&
     Boolean(settings.gatewayToken) &&
     hatchChoice === null;

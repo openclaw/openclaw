@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const mocks = vi.hoisted(() => ({
@@ -22,7 +22,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: mocks.listAgentIds,
 }));
 
-const { resolveSessionKeyForRequest } = await import("./session.js");
+const { resolveSession, resolveSessionKeyForRequest } = await import("./session.js");
 
 describe("resolveSessionKeyForRequest", () => {
   const MAIN_STORE_PATH = "/tmp/main-store.json";
@@ -175,5 +175,60 @@ describe("resolveSessionKeyForRequest", () => {
     expect(storePaths).toHaveLength(2);
     expect(storePaths).toContain(MAIN_STORE_PATH);
     expect(storePaths).toContain(MYBOT_STORE_PATH);
+  });
+});
+
+describe("resolveSession", () => {
+  const MAIN_STORE_PATH = "/tmp/main-store.json";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.listAgentIds.mockReturnValue(["main"]);
+    mocks.resolveStorePath.mockReturnValue(MAIN_STORE_PATH);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps chat sessions persistent by default across day boundaries", () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "persistent-session",
+        updatedAt: new Date(2026, 0, 17, 3, 0, 0).getTime(),
+      },
+    });
+
+    const result = resolveSession({
+      cfg: {},
+      to: "+15551234567",
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe("persistent-session");
+  });
+
+  it("still respects explicit time-based reset policies", () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "daily-session",
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      },
+    });
+
+    const result = resolveSession({
+      cfg: {
+        session: {
+          reset: { mode: "daily", atHour: 4 },
+        },
+      } as OpenClawConfig["session"],
+      to: "+15551234567",
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe("daily-session");
   });
 });

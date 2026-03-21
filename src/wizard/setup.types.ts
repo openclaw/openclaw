@@ -1,3 +1,4 @@
+import type { LocalGatewaySetupState } from "../commands/onboard-local-gateway.js";
 import type { GatewayAuthChoice } from "../commands/onboard-types.js";
 import type { SecretInput } from "../config/types.secrets.js";
 
@@ -15,12 +16,4 @@ export type QuickstartGatewayDefaults = {
   tailscaleResetOnExit: boolean;
 };
 
-export type GatewayWizardSettings = {
-  port: number;
-  bind: "loopback" | "lan" | "auto" | "custom" | "tailnet";
-  customBindHost?: string;
-  authMode: GatewayAuthChoice;
-  gatewayToken?: string;
-  tailscaleMode: "off" | "serve" | "funnel";
-  tailscaleResetOnExit: boolean;
-};
+export type GatewayWizardSettings = LocalGatewaySetupState;

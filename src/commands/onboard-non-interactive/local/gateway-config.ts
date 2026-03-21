@@ -3,6 +3,7 @@ import { isValidEnvSecretRefId } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeGatewayTokenInput, randomToken } from "../../onboard-helpers.js";
+import type { LocalGatewaySetupState } from "../../onboard-local-gateway.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 export function applyNonInteractiveGatewayConfig(params: {
@@ -12,12 +13,7 @@ export function applyNonInteractiveGatewayConfig(params: {
   defaultPort: number;
 }): {
   nextConfig: OpenClawConfig;
-  port: number;
-  bind: string;
-  authMode: string;
-  tailscaleMode: string;
-  tailscaleResetOnExit: boolean;
-  gatewayToken?: string;
+  state: LocalGatewaySetupState;
 } | null {
   const { opts, runtime } = params;
 
@@ -54,6 +50,7 @@ export function applyNonInteractiveGatewayConfig(params: {
   const explicitGatewayToken = normalizeGatewayTokenInput(opts.gatewayToken);
   const envGatewayToken = normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN);
   let gatewayToken = explicitGatewayToken || envGatewayToken || undefined;
+  let gatewayPassword: string | undefined;
   const gatewayTokenRefEnv = String(opts.gatewayTokenRefEnv ?? "").trim();
 
   if (authMode === "token") {
@@ -119,6 +116,7 @@ export function applyNonInteractiveGatewayConfig(params: {
       runtime.exit(1);
       return null;
     }
+    gatewayPassword = password;
     nextConfig = {
       ...nextConfig,
       gateway: {
@@ -148,11 +146,15 @@ export function applyNonInteractiveGatewayConfig(params: {
 
   return {
     nextConfig,
-    port,
-    bind,
-    authMode,
-    tailscaleMode,
-    tailscaleResetOnExit,
-    gatewayToken,
+    state: {
+      mode: "local",
+      port,
+      bind,
+      authMode,
+      gatewayToken,
+      gatewayPassword,
+      tailscaleMode,
+      tailscaleResetOnExit,
+    },
   };
 }

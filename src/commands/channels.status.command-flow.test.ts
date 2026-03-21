@@ -169,4 +169,32 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(joined).not.toContain("secret unavailable in this command path");
     expect(joined).not.toContain("token:config (unavailable)");
   });
+
+  it("uses a larger default timeout for probe mode", async () => {
+    callGateway.mockResolvedValue({
+      ts: Date.now(),
+      channelOrder: [],
+      channelLabels: {},
+      channelDetailLabels: {},
+      channelSystemImages: {},
+      channelMeta: [],
+      channels: {},
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    const { runtime } = createRuntimeCapture();
+
+    await channelsStatusCommand({ probe: true }, runtime as never);
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "channels.status",
+        params: expect.objectContaining({
+          probe: true,
+          timeoutMs: 20_000,
+        }),
+        timeoutMs: 20_000,
+      }),
+    );
+  });
 });

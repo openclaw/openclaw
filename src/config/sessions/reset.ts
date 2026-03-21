@@ -2,7 +2,7 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { DEFAULT_IDLE_MINUTES } from "./types.js";
 
-export type SessionResetMode = "daily" | "idle";
+export type SessionResetMode = "manual" | "daily" | "idle";
 export type SessionResetType = "direct" | "group" | "thread";
 
 export type SessionResetPolicy = {
@@ -17,7 +17,8 @@ export type SessionFreshness = {
   idleExpiresAt?: number;
 };
 
-export const DEFAULT_RESET_MODE: SessionResetMode = "daily";
+export const DEFAULT_RESET_MODE: SessionResetMode = "manual";
+export const DEFAULT_CRON_RESET_MODE: SessionResetMode = "daily";
 export const DEFAULT_RESET_AT_HOUR = 4;
 
 const THREAD_SESSION_MARKERS = [":thread:", ":topic:"];
@@ -85,6 +86,7 @@ export function resolveSessionResetPolicy(params: {
   sessionCfg?: SessionConfig;
   resetType: SessionResetType;
   resetOverride?: SessionResetConfig;
+  defaultMode?: SessionResetMode;
 }): SessionResetPolicy {
   const sessionCfg = params.sessionCfg;
   const baseReset = params.resetOverride ?? sessionCfg?.reset;
@@ -100,7 +102,9 @@ export function resolveSessionResetPolicy(params: {
   const mode =
     typeReset?.mode ??
     baseReset?.mode ??
-    (!hasExplicitReset && legacyIdleMinutes != null ? "idle" : DEFAULT_RESET_MODE);
+    (!hasExplicitReset && legacyIdleMinutes != null
+      ? "idle"
+      : (params.defaultMode ?? DEFAULT_RESET_MODE));
   const atHour = normalizeResetAtHour(
     typeReset?.atHour ?? baseReset?.atHour ?? DEFAULT_RESET_AT_HOUR,
   );
@@ -141,6 +145,11 @@ export function evaluateSessionFreshness(params: {
   now: number;
   policy: SessionResetPolicy;
 }): SessionFreshness {
+  // Manual mode is the persistent-chat path: keep the conversation alive until
+  // the user explicitly rotates it with /new or /reset.
+  if (params.policy.mode === "manual") {
+    return { fresh: true };
+  }
   const dailyResetAt =
     params.policy.mode === "daily"
       ? resolveDailyResetAtMs(params.now, params.policy.atHour)

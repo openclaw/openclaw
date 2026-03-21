@@ -137,7 +137,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     const payload = decodeSetupCode(setupCode ?? "");
     expect(payload.url).toBe("ws://gateway.local:18789");
     expect(payload.bootstrapToken).toBeTruthy();
-    expect(payload.token).toBeUndefined();
+    expect(payload.token).toBe("shared-token-123");
     expect(runtimeErrors).toEqual([]);
 
     runtimeLogs.length = 0;

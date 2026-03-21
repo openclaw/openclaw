@@ -167,4 +167,70 @@ describe("gateway server channels", () => {
     expect(snap.config?.channels?.telegram?.botToken).toBeUndefined();
     expect(snap.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
   });
+
+  test("channels.status probes accounts in parallel and degrades probe failures per account", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const slowPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "telegram",
+        label: "Telegram",
+        config: {
+          listAccountIds: () => ["default", "ops"],
+          defaultAccountId: () => "default",
+          resolveAccount: (_cfg, accountId) => ({ accountId }),
+          isConfigured: async () => true,
+          isEnabled: () => true,
+        },
+      }),
+      status: {
+        buildChannelSummary: async () => ({ configured: true }),
+        probeAccount: async ({ account }) => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          inFlight -= 1;
+          const accountId =
+            typeof account === "object" && account && "accountId" in account
+              ? String((account as { accountId: string }).accountId)
+              : "default";
+          if (accountId === "ops") {
+            await new Promise((resolve) => setTimeout(resolve, 1_100));
+          }
+          return { ok: true, bot: { username: `${accountId}_bot` } };
+        },
+      },
+    };
+
+    setRegistry(
+      createRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: slowPlugin,
+        },
+      ]),
+    );
+
+    const res = await rpcReq<{
+      channelAccounts?: Record<
+        string,
+        Array<{ accountId?: string; probe?: { ok?: boolean; error?: string } }>
+      >;
+    }>(ws, "channels.status", { probe: true, timeoutMs: 1_000 });
+
+    expect(res.ok).toBe(true);
+    expect(maxInFlight).toBeGreaterThan(1);
+    const telegramAccounts = res.payload?.channelAccounts?.telegram ?? [];
+    expect(telegramAccounts).toHaveLength(2);
+    expect(
+      telegramAccounts.find((account) => account.accountId === "default")?.probe,
+    ).toMatchObject({
+      ok: true,
+    });
+    expect(telegramAccounts.find((account) => account.accountId === "ops")?.probe).toMatchObject({
+      ok: false,
+      error: "telegram:ops probe timed out after 1000ms",
+    });
+  });
 });

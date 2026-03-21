@@ -68,8 +68,9 @@ export type SessionSendPolicyConfig = {
   rules?: SessionSendPolicyRule[];
 };
 
-export type SessionResetMode = "daily" | "idle";
+export type SessionResetMode = "manual" | "daily" | "idle";
 export type SessionResetConfig = {
+  /** Manual mode never expires by time; sessions rotate only on explicit /new or /reset. */
   mode?: SessionResetMode;
   /** Local hour (0-23) for the daily reset boundary. */
   atHour?: number;

@@ -866,12 +866,12 @@ describe("initSessionState reset policy", () => {
     vi.useRealTimers();
   });
 
-  it("defaults to daily reset at 4am local time", async () => {
+  it("defaults chat sessions to manual persistence", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-    const root = await makeCaseDir("openclaw-reset-daily-");
+    const root = await makeCaseDir("openclaw-reset-manual-");
     const storePath = path.join(root, "sessions.json");
     const sessionKey = "agent:main:whatsapp:dm:s1";
-    const existingSessionId = "daily-session-id";
+    const existingSessionId = "manual-session-id";
 
     await writeSessionStoreFast(storePath, {
       [sessionKey]: {
@@ -887,12 +887,43 @@ describe("initSessionState reset policy", () => {
       commandAuthorized: true,
     });
 
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
     expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
       sessionKey,
-      previousSessionId: existingSessionId,
+      previousSessionId: undefined,
     });
+  });
+
+  it("keeps thread sessions persistent across day boundaries by default", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-thread-manual-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:g1:topic:42";
+    const existingSessionId = "manual-thread-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 17, 3, 0, 0).getTime(),
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "still here",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+        MessageThreadId: 42,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
@@ -909,7 +940,12 @@ describe("initSessionState reset policy", () => {
       },
     });
 
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4 },
+      },
+    } as OpenClawConfig;
     const result = await initSessionState({
       ctx: { Body: "hello", SessionKey: sessionKey },
       cfg,
@@ -1011,7 +1047,7 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).toBe(existingSessionId);
   });
 
-  it("defaults to daily resets when only resetByType is configured", async () => {
+  it("defaults to manual resets when only resetByType is configured", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-type-default-");
     const storePath = path.join(root, "sessions.json");
@@ -1037,8 +1073,8 @@ describe("initSessionState reset policy", () => {
       commandAuthorized: true,
     });
 
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("keeps legacy idleMinutes behavior without reset config", async () => {
@@ -1473,13 +1509,14 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     archiveSpy.mockRestore();
   });
 
-  it("archives the old session transcript on daily/scheduled reset (stale session)", async () => {
-    // Daily resets occur when the session becomes stale (not via /new or /reset command).
+  it("archives the old session transcript on configured time-based reset (stale session)", async () => {
+    // Time-based resets occur only when operators explicitly configure them.
     // Previously, previousSessionEntry was only set when resetTriggered=true, leaving
     // old transcript files orphaned on disk. Refs #35481.
     vi.useFakeTimers();
     try {
       // Simulate: it is 5am, session was last active at 3am (before 4am daily boundary)
+      // and this agent explicitly opted into time-based rollover.
       vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
       const storePath = await createStorePath("openclaw-stale-archive-");
       const sessionKey = "agent:main:telegram:dm:archive-stale-user";
@@ -1495,7 +1532,12 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       const sessionUtils = await import("../../gateway/session-utils.fs.js");
       const archiveSpy = vi.spyOn(sessionUtils, "archiveSessionTranscripts");
 
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const cfg = {
+        session: {
+          store: storePath,
+          reset: { mode: "daily", atHour: 4 },
+        },
+      } as OpenClawConfig;
       const result = await initSessionState({
         ctx: {
           Body: "hello",

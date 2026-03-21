@@ -337,9 +337,10 @@ export async function initSessionState(params: {
     ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;
   // Capture the current session entry before any reset so its transcript can be
-  // archived afterward.  We need to do this for both explicit resets (/new, /reset)
-  // and for scheduled/daily resets where the session has become stale (!freshEntry).
-  // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
+  // archived afterward. We need to do this for both explicit resets (/new, /reset)
+  // and for configured time-based resets where the session has become stale
+  // (!freshEntry). Without this, stale-session transcripts are left as orphaned
+  // files on disk (#35481).
   const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,

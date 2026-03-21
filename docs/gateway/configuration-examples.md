@@ -155,9 +155,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   session: {
     scope: "per-sender",
     reset: {
-      mode: "daily",
-      atHour: 4,
-      idleMinutes: 60,
+      mode: "manual",
     },
     resetByChannel: {
       discord: { mode: "idle", idleMinutes: 10080 },

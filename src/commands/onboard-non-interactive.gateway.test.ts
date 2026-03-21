@@ -378,6 +378,32 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  it("uses the existing-gateway health deadline when daemon install was not requested", async () => {
+    await withStateDir("state-local-existing-health-", async (stateDir) => {
+      let capturedDeadlineMs: number | undefined;
+      waitForGatewayReachableMock = vi.fn(async (params: { deadlineMs?: number }) => {
+        capturedDeadlineMs = params.deadlineMs;
+        return { ok: true };
+      });
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace: path.join(stateDir, "openclaw"),
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: false,
+          gatewayBind: "loopback",
+        },
+        runtime,
+      );
+
+      expect(installGatewayDaemonNonInteractiveMock).not.toHaveBeenCalled();
+      expect(capturedDeadlineMs).toBe(15_000);
+    });
+  }, 60_000);
+
   it("uses a longer health deadline when daemon install was requested", async () => {
     await withStateDir("state-local-daemon-health-", async (stateDir) => {
       let capturedDeadlineMs: number | undefined;

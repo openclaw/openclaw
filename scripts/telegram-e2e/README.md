@@ -193,6 +193,23 @@ scripts/telegram-e2e/run-model-inheritance-e2e.sh \
 
 Pass signal is `PASS: thread B reports expected model (...)`.
 
+## ACP handoff validation status
+
+Live result (2026-03-20, tester lane `tg-finance`): `ACP one-shot = passed`.
+
+Evidence signature:
+
+- Telegram request: `run this in codex and reply exactly <token>`
+- Bot reply contains exact `<token>`
+- Gateway log contains ACP success run marker:
+  - `:agent:codex:acp:...:ok`
+  - `[agent:nested] ... <token>`
+
+Scope note:
+
+- This confirms one-shot ACP delegation from Telegram to Codex and return-to-parent reply flow.
+- This does **not** by itself prove persistent thread-bound ACP session behavior across follow-up turns.
+
 ## Known behavior and failure recovery
 
 - `409 Conflict` from `tg poll` is expected when gateway owns `getUpdates`.

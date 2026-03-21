@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  DEFAULT_CRON_RESET_MODE,
   evaluateSessionFreshness,
   loadSessionStore,
   resolveSessionResetPolicy,
@@ -34,6 +35,9 @@ export function resolveCronSession(params: {
     const resetPolicy = resolveSessionResetPolicy({
       sessionCfg,
       resetType: "direct",
+      // Keep isolated cron/webhook runs on the legacy time-based default unless
+      // operators explicitly choose a different policy in config.
+      defaultMode: DEFAULT_CRON_RESET_MODE,
     });
     const freshness = evaluateSessionFreshness({
       updatedAt: entry.updatedAt,

@@ -14,6 +14,7 @@ import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 import { confirm, select, text } from "./configure.shared.js";
+import { normalizeGatewayExposureSafety } from "./onboard-gateway-exposure.js";
 import {
   guardCancel,
   normalizeGatewayTokenInput,
@@ -138,15 +139,21 @@ export async function promptGatewayConfig(
     );
   }
 
-  if (tailscaleMode !== "off" && bind !== "loopback") {
+  const exposureSafety = normalizeGatewayExposureSafety({
+    bind,
+    authMode,
+    tailscaleMode,
+    customBindHost,
+  });
+  if (exposureSafety.adjustments.bindForcedToLoopback) {
     note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
-    bind = "loopback";
   }
-
-  if (tailscaleMode === "funnel" && authMode !== "password") {
+  if (exposureSafety.adjustments.authForcedToPassword) {
     note("Tailscale funnel requires password auth.", "Note");
-    authMode = "password";
   }
+  bind = exposureSafety.bind;
+  authMode = exposureSafety.authMode;
+  customBindHost = exposureSafety.customBindHost;
 
   // trusted-proxy + loopback is valid when the reverse proxy runs on the same
   // host (e.g. cloudflared, nginx, Caddy). trustedProxies must include 127.0.0.1.

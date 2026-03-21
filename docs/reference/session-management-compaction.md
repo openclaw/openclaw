@@ -126,7 +126,8 @@ Each `sessionKey` points at a current `sessionId` (the transcript file that cont
 Rules of thumb:
 
 - **Reset** (`/new`, `/reset`) creates a new `sessionId` for that `sessionKey`.
-- **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
+- **Manual persistence** (default chat behavior) keeps the same `sessionId` until the user explicitly resets the conversation.
+- **Daily reset** (optional, default 4:00 AM local time when configured) creates a new `sessionId` on the next message after the reset boundary.
 - **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
 - **Thread parent fork guard** (`session.parentForkMaxTokens`, default `100000`) skips parent transcript forking when the parent session is already too large; the new thread starts fresh. Set `0` to disable.
 

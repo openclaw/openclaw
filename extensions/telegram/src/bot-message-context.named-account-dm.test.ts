@@ -6,9 +6,13 @@ import {
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
-vi.mock("../../../src/channels/session.js", () => ({
-  recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
-}));
+vi.mock("../../../src/channels/session.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/channels/session.js")>();
+  return {
+    ...actual,
+    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+  };
+});
 
 describe("buildTelegramMessageContext named-account DM fallback", () => {
   const baseCfg = {

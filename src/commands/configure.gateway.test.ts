@@ -165,6 +165,38 @@ describe("promptGatewayConfig", () => {
     expect(result.config.gateway?.tailscale?.resetOnExit).toBe(false);
   });
 
+  it("forces loopback and clears custom bind host when tailscale serve is enabled", async () => {
+    mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
+    const { result } = await runGatewayPrompt({
+      selectQueue: ["custom", "token", "serve", "plaintext"],
+      textQueue: ["18789", "192.168.1.20", "my-token"],
+      confirmResult: true,
+      authConfigFactory: ({ mode, token }) => ({ mode, token }),
+    });
+
+    expect(result.config.gateway?.bind).toBe("loopback");
+    expect(result.config.gateway?.customBindHost).toBeUndefined();
+    expect(mocks.note).toHaveBeenCalledWith(
+      "Tailscale requires bind=loopback. Adjusting bind to loopback.",
+      "Note",
+    );
+  });
+
+  it("forces password auth when tailscale funnel is enabled after token selection", async () => {
+    mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
+    const { call, result } = await runGatewayPrompt({
+      selectQueue: ["loopback", "token", "funnel"],
+      textQueue: ["18789", "my-password"],
+      confirmResult: true,
+      authConfigFactory: ({ mode, password }) => ({ mode, password }),
+    });
+
+    expect(call?.mode).toBe("password");
+    expect(call?.password).toBe("my-password");
+    expect(result.config.gateway?.auth?.mode).toBe("password");
+    expect(mocks.note).toHaveBeenCalledWith("Tailscale funnel requires password auth.", "Note");
+  });
+
   it("adds Tailscale origin to controlUi.allowedOrigins when tailscale serve is enabled", async () => {
     mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
     const { result } = await runGatewayPrompt({
