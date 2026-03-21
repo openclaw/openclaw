@@ -2,6 +2,8 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+
 export type SystemEvent = { text: string; ts: number; contextKey?: string | null };
 
 const MAX_EVENTS = 20;
@@ -12,7 +14,9 @@ type SessionQueue = {
   lastContextKey: string | null;
 };
 
-const queues = new Map<string, SessionQueue>();
+const SYSTEM_EVENT_QUEUES_KEY = Symbol.for("openclaw.systemEvents.queues");
+
+const queues = resolveGlobalMap<string, SessionQueue>(SYSTEM_EVENT_QUEUES_KEY);
 
 type SystemEventOptions = {
   sessionKey: string;
