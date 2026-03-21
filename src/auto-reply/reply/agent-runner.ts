@@ -15,6 +15,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
@@ -121,6 +122,30 @@ export async function runReplyAgent(params: {
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
+  const resolveCurrentSessionEntry = () =>
+    (sessionKey ? activeSessionStore?.[sessionKey] : undefined) ?? activeSessionEntry;
+  const rebindFollowupRunToCurrentSession = () => {
+    const latestEntry = resolveCurrentSessionEntry();
+    const latestSessionId = latestEntry?.sessionId?.trim();
+    if (latestEntry) {
+      activeSessionEntry = latestEntry;
+    }
+    if (!latestSessionId || latestSessionId === followupRun.run.sessionId) {
+      return;
+    }
+    followupRun.run.sessionId = latestSessionId;
+    const latestSessionFile = latestEntry.sessionFile?.trim();
+    if (latestSessionFile) {
+      followupRun.run.sessionFile = latestSessionFile;
+    }
+    logVerbose(`reply runner: rebound ${sessionKey ?? queueKey} to session ${latestSessionId}`);
+  };
+  const isFollowupRunSuperseded = () => {
+    const latestSessionId = resolveCurrentSessionEntry()?.sessionId?.trim();
+    const runSessionId = followupRun.run.sessionId?.trim();
+    return Boolean(latestSessionId && runSessionId && latestSessionId !== runSessionId);
+  };
+  rebindFollowupRunToCurrentSession();
 
   const isHeartbeat = opts?.isHeartbeat === true;
   const typingSignals = createTypingSignaler({
@@ -374,6 +399,11 @@ export async function runReplyAgent(params: {
       storePath,
       resolvedVerboseLevel,
     });
+
+    if (isFollowupRunSuperseded()) {
+      logVerbose(`reply runner: dropping superseded reply for ${sessionKey ?? queueKey}`);
+      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
 
     if (runOutcome.kind === "final") {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);

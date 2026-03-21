@@ -1358,6 +1358,16 @@ describe("gateway server sessions", () => {
       ["main", "agent:main:main", "sess-main"],
       "sess-main",
     );
+    const clearOptions = (
+      sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[], unknown]>
+    )[0]?.[1] as
+      | { clearFollowups?: boolean; clearDrainCallbacks?: boolean; clearLanes?: boolean }
+      | undefined;
+    expect(clearOptions).toMatchObject({
+      clearFollowups: false,
+      clearDrainCallbacks: false,
+      clearLanes: true,
+    });
     expect(waitCallCountAtSnapshotClear).toEqual([1]);
     expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(1);
     expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith({

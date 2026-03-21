@@ -42,6 +42,7 @@ const ROUTABLE_TEST_CHANNELS = new Set([
 ]);
 
 beforeEach(() => {
+  runEmbeddedPiAgentMock.mockReset();
   routeReplyMock.mockReset();
   routeReplyMock.mockResolvedValue({ ok: true });
   isRoutableChannelMock.mockReset();
@@ -230,6 +231,100 @@ describe("createFollowupRunner compaction", () => {
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toBe("final");
     expect(sessionStore.main.compactionCount).toBeUndefined();
+  });
+});
+
+describe("createFollowupRunner session resets", () => {
+  it("rebinds queued followups to the latest session after a reset", async () => {
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "session-new",
+        sessionFile: "/tmp/session-new.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const onBlockReply = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: {
+        sessionId: "session-old",
+        sessionFile: "/tmp/session-old.jsonl",
+        updatedAt: Date.now(),
+      },
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-old",
+          sessionFile: "/tmp/session-old.jsonl",
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
+      sessionId?: string;
+      sessionFile?: string;
+    };
+    expect(call.sessionId).toBe("session-new");
+    expect(call.sessionFile).toBe("/tmp/session-new.jsonl");
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops followup output when the run is superseded by a newer session", async () => {
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "session-old",
+        sessionFile: "/tmp/session-old.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const onBlockReply = vi.fn(async () => {});
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      sessionStore.main = {
+        sessionId: "session-new",
+        sessionFile: "/tmp/session-new.jsonl",
+        updatedAt: Date.now(),
+      };
+      return {
+        payloads: [{ text: "stale reply" }],
+        meta: {},
+      };
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-old",
+          sessionFile: "/tmp/session-old.jsonl",
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 });
 

@@ -111,6 +111,7 @@ async function ensureSessionRuntimeCleanup(params: {
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
+  reason: "session-reset" | "session-delete";
 }) {
   const closeTrackedBrowserTabs = async () => {
     const closeKeys = new Set<string>([
@@ -130,7 +131,16 @@ async function ensureSessionRuntimeCleanup(params: {
   if (params.sessionId) {
     queueKeys.add(params.sessionId);
   }
-  clearSessionQueues([...queueKeys]);
+  clearSessionQueues(
+    [...queueKeys],
+    params.reason === "session-reset"
+      ? {
+          clearFollowups: false,
+          clearDrainCallbacks: false,
+          clearLanes: true,
+        }
+      : undefined,
+  );
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
     clearBootstrapSnapshot(params.target.canonicalKey);
@@ -238,6 +248,7 @@ export async function cleanupSessionBeforeMutation(params: {
     key: params.key,
     target: params.target,
     sessionId: params.entry?.sessionId,
+    reason: params.reason,
   });
   if (cleanupError) {
     return cleanupError;
