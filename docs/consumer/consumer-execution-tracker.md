@@ -100,7 +100,7 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
     - Direct OpenClaw Browserbase CLI smoke now passes (`status`, `open`, `tabs`) with `keepAlive: true`.
     - A fresh-session minimal local-agent Browserbase run also passes, so the local-agent/browser-tool path is not universally broken.
     - Browserbase Task 3 rerun `r3` gets past attach/open and fails later on browser-tool timeout while inspecting article contents for summarization.
-    - Browserbase Task 1 rerun `r1` on this worktree still fails much earlier on Google Flights with `Remote CDP ... not reachable`, so the lane remains benchmark-unstable on real travel tasks even though tiny smoke runs pass.
+    - Browserbase Task 1 split rerun on this worktree is more precise: `r1` still fails early on Google Flights with `Remote CDP ... not reachable`, but a fresh-session warm-up run (`status` + `open https://www.google.com/travel/flights`) succeeds on the same lane and then moves the next concrete blocker downstream to a Google Flights `locator.fill` timeout.
     - Browserbase account concurrency is currently very tight (`3` concurrent sessions), so leaked probe sessions quickly trigger `429 Too Many Requests`.
     - Browser Use setup research is done, but execution is honestly blocked on missing model/API keys on this machine.
 
@@ -122,7 +122,7 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 - [ ] Capture one clean `profile=openclaw` Emirates result artifact on the latest dist
 - [ ] Clean up benchmark artifact capture so JSON results are not polluted by service log lines
 - [ ] Decide whether remaining failures are browser-lane bugs or benchmark-harness bugs
-- [ ] Benchmark Browserbase on another real task using the fresh-session pattern now that minimal local-agent smoke passes
+- [ ] Capture one clean Browserbase Task 1 artifact now that the split rerun has moved the blocker from attach to field interaction
 - [ ] Re-run Browserbase benchmark tasks after clearing leaked provider sessions / avoiding 429 concurrency caps
 - [ ] Run Browser Use as the first external comparison lane once a usable model/API key is available
 - [ ] Keep Agent S3 documented as a later experiment, not a week-1 gate

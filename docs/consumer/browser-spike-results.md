@@ -76,6 +76,7 @@ Legend:
     - Default Browserbase sessions (`keepAlive: false`) are incompatible with OpenClaw's probe/connect pattern because the session dies after disconnect and the next action hits a dead `connectUrl`.
     - Browserbase account currently has a very small concurrent-session cap (`3`), so leaked probe sessions quickly trigger `429 Too Many Requests`.
     - The latest Browserbase Task 3 rerun no longer fails at remote-CDP reachability; it opens the target article and then times out later when the browser tool tries to inspect page contents for summarization.
+    - Browserbase Task 1 split rerun shows the same pattern: on a fresh `keepAlive: true` session, direct `status` and `open https://www.google.com/travel/flights` pass first, and the next concrete failure moves downstream to Google Flights field interaction (`locator.fill` timeout) rather than initial remote-CDP attachment.
     - A fresh Browserbase Task 1 rerun on this worktree still fails much earlier on Google Flights with `Remote CDP ... not reachable`, even though a tiny same-session smoke (`open https://example.com`) still passes.
   - Browser Use findings on 2026-03-21:
     - Side-lane setup research is complete.
@@ -204,6 +205,21 @@ Task 1, run 2:
   - run 2: `54.5s`
   - median: `69.9s`
   - artifact: `.artifacts/browser-spike-20260320-114824/runs/openclaw_task1_r2/agent.json`
+
+Browserbase Task 1 split proof, runs 1-2:
+
+- `browserbase`
+  - run 1: fresh-session direct task attempt
+  - artifact: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task1_r1/agent.json`
+  - stderr: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task1_r1/agent.stderr.log`
+  - result: `FAIL`
+  - note: this run still failed at initial Browserbase remote-CDP reachability on a fresh session
+  - run 2: fresh-session split warm-up (`status` + `open`) before agent task
+  - artifact: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task1_r2b/direct-status.txt`
+  - artifact: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task1_r2b/direct-open.txt`
+  - stderr: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task1_r2b/agent.stderr.log`
+  - result: `PARTIAL`
+  - note: Browserbase transport passed on the same session (`status`, `open https://www.google.com/travel/flights`), and the next concrete blocker became a Google Flights field fill timeout: `TimeoutError: locator.fill: Timeout 5000ms exceeded` while waiting on `locator('aria-ref=ax194')`
 
 Task 2, run 1:
 
