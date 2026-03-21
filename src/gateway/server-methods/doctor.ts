@@ -56,9 +56,9 @@ export const doctorHandlers: GatewayRequestHandlers = {
       };
       respond(true, payload, undefined);
     } finally {
-      // Do NOT close the manager here — it may be the long-lived cached
-      // instance from startup whose file watcher must stay active.
-      // Manager lifecycle is handled by closeAllMemorySearchManagers at shutdown.
+      // Status-only managers are not cached and should be cleaned up.
+      // The long-lived startup instances use purpose:'default' and are handled by closeAllMemorySearchManagers.
+      await manager.close?.().catch(() => {});
     }
   },
 };
