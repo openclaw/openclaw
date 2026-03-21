@@ -161,7 +161,7 @@ export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageAc
   return Array.from(actions);
 }
 
-export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
+function collectChannelCapabilities(cfg: OpenClawConfig): Set<ChannelMessageCapability> {
   const capabilities = new Set<ChannelMessageCapability>();
   for (const plugin of listChannelPlugins()) {
     for (const capability of resolveMessageActionDiscoveryForPlugin({
@@ -173,7 +173,11 @@ export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMess
       capabilities.add(capability);
     }
   }
-  return Array.from(capabilities);
+  return capabilities;
+}
+
+export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
+  return Array.from(collectChannelCapabilities(cfg));
 }
 
 export function listChannelMessageCapabilitiesForChannel(params: {
@@ -263,19 +267,7 @@ export function channelSupportsMessageCapability(
   cfg: OpenClawConfig,
   capability: ChannelMessageCapability,
 ): boolean {
-  for (const plugin of listChannelPlugins()) {
-    for (const cap of resolveMessageActionDiscoveryForPlugin({
-      pluginId: plugin.id,
-      actions: plugin.actions,
-      context: { cfg },
-      includeCapabilities: true,
-    }).capabilities) {
-      if (cap === capability) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return collectChannelCapabilities(cfg).has(capability);
 }
 
 export function channelSupportsMessageCapabilityForChannel(
