@@ -472,6 +472,17 @@ const saveSessionToMemory: HookHandler = async (event) => {
       ? path.resolve(canonicalWorkspace, writeRelativePath)
       : memoryFilePath;
 
+    // Snapshot pre-existing content before the inline write. If a later hook
+    // sets blockSessionSave, we restore this content instead of unlinking —
+    // preventing data loss when the target file already existed (e.g. fixed
+    // redirect quarantine paths or slug collisions on non-redirected writes).
+    let preExistingContent: string | null = null;
+    try {
+      preExistingContent = await fs.readFile(writtenFilePath, "utf-8");
+    } catch {
+      // File doesn't exist yet — no prior content to preserve.
+    }
+
     // Write inline (fail-safe: if postHookActions never drains, the file
     // is preserved on disk with the best content available at this point).
     // If blockSessionSave was already set by an upstream hook, skip the write.
@@ -544,16 +555,34 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // Post-hook callback — errors propagate to the framework's per-action
     // catch in triggerInternalHook, which provides consistent log formatting
     // and per-action isolation.
+    // Defensive: normalize postHookActions for direct callers that bypass
+    // triggerInternalHook (which does its own ??= [] normalization).
+    event.postHookActions ??= [];
     event.postHookActions.push(async () => {
       // If a later hook blocked the save, retract the file we just wrote.
       // This applies to both redirected and non-redirected writes —
       // blockSessionSave means "no persistence anywhere."
       if (event.context.blockSessionSave === true && writtenEntry !== null) {
         try {
-          await fs.unlink(writtenFilePath);
-          log.debug("Session save retracted by post-hook (blockSessionSave)", {
-            redirected: isRedirected,
-          });
+          if (preExistingContent !== null) {
+            // Restore prior content rather than deleting — the file existed
+            // before our write and may belong to a previous session or contain
+            // historical data (common with fixed redirect quarantine paths).
+            await writeFileWithinRoot({
+              rootDir: isRedirected ? canonicalWorkspace : memoryDir,
+              relativePath: isRedirected ? writeRelativePath : filename,
+              data: preExistingContent,
+              encoding: "utf-8",
+            });
+            log.debug("Session save retracted — pre-existing content restored", {
+              redirected: isRedirected,
+            });
+          } else {
+            await fs.unlink(writtenFilePath);
+            log.debug("Session save retracted by post-hook (blockSessionSave)", {
+              redirected: isRedirected,
+            });
+          }
         } catch (err) {
           // File may not exist if inline write also didn't happen — that's fine.
           if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
