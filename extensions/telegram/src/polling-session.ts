@@ -1,4 +1,6 @@
 import { type RunOptions, run } from "@grammyjs/runner";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-runtime";
+import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
 import { formatDurationPrecise } from "openclaw/plugin-sdk/infra-runtime";
@@ -49,6 +51,7 @@ type TelegramPollingSessionOpts = {
   getLastUpdateId: () => number | null;
   persistUpdateId: (updateId: number) => Promise<void>;
   log: (line: string) => void;
+  setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
   /** Pre-resolved Telegram transport to reuse across bot instances */
   telegramTransport?: TelegramTransport;
   /** Rebuild Telegram transport after stall/network recovery when marked dirty. */
@@ -233,6 +236,7 @@ export class TelegramPollingSession {
         lastGetUpdatesFinishedAt = finishedAt;
         lastGetUpdatesDurationMs = finishedAt - startedAt;
         lastGetUpdatesOutcome = Array.isArray(result) ? `ok:${result.length}` : "ok";
+        this.opts.setStatus?.(createConnectedChannelStatusPatch(finishedAt));
         return result;
       } catch (err) {
         const finishedAt = Date.now();
@@ -349,6 +353,7 @@ export class TelegramPollingSession {
       );
       return shouldRestart ? "continue" : "exit";
     } catch (err) {
+      this.opts.setStatus?.({ connected: false });
       this.#forceRestarted = false;
       if (this.opts.abortSignal?.aborted) {
         throw err;
@@ -374,6 +379,7 @@ export class TelegramPollingSession {
       );
       return shouldRestart ? "continue" : "exit";
     } finally {
+      this.opts.setStatus?.({ connected: false });
       clearInterval(watchdog);
       if (forceCycleTimer) {
         clearTimeout(forceCycleTimer);

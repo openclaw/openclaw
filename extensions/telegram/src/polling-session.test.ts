@@ -389,4 +389,68 @@ describe("TelegramPollingSession", () => {
     expectTelegramBotTransportSequence(transport1, transport1);
     expect(createTelegramTransport).not.toHaveBeenCalled();
   });
+
+
+  it("publishes channel liveness on successful polls and clears it on stop", async () => {
+    const abort = new AbortController();
+    const runnerStop = vi.fn(async () => undefined);
+    const setStatus = vi.fn();
+    const apiConfigUse = vi.fn();
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        getUpdates: vi.fn(async () => []),
+        config: {
+          use: apiConfigUse,
+        },
+      },
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValue(bot);
+
+    runMock.mockImplementation(() => ({
+      task: async () => {
+        const middleware = apiConfigUse.mock.calls[0]?.[0] as
+          | ((
+              prev: (
+                method: string,
+                payload: unknown,
+                signal: AbortSignal | undefined,
+              ) => Promise<unknown>,
+              method: string,
+              payload: unknown,
+              signal: AbortSignal | undefined,
+            ) => Promise<unknown>)
+          | undefined;
+        await middleware?.(async () => [], "getUpdates", {}, undefined);
+        abort.abort();
+      },
+      stop: runnerStop,
+      isRunning: () => false,
+    }));
+
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => null,
+      persistUpdateId: async () => undefined,
+      log: () => undefined,
+      setStatus,
+      telegramTransport: undefined,
+    });
+
+    await session.runUntilAbort();
+
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connected: true,
+      }),
+    );
+    expect(setStatus).toHaveBeenLastCalledWith({ connected: false });
+  });
 });

@@ -106,16 +106,10 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  // Skip stale-socket check for Telegram (long-polling mode) and any channel
-  // explicitly operating in webhook mode. In these cases, there is no persistent
-  // outgoing socket that can go half-dead, so the lack of incoming events
-  // does not necessarily indicate a connection failure.
-  if (
-    policy.channelId !== "telegram" &&
-    snapshot.mode !== "webhook" &&
-    snapshot.connected === true &&
-    snapshot.lastEventAt != null
-  ) {
+  // Skip stale-socket check for channels explicitly operating in webhook mode.
+  // Polling channels, including Telegram, can publish synthetic event activity
+  // from successful poll cycles so the monitor can detect wedged listeners.
+  if (snapshot.mode !== "webhook" && snapshot.connected === true && snapshot.lastEventAt != null) {
     if (lastStartAt != null && snapshot.lastEventAt < lastStartAt) {
       const lifecycleEventGap = Math.max(0, policy.now - lastStartAt);
       if (lifecycleEventGap <= policy.staleEventThresholdMs) {

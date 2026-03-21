@@ -136,7 +136,7 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
   });
 
-  it("skips stale-socket detection for telegram long-polling channels", () => {
+  it("treats telegram polling channels with stale event liveness as unhealthy", () => {
     const evaluation = evaluateChannelHealth(
       {
         running: true,
@@ -144,7 +144,7 @@ describe("evaluateChannelHealth", () => {
         enabled: true,
         configured: true,
         lastStartAt: 0,
-        lastEventAt: null,
+        lastEventAt: 0,
       },
       {
         channelId: "telegram",
@@ -153,7 +153,7 @@ describe("evaluateChannelHealth", () => {
         staleEventThresholdMs: 30_000,
       },
     );
-    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
   });
 
   it("skips stale-socket detection for channels in webhook mode", () => {
