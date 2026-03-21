@@ -13,6 +13,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  formatSessionArchiveTimestamp,
+  isSessionArchiveArtifactName,
+  parseSessionArchiveTimestamp,
+} from "../config/sessions/artifacts.js";
+import {
   ExecutionRefusalError,
   renderConfirmationBlock,
   renderExecutionReportText,
@@ -569,5 +574,38 @@ describe("executor file-level operations", () => {
     if (!result.valid) {
       expect(result.error).toContain("Tier 2");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Orphan archive naming compatibility with canonical artifacts.ts helpers
+// ---------------------------------------------------------------------------
+
+describe("orphan archive naming compatibility", () => {
+  it("canonical archive format is recognized by isSessionArchiveArtifactName", () => {
+    // The executor now uses formatSessionArchiveTimestamp() and appends
+    // `.deleted.<stamp>` after the full filename, matching the doctor command
+    // and disk-budget helpers.
+    const stamp = formatSessionArchiveTimestamp(1711234567890);
+    const archiveName = `some-session-id.jsonl.deleted.${stamp}`;
+
+    expect(isSessionArchiveArtifactName(archiveName)).toBe(true);
+    expect(parseSessionArchiveTimestamp(archiveName, "deleted")).toBe(1711234567890);
+  });
+
+  it("old epoch-based pattern is NOT recognized by canonical helpers", () => {
+    // Before the fix: `foo.deleted.1711234567890.jsonl`
+    // This format was NOT compatible with artifacts.ts helpers.
+    const oldPattern = "some-session-id.deleted.1711234567890.jsonl";
+    expect(isSessionArchiveArtifactName(oldPattern)).toBe(false);
+  });
+
+  it("canonical format round-trips through parse", () => {
+    const now = Date.now();
+    const stamp = formatSessionArchiveTimestamp(now);
+    const archiveName = `abc-def.jsonl.deleted.${stamp}`;
+
+    const parsed = parseSessionArchiveTimestamp(archiveName, "deleted");
+    expect(parsed).toBe(now);
   });
 });

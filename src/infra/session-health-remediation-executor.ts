@@ -34,6 +34,7 @@ import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store.js";
 import { collectSessionHealth } from "./session-health-collector.js";
@@ -370,7 +371,8 @@ async function executeCleanupOrphanedTmp(params: {
 }
 
 /**
- * Tier 1: Rename orphan .jsonl files to .deleted.<timestamp>.
+ * Tier 1: Rename orphan .jsonl files using the canonical archive format
+ * (e.g. `foo.jsonl.deleted.2026-03-21T18-46-00.123Z`).
  * This is a reversible operation — files are renamed, not deleted.
  */
 async function executeArchiveOrphanTranscripts(params: {
@@ -398,11 +400,18 @@ async function executeArchiveOrphanTranscripts(params: {
   let archived = 0;
   let bytesFreed = 0;
   const warnings: string[] = [];
-  const timestamp = Date.now();
+  // Use the canonical archive timestamp format from artifacts.ts so the
+  // resulting filenames are recognized by isSessionArchiveArtifactName(),
+  // parseSessionArchiveTimestamp(), and the disk-budget helpers.
+  const archiveStamp = formatSessionArchiveTimestamp();
 
   for (const file of files) {
     try {
-      const newName = file.name.replace(/\.jsonl$/, `.deleted.${timestamp}.jsonl`);
+      // Canonical pattern: append `.deleted.<iso-stamp>` after the full
+      // filename (e.g. `foo.jsonl.deleted.2026-03-21T18-46-00.123Z`).
+      // This matches the format used by `doctor --fix` and the disk-budget
+      // sweep, and is recognized by the artifacts.ts helpers.
+      const newName = `${file.name}.deleted.${archiveStamp}`;
       const newPath = path.join(sessionsDir, newName);
       await fs.rename(file.absolutePath, newPath);
       archived++;
@@ -435,7 +444,7 @@ async function executeArchiveOrphanTranscripts(params: {
     status: "complete",
     artifactsRemoved: archived,
     bytesFreed, // 0 for rename operations
-    detail: `Archived ${archived} orphan transcript(s) to .deleted.${timestamp}.jsonl.`,
+    detail: `Archived ${archived} orphan transcript(s) to .deleted.${archiveStamp}.`,
     ...(warnings.length > 0 ? { warnings } : {}),
   };
 }

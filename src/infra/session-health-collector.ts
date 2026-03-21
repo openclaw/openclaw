@@ -471,15 +471,30 @@ export async function collectSessionHealth(
     }
   }
 
-  // Compute usage percentages
-  const usageEntries =
-    maintenance.maxEntries > 0
-      ? Math.round((totalIndexed / maintenance.maxEntries) * 10000) / 100
-      : 0;
-  const usageDiskBytes =
-    maintenance.maxDiskBytes != null && maintenance.maxDiskBytes > 0
-      ? Math.round((mergedStorage.totalManagedBytes / maintenance.maxDiskBytes) * 10000) / 100
-      : null;
+  // Compute usage percentages.
+  // maxEntries and maxDiskBytes are per-store limits (enforced per agent), so
+  // usage pressure is the max across agents, not a merged total ÷ single limit.
+  // For single-agent installs, this produces the same result as before.
+  let usageEntries = 0;
+  let usageDiskBytes: number | null =
+    maintenance.maxDiskBytes != null && maintenance.maxDiskBytes > 0 ? 0 : null;
+
+  for (const result of agentResults) {
+    if (maintenance.maxEntries > 0) {
+      const pct =
+        Math.round((result.breakdown.indexedCount / maintenance.maxEntries) * 10000) / 100;
+      if (pct > usageEntries) {
+        usageEntries = pct;
+      }
+    }
+    if (maintenance.maxDiskBytes != null && maintenance.maxDiskBytes > 0) {
+      const pct =
+        Math.round((result.breakdown.totalManagedBytes / maintenance.maxDiskBytes) * 10000) / 100;
+      if (pct > (usageDiskBytes ?? 0)) {
+        usageDiskBytes = pct;
+      }
+    }
+  }
 
   // Growth deltas from previous snapshot
   const growth = await computeGrowthDeltas({
