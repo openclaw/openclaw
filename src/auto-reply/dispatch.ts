@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { GatewayDrainingError } from "../process/command-queue.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
+import { persistDrainRejectedMessage, type PersistedFollowupItem } from "./reply/queue/persist.js";
 import {
   createReplyDispatcher,
   createReplyDispatcherWithTyping,
@@ -32,6 +34,28 @@ export async function withReplyDispatcher<T>(params: {
   }
 }
 
+/**
+ * Extract the minimal serializable context from a finalized inbound message
+ * for persistence when the gateway is draining.
+ */
+function extractPersistedItem(ctx: FinalizedMsgContext): PersistedFollowupItem {
+  return {
+    prompt: ctx.Body ?? ctx.BodyForAgent ?? "",
+    messageId: ctx.RootMessageId,
+    enqueuedAt: Date.now(),
+    originatingChannel: ctx.OriginatingChannel,
+    originatingTo: ctx.OriginatingTo,
+    originatingAccountId: ctx.AccountId,
+    originatingThreadId: ctx.MessageThreadId,
+    originatingChatType: ctx.ChatType,
+    sessionKey: ctx.SessionKey,
+    senderId: ctx.SenderId,
+    senderName: ctx.SenderName,
+    senderUsername: ctx.SenderUsername,
+    senderE164: ctx.SenderE164,
+  };
+}
+
 export async function dispatchInboundMessage(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
@@ -40,17 +64,31 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
-  return await withReplyDispatcher({
-    dispatcher: params.dispatcher,
-    run: () =>
-      dispatchReplyFromConfig({
-        ctx: finalized,
-        cfg: params.cfg,
-        dispatcher: params.dispatcher,
-        replyOptions: params.replyOptions,
-        replyResolver: params.replyResolver,
-      }),
-  });
+  try {
+    return await withReplyDispatcher({
+      dispatcher: params.dispatcher,
+      run: () =>
+        dispatchReplyFromConfig({
+          ctx: finalized,
+          cfg: params.cfg,
+          dispatcher: params.dispatcher,
+          replyOptions: params.replyOptions,
+          replyResolver: params.replyResolver,
+        }),
+    });
+  } catch (err) {
+    if (err instanceof GatewayDrainingError) {
+      // Phase 2: persist the rejected inbound message for replay after restart.
+      try {
+        await persistDrainRejectedMessage(extractPersistedItem(finalized));
+      } catch (persistErr) {
+        // Best-effort — log but still re-throw the original error.
+        // eslint-disable-next-line no-console
+        console.error(`Failed to persist drain-rejected message: ${String(persistErr)}`);
+      }
+    }
+    throw err;
+  }
 }
 
 export async function dispatchInboundMessageWithBufferedDispatcher(params: {

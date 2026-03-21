@@ -6,6 +6,7 @@ import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
 const PENDING_FOLLOWUPS_FILENAME = "pending-followups.json";
+const DRAIN_REJECTED_FILENAME = "drain-rejected.jsonl";
 
 /**
  * Serializable subset of FollowupRun for persistence across restarts.
@@ -154,4 +155,62 @@ export async function consumePersistedFollowups(
   }
 
   return parsed.queues;
+}
+
+function resolveDrainRejectedPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), DRAIN_REJECTED_FILENAME);
+}
+
+/**
+ * Persist a single inbound message that was rejected during the gateway
+ * drain window (GatewayDrainingError).  Appends one JSON line per call
+ * so concurrent rejects don't require read-modify-write coordination.
+ */
+export async function persistDrainRejectedMessage(
+  item: PersistedFollowupItem,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const filePath = resolveDrainRejectedPath(env);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.appendFile(filePath, `${JSON.stringify(item)}\n`, "utf-8");
+  defaultRuntime.info?.(
+    `Persisted drain-rejected message for replay (session: ${item.sessionKey ?? "unknown"})`,
+  );
+}
+
+/**
+ * Read and consume all drain-rejected messages persisted during the previous
+ * gateway drain window.  Returns the items for replay, then deletes the file.
+ */
+export async function consumeDrainRejectedMessages(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<PersistedFollowupItem[]> {
+  const filePath = resolveDrainRejectedPath(env);
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, "utf-8");
+  } catch {
+    return [];
+  }
+
+  const items: PersistedFollowupItem[] = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      items.push(JSON.parse(trimmed) as PersistedFollowupItem);
+    } catch {
+      defaultRuntime.warn?.(`Skipping malformed drain-rejected line: ${trimmed.slice(0, 80)}`);
+    }
+  }
+
+  await fs.unlink(filePath).catch(() => {});
+
+  if (items.length > 0) {
+    defaultRuntime.info?.(`Consumed ${items.length} drain-rejected message(s) for replay`);
+  }
+
+  return items;
 }
