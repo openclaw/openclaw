@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
-import { decodeStrictBase64, spawnSubagentDirect } from "./subagent-spawn.js";
 
 const callGatewayMock = vi.fn();
 
@@ -33,14 +32,8 @@ let configOverride: Record<string, unknown> = {
   },
 };
 let workspaceDirOverride = "";
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => configOverride,
-  };
-});
+let configPathOverride = "";
+let previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 
 vi.mock("./subagent-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./subagent-registry.js")>();
@@ -90,12 +83,17 @@ function setupGatewayMock() {
   });
 }
 
+async function loadSubagentSpawnModule() {
+  return import("./subagent-spawn.js");
+}
+
 // --- decodeStrictBase64 ---
 
 describe("decodeStrictBase64", () => {
   const maxBytes = 1024;
 
-  it("valid base64 returns buffer with correct bytes", () => {
+  it("valid base64 returns buffer with correct bytes", async () => {
+    const { decodeStrictBase64 } = await loadSubagentSpawnModule();
     const input = "hello world";
     const encoded = Buffer.from(input).toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);
@@ -103,35 +101,42 @@ describe("decodeStrictBase64", () => {
     expect(result?.toString("utf8")).toBe(input);
   });
 
-  it("empty string returns null", () => {
+  it("empty string returns null", async () => {
+    const { decodeStrictBase64 } = await loadSubagentSpawnModule();
     expect(decodeStrictBase64("", maxBytes)).toBeNull();
   });
 
-  it("bad padding (length % 4 !== 0) returns null", () => {
+  it("bad padding (length % 4 !== 0) returns null", async () => {
+    const { decodeStrictBase64 } = await loadSubagentSpawnModule();
     expect(decodeStrictBase64("abc", maxBytes)).toBeNull();
   });
 
-  it("non-base64 chars returns null", () => {
+  it("non-base64 chars returns null", async () => {
+    const { decodeStrictBase64 } = await loadSubagentSpawnModule();
     expect(decodeStrictBase64("!@#$", maxBytes)).toBeNull();
   });
 
-  it("whitespace-only returns null (empty after strip)", () => {
+  it("whitespace-only returns null (empty after strip)", async () => {
+    const { decodeStrictBase64 } = await loadSubagentSpawnModule();
     expect(decodeStrictBase64("   ", maxBytes)).toBeNull();
   });
 
-  it("pre-decode oversize guard: encoded string > maxEncodedBytes * 2 returns null", () => {
+  it("pre-decode oversize guard: encoded string > maxEncodedBytes * 2 returns null", async () => {
+    const { decodeStrictBase64 } = await loadSubagentSpawnModule();
     // maxEncodedBytes = ceil(1024/3)*4 = 1368; *2 = 2736
     const oversized = "A".repeat(2737);
     expect(decodeStrictBase64(oversized, maxBytes)).toBeNull();
   });
 
-  it("decoded byteLength exceeds maxDecodedBytes returns null", () => {
+  it("decoded byteLength exceeds maxDecodedBytes returns null", async () => {
+    const { decodeStrictBase64 } = await loadSubagentSpawnModule();
     const bigBuf = Buffer.alloc(1025, 0x42);
     const encoded = bigBuf.toString("base64");
     expect(decodeStrictBase64(encoded, maxBytes)).toBeNull();
   });
 
-  it("valid base64 at exact boundary returns Buffer", () => {
+  it("valid base64 at exact boundary returns Buffer", async () => {
+    const { decodeStrictBase64 } = await loadSubagentSpawnModule();
     const exactBuf = Buffer.alloc(1024, 0x41);
     const encoded = exactBuf.toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);
@@ -150,9 +155,19 @@ describe("spawnSubagentDirect filename validation", () => {
     workspaceDirOverride = fs.mkdtempSync(
       path.join(os.tmpdir(), `openclaw-subagent-attachments-${process.pid}-${Date.now()}-`),
     );
+    configPathOverride = path.join(workspaceDirOverride, "openclaw.test.json");
+    fs.writeFileSync(configPathOverride, JSON.stringify(configOverride, null, 2));
+    previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    process.env.OPENCLAW_CONFIG_PATH = configPathOverride;
   });
 
   afterEach(() => {
+    if (previousConfigPath === undefined) {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    } else {
+      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+    }
+    configPathOverride = "";
     if (workspaceDirOverride) {
       fs.rmSync(workspaceDirOverride, { recursive: true, force: true });
       workspaceDirOverride = "";
@@ -169,6 +184,7 @@ describe("spawnSubagentDirect filename validation", () => {
   const validContent = Buffer.from("hello").toString("base64");
 
   async function spawnWithName(name: string) {
+    const { spawnSubagentDirect } = await loadSubagentSpawnModule();
     return spawnSubagentDirect(
       {
         task: "test",
@@ -203,6 +219,7 @@ describe("spawnSubagentDirect filename validation", () => {
   });
 
   it("duplicate name returns attachments_duplicate_name", async () => {
+    const { spawnSubagentDirect } = await loadSubagentSpawnModule();
     const result = await spawnSubagentDirect(
       {
         task: "test",
@@ -237,6 +254,7 @@ describe("spawnSubagentDirect filename validation", () => {
       return {};
     });
 
+    const { spawnSubagentDirect } = await loadSubagentSpawnModule();
     const result = await spawnSubagentDirect(
       {
         task: "test",

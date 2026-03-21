@@ -41,17 +41,17 @@ async function buildSnapshotFromAccount<ResolvedAccount>(params: {
   };
 }
 
-function inspectChannelAccount<ResolvedAccount>(params: {
+async function inspectChannelAccount<ResolvedAccount>(params: {
   plugin: ChannelPlugin<ResolvedAccount>;
   cfg: OpenClawConfig;
   accountId: string;
-}): ResolvedAccount | null {
+}): Promise<ResolvedAccount | null> {
   return (params.plugin.config.inspectAccount?.(params.cfg, params.accountId) ??
-    inspectReadOnlyChannelAccount({
+    (await inspectReadOnlyChannelAccount({
       channelId: params.plugin.id,
       cfg: params.cfg,
       accountId: params.accountId,
-    })) as ResolvedAccount | null;
+    }))) as ResolvedAccount | null;
 }
 
 export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>(params: {
@@ -62,7 +62,7 @@ export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>
   probe?: unknown;
   audit?: unknown;
 }): Promise<ChannelAccountSnapshot | null> {
-  const inspectedAccount = inspectChannelAccount(params);
+  const inspectedAccount = await inspectChannelAccount(params);
   if (!inspectedAccount) {
     return null;
   }
@@ -80,7 +80,7 @@ export async function buildChannelAccountSnapshot<ResolvedAccount>(params: {
   probe?: unknown;
   audit?: unknown;
 }): Promise<ChannelAccountSnapshot> {
-  const inspectedAccount = inspectChannelAccount(params);
+  const inspectedAccount = await inspectChannelAccount(params);
   const account =
     inspectedAccount ?? params.plugin.config.resolveAccount(params.cfg, params.accountId);
   return await buildSnapshotFromAccount({

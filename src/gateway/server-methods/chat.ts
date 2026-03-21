@@ -9,12 +9,13 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -1317,14 +1318,45 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKey,
         config: cfg,
       });
-      const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+      const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
         cfg,
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
+      const userTranscriptMessage = {
+        role: "user" as const,
+        content: parsedMessage,
+        timestamp: now,
+      };
+      let userTranscriptUpdateEmitted = false;
+      const emitUserTranscriptUpdate = () => {
+        if (userTranscriptUpdateEmitted) {
+          return;
+        }
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
+        if (!resolvedSessionId) {
+          return;
+        }
+        const transcriptPath = resolveTranscriptPath({
+          sessionId: resolvedSessionId,
+          storePath: latestStorePath,
+          sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+          agentId,
+        });
+        if (!transcriptPath) {
+          return;
+        }
+        userTranscriptUpdateEmitted = true;
+        emitSessionTranscriptUpdate({
+          sessionFile: transcriptPath,
+          sessionKey,
+          message: userTranscriptMessage,
+        });
+      };
       const dispatcher = createReplyDispatcher({
-        ...prefixOptions,
+        ...replyPipeline,
         onError: (err) => {
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },
@@ -1347,6 +1379,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           images: parsedImages.length > 0 ? parsedImages : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
+            emitUserTranscriptUpdate();
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(
               client?.connect?.caps,
@@ -1368,6 +1401,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       })
         .then(() => {
+          emitUserTranscriptUpdate();
           if (!agentRunStarted) {
             const btwReplies = deliveredReplies
               .map((entry) => entry.payload)

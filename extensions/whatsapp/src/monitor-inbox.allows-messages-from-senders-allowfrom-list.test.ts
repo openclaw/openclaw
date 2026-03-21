@@ -38,6 +38,19 @@ async function openInboxMonitor(onMessage = vi.fn()) {
   return { onMessage, listener, sock: getSock() };
 }
 
+async function settleInboundWork() {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}
+
+async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, count: number) {
+  await vi.waitFor(
+    () => {
+      expect(onMessage).toHaveBeenCalledTimes(count);
+    },
+    { timeout: 2_000, interval: 5 },
+  );
+}
+
 async function expectOutboundDmSkipsPairing(params: {
   selfChatMode: boolean;
   messageId: string;
@@ -77,7 +90,7 @@ async function expectOutboundDmSkipsPairing(params: {
         },
       ],
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await settleInboundWork();
 
     expect(onMessage).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
@@ -111,7 +124,7 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
+    await waitForMessageCalls(onMessage, 1);
 
     // Should call onMessage for authorized senders
     expect(onMessage).toHaveBeenCalledWith(
@@ -145,7 +158,7 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
+    await waitForMessageCalls(onMessage, 1);
 
     // Should allow self-messages even if not in allowFrom
     expect(onMessage).toHaveBeenCalledWith(
@@ -181,7 +194,12 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsertBlocked);
-    await new Promise((resolve) => setImmediate(resolve));
+    await vi.waitFor(
+      () => {
+        expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
     expect(onMessage).not.toHaveBeenCalled();
     expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
@@ -201,7 +219,7 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsertBlockedAgain);
-    await new Promise((resolve) => setImmediate(resolve));
+    await settleInboundWork();
     expect(onMessage).not.toHaveBeenCalled();
     expect(sock.sendMessage).toHaveBeenCalledTimes(1);
 
@@ -222,7 +240,7 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsertSelf);
-    await new Promise((resolve) => setImmediate(resolve));
+    await waitForMessageCalls(onMessage, 1);
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith(
@@ -254,6 +272,7 @@ describe("web monitor inbox", () => {
 
   it("handles append DM messages by marking them read but skipping auto-reply", async () => {
     const { onMessage, listener, sock } = await openInboxMonitor();
+    const staleTs = Math.floor(Date.now() / 1000) - 300;
 
     const upsert = {
       type: "append",
@@ -265,24 +284,26 @@ describe("web monitor inbox", () => {
             remoteJid: "999@s.whatsapp.net",
           },
           message: { conversation: "old message" },
-          messageTimestamp: nowSeconds(),
+          messageTimestamp: staleTs,
           pushName: "History Sender",
         },
       ],
     };
 
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
-
-    // Verify it WAS marked as read
-    expect(sock.readMessages).toHaveBeenCalledWith([
-      {
-        remoteJid: "999@s.whatsapp.net",
-        id: "history1",
-        participant: undefined,
-        fromMe: false,
+    await vi.waitFor(
+      () => {
+        expect(sock.readMessages).toHaveBeenCalledWith([
+          {
+            remoteJid: "999@s.whatsapp.net",
+            id: "history1",
+            participant: undefined,
+            fromMe: false,
+          },
+        ]);
       },
-    ]);
+      { timeout: 2_000, interval: 5 },
+    );
 
     expect(onMessage).not.toHaveBeenCalled();
 

@@ -1,5 +1,5 @@
-import type { OpenClawConfig, SlackSlashCommandConfig } from "../../../../src/config/config.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
+import type { OpenClawConfig, SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SlackFile, SlackMessageEvent } from "../types.js";
 
 export type MonitorSlackOpts = {

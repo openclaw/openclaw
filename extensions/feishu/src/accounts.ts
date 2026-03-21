@@ -1,5 +1,5 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type {
   FeishuConfig,
@@ -143,7 +143,7 @@ export function resolveFeishuCredentials(
       return asString;
     }
 
-    // In relaxed/onboarding paths only: allow direct env SecretRef reads for UX.
+    // In relaxed/setup paths only: allow direct env SecretRef reads for UX.
     // Default resolution path must preserve unresolved-ref diagnostics/policy semantics.
     if (options?.allowUnresolvedSecretRef && typeof value === "object" && value !== null) {
       const rec = value as Record<string, unknown>;

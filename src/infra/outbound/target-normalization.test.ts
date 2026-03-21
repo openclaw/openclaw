@@ -4,33 +4,51 @@ const normalizeChannelIdMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryVersionMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../channels/plugins/index.js", () => ({
-  normalizeChannelId: (...args: unknown[]) => normalizeChannelIdMock(...args),
-  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
-}));
+type TargetNormalizationModule = typeof import("./target-normalization.js");
 
-vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginRegistryVersion: (...args: unknown[]) =>
-    getActivePluginRegistryVersionMock(...args),
-}));
-
-import {
-  buildTargetResolverSignature,
-  normalizeChannelTargetInput,
-  normalizeTargetForProvider,
-} from "./target-normalization.js";
+let buildTargetResolverSignature: TargetNormalizationModule["buildTargetResolverSignature"];
+let normalizeChannelTargetInput: TargetNormalizationModule["normalizeChannelTargetInput"];
+let normalizeTargetForProvider: TargetNormalizationModule["normalizeTargetForProvider"];
 
 describe("normalizeChannelTargetInput", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    normalizeChannelIdMock.mockReset();
+    getChannelPluginMock.mockReset();
+    getActivePluginRegistryVersionMock.mockReset();
+    vi.doMock("../../channels/plugins/index.js", () => ({
+      normalizeChannelId: (...args: unknown[]) => normalizeChannelIdMock(...args),
+      getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+    }));
+    vi.doMock("../../plugins/runtime.js", () => ({
+      getActivePluginRegistryVersion: (...args: unknown[]) =>
+        getActivePluginRegistryVersionMock(...args),
+    }));
+    ({ buildTargetResolverSignature, normalizeChannelTargetInput, normalizeTargetForProvider } =
+      await import("./target-normalization.js"));
+  });
+
   it("trims raw target input", () => {
     expect(normalizeChannelTargetInput("  channel:C1  ")).toBe("channel:C1");
   });
 });
 
 describe("normalizeTargetForProvider", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     normalizeChannelIdMock.mockReset();
     getChannelPluginMock.mockReset();
     getActivePluginRegistryVersionMock.mockReset();
+    vi.doMock("../../channels/plugins/index.js", () => ({
+      normalizeChannelId: (...args: unknown[]) => normalizeChannelIdMock(...args),
+      getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+    }));
+    vi.doMock("../../plugins/runtime.js", () => ({
+      getActivePluginRegistryVersion: (...args: unknown[]) =>
+        getActivePluginRegistryVersionMock(...args),
+    }));
+    ({ buildTargetResolverSignature, normalizeChannelTargetInput, normalizeTargetForProvider } =
+      await import("./target-normalization.js"));
   });
 
   it("returns undefined for missing or blank raw input", () => {
@@ -87,8 +105,21 @@ describe("normalizeTargetForProvider", () => {
 });
 
 describe("buildTargetResolverSignature", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    normalizeChannelIdMock.mockReset();
     getChannelPluginMock.mockReset();
+    getActivePluginRegistryVersionMock.mockReset();
+    vi.doMock("../../channels/plugins/index.js", () => ({
+      normalizeChannelId: (...args: unknown[]) => normalizeChannelIdMock(...args),
+      getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+    }));
+    vi.doMock("../../plugins/runtime.js", () => ({
+      getActivePluginRegistryVersion: (...args: unknown[]) =>
+        getActivePluginRegistryVersionMock(...args),
+    }));
+    ({ buildTargetResolverSignature, normalizeChannelTargetInput, normalizeTargetForProvider } =
+      await import("./target-normalization.js"));
   });
 
   it("builds stable signatures from resolver hint and looksLikeId source", () => {

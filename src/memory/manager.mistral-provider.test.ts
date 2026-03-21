@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
 import type {
@@ -11,7 +11,7 @@ import type {
   OllamaEmbeddingClient,
   OpenAiEmbeddingClient,
 } from "./embeddings.js";
-import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import type { MemoryIndexManager } from "./index.js";
 
 const { createEmbeddingProviderMock } = vi.hoisted(() => ({
   createEmbeddingProviderMock: vi.fn(),
@@ -24,6 +24,11 @@ vi.mock("./embeddings.js", () => ({
 vi.mock("./sqlite-vec.js", () => ({
   loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
 }));
+
+type MemoryIndexModule = typeof import("./index.js");
+
+let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
+let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 
 function createProvider(id: string): EmbeddingProvider {
   return {
@@ -63,7 +68,12 @@ describe("memory manager mistral provider wiring", () => {
   let indexPath = "";
   let manager: MemoryIndexManager | null = null;
 
+  beforeAll(async () => {
+    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
+  });
+
   beforeEach(async () => {
+    vi.clearAllMocks();
     createEmbeddingProviderMock.mockReset();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-mistral-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
@@ -76,6 +86,7 @@ describe("memory manager mistral provider wiring", () => {
       await manager.close();
       manager = null;
     }
+    await closeAllMemorySearchManagers();
     if (workspaceDir) {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       workspaceDir = "";
