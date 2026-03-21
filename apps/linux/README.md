@@ -55,6 +55,11 @@ meson setup build
 meson compile -C build
 ```
 
+## Testing
+```bash
+meson test -C build
+```
+
 ## Running (Development)
 ```bash
 ./build/openclaw-linux

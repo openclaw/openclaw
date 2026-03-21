@@ -31,7 +31,7 @@ static guint properties_changed_signal_id = 0;
 static void fetch_unit_properties(void);
 extern void systemd_refresh(void);
 
-static gboolean is_gateway_unit(const gchar *filename, const gchar *contents) {
+gboolean systemd_is_gateway_unit(const gchar *filename, const gchar *contents) {
     if (!contents) return FALSE;
     
     // Must be a gateway (explicit kind marker or legacy/default filename pattern)
@@ -61,7 +61,7 @@ static gboolean check_system_scope_units(void) {
                 g_autofree gchar *filepath = g_build_filename(paths[i], filename, NULL);
                 gchar *contents = NULL;
                 if (g_file_get_contents(filepath, &contents, NULL, NULL)) {
-                    if (is_gateway_unit(filename, contents)) {
+                    if (systemd_is_gateway_unit(filename, contents)) {
                         g_free(contents);
                         g_dir_close(dir);
                         return TRUE;
@@ -125,6 +125,35 @@ static void get_unit_preference_score(const gchar *unit_name, gboolean *is_activ
     }
 }
 
+gchar* systemd_normalize_unit_override(const gchar *raw_unit) {
+    if (!raw_unit) return NULL;
+    gchar *trimmed = g_strstrip(g_strdup(raw_unit));
+    if (strlen(trimmed) > 0) {
+        if (g_str_has_suffix(trimmed, ".service")) {
+            return trimmed;
+        } else {
+            gchar *res = g_strdup_printf("%s.service", trimmed);
+            g_free(trimmed);
+            return res;
+        }
+    }
+    g_free(trimmed);
+    return NULL;
+}
+
+gchar* systemd_normalize_profile(const gchar *raw_profile) {
+    if (!raw_profile) return NULL;
+    gchar *trimmed = g_strstrip(g_strdup(raw_profile));
+    gchar *res = NULL;
+    if (strlen(trimmed) == 0 || g_strcmp0(trimmed, "default") == 0) {
+        res = g_strdup("openclaw-gateway.service");
+    } else {
+        res = g_strdup_printf("openclaw-gateway-%s.service", trimmed);
+    }
+    g_free(trimmed);
+    return res;
+}
+
 static const gchar* discover_canonical_unit_name(void) {
     if (cached_unit_name) return cached_unit_name;
 
@@ -151,7 +180,7 @@ static const gchar* discover_canonical_unit_name(void) {
         g_autofree gchar *filepath = g_build_filename(systemd_user_dir, filename, NULL);
         gchar *contents = NULL;
         if (g_file_get_contents(filepath, &contents, NULL, NULL)) {
-            if (is_gateway_unit(filename, contents)) {
+            if (systemd_is_gateway_unit(filename, contents)) {
                 g_ptr_array_add(marked_units, g_strdup(filename));
             }
             g_free(contents);
@@ -174,28 +203,10 @@ static const gchar* discover_canonical_unit_name(void) {
         const gchar *raw_unit = g_getenv("OPENCLAW_SYSTEMD_UNIT");
         const gchar *raw_profile = g_getenv("OPENCLAW_PROFILE");
         
-        if (raw_unit) {
-            gchar *trimmed = g_strstrip(g_strdup(raw_unit));
-            if (strlen(trimmed) > 0) {
-                if (g_str_has_suffix(trimmed, ".service")) {
-                    env_override = trimmed;
-                } else {
-                    env_override = g_strdup_printf("%s.service", trimmed);
-                    g_free(trimmed);
-                }
-            } else {
-                g_free(trimmed);
-            }
-        }
+        env_override = systemd_normalize_unit_override(raw_unit);
         
         if (!env_override && raw_profile) {
-            gchar *trimmed = g_strstrip(g_strdup(raw_profile));
-            if (strlen(trimmed) == 0 || g_strcmp0(trimmed, "default") == 0) {
-                env_override = g_strdup("openclaw-gateway.service");
-            } else {
-                env_override = g_strdup_printf("openclaw-gateway-%s.service", trimmed);
-            }
-            g_free(trimmed);
+            env_override = systemd_normalize_profile(raw_profile);
         }
         
         if (env_override) {
