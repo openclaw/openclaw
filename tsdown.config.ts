@@ -113,6 +113,7 @@ function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
     entry: "src/entry.ts",
+    "postinstall-gateway-service": "src/postinstall-gateway-service.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
     // Ensure memory-cli is a stable entry so the runtime tools plugin can import
