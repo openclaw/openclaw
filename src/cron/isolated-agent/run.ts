@@ -8,11 +8,19 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { resolveCircuitBreakerConfig } from "../../agents/circuit-breaker/config.js";
+import {
+  clearCircuitBreakerErrors,
+  executeCircuitBreakerActions,
+  isCircuitBreakerTripped,
+  recordCircuitBreakerError,
+} from "../../agents/circuit-breaker/state.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { isFailoverError, describeFailoverError } from "../../agents/failover-error.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveNestedAgentLane } from "../../agents/lanes.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
@@ -26,6 +34,7 @@ import {
   resolveHooksGmailModel,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
+import { isLikelyContextOverflowError } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   countActiveDescendantRuns,
@@ -552,6 +561,12 @@ export async function runCronIsolatedAgentTurn(params: {
   });
   const authProfileIdSource = cronSession.sessionEntry.authProfileOverrideSource;
 
+  // Circuit breaker: skip if session is tripped.
+  const cbConfig = resolveCircuitBreakerConfig(cfgWithAgentDefaults, agentId);
+  if (isCircuitBreakerTripped(cronSession.sessionEntry, cbConfig)) {
+    return withRunSession({ status: "skipped", error: "circuit-breaker: session paused" });
+  }
+
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>> | undefined;
   let fallbackProvider = provider;
   let fallbackModel = model;
@@ -724,6 +739,33 @@ export async function runCronIsolatedAgentTurn(params: {
       }
     }
   } catch (err) {
+    // Circuit breaker: record model-level errors.
+    const errMsg = String(err instanceof Error ? err.message : err);
+    const isModelError = isFailoverError(err) || isLikelyContextOverflowError(errMsg);
+    if (isModelError) {
+      const failoverReason = isFailoverError(err)
+        ? (describeFailoverError(err).reason ?? "unknown")
+        : "context_overflow";
+      const { tripped } = recordCircuitBreakerError(
+        cronSession.sessionEntry,
+        cbConfig,
+        failoverReason,
+      );
+      if (tripped && cbConfig) {
+        await executeCircuitBreakerActions({
+          entry: cronSession.sessionEntry,
+          config: cbConfig,
+          sessionKey: agentSessionKey,
+          agentId,
+          cfg: cfgWithAgentDefaults,
+        });
+      }
+      try {
+        await persistSessionEntry();
+      } catch {
+        // Best-effort.
+      }
+    }
     return withRunSession({ status: "error", error: String(err) });
   }
 
@@ -735,6 +777,27 @@ export async function runCronIsolatedAgentTurn(params: {
   }
   const finalRunResult = runResult;
   const payloads = finalRunResult.payloads ?? [];
+
+  // Circuit breaker: handle model-level errors returned via meta.error
+  // (context_overflow, compaction_failure, role_ordering, retry_limit).
+  // These don't throw but indicate a structurally broken session.
+  const metaError = finalRunResult.meta?.error;
+  if (metaError) {
+    const reason = metaError.kind ?? "model_error";
+    const { tripped } = recordCircuitBreakerError(cronSession.sessionEntry, cbConfig, reason);
+    if (tripped && cbConfig) {
+      await executeCircuitBreakerActions({
+        entry: cronSession.sessionEntry,
+        config: cbConfig,
+        sessionKey: agentSessionKey,
+        agentId,
+        cfg: cfgWithAgentDefaults,
+      });
+    }
+  } else {
+    // Successful model call — clear error count.
+    clearCircuitBreakerErrors(cronSession.sessionEntry);
+  }
 
   // Update token+model fields in the session store.
   // Also collect best-effort telemetry for the cron run log.

@@ -182,6 +182,16 @@ export type SessionEntry = {
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
   acp?: SessionAcpMeta;
+  /** Circuit breaker: consecutive model error count (reset on success). */
+  cbErrorCount?: number;
+  /** Circuit breaker: timestamp of last model error. */
+  cbLastErrorAt?: number;
+  /** Circuit breaker: reason of last model error. */
+  cbLastErrorReason?: string;
+  /** Circuit breaker: timestamp when circuit breaker tripped. */
+  cbTrippedAt?: number;
+  /** Circuit breaker: pause cooldown expiry timestamp. */
+  cbCooldownUntil?: number;
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {

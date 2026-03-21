@@ -9,8 +9,17 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { resolveCircuitBreakerConfig } from "../agents/circuit-breaker/config.js";
+import {
+  clearCircuitBreakerErrors,
+  executeCircuitBreakerActions,
+  isCircuitBreakerTripped,
+  recordCircuitBreakerError,
+} from "../agents/circuit-breaker/state.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
+import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import { isLikelyContextOverflowError } from "../agents/pi-embedded-helpers.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -573,6 +582,16 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: preflight.skipReason };
   }
   const { entry, sessionKey, storePath } = preflight.session;
+  // Circuit breaker: skip if session is tripped.
+  const cbConfig = resolveCircuitBreakerConfig(cfg, agentId);
+  if (entry && isCircuitBreakerTripped(entry, cbConfig, startedAt)) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "circuit-breaker",
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: "circuit-breaker" };
+  }
   const previousUpdatedAt = entry?.updatedAt;
 
   // When isolatedSession is enabled, create a fresh session via the same
@@ -719,6 +738,46 @@ export async function runHeartbeatOnce(opts: {
       : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+
+    // Circuit breaker: detect model-level error payloads returned by
+    // getReplyFromConfig (which catches all model errors internally and
+    // returns them as "⚠️ ..." text payloads instead of throwing).
+    const replyText = replyPayload?.text?.trim() ?? "";
+    const isModelErrorReply = entry && replyText.startsWith("\u26A0\uFE0F");
+    if (entry && isModelErrorReply) {
+      const { tripped } = recordCircuitBreakerError(entry, cbConfig, "model_error", Date.now());
+      if (tripped && cbConfig) {
+        await executeCircuitBreakerActions({
+          entry,
+          config: cbConfig,
+          sessionKey,
+          agentId,
+          cfg,
+          deps: opts.deps,
+        });
+      }
+      try {
+        await updateSessionStore(storePath, (store) => {
+          const current = store[sessionKey];
+          if (current) {
+            store[sessionKey] = { ...current, ...entry };
+          }
+        });
+      } catch {
+        // Best-effort persistence.
+      }
+    } else if (entry && clearCircuitBreakerErrors(entry)) {
+      try {
+        await updateSessionStore(storePath, (store) => {
+          const current = store[sessionKey];
+          if (current) {
+            clearCircuitBreakerErrors(current);
+          }
+        });
+      } catch {
+        // Best-effort persistence.
+      }
+    }
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
       ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
@@ -930,6 +989,34 @@ export async function runHeartbeatOnce(opts: {
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
     const reason = formatErrorMessage(err);
+    // Circuit breaker: record model-level errors.
+    const isModelError = isFailoverError(err) || isLikelyContextOverflowError(reason);
+    if (entry && isModelError) {
+      const failoverReason = isFailoverError(err)
+        ? (describeFailoverError(err).reason ?? "unknown")
+        : "context_overflow";
+      const { tripped } = recordCircuitBreakerError(entry, cbConfig, failoverReason, Date.now());
+      if (tripped) {
+        await executeCircuitBreakerActions({
+          entry,
+          config: cbConfig!,
+          sessionKey,
+          agentId,
+          cfg,
+          deps: opts.deps,
+        });
+      }
+      try {
+        await updateSessionStore(storePath, (store) => {
+          const current = store[sessionKey];
+          if (current) {
+            store[sessionKey] = { ...current, ...entry };
+          }
+        });
+      } catch {
+        // Best-effort persistence.
+      }
+    }
     emitHeartbeatEvent({
       status: "failed",
       reason,
