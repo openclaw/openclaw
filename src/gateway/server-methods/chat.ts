@@ -1304,6 +1304,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
 
+    const rawSessionKey = p.sessionKey;
+    const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+
     // When images are detected, switch to the configured image model.
     // This ensures non-vision models don't fail when users send images via Dashboard.
     let imageModelOverride: string | undefined;
@@ -1316,9 +1319,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         );
       }
     }
-
-    const rawSessionKey = p.sessionKey;
-    const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
