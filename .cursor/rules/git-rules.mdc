@@ -1,0 +1,13 @@
+---
+description: Git and PR rules for DenchClaw (fork of OpenClaw)
+globs:
+alwaysApply: true
+---
+
+# Git Rules
+
+- This repo (DenchHQ/DenchClaw) is a **fork** of openclaw/openclaw.
+- When creating PRs, ALWAYS target `DenchHQ/DenchClaw` — never the upstream `openclaw/openclaw`.
+  Use `gh pr create --repo DenchHQ/DenchClaw` to ensure this.
+- NEVER commit or push without explicit user approval.
+- NEVER force push to main/master.
