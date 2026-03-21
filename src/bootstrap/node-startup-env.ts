@@ -1,11 +1,9 @@
-import { resolveAutoNodeExtraCaCerts } from "./node-extra-ca-certs.js";
+import { type EnvMap, resolveAutoNodeExtraCaCerts } from "./node-extra-ca-certs.js";
 
 export type NodeStartupTlsEnvironment = {
   NODE_EXTRA_CA_CERTS?: string;
   NODE_USE_SYSTEM_CA?: string;
 };
-
-type EnvMap = Record<string, string | undefined>;
 
 export function resolveNodeStartupTlsEnvironment(
   params: {

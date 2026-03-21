@@ -11,7 +11,9 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import type { TelegramNetworkConfig } from "../../../config/types.telegram.js";
 import { resolveTelegramAccount } from "../../../plugin-sdk/account-resolution.js";
 import { describeUnknownError } from "../../../secrets/shared.js";
+import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { hasAllowFromEntries } from "../shared/allowlist.js";
+import type { EmptyAllowlistAccountScanParams } from "../shared/empty-allowlist-scan.js";
 import { asObjectRecord } from "../shared/object.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 
@@ -25,8 +27,6 @@ type TelegramAllowFromListRef = {
 
 type ResolvedTelegramLookupAccount = {
   token: string;
-  apiRoot?: string;
-  proxyUrl?: string;
   network?: TelegramNetworkConfig;
 };
 
@@ -163,15 +163,13 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
     if (!token) {
       continue;
     }
-    const apiRoot = account.config.apiRoot?.trim() || undefined;
-    const proxyUrl = account.config.proxy?.trim() || undefined;
     const network = account.config.network;
-    const cacheKey = `${token}::${apiRoot ?? ""}::${proxyUrl ?? ""}::${JSON.stringify(network ?? {})}`;
+    const cacheKey = `${token}::${JSON.stringify(network ?? {})}`;
     if (seenLookupAccounts.has(cacheKey)) {
       continue;
     }
     seenLookupAccounts.add(cacheKey);
-    lookupAccounts.push({ token, apiRoot, proxyUrl, network });
+    lookupAccounts.push({ token, network });
   }
 
   if (lookupAccounts.length === 0) {
@@ -210,8 +208,6 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
           token: account.token,
           chatId: username,
           signal: controller.signal,
-          apiRoot: account.apiRoot,
-          proxyUrl: account.proxyUrl,
           network: account.network,
         });
         if (id) {
@@ -270,10 +266,14 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
     holder[key] = deduped;
     if (replaced.length > 0) {
       for (const rep of replaced.slice(0, 5)) {
-        changes.push(`- ${pathLabel}: resolved ${rep.from} -> ${rep.to}`);
+        changes.push(
+          `- ${sanitizeForLog(pathLabel)}: resolved ${sanitizeForLog(rep.from)} -> ${sanitizeForLog(rep.to)}`,
+        );
       }
       if (replaced.length > 5) {
-        changes.push(`- ${pathLabel}: resolved ${replaced.length - 5} more @username entries`);
+        changes.push(
+          `- ${sanitizeForLog(pathLabel)}: resolved ${replaced.length - 5} more @username entries`,
+        );
       }
     }
   };
@@ -338,4 +338,21 @@ export function collectTelegramGroupPolicyWarnings(
   return [
     `- ${params.prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to ${params.prefix}.groupAllowFrom or ${params.prefix}.allowFrom, or set ${params.prefix}.groupPolicy to "open".`,
   ];
+}
+
+export function collectTelegramEmptyAllowlistExtraWarnings(
+  params: EmptyAllowlistAccountScanParams,
+): string[] {
+  return params.channelName === "telegram" &&
+    ((params.account.groupPolicy as string | undefined) ??
+      (params.parent?.groupPolicy as string | undefined) ??
+      undefined) === "allowlist"
+    ? collectTelegramGroupPolicyWarnings({
+        account: params.account,
+        dmPolicy: params.dmPolicy,
+        effectiveAllowFrom: params.effectiveAllowFrom,
+        parent: params.parent,
+        prefix: params.prefix,
+      })
+    : [];
 }
