@@ -25,7 +25,9 @@ extern void systemd_start_gateway(void);
 extern void systemd_stop_gateway(void);
 extern void systemd_restart_gateway(void);
 extern void health_probe_gateway(void);
+extern void health_probe_gateway_eager(void);
 extern void health_run_deep_probe(void);
+extern void health_run_deep_probe_eager(void);
 extern void diagnostics_show_window(void);
 
 static void handle_helper_action(const gchar *action) {
@@ -38,8 +40,8 @@ static void handle_helper_action(const gchar *action) {
     } else if (g_strcmp0(action, "REFRESH") == 0) {
         // Triggers async lanes. The health module itself enforces the
         // single in-flight lock, so we don't pile up subprocesses here.
-        health_probe_gateway();
-        health_run_deep_probe();
+        health_probe_gateway_eager();
+        health_run_deep_probe_eager();
     } else if (g_strcmp0(action, "DIAGNOSTICS") == 0) {
         // Note: Opening diagnostics may explicitly request a background deep probe refresh
         // just in case the last one is stale. The probe execution remains guarded by 

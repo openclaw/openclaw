@@ -126,22 +126,47 @@ void state_update_systemd(const SystemdState *sys_state) {
         current_sys_state.environment = NULL;
     }
     
-    AppState new_state = compute_state();
+    AppState predicted_new_state = compute_state();
     
     // Clear stale diagnostics when entering a state where background probes are disabled.
     // This prevents the UI from showing old "Healthy" or "Reachable" strings for dead services.
-    if (!is_probe_disabled_state(old_state) && is_probe_disabled_state(new_state)) {
+    if (!is_probe_disabled_state(old_state) && is_probe_disabled_state(predicted_new_state)) {
         current_health_state.last_updated = 0;
+        current_health_state.rpc_ok = FALSE;
+        current_health_state.health_healthy = FALSE;
+        
+        g_free(current_health_state.bind_host);
+        current_health_state.bind_host = NULL;
+        
+        g_free(current_health_state.probe_url);
+        current_health_state.probe_url = NULL;
+
         current_probe_state.last_updated = 0;
         g_free(current_probe_state.summary);
         current_probe_state.summary = NULL;
+        
         current_health_generation++;
     } else if (became_active || unit_changed) {
         // Reset the health snapshot explicitly on the relevant systemd transition
         // or unit retargeting so the state model has a clear freshness boundary.
         current_health_state.last_updated = 0;
+        current_health_state.rpc_ok = FALSE;
+        current_health_state.health_healthy = FALSE;
+        
+        g_free(current_health_state.bind_host);
+        current_health_state.bind_host = NULL;
+        
+        g_free(current_health_state.probe_url);
+        current_health_state.probe_url = NULL;
+
+        current_probe_state.last_updated = 0;
+        g_free(current_probe_state.summary);
+        current_probe_state.summary = NULL;
+        
         current_health_generation++;
     }
+    
+    AppState new_state = compute_state();
     
     gboolean is_supported = (new_state != STATE_NOT_INSTALLED && new_state != STATE_SYSTEM_UNSUPPORTED && new_state != STATE_USER_SYSTEMD_UNAVAILABLE);
     gboolean should_trigger_probes = is_supported && (!initial_probe_fired || became_active || unit_changed);

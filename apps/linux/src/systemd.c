@@ -34,10 +34,7 @@ extern void systemd_refresh(void);
 static gboolean is_gateway_unit(const gchar *filename, const gchar *contents) {
     if (!contents) return FALSE;
     
-    // 1. We still generally want it to be an OpenClaw managed/marked unit
-    gboolean has_marker = (strstr(contents, "OPENCLAW_SERVICE_MARKER=openclaw") != NULL);
-    
-    // 2. Must be a gateway (explicit kind marker or legacy/default filename pattern)
+    // Must be a gateway (explicit kind marker or legacy/default filename pattern)
     gboolean is_gateway = FALSE;
     if (strstr(contents, "OPENCLAW_SERVICE_KIND=gateway")) {
         is_gateway = TRUE;
@@ -50,7 +47,7 @@ static gboolean is_gateway_unit(const gchar *filename, const gchar *contents) {
     
     // If it has the new kind marker, that implies it's ours.
     // If it only has the general marker, it MUST match the gateway prefix to filter out node services.
-    return (is_gateway && (has_marker || strstr(contents, "OPENCLAW_SERVICE_KIND=gateway")));
+    return is_gateway;
 }
 
 static gboolean check_system_scope_units(void) {

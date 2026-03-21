@@ -425,18 +425,23 @@ static void on_deep_probe_finished(GObject *source_object, GAsyncResult *res, gp
     if (stdout_buf) {
         // Plaintext parsing is intentionally conservative/simple because
         // probe output is human-oriented, so parsing is heuristic but bounded.
-        if (strstr(stdout_buf, "Reachable: yes")) {
-            ps.reachable = TRUE;
+        gchar **lines = g_strsplit(stdout_buf, "\n", -1);
+        for (gint i = 0; lines[i] != NULL; i++) {
+            gchar *line = lines[i];
+            if (strstr(line, "Connect:")) {
+                if (strstr(line, "Connect: ok")) {
+                    ps.connect_ok = TRUE;
+                    ps.reachable = TRUE;
+                }
+                if (strstr(line, "RPC: ok")) {
+                    ps.rpc_ok = TRUE;
+                }
+            }
+            if (strstr(line, "timeout") || strstr(line, "timed out")) {
+                ps.timed_out = TRUE;
+            }
         }
-        if (strstr(stdout_buf, "Connect: ok")) {
-            ps.connect_ok = TRUE;
-        }
-        if (strstr(stdout_buf, "RPC: ok")) {
-            ps.rpc_ok = TRUE;
-        }
-        if (strstr(stdout_buf, "timeout") || strstr(stdout_buf, "timed out")) {
-            ps.timed_out = TRUE;
-        }
+        g_strfreev(lines);
         
         // Synthesize summary strings based on the combination of connectivity booleans
         if (ps.reachable && ps.rpc_ok) {
