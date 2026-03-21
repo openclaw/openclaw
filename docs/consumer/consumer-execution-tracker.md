@@ -17,14 +17,16 @@ Use these documents in this order when there is any ambiguity:
 ## Locked decisions
 
 - Week 1 scope follows `CONSUMER.md` + execution spec (power mode, no safety-profile build in week 1).
-- Browser path priority is CDP first:
-  1. `browser profile=user` (existing-session / Chrome MCP)
-  2. `browser profile=openclaw` (managed isolated browser)
-  3. Claude-in-Chrome investigation/adaptation
-  4. Browserbase (currently credential-blocked; run when creds arrive)
+- Browser strategy is split into core decision lanes and side experiments:
+  1. Core lane: `browser profile=openclaw` (managed isolated browser, reliability baseline)
+  2. Core lane: `browser profile=user` (existing-session / Chrome MCP, ideal signed-in browser path)
+  3. Core lane: Browserbase (official remote CDP fallback; run when creds arrive)
+  4. Side experiment: Browser Use (direct-CDP external comparison lane)
+  5. Side experiment: Agent S3 (later computer-use comparison lane)
 - Benchmark output path is `docs/consumer/browser-spike-results.md`.
 - Benchmark protocol is 2 runs per approach/task, using median time.
 - This tracker is the handoff doc for context compaction. Update it before ending a major debugging block.
+- Use `openai-codex/gpt-5.4` for the next comparison wave so results stay comparable.
 
 ## Workstream registry (single source)
 
@@ -88,6 +90,10 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
       - `openclaw/openclaw#49295`
       - `ChromeDevTools/chrome-devtools-mcp#116`
       - `ChromeDevTools/chrome-devtools-mcp#863`
+  - External-lane research status:
+    - Browserbase remains the official remote-CDP fallback for the week-1 decision once creds are available.
+    - Browser Use is a real open-source direct-CDP competitor and should be benchmarked before Agent S3.
+    - Agent S3 stays on the board, but later; it is a computer-use lane, not a clean browser-native replacement.
 
 ## Phase B hardening tracker
 
@@ -107,14 +113,29 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 - [ ] Capture one clean `profile=openclaw` Emirates result artifact on the latest dist
 - [ ] Clean up benchmark artifact capture so JSON results are not polluted by service log lines
 - [ ] Decide whether remaining failures are browser-lane bugs or benchmark-harness bugs
+- [ ] Unblock Browserbase creds and run the official remote-CDP comparison lane
+- [ ] Run Browser Use as the first external comparison lane
+- [ ] Keep Agent S3 documented as a later experiment, not a week-1 gate
 
-### Immediate next 5 actions
+### Immediate next 7 actions
 
-1. Keep benchmark lane on `/tmp/openclaw-consumer-bench` and port `19011`; do not reuse the desktop Consumer app runtime.
-2. Start gateway only after killing stale wrapper shells from this worktree, then verify listeners on `19011` and `19013`.
-3. Re-run screenshots-first Emirates flow on `profile=user` and record whether the earlier `5110ms` interaction timeout is gone on the fresh dist.
-4. Re-run the same prompt on `profile=openclaw` as the stability baseline.
-5. Once both runs are captured cleanly, update `docs/consumer/browser-spike-results.md` before any commit.
+1. Inspect `r6` and classify it as real browser failure, real success, or harness/artifact failure.
+2. If `r6` lacks a deterministic terminal artifact, fix benchmark artifact writing before any more lane comparisons.
+3. Keep benchmark lane on `/tmp/openclaw-consumer-bench` and port `19011`; do not reuse the desktop Consumer app runtime.
+4. Re-run screenshots-first Emirates flow on `profile=openclaw` as the stability baseline once the harness is trustworthy.
+5. Re-run screenshots-first Emirates flow on `profile=user` only after the harness is trustworthy and Chrome CDP is explicitly healthy.
+6. Unblock Browserbase creds from the external Jarvis thread and run the official remote-CDP lane as soon as creds are available.
+7. Run Browser Use on the smallest 2-3 task smoke set before Agent S3.
+
+### Auth and rate-limit sanity checks
+
+Before any long benchmark wave:
+
+1. Verify the isolated bench runtime still points at `openai-codex/gpt-5.4`.
+2. Verify the auth order is pinned to the intended `openai-codex` profile set; do not let the run silently rotate into known-bad tokens.
+3. Run one tiny local sanity turn (`Reply exactly OK`) before starting expensive browser tasks.
+4. If logs/status show `refresh_token_reused`, repeated `API rate limit reached`, or repeated `overloaded`, stop retrying and reauth or change the auth order before continuing.
+5. Treat repeated auth/provider failures as a runtime-preflight failure, not as browser evidence.
 
 ## Execution phases and gates
 
@@ -143,13 +164,15 @@ Phase A validation notes (2026-03-16):
 ### Phase B: Browser spike (week 1, days 1-3)
 
 - [ ] Finalize benchmark matrix in `docs/consumer/browser-spike-results.md`
-- [ ] Run approach: `user` existing-session path
-  - Control lane verified on direct-built gateway; Tasks 1-3 now have passing evidence on the dedicated CDP Chrome lane.
 - [ ] Run approach: `openclaw` managed profile path
   - Control lane verified on direct-built gateway; Tasks 1-3 now have passing evidence on the managed profile lane.
-- [ ] Run approach: Claude-in-Chrome investigation/adaptation
+- [ ] Run approach: `user` existing-session path
+  - Control lane verified on direct-built gateway; Tasks 1-3 now have passing evidence on the dedicated CDP Chrome lane.
 - [ ] Mark Browserbase rows `credential-blocked` until credentials are available
 - [ ] Re-run Browserbase rows once credentials are provided
+- [ ] Run side experiment: Browser Use on 2-3 benchmark tasks
+- [ ] Record side experiment: Agent S3 deferred until after Browser Use
+- [ ] Run approach: Claude-in-Chrome investigation/adaptation only if it still looks useful after the direct-CDP comparisons
 - [ ] Select primary + fallback browser architecture
 
 Gate to exit Phase B:
@@ -211,8 +234,10 @@ OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm opencla
 | ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | --------------------------------------------------------------------------------------------------- |
 | user (existing-session) | pending       | pending     | pending            | pending          | pending           | ready-with-cdp-url | control lane passes when Chrome exposes standard CDP endpoint (for example `http://127.0.0.1:9333`) |
 | openclaw (managed)      | pending       | pending     | pending            | pending          | pending           | ready-for-runs     | control lane is healthy on clean gateway; benchmark task runs can proceed                           |
-| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | feasibility + adaptation                                                                            |
 | Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds                                                                                     |
+| Browser Use             | pending       | pending     | pending            | pending          | pending           | side-experiment    | direct-CDP external comparison; promote only if it materially beats current lanes                   |
+| Agent S3                | later         | later       | later              | later            | later             | deferred           | computer-use comparison, not part of the default week-1 gate                                        |
+| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | revisit only if the direct-CDP paths still leave a clear gap                                        |
 
 ## Scope guardrails (week 1)
 
