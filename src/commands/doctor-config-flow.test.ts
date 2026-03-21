@@ -109,6 +109,66 @@ describe("doctor config flow", () => {
     ).toBe(false);
   });
 
+  it("shows first-time Telegram guidance without the old groupAllowFrom warning", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          botToken: "123:abc",
+          groupPolicy: "allowlist",
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.telegram.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes("channels.telegram: Telegram is in first-time setup mode.") &&
+          line.includes("DMs use pairing mode") &&
+          line.includes("channels.telegram.groups"),
+      ),
+    ).toBe(true);
+  });
+
+  it("shows account-scoped first-time Telegram guidance without the old groupAllowFrom warning", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: "123:abc",
+              groupPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.telegram.accounts.default.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes(
+            "channels.telegram.accounts.default: Telegram is in first-time setup mode.",
+          ) &&
+          line.includes("DMs use pairing mode") &&
+          line.includes("channels.telegram.accounts.default.groups"),
+      ),
+    ).toBe(true);
+  });
+
   it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {
