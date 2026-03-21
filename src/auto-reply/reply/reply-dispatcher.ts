@@ -66,6 +66,7 @@ function emitMessageSentHookFromDispatcher(
       {
         channelId: hookContext.channelId,
         accountId: hookContext.accountId,
+        conversationId: hookContext.to,
       },
     )
     .catch(() => {
@@ -216,11 +217,15 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         await options.deliver(normalized, { kind });
         // Emit message_sent hook after successful delivery (#47472).
         // This covers the dispatcher path that bypasses deliver.ts.
+        // Skip tool-kind deliveries — they are internal tool-result coordination,
+        // not user-visible messages. Matches the deliver.ts path behavior.
         try {
-          if (options.onDelivered) {
-            options.onDelivered(normalized, { kind });
-          } else if (options.hookContext) {
-            emitMessageSentHookFromDispatcher(options.hookContext, normalized);
+          if (kind !== "tool") {
+            if (options.onDelivered) {
+              options.onDelivered(normalized, { kind });
+            } else if (options.hookContext) {
+              emitMessageSentHookFromDispatcher(options.hookContext, normalized);
+            }
           }
         } catch {
           // Swallow errors — delivery already succeeded.
