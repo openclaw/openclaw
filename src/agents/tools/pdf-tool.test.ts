@@ -522,6 +522,44 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("adds Codex instructions when extraction has images but the model only accepts text", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, {
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        input: ["text"],
+      });
+
+      const extractModule = await import("../../media/pdf-extract.js");
+      vi.spyOn(extractModule, "extractPdfContent").mockResolvedValue({
+        text: "Extracted content",
+        images: [{ data: "base64img", mimeType: "image/png" }],
+      });
+
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "codex summary" }],
+      } as never);
+
+      const cfg = withPdfModel(CODEX_PDF_MODEL);
+      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
+
+      expect(result).toMatchObject({
+        content: [{ type: "text", text: "codex summary" }],
+        details: { native: false, model: CODEX_PDF_MODEL },
+      });
+      expect(completeMock).toHaveBeenCalledTimes(1);
+      const [, context] = completeMock.mock.calls[0] ?? [];
+      expect(context?.systemPrompt).toContain("Analyze the provided PDF content");
+    });
+  });
+
   it("tool parameters have correct schema shape", async () => {
     await loadCreatePdfTool();
     const schema = PdfToolSchema;
