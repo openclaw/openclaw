@@ -217,6 +217,14 @@ function buildEndpointAuthHintFromUrl(baseUrl: string): string {
   }
 }
 
+function findExistingProviderIdForBaseUrl(
+  config: OpenClawConfig,
+  baseUrl: string,
+): string | undefined {
+  const providers = config.models?.providers ?? {};
+  return Object.entries(providers).find(([, provider]) => provider?.baseUrl === baseUrl)?.[0];
+}
+
 function resolveUniqueEndpointId(params: {
   requestedId: string;
   baseUrl: string;
@@ -461,7 +469,10 @@ async function promptBaseUrlAndKey(params: {
     },
   });
   const baseUrl = baseUrlInput.trim();
-  const providerHint = buildEndpointAuthHintFromUrl(baseUrl) || "custom";
+  const providerHint =
+    findExistingProviderIdForBaseUrl(params.config, baseUrl) ??
+    buildEndpointAuthHintFromUrl(baseUrl) ??
+    "custom";
   let apiKeyInput: SecretInput | undefined;
   const resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
     config: params.config,

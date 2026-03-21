@@ -161,8 +161,10 @@ function expectMinimaxEnvRefCredentialStored(setCredential: ReturnType<typeof vi
 async function ensureWithOptionEnvOrPrompt(params: {
   token: string;
   tokenProvider: string;
+  config?: Parameters<typeof ensureApiKeyFromOptionEnvOrPrompt>[0]["config"];
   agentDir?: Parameters<typeof ensureApiKeyFromOptionEnvOrPrompt>[0]["agentDir"];
   expectedProviders: string[];
+  reuseProviders?: Parameters<typeof ensureApiKeyFromOptionEnvOrPrompt>[0]["reuseProviders"];
   provider: string;
   envLabel: string;
   confirm: WizardPrompter["confirm"];
@@ -175,9 +177,10 @@ async function ensureWithOptionEnvOrPrompt(params: {
   return await ensureApiKeyFromOptionEnvOrPrompt({
     token: params.token,
     tokenProvider: params.tokenProvider,
-    config: {},
+    config: params.config ?? {},
     agentDir: params.agentDir,
     expectedProviders: params.expectedProviders,
+    reuseProviders: params.reuseProviders,
     provider: params.provider,
     envLabel: params.envLabel,
     promptMessage: "Enter key",
@@ -442,6 +445,71 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
     expect(confirm).toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
     expect(setCredential).toHaveBeenCalledWith("env-key", "plaintext");
+  });
+
+  it("reuses stored API keys across shared provider aliases", async () => {
+    const { stateDir, agentDir } = await setupAuthTestEnv("openclaw-auth-alias-", {
+      agentSubdir: "agents/opencode-go",
+    });
+    await fs.writeFile(
+      authProfilePathForAgent(agentDir),
+      JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "opencode:default": {
+              type: "api_key",
+              provider: "opencode",
+              key: "shared-opencode-key",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const { confirm, note, text, setCredential } = createPromptAndCredentialSpies({
+      confirmResult: true,
+      textResult: "prompt-key",
+    });
+
+    try {
+      const result = await ensureWithOptionEnvOrPrompt({
+        token: "",
+        tokenProvider: "",
+        config: {
+          auth: {
+            profiles: {
+              "opencode:default": { provider: "opencode", mode: "api_key" },
+            },
+          },
+        },
+        agentDir,
+        expectedProviders: ["opencode", "opencode-go"],
+        reuseProviders: ["opencode", "opencode-go"],
+        provider: "opencode-go",
+        envLabel: "OPENCODE_API_KEY",
+        confirm,
+        note,
+        noteMessage: "OpenCode note",
+        noteTitle: "OpenCode",
+        setCredential,
+        text,
+      });
+
+      expect(result).toBe("shared-opencode-key");
+      expect(confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("profile:opencode:default"),
+        }),
+      );
+      expect(setCredential).toHaveBeenCalledWith("shared-opencode-key", "plaintext");
+      expect(text).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("reuses the first ordered API-key profile from the scoped agent store", async () => {
