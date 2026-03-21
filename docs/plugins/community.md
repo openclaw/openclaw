@@ -94,7 +94,7 @@ supports direct messages & group chats, streaming replies, and proactive messagi
 openclaw plugins install @wecom/wecom-openclaw-plugin
 ```
 
- ### YDIM
+### YDIM
 
 Connect OpenClaw to YDIM.
 Supports text, image, and file exchange.
