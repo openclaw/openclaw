@@ -4,30 +4,13 @@ const { withTrustedWebToolsEndpointMock } = vi.hoisted(() => ({
   withTrustedWebToolsEndpointMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-web-search", () => {
+vi.mock("openclaw/plugin-sdk/provider-web-search", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-web-search")>(
+    "openclaw/plugin-sdk/provider-web-search",
+  );
   return {
-    DEFAULT_CACHE_TTL_MINUTES: 5,
-    normalizeCacheKey: (value: string) => value,
-    readCache: () => null,
-    readResponseText: async (
-      response: Response,
-      options?: { maxBytes?: number },
-    ): Promise<{ text: string; truncated: boolean; bytesRead: number }> => {
-      const text = await response.text();
-      const maxBytes =
-        typeof options?.maxBytes === "number" && Number.isFinite(options.maxBytes)
-          ? Math.max(0, Math.floor(options.maxBytes))
-          : text.length;
-      const truncated = text.length > maxBytes;
-      return {
-        text: text.slice(0, maxBytes),
-        truncated,
-        bytesRead: Math.min(text.length, maxBytes),
-      };
-    },
-    resolveCacheTtlMs: () => 0,
+    ...actual,
     withTrustedWebToolsEndpoint: withTrustedWebToolsEndpointMock,
-    writeCache: () => {},
   };
 });
 

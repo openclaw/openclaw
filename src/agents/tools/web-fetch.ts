@@ -1,4 +1,8 @@
 import { Type } from "@sinclair/typebox";
+import {
+  ensureBrightDataZoneExists,
+  resetEnsuredBrightDataZones,
+} from "openclaw/plugin-sdk/provider-web-search";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
@@ -49,7 +53,6 @@ const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
 const FETCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
-const ENSURED_BRIGHTDATA_UNLOCKER_ZONES = new Map<string, Promise<boolean>>();
 
 const WebFetchSchema = Type.Object({
   url: Type.String({ description: "HTTP or HTTPS URL to fetch." }),
@@ -534,123 +537,27 @@ function resolveBrightDataEndpoint(baseUrl: string): string {
   return resolveBrightDataApiEndpoint(baseUrl, "/request");
 }
 
-function buildBrightDataUnlockerZoneCacheKey(params: {
-  apiKey: string;
-  baseUrl: string;
-  unlockerZone: string;
-}): string {
-  return [params.baseUrl, params.apiKey, params.unlockerZone].join("\n");
-}
-
-function hasBrightDataZone(payload: unknown, zoneName: string): boolean {
-  const records = Array.isArray(payload)
-    ? payload
-    : payload &&
-        typeof payload === "object" &&
-        !Array.isArray(payload) &&
-        Array.isArray((payload as Record<string, unknown>).zones)
-      ? ((payload as Record<string, unknown>).zones as unknown[])
-      : [];
-  return records.some(
-    (entry) =>
-      entry &&
-      typeof entry === "object" &&
-      !Array.isArray(entry) &&
-      typeof (entry as Record<string, unknown>).name === "string" &&
-      ((entry as Record<string, unknown>).name as string).trim() === zoneName,
-  );
-}
-
-async function requestBrightDataZoneJson(params: {
-  apiKey: string;
-  baseUrl: string;
-  pathname: string;
-  timeoutSeconds: number;
-  errorLabel: string;
-  body?: unknown;
-}): Promise<unknown> {
-  const endpoint = resolveBrightDataApiEndpoint(params.baseUrl, params.pathname);
-  return await withTrustedWebToolsEndpoint(
-    {
-      url: endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      init: {
-        method: params.body === undefined ? "GET" : "POST",
-        headers: {
-          Authorization: `Bearer ${params.apiKey}`,
-          Accept: "application/json",
-          ...(params.body === undefined ? {} : { "Content-Type": "application/json" }),
-        },
-        ...(params.body === undefined ? {} : { body: JSON.stringify(params.body) }),
-      },
-    },
-    async ({ response }) => {
-      const text = (await response.text()).trim();
-      if (!response.ok) {
-        throw new Error(
-          `${params.errorLabel} failed (${response.status}): ${wrapWebContent(text || response.statusText, "web_fetch")}`,
-        );
-      }
-      if (!text) {
-        return null;
-      }
-      try {
-        return JSON.parse(text) as unknown;
-      } catch {
-        throw new Error(`${params.errorLabel} returned invalid JSON.`);
-      }
-    },
-  );
-}
-
 async function ensureBrightDataUnlockerZoneExists(params: {
   apiKey: string;
   baseUrl: string;
   unlockerZone: string;
   timeoutSeconds: number;
 }): Promise<boolean> {
-  const cacheKey = buildBrightDataUnlockerZoneCacheKey(params);
-  const existing = ENSURED_BRIGHTDATA_UNLOCKER_ZONES.get(cacheKey);
-  if (existing) {
-    return await existing;
-  }
-
-  const ensurePromise = (async () => {
-    try {
-      const activeZones = await requestBrightDataZoneJson({
-        apiKey: params.apiKey,
-        baseUrl: params.baseUrl,
-        pathname: "/zone/get_active_zones",
-        timeoutSeconds: params.timeoutSeconds,
-        errorLabel: "Bright Data active zones",
-      });
-      if (hasBrightDataZone(activeZones, params.unlockerZone)) {
-        return true;
-      }
-      await requestBrightDataZoneJson({
-        apiKey: params.apiKey,
-        baseUrl: params.baseUrl,
-        pathname: "/zone",
-        timeoutSeconds: params.timeoutSeconds,
-        errorLabel: `Bright Data create unlocker zone (${params.unlockerZone})`,
-        body: {
-          zone: { name: params.unlockerZone, type: "unblocker" },
-          plan: { type: "unblocker", ub_premium: true },
-        },
-      });
-      return true;
-    } catch (error) {
-      ENSURED_BRIGHTDATA_UNLOCKER_ZONES.delete(cacheKey);
+  return await ensureBrightDataZoneExists({
+    requestEndpoint: withTrustedWebToolsEndpoint,
+    apiToken: params.apiKey,
+    baseUrl: params.baseUrl,
+    zoneName: params.unlockerZone,
+    kind: "unlocker",
+    timeoutSeconds: params.timeoutSeconds,
+    onError: (error) => {
       logDebug(
         `[web-fetch] Bright Data unlocker zone bootstrap failed (${params.unlockerZone}): ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      return false;
-    }
-  })();
-  ENSURED_BRIGHTDATA_UNLOCKER_ZONES.set(cacheKey, ensurePromise);
-  return await ensurePromise;
+    },
+  });
 }
 
 export async function fetchBrightDataContent(params: {
@@ -1227,7 +1134,7 @@ export function createWebFetchTool(options?: {
 
 export const __testing = {
   resetBrightDataZoneEnsureCache: () => {
-    ENSURED_BRIGHTDATA_UNLOCKER_ZONES.clear();
+    resetEnsuredBrightDataZones();
   },
   resolveBrightDataBaseUrl,
   resolveFirecrawlBaseUrl,

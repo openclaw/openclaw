@@ -2,9 +2,11 @@ import { markdownToText, truncateText } from "openclaw/plugin-sdk/agent-runtime"
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
+  ensureBrightDataZoneExists,
   normalizeCacheKey,
   readCache,
   readResponseText,
+  resetEnsuredBrightDataZones,
   resolveCacheTtlMs,
   withTrustedWebToolsEndpoint,
   writeCache,
@@ -37,7 +39,6 @@ const DEFAULT_ERROR_MAX_BYTES = 64_000;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 
 const PENDING_WEB_DATA_STATUSES = new Set(["running", "building", "starting"]);
-const ENSURED_BRIGHTDATA_ZONES = new Map<string, Promise<boolean>>();
 
 export type BrightDataSearchEngine = "google" | "bing" | "yandex";
 export type BrightDataScrapeExtractMode = "markdown" | "text" | "html";
@@ -318,97 +319,7 @@ async function requestBrightDataJson(params: {
   );
 }
 
-async function requestBrightDataOptionalJson(params: {
-  baseUrl: string;
-  pathname: string;
-  apiToken: string;
-  timeoutSeconds: number;
-  errorLabel: string;
-  body?: unknown;
-  queryParams?: Record<string, string | number | boolean | undefined>;
-  unlockerZone?: string;
-}): Promise<unknown> {
-  const endpoint = appendQueryParams(
-    resolveEndpoint(params.baseUrl, params.pathname),
-    params.queryParams,
-  );
-  return await withTrustedWebToolsEndpoint(
-    {
-      url: endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      init: buildRequestInit({
-        method: params.body === undefined ? "GET" : "POST",
-        apiToken: params.apiToken,
-        body: params.body,
-        accept: "application/json",
-      }),
-    },
-    async ({ response }) => {
-      if (!response.ok) {
-        return await throwBrightDataApiError({
-          response,
-          errorLabel: params.errorLabel,
-          unlockerZone: params.unlockerZone,
-        });
-      }
-      const text = (await response.text()).trim();
-      if (!text) {
-        return null;
-      }
-      try {
-        return JSON.parse(text) as unknown;
-      } catch {
-        throw new Error(`${params.errorLabel} returned invalid JSON.`);
-      }
-    },
-  );
-}
-
-function buildBrightDataZoneCacheKey(params: {
-  apiToken: string;
-  baseUrl: string;
-  zoneName: string;
-  kind: BrightDataZoneKind;
-}): string {
-  return [params.baseUrl, params.apiToken, params.zoneName, params.kind].join("\n");
-}
-
-function hasBrightDataZone(payload: unknown, zoneName: string): boolean {
-  const records = Array.isArray(payload)
-    ? payload
-    : payload &&
-        typeof payload === "object" &&
-        !Array.isArray(payload) &&
-        Array.isArray((payload as Record<string, unknown>).zones)
-      ? ((payload as Record<string, unknown>).zones as unknown[])
-      : [];
-  return records.some(
-    (entry) =>
-      entry &&
-      typeof entry === "object" &&
-      !Array.isArray(entry) &&
-      typeof (entry as Record<string, unknown>).name === "string" &&
-      ((entry as Record<string, unknown>).name as string).trim() === zoneName,
-  );
-}
-
-function buildBrightDataZoneCreatePayload(params: {
-  kind: BrightDataZoneKind;
-  zoneName: string;
-}): Record<string, unknown> {
-  if (params.kind === "browser") {
-    return {
-      zone: { name: params.zoneName, type: "browser_api" },
-      plan: { type: "browser_api" },
-    };
-  }
-  return {
-    zone: { name: params.zoneName, type: "unblocker" },
-    plan: { type: "unblocker", ub_premium: true },
-  };
-}
-
-async function ensureBrightDataZoneExists(params: {
+async function ensureConfiguredBrightDataZoneExists(params: {
   cfg?: OpenClawConfig;
   kind: BrightDataZoneKind;
   timeoutSeconds?: number;
@@ -422,60 +333,29 @@ async function ensureBrightDataZoneExists(params: {
     params.kind === "browser"
       ? resolveBrightDataBrowserZone(params.cfg)
       : resolveBrightDataUnlockerZone(params.cfg);
-  const cacheKey = buildBrightDataZoneCacheKey({
+  const timeoutSeconds = resolveBrightDataSearchTimeoutSeconds(params.timeoutSeconds);
+  return await ensureBrightDataZoneExists({
+    requestEndpoint: withTrustedWebToolsEndpoint,
     apiToken,
     baseUrl,
     zoneName,
     kind: params.kind,
+    timeoutSeconds,
   });
-  const existing = ENSURED_BRIGHTDATA_ZONES.get(cacheKey);
-  if (existing) {
-    return await existing;
-  }
-
-  const timeoutSeconds = resolveBrightDataSearchTimeoutSeconds(params.timeoutSeconds);
-  const ensurePromise = (async () => {
-    try {
-      const activeZones = await requestBrightDataOptionalJson({
-        baseUrl,
-        pathname: "/zone/get_active_zones",
-        apiToken,
-        timeoutSeconds,
-        errorLabel: "Bright Data active zones",
-      });
-      if (hasBrightDataZone(activeZones, zoneName)) {
-        return true;
-      }
-      await requestBrightDataOptionalJson({
-        baseUrl,
-        pathname: "/zone",
-        apiToken,
-        timeoutSeconds,
-        errorLabel: `Bright Data create ${params.kind} zone (${zoneName})`,
-        body: buildBrightDataZoneCreatePayload({ kind: params.kind, zoneName }),
-      });
-      return true;
-    } catch {
-      ENSURED_BRIGHTDATA_ZONES.delete(cacheKey);
-      return false;
-    }
-  })();
-  ENSURED_BRIGHTDATA_ZONES.set(cacheKey, ensurePromise);
-  return await ensurePromise;
 }
 
 export async function ensureBrightDataUnlockerZoneExists(
   cfg?: OpenClawConfig,
   timeoutSeconds?: number,
 ): Promise<boolean> {
-  return await ensureBrightDataZoneExists({ cfg, kind: "unlocker", timeoutSeconds });
+  return await ensureConfiguredBrightDataZoneExists({ cfg, kind: "unlocker", timeoutSeconds });
 }
 
 export async function ensureBrightDataBrowserZoneExists(
   cfg?: OpenClawConfig,
   timeoutSeconds?: number,
 ): Promise<boolean> {
-  return await ensureBrightDataZoneExists({ cfg, kind: "browser", timeoutSeconds });
+  return await ensureConfiguredBrightDataZoneExists({ cfg, kind: "browser", timeoutSeconds });
 }
 
 export function cleanGoogleSearchPayload(rawData: unknown): CleanGoogleSearchPayload {
@@ -1000,7 +880,7 @@ export const __testing = {
   normalizeBrightDataWebDataPayload,
   parseBrightDataScrapeBody,
   resetEnsuredBrightDataZones: () => {
-    ENSURED_BRIGHTDATA_ZONES.clear();
+    resetEnsuredBrightDataZones();
   },
   resolveBrightDataSearchItems,
   resolveMarkdownSearchItems,
