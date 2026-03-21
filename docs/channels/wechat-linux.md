@@ -20,6 +20,47 @@ Supports direct messages and groups with text, images, and files.
 - `xdotool` available on the gateway host.
 - `silk-python` installed in the same Python environment as PyWxDump when you want SILK voice messages to reach ASR.
 
+## Linux package and Python requirements
+
+To run the full WeChat Linux flow on Ubuntu or Debian-like hosts, the practical checklist is:
+
+- Node.js 22+ with `corepack` enabled for OpenClaw.
+- A Python 3 virtual environment for PyWxDump.
+- System tools for X11 send and screenshot flows:
+  - `xdotool`
+  - `xclip`
+  - `xwininfo`
+  - `xwd`
+  - `ffmpeg`
+  - `xauth`
+  - `zstd` recommended
+  - `sqlite3` recommended for manual verification
+- Python packages in the same environment as `channels.wechat-linux.pythonPath`:
+  - `pycryptodomex`
+  - `Pillow`
+  - `silk-python`
+  - `zstandard` recommended
+  - `html2text` recommended when `linkDocs` is enabled
+  - `beautifulsoup4` recommended when `linkDocs` is enabled
+
+Ubuntu example:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y xdotool xclip x11-utils x11-apps ffmpeg xauth zstd sqlite3
+```
+
+Python example:
+
+```bash
+"/path/to/PyWxDump/.venv/bin/python" -m pip install -r \
+  "/path/to/openclaw/extensions/wechat-linux/bridge/requirements-linux.txt"
+```
+
+The curated Python requirements file lives at:
+
+- `extensions/wechat-linux/bridge/requirements-linux.txt`
+
 ## Quick setup
 
 1. Install and sign in to the Linux desktop WeChat client.
@@ -46,6 +87,47 @@ Minimal config:
       groupPolicy: "allowlist",
       allowFrom: ["wxid_example123"],
       groupAllowFrom: ["wxid_example123"],
+    },
+  },
+}
+```
+
+Recommended environment variables for full media processing and send reliability:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+export OPENAI_BASE_URL="https://coding.dashscope.aliyuncs.com/v1"
+export OPENAI_MODEL="qwen3-coder-plus"
+export MAIN_WINDOW_VISION_BASE_URL="https://coding.dashscope.aliyuncs.com/v1"
+export MAIN_WINDOW_VISION_MODEL="qwen3.5-plus"
+export DISPLAY=":1.0"
+# export XAUTHORITY="/run/user/1000/gdm/Xauthority"
+```
+
+Recommended `channels.wechat-linux` config for a full setup:
+
+```json5
+{
+  channels: {
+    "wechat-linux": {
+      enabled: true,
+      pyWxDumpRoot: "/path/to/PyWxDump",
+      pythonPath: "/path/to/PyWxDump/.venv/bin/python",
+      keyFile: "/home/user/.wx_db_keys.json",
+      dbDir: "/home/user/Documents/xwechat_files/wxid_example/db_storage",
+      outputDir: "/home/user/wx_decrypted",
+      display: ":1.0",
+      windowClass: "wechat",
+      windowMode: "auto",
+      dmPolicy: "pairing",
+      allowFrom: ["wxid_example123"],
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["wxid_example123"],
+      imageAnalysis: true,
+      videoAnalysis: true,
+      voiceAsr: true,
+      linkDocs: true,
+      asrUrl: "http://127.0.0.1:8001/api/asr/transcribe",
     },
   },
 }

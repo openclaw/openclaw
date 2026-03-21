@@ -1,0 +1,23 @@
+# Linux Python extras for OpenClaw wechat-linux + PyWxDump.
+# Install these into the same Python environment referenced by
+# channels.wechat-linux.pythonPath.
+#
+# Example:
+#   "/path/to/PyWxDump/.venv/bin/python" -m pip install -r \
+#     "/path/to/openclaw/extensions/wechat-linux/bridge/requirements-linux.txt"
+
+# Required: WeChat DB decryption
+pycryptodomex
+
+# Required: image loading/cropping and clipboard send flows
+Pillow
+
+# Required: SILK voice decode before ASR
+silk-python
+
+# Recommended: better decompression support for compressed message bodies
+zstandard
+
+# Recommended when linkDocs is enabled
+html2text
+beautifulsoup4
