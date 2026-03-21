@@ -183,12 +183,16 @@ private struct ChatMessageBody: View {
                         isUser: self.isUser,
                         toolName: self.message.toolName)
                 }
+            } else if self.isUser, self.isSystemMessage(text) {
+                CollapsibleSystemMessage(text: text)
+            } else if self.isUser, self.isSystemMessage(text) {
+                CollapsibleSystemMessage(text: text)
             } else if self.isUser {
                 ChatMarkdownRenderer(
                     text: text,
                     context: .user,
                     variant: self.markdownVariant,
-                    font: .system(size: 14),
+                    font: .custom("Courier New", size: 12),
                     textColor: textColor)
             } else {
                 ChatAssistantTextBody(
@@ -233,6 +237,25 @@ private struct ChatMessageBody: View {
         .shadow(color: self.bubbleShadowColor, radius: self.bubbleShadowRadius, y: self.bubbleShadowYOffset)
         .padding(.leading, self.tailPaddingLeading)
         .padding(.trailing, self.tailPaddingTrailing)
+    }
+
+    private func isSystemMessage(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = trimmed.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return false }
+        return lines.allSatisfy { line in
+            line.hasPrefix("System:") ||
+            line.hasPrefix("An async command") ||
+            line.hasPrefix("Current time:") ||
+            line.hasPrefix("Handle the result internally")
+        }
+    }
+
+    private var isSystemContent: Bool {
+        guard self.isUser else { return false }
+        return self.isSystemMessage(self.primaryText)
     }
 
     private var primaryText: String {
@@ -287,6 +310,9 @@ private struct ChatMessageBody: View {
     }
 
     private var bubbleFillColor: Color {
+        if self.isUser, self.isSystemContent {
+            return Color(red: 38 / 255.0, green: 39 / 255.0, blue: 42 / 255.0)
+        }
         if self.isUser {
             return self.userAccent ?? OpenClawChatTheme.userBubble
         }
@@ -358,7 +384,7 @@ private struct AttachmentRow: View {
         HStack(spacing: 8) {
             Image(systemName: "paperclip")
             Text(self.att.fileName ?? "Attachment")
-                .font(.footnote)
+                .font(.system(size: 11, design: .monospaced))
                 .lineLimit(1)
                 .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
             Spacer()
@@ -377,13 +403,13 @@ private struct ToolCallCard: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(self.toolName)
-                    .font(.footnote.weight(.semibold))
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 Spacer(minLength: 0)
             }
 
             if let summary = self.summary, !summary.isEmpty {
                 Text(summary)
-                    .font(.footnote.monospaced())
+                    .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -422,12 +448,12 @@ private struct ToolResultCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     Text(self.title)
-                        .font(.footnote.weight(.semibold))
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     Spacer(minLength: 0)
                 }
 
                 Text(self.displayText)
-                    .font(.footnote.monospaced())
+                    .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
                     .lineLimit(self.expanded ? nil : Self.previewLineLimit)
 
@@ -436,7 +462,7 @@ private struct ToolResultCard: View {
                         self.expanded.toggle()
                     }
                     .buttonStyle(.plain)
-                    .font(.caption)
+                    .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
                 }
             }
@@ -475,11 +501,17 @@ struct ChatTypingIndicatorBubble: View {
     let style: OpenClawChatView.Style
 
     var body: some View {
-        HStack(spacing: 10) {
-            TypingDots()
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(Color(red: 1.0, green: 0.75, blue: 0.2))
+            Text("⏳ thinking…")
+                .font(.custom("Courier New Bold", size: 10))
+                .foregroundStyle(Color(red: 1.0, green: 0.75, blue: 0.2))
+            ElapsedTimerView()
             Spacer(minLength: 0)
         }
-        .padding(.vertical, self.style == .standard ? 12 : 10)
+        .padding(.vertical, self.style == .standard ? 8 : 6)
         .padding(.horizontal, self.style == .standard ? 12 : 14)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -495,6 +527,33 @@ struct ChatTypingIndicatorBubble: View {
 extension ChatTypingIndicatorBubble: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.style == rhs.style
+    }
+}
+
+@MainActor
+private struct ElapsedTimerView: View {
+    @State private var elapsed: TimeInterval = 0
+    @State private var startDate = Date()
+    private let timer = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Text(self.formattedTime)
+            .font(.custom("Courier New", size: 10))
+            .foregroundStyle(Color.secondary.opacity(0.6))
+            .onReceive(self.timer) { _ in
+                self.elapsed = Date().timeIntervalSince(self.startDate)
+            }
+    }
+
+    private var formattedTime: String {
+        let secs = Int(self.elapsed)
+        let tenths = Int((self.elapsed - Double(secs)) * 10)
+        if secs < 60 {
+            return String(format: "%d.%ds", secs, tenths)
+        }
+        let mins = secs / 60
+        let remainSecs = secs % 60
+        return String(format: "%d:%02d", mins, remainSecs)
     }
 }
 
@@ -535,34 +594,31 @@ struct ChatPendingToolsBubble: View {
     let toolCalls: [OpenClawChatPendingToolCall]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Running tools…", systemImage: "hammer")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
+        VStack(alignment: .leading, spacing: 6) {
             ForEach(self.toolCalls) { call in
                 let display = ToolDisplayRegistry.resolve(name: call.name, args: call.args)
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("\(display.emoji) \(display.label)")
-                            .font(.footnote.monospaced())
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        ProgressView().controlSize(.mini)
-                    }
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(Color(red: 1.0, green: 0.75, blue: 0.2))
+                    Text("\(display.emoji) \(display.label)")
+                        .font(.custom("Courier New Bold", size: 10))
+                        .foregroundStyle(Color(red: 1.0, green: 0.75, blue: 0.2))
                     if let detail = display.detailLine, !detail.isEmpty {
                         Text(detail)
-                            .font(.caption.monospaced())
+                            .font(.custom("Courier New", size: 9))
                             .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    if let startedAt = call.startedAt {
+                        ToolElapsedView(startedAt: startedAt)
                     }
                 }
-                .padding(10)
-                .background(Color.white.opacity(0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
-        .padding(12)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
         .assistantBubbleContainerStyle()
     }
 }
@@ -572,6 +628,26 @@ extension ChatPendingToolsBubble: @MainActor Equatable {
         lhs.toolCalls == rhs.toolCalls
     }
 }
+
+@MainActor
+private struct ToolElapsedView: View {
+    let startedAt: Double
+    @State private var elapsed: TimeInterval = 0
+    private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+    var body: some View {
+        Text(self.formattedTime)
+            .font(.custom("Courier New", size: 9))
+            .foregroundStyle(Color.secondary.opacity(0.5))
+            .onAppear { self.elapsed = max(0, Date().timeIntervalSince1970 - self.startedAt / 1000) }
+            .onReceive(self.timer) { _ in self.elapsed = max(0, Date().timeIntervalSince1970 - self.startedAt / 1000) }
+    }
+    private var formattedTime: String {
+        let secs = Int(self.elapsed)
+        if secs < 60 { return "\(secs)s" }
+        return String(format: "%d:%02d", secs / 60, secs % 60)
+    }
+}
+
 
 @MainActor
 private struct TypingDots: View {
@@ -613,6 +689,53 @@ private struct TypingDots: View {
     }
 }
 
+@MainActor
+private struct CollapsibleSystemMessage: View {
+    let text: String
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { self.isExpanded.toggle() } }) {
+                HStack(spacing: 6) {
+                    Image(systemName: self.isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(Color.secondary.opacity(0.6))
+                        .frame(width: 10)
+                    Image(systemName: "terminal")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.secondary.opacity(0.5))
+                    Text(self.previewText)
+                        .font(.custom("Courier New", size: 10))
+                        .foregroundStyle(Color.secondary.opacity(0.6))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if self.isExpanded {
+                Text(self.text)
+                    .font(.custom("Courier New", size: 10))
+                    .foregroundStyle(Color.secondary.opacity(0.7))
+                    .textSelection(.enabled)
+                    .padding(.leading, 16)
+            }
+        }
+    }
+
+    private var previewText: String {
+        let firstLine = self.text.components(separatedBy: .newlines).first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? "System message"
+        let cleaned = firstLine
+            .replacingOccurrences(of: "System: ", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.count > 60 {
+            return String(cleaned.prefix(60)) + "…"
+        }
+        return cleaned
+    }
+}
+
 private struct ChatAssistantTextBody: View {
     let text: String
     let markdownVariant: ChatMarkdownVariant
@@ -622,7 +745,7 @@ private struct ChatAssistantTextBody: View {
         let segments = AssistantTextParser.segments(from: self.text, includeThinking: self.includesThinking)
         VStack(alignment: .leading, spacing: 10) {
             ForEach(segments) { segment in
-                let font = segment.kind == .thinking ? Font.system(size: 14).italic() : Font.system(size: 14)
+                let font = segment.kind == .thinking ? Font.custom("Courier New Italic", size: 12) : Font.custom("Courier New", size: 12)
                 ChatMarkdownRenderer(
                     text: segment.text,
                     context: .assistant,

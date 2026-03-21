@@ -1,6 +1,25 @@
 import SwiftUI
 import Textual
 
+// Custom StructuredText style based on gitHub but with apricot inline code background
+private struct ApricotStyle: StructuredText.Style {
+    let inlineStyle: InlineStyle = InlineStyle()
+        .code(.monospaced, .fontScale(0.85), .backgroundColor(Color(red: 0.35, green: 0.22, blue: 0.04)))
+        .strong(.fontWeight(.semibold))
+        .link(.foregroundColor(.accentColor))
+    let headingStyle: StructuredText.GitHubHeadingStyle = .gitHub
+    let paragraphStyle: StructuredText.GitHubParagraphStyle = .gitHub
+    let blockQuoteStyle: StructuredText.GitHubBlockQuoteStyle = .gitHub
+    let codeBlockStyle: StructuredText.GitHubCodeBlockStyle = .gitHub
+    let listItemStyle: StructuredText.DefaultListItemStyle = .default
+    let unorderedListMarker: StructuredText.HierarchicalSymbolListMarker = .hierarchical(.disc, .circle, .square)
+    let orderedListMarker: StructuredText.DecimalListMarker = .decimal
+    let tableStyle: StructuredText.GitHubTableStyle = .gitHub
+    let tableCellStyle: StructuredText.GitHubTableCellStyle = .gitHub
+    let thematicBreakStyle: StructuredText.GitHubThematicBreakStyle = .gitHub
+}
+
+
 public enum ChatMarkdownVariant: String, CaseIterable, Sendable {
     case standard
     case compact
@@ -47,12 +66,10 @@ private struct ChatMarkdownStyle: ViewModifier {
             if self.variant == .compact {
                 content.textual.structuredTextStyle(.default)
             } else {
-                content.textual.structuredTextStyle(.gitHub)
+                content.textual.structuredTextStyle(ApricotStyle())
             }
         }
         .font(self.font)
-        .foregroundStyle(self.textColor)
-        .textual.inlineStyle(self.inlineStyle)
         .textual.textSelection(.enabled)
     }
 

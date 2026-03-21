@@ -460,7 +460,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.font = .systemFont(ofSize: 14, weight: .regular)
+        textView.font = .systemFont(ofSize: 13, weight: .regular)
         textView.textContainer?.lineBreakMode = .byWordWrapping
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainerInset = NSSize(width: 2, height: 4)
