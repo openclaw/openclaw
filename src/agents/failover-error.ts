@@ -337,7 +337,7 @@ export function coerceToFailoverError(
  * - Timeouts: 408
  * - Not found: 404 (model may have been removed)
  */
-const DEFAULT_FALLBACK_STATUS_CODES = [408, 429, 500, 502, 503, 504, 404];
+const DEFAULT_FALLBACK_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504, 404]);
 
 /**
  * Check if an error should trigger fallback based on the configured error codes.
@@ -365,13 +365,13 @@ export function shouldTriggerFallback(
 
   // Determine if status code should trigger fallback
   if (fallbackOnErrors === undefined || fallbackOnErrors === "default") {
-    return DEFAULT_FALLBACK_STATUS_CODES.includes(status);
+    return DEFAULT_FALLBACK_STATUS_CODES.has(status);
   } else if (fallbackOnErrors === "all") {
     // "all" means all HTTP errors (4xx and 5xx)
     return status >= 400;
   } else {
     // Custom list of status codes
-    return fallbackOnErrors.includes(status);
+    return new Set(fallbackOnErrors).has(status);
   }
 }
 
