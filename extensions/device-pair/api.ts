@@ -11,4 +11,4 @@ export {
   resolvePreferredOpenClawTmpDir,
   runPluginCommandWithTimeout,
 } from "openclaw/plugin-sdk/sandbox";
-export { renderQrPngBase64 } from "../whatsapp/src/qr-image.js";
+export { renderQrPngBase64 } from "./qr-image.js";

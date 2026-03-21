@@ -146,6 +146,31 @@ describe("device-pair /pair qr", () => {
     expect(result?.text).not.toContain("```");
   });
 
+  it("reissues the bootstrap token if webchat QR rendering fails before falling back", async () => {
+    pluginApiMocks.issueDeviceBootstrapToken
+      .mockResolvedValueOnce({
+        token: "first-token",
+        expiresAtMs: Date.now() + 10 * 60_000,
+      })
+      .mockResolvedValueOnce({
+        token: "second-token",
+        expiresAtMs: Date.now() + 10 * 60_000,
+      });
+    pluginApiMocks.renderQrPngBase64.mockRejectedValueOnce(new Error("render failed"));
+
+    const command = registerPairCommand();
+    const result = await command?.handler(createCommandContext({ channel: "webchat" }));
+
+    expect(pluginApiMocks.revokeDeviceBootstrapToken).toHaveBeenCalledWith({
+      token: "first-token",
+    });
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(2);
+    expect(result?.text).toContain(
+      "QR image delivery is not available on this channel right now, so I generated a pasteable setup code instead.",
+    );
+    expect(result?.text).toContain("Pairing setup code generated.");
+  });
+
   it.each([
     {
       label: "Telegram",

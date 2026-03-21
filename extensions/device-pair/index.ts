@@ -75,7 +75,7 @@ type QrCommandContext = {
 };
 
 type QrChannelSender = {
-  resolveSend: (api: OpenClawPluginApi) => ((...args: unknown[]) => Promise<unknown>) | undefined;
+  resolveSend: (api: OpenClawPluginApi) => QrSendFn | undefined;
   createOpts: (params: {
     ctx: QrCommandContext;
     qrFilePath: string;
@@ -492,19 +492,18 @@ function formatQrInfoMarkdown(params: {
   autoNotifyArmed: boolean;
   expiresAtMs: number;
 }): string {
-  const [gatewayLine, authLine, ...rest] = buildQrInfoLines(params);
   return [
-    `- ${gatewayLine}`,
-    `- ${authLine}`,
-    ...rest.map((line) =>
-      line.startsWith("Security:") || line.startsWith("Expires:")
-        ? `- ${line}`
-        : line === "IMPORTANT: After pairing finishes, run /pair cleanup."
-          ? "**Important:** Run `/pair cleanup` after pairing finishes."
-          : line === "If this QR code leaks, run /pair cleanup immediately."
-            ? "If this QR code leaks, run `/pair cleanup` immediately."
-            : line,
-    ),
+    `- Gateway: ${params.payload.url}`,
+    `- Auth: ${params.authLabel}`,
+    ...buildSecurityNoticeLines({
+      kind: "QR code",
+      expiresAtMs: params.expiresAtMs,
+      markdown: true,
+    }),
+    "",
+    ...buildQrFollowUpLines(params.autoNotifyArmed),
+    "",
+    "If your camera still won’t lock on, run `/pair` for a pasteable setup code.",
   ].join("\n");
 }
 
@@ -726,7 +725,23 @@ export default definePluginEntry({
 
           api.logger.info?.(`device-pair: QR fallback channel=${channel} target=${target}`);
           if (channel === "webchat") {
-            const qrDataUrl = await renderQrDataUrl(setupCode);
+            let qrDataUrl: string;
+            try {
+              qrDataUrl = await renderQrDataUrl(setupCode);
+            } catch (err) {
+              api.logger.warn?.(
+                `device-pair: webchat QR render failed, falling back (${String(
+                  (err as Error)?.message ?? err,
+                )})`,
+              );
+              await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
+              payload = await issueSetupPayload(urlResult.url);
+              return {
+                text:
+                  "QR image delivery is not available on this channel right now, so I generated a pasteable setup code instead.\n\n" +
+                  formatSetupReply(payload, authLabel),
+              };
+            }
             return {
               text: [
                 "Scan this QR code with the OpenClaw iOS app:",
