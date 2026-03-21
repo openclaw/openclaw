@@ -379,6 +379,14 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 function generateZshCompletion(program: Command): string {
   const rootCmd = program.name();
   const script = `
+# Ensure zsh completion system is initialized.
+# When sourced via \`source <(openclaw completion --shell zsh)\`,
+# compdef may not be available unless compinit has been called first.
+if (( ! \$+functions[compdef] )); then
+  autoload -Uz compinit
+  compinit -C
+fi
+
 #compdef ${rootCmd}
 
 _${rootCmd}_root_completion() {
