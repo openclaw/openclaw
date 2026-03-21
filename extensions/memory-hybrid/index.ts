@@ -27,6 +27,7 @@ import {
 import { ChatModel } from "./chat.js";
 import { MEMORY_CATEGORIES, type MemoryCategory, memoryConfigSchema } from "./config.js";
 import { clusterBySimilarity, mergeFacts } from "./consolidate.js";
+import { DreamService } from "./dream.js";
 import { Embeddings, vectorDimsForModel } from "./embeddings.js";
 import { GraphDB, extractGraphFromText } from "./graph.js";
 import { hybridScore, getGraphEnrichment, type MemoryEntry } from "./recall.js";
@@ -227,6 +228,33 @@ export class MemoryDB {
     return results as unknown as MemoryEntry[];
   }
 
+  /** Dream Mode Phase 1: Delete low importance noise */
+  async cleanupTrash(): Promise<number> {
+    await this.ensureInitialized();
+    const rows = await this.table!.query().where("importance <= 0.2").toArray();
+    if (rows.length === 0) return 0;
+
+    // Extract valid UUIDs to array of strings
+    const validRows = rows.filter(
+      (r) => typeof r.id === "string" && UUID_REGEX.test(r.id as string),
+    );
+    if (validRows.length === 0) return 0;
+
+    const ids = validRows.map((r) => `'${r.id}'`).join(", ");
+    await this.table!.delete(`id IN (${ids})`);
+    return validRows.length;
+  }
+
+  /** Dream Mode Phase 2: Fetch specific categories for profiling */
+  async getMemoriesByCategory(categories: string[], limit: number = 50): Promise<MemoryEntry[]> {
+    await this.ensureInitialized();
+    if (categories.length === 0) return [];
+
+    const cats = categories.map((c) => `'${c}'`).join(", ");
+    const rows = await this.table!.query().where(`category IN (${cats})`).limit(limit).toArray();
+    return rows as unknown as MemoryEntry[];
+  }
+
   /**
    * Multi-Retrieval Search
    * 1. Fetches top N by vector similarity (semantic search)
@@ -350,12 +378,15 @@ export class MemoryDB {
     const associativeResults: MemorySearchResult[] = [];
 
     // Construct a compatible WHERE clause for multiple entities
-    // LanceDB 2.0's DataFusion has some limitations with ARRAY/LIKE ANY
+    // We strictly use discovered entities to avoid full table scans
     const conditions = Array.from(discoveredEntities).map((e) => {
-      const safeE = e.replace(/['%_]/g, ""); // Prevent SQL injection and query crashes
+      const safeE = e.replace(/['%_]/g, "");
       return `text LIKE '%${safeE}%'`;
     });
-    const whereClause = `(${conditions.join(" OR ")}) OR category = 'fact'`;
+
+    if (conditions.length === 0) return initialResults;
+
+    const whereClause = conditions.join(" OR ");
 
     await this.ensureInitialized();
     const matchedMemories = await this.table!.query().where(whereClause).limit(10).toArray();
@@ -605,6 +636,7 @@ const memoryPlugin = {
     const graphDB = new GraphDB(resolvedDbPath);
     const workingMemory = new WorkingMemoryBuffer(50, 0.7, 3);
     const conversationStack = new ConversationStack(30);
+    const dreamService = new DreamService(db, chatModel, embeddings, graphDB, api);
     let lastPruneTime = 0;
     const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -616,6 +648,9 @@ const memoryPlugin = {
     api.logger.info(
       `memory-hybrid: registered (db: ${resolvedDbPath}, model: ${cfg.embedding.model}, provider: ${cfg.embedding.provider})`,
     );
+
+    // Start Dream Mode Background Service
+    dreamService.start();
 
     // ======================================================================
     // Tool: memory_recall
@@ -1324,9 +1359,11 @@ const memoryPlugin = {
         // Skip semantic search for generic commands or basic greetings
         if (nPrompt.startsWith("/")) return;
         if (
-          /^(hi|hello|hey|start|new chat|привіт|вітаю|почнемо|started a new chat)[\s.!?]*$/i.test(
+          /^(hi|hello|hey|start|new chat|привіт|вітаю|почнемо|started a new chat|welcome|що нового)[\s.!?]*$/i.test(
             nPrompt,
-          )
+          ) ||
+          nPrompt.includes("started a new chat") ||
+          nPrompt.includes("session started")
         )
           return;
 
@@ -1431,6 +1468,9 @@ const memoryPlugin = {
               );
             });
           }
+
+          // ---- Dream Mode Interaction Tracking ----
+          dreamService.registerInteraction();
 
           // ---- Smart Capture (LLM-powered) ----
           // Note: Smart Capture intentionally bypasses Working Memory Buffer.
@@ -1593,8 +1633,10 @@ const memoryPlugin = {
         api.logger.info(
           `memory-hybrid: started (model: ${cfg.embedding.model}, chat: ${cfg.chatModel})`,
         );
+        dreamService.start();
       },
       stop: () => {
+        dreamService.stop();
         api.logger.info("memory-hybrid: stopped");
       },
     });
