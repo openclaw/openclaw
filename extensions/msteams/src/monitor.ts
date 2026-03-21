@@ -253,7 +253,6 @@ export async function monitorMSTeamsProvider(
 
   // Create Express server
   const expressApp = express.default();
-  expressApp.use(authorizeJWT(authConfig));
   expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
   expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
     if (err && typeof err === "object" && "status" in err && err.status === 413) {
@@ -359,10 +358,11 @@ export async function monitorMSTeamsProvider(
  * onMessage / onMembersAdded registration and a run() method.
  */
 function buildActivityHandler(): MSTeamsActivityHandler {
-  const messageHandlers: Array<(context: unknown, next: () => Promise<void>) => Promise<void>> = [];
-  const membersAddedHandlers: Array<
-    (context: unknown, next: () => Promise<void>) => Promise<void>
-  > = [];
+  type Handler = (context: unknown, next: () => Promise<void>) => Promise<void>;
+  const messageHandlers: Handler[] = [];
+  const membersAddedHandlers: Handler[] = [];
+  const reactionsAddedHandlers: Handler[] = [];
+  const reactionsRemovedHandlers: Handler[] = [];
 
   const handler: MSTeamsActivityHandler = {
     onMessage(cb) {
@@ -371,6 +371,14 @@ function buildActivityHandler(): MSTeamsActivityHandler {
     },
     onMembersAdded(cb) {
       membersAddedHandlers.push(cb);
+      return handler;
+    },
+    onReactionsAdded(cb) {
+      reactionsAddedHandlers.push(cb);
+      return handler;
+    },
+    onReactionsRemoved(cb) {
+      reactionsRemovedHandlers.push(cb);
       return handler;
     },
     async run(context: unknown) {
@@ -385,6 +393,20 @@ function buildActivityHandler(): MSTeamsActivityHandler {
       } else if (activityType === "conversationUpdate") {
         for (const h of membersAddedHandlers) {
           await h(context, noop);
+        }
+      } else if (activityType === "messageReaction") {
+        const activity = (
+          ctx as { activity?: { reactionsAdded?: unknown[]; reactionsRemoved?: unknown[] } }
+        )?.activity;
+        if (activity?.reactionsAdded?.length) {
+          for (const h of reactionsAddedHandlers) {
+            await h(context, noop);
+          }
+        }
+        if (activity?.reactionsRemoved?.length) {
+          for (const h of reactionsRemovedHandlers) {
+            await h(context, noop);
+          }
         }
       }
     },

@@ -9,10 +9,7 @@
  * Uses the shared draft-stream-loop for throttling (avoids rate limits).
  */
 
-import {
-  createDraftStreamLoop,
-  type DraftStreamLoop,
-} from "../../../src/channels/draft-stream-loop.js";
+import { createDraftStreamLoop, type DraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
 
 /** Default throttle interval between stream updates (ms).
  * Teams docs recommend buffering tokens for 1.5-2s; limit is 1 req/s. */

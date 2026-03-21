@@ -297,6 +297,14 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
         response.status(500).send({ error: String(err) });
       }
     },
+
+    async updateActivity(_context, activity) {
+      // No-op: updateActivity is handled via REST in streaming-message.ts
+    },
+
+    async deleteActivity(_context, _reference) {
+      // No-op: deleteActivity not yet implemented for Teams SDK adapter
+    },
   };
 }
 

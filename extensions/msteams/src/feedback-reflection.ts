@@ -10,7 +10,7 @@
  * 6. Optionally sends a proactive follow-up to the user
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js";
