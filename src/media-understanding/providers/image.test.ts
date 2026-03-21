@@ -1,58 +1,72 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const completeMock = vi.fn();
-const minimaxUnderstandImageMock = vi.fn();
-const ensureOpenClawModelsJsonMock = vi.fn(async () => {});
-const getApiKeyForModelMock = vi.fn(async () => ({
-  apiKey: "oauth-test", // pragma: allowlist secret
-  source: "test",
-  mode: "oauth",
+const hoisted = vi.hoisted(() => ({
+  completeMock: vi.fn(),
+  minimaxUnderstandImageMock: vi.fn(),
+  ensureOpenClawModelsJsonMock: vi.fn(async () => {}),
+  getApiKeyForModelMock: vi.fn(async () => ({
+    apiKey: "oauth-test", // pragma: allowlist secret
+    source: "test",
+    mode: "oauth",
+  })),
+  resolveApiKeyForProviderMock: vi.fn(async () => ({
+    apiKey: "oauth-test", // pragma: allowlist secret
+    source: "test",
+    mode: "oauth",
+  })),
+  requireApiKeyMock: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
+  setRuntimeApiKeyMock: vi.fn(),
+  discoverModelsMock: vi.fn(),
 }));
-const resolveApiKeyForProviderMock = vi.fn(async () => ({
-  apiKey: "oauth-test", // pragma: allowlist secret
-  source: "test",
-  mode: "oauth",
-}));
-const requireApiKeyMock = vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? "");
-const setRuntimeApiKeyMock = vi.fn();
-const discoverModelsMock = vi.fn();
-type ImageModule = typeof import("./image.js");
+const {
+  completeMock,
+  minimaxUnderstandImageMock,
+  ensureOpenClawModelsJsonMock,
+  getApiKeyForModelMock,
+  resolveApiKeyForProviderMock,
+  requireApiKeyMock,
+  setRuntimeApiKeyMock,
+  discoverModelsMock,
+} = hoisted;
 
-let describeImageWithModel: ImageModule["describeImageWithModel"];
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+  return {
+    ...actual,
+    complete: completeMock,
+  };
+});
+
+vi.mock("../../agents/minimax-vlm.js", () => ({
+  isMinimaxVlmProvider: (provider: string) =>
+    provider === "minimax" || provider === "minimax-portal",
+  isMinimaxVlmModel: (provider: string, modelId: string) =>
+    (provider === "minimax" || provider === "minimax-portal") && modelId === "MiniMax-VL-01",
+  minimaxUnderstandImage: minimaxUnderstandImageMock,
+}));
+
+vi.mock("../../agents/models-config.js", () => ({
+  ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
+}));
+
+vi.mock("../../agents/model-auth.js", () => ({
+  getApiKeyForModel: getApiKeyForModelMock,
+  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+  requireApiKey: requireApiKeyMock,
+}));
+
+vi.mock("../../agents/pi-model-discovery-runtime.js", () => ({
+  discoverAuthStorage: () => ({
+    setRuntimeApiKey: setRuntimeApiKeyMock,
+  }),
+  discoverModels: discoverModelsMock,
+}));
+
+const { describeImageWithModel } = await import("./image.js");
 
 describe("describeImageWithModel", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     vi.clearAllMocks();
-    vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-      return {
-        ...actual,
-        complete: completeMock,
-      };
-    });
-    vi.doMock("../../agents/minimax-vlm.js", () => ({
-      isMinimaxVlmProvider: (provider: string) =>
-        provider === "minimax" || provider === "minimax-portal",
-      isMinimaxVlmModel: (provider: string, modelId: string) =>
-        (provider === "minimax" || provider === "minimax-portal") && modelId === "MiniMax-VL-01",
-      minimaxUnderstandImage: minimaxUnderstandImageMock,
-    }));
-    vi.doMock("../../agents/models-config.js", () => ({
-      ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
-    }));
-    vi.doMock("../../agents/model-auth.js", () => ({
-      getApiKeyForModel: getApiKeyForModelMock,
-      resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-      requireApiKey: requireApiKeyMock,
-    }));
-    vi.doMock("../../agents/pi-model-discovery-runtime.js", () => ({
-      discoverAuthStorage: () => ({
-        setRuntimeApiKey: setRuntimeApiKeyMock,
-      }),
-      discoverModels: discoverModelsMock,
-    }));
-    ({ describeImageWithModel } = await import("./image.js"));
     minimaxUnderstandImageMock.mockResolvedValue("portal ok");
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({

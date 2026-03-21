@@ -28,6 +28,13 @@ export type GatewayProbeResult = {
   configSnapshot: unknown;
 };
 
+export const MIN_PROBE_TIMEOUT_MS = 250;
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+export function clampProbeTimeoutMs(timeoutMs: number): number {
+  return Math.min(MAX_TIMER_DELAY_MS, Math.max(MIN_PROBE_TIMEOUT_MS, timeoutMs));
+}
+
 export async function probeGateway(opts: {
   url: string;
   auth?: GatewayProbeAuth;
@@ -134,21 +141,18 @@ export async function probeGateway(opts: {
       },
     });
 
-    const timer = setTimeout(
-      () => {
-        settle({
-          ok: false,
-          connectLatencyMs,
-          error: connectError ? `connect failed: ${connectError}` : "timeout",
-          close,
-          health: null,
-          status: null,
-          presence: null,
-          configSnapshot: null,
-        });
-      },
-      Math.max(250, opts.timeoutMs),
-    );
+    const timer = setTimeout(() => {
+      settle({
+        ok: false,
+        connectLatencyMs,
+        error: connectError ? `connect failed: ${connectError}` : "timeout",
+        close,
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      });
+    }, clampProbeTimeoutMs(opts.timeoutMs));
 
     client.start();
   });

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveMatrixAccountStorageRoot } from "openclaw/plugin-sdk/matrix";
 import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../../../../test/helpers/temp-home.js";
+import { resolveMatrixAccountStorageRoot } from "../../../runtime-api.js";
 import { maybeRestoreLegacyMatrixBackup } from "./legacy-crypto-restore.js";
 
 function createBackupStatus() {
