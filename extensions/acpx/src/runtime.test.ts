@@ -120,6 +120,8 @@ describe("AcpxRuntime", () => {
     const prompt = logs.find((entry) => entry.kind === "prompt");
     expect(ensure).toBeDefined();
     expect(prompt).toBeDefined();
+    const ensureArgs = (ensure?.args as string[]) ?? [];
+    expect(ensureArgs).toContain("--approve-all");
     expect(prompt?.openclawShell).toBe("acp");
     expect(Array.isArray(prompt?.args)).toBe(true);
     const promptArgs = (prompt?.args as string[]) ?? [];
@@ -149,6 +151,7 @@ describe("AcpxRuntime", () => {
     );
     expect(resumeEntry).toBeDefined();
     const resumeArgs = (resumeEntry?.args as string[]) ?? [];
+    expect(resumeArgs).toContain("--approve-all");
     const resumeFlagIndex = resumeArgs.indexOf("--resume-session");
     expect(resumeFlagIndex).toBeGreaterThanOrEqual(0);
     expect(resumeArgs[resumeFlagIndex + 1]).toBe(resumeSessionId);
@@ -660,7 +663,10 @@ describe("AcpxRuntime", () => {
 
       const logs = await readMockRuntimeLogEntries(logPath);
       expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
-      expect(logs.some((entry) => entry.kind === "new")).toBe(true);
+      const newEntry = logs.find((entry) => entry.kind === "new");
+      expect(newEntry).toBeDefined();
+      const newArgs = (newEntry?.args as string[]) ?? [];
+      expect(newArgs).toContain("--approve-all");
     } finally {
       delete process.env.MOCK_ACPX_ENSURE_EMPTY;
     }
