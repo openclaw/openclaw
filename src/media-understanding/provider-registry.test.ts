@@ -58,4 +58,28 @@ describe("media-understanding provider registry", () => {
 
     expect(provider?.id).toBe("google");
   });
+
+  it("auto-registers media-understanding for config providers with image-capable models (#51392)", () => {
+    const cfg = {
+      models: {
+        providers: {
+          glm: {
+            models: [{ id: "glm-4.6v", input: ["text", "image"] }],
+          },
+          textOnly: {
+            models: [{ id: "text-model", input: ["text"] }],
+          },
+        },
+      },
+    } as never;
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+    const glmProvider = getMediaUnderstandingProvider("glm", registry);
+    const textOnlyProvider = getMediaUnderstandingProvider("textOnly", registry);
+
+    expect(glmProvider?.id).toBe("glm");
+    expect(glmProvider?.capabilities).toEqual(["image"]);
+    expect(glmProvider?.describeImage).toBeDefined();
+    expect(glmProvider?.describeImages).toBeDefined();
+    expect(textOnlyProvider).toBeUndefined();
+  });
 });
