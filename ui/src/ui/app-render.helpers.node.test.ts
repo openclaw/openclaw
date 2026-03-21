@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildUniqueChatSessionIdentity,
   isCronSessionKey,
   parseSessionKey,
+  resolveSessionOptionGroups,
   resolveSessionDisplayName,
 } from "./app-render.helpers.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -11,6 +13,42 @@ type SessionRow = SessionsListResult["sessions"][number];
 function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
   return { kind: "direct", updatedAt: 0, ...overrides };
 }
+
+describe("buildUniqueChatSessionIdentity", () => {
+  it("builds a new agent-scoped session key from the requested label", () => {
+    expect(
+      buildUniqueChatSessionIdentity({
+        agentId: "main",
+        requestedLabel: "Project Alpha",
+        sessions: { sessions: [] },
+      }),
+    ).toEqual({
+      key: "agent:main:project-alpha",
+      label: "Project Alpha",
+    });
+  });
+
+  it("adds a numeric suffix when the key or label already exists", () => {
+    const sessions: SessionsListResult = {
+      sessions: [
+        row({
+          key: "agent:main:project-alpha",
+          label: "Project Alpha",
+        }),
+      ],
+    };
+    expect(
+      buildUniqueChatSessionIdentity({
+        agentId: "main",
+        requestedLabel: "Project Alpha",
+        sessions,
+      }),
+    ).toEqual({
+      key: "agent:main:project-alpha-2",
+      label: "Project Alpha 2",
+    });
+  });
+});
 
 /* ================================================================
  *  parseSessionKey – low-level key → type / fallback mapping
@@ -282,5 +320,54 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("resolveSessionOptionGroups", () => {
+  it("sorts sessions by most recent updatedAt first within the same agent group", () => {
+    const groups = resolveSessionOptionGroups(
+      {
+        sessionsHideCron: true,
+        agentsList: { agents: [{ id: "main", name: "Main" }] },
+      } as never,
+      "agent:main:older",
+      {
+        sessions: [
+          row({ key: "agent:main:older", updatedAt: 100 }),
+          row({ key: "agent:main:newer", updatedAt: 200 }),
+          row({ key: "agent:main:newest", updatedAt: 300 }),
+        ],
+      },
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.options.map((entry) => entry.key)).toEqual([
+      "agent:main:newest",
+      "agent:main:newer",
+      "agent:main:older",
+    ]);
+  });
+
+  it("sorts agent groups by their most recently used session", () => {
+    const groups = resolveSessionOptionGroups(
+      {
+        sessionsHideCron: true,
+        agentsList: {
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "ops", name: "Ops" },
+          ],
+        },
+      } as never,
+      "agent:main:chat-a",
+      {
+        sessions: [
+          row({ key: "agent:main:chat-a", updatedAt: 100 }),
+          row({ key: "agent:ops:chat-b", updatedAt: 500 }),
+        ],
+      },
+    );
+
+    expect(groups.map((entry) => entry.id)).toEqual(["agent:ops", "agent:main"]);
   });
 });

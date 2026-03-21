@@ -1,6 +1,8 @@
 import { html, nothing } from "lit";
+import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
+import { buildAgentMainSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
@@ -76,13 +78,6 @@ export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: bo
           return;
         }
         event.preventDefault();
-        if (tab === "chat") {
-          const mainSessionKey = resolveSidebarChatSessionKey(state);
-          if (state.sessionKey !== mainSessionKey) {
-            resetChatStateForSessionSwitch(state, mainSessionKey);
-            void state.loadAssistantIdentity();
-          }
-        }
         state.setTab(tab);
       }}
       title=${titleForTab(tab)}
@@ -140,7 +135,7 @@ export function renderChatSessionSelect(state: AppViewState) {
     <div class="chat-controls__session-row">
       <label class="field chat-controls__session">
         <select
-          .value=${state.sessionKey}
+          .value=${live(state.sessionKey)}
           ?disabled=${!state.connected || sessionGroups.length === 0}
           @change=${(e: Event) => {
             const next = (e.target as HTMLSelectElement).value;
@@ -159,7 +154,11 @@ export function renderChatSessionSelect(state: AppViewState) {
                   group.options,
                   (entry) => entry.key,
                   (entry) =>
-                    html`<option value=${entry.key} title=${entry.title}>
+                    html`<option
+                      value=${entry.key}
+                      title=${entry.title}
+                      ?selected=${entry.key === state.sessionKey}
+                    >
                       ${entry.label}
                     </option>`,
                 )}
@@ -410,7 +409,7 @@ export function renderChatMobileToggle(state: AppViewState) {
         <div class="chat-controls">
           <label class="field chat-controls__session">
             <select
-              .value=${state.sessionKey}
+              .value=${live(state.sessionKey)}
               @change=${(e: Event) => {
                 const next = (e.target as HTMLSelectElement).value;
                 switchChatSession(state, next);
@@ -421,7 +420,11 @@ export function renderChatMobileToggle(state: AppViewState) {
                   <optgroup label=${group.label}>
                     ${group.options.map(
                       (opt) => html`
-                        <option value=${opt.key} title=${opt.title}>
+                        <option
+                          value=${opt.key}
+                          title=${opt.title}
+                          ?selected=${opt.key === state.sessionKey}
+                        >
                           ${opt.label}
                         </option>
                       `,
@@ -510,6 +513,88 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   );
   void loadChatHistory(state as unknown as ChatState);
   void refreshSessionOptions(state);
+}
+
+function slugifySessionLabel(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  const slug = trimmed
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return slug || "session";
+}
+
+function buildSessionNameSuggestion(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  const hour = String(now.getHours()).padStart(2, "0");
+  const minute = String(now.getMinutes()).padStart(2, "0");
+  return `chat-${month}${day}-${hour}${minute}`;
+}
+
+function normalizeSessionLabelValue(value: string | undefined | null): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+export function buildUniqueChatSessionIdentity(params: {
+  agentId: string;
+  requestedLabel: string;
+  sessions: SessionsListResult | null;
+}): { key: string; label: string } {
+  const requestedLabel = params.requestedLabel.trim() || buildSessionNameSuggestion();
+  const rows = params.sessions?.sessions ?? [];
+  const takenKeys = new Set(rows.map((row) => row.key.trim().toLowerCase()));
+  const takenLabels = new Set(
+    rows.flatMap((row) =>
+      [row.label, row.displayName].map((value) => normalizeSessionLabelValue(value)).filter(Boolean),
+    ),
+  );
+  const baseSlug = slugifySessionLabel(requestedLabel);
+  let attempt = 0;
+  while (attempt < 500) {
+    const suffix = attempt === 0 ? "" : `-${attempt + 1}`;
+    const label = attempt === 0 ? requestedLabel : `${requestedLabel} ${attempt + 1}`;
+    const key = buildAgentMainSessionKey({
+      agentId: params.agentId,
+      mainKey: `${baseSlug}${suffix}`,
+    });
+    if (!takenKeys.has(key.toLowerCase()) && !takenLabels.has(label.toLowerCase())) {
+      return { key, label };
+    }
+    attempt += 1;
+  }
+  const fallbackKey = buildAgentMainSessionKey({
+    agentId: params.agentId,
+    mainKey: `${baseSlug}-${Date.now()}`,
+  });
+  return { key: fallbackKey, label: `${requestedLabel} ${Date.now()}` };
+}
+
+export async function createAndSwitchChatSession(state: AppViewState): Promise<void> {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const activeRow = resolveActiveSessionRow(state);
+  const promptDefault = activeRow?.label?.trim() || buildSessionNameSuggestion();
+  const requestedLabel = window.prompt("Name the new session", promptDefault);
+  if (requestedLabel === null) {
+    return;
+  }
+  const agentId = parseAgentSessionKey(state.sessionKey)?.agentId ?? "main";
+  const { key, label } = buildUniqueChatSessionIdentity({
+    agentId,
+    requestedLabel,
+    sessions: state.sessionsResult,
+  });
+  try {
+    await state.client.request("sessions.patch", { key, label });
+    switchChatSession(state, key);
+  } catch (err) {
+    state.lastError = String(err);
+    return;
+  }
 }
 
 async function refreshSessionOptions(state: AppViewState) {
@@ -777,6 +862,7 @@ type SessionOptionEntry = {
   label: string;
   scopeLabel: string;
   title: string;
+  updatedAt: number;
 };
 
 type SessionOptionGroup = {
@@ -833,6 +919,7 @@ export function resolveSessionOptionGroups(
       label,
       scopeLabel,
       title: key,
+      updatedAt: resolveSessionUpdatedAt(row),
     });
   };
 
@@ -848,6 +935,12 @@ export function resolveSessionOptionGroups(
   addOption(sessionKey);
 
   for (const group of groups.values()) {
+    group.options.sort((a, b) => {
+      if (b.updatedAt !== a.updatedAt) {
+        return b.updatedAt - a.updatedAt;
+      }
+      return a.label.localeCompare(b.label);
+    });
     const counts = new Map<string, number>();
     for (const option of group.options) {
       counts.set(option.label, (counts.get(option.label) ?? 0) + 1);
@@ -859,7 +952,14 @@ export function resolveSessionOptionGroups(
     }
   }
 
-  return Array.from(groups.values());
+  return Array.from(groups.values()).sort((a, b) => {
+    const aLatest = a.options[0]?.updatedAt ?? 0;
+    const bLatest = b.options[0]?.updatedAt ?? 0;
+    if (bLatest !== aLatest) {
+      return bLatest - aLatest;
+    }
+    return a.label.localeCompare(b.label);
+  });
 }
 
 /** Count sessions with a cron: key that would be hidden when hideCron=true. */
@@ -897,6 +997,10 @@ function resolveSessionScopedOptionLabel(
   }
 
   return base;
+}
+
+function resolveSessionUpdatedAt(row?: SessionsListResult["sessions"][number]): number {
+  return typeof row?.updatedAt === "number" ? row.updatedAt : 0;
 }
 
 type ThemeOption = { id: ThemeName; label: string; icon: string };
