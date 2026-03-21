@@ -10,9 +10,14 @@ HOST_PORT="18426"
 HOST_PORT_EXPLICIT=0
 HOST_IP=""
 LATEST_VERSION=""
+INSTALL_VERSION=""
+TARGET_PACKAGE_SPEC=""
 JSON_OUTPUT=0
 KEEP_SERVER=0
 CHECK_LATEST_REF=1
+SNAPSHOT_ID=""
+SNAPSHOT_STATE=""
+SNAPSHOT_NAME=""
 
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
@@ -42,6 +47,14 @@ UPGRADE_AGENT_STATUS="skip"
 
 say() {
   printf '==> %s\n' "$*"
+}
+
+artifact_label() {
+  if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
+    printf 'target package tgz'
+    return
+  fi
+  printf 'current main tgz'
 }
 
 warn() {
@@ -77,6 +90,10 @@ Options:
   --host-port <port>         Host HTTP port for current-main tgz. Default: 18426
   --host-ip <ip>             Override Parallels host IP.
   --latest-version <ver>     Override npm latest version lookup.
+  --install-version <ver>    Pin site-installer version/dist-tag for the baseline lane.
+  --target-package-spec <npm-spec>
+                             Install this npm package tarball instead of packing current main.
+                             Example: openclaw@2026.3.13-beta.1
   --skip-latest-ref-check    Skip latest-release ref-mode precheck.
   --keep-server              Leave temp host HTTP server running.
   --json                     Print machine-readable JSON summary.
@@ -117,6 +134,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --latest-version)
       LATEST_VERSION="$2"
+      shift 2
+      ;;
+    --install-version)
+      INSTALL_VERSION="$2"
+      shift 2
+      ;;
+    --target-package-spec)
+      TARGET_PACKAGE_SPEC="$2"
       shift 2
       ;;
     --skip-latest-ref-check)
@@ -172,7 +197,7 @@ ps_array_literal() {
   printf '@(%s)' "$joined"
 }
 
-resolve_snapshot_id() {
+resolve_snapshot_info() {
   local json hint
   json="$(prlctl snapshot-list "$VM_NAME" --json)"
   hint="$SNAPSHOT_HINT"
@@ -180,28 +205,54 @@ resolve_snapshot_id() {
 import difflib
 import json
 import os
+import re
 import sys
 
 payload = json.loads(os.environ["SNAPSHOT_JSON"])
 hint = os.environ["SNAPSHOT_HINT"].strip().lower()
 best_id = None
+best_meta = None
 best_score = -1.0
+
+def aliases(name: str) -> list[str]:
+    values = [name]
+    for pattern in (
+        r"^(.*)-poweroff$",
+        r"^(.*)-poweroff-\d{4}-\d{2}-\d{2}$",
+    ):
+        match = re.match(pattern, name)
+        if match:
+            values.append(match.group(1))
+    return values
+
 for snapshot_id, meta in payload.items():
     name = str(meta.get("name", "")).strip()
     lowered = name.lower()
     score = 0.0
-    if lowered == hint:
-        score = 10.0
-    elif hint and hint in lowered:
-        score = 5.0 + len(hint) / max(len(lowered), 1)
-    else:
-        score = difflib.SequenceMatcher(None, hint, lowered).ratio()
+    for alias in aliases(lowered):
+        if alias == hint:
+            score = max(score, 10.0)
+        elif hint and hint in alias:
+            score = max(score, 5.0 + len(hint) / max(len(alias), 1))
+        else:
+            score = max(score, difflib.SequenceMatcher(None, hint, alias).ratio())
+    if str(meta.get("state", "")).lower() == "poweroff":
+        score += 0.5
     if score > best_score:
         best_score = score
         best_id = snapshot_id
+        best_meta = meta
 if not best_id:
     sys.exit("no snapshot matched")
-print(best_id)
+print(
+    "\t".join(
+        [
+            best_id,
+            str(best_meta.get("state", "")).strip(),
+            str(best_meta.get("name", "")).strip(),
+        ]
+    )
+)
 PY
 }
 
@@ -316,10 +367,29 @@ restore_snapshot() {
   local snapshot_id="$1"
   say "Restore snapshot $SNAPSHOT_HINT ($snapshot_id)"
   prlctl snapshot-switch "$VM_NAME" --id "$snapshot_id" >/dev/null
+  if [[ "$SNAPSHOT_STATE" == "poweroff" ]]; then
+    wait_for_vm_status "stopped" || die "restored poweroff snapshot did not reach stopped state in $VM_NAME"
+    say "Start restored poweroff snapshot $SNAPSHOT_NAME"
+    prlctl start "$VM_NAME" >/dev/null
+  fi
 }
 
 verify_windows_user_ready() {
   guest_exec cmd.exe /d /s /c "echo ready"
+}
+
+wait_for_vm_status() {
+  local expected="$1"
+  local deadline status
+  deadline=$((SECONDS + TIMEOUT_SNAPSHOT_S))
+  while (( SECONDS < deadline )); do
+    status="$(prlctl status "$VM_NAME" 2>/dev/null || true)"
+    if [[ "$status" == *" $expected" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 wait_for_guest_ready() {
@@ -349,9 +419,10 @@ phase_run() {
   local timeout_s="$2"
   shift 2
 
-  local log_path pid rc timed_out
+  local log_path pid start rc timed_out
   log_path="$(phase_log_path "$phase_id")"
   say "$phase_id"
+  start=$SECONDS
   timed_out=0
 
   (
@@ -359,25 +430,21 @@ phase_run() {
   ) >"$log_path" 2>&1 &
   pid=$!
 
-  (
-    sleep "$timeout_s"
-    kill "$pid" >/dev/null 2>&1 || true
-    sleep 2
-    kill -9 "$pid" >/dev/null 2>&1 || true
-  ) &
-  local killer_pid=$!
+  while kill -0 "$pid" >/dev/null 2>&1; do
+    if (( SECONDS - start >= timeout_s )); then
+      timed_out=1
+      kill "$pid" >/dev/null 2>&1 || true
+      sleep 2
+      kill -9 "$pid" >/dev/null 2>&1 || true
+      break
+    fi
+    sleep 1
+  done
 
   set +e
   wait "$pid"
   rc=$?
   set -e
-
-  if kill -0 "$killer_pid" >/dev/null 2>&1; then
-    kill "$killer_pid" >/dev/null 2>&1 || true
-    wait "$killer_pid" >/dev/null 2>&1 || true
-  else
-    timed_out=1
-  fi
 
   if (( timed_out )); then
     warn "$phase_id timed out after ${timeout_s}s"
@@ -421,6 +488,8 @@ summary = {
     "snapshotId": os.environ["SUMMARY_SNAPSHOT_ID"],
     "mode": os.environ["SUMMARY_MODE"],
     "latestVersion": os.environ["SUMMARY_LATEST_VERSION"],
+    "installVersion": os.environ["SUMMARY_INSTALL_VERSION"],
+    "targetPackageSpec": os.environ["SUMMARY_TARGET_PACKAGE_SPEC"],
     "currentHead": os.environ["SUMMARY_CURRENT_HEAD"],
     "runDir": os.environ["SUMMARY_RUN_DIR"],
     "freshMain": {
@@ -556,6 +625,7 @@ ensure_guest_git() {
     return
   fi
   guest_exec cmd.exe /d /s /c "if exist \"%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\" rmdir /s /q \"%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\""
+  guest_exec cmd.exe /d /s /c "if not exist \"%LOCALAPPDATA%\\OpenClaw\\deps\" mkdir \"%LOCALAPPDATA%\\OpenClaw\\deps\""
   guest_exec cmd.exe /d /s /c "mkdir \"%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\""
   guest_exec cmd.exe /d /s /c "curl.exe -fsSL \"$mingit_url\" -o \"%TEMP%\\$MINGIT_ZIP_NAME\""
   guest_exec cmd.exe /d /s /c "tar.exe -xf \"%TEMP%\\$MINGIT_ZIP_NAME\" -C \"%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\""
@@ -563,9 +633,30 @@ ensure_guest_git() {
 }
 
 pack_main_tgz() {
+  local mingit_name mingit_url short_head pkg
+  if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
+    say "Pack target package tgz: $TARGET_PACKAGE_SPEC"
+    mapfile -t mingit_meta < <(resolve_mingit_download)
+    mingit_name="${mingit_meta[0]}"
+    mingit_url="${mingit_meta[1]}"
+    MINGIT_ZIP_NAME="$mingit_name"
+    MINGIT_ZIP_PATH="$MAIN_TGZ_DIR/$mingit_name"
+    if [[ ! -f "$MINGIT_ZIP_PATH" ]]; then
+      say "Download $MINGIT_ZIP_NAME"
+      curl -fsSL "$mingit_url" -o "$MINGIT_ZIP_PATH"
+    fi
+    pkg="$(
+      npm pack "$TARGET_PACKAGE_SPEC" --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
+        | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
+    )"
+    MAIN_TGZ_PATH="$MAIN_TGZ_DIR/$(basename "$pkg")"
+    TARGET_EXPECT_VERSION="$(tar -xOf "$MAIN_TGZ_PATH" package/package.json | python3 -c "import json, sys; print(json.load(sys.stdin)['version'])")"
+    say "Packed $MAIN_TGZ_PATH"
+    say "Target package version: $TARGET_EXPECT_VERSION"
+    return
+  fi
   say "Pack current main tgz"
   ensure_current_build
-  local mingit_name mingit_url
   mapfile -t mingit_meta < <(resolve_mingit_download)
   mingit_name="${mingit_meta[0]}"
   mingit_url="${mingit_meta[1]}"
@@ -575,7 +666,6 @@ pack_main_tgz() {
     say "Download $MINGIT_ZIP_NAME"
     curl -fsSL "$mingit_url" -o "$MINGIT_ZIP_PATH"
   fi
-  local short_head pkg
   short_head="$(git rev-parse --short HEAD)"
   pkg="$(
     npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
@@ -587,6 +677,14 @@ pack_main_tgz() {
   tar -xOf "$MAIN_TGZ_PATH" package/dist/build-info.json
 }
 
+verify_target_version() {
+  if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
+    verify_version_contains "$TARGET_EXPECT_VERSION"
+    return
+  fi
+  verify_version_contains "$(git rev-parse --short=7 HEAD)"
+}
+
 start_server() {
   local host_ip="$1"
   local artifact probe_url attempt
@@ -594,7 +692,7 @@ start_server() {
   attempt=0
   while :; do
     attempt=$((attempt + 1))
-    say "Serve current main tgz on $host_ip:$HOST_PORT"
+    say "Serve $(artifact_label) on $host_ip:$HOST_PORT"
     (
       cd "$MAIN_TGZ_DIR"
       exec python3 -m http.server "$HOST_PORT" --bind 0.0.0.0
@@ -617,12 +715,16 @@ start_server() {
 }
 
 install_latest_release() {
-  local install_url_q
+  local install_url_q version_flag_q
   install_url_q="$(ps_single_quote "$INSTALL_URL")"
+  version_flag_q=""
+  if [[ -n "$INSTALL_VERSION" ]]; then
+    version_flag_q="-Tag '$(ps_single_quote "$INSTALL_VERSION")' "
+  fi
   guest_powershell "$(cat <<EOF
 \$ProgressPreference = 'SilentlyContinue'
 \$script = Invoke-RestMethod -Uri '$install_url_q'
-& ([scriptblock]::Create(\$script)) -NoOnboard
+& ([scriptblock]::Create(\$script)) ${version_flag_q}-NoOnboard
 & (Join-Path \$env:APPDATA 'npm\openclaw.cmd') --version
 EOF
 )"
@@ -713,7 +815,7 @@ show_gateway_status_compat() {
 }
 
 verify_turn() {
-  guest_run_openclaw "" "" agent --agent main --message ping --json
+  guest_run_openclaw "" "" agent --agent main --message "Reply with exact ASCII text OK only." --json
 }
 
 capture_latest_ref_failure() {
@@ -740,7 +842,7 @@ run_fresh_main_lane() {
   phase_run "fresh.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip" || return $?
   phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz" || return $?
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
-  phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$(git rev-parse --short=7 HEAD)" || return $?
+  phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard || return $?
   phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway || return $?
   FRESH_GATEWAY_STATUS="pass"
@@ -768,7 +870,7 @@ run_upgrade_lane() {
   phase_run "upgrade.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip" || return $?
   phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz" || return $?
   UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
-  phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$(git rev-parse --short=7 HEAD)" || return $?
+  phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard || return $?
   phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway || return $?
   UPGRADE_GATEWAY_STATUS="pass"
@@ -776,13 +878,16 @@ run_upgrade_lane() {
   UPGRADE_AGENT_STATUS="pass"
 }
 
-SNAPSHOT_ID="$(resolve_snapshot_id)"
+IFS=$'\t' read -r SNAPSHOT_ID SNAPSHOT_STATE SNAPSHOT_NAME <<<"$(resolve_snapshot_info)"
+[[ -n "$SNAPSHOT_ID" ]] || die "failed to resolve snapshot id"
+[[ -n "$SNAPSHOT_NAME" ]] || SNAPSHOT_NAME="$SNAPSHOT_HINT"
 LATEST_VERSION="$(resolve_latest_version)"
 HOST_IP="$(resolve_host_ip)"
 HOST_PORT="$(resolve_host_port)"
 
 say "VM: $VM_NAME"
 say "Snapshot hint: $SNAPSHOT_HINT"
+say "Resolved snapshot: $SNAPSHOT_NAME [$SNAPSHOT_STATE]"
 say "Latest npm version: $LATEST_VERSION"
 say "Current head: $(git rev-parse --short HEAD)"
 say "Run logs: $RUN_DIR"
@@ -825,6 +930,8 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_SNAPSHOT_ID="$SNAPSHOT_ID" \
   SUMMARY_MODE="$MODE" \
   SUMMARY_LATEST_VERSION="$LATEST_VERSION" \
+  SUMMARY_INSTALL_VERSION="$INSTALL_VERSION" \
+  SUMMARY_TARGET_PACKAGE_SPEC="$TARGET_PACKAGE_SPEC" \
   SUMMARY_CURRENT_HEAD="$(git rev-parse --short HEAD)" \
   SUMMARY_RUN_DIR="$RUN_DIR" \
   SUMMARY_FRESH_MAIN_STATUS="$FRESH_MAIN_STATUS" \
@@ -844,6 +951,12 @@ if [[ "$JSON_OUTPUT" -eq 1 ]]; then
   cat "$SUMMARY_JSON_PATH"
 else
   printf '\nSummary:\n'
+  if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
+    printf '  target-package: %s\n' "$TARGET_PACKAGE_SPEC"
+  fi
+  if [[ -n "$INSTALL_VERSION" ]]; then
+    printf '  baseline-install-version: %s\n' "$INSTALL_VERSION"
+  fi
   printf '  fresh-main: %s (%s)\n' "$FRESH_MAIN_STATUS" "$FRESH_MAIN_VERSION"
   printf '  latest->main precheck: %s (%s)\n' "$UPGRADE_PRECHECK_STATUS" "$LATEST_INSTALLED_VERSION"
   printf '  latest->main: %s (%s)\n' "$UPGRADE_STATUS" "$UPGRADE_MAIN_VERSION"

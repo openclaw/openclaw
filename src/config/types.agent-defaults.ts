@@ -122,6 +122,8 @@ export type AgentDefaultsConfig = {
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentModelConfig;
+  /** Optional image-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
+  imageGenerationModel?: AgentModelConfig;
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   pdfModel?: AgentModelConfig;
   /** Maximum PDF file size in megabytes (default: 10). */
@@ -256,6 +258,13 @@ export type AgentDefaultsConfig = {
      */
     lightContext?: boolean;
     /**
+     * If true, run heartbeat turns in an isolated session with no prior
+     * conversation history. The heartbeat only sees its bootstrap context
+     * (HEARTBEAT.md when lightContext is also enabled). Dramatically reduces
+     * per-heartbeat token cost by avoiding the full session transcript.
+     */
+    isolatedSession?: boolean;
+    /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
      *
@@ -273,7 +282,7 @@ export type AgentDefaultsConfig = {
     maxSpawnDepth?: number;
     /** Maximum active children a single requester session may spawn. Default behavior: 5. */
     maxChildrenPerAgent?: number;
-    /** Auto-archive sub-agent sessions after N minutes (default: 60). */
+    /** Auto-archive sub-agent sessions after N minutes (default: 60, set 0 to disable). */
     archiveAfterMinutes?: number;
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
@@ -333,6 +342,8 @@ export type AgentCompactionConfig = {
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
+  /** Maximum time in seconds for a single compaction operation (default: 900). */
+  timeoutSeconds?: number;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

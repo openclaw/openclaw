@@ -8,45 +8,51 @@ const getApiKeyForModelMock = vi.fn(async () => ({
   source: "test",
   mode: "oauth",
 }));
+const resolveApiKeyForProviderMock = vi.fn(async () => ({
+  apiKey: "oauth-test", // pragma: allowlist secret
+  source: "test",
+  mode: "oauth",
+}));
 const requireApiKeyMock = vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? "");
 const setRuntimeApiKeyMock = vi.fn();
 const discoverModelsMock = vi.fn();
+type ImageModule = typeof import("./image.js");
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-  return {
-    ...actual,
-    complete: completeMock,
-  };
-});
-
-vi.mock("../../agents/minimax-vlm.js", () => ({
-  isMinimaxVlmProvider: (provider: string) =>
-    provider === "minimax" || provider === "minimax-portal",
-  isMinimaxVlmModel: (provider: string, modelId: string) =>
-    (provider === "minimax" || provider === "minimax-portal") && modelId === "MiniMax-VL-01",
-  minimaxUnderstandImage: minimaxUnderstandImageMock,
-}));
-
-vi.mock("../../agents/models-config.js", () => ({
-  ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
-}));
-
-vi.mock("../../agents/model-auth.js", () => ({
-  getApiKeyForModel: getApiKeyForModelMock,
-  requireApiKey: requireApiKeyMock,
-}));
-
-vi.mock("../../agents/pi-model-discovery-runtime.js", () => ({
-  discoverAuthStorage: () => ({
-    setRuntimeApiKey: setRuntimeApiKeyMock,
-  }),
-  discoverModels: discoverModelsMock,
-}));
+let describeImageWithModel: ImageModule["describeImageWithModel"];
 
 describe("describeImageWithModel", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+      return {
+        ...actual,
+        complete: completeMock,
+      };
+    });
+    vi.doMock("../../agents/minimax-vlm.js", () => ({
+      isMinimaxVlmProvider: (provider: string) =>
+        provider === "minimax" || provider === "minimax-portal",
+      isMinimaxVlmModel: (provider: string, modelId: string) =>
+        (provider === "minimax" || provider === "minimax-portal") && modelId === "MiniMax-VL-01",
+      minimaxUnderstandImage: minimaxUnderstandImageMock,
+    }));
+    vi.doMock("../../agents/models-config.js", () => ({
+      ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
+    }));
+    vi.doMock("../../agents/model-auth.js", () => ({
+      getApiKeyForModel: getApiKeyForModelMock,
+      resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+      requireApiKey: requireApiKeyMock,
+    }));
+    vi.doMock("../../agents/pi-model-discovery-runtime.js", () => ({
+      discoverAuthStorage: () => ({
+        setRuntimeApiKey: setRuntimeApiKeyMock,
+      }),
+      discoverModels: discoverModelsMock,
+    }));
+    ({ describeImageWithModel } = await import("./image.js"));
     minimaxUnderstandImageMock.mockResolvedValue("portal ok");
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
@@ -59,8 +65,6 @@ describe("describeImageWithModel", () => {
   });
 
   it("routes minimax-portal image models through the MiniMax VLM endpoint", async () => {
-    const { describeImageWithModel } = await import("./image.js");
-
     const result = await describeImageWithModel({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
@@ -109,8 +113,6 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "generic ok" }],
     });
 
-    const { describeImageWithModel } = await import("./image.js");
-
     const result = await describeImageWithModel({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
@@ -152,8 +154,6 @@ describe("describeImageWithModel", () => {
       timestamp: Date.now(),
       content: [{ type: "text", text: "flash ok" }],
     });
-
-    const { describeImageWithModel } = await import("./image.js");
 
     const result = await describeImageWithModel({
       cfg: {},
@@ -202,8 +202,6 @@ describe("describeImageWithModel", () => {
       timestamp: Date.now(),
       content: [{ type: "text", text: "flash lite ok" }],
     });
-
-    const { describeImageWithModel } = await import("./image.js");
 
     const result = await describeImageWithModel({
       cfg: {},

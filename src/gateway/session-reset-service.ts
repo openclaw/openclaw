@@ -12,10 +12,10 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
-import { unbindThreadBindingsBySessionKey } from "../discord/monitor/thread-bindings.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -31,6 +31,12 @@ import {
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
+let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | undefined;
+
+function getChannelRuntime() {
+  cachedChannelRuntime ??= createPluginRuntime().channel;
+  return cachedChannelRuntime;
+}
 
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
   if (!entry) {
@@ -70,7 +76,8 @@ export async function emitSessionUnboundLifecycleEvent(params: {
   emitHooks?: boolean;
 }) {
   const targetKind = isSubagentSessionKey(params.targetSessionKey) ? "subagent" : "acp";
-  unbindThreadBindingsBySessionKey({
+  const channelRuntime = getChannelRuntime();
+  channelRuntime.discord.threadBindings.unbindBySessionKey({
     targetSessionKey: params.targetSessionKey,
     targetKind,
     reason: params.reason,

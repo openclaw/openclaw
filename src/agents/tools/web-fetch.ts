@@ -10,13 +10,14 @@ import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
+  extractBasicHtmlContent,
   extractReadableContent,
   htmlToMarkdown,
   markdownToText,
   truncateText,
   type ExtractMode,
 } from "./web-fetch-utils.js";
-import { fetchWithWebToolsNetworkGuard } from "./web-guarded-fetch.js";
+import { fetchWithWebToolsNetworkGuard, withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -26,7 +27,6 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
-  withTimeout,
   writeCache,
 } from "./web-shared.js";
 
@@ -161,11 +161,12 @@ function resolveFirecrawlEnabled(params: {
 }
 
 function resolveFirecrawlBaseUrl(firecrawl?: FirecrawlFetchConfig): string {
-  const raw =
+  const fromConfig =
     firecrawl && "baseUrl" in firecrawl && typeof firecrawl.baseUrl === "string"
       ? firecrawl.baseUrl.trim()
       : "";
-  return raw || DEFAULT_FIRECRAWL_BASE_URL;
+  const fromEnv = normalizeSecretInput(process.env.FIRECRAWL_BASE_URL);
+  return fromConfig || fromEnv || DEFAULT_FIRECRAWL_BASE_URL;
 }
 
 function resolveFirecrawlOnlyMainContent(firecrawl?: FirecrawlFetchConfig): boolean {
@@ -381,54 +382,59 @@ export async function fetchFirecrawlContent(params: {
     proxy: params.proxy,
     storeInCache: params.storeInCache,
   };
-
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${params.apiKey}`,
-      "Content-Type": "application/json",
+  return await withTrustedWebToolsEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${params.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      },
     },
-    body: JSON.stringify(body),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
-  });
-
-  const payload = (await res.json()) as {
-    success?: boolean;
-    data?: {
-      markdown?: string;
-      content?: string;
-      metadata?: {
-        title?: string;
-        sourceURL?: string;
-        statusCode?: number;
+    async ({ response }) => {
+      const payload = (await response.json()) as {
+        success?: boolean;
+        data?: {
+          markdown?: string;
+          content?: string;
+          metadata?: {
+            title?: string;
+            sourceURL?: string;
+            statusCode?: number;
+          };
+        };
+        warning?: string;
+        error?: string;
       };
-    };
-    warning?: string;
-    error?: string;
-  };
 
-  if (!res.ok || payload?.success === false) {
-    const detail = payload?.error ?? "";
-    throw new Error(
-      `Firecrawl fetch failed (${res.status}): ${wrapWebContent(detail || res.statusText, "web_fetch")}`.trim(),
-    );
-  }
+      if (!response.ok || payload?.success === false) {
+        const detail = payload?.error ?? "";
+        throw new Error(
+          `Firecrawl fetch failed (${response.status}): ${wrapWebContent(detail || response.statusText, "web_fetch")}`.trim(),
+        );
+      }
 
-  const data = payload?.data ?? {};
-  const rawText =
-    typeof data.markdown === "string"
-      ? data.markdown
-      : typeof data.content === "string"
-        ? data.content
-        : "";
-  const text = params.extractMode === "text" ? markdownToText(rawText) : rawText;
-  return {
-    text,
-    title: data.metadata?.title,
-    finalUrl: data.metadata?.sourceURL,
-    status: data.metadata?.statusCode,
-    warning: payload?.warning,
-  };
+      const data = payload?.data ?? {};
+      const rawText =
+        typeof data.markdown === "string"
+          ? data.markdown
+          : typeof data.content === "string"
+            ? data.content
+            : "";
+      const text = params.extractMode === "text" ? markdownToText(rawText) : rawText;
+      return {
+        text,
+        title: data.metadata?.title,
+        finalUrl: data.metadata?.sourceURL,
+        status: data.metadata?.statusCode,
+        warning: payload?.warning,
+      };
+    },
+  );
 }
 
 type FirecrawlRuntimeParams = {
@@ -629,9 +635,19 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
             title = firecrawl.title;
             extractor = "firecrawl";
           } else {
-            throw new Error(
-              "Web fetch extraction failed: Readability and Firecrawl returned no content.",
-            );
+            const basic = await extractBasicHtmlContent({
+              html: body,
+              extractMode: params.extractMode,
+            });
+            if (basic?.text) {
+              text = basic.text;
+              title = basic.title;
+              extractor = "raw-html";
+            } else {
+              throw new Error(
+                "Web fetch extraction failed: Readability, Firecrawl, and basic HTML cleanup returned no content.",
+              );
+            }
           }
         }
       } else {
@@ -784,3 +800,7 @@ export function createWebFetchTool(options?: {
     },
   };
 }
+
+export const __testing = {
+  resolveFirecrawlBaseUrl,
+};

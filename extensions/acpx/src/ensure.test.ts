@@ -85,7 +85,13 @@ describe("acpx ensure", () => {
     });
     expect(spawnAndCollectMock.mock.calls[1]?.[0]).toMatchObject({
       command: "npm",
-      args: ["install", "--omit=dev", "--no-save", `acpx@${ACPX_PINNED_VERSION}`],
+      args: [
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        `acpx@${ACPX_PINNED_VERSION}`,
+      ],
       cwd: "/plugin",
       stripProviderAuthEnvVars,
     });

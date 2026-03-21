@@ -3,6 +3,7 @@ import Foundation
 enum ExecSystemRunCommandValidator {
     struct ResolvedCommand {
         let displayCommand: String
+        let evaluationRawCommand: String?
     }
 
     enum ValidationResult {
@@ -52,18 +53,43 @@ enum ExecSystemRunCommandValidator {
         let envManipulationBeforeShellWrapper = self.hasEnvManipulationBeforeShellWrapper(command)
         let shellWrapperPositionalArgv = self.hasTrailingPositionalArgvAfterInlineCommand(command)
         let mustBindDisplayToFullArgv = envManipulationBeforeShellWrapper || shellWrapperPositionalArgv
-
-        let inferred: String = if let shellCommand, !mustBindDisplayToFullArgv {
+        let formattedArgv = ExecCommandFormatter.displayString(for: command)
+        let previewCommand: String? = if let shellCommand, !mustBindDisplayToFullArgv {
             shellCommand
         } else {
-            ExecCommandFormatter.displayString(for: command)
+            nil
         }
 
-        if let raw = normalizedRaw, raw != inferred {
+        if let raw = normalizedRaw, raw != formattedArgv, raw != previewCommand {
             return .invalid(message: "INVALID_REQUEST: rawCommand does not match command")
         }
 
-        return .ok(ResolvedCommand(displayCommand: normalizedRaw ?? inferred))
+        return .ok(ResolvedCommand(
+            displayCommand: formattedArgv,
+            evaluationRawCommand: self.allowlistEvaluationRawCommand(
+                normalizedRaw: normalizedRaw,
+                shellIsWrapper: shell.isWrapper,
+                previewCommand: previewCommand)))
+    }
+
+    static func allowlistEvaluationRawCommand(command: [String], rawCommand: String?) -> String? {
+        let normalizedRaw = self.normalizeRaw(rawCommand)
+        let shell = ExecShellWrapperParser.extract(command: command, rawCommand: nil)
+        let shellCommand = shell.isWrapper ? self.trimmedNonEmpty(shell.command) : nil
+
+        let envManipulationBeforeShellWrapper = self.hasEnvManipulationBeforeShellWrapper(command)
+        let shellWrapperPositionalArgv = self.hasTrailingPositionalArgvAfterInlineCommand(command)
+        let mustBindDisplayToFullArgv = envManipulationBeforeShellWrapper || shellWrapperPositionalArgv
+        let previewCommand: String? = if let shellCommand, !mustBindDisplayToFullArgv {
+            shellCommand
+        } else {
+            nil
+        }
+
+        return self.allowlistEvaluationRawCommand(
+            normalizedRaw: normalizedRaw,
+            shellIsWrapper: shell.isWrapper,
+            previewCommand: previewCommand)
     }
 
     private static func normalizeRaw(_ rawCommand: String?) -> String? {
@@ -74,6 +100,20 @@ enum ExecSystemRunCommandValidator {
     private static func trimmedNonEmpty(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func allowlistEvaluationRawCommand(
+        normalizedRaw: String?,
+        shellIsWrapper: Bool,
+        previewCommand: String?) -> String?
+    {
+        guard shellIsWrapper else {
+            return normalizedRaw
+        }
+        guard let normalizedRaw else {
+            return nil
+        }
+        return normalizedRaw == previewCommand ? normalizedRaw : nil
     }
 
     private static func normalizeExecutableToken(_ token: String) -> String {

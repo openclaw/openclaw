@@ -1,9 +1,18 @@
 import { Separator, TextDisplay } from "@buape/carbon";
-import { describe, expect, it } from "vitest";
-import { DiscordUiContainer } from "../../discord/ui.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import { discordPlugin } from "../../../extensions/discord/src/channel.js";
+import { DiscordUiContainer } from "../../../extensions/discord/src/ui.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getChannelMessageAdapter } from "./channel-adapters.js";
 
 describe("getChannelMessageAdapter", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
+    );
+  });
+
   it("returns the default adapter for non-discord channels", () => {
     expect(getChannelMessageAdapter("telegram")).toEqual({
       supportsComponentsV2: false,

@@ -256,7 +256,7 @@ Enable with `tools.loopDetection.enabled: true` (default is `false`).
 
 ### `web_search`
 
-Search the web using Perplexity, Brave, Gemini, Grok, or Kimi.
+Search the web using Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily.
 
 Core parameters:
 
@@ -318,8 +318,7 @@ Common parameters:
 - All actions accept optional `profile` parameter for multi-instance support.
 - Omit `profile` for the safe default: isolated OpenClaw-managed browser (`openclaw`).
 - Use `profile="user"` for the real local host browser when existing logins/cookies matter and the user is present to click/approve any attach prompt.
-- Use `profile="chrome-relay"` only for the Chrome extension / toolbar-button attach flow.
-- `profile="user"` and `profile="chrome-relay"` are host-only; do not combine them with sandbox/node targets.
+- `profile="user"` is host-only; do not combine it with sandbox/node targets.
 - When `profile` is omitted, uses `browser.defaultProfile` (defaults to `openclaw`).
 - Profile names: lowercase alphanumeric + hyphens only (max 64 chars).
 - Port range: 18800-18899 (~100 profiles max).
@@ -401,6 +400,46 @@ Notes:
 - Only available when `agents.defaults.imageModel` is configured (primary or fallbacks), or when an implicit image model can be inferred from your default model + configured auth (best-effort pairing).
 - Uses the image model directly (independent of the main chat model).
 
+### `image_generate`
+
+Generate one or more images with the configured or inferred image-generation model.
+
+Core parameters:
+
+- `action` (optional: `generate` or `list`; default `generate`)
+- `prompt` (required)
+- `image` or `images` (optional reference image path/URL for edit mode)
+- `model` (optional provider/model override)
+- `size` (optional size hint)
+- `resolution` (optional `1K|2K|4K` hint)
+- `count` (optional, `1-4`, default `1`)
+
+Notes:
+
+- Available when `agents.defaults.imageGenerationModel` is configured, or when OpenClaw can infer a compatible image-generation default from your enabled providers plus available auth.
+- Explicit `agents.defaults.imageGenerationModel` still wins over any inferred default.
+- Use `action: "list"` to inspect registered providers, default models, supported model ids, sizes, resolutions, and edit support.
+- Returns local `MEDIA:<path>` lines so channels can deliver the generated files directly.
+- Uses the image-generation model directly (independent of the main chat model).
+- Google-backed flows, including `google/gemini-3-pro-image-preview` for the native Nano Banana-style path, support reference-image edits plus explicit `1K|2K|4K` resolution hints.
+- When editing and `resolution` is omitted, OpenClaw infers a draft/final resolution from the input image size.
+- This is the built-in replacement for the old `nano-banana-pro` skill workflow. Use `agents.defaults.imageGenerationModel`, not `skills.entries`, for stock image generation.
+
+Native example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "google/gemini-3-pro-image-preview", // native Nano Banana path
+        fallbacks: ["fal/fal-ai/flux/dev"],
+      },
+    },
+  },
+}
+```
+
 ### `pdf`
 
 Analyze one or more PDF documents.
@@ -409,12 +448,12 @@ For full behavior, limits, config, and examples, see [PDF tool](/tools/pdf).
 
 ### `message`
 
-Send messages and channel actions across Discord/Google Chat/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams.
+Send messages and channel actions across Discord/Google Chat/Slack/Telegram/WhatsApp/Signal/iMessage/Microsoft Teams.
 
 Core actions:
 
-- `send` (text + optional media; MS Teams also supports `card` for Adaptive Cards)
-- `poll` (WhatsApp/Discord/MS Teams polls)
+- `send` (text + optional media; Microsoft Teams also supports `card` for Adaptive Cards)
+- `poll` (WhatsApp/Discord/Microsoft Teams polls)
 - `react` / `reactions` / `read` / `edit` / `delete`
 - `pin` / `unpin` / `list-pins`
 - `permissions`
@@ -432,7 +471,7 @@ Core actions:
 Notes:
 
 - `send` routes WhatsApp via the Gateway; other channels go direct.
-- `poll` uses the Gateway for WhatsApp and MS Teams; Discord polls go direct.
+- `poll` uses the Gateway for WhatsApp and Microsoft Teams; Discord polls go direct.
 - When a message tool call is bound to an active chat session, sends are constrained to that session’s target to avoid cross-context leaks.
 
 ### `cron`

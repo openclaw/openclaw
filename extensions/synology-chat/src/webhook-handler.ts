@@ -9,13 +9,15 @@ import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk/synology-chat";
+} from "../api.js";
 import { sendMessage, resolveChatUserId } from "./client.js";
 import { validateToken, authorizeUserForDm, sanitizeInput, RateLimiter } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 
 // One rate limiter per account, created lazily
 const rateLimiters = new Map<string, RateLimiter>();
+const PREAUTH_MAX_BODY_BYTES = 64 * 1024;
+const PREAUTH_BODY_TIMEOUT_MS = 5_000;
 
 function getRateLimiter(account: ResolvedSynologyChatAccount): RateLimiter {
   let rl = rateLimiters.get(account.accountId);
@@ -49,8 +51,8 @@ async function readBody(req: IncomingMessage): Promise<
 > {
   try {
     const body = await readRequestBodyWithLimit(req, {
-      maxBytes: 1_048_576,
-      timeoutMs: 30_000,
+      maxBytes: PREAUTH_MAX_BODY_BYTES,
+      timeoutMs: PREAUTH_BODY_TIMEOUT_MS,
     });
     return { ok: true, body };
   } catch (err) {

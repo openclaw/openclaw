@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePluginTools } from "../../plugins/tools.js";
 import { ErrorCodes } from "../protocol/index.js";
 import { toolsCatalogHandlers } from "./tools-catalog.js";
 
@@ -116,5 +117,17 @@ describe("tools.catalog handler", () => {
       pluginId: "voice-call",
       optional: true,
     });
+  });
+
+  it("opts plugin tool catalog loads into gateway subagent binding", async () => {
+    const { invoke } = createInvokeParams({});
+
+    await invoke();
+
+    expect(vi.mocked(resolvePluginTools)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewaySubagentBinding: true,
+      }),
+    );
   });
 });

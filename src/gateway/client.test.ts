@@ -25,6 +25,7 @@ class MockWebSocket {
   readonly sent: string[] = [];
   closeCalls = 0;
   terminateCalls = 0;
+  autoCloseOnClose = true;
 
   constructor(_url: string, _options?: unknown) {
     wsInstances.push(this);
@@ -55,7 +56,9 @@ class MockWebSocket {
 
   close(code?: number, reason?: string): void {
     this.closeCalls += 1;
-    this.emitClose(code ?? 1000, reason ?? "");
+    if (this.autoCloseOnClose) {
+      this.emitClose(code ?? 1000, reason ?? "");
+    }
   }
 
   terminate(): void {
@@ -322,6 +325,39 @@ describe("GatewayClient close handling", () => {
       await vi.advanceTimersByTimeAsync(250);
 
       expect(ws.terminateCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for a lingering socket to terminate in stopAndWait", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+      });
+
+      client.start();
+      const ws = getLatestWs();
+      ws.autoCloseOnClose = false;
+
+      let settled = false;
+      const stopPromise = client.stopAndWait().then(() => {
+        settled = true;
+      });
+
+      expect(ws.closeCalls).toBe(1);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(ws.terminateCalls).toBe(0);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await stopPromise;
+
+      expect(ws.terminateCalls).toBe(1);
+      expect(settled).toBe(true);
     } finally {
       vi.useRealTimers();
     }

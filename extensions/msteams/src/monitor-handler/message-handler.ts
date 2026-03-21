@@ -2,9 +2,9 @@ import {
   DEFAULT_ACCOUNT_ID,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
+  createChannelPairingController,
   dispatchReplyFromConfigWithSettledDispatcher,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  createScopedPairingAccess,
   logInboundDrop,
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
@@ -19,7 +19,7 @@ import {
   resolveEffectiveAllowFromLists,
   resolveDmGroupAccessWithLists,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/msteams";
+} from "../../runtime-api.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,
@@ -63,7 +63,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     log,
   } = deps;
   const core = getMSTeamsRuntime();
-  const pairing = createScopedPairingAccess({
+  const pairing = createChannelPairingController({
     core,
     channel: "msteams",
     accountId: DEFAULT_ACCOUNT_ID,

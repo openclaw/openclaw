@@ -8,13 +8,13 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { z } from "zod";
 import {
   createFixedWindowRateLimiter,
   isBlockedHostnameOrIp,
   readJsonBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk/nostr";
-import { z } from "zod";
+} from "../api.js";
 import { publishNostrProfile, getNostrProfileState } from "./channel.js";
 import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
 import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
