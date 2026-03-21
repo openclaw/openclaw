@@ -599,7 +599,7 @@ export function renderApp(state: AppViewState) {
 
         ${
           isChat
-            ? html`<section class="content-header content-header--chat">
+            ? html`<section class="content-header--chat">
               <div class="content-header__start">
                 ${renderChatSessionSelect(state)}
               </div>
