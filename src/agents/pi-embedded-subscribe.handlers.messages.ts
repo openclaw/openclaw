@@ -321,7 +321,15 @@ export function handleMessageEnd(
     }
   }
 
-  if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+  // Tool-call-only responses from OpenAI-compatible providers (e.g. vLLM) may have
+  // no text or media content. Without this check, handleMessageEnd silently skips
+  // emitting the assistant update, which prevents downstream tool execution from
+  // being signalled. See: https://github.com/openclaw/openclaw/issues/13603
+  const hasToolCalls =
+    Array.isArray(assistantMessage.content) &&
+    assistantMessage.content.some((b: { type?: string }) => b.type === "toolCall");
+
+  if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia || hasToolCalls)) {
     const data = buildAssistantStreamData({
       text: cleanedText,
       delta: cleanedText,
