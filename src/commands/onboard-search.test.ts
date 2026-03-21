@@ -165,6 +165,11 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(pluginWebSearchApiKey(result, "google")).toBe("AIza-test");
     expect(result.plugins?.entries?.google?.enabled).toBe(true);
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Google Gemini API key",
+      }),
+    );
   });
 
   it("sets provider and key for firecrawl and enables the plugin", async () => {
@@ -244,7 +249,9 @@ describe("setupSearch", () => {
       const result = await setupSearch(cfg, runtime, prompter);
       expect(result.tools?.web?.search?.provider).toBe("brave");
       expect(result.tools?.web?.search?.enabled).toBeUndefined();
-      const missingNote = notes.find((n) => n.message.includes("No API key stored"));
+      const missingNote = notes.find((n) =>
+        n.message.includes("No Brave Search API key stored"),
+      );
       expect(missingNote).toBeDefined();
     } finally {
       if (original === undefined) {
@@ -344,6 +351,20 @@ describe("setupSearch", () => {
         process.env.XAI_API_KEY = original;
       }
     }
+  });
+
+  it("uses provider-specific credential copy for kimi in onboarding", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "kimi",
+      textValue: "",
+    });
+    await setupSearch(cfg, runtime, prompter);
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Moonshot / Kimi API key",
+      }),
+    );
   });
 
   it("quickstart skips key prompt when env var is available", async () => {
