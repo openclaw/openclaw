@@ -210,8 +210,6 @@ export async function speak(
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
 
-    addTranscriptEntry(call, "bot", text);
-
     const voice = provider.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
     await provider.playTts({
       callId,
@@ -220,8 +218,14 @@ export async function speak(
       voice,
     });
 
+    addTranscriptEntry(call, "bot", text);
+    persistCallRecord(ctx.storePath, call);
+
     return { success: true };
   } catch (err) {
+    // A failed playback should not leave the call stuck in speaking state.
+    transitionState(call, "listening");
+    persistCallRecord(ctx.storePath, call);
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }

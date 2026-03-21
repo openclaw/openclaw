@@ -159,6 +159,7 @@ describe("CallManager notify and mapping", () => {
     const afterFailure = manager.getCall(callId);
     expect(provider.playTtsCalls).toHaveLength(1);
     expect(afterFailure?.metadata?.initialMessage).toBe("Retry me");
+    expect(afterFailure?.state).toBe("listening");
 
     manager.processEvent({
       id: "evt-retry-2",

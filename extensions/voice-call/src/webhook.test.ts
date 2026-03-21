@@ -470,6 +470,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
     call.callId = "call-barge";
     call.providerCallId = "CA-barge";
     call.direction = "outbound";
+    call.state = "speaking";
     call.metadata = {
       mode: "conversation",
       initialMessage: "Hi, this is OpenClaw.",
@@ -517,9 +518,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       expect(clearTtsQueue).not.toHaveBeenCalled();
       expect(handleInboundResponse).not.toHaveBeenCalled();
 
-      if (call.metadata) {
-        delete call.metadata.initialMessage;
-      }
+      call.state = "listening";
 
       media.config.onSpeechStart?.("CA-barge");
       media.config.onTranscript?.("CA-barge", "hello again");

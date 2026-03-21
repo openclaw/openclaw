@@ -39,6 +39,17 @@ type TwilioTtsTiming = {
   [key: string]: string | number | boolean | undefined;
 };
 
+type StreamQueueDiagnostics = {
+  queueDepth: number;
+  playing: boolean;
+  hasActivePlayback: boolean;
+};
+
+type StreamSendResult = {
+  sent: boolean;
+  bufferedAfterBytes: number;
+};
+
 function logTwilioTtsTiming(entry: TwilioTtsTiming): void {
   console.log(
     `[voice-call][timing] ${JSON.stringify({
@@ -707,8 +718,68 @@ export class TwilioProvider implements VoiceCallProvider {
 
     const handler = this.mediaStreamHandler;
     const ttsProvider = this.ttsProvider;
+    const getQueueDiagnostics = (): StreamQueueDiagnostics => {
+      const diagnosticsGetter = (handler as { getTtsDiagnostics?: (sid: string) => unknown })
+        .getTtsDiagnostics;
+      if (typeof diagnosticsGetter !== "function") {
+        return { queueDepth: 0, playing: false, hasActivePlayback: false };
+      }
+
+      const raw = diagnosticsGetter.call(handler, streamSid);
+      if (!raw || typeof raw !== "object") {
+        return { queueDepth: 0, playing: false, hasActivePlayback: false };
+      }
+
+      const diagnostics = raw as {
+        queueDepth?: unknown;
+        playing?: unknown;
+        hasActivePlayback?: unknown;
+      };
+      return {
+        queueDepth:
+          typeof diagnostics.queueDepth === "number" && Number.isFinite(diagnostics.queueDepth)
+            ? diagnostics.queueDepth
+            : 0,
+        playing: Boolean(diagnostics.playing),
+        hasActivePlayback: Boolean(diagnostics.hasActivePlayback),
+      };
+    };
+
+    const normalizeSendResult = (raw: unknown): StreamSendResult => {
+      if (!raw || typeof raw !== "object") {
+        return { sent: true, bufferedAfterBytes: 0 };
+      }
+      const typed = raw as {
+        sent?: unknown;
+        bufferedAfterBytes?: unknown;
+      };
+      return {
+        sent: typed.sent === undefined ? true : Boolean(typed.sent),
+        bufferedAfterBytes:
+          typeof typed.bufferedAfterBytes === "number" && Number.isFinite(typed.bufferedAfterBytes)
+            ? typed.bufferedAfterBytes
+            : 0,
+      };
+    };
+
+    const sendAudioChunk = (audio: Buffer): StreamSendResult => {
+      const raw = (handler as { sendAudio: (sid: string, chunk: Buffer) => unknown }).sendAudio(
+        streamSid,
+        audio,
+      );
+      return normalizeSendResult(raw);
+    };
+
+    const sendPlaybackMark = (name: string): StreamSendResult => {
+      const raw = (handler as { sendMark: (sid: string, markName: string) => unknown }).sendMark(
+        streamSid,
+        name,
+      );
+      return normalizeSendResult(raw);
+    };
+
     const queuedAt = Date.now();
-    const queueSnapshotAtWait = handler.getTtsDiagnostics(streamSid);
+    const queueSnapshotAtWait = getQueueDiagnostics();
     logTwilioTtsTiming({
       stage: "stream.queue.wait",
       callId: context?.callId,
@@ -720,7 +791,7 @@ export class TwilioProvider implements VoiceCallProvider {
     });
     await handler.queueTts(streamSid, async (signal) => {
       const dequeuedAt = Date.now();
-      const queueSnapshotAtDequeue = handler.getTtsDiagnostics(streamSid);
+      const queueSnapshotAtDequeue = getQueueDiagnostics();
       logTwilioTtsTiming({
         stage: "stream.queue.dequeue",
         callId: context?.callId,
@@ -735,7 +806,7 @@ export class TwilioProvider implements VoiceCallProvider {
       let keepAliveDropped = 0;
       let keepAliveMaxBufferedAfterBytes = 0;
       const sendKeepAlive = () => {
-        const result = handler.sendAudio(streamSid, SILENCE_CHUNK);
+        const result = sendAudioChunk(SILENCE_CHUNK);
         if (!result.sent) {
           keepAliveDropped += 1;
           return;
@@ -827,7 +898,7 @@ export class TwilioProvider implements VoiceCallProvider {
         previousChunkSentAt = chunkSentAt;
         chunkCount += 1;
         bytesSent += chunk.length;
-        const sendResult = handler.sendAudio(streamSid, chunk);
+        const sendResult = sendAudioChunk(chunk);
         if (!sendResult.sent) {
           sendFailures += 1;
         }
@@ -862,7 +933,7 @@ export class TwilioProvider implements VoiceCallProvider {
       let markBufferedAfterBytes = 0;
       if (!signal.aborted) {
         // Send a mark to track when audio finishes
-        const markResult = handler.sendMark(streamSid, `tts-${Date.now()}`);
+        const markResult = sendPlaybackMark(`tts-${Date.now()}`);
         markSent = markResult.sent;
         markBufferedAfterBytes = markResult.bufferedAfterBytes;
       }
@@ -904,7 +975,7 @@ export class TwilioProvider implements VoiceCallProvider {
         aborted: signal.aborted,
       });
     });
-    const queueSnapshotAtDone = handler.getTtsDiagnostics(streamSid);
+    const queueSnapshotAtDone = getQueueDiagnostics();
     logTwilioTtsTiming({
       stage: "stream.queue.done",
       callId: context?.callId,

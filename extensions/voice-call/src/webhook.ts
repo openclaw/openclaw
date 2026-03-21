@@ -104,6 +104,12 @@ export class VoiceCallWebhookServer {
       return false;
     }
 
+    // Suppress only while the initial greeting is actively being played.
+    // If playback fails and the call leaves "speaking", do not block auto-response.
+    if (call.state !== "speaking") {
+      return false;
+    }
+
     const mode = (call.metadata?.mode as string | undefined) ?? "conversation";
     if (mode !== "conversation") {
       return false;

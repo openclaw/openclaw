@@ -60,6 +60,19 @@ type TtsQueueEntry = {
   reject: (error: unknown) => void;
 };
 
+type StreamSendResult = {
+  sent: boolean;
+  readyState?: number;
+  bufferedBeforeBytes: number;
+  bufferedAfterBytes: number;
+};
+
+type TtsDiagnostics = {
+  queueDepth: number;
+  playing: boolean;
+  hasActivePlayback: boolean;
+};
+
 type PendingConnection = {
   ip: string;
   timeout: ReturnType<typeof setTimeout>;
@@ -351,17 +364,51 @@ export class MediaStreamHandler {
   /**
    * Send a message to a stream's WebSocket if available.
    */
-  private sendToStream(streamSid: string, message: unknown): void {
-    const session = this.getOpenSession(streamSid);
-    session?.ws.send(JSON.stringify(message));
+  private sendToStream(streamSid: string, message: unknown): StreamSendResult {
+    const session = this.sessions.get(streamSid);
+    if (!session) {
+      return {
+        sent: false,
+        bufferedBeforeBytes: 0,
+        bufferedAfterBytes: 0,
+      };
+    }
+
+    const readyState = session.ws.readyState;
+    const bufferedBeforeBytes = session.ws.bufferedAmount;
+    if (readyState !== WebSocket.OPEN) {
+      return {
+        sent: false,
+        readyState,
+        bufferedBeforeBytes,
+        bufferedAfterBytes: session.ws.bufferedAmount,
+      };
+    }
+
+    try {
+      session.ws.send(JSON.stringify(message));
+      return {
+        sent: true,
+        readyState,
+        bufferedBeforeBytes,
+        bufferedAfterBytes: session.ws.bufferedAmount,
+      };
+    } catch {
+      return {
+        sent: false,
+        readyState,
+        bufferedBeforeBytes,
+        bufferedAfterBytes: session.ws.bufferedAmount,
+      };
+    }
   }
 
   /**
    * Send audio to a specific stream (for TTS playback).
    * Audio should be mu-law encoded at 8kHz mono.
    */
-  sendAudio(streamSid: string, muLawAudio: Buffer): void {
-    this.sendToStream(streamSid, {
+  sendAudio(streamSid: string, muLawAudio: Buffer): StreamSendResult {
+    return this.sendToStream(streamSid, {
       event: "media",
       streamSid,
       media: { payload: muLawAudio.toString("base64") },
@@ -371,8 +418,8 @@ export class MediaStreamHandler {
   /**
    * Send a mark event to track audio playback position.
    */
-  sendMark(streamSid: string, name: string): void {
-    this.sendToStream(streamSid, {
+  sendMark(streamSid: string, name: string): StreamSendResult {
+    return this.sendToStream(streamSid, {
       event: "mark",
       streamSid,
       mark: { name },
@@ -382,8 +429,8 @@ export class MediaStreamHandler {
   /**
    * Clear audio buffer (interrupt playback).
    */
-  clearAudio(streamSid: string): void {
-    this.sendToStream(streamSid, { event: "clear", streamSid });
+  clearAudio(streamSid: string): StreamSendResult {
+    return this.sendToStream(streamSid, { event: "clear", streamSid });
   }
 
   /**
@@ -416,11 +463,22 @@ export class MediaStreamHandler {
   /**
    * Clear TTS queue and interrupt current playback (barge-in).
    */
-  clearTtsQueue(streamSid: string): void {
+  clearTtsQueue(streamSid: string, _reason = "unspecified"): void {
     const queue = this.getTtsQueue(streamSid);
     queue.length = 0;
     this.ttsActiveControllers.get(streamSid)?.abort();
     this.clearAudio(streamSid);
+  }
+
+  /**
+   * Get queue/playback diagnostics for the stream TTS pipeline.
+   */
+  getTtsDiagnostics(streamSid: string): TtsDiagnostics {
+    return {
+      queueDepth: this.ttsQueues.get(streamSid)?.length ?? 0,
+      playing: Boolean(this.ttsPlaying.get(streamSid)),
+      hasActivePlayback: this.ttsActiveControllers.has(streamSid),
+    };
   }
 
   /**
