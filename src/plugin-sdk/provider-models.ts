@@ -24,6 +24,7 @@ export {
   XAI_TOOL_SCHEMA_PROFILE,
 } from "../agents/model-compat.js";
 export { normalizeProviderId } from "../agents/provider-id.js";
+export { normalizeXaiModelId } from "../agents/model-id-normalization.js";
 export { cloneFirstTemplateModel } from "../plugins/provider-model-helpers.js";
 
 export {
@@ -40,6 +41,7 @@ export {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   resolveCloudflareAiGatewayBaseUrl,
 } from "../agents/cloudflare-ai-gateway.js";
+export { resolveAnthropicVertexRegion } from "../agents/anthropic-vertex-provider.js";
 export {
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,
