@@ -18,7 +18,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
+import { SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -64,7 +64,7 @@ function prunePollParamsForNonPollAction(
   if (action === "poll") {
     return;
   }
-  for (const key of Object.keys(POLL_CREATION_PARAM_DEFS)) {
+  for (const key of POLL_PARAM_KEYS) {
     delete params[key];
   }
 }
@@ -708,7 +708,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
-<<<<<<< HEAD
       let cfg = options?.config;
       if (!cfg) {
         const loadedRaw = loadConfig();
@@ -735,9 +734,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           })
         ).resolvedConfig;
       }
-=======
       prunePollParamsForNonPollAction(action, params);
->>>>>>> 71ad2665f (fix(message): ignore poll params for non-poll actions)
       const requireExplicitTarget = options?.requireExplicitTarget === true;
       if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
         const explicitTarget =
