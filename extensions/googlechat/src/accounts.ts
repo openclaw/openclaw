@@ -1,7 +1,7 @@
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { isSecretRef, type OpenClawConfig } from "openclaw/plugin-sdk/core";
-import type { GoogleChatAccountConfig } from "./types.config.js";
+import type { GoogleChatAccountConfig, GoogleChatConfig } from "./types.config.js";
 
 export type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
 
@@ -39,10 +39,11 @@ function mergeGoogleChatAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): GoogleChatAccountConfig {
-  const raw = cfg.channels?.["googlechat"] ?? {};
+  const raw: Partial<GoogleChatConfig> = cfg.channels?.["googlechat"] ?? {};
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
-  const defaultAccountConfig = resolveAccountConfig(cfg, DEFAULT_ACCOUNT_ID) ?? {};
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
+  const defaultAccountConfig: Partial<GoogleChatAccountConfig> =
+    resolveAccountConfig(cfg, DEFAULT_ACCOUNT_ID) ?? {};
+  const account: Partial<GoogleChatAccountConfig> = resolveAccountConfig(cfg, accountId) ?? {};
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return { ...base, ...defaultAccountConfig } as GoogleChatAccountConfig;
   }

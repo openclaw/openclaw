@@ -21,6 +21,7 @@ describe("doctor open-policy allowFrom repair", () => {
     const result = maybeRepairOpenPolicyAllowFrom({
       channels: {
         googlechat: {
+          appPrincipal: "test-principal",
           dm: {
             policy: "open",
           },

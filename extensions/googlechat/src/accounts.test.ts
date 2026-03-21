@@ -7,14 +7,17 @@ describe("resolveGoogleChatAccount", () => {
     const cfg: OpenClawConfig = {
       channels: {
         googlechat: {
+          appPrincipal: "test-principal",
           accounts: {
             default: {
               audienceType: "app-url",
               audience: "https://example.com/googlechat",
               webhookPath: "/googlechat",
+              appPrincipal: "test-principal",
             },
             andy: {
               serviceAccountFile: "/tmp/andy-sa.json",
+              appPrincipal: "test-principal",
             },
           },
         },
@@ -32,6 +35,7 @@ describe("resolveGoogleChatAccount", () => {
     const cfg: OpenClawConfig = {
       channels: {
         googlechat: {
+          appPrincipal: "test-principal",
           audienceType: "project-number",
           audience: "1234567890",
           accounts: {
@@ -39,9 +43,11 @@ describe("resolveGoogleChatAccount", () => {
               audienceType: "app-url",
               audience: "https://default.example.com/googlechat",
               webhookPath: "/googlechat-default",
+              appPrincipal: "test-principal",
             },
             april: {
               webhookPath: "/googlechat-april",
+              appPrincipal: "test-principal",
             },
           },
         },
@@ -58,14 +64,17 @@ describe("resolveGoogleChatAccount", () => {
     const cfg: OpenClawConfig = {
       channels: {
         googlechat: {
+          appPrincipal: "test-principal",
           accounts: {
             default: {
               enabled: false,
               audienceType: "app-url",
               audience: "https://example.com/googlechat",
+              appPrincipal: "test-principal",
             },
             andy: {
               serviceAccountFile: "/tmp/andy-sa.json",
+              appPrincipal: "test-principal",
             },
           },
         },
@@ -82,6 +91,7 @@ describe("resolveGoogleChatAccount", () => {
     const cfg: OpenClawConfig = {
       channels: {
         googlechat: {
+          appPrincipal: "test-principal",
           accounts: {
             default: {
               serviceAccountRef: {
@@ -91,9 +101,11 @@ describe("resolveGoogleChatAccount", () => {
               },
               audienceType: "app-url",
               audience: "https://example.com/googlechat",
+              appPrincipal: "test-principal",
             },
             andy: {
               serviceAccountFile: "/tmp/andy-sa.json",
+              appPrincipal: "test-principal",
             },
           },
         },
@@ -110,14 +122,17 @@ describe("resolveGoogleChatAccount", () => {
     const cfg: OpenClawConfig = {
       channels: {
         googlechat: {
+          appPrincipal: "test-principal",
           accounts: {
             default: {
               dangerouslyAllowNameMatching: true,
               audienceType: "app-url",
               audience: "https://example.com/googlechat",
+              appPrincipal: "test-principal",
             },
             andy: {
               serviceAccountFile: "/tmp/andy-sa.json",
+              appPrincipal: "test-principal",
             },
           },
         },

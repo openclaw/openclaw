@@ -73,6 +73,7 @@ describe("config secret refs schema", () => {
     const result = validateConfigObjectRaw({
       channels: {
         googlechat: {
+          appPrincipal: "test-principal",
           serviceAccountRef: {
             source: "file",
             provider: "filemain",

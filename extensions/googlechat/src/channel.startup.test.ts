@@ -40,6 +40,7 @@ describe("googlechatPlugin gateway.startAccount", () => {
         webhookUrl: "https://example.com/googlechat",
         audienceType: "app-url",
         audience: "https://example.com/googlechat",
+        appPrincipal: "test-principal",
       },
     };
 

@@ -21,6 +21,7 @@ function createGoogleChatCfg(): OpenClawConfig {
     channels: {
       googlechat: {
         enabled: true,
+        appPrincipal: "test-principal",
         serviceAccount: {
           type: "service_account",
           client_email: "bot@example.com",
