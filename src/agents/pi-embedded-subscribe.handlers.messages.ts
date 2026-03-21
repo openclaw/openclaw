@@ -327,7 +327,13 @@ export function handleMessageEnd(
   // being signalled. See: https://github.com/openclaw/openclaw/issues/13603
   const hasToolCalls =
     Array.isArray(assistantMessage.content) &&
-    assistantMessage.content.some((b: { type?: string }) => b.type === "toolCall");
+    assistantMessage.content.some(
+      (b: unknown) =>
+        b != null &&
+        typeof b === "object" &&
+        "type" in b &&
+        (b.type === "toolCall" || b.type === "toolUse" || b.type === "functionCall"),
+    );
 
   if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia || hasToolCalls)) {
     const data = buildAssistantStreamData({
