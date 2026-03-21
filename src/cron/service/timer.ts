@@ -347,6 +347,8 @@ export function applyJobResult(
   const recurringRetryState = getRecurringRetryState(job);
   const priorNaturalNextRunAtMs = recurringRetryState.naturalNextRunAtMs;
   const priorRetryNextRunAtMs = recurringRetryState.retryNextRunAtMs;
+  const completedRetryCycle =
+    typeof priorRetryNextRunAtMs === "number" || recurringRetryState.retryAttempt !== undefined;
   const computeNextWithPreservedLastRun = (nowMs: number) => {
     const saved = job.state.lastRunAtMs;
     job.state.lastRunAtMs = prevLastRunAtMs;
@@ -455,7 +457,9 @@ export function applyJobResult(
     } else if (result.status === "error" && job.enabled) {
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
       const preservedNaturalNextRunAtMs =
-        typeof priorNaturalNextRunAtMs === "number" ? priorNaturalNextRunAtMs : undefined;
+        completedRetryCycle && typeof priorNaturalNextRunAtMs === "number"
+          ? priorNaturalNextRunAtMs
+          : undefined;
       let normalNext: number | undefined;
       try {
         normalNext =
@@ -501,7 +505,8 @@ export function applyJobResult(
       let naturalNext: number | undefined;
       try {
         naturalNext =
-          opts?.preserveSchedule && job.schedule.kind === "every"
+          (opts?.preserveSchedule || (completedRetryCycle && job.schedule.kind === "every")) &&
+          job.schedule.kind === "every"
             ? computeNextWithPreservedLastRun(result.endedAt)
             : computeJobNextRunAtMs(job, result.endedAt);
       } catch (err) {
@@ -510,12 +515,8 @@ export function applyJobResult(
         // so a persistent throw doesn't cause a MIN_REFIRE_GAP_MS hot loop.
         recordScheduleComputeError({ state, job, err });
       }
-      const completedRetry =
-        typeof priorRetryNextRunAtMs === "number" &&
-        (typeof priorNaturalNextRunAtMs === "number" ||
-          recurringRetryState.retryAttempt !== undefined);
       if (
-        completedRetry &&
+        completedRetryCycle &&
         typeof priorNaturalNextRunAtMs === "number" &&
         priorNaturalNextRunAtMs > result.endedAt
       ) {
