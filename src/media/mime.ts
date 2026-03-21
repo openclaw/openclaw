@@ -48,6 +48,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ".jpeg": "image/jpeg",
   ".js": "text/javascript",
   ".htm": "text/html",
+  ".xml": "text/xml", // pin text/xml as canonical (application/xml also maps to .xml in EXT_BY_MIME)
 };
 
 const AUDIO_FILE_EXTENSIONS = new Set([
