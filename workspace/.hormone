@@ -7,7 +7,7 @@
 # TTL 到期後系統會提醒 Cruz 重新評估，但不會自己改。
 # 只有兩種東西能改這個檔案：Cruz 本人，或觸發條件。
 
-season: harvest
+season: grow
 # seed    — 播種期：大量產出內容，建立存在感
 # grow    — 成長期：互動、深化關係、擴張
 # harvest — 收割期：轉化訂閱者、招募、變現
