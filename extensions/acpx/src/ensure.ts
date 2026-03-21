@@ -366,6 +366,12 @@ export async function ensureAcpx(params: {
       throw new Error(`plugin-local acpx verification failed after install: ${postcheck.message}`);
     }
 
+    if (postcheck.cmdWrapperFallback) {
+      throw new Error(
+        "plugin-local acpx reinstall did not resolve the Windows .cmd wrapper; binary is still not directly executable",
+      );
+    }
+
     params.logger?.info(`acpx plugin-local binary ready (version ${postcheck.version})`);
   })();
 
