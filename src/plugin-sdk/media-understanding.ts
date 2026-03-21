@@ -16,7 +16,7 @@ export type {
 export {
   describeImageWithModel,
   describeImagesWithModel,
-} from "../media-understanding/providers/image.js";
+} from "../media-understanding/providers/image-runtime.js";
 export { transcribeOpenAiCompatibleAudio } from "../media-understanding/providers/openai-compatible-audio.js";
 export {
   assertOkOrThrowHttpError,
