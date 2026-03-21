@@ -135,10 +135,10 @@ Recommended `channels.wechat-linux` config for a full setup:
 
 ## Runtime commands
 
-Typical local development run command for the OpenClaw gateway:
+Typical local development run command for the OpenClaw gateway after enabling `corepack` once on the host:
 
 ```bash
-npx -y node@22 /usr/local/bin/corepack pnpm openclaw gateway run --bind loopback --port 18789 --force
+pnpm openclaw gateway run --bind loopback --port 18789 --force
 ```
 
 Typical `wechat-linux` bridge watch command after the gateway expands the channel config:
@@ -296,6 +296,82 @@ The shortest reliable bring-up order is:
 4. Decrypt and verify `contact.db`.
 5. Update `channels.wechat-linux.pythonPath`, `keyFile`, `outputDir`, and `dbDir`.
 6. Run `openclaw channels status --probe`.
+
+## Portable debugging approach
+
+When this channel moves to another machine, use the same symptom-first workflow instead of changing settings by guesswork:
+
+1. Separate the failure layer before changing config.
+   Treat local data access, gateway routing, model behavior, and GUI send reliability as different layers. A missing reply in WeChat may mean the model never ran, or it may mean the final reply was generated but the desktop send step failed.
+2. Verify local prerequisites before trusting auto-detection.
+   Confirm that the host has the required Linux packages, Python bridge dependencies, and model provider settings. In practice that means checking the active `db_storage`, regenerating `~/.wx_db_keys.json` on that host, decrypting `contact.db`, and confirming the gateway can see the expected API key and provider config before you blame routing or prompt logic.
+3. Check access control and pairing early.
+   A direct message can arrive correctly and still be blocked by `dmPolicy = "pairing"` or an allowlist rule. When bring-up reaches live message tests, verify whether the sender still needs `openclaw pairing approve wechat-linux <code>` or whether `allowFrom` and `groupAllowFrom` need to be updated on that machine.
+4. Compare user-visible symptoms with logs, then turn the stable conclusions into explicit rules.
+   A contact may only see progress text while the gateway log already shows a final reply or a send failure. Always compare the chat symptom with gateway logs and the session transcript before changing prompt, policy, or channel code. Once you confirm the real cause, write fixed choices such as the default weather city, privacy rules, reply style, and non-disclosure of runtime, provider, or model details into config or prompt guidance instead of rediscovering them on every host.
+
+## Practical bring-up checklist
+
+Use this longer checklist when you want to reproduce a working setup on another host instead of only debugging one symptom.
+
+### Host prerequisites
+
+- Keep Node 22 or later available on the host.
+- Enable `corepack` once before relying on `pnpm` commands from a fresh shell environment.
+- Install the required Linux desktop packages before blaming the bridge or the agent.
+- Install the Python dependencies from `extensions/wechat-linux/bridge/requirements-linux.txt` into the PyWxDump virtual environment used by this channel.
+
+### WeChat local data
+
+- Sign in to the Linux WeChat client first. Do not try to prepare bridge config before the account has produced a real local `db_storage`.
+- Confirm which `db_storage` belongs to the running `wechat` process instead of trusting the first `wxid_*` directory on disk.
+- Regenerate `~/.wx_db_keys.json` on the target host whenever you move the setup or switch WeChat accounts.
+- Decrypt and verify `contact.db` before expecting OpenClaw routing to work. A working `contact.db` check is the fastest proof that the key file and `dbDir` match.
+- Pin `channels.wechat-linux.pythonPath`, `keyFile`, `outputDir`, and `dbDir` explicitly after you confirm the right values.
+- Treat decrypted output as cache. Reusing `outputDir` is fine, but copied decrypted files should never be trusted as proof that the live host is configured correctly.
+
+### Gateway and model provider
+
+- Confirm that the gateway process can see the expected provider API key, base URL, and model settings before testing chat behavior.
+- After changing environment variables or provider config, restart the gateway instead of assuming a running process will pick them up automatically.
+- If the gateway requires local auth state, make sure it has the expected token or onboarding state before testing channels.
+- Use the gateway run command as the primary entry point. In normal use, the WeChat bridge process should be started by the gateway, not launched manually.
+
+### Access control and pairing
+
+- Treat pairing as part of bring-up, not as an edge case. A DM can arrive correctly and still be blocked by policy.
+- Verify `dmPolicy`, `allowFrom`, `groupPolicy`, and `groupAllowFrom` on the target host before concluding that inbound routing is broken.
+- When a sender receives a pairing challenge, approve it with `openclaw pairing approve wechat-linux <code>` before deeper debugging.
+- Use stable sender ids such as `wxid_*` for allowlists rather than display names.
+
+### Startup and verification order
+
+- Start with `openclaw channels status --probe` to catch bridge setup failures before live chat testing.
+- Verify that the gateway is listening on the expected local port and that the bridge reached a ready state in logs.
+- Test outbound delivery to one known direct chat before testing more complex scenarios such as groups or media.
+- Then test inbound delivery from one paired sender so you can separate policy problems from bridge startup problems.
+- Only after text round-trip works should you validate images, files, voice ASR, link conversion, or other optional enrichments.
+
+### Desktop send behavior
+
+- If the channel sends through the desktop client, verify the configured display and window class on the target machine.
+- Treat focus loss, popup timing, and post-send window state as host-specific behavior that may need explicit validation after migration.
+- If the user reports that the message was generated but not visibly delivered, inspect the send path separately from model execution.
+
+### Symptom interpretation
+
+- `contact.db` decrypt failures usually indicate a bad key file or the wrong `dbDir`.
+- A pairing challenge means inbound transport worked, but access control blocked delivery to the agent.
+- Missing-model or missing-API-key errors usually belong to provider setup, not WeChat routing.
+- A user-visible non-final acknowledgement does not prove that the final generation failed. Check gateway logs and the session transcript before changing prompts.
+- If weather or location answers drift, treat that as a prompt or configuration rule problem. Do not infer physical location from timezone.
+
+### Rules worth writing down
+
+- Record the default weather city explicitly if the deployment expects one.
+- Record the privacy policy for external users explicitly, including whether runtime, provider, or model details should be hidden.
+- Record the preferred reply style for external contacts so behavior stays stable across hosts.
+- Record any host-specific GUI expectations, such as whether the WeChat window should minimize after sending.
 
 ## Access control
 
