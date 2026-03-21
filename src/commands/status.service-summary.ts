@@ -1,5 +1,18 @@
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
-import type { GatewayService } from "../daemon/service.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceEnv,
+  GatewayServiceEnvArgs,
+} from "../daemon/service-types.js";
+
+export type GatewayServiceStatusReader = {
+  label: string;
+  loadedText: string;
+  notLoadedText: string;
+  isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
+  readRuntime: (env: GatewayServiceEnv) => Promise<GatewayServiceRuntime | undefined>;
+};
 
 export type ServiceStatusSummary = {
   label: string;
@@ -12,7 +25,7 @@ export type ServiceStatusSummary = {
 };
 
 export async function readServiceStatusSummary(
-  service: GatewayService,
+  service: GatewayServiceStatusReader,
   fallbackLabel: string,
 ): Promise<ServiceStatusSummary> {
   try {
