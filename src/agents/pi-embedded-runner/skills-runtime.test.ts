@@ -67,4 +67,25 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     });
     expect(hoisted.loadWorkspaceSkillEntries).not.toHaveBeenCalled();
   });
+
+  it("reloads skill entries when sandbox execution prefers workspace-local skill paths", () => {
+    const snapshot: SkillSnapshot = {
+      prompt: "skills prompt",
+      skills: [{ name: "diffs" }],
+      resolvedSkills: [],
+    };
+
+    const result = resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/tmp/workspace-sandbox",
+      config: {},
+      skillsSnapshot: snapshot,
+      preferWorkspaceEntries: true,
+    });
+
+    expect(result.shouldLoadSkillEntries).toBe(true);
+    expect(hoisted.loadWorkspaceSkillEntries).toHaveBeenCalledTimes(1);
+    expect(hoisted.loadWorkspaceSkillEntries).toHaveBeenCalledWith("/tmp/workspace-sandbox", {
+      config: {},
+    });
+  });
 });

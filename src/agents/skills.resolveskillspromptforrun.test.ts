@@ -29,4 +29,27 @@ describe("resolveSkillsPromptForRun", () => {
     expect(prompt).toContain("<available_skills>");
     expect(prompt).toContain("/app/skills/demo-skill/SKILL.md");
   });
+
+  it("prefers workspace-built prompt when sandbox execution overrides snapshot paths", () => {
+    const entry: SkillEntry = {
+      skill: {
+        name: "demo-skill",
+        description: "Demo",
+        filePath: "/sandbox/workspace/skills/demo-skill/SKILL.md",
+        baseDir: "/sandbox/workspace/skills/demo-skill",
+        source: "workspace",
+        disableModelInvocation: false,
+      },
+      frontmatter: {},
+    };
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: { prompt: "SNAPSHOT", skills: [] },
+      entries: [entry],
+      workspaceDir: "/sandbox/workspace",
+      preferEntries: true,
+    });
+
+    expect(prompt).toContain("/sandbox/workspace/skills/demo-skill/SKILL.md");
+    expect(prompt).not.toBe("SNAPSHOT");
+  });
 });
