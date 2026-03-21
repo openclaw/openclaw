@@ -31,40 +31,62 @@ async function runFinalize(cfg: OpenClawConfig, accountId: string) {
   return prompter.note;
 }
 
+function expectPreparedResult(
+  prepared: Awaited<ReturnType<typeof runPrepare>>,
+): { cfg: OpenClawConfig } & Exclude<Awaited<ReturnType<typeof runPrepare>>, void | undefined> {
+  expect(prepared).toBeDefined();
+  if (
+    !prepared ||
+    typeof prepared !== "object" ||
+    !("cfg" in prepared) ||
+    prepared.cfg === undefined
+  ) {
+    throw new Error("Expected prepare result with cfg");
+  }
+  return prepared as { cfg: OpenClawConfig } & Exclude<
+    Awaited<ReturnType<typeof runPrepare>>,
+    void | undefined
+  >;
+}
+
 describe("telegramSetupWizard.prepare", () => {
   it('adds groups["*"].requireMention=true for fresh setups', async () => {
-    const prepared = await runPrepare(
-      {
-        channels: {
-          telegram: {
-            botToken: "tok",
+    const prepared = expectPreparedResult(
+      await runPrepare(
+        {
+          channels: {
+            telegram: {
+              botToken: "tok",
+            },
           },
         },
-      },
-      DEFAULT_ACCOUNT_ID,
+        DEFAULT_ACCOUNT_ID,
+      ),
     );
 
-    expect(prepared?.cfg.channels?.telegram?.groups).toEqual({
+    expect(prepared.cfg.channels?.telegram?.groups).toEqual({
       "*": { requireMention: true },
     });
   });
 
   it("preserves an explicit wildcard group mention setting", async () => {
-    const prepared = await runPrepare(
-      {
-        channels: {
-          telegram: {
-            botToken: "tok",
-            groups: {
-              "*": { requireMention: false },
+    const prepared = expectPreparedResult(
+      await runPrepare(
+        {
+          channels: {
+            telegram: {
+              botToken: "tok",
+              groups: {
+                "*": { requireMention: false },
+              },
             },
           },
         },
-      },
-      DEFAULT_ACCOUNT_ID,
+        DEFAULT_ACCOUNT_ID,
+      ),
     );
 
-    expect(prepared?.cfg.channels?.telegram?.groups).toEqual({
+    expect(prepared.cfg.channels?.telegram?.groups).toEqual({
       "*": { requireMention: false },
     });
   });
