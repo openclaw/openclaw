@@ -47,4 +47,13 @@ describe("chat-model-ref helpers", () => {
     expect(resolveServerChatModelValue("gpt-5-mini", "openai")).toBe("openai/gpt-5-mini");
     expect(resolveServerChatModelValue("alias-only", null)).toBe("alias-only");
   });
+
+  it("does not prepend a second provider when the server model is already qualified", () => {
+    expect(resolveServerChatModelValue("ollama/gpt-oss:120b-cloud", "anthropic")).toBe(
+      "ollama/gpt-oss:120b-cloud",
+    );
+    expect(
+      resolveServerChatModelValue("openrouter/anthropic/claude-sonnet-4-6", "openrouter"),
+    ).toBe("openrouter/anthropic/claude-sonnet-4-6");
+  });
 });

@@ -15,6 +15,15 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
   if (!trimmedModel) {
     return "";
   }
+
+  // Server/session state may already carry a fully qualified ref such as
+  // "ollama/qwen3:8b" or a nested vendor/model id like
+  // "openrouter/anthropic/claude-sonnet-4-6". Do not prepend another
+  // provider in those cases.
+  if (trimmedModel.includes("/")) {
+    return trimmedModel;
+  }
+
   const trimmedProvider = provider?.trim();
   return trimmedProvider ? `${trimmedProvider}/${trimmedModel}` : trimmedModel;
 }
