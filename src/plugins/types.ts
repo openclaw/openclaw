@@ -594,6 +594,11 @@ export type ProviderPluginWizardSetup = {
   groupHint?: string;
   methodId?: string;
   /**
+   * Interactive onboarding surfaces where this auth choice should appear.
+   * Defaults to `["text-inference"]` when omitted.
+   */
+  onboardingScopes?: Array<"text-inference" | "image-generation">;
+  /**
    * Optional model-allowlist prompt policy applied after this auth choice is
    * selected in configure/onboarding flows.
    *
@@ -886,6 +891,7 @@ export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  credentialLabel?: string;
   envVars: string[];
   placeholder: string;
   signupUrl: string;
@@ -963,7 +969,7 @@ export type PluginCommandContext = {
   /** Account id for multi-account channels */
   accountId?: string;
   /** Thread/topic id if available */
-  messageThreadId?: number;
+  messageThreadId?: string | number;
   requestConversationBinding: (
     params?: PluginConversationBindingRequestParams,
   ) => Promise<PluginConversationBindingRequestResult>;
@@ -1340,6 +1346,10 @@ export type OpenClawPluginApi = {
   registerContextEngine: (
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
+  ) => void;
+  /** Register the system prompt section builder for this memory plugin (exclusive slot). */
+  registerMemoryPromptSection: (
+    builder: import("../memory/prompt-section.js").MemoryPromptSectionBuilder,
   ) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */

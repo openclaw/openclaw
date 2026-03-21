@@ -108,6 +108,7 @@ vi.mock("./onboard-search.js", () => ({
       id: "firecrawl",
       label: "Firecrawl Search",
       hint: "Structured results with optional result scraping",
+      credentialLabel: "Firecrawl API key",
       envVars: ["FIRECRAWL_API_KEY"],
       placeholder: "fc-...",
       signupUrl: "https://www.firecrawl.dev/",
@@ -136,6 +137,7 @@ describe("runConfigureWizard", () => {
         id: "firecrawl",
         label: "Firecrawl Search",
         hint: "Structured results with optional result scraping",
+        credentialLabel: "Firecrawl API key",
         envVars: ["FIRECRAWL_API_KEY"],
         placeholder: "fc-...",
         signupUrl: "https://www.firecrawl.dev/",
@@ -286,6 +288,11 @@ describe("runConfigureWizard", () => {
         }),
       }),
     );
+    expect(mocks.clackText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Firecrawl API key",
+      }),
+    );
   });
 
   it("applies provider selection side effects when a key already exists via secret ref or env", async () => {
@@ -361,6 +368,64 @@ describe("runConfigureWizard", () => {
           }),
         }),
       }),
+    );
+    expect(mocks.clackText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Firecrawl API key (leave blank to keep current)",
+      }),
+    );
+  });
+
+  it("uses provider-specific credential copy for Gemini web search", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
+      valid: true,
+      config: {},
+      issues: [],
+    });
+    mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+    mocks.summarizeExistingConfig.mockReturnValue("");
+    mocks.createClackPrompter.mockReturnValue({});
+    mocks.resolveSearchProviderOptions.mockReturnValue([
+      {
+        id: "gemini",
+        label: "Gemini (Google Search)",
+        hint: "Requires Google Gemini API key · Google Search grounding",
+        credentialLabel: "Google Gemini API key",
+        envVars: ["GEMINI_API_KEY"],
+        placeholder: "AIza...",
+        signupUrl: "https://aistudio.google.com/apikey",
+        credentialPath: "plugins.entries.google.config.webSearch.apiKey",
+      },
+    ]);
+
+    const selectQueue = ["local", "gemini"];
+    const confirmQueue = [true, false];
+    mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
+    mocks.clackConfirm.mockImplementation(async () => confirmQueue.shift());
+    mocks.clackText.mockResolvedValue("");
+    mocks.clackIntro.mockResolvedValue(undefined);
+    mocks.clackOutro.mockResolvedValue(undefined);
+
+    await runConfigureWizard(
+      { command: "configure", sections: ["web"] },
+      {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    );
+
+    expect(mocks.clackText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Google Gemini API key",
+      }),
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Store your Google Gemini API key here or set GEMINI_API_KEY"),
+      "Web search",
     );
   });
 

@@ -266,7 +266,11 @@ export function resolveModelWithRegistry(params: {
       provider,
       cfg,
       agentDir,
-      model: pluginDynamicModel,
+      model: applyConfiguredProviderOverrides({
+        discoveredModel: pluginDynamicModel as Model<Api>,
+        providerConfig,
+        modelId,
+      }),
     });
   }
 
