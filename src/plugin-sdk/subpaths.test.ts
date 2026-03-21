@@ -97,7 +97,6 @@ describe("plugin-sdk subpath exports", () => {
     expect(pluginSdkSubpaths).not.toContain("bluebubbles");
     expect(pluginSdkSubpaths).not.toContain("compat");
     expect(pluginSdkSubpaths).not.toContain("device-pair");
-    expect(pluginSdkSubpaths).not.toContain("discord");
     expect(pluginSdkSubpaths).not.toContain("feishu");
     expect(pluginSdkSubpaths).not.toContain("google");
     expect(pluginSdkSubpaths).not.toContain("googlechat");
@@ -132,7 +131,6 @@ describe("plugin-sdk subpath exports", () => {
     expect(pluginSdkSubpaths).not.toContain("secret-input-runtime");
     expect(pluginSdkSubpaths).not.toContain("secret-input-schema");
     expect(pluginSdkSubpaths).not.toContain("zai");
-    expect(pluginSdkSubpaths).not.toContain("discord-core");
     expect(pluginSdkSubpaths).not.toContain("slack-core");
     expect(pluginSdkSubpaths).not.toContain("provider-model-definitions");
   });
@@ -218,6 +216,14 @@ describe("plugin-sdk subpath exports", () => {
 
   it("exports runtime helpers from the dedicated subpath", () => {
     expect(typeof runtimeSdk.createLoggerBackedRuntime).toBe("function");
+  });
+
+  it("exports Discord component helpers from the dedicated subpath", async () => {
+    const discordSdk = await import("openclaw/plugin-sdk/discord");
+    expect(typeof discordSdk.buildDiscordComponentMessage).toBe("function");
+    expect(typeof discordSdk.editDiscordComponentMessage).toBe("function");
+    expect(typeof discordSdk.registerBuiltDiscordComponentMessage).toBe("function");
+    expect(typeof discordSdk.resolveDiscordAccount).toBe("function");
   });
 
   it("exports channel identity and session helpers from stronger existing homes", () => {
