@@ -78,6 +78,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
   sendFormattedText?: (
@@ -85,6 +86,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult[]>;
   sendFormattedMedia?: (
@@ -93,6 +95,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
   sendText: (
@@ -100,6 +103,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
   sendMedia: (
@@ -108,6 +112,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
 };
@@ -159,10 +164,12 @@ function createPluginHandler(
   const resolveCtx = (overrides?: {
     replyToId?: string | null;
     threadId?: string | number | null;
+    audioAsVoice?: boolean;
   }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
     ...baseCtx,
     replyToId: overrides?.replyToId ?? baseCtx.replyToId,
     threadId: overrides?.threadId ?? baseCtx.threadId,
+    audioAsVoice: overrides?.audioAsVoice,
   });
   return {
     chunker,
@@ -335,6 +342,7 @@ function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
   return {
     text: parts.text,
     mediaUrls: parts.mediaUrls,
+    audioAsVoice: payload.audioAsVoice === true ? true : undefined,
     interactive: payload.interactive,
     channelData: payload.channelData,
   };
@@ -572,7 +580,11 @@ async function deliverOutboundPayloadsCore(
 
   const sendTextChunks = async (
     text: string,
-    overrides?: { replyToId?: string | null; threadId?: string | number | null },
+    overrides?: {
+      replyToId?: string | null;
+      threadId?: string | number | null;
+      audioAsVoice?: boolean;
+    },
   ) => {
     throwIfAborted(abortSignal);
     if (!handler.chunker || textLimit === undefined) {
@@ -657,6 +669,7 @@ async function deliverOutboundPayloadsCore(
       const sendOverrides = {
         replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
+        audioAsVoice: effectivePayload.audioAsVoice === true ? true : undefined,
         forceDocument: params.forceDocument,
       };
       if (

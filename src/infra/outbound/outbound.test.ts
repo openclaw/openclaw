@@ -1308,21 +1308,29 @@ describe("normalizeOutboundPayloadsForJson", () => {
       {
         input: [
           { text: "hi" },
-          { text: "photo", mediaUrl: "https://x.test/a.jpg" },
+          { text: "photo", mediaUrl: "https://x.test/a.jpg", audioAsVoice: true },
           { text: "multi", mediaUrls: ["https://x.test/1.png"] },
         ],
         expected: [
-          { text: "hi", mediaUrl: null, mediaUrls: undefined, channelData: undefined },
+          {
+            text: "hi",
+            mediaUrl: null,
+            mediaUrls: undefined,
+            audioAsVoice: undefined,
+            channelData: undefined,
+          },
           {
             text: "photo",
             mediaUrl: "https://x.test/a.jpg",
             mediaUrls: ["https://x.test/a.jpg"],
+            audioAsVoice: true,
             channelData: undefined,
           },
           {
             text: "multi",
             mediaUrl: null,
             mediaUrls: ["https://x.test/1.png"],
+            audioAsVoice: undefined,
             channelData: undefined,
           },
         ],
@@ -1338,6 +1346,7 @@ describe("normalizeOutboundPayloadsForJson", () => {
             text: "",
             mediaUrl: null,
             mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
+            audioAsVoice: undefined,
             channelData: undefined,
           },
         ],
@@ -1362,7 +1371,9 @@ describe("normalizeOutboundPayloadsForJson", () => {
       { text: "Reasoning:\n_step_", isReasoning: true },
       { text: "final answer" },
     ]);
-    expect(normalized).toEqual([{ text: "final answer", mediaUrl: null, mediaUrls: undefined }]);
+    expect(normalized).toEqual([
+      { text: "final answer", mediaUrl: null, mediaUrls: undefined, audioAsVoice: undefined },
+    ]);
   });
 });
 
