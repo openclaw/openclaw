@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
+import { clearPluginCommands, getPluginCommandSpecs } from "./commands.js";
 
 async function importFreshPluginTestModules() {
   vi.resetModules();
@@ -1009,8 +1010,6 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         },
       };`,
     });
-    const { clearPluginCommands, getPluginCommandSpecs } = await import("./commands.js");
-
     clearPluginCommands();
 
     const scoped = loadOpenClawPlugins({
@@ -1395,6 +1394,8 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
       filename: "cache-eviction.cjs",
       body: `module.exports = { id: "cache-eviction", register() {} };`,
     });
+    const previousCacheCap = __testing.maxPluginRegistryCacheEntries;
+    __testing.setMaxPluginRegistryCacheEntriesForTest(4);
     const stateDirs = Array.from({ length: __testing.maxPluginRegistryCacheEntries + 1 }, () =>
       makeTempDir(),
     );
@@ -1416,17 +1417,21 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         },
       });
 
-    const first = loadWithStateDir(stateDirs[0] ?? makeTempDir());
-    const second = loadWithStateDir(stateDirs[1] ?? makeTempDir());
+    try {
+      const first = loadWithStateDir(stateDirs[0] ?? makeTempDir());
+      const second = loadWithStateDir(stateDirs[1] ?? makeTempDir());
 
-    expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
+      expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
 
-    for (const stateDir of stateDirs.slice(2)) {
-      loadWithStateDir(stateDir);
+      for (const stateDir of stateDirs.slice(2)) {
+        loadWithStateDir(stateDir);
+      }
+
+      expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
+      expect(loadWithStateDir(stateDirs[1] ?? makeTempDir())).not.toBe(second);
+    } finally {
+      __testing.setMaxPluginRegistryCacheEntriesForTest(previousCacheCap);
     }
-
-    expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
-    expect(loadWithStateDir(stateDirs[1] ?? makeTempDir())).not.toBe(second);
   });
 
   it("normalizes bundled plugin env overrides against the provided env", () => {

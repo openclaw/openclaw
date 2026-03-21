@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  buildProviderRegistry,
+  createMediaAttachmentCache,
+  normalizeMediaAttachments,
+  runCapability,
+} from "./runner.js";
 
 const catalog = [
   {
@@ -23,20 +29,9 @@ vi.mock("../agents/model-catalog.js", async () => {
   };
 });
 
-let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
-let createMediaAttachmentCache: typeof import("./runner.js").createMediaAttachmentCache;
-let normalizeMediaAttachments: typeof import("./runner.js").normalizeMediaAttachments;
-let runCapability: typeof import("./runner.js").runCapability;
-
 describe("runCapability image skip", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({
-      buildProviderRegistry,
-      createMediaAttachmentCache,
-      normalizeMediaAttachments,
-      runCapability,
-    } = await import("./runner.js"));
+  beforeEach(() => {
+    loadModelCatalog.mockClear();
   });
 
   it("skips image understanding when the active model supports vision", async () => {

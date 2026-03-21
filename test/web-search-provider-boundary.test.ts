@@ -1,10 +1,29 @@
-import { execFileSync } from "node:child_process";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { collectWebSearchProviderBoundaryInventory } from "../scripts/check-web-search-provider-boundaries.mjs";
+import {
+  collectWebSearchProviderBoundaryInventory,
+  main,
+} from "../scripts/check-web-search-provider-boundaries.mjs";
 
-const repoRoot = process.cwd();
-const scriptPath = path.join(repoRoot, "scripts", "check-web-search-provider-boundaries.mjs");
+function createCapturedIo() {
+  let stdout = "";
+  let stderr = "";
+  return {
+    io: {
+      stdout: {
+        write(chunk) {
+          stdout += String(chunk);
+        },
+      },
+      stderr: {
+        write(chunk) {
+          stderr += String(chunk);
+        },
+      },
+    },
+    readStdout: () => stdout,
+    readStderr: () => stderr,
+  };
+}
 
 describe("web search provider boundary inventory", () => {
   it("has no remaining production inventory in core", async () => {
@@ -35,12 +54,12 @@ describe("web search provider boundary inventory", () => {
     ).toEqual(first);
   });
 
-  it("script json output is empty", () => {
-    const stdout = execFileSync(process.execPath, [scriptPath, "--json"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-    });
+  it("script json output is empty", async () => {
+    const captured = createCapturedIo();
+    const exitCode = await main(["--json"], captured.io);
 
-    expect(JSON.parse(stdout)).toEqual([]);
+    expect(exitCode).toBe(0);
+    expect(captured.readStderr()).toBe("");
+    expect(JSON.parse(captured.readStdout())).toEqual([]);
   });
 });
