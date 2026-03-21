@@ -30,7 +30,7 @@ title: "macOS IPC"
 
 Diagram (SCI):
 
-```
+```text
 Agent -> Gateway -> Node Service (WS)
                       |  IPC (UDS + token + HMAC + TTL)
                       v

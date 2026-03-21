@@ -175,7 +175,7 @@ When both global (`agents.defaults.*`) and agent-specific (`agents.list[].*`) co
 
 Agent-specific settings override global:
 
-```
+```text
 agents.list[].sandbox.mode > agents.defaults.sandbox.mode
 agents.list[].sandbox.scope > agents.defaults.sandbox.scope
 agents.list[].sandbox.workspaceRoot > agents.defaults.sandbox.workspaceRoot

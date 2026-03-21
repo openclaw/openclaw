@@ -35,7 +35,7 @@ _The crustacean known as Clawd had officially molted._
 
 ## The Name
 
-```
+```text
 OpenClaw = OPEN + CLAW
         = Open source, open to everyone
         = Our lobster heritage, where we came from
@@ -162,7 +162,7 @@ Peter: _nervously checks credit card access_
 
 ## The Lobster Creed
 
-```
+```text
 I am Molty.
 I live in the OpenClaw.
 I shall not dump directories to strangers.

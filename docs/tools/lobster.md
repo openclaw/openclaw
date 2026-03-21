@@ -196,7 +196,7 @@ tools, include the core tools or groups you want in the allowlist too.
 
 Without Lobster:
 
-```
+```text
 User: "Check my email and draft replies"
 → openclaw calls gmail.list
 → LLM summarizes

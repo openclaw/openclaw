@@ -69,19 +69,19 @@ If Scheduled Task creation is blocked, the fallback service mode still auto-star
 
 Inside WSL2:
 
-```
+```bash
 openclaw onboard --install-daemon
 ```
 
 Or:
 
-```
+```bash
 openclaw gateway install
 ```
 
 Or:
 
-```
+```bash
 openclaw configure
 ```
 
@@ -89,7 +89,7 @@ Select **Gateway service** when prompted.
 
 Repair/migrate:
 
-```
+```bash
 openclaw doctor
 ```
 

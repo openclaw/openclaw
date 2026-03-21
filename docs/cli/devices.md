@@ -16,7 +16,7 @@ Manage device pairing requests and device-scoped tokens.
 
 List pending pairing requests and paired devices.
 
-```
+```bash
 openclaw devices list
 openclaw devices list --json
 ```
@@ -28,7 +28,7 @@ be reviewed before you approve.
 
 Remove one paired device entry.
 
-```
+```bash
 openclaw devices remove <deviceId>
 openclaw devices remove <deviceId> --json
 ```
@@ -37,7 +37,7 @@ openclaw devices remove <deviceId> --json
 
 Clear paired devices in bulk.
 
-```
+```bash
 openclaw devices clear --yes
 openclaw devices clear --yes --pending
 openclaw devices clear --yes --pending --json
@@ -53,7 +53,7 @@ key), OpenClaw supersedes the previous pending entry and issues a new
 `requestId`. Run `openclaw devices list` right before approval to use the
 current ID.
 
-```
+```bash
 openclaw devices approve
 openclaw devices approve <requestId>
 openclaw devices approve --latest
@@ -63,7 +63,7 @@ openclaw devices approve --latest
 
 Reject a pending device pairing request.
 
-```
+```bash
 openclaw devices reject <requestId>
 ```
 
@@ -71,7 +71,7 @@ openclaw devices reject <requestId>
 
 Rotate a device token for a specific role (optionally updating scopes).
 
-```
+```bash
 openclaw devices rotate --device <deviceId> --role operator --scope operator.read --scope operator.write
 ```
 
@@ -79,7 +79,7 @@ openclaw devices rotate --device <deviceId> --role operator --scope operator.rea
 
 Revoke a device token for a specific role.
 
-```
+```bash
 openclaw devices revoke --device <deviceId> --role node
 ```
 

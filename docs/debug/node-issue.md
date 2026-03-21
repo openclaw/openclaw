@@ -12,7 +12,7 @@ title: "Node + tsx Crash"
 
 Running OpenClaw via Node with `tsx` fails at startup with:
 
-```
+```json
 [openclaw] Failed to start CLI: TypeError: __name is not a function
     at createSubsystemLogger (.../src/logging/subsystem.ts:203:25)
     at .../src/agents/auth-profiles/constants.ts:25:20

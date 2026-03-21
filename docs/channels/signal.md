@@ -229,7 +229,7 @@ Groups:
 
 Examples:
 
-```
+```text
 message action=react channel=signal target=uuid:123e4567-e89b-12d3-a456-426614174000 messageId=1737630212345 emoji=🔥
 message action=react channel=signal target=+15551234567 messageId=1737630212345 emoji=🔥 remove=true
 message action=react channel=signal target=signal:group:<groupId> targetAuthor=uuid:<sender-uuid> messageId=1737630212345 emoji=✅

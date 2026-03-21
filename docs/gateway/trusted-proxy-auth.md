@@ -192,7 +192,7 @@ Caddy with the `caddy-security` plugin can authenticate users and pass identity 
 
 Caddyfile snippet:
 
-```
+```bash
 openclaw.example.com {
     authenticate with oauth2_provider
     authorize with policy1

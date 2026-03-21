@@ -190,7 +190,7 @@ Create a service account and enable domain-wide delegation in the Admin Console.
 
 Delegate only the scopes you need:
 
-```
+```text
 https://www.googleapis.com/auth/gmail.readonly    # Tier 1
 https://www.googleapis.com/auth/gmail.send         # Tier 2
 https://www.googleapis.com/auth/calendar           # Tier 2

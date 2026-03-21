@@ -22,7 +22,7 @@ openclaw onboard --auth-choice synthetic-api-key
 
 The default model is set to:
 
-```
+```text
 synthetic/hf:MiniMaxAI/MiniMax-M2.5
 ```
 

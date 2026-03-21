@@ -70,7 +70,7 @@ durable notes to disk. See [Memory](/concepts/memory) for details and config.
 
 Use `/compact` (optionally with instructions) to force a compaction pass:
 
-```
+```text
 /compact Focus on decisions and open questions
 ```
 

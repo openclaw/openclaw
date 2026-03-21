@@ -230,7 +230,7 @@ Notes:
 
 Examples:
 
-```
+```text
 message action=react channel=mattermost target=channel:<channelId> messageId=<postId> emoji=thumbsup
 message action=react channel=mattermost target=channel:<channelId> messageId=<postId> emoji=thumbsup remove=true
 ```
@@ -259,7 +259,7 @@ Enable buttons by adding `inlineButtons` to the channel capabilities:
 
 Use `message action=send` with a `buttons` parameter. Buttons are a 2D array (rows of buttons):
 
-```
+```text
 message action=send channel=mattermost target=channel:<channelId> buttons=[[{"text":"Yes","callback_data":"yes"},{"text":"No","callback_data":"no"}]]
 ```
 

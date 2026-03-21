@@ -128,7 +128,7 @@ launchctl load ~/Library/LaunchAgents/com.user.poke-messages.plist
 
 BlueBubbles is available in interactive onboarding:
 
-```
+```bash
 openclaw onboard
 ```
 
@@ -142,7 +142,7 @@ The wizard prompts for:
 
 You can also add BlueBubbles via CLI:
 
-```
+```bash
 openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --password <password>
 ```
 

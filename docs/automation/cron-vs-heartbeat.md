@@ -132,7 +132,7 @@ See [Cron jobs](/automation/cron-jobs) for full CLI reference.
 
 ## Decision Flowchart
 
-```
+```text
 Does the task need to run at an EXACT time?
   YES -> Use cron
   NO  -> Continue...

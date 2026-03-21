@@ -20,7 +20,7 @@ There is **no true token-delta streaming** to channel messages today. Preview st
 
 Block streaming sends assistant output in coarse chunks as it becomes available.
 
-```
+```text
 Model output
   └─ text_delta/events
        ├─ (blockStreamingBreak=text_end)

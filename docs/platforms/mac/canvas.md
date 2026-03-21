@@ -72,7 +72,7 @@ A2UI host page on first open.
 
 Default A2UI host URL:
 
-```
+```text
 http://<gateway-host>:18789/__openclaw__/a2ui/
 ```
 

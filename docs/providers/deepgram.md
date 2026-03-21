@@ -22,7 +22,7 @@ Docs: [https://developers.deepgram.com](https://developers.deepgram.com)
 
 1. Set your API key:
 
-```
+```text
 DEEPGRAM_API_KEY=dg_...
 ```
 

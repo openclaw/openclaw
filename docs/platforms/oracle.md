@@ -160,7 +160,7 @@ This blocks SSH on port 22, HTTP, HTTPS, and everything else at the network edge
 
 From any device on your Tailscale network:
 
-```
+```text
 https://openclaw.<tailnet-name>.ts.net/
 ```
 

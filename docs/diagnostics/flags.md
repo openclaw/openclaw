@@ -56,7 +56,7 @@ OPENCLAW_DIAGNOSTICS=0
 
 Flags emit logs into the standard diagnostics log file. By default:
 
-```
+```text
 /tmp/openclaw/openclaw-YYYY-MM-DD.log
 ```
 

@@ -40,7 +40,7 @@ openclaw plugins install ./extensions/line
 4. Enable **Use webhook** in the Messaging API settings.
 5. Set the webhook URL to your gateway endpoint (HTTPS required):
 
-```
+```text
 https://gateway-host/line/webhook
 ```
 
@@ -180,7 +180,7 @@ messages.
 
 The LINE plugin also ships a `/card` command for Flex message presets:
 
-```
+```text
 /card info "Welcome" "Thanks for joining!"
 ```
 

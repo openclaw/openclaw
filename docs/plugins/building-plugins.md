@@ -48,7 +48,7 @@ A plugin that registers zero capabilities but provides hooks or services is a
 
 Plugins follow this layout (whether in-repo or standalone):
 
-```
+```text
 my-plugin/
 ├── package.json          # npm metadata + openclaw config
 ├── openclaw.plugin.json  # Plugin manifest

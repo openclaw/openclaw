@@ -65,7 +65,7 @@ Node service + app IPC:
 
 Diagram (SCI):
 
-```
+```text
 Gateway -> Node Service (WS)
                  |  IPC (UDS + token + HMAC + TTL)
                  v
@@ -77,7 +77,7 @@ Gateway -> Node Service (WS)
 `system.run` is controlled by **Exec approvals** in the macOS app (Settings → Exec approvals).
 Security + ask + allowlist are stored locally on the Mac in:
 
-```
+```text
 ~/.openclaw/exec-approvals.json
 ```
 

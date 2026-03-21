@@ -110,7 +110,7 @@ prompt instructs the model to use `read` to load the SKILL.md at the listed
 location (workspace, managed, or bundled). If no skills are eligible, the
 Skills section is omitted.
 
-```
+```text
 <available_skills>
   <skill>
     <name>...</name>

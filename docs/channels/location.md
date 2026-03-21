@@ -32,7 +32,7 @@ Locations are rendered as friendly lines without brackets:
 
 If the channel includes a caption/comment, it is appended on the next line:
 
-```
+```text
 📍 48.858844, 2.294351 ±12m
 Meet here
 ```

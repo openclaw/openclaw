@@ -150,7 +150,7 @@ openclaw config set tools.exec.node "<id-or-name>"
 
 Or per session:
 
-```
+```text
 /exec host=node security=allowlist node=<id-or-name>
 ```
 

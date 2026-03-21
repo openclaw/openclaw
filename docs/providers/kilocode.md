@@ -57,7 +57,7 @@ OpenClaw dynamically discovers available models from the Kilo Gateway at startup
 
 Any model available on the gateway can be used with the `kilocode/` prefix:
 
-```
+```text
 kilocode/kilo/auto              (default - smart routing)
 kilocode/anthropic/claude-sonnet-4
 kilocode/openai/gpt-5.2
