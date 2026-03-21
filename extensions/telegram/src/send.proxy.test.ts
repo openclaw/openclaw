@@ -37,6 +37,8 @@ vi.mock("./proxy.js", () => ({
 
 vi.mock("./fetch.js", () => ({
   resolveTelegramFetch,
+  resolveTelegramApiBase: (apiRoot?: string) =>
+    apiRoot?.trim()?.replace(/\/+$/, "") || "https://api.telegram.org",
 }));
 
 vi.mock("grammy", () => ({

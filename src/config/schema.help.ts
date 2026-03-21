@@ -1532,6 +1532,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
   "channels.telegram.silentErrorReplies":
     "When true, Telegram bot replies marked as errors are sent silently (no notification sound). Default: false.",
+  "channels.telegram.apiRoot":
+    "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
   "channels.telegram.threadBindings.enabled":
     "Enable Telegram conversation binding features (/focus, /unfocus, /agents, and /session idle|max-age). Overrides session.threadBindings.enabled when set.",
   "channels.telegram.threadBindings.idleHours":

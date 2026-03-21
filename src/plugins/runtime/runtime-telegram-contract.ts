@@ -82,7 +82,7 @@ export {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
 } from "../../../extensions/telegram/api.js";
-export { fetchTelegramChatId } from "../../../extensions/telegram/api.js";
+export { fetchTelegramChatId, lookupTelegramChatId } from "../../../extensions/telegram/api.js";
 export {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
