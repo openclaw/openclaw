@@ -1,6 +1,9 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
+const loadConfigMock = vi.fn(() => ({
+  agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
+}));
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async (request: unknown) => {
@@ -17,11 +20,13 @@ vi.mock("../infra/agent-events.js", () => ({
   onAgentEvent: vi.fn((_handler: unknown) => noop),
 }));
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({
-    agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
-  })),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: loadConfigMock,
+  };
+});
 
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(async () => true),
@@ -43,8 +48,55 @@ describe("subagent registry archive behavior", () => {
     mod = await import("./subagent-registry.js");
   });
 
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    loadConfigMock.mockReturnValue({
+      agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
+    });
+  });
+
   afterEach(() => {
     mod.resetSubagentRegistryForTests({ persist: false });
+    vi.useRealTimers();
+  });
+
+  it("does not set archiveAtMs for keep-mode run subagents", () => {
+    mod.registerSubagentRun({
+      runId: "run-keep-1",
+      childSessionKey: "agent:main:subagent:keep-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "persistent-run",
+      cleanup: "keep",
+    });
+
+    const run = mod.listSubagentRunsForRequester("agent:main:main")[0];
+    expect(run?.runId).toBe("run-keep-1");
+    expect(run?.spawnMode).toBe("run");
+    expect(run?.archiveAtMs).toBeUndefined();
+  });
+
+  it("sets archiveAtMs and sweeps delete-mode run subagents", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-delete-1",
+      childSessionKey: "agent:main:subagent:delete-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "ephemeral-run",
+      cleanup: "delete",
+    });
+
+    const initialRun = mod.listSubagentRunsForRequester("agent:main:main")[0];
+    expect(initialRun?.archiveAtMs).toBe(Date.now() + 60_000);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
   it("does not set archiveAtMs for persistent session-mode runs", () => {
@@ -64,15 +116,14 @@ describe("subagent registry archive behavior", () => {
     expect(run?.archiveAtMs).toBeUndefined();
   });
 
-  it("keeps archiveAtMs unset when replacing a session-mode run after steer restart", () => {
+  it("keeps archiveAtMs unset when replacing a keep-mode run after steer restart", () => {
     mod.registerSubagentRun({
       runId: "run-old",
-      childSessionKey: "agent:main:subagent:session-1",
+      childSessionKey: "agent:main:subagent:run-1",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "persistent-session",
+      task: "persistent-run",
       cleanup: "keep",
-      spawnMode: "session",
     });
 
     const replaced = mod.replaceSubagentRunAfterSteer({
@@ -84,7 +135,53 @@ describe("subagent registry archive behavior", () => {
     const run = mod
       .listSubagentRunsForRequester("agent:main:main")
       .find((entry) => entry.runId === "run-new");
-    expect(run?.spawnMode).toBe("session");
+    expect(run?.spawnMode).toBe("run");
+    expect(run?.archiveAtMs).toBeUndefined();
+  });
+
+  it("recomputes archiveAtMs when replacing a delete-mode run after steer restart", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-delete-old",
+      childSessionKey: "agent:main:subagent:delete-old",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "ephemeral-run",
+      cleanup: "delete",
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const replaced = mod.replaceSubagentRunAfterSteer({
+      previousRunId: "run-delete-old",
+      nextRunId: "run-delete-new",
+    });
+
+    expect(replaced).toBe(true);
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-delete-new");
+    expect(run?.archiveAtMs).toBe(Date.now() + 60_000);
+  });
+
+  it("treats archiveAfterMinutes=0 as never archive", () => {
+    loadConfigMock.mockReturnValue({
+      agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-no-archive",
+      childSessionKey: "agent:main:subagent:no-archive",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "never archive",
+      cleanup: "delete",
+    });
+
+    const run = mod.listSubagentRunsForRequester("agent:main:main")[0];
     expect(run?.archiveAtMs).toBeUndefined();
   });
 });

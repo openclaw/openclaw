@@ -44,13 +44,16 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "category-edit",
   "category-delete",
   "topic-create",
+  "topic-edit",
   "voice-status",
   "event-list",
   "event-create",
   "timeout",
   "kick",
   "ban",
+  "set-profile",
   "set-presence",
+  "set-profile",
   "download-file",
 ] as const;
 

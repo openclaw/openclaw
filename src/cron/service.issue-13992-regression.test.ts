@@ -46,21 +46,14 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     const now = Date.now();
     const pastDue = now - 60_000;
 
-    const job: CronJob = {
-      id: "test-job",
-      name: "test job",
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "test" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
+    const job = createCronSystemEventJob(now, {
       createdAtMs: now - 3600_000,
       updatedAtMs: now - 3600_000,
       state: {
         nextRunAtMs: pastDue,
         lastRunAtMs: pastDue + 1000,
       },
-    };
+    });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
@@ -73,21 +66,14 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     const now = Date.now();
     const pastDue = now - 60_000;
 
-    const job: CronJob = {
-      id: "test-job",
-      name: "test job",
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "test" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
+    const job = createCronSystemEventJob(now, {
       createdAtMs: now - 3600_000,
       updatedAtMs: now - 3600_000,
       state: {
         nextRunAtMs: pastDue,
         runningAtMs: now - 500,
       },
-    };
+    });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state, { recomputeExpired: true });

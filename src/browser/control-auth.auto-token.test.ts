@@ -132,4 +132,29 @@ describe("ensureBrowserControlAuth", () => {
     expect(result).toEqual({ auth: { token: "latest-token" } });
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
+
+  it("fails when gateway.auth.token SecretRef is unresolved", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_GW_TOKEN" },
+        },
+      },
+      browser: {
+        enabled: true,
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(cfg);
+
+    await expect(ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv })).rejects.toThrow(
+      /MISSING_GW_TOKEN/i,
+    );
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
 });

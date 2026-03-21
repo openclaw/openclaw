@@ -1,0 +1,655 @@
+import fs from "node:fs/promises";
+import {
+  getCustomProviderApiKey,
+  resolveEnvApiKey,
+} from "../agents/model-auth.js";
+import {
+  resolveApiKeyForProfile,
+  resolveAuthProfileOrder,
+  resolveAuthStorePathForDisplay,
+  type AuthProfileCredential,
+  type AuthProfileStore,
+} from "../agents/auth-profiles.js";
+import type { OpenClawConfig } from "../config/types.js";
+import {
+  isValidEnvSecretRefId,
+  parseEnvTemplateSecretRef,
+  type SecretInput,
+  type SecretRef,
+} from "../config/types.secrets.js";
+import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
+import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
+import {
+  formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
+  isValidFileSecretRefId,
+  resolveDefaultSecretProviderAlias,
+} from "../secrets/ref-contract.js";
+import { resolveSecretRefString } from "../secrets/resolve.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import type { SecretInputMode } from "./provider-auth-types.js";
+
+const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
+const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
+
+type SecretRefChoice = "env" | "provider"; // pragma: allowlist secret
+
+export type SecretInputModePromptCopy = {
+  modeMessage?: string;
+  plaintextLabel?: string;
+  plaintextHint?: string;
+  refLabel?: string;
+  refHint?: string;
+};
+
+export type SecretRefSetupPromptCopy = {
+  sourceMessage?: string;
+  envVarMessage?: string;
+  envVarPlaceholder?: string;
+  envVarFormatError?: string;
+  envVarMissingError?: (envVar: string) => string;
+  noProvidersMessage?: string;
+  envValidatedMessage?: (envVar: string) => string;
+  providerValidatedMessage?: (provider: string, id: string, source: "file" | "exec") => string;
+};
+
+export function normalizeApiKeyInput(raw: string): string {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const assignmentMatch = trimmed.match(/^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+)$/);
+  const valuePart = assignmentMatch ? assignmentMatch[1].trim() : trimmed;
+
+  const unquoted =
+    valuePart.length >= 2 &&
+    ((valuePart.startsWith('"') && valuePart.endsWith('"')) ||
+      (valuePart.startsWith("'") && valuePart.endsWith("'")) ||
+      (valuePart.startsWith("`") && valuePart.endsWith("`")))
+      ? valuePart.slice(1, -1)
+      : valuePart;
+
+  const withoutSemicolon = unquoted.endsWith(";") ? unquoted.slice(0, -1) : unquoted;
+
+  return withoutSemicolon.trim();
+}
+
+export const validateApiKeyInput = (value: string) =>
+  normalizeApiKeyInput(value).length > 0 ? undefined : "Required";
+
+export function formatApiKeyPreview(
+  raw: string,
+  opts: { head?: number; tail?: number } = {},
+): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "…";
+  }
+  const head = opts.head ?? DEFAULT_KEY_PREVIEW.head;
+  const tail = opts.tail ?? DEFAULT_KEY_PREVIEW.tail;
+  if (trimmed.length <= head + tail) {
+    const shortHead = Math.min(2, trimmed.length);
+    const shortTail = Math.min(2, trimmed.length - shortHead);
+    if (shortTail <= 0) {
+      return `${trimmed.slice(0, shortHead)}…`;
+    }
+    return `${trimmed.slice(0, shortHead)}…${trimmed.slice(-shortTail)}`;
+  }
+  return `${trimmed.slice(0, head)}…${trimmed.slice(-tail)}`;
+}
+
+function formatErrorMessage(error: unknown): string {
+  if (error instanceof Error && typeof error.message === "string" && error.message.trim()) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function extractEnvVarFromSourceLabel(source: string): string | undefined {
+  const match = ENV_SOURCE_LABEL_RE.exec(source.trim());
+  return match?.[1];
+}
+
+function resolveDefaultProviderEnvVar(provider: string): string | undefined {
+  const envVars = PROVIDER_ENV_VARS[provider];
+  return envVars?.find((candidate) => candidate.trim().length > 0);
+}
+
+function resolveDefaultFilePointerId(provider: string): string {
+  return `/providers/${encodeJsonPointerToken(provider)}/apiKey`;
+}
+
+function resolveRefFallbackInput(params: {
+  config: OpenClawConfig;
+  provider: string;
+  preferredEnvVar?: string;
+}): { ref: SecretRef; resolvedValue: string } {
+  const fallbackEnvVar = params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider);
+  if (!fallbackEnvVar) {
+    throw new Error(
+      `No default environment variable mapping found for provider "${params.provider}". Set a provider-specific env var, or re-run setup in an interactive terminal to configure a ref.`,
+    );
+  }
+  const value = process.env[fallbackEnvVar]?.trim();
+  if (!value) {
+    throw new Error(
+      `Environment variable "${fallbackEnvVar}" is required for --secret-input-mode ref in non-interactive setup.`,
+    );
+  }
+  return {
+    ref: {
+      source: "env",
+      provider: resolveDefaultSecretProviderAlias(params.config, "env", {
+        preferFirstProviderForSource: true,
+      }),
+      id: fallbackEnvVar,
+    },
+    resolvedValue: value,
+  };
+}
+
+async function loadScopedAuthProfileStore(agentDir?: string): Promise<AuthProfileStore> {
+  if (!agentDir) {
+    try {
+      const raw = await fs.readFile(resolveAuthStorePathForDisplay(undefined), "utf-8");
+      const parsed = JSON.parse(raw) as AuthProfileStore;
+      return {
+        version: Number(parsed.version ?? 1),
+        profiles: parsed.profiles ?? {},
+        ...(parsed.order ? { order: parsed.order } : {}),
+        ...(parsed.lastGood ? { lastGood: parsed.lastGood } : {}),
+        ...(parsed.usageStats ? { usageStats: parsed.usageStats } : {}),
+      };
+    } catch {
+      return { version: 1, profiles: {} };
+    }
+  }
+
+  try {
+    const raw = await fs.readFile(resolveAuthStorePathForDisplay(agentDir), "utf-8");
+    const parsed = JSON.parse(raw) as {
+      version?: number;
+      profiles?: Record<string, unknown>;
+      order?: Record<string, unknown>;
+      lastGood?: Record<string, unknown>;
+      usageStats?: Record<string, unknown>;
+    };
+    const profiles: Record<string, AuthProfileCredential> = {};
+    if (parsed && typeof parsed === "object" && parsed.profiles) {
+      for (const [profileId, profile] of Object.entries(parsed.profiles)) {
+        if (profile && typeof profile === "object") {
+          profiles[profileId] = profile as AuthProfileCredential;
+        }
+      }
+    }
+
+    return {
+      version: Number(parsed?.version ?? 1),
+      profiles,
+      ...(parsed?.order && typeof parsed.order === "object" ? { order: parsed.order as Record<string, string[]> } : {}),
+      ...(parsed?.lastGood && typeof parsed.lastGood === "object"
+        ? { lastGood: parsed.lastGood as Record<string, string> }
+        : {}),
+      ...(parsed?.usageStats && typeof parsed.usageStats === "object"
+        ? { usageStats: parsed.usageStats as AuthProfileStore["usageStats"] }
+        : {}),
+    };
+  } catch {
+    return { version: 1, profiles: {} };
+  }
+}
+
+async function resolveExistingProviderApiKey(params: {
+  config: OpenClawConfig;
+  provider: string;
+  agentDir?: string;
+}): Promise<{ apiKey: string; source: string; credential: SecretInput } | null> {
+  try {
+    const store = await loadScopedAuthProfileStore(params.agentDir);
+    const orderedProfiles = resolveAuthProfileOrder({
+      cfg: params.config,
+      store,
+      provider: params.provider,
+    });
+    const candidateProfileIds = new Set<string>(orderedProfiles);
+
+    for (const [profileId, profile] of Object.entries(store.profiles)) {
+      if (profile?.type === "api_key" && profile.provider === params.provider) {
+        candidateProfileIds.add(profileId);
+      }
+    }
+
+    for (const profileId of candidateProfileIds) {
+      const profile = store.profiles[profileId];
+      if (profile?.type !== "api_key") {
+        continue;
+      }
+      try {
+        const resolved = await resolveApiKeyForProfile({
+          cfg: params.config,
+          store,
+          profileId,
+          agentDir: params.agentDir,
+        });
+        if (!resolved?.apiKey) {
+          continue;
+        }
+        return {
+          apiKey: resolved.apiKey,
+          source: `profile:${profileId}`,
+          credential: (() => {
+            if (profile.keyRef) {
+              return profile.keyRef;
+            }
+            if (typeof profile.key === "string" && profile.key.trim().length > 0) {
+              const inlineEnvRef = parseEnvTemplateSecretRef(
+                profile.key,
+                resolveDefaultSecretProviderAlias(params.config, "env", {
+                  preferFirstProviderForSource: true,
+                }),
+              );
+              return inlineEnvRef ?? profile.key;
+            }
+            return resolved.apiKey;
+          })(),
+        };
+      } catch {
+        continue;
+      }
+    }
+
+    const envKey = resolveEnvApiKey(params.provider);
+    if (envKey && !envKey.source.includes("OAUTH_TOKEN")) {
+      return {
+        apiKey: envKey.apiKey,
+        source: envKey.source,
+        credential: envKey.apiKey,
+      };
+    }
+
+    const configApiKey = getCustomProviderApiKey(params.config, params.provider);
+    if (configApiKey) {
+      return {
+        apiKey: configApiKey,
+        source: "models.json",
+        credential: configApiKey,
+      };
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function promptSecretRefForSetup(params: {
+  provider: string;
+  config: OpenClawConfig;
+  prompter: WizardPrompter;
+  preferredEnvVar?: string;
+  copy?: SecretRefSetupPromptCopy;
+}): Promise<{ ref: SecretRef; resolvedValue: string }> {
+  const defaultEnvVar =
+    params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider) ?? "";
+  const defaultFilePointer = resolveDefaultFilePointerId(params.provider);
+  let sourceChoice: SecretRefChoice = "env"; // pragma: allowlist secret
+
+  while (true) {
+    const sourceRaw: SecretRefChoice = await params.prompter.select<SecretRefChoice>({
+      message: params.copy?.sourceMessage ?? "Where is this API key stored?",
+      initialValue: sourceChoice,
+      options: [
+        {
+          value: "env",
+          label: "Environment variable",
+          hint: "Reference a variable from your runtime environment",
+        },
+        {
+          value: "provider",
+          label: "Configured secret provider",
+          hint: "Use a configured file or exec secret provider",
+        },
+      ],
+    });
+    const source: SecretRefChoice = sourceRaw === "provider" ? "provider" : "env";
+    sourceChoice = source;
+
+    if (source === "env") {
+      const envVarRaw = await params.prompter.text({
+        message: params.copy?.envVarMessage ?? "Environment variable name",
+        initialValue: defaultEnvVar || undefined,
+        placeholder: params.copy?.envVarPlaceholder ?? "OPENAI_API_KEY",
+        validate: (value) => {
+          const candidate = value.trim();
+          if (!isValidEnvSecretRefId(candidate)) {
+            return (
+              params.copy?.envVarFormatError ??
+              'Use an env var name like "OPENAI_API_KEY" (uppercase letters, numbers, underscores).'
+            );
+          }
+          if (!process.env[candidate]?.trim()) {
+            return (
+              params.copy?.envVarMissingError?.(candidate) ??
+              `Environment variable "${candidate}" is missing or empty in this session.`
+            );
+          }
+          return undefined;
+        },
+      });
+      const envCandidate = String(envVarRaw ?? "").trim();
+      const envVar =
+        envCandidate && isValidEnvSecretRefId(envCandidate) ? envCandidate : defaultEnvVar;
+      if (!envVar) {
+        throw new Error(
+          `No valid environment variable name provided for provider "${params.provider}".`,
+        );
+      }
+      const ref: SecretRef = {
+        source: "env",
+        provider: resolveDefaultSecretProviderAlias(params.config, "env", {
+          preferFirstProviderForSource: true,
+        }),
+        id: envVar,
+      };
+      const resolvedValue = await resolveSecretRefString(ref, {
+        config: params.config,
+        env: process.env,
+      });
+      await params.prompter.note(
+        params.copy?.envValidatedMessage?.(envVar) ??
+          `Validated environment variable ${envVar}. OpenClaw will store a reference, not the key value.`,
+        "Reference validated",
+      );
+      return { ref, resolvedValue };
+    }
+
+    const externalProviders = Object.entries(params.config.secrets?.providers ?? {}).filter(
+      ([, provider]) => provider?.source === "file" || provider?.source === "exec",
+    );
+    if (externalProviders.length === 0) {
+      await params.prompter.note(
+        params.copy?.noProvidersMessage ??
+          "No file/exec secret providers are configured yet. Add one under secrets.providers, or select Environment variable.",
+        "No providers configured",
+      );
+      continue;
+    }
+    const defaultProvider = resolveDefaultSecretProviderAlias(params.config, "file", {
+      preferFirstProviderForSource: true,
+    });
+    const selectedProvider = await params.prompter.select<string>({
+      message: "Select secret provider",
+      initialValue:
+        externalProviders.find(([providerName]) => providerName === defaultProvider)?.[0] ??
+        externalProviders[0]?.[0],
+      options: externalProviders.map(([providerName, provider]) => ({
+        value: providerName,
+        label: providerName,
+        hint: provider?.source === "exec" ? "Exec provider" : "File provider",
+      })),
+    });
+    const providerEntry = params.config.secrets?.providers?.[selectedProvider];
+    if (!providerEntry || (providerEntry.source !== "file" && providerEntry.source !== "exec")) {
+      await params.prompter.note(
+        `Provider "${selectedProvider}" is not a file/exec provider.`,
+        "Invalid provider",
+      );
+      continue;
+    }
+    const idPrompt =
+      providerEntry.source === "file"
+        ? "Secret id (JSON pointer for json mode, or 'value' for singleValue mode)"
+        : "Secret id for the exec provider";
+    const idDefault =
+      providerEntry.source === "file"
+        ? providerEntry.mode === "singleValue"
+          ? "value"
+          : defaultFilePointer
+        : `${params.provider}/apiKey`;
+    const idRaw = await params.prompter.text({
+      message: idPrompt,
+      initialValue: idDefault,
+      placeholder: providerEntry.source === "file" ? "/providers/openai/apiKey" : "openai/api-key",
+      validate: (value) => {
+        const candidate = value.trim();
+        if (!candidate) {
+          return "Secret id cannot be empty.";
+        }
+        if (
+          providerEntry.source === "file" &&
+          providerEntry.mode !== "singleValue" &&
+          !isValidFileSecretRefId(candidate)
+        ) {
+          return 'Use an absolute JSON pointer like "/providers/openai/apiKey".';
+        }
+        if (
+          providerEntry.source === "file" &&
+          providerEntry.mode === "singleValue" &&
+          candidate !== "value"
+        ) {
+          return 'singleValue mode expects id "value".';
+        }
+        if (providerEntry.source === "exec" && !isValidExecSecretRefId(candidate)) {
+          return formatExecSecretRefIdValidationMessage();
+        }
+        return undefined;
+      },
+    });
+    const id = String(idRaw ?? "").trim() || idDefault;
+    const ref: SecretRef = {
+      source: providerEntry.source,
+      provider: selectedProvider,
+      id,
+    };
+    try {
+      const resolvedValue = await resolveSecretRefString(ref, {
+        config: params.config,
+        env: process.env,
+      });
+      await params.prompter.note(
+        params.copy?.providerValidatedMessage?.(selectedProvider, id, providerEntry.source) ??
+          `Validated ${providerEntry.source} reference ${selectedProvider}:${id}. OpenClaw will store a reference, not the key value.`,
+        "Reference validated",
+      );
+      return { ref, resolvedValue };
+    } catch (error) {
+      await params.prompter.note(
+        [
+          `Could not validate provider reference ${selectedProvider}:${id}.`,
+          formatErrorMessage(error),
+          "Check your provider configuration and try again.",
+        ].join("\n"),
+        "Reference check failed",
+      );
+    }
+  }
+}
+
+export function normalizeTokenProviderInput(
+  tokenProvider: string | null | undefined,
+): string | undefined {
+  const normalized = String(tokenProvider ?? "")
+    .trim()
+    .toLowerCase();
+  return normalized || undefined;
+}
+
+export function normalizeSecretInputModeInput(
+  secretInputMode: string | null | undefined,
+): SecretInputMode | undefined {
+  const normalized = String(secretInputMode ?? "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "plaintext" || normalized === "ref") {
+    return normalized;
+  }
+  return undefined;
+}
+
+export async function resolveSecretInputModeForEnvSelection(params: {
+  prompter: WizardPrompter;
+  explicitMode?: SecretInputMode;
+  copy?: SecretInputModePromptCopy;
+}): Promise<SecretInputMode> {
+  if (params.explicitMode) {
+    return params.explicitMode;
+  }
+  if (typeof params.prompter.select !== "function") {
+    return "plaintext";
+  }
+  const selected = await params.prompter.select<SecretInputMode>({
+    message: params.copy?.modeMessage ?? "How do you want to provide this API key?",
+    initialValue: "plaintext",
+    options: [
+      {
+        value: "plaintext",
+        label: params.copy?.plaintextLabel ?? "Paste API key now",
+        hint: params.copy?.plaintextHint ?? "Stores the key directly in OpenClaw config",
+      },
+      {
+        value: "ref",
+        label: params.copy?.refLabel ?? "Use external secret provider",
+        hint:
+          params.copy?.refHint ??
+          "Stores a reference to env or configured external secret providers",
+      },
+    ],
+  });
+  return selected === "ref" ? "ref" : "plaintext";
+}
+
+export async function maybeApplyApiKeyFromOption(params: {
+  token: string | undefined;
+  tokenProvider: string | undefined;
+  secretInputMode?: SecretInputMode;
+  expectedProviders: string[];
+  normalize: (value: string) => string;
+  setCredential: (apiKey: SecretInput, mode?: SecretInputMode) => Promise<void>;
+}): Promise<string | undefined> {
+  const tokenProvider = normalizeTokenProviderInput(params.tokenProvider);
+  const expectedProviders = params.expectedProviders
+    .map((provider) => normalizeTokenProviderInput(provider))
+    .filter((provider): provider is string => Boolean(provider));
+  if (!params.token || !tokenProvider || !expectedProviders.includes(tokenProvider)) {
+    return undefined;
+  }
+  const apiKey = params.normalize(params.token);
+  await params.setCredential(apiKey, params.secretInputMode);
+  return apiKey;
+}
+
+export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
+  token: string | undefined;
+  tokenProvider: string | undefined;
+  secretInputMode?: SecretInputMode;
+  config: OpenClawConfig;
+  agentDir?: string;
+  expectedProviders: string[];
+  provider: string;
+  envLabel: string;
+  promptMessage: string;
+  normalize: (value: string) => string;
+  validate: (value: string) => string | undefined;
+  prompter: WizardPrompter;
+  setCredential: (apiKey: SecretInput, mode?: SecretInputMode) => Promise<void>;
+  noteMessage?: string;
+  noteTitle?: string;
+}): Promise<string> {
+  const optionApiKey = await maybeApplyApiKeyFromOption({
+    token: params.token,
+    tokenProvider: params.tokenProvider,
+    secretInputMode: params.secretInputMode,
+    expectedProviders: params.expectedProviders,
+    normalize: params.normalize,
+    setCredential: params.setCredential,
+  });
+  if (optionApiKey) {
+    return optionApiKey;
+  }
+
+  if (params.noteMessage) {
+    await params.prompter.note(params.noteMessage, params.noteTitle);
+  }
+
+  return await ensureApiKeyFromEnvOrPrompt({
+    config: params.config,
+    agentDir: params.agentDir,
+    provider: params.provider,
+    envLabel: params.envLabel,
+    promptMessage: params.promptMessage,
+    normalize: params.normalize,
+    validate: params.validate,
+    prompter: params.prompter,
+    secretInputMode: params.secretInputMode,
+    setCredential: params.setCredential,
+  });
+}
+
+export async function ensureApiKeyFromEnvOrPrompt(params: {
+  config: OpenClawConfig;
+  agentDir?: string;
+  provider: string;
+  envLabel: string;
+  promptMessage: string;
+  normalize: (value: string) => string;
+  validate: (value: string) => string | undefined;
+  prompter: WizardPrompter;
+  secretInputMode?: SecretInputMode;
+  setCredential: (apiKey: SecretInput, mode?: SecretInputMode) => Promise<void>;
+}): Promise<string> {
+  const selectedMode = await resolveSecretInputModeForEnvSelection({
+    prompter: params.prompter,
+    explicitMode: params.secretInputMode,
+  });
+  const envKey = resolveEnvApiKey(params.provider);
+  const existingApiKey = await resolveExistingProviderApiKey({
+    config: params.config,
+    provider: params.provider,
+    agentDir: params.agentDir,
+  });
+
+  if (selectedMode === "ref") {
+    if (typeof params.prompter.select !== "function") {
+      const fallback = resolveRefFallbackInput({
+        config: params.config,
+        provider: params.provider,
+        preferredEnvVar: envKey?.source ? extractEnvVarFromSourceLabel(envKey.source) : undefined,
+      });
+      await params.setCredential(fallback.ref, selectedMode);
+      return fallback.resolvedValue;
+    }
+    const resolved = await promptSecretRefForSetup({
+      provider: params.provider,
+      config: params.config,
+      prompter: params.prompter,
+      preferredEnvVar: envKey?.source ? extractEnvVarFromSourceLabel(envKey.source) : undefined,
+    });
+    await params.setCredential(resolved.ref, selectedMode);
+    return resolved.resolvedValue;
+  }
+
+  if (existingApiKey && selectedMode === "plaintext") {
+    const existingCredentialLabel =
+      existingApiKey.source.startsWith("env:") ||
+      existingApiKey.source.startsWith("shell env:")
+        ? params.envLabel
+        : `${params.provider} credentials`;
+    const useExisting = await params.prompter.confirm({
+      message: `Use existing ${existingCredentialLabel} (${existingApiKey.source}, ${formatApiKeyPreview(existingApiKey.apiKey)})?`,
+      initialValue: true,
+    });
+    if (useExisting) {
+      await params.setCredential(existingApiKey.credential, selectedMode);
+      return existingApiKey.apiKey;
+    }
+  }
+
+  const key = await params.prompter.text({
+    message: params.promptMessage,
+    validate: params.validate,
+  });
+  const apiKey = params.normalize(String(key ?? ""));
+  await params.setCredential(apiKey, selectedMode);
+  return apiKey;
+}

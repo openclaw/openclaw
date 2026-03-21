@@ -3,20 +3,40 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import "../cron/isolated-agent.mocks.js";
+import * as authProfilesModule from "../agents/auth-profiles.js";
 import * as cliRunnerModule from "../agents/cli-runner.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
-import * as sessionsModule from "../config/sessions.js";
+import * as sessionPathsModule from "../config/sessions/paths.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
 import * as agentDeliveryModule from "./agent/delivery.js";
+
+vi.mock("../logging/subsystem.js", () => {
+  const createMockLogger = () => ({
+    subsystem: "test",
+    isEnabled: vi.fn(() => true),
+    trace: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn(() => createMockLogger()),
+  });
+  return {
+    createSubsystemLogger: vi.fn(() => createMockLogger()),
+  };
+});
 
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
@@ -26,10 +46,13 @@ vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../agents/workspace.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/workspace.js")>();
+vi.mock("../agents/workspace.js", () => {
+  const resolveDefaultAgentWorkspaceDir = () => "/tmp/openclaw-workspace";
   return {
-    ...actual,
+    DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/openclaw-workspace",
+    DEFAULT_AGENTS_FILENAME: "AGENTS.md",
+    DEFAULT_IDENTITY_FILENAME: "IDENTITY.md",
+    resolveDefaultAgentWorkspaceDir,
     ensureAgentWorkspace: vi.fn(async ({ dir }: { dir: string }) => ({ dir })),
   };
 });
@@ -51,6 +74,8 @@ const runtime: RuntimeEnv = {
 };
 
 const configSpy = vi.spyOn(configModule, "loadConfig");
+const readConfigFileSnapshotForWriteSpy = vi.spyOn(configModule, "readConfigFileSnapshotForWrite");
+const setRuntimeConfigSnapshotSpy = vi.spyOn(configModule, "setRuntimeConfigSnapshot");
 const runCliAgentSpy = vi.spyOn(cliRunnerModule, "runCliAgent");
 const deliverAgentCommandResultSpy = vi.spyOn(agentDeliveryModule, "deliverAgentCommandResult");
 
@@ -215,16 +240,7 @@ async function expectDefaultThinkLevel(params: {
 function createTelegramOutboundPlugin() {
   const sendWithTelegram = async (
     ctx: {
-      deps?: {
-        sendTelegram?: (
-          to: string,
-          text: string,
-          opts: Record<string, unknown>,
-        ) => Promise<{
-          messageId: string;
-          chatId: string;
-        }>;
-      };
+      deps?: { [channelId: string]: unknown };
       to: string;
       text: string;
       accountId?: string | null;
@@ -232,7 +248,13 @@ function createTelegramOutboundPlugin() {
     },
     mediaUrl?: string,
   ) => {
-    const sendTelegram = ctx.deps?.sendTelegram;
+    const sendTelegram = ctx.deps?.["telegram"] as
+      | ((
+          to: string,
+          text: string,
+          opts: Record<string, unknown>,
+        ) => Promise<{ messageId: string; chatId: string }>)
+      | undefined;
     if (!sendTelegram) {
       throw new Error("sendTelegram dependency missing");
     }
@@ -256,13 +278,91 @@ function createTelegramOutboundPlugin() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  configModule.clearRuntimeConfigSnapshot();
   runCliAgentSpy.mockResolvedValue(createDefaultAgentResult() as never);
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue(createDefaultAgentResult());
   vi.mocked(loadModelCatalog).mockResolvedValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
+  readConfigFileSnapshotForWriteSpy.mockResolvedValue({
+    snapshot: { valid: false, resolved: {} as OpenClawConfig },
+    writeOptions: {},
+  } as Awaited<ReturnType<typeof configModule.readConfigFileSnapshotForWrite>>);
 });
 
 describe("agentCommand", () => {
+  it("sets runtime snapshots from source config before embedded agent run", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const loadedConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            models: { "anthropic/claude-opus-4-5": {} },
+            workspace: path.join(home, "openclaw"),
+          },
+        },
+        session: { store, mainKey: "main" },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const sourceConfig = {
+        ...loadedConfig,
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const resolvedConfig = {
+        ...loadedConfig,
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "sk-resolved-runtime", // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      configSpy.mockReturnValue(loadedConfig);
+      readConfigFileSnapshotForWriteSpy.mockResolvedValue({
+        snapshot: { valid: true, resolved: sourceConfig },
+        writeOptions: {},
+      } as Awaited<ReturnType<typeof configModule.readConfigFileSnapshotForWrite>>);
+      const resolveSecretsSpy = vi
+        .spyOn(commandSecretGatewayModule, "resolveCommandSecretRefsViaGateway")
+        .mockResolvedValueOnce({
+          resolvedConfig,
+          diagnostics: [],
+          targetStatesByPath: {},
+          hadUnresolvedTargets: false,
+        });
+
+      await agentCommand({ message: "hello", to: "+1555" }, runtime);
+
+      expect(resolveSecretsSpy).toHaveBeenCalledWith({
+        config: loadedConfig,
+        commandName: "agent",
+        targetIds: expect.any(Set),
+      });
+      expect(setRuntimeConfigSnapshotSpy).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
+      expect(vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0]?.config).toBe(resolvedConfig);
+    });
+  });
+
   it("creates a session entry when deriving from --to", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -327,13 +427,35 @@ describe("agentCommand", () => {
     });
   });
 
+  it("requires explicit allowModelOverride for ingress runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      await expect(
+        // Runtime guard for non-TS callers; TS callsites are statically typed.
+        agentCommandFromIngress(
+          {
+            message: "hi",
+            to: "+1555",
+            senderIsOwner: false,
+          } as never,
+          runtime,
+        ),
+      ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
+    });
+  });
+
   it("honors explicit senderIsOwner for ingress runs", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
-      await agentCommandFromIngress({ message: "hi", to: "+1555", senderIsOwner: false }, runtime);
+      await agentCommandFromIngress(
+        { message: "hi", to: "+1555", senderIsOwner: false, allowModelOverride: false },
+        runtime,
+      );
       const ingressCall = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(ingressCall?.senderIsOwner).toBe(false);
+      expect(ingressCall).not.toHaveProperty("allowModelOverride");
     });
   });
 
@@ -384,7 +506,7 @@ describe("agentCommand", () => {
       const store = path.join(customStoreDir, "sessions.json");
       writeSessionStoreSeed(store, {});
       mockConfig(home, store);
-      const resolveSessionFilePathSpy = vi.spyOn(sessionsModule, "resolveSessionFilePath");
+      const resolveSessionFilePathSpy = vi.spyOn(sessionPathsModule, "resolveSessionFilePath");
 
       await agentCommand({ message: "resume me", sessionId: "session-custom-123" }, runtime);
 
@@ -605,6 +727,149 @@ describe("agentCommand", () => {
       expect(entry?.fallbackNoticeSelectedModel).toBeUndefined();
       expect(entry?.fallbackNoticeActiveModel).toBeUndefined();
       expect(entry?.fallbackNoticeReason).toBeUndefined();
+    });
+  });
+
+  it("applies per-run provider and model overrides without persisting them", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-4.1-mini": {},
+        },
+      });
+
+      await agentCommand(
+        {
+          message: "use the override",
+          sessionKey: "agent:main:subagent:run-override",
+          provider: "openai",
+          model: "gpt-4.1-mini",
+        },
+        runtime,
+      );
+
+      expectLastRunProviderModel("openai", "gpt-4.1-mini");
+
+      const saved = readSessionStore<{
+        providerOverride?: string;
+        modelOverride?: string;
+      }>(store);
+      expect(saved["agent:main:subagent:run-override"]?.providerOverride).toBeUndefined();
+      expect(saved["agent:main:subagent:run-override"]?.modelOverride).toBeUndefined();
+    });
+  });
+
+  it("rejects explicit override values that contain control characters", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-4.1-mini": {},
+        },
+      });
+
+      await expect(
+        agentCommand(
+          {
+            message: "use an invalid override",
+            sessionKey: "agent:main:subagent:invalid-override",
+            provider: "openai\u001b[31m",
+            model: "gpt-4.1-mini",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow("Provider override contains invalid control characters.");
+    });
+  });
+
+  it("sanitizes provider/model text in model-allowlist errors", async () => {
+    const parseModelRefSpy = vi.spyOn(modelSelectionModule, "parseModelRef");
+    parseModelRefSpy.mockImplementationOnce(() => ({
+      provider: "anthropic\u001b[31m",
+      model: "claude-haiku-4-5\u001b[32m",
+    }));
+    try {
+      await withTempHome(async (home) => {
+        const store = path.join(home, "sessions.json");
+        mockConfig(home, store, {
+          models: {
+            "openai/gpt-4.1-mini": {},
+          },
+        });
+
+        await expect(
+          agentCommand(
+            {
+              message: "use disallowed override",
+              sessionKey: "agent:main:subagent:sanitized-override-error",
+              model: "claude-haiku-4-5",
+            },
+            runtime,
+          ),
+        ).rejects.toThrow(
+          'Model override "anthropic/claude-haiku-4-5" is not allowed for agent "main".',
+        );
+      });
+    } finally {
+      parseModelRefSpy.mockRestore();
+    }
+  });
+
+  it("keeps stored auth profile overrides during one-off cross-provider runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:temp-openai-run": {
+          sessionId: "session-temp-openai-run",
+          updatedAt: Date.now(),
+          authProfileOverride: "anthropic:work",
+          authProfileOverrideSource: "user",
+          authProfileOverrideCompactionCount: 2,
+        },
+      });
+      mockConfig(home, store, {
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-4.1-mini": {},
+        },
+      });
+      vi.mocked(authProfilesModule.ensureAuthProfileStore).mockReturnValue({
+        version: 1,
+        profiles: {
+          "anthropic:work": {
+            provider: "anthropic",
+          },
+        },
+      } as never);
+
+      await agentCommand(
+        {
+          message: "use a different provider once",
+          sessionKey: "agent:main:subagent:temp-openai-run",
+          provider: "openai",
+          model: "gpt-4.1-mini",
+        },
+        runtime,
+      );
+
+      expectLastRunProviderModel("openai", "gpt-4.1-mini");
+      expect(getLastEmbeddedCall()?.authProfileId).toBeUndefined();
+
+      const saved = readSessionStore<{
+        authProfileOverride?: string;
+        authProfileOverrideSource?: string;
+        authProfileOverrideCompactionCount?: number;
+      }>(store);
+      expect(saved["agent:main:subagent:temp-openai-run"]?.authProfileOverride).toBe(
+        "anthropic:work",
+      );
+      expect(saved["agent:main:subagent:temp-openai-run"]?.authProfileOverrideSource).toBe("user");
+      expect(saved["agent:main:subagent:temp-openai-run"]?.authProfileOverrideCompactionCount).toBe(
+        2,
+      );
     });
   });
 

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import {
   getPwToolsCoreSessionMocks,
@@ -74,5 +75,33 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     });
     expect(goto).toHaveBeenCalledTimes(2);
     expect(result.url).toBe("https://example.com/recovered");
+  });
+
+  it("blocks private intermediate redirect hops during navigation", async () => {
+    const goto = vi.fn(async () => ({
+      request: () => ({
+        url: () => "https://93.184.216.34/final",
+        redirectedFrom: () => ({
+          url: () => "http://127.0.0.1:18080/internal-hop",
+          redirectedFrom: () => ({
+            url: () => "https://93.184.216.34/start",
+            redirectedFrom: () => null,
+          }),
+        }),
+      }),
+    }));
+    setPwToolsCoreCurrentPage({
+      goto,
+      url: vi.fn(() => "https://93.184.216.34/final"),
+    });
+
+    await expect(
+      mod.navigateViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://93.184.216.34/start",
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+
+    expect(goto).toHaveBeenCalledTimes(1);
   });
 });

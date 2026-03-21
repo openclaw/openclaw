@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as fences from "../markdown/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import {
   chunkByNewline,
@@ -216,6 +217,17 @@ describe("chunkMarkdownText", () => {
     const chunks = chunkMarkdownText(text, 20);
     expect(chunks[0]?.length).toBe(20);
     expect(chunks.join("")).toBe(text);
+  });
+
+  it("parses fence spans once for long fenced payloads", () => {
+    const parseSpy = vi.spyOn(fences, "parseFenceSpans");
+    const text = `\`\`\`txt\n${"line\n".repeat(600)}\`\`\``;
+
+    const chunks = chunkMarkdownText(text, 80);
+
+    expect(chunks.length).toBeGreaterThan(2);
+    expect(parseSpy).toHaveBeenCalledTimes(1);
+    parseSpy.mockRestore();
   });
 });
 

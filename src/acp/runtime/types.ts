@@ -35,13 +35,20 @@ export type AcpRuntimeEnsureInput = {
   sessionKey: string;
   agent: string;
   mode: AcpRuntimeSessionMode;
+  resumeSessionId?: string;
   cwd?: string;
   env?: Record<string, string>;
+};
+
+export type AcpRuntimeTurnAttachment = {
+  mediaType: string;
+  data: string;
 };
 
 export type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
   text: string;
+  attachments?: AcpRuntimeTurnAttachment[];
   mode: AcpRuntimePromptMode;
   requestId: string;
   signal?: AbortSignal;

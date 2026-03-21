@@ -14,6 +14,7 @@ import type {
   TalkConfig,
 } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
+import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
 import type {
   AudioConfig,
@@ -101,6 +102,12 @@ export type OpenClawConfig = {
   bindings?: AgentBinding[];
   broadcast?: BroadcastConfig;
   audio?: AudioConfig;
+  media?: {
+    /** Preserve original uploaded filenames when storing inbound media. */
+    preserveFilenames?: boolean;
+    /** Optional retention window for persisted inbound media cleanup. */
+    ttlHours?: number;
+  };
   messages?: MessagesConfig;
   commands?: CommandsConfig;
   approvals?: ApprovalsConfig;
@@ -114,6 +121,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  mcp?: McpConfig;
 };
 
 export type ConfigValidationIssue = {

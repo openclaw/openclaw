@@ -17,22 +17,21 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func ensureFileSkipsRewriteWhenUnchanged() async throws {
-        try await self.withTempStateDir { stateDir in
+    func `ensure file skips rewrite when unchanged`() async throws {
+        try await self.withTempStateDir { _ in
             _ = ExecApprovalsStore.ensureFile()
             let url = ExecApprovalsStore.fileURL()
-            let firstWriteDate = try Self.modificationDate(at: url)
+            let firstIdentity = try Self.fileIdentity(at: url)
 
-            try await Task.sleep(nanoseconds: 1_100_000_000)
             _ = ExecApprovalsStore.ensureFile()
-            let secondWriteDate = try Self.modificationDate(at: url)
+            let secondIdentity = try Self.fileIdentity(at: url)
 
-            #expect(firstWriteDate == secondWriteDate)
+            #expect(firstIdentity == secondIdentity)
         }
     }
 
     @Test
-    func updateAllowlistReportsRejectedBasenamePattern() async throws {
+    func `update allowlist reports rejected basename pattern`() async throws {
         try await self.withTempStateDir { _ in
             let rejected = ExecApprovalsStore.updateAllowlist(
                 agentId: "main",
@@ -50,7 +49,7 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func updateAllowlistMigratesLegacyPatternFromResolvedPath() async throws {
+    func `update allowlist migrates legacy pattern from resolved path`() async throws {
         try await self.withTempStateDir { _ in
             let rejected = ExecApprovalsStore.updateAllowlist(
                 agentId: "main",
@@ -69,7 +68,7 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func ensureFileHardensStateDirectoryPermissions() async throws {
+    func `ensure file hardens state directory permissions`() async throws {
         try await self.withTempStateDir { stateDir in
             try FileManager().createDirectory(at: stateDir, withIntermediateDirectories: true)
             try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: stateDir.path)
@@ -81,12 +80,12 @@ struct ExecApprovalsStoreRefactorTests {
         }
     }
 
-    private static func modificationDate(at url: URL) throws -> Date {
+    private static func fileIdentity(at url: URL) throws -> Int {
         let attributes = try FileManager().attributesOfItem(atPath: url.path)
-        guard let date = attributes[.modificationDate] as? Date else {
-            struct MissingDateError: Error {}
-            throw MissingDateError()
+        guard let identifier = (attributes[.systemFileNumber] as? NSNumber)?.intValue else {
+            struct MissingIdentifierError: Error {}
+            throw MissingIdentifierError()
         }
-        return date
+        return identifier
     }
 }

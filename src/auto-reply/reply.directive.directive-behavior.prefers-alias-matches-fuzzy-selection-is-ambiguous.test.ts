@@ -57,7 +57,7 @@ function makeMoonshotConfig(home: string, storePath: string) {
       providers: {
         moonshot: {
           baseUrl: "https://api.moonshot.ai/v1",
-          apiKey: "sk-test",
+          apiKey: "sk-test", // pragma: allowlist secret
           api: "openai-completions",
           models: [makeModelDefinition("kimi-k2-0905-preview", "Kimi K2")],
         },
@@ -119,11 +119,12 @@ describe("directive behavior", () => {
           config: {
             agents: {
               defaults: {
-                model: { primary: "minimax/MiniMax-M2.5" },
+                model: { primary: "minimax/MiniMax-M2.7" },
                 workspace: path.join(home, "openclaw"),
                 models: {
+                  "minimax/MiniMax-M2.7": {},
                   "minimax/MiniMax-M2.5": {},
-                  "minimax/MiniMax-M2.5-Lightning": {},
+                  "minimax/MiniMax-M2.5-highspeed": {},
                   "lmstudio/minimax-m2.5-gs32": {},
                 },
               },
@@ -133,13 +134,16 @@ describe("directive behavior", () => {
               providers: {
                 minimax: {
                   baseUrl: "https://api.minimax.io/anthropic",
-                  apiKey: "sk-test",
+                  apiKey: "sk-test", // pragma: allowlist secret
                   api: "anthropic-messages",
-                  models: [makeModelDefinition("MiniMax-M2.5", "MiniMax M2.5")],
+                  models: [
+                    makeModelDefinition("MiniMax-M2.7", "MiniMax M2.7"),
+                    makeModelDefinition("MiniMax-M2.5", "MiniMax M2.5"),
+                  ],
                 },
                 lmstudio: {
                   baseUrl: "http://127.0.0.1:1234/v1",
-                  apiKey: "lmstudio",
+                  apiKey: "lmstudio", // pragma: allowlist secret
                   api: "openai-responses",
                   models: [makeModelDefinition("minimax-m2.5-gs32", "MiniMax M2.5 GS32")],
                 },
@@ -153,11 +157,12 @@ describe("directive behavior", () => {
           config: {
             agents: {
               defaults: {
-                model: { primary: "minimax/MiniMax-M2.5" },
+                model: { primary: "minimax/MiniMax-M2.7" },
                 workspace: path.join(home, "openclaw"),
                 models: {
+                  "minimax/MiniMax-M2.7": {},
                   "minimax/MiniMax-M2.5": {},
-                  "minimax/MiniMax-M2.5-Lightning": {},
+                  "minimax/MiniMax-M2.5-highspeed": {},
                 },
               },
             },
@@ -166,11 +171,12 @@ describe("directive behavior", () => {
               providers: {
                 minimax: {
                   baseUrl: "https://api.minimax.io/anthropic",
-                  apiKey: "sk-test",
+                  apiKey: "sk-test", // pragma: allowlist secret
                   api: "anthropic-messages",
                   models: [
+                    makeModelDefinition("MiniMax-M2.7", "MiniMax M2.7"),
                     makeModelDefinition("MiniMax-M2.5", "MiniMax M2.5"),
-                    makeModelDefinition("MiniMax-M2.5-Lightning", "MiniMax M2.5 Lightning"),
+                    makeModelDefinition("MiniMax-M2.5-highspeed", "MiniMax M2.5 Highspeed"),
                   ],
                 },
               },
@@ -215,13 +221,13 @@ describe("directive behavior", () => {
             providers: {
               moonshot: {
                 baseUrl: "https://api.moonshot.ai/v1",
-                apiKey: "sk-test",
+                apiKey: "sk-test", // pragma: allowlist secret
                 api: "openai-completions",
                 models: [makeModelDefinition("kimi-k2-0905-preview", "Kimi K2")],
               },
               lmstudio: {
                 baseUrl: "http://127.0.0.1:1234/v1",
-                apiKey: "lmstudio",
+                apiKey: "lmstudio", // pragma: allowlist secret
                 api: "openai-responses",
                 models: [makeModelDefinition("kimi-k2-0905-preview", "Kimi K2 (Local)")],
               },
