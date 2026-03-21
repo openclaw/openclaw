@@ -69,6 +69,14 @@
       "destination": "/plugins/building-plugins"
     },
     {
+      "source": "/plugins/agent-tools",
+      "destination": "/plugins/building-plugins#registering-agent-tools"
+    },
+    {
+      "source": "/tools/capability-cookbook",
+      "destination": "/plugins/architecture"
+    },
+    {
       "source": "/brave-search",
       "destination": "/tools/brave-search"
     },
@@ -1030,13 +1038,11 @@
                 "pages": [
                   "tools/plugin",
                   "plugins/building-plugins",
-                  "plugins/sdk-migration",
-                  "plugins/architecture",
                   "plugins/community",
                   "plugins/bundles",
                   "plugins/manifest",
-                  "plugins/agent-tools",
-                  "tools/capability-cookbook"
+                  "plugins/sdk-migration",
+                  "plugins/architecture"
                 ]
               },
               {
@@ -1067,32 +1073,37 @@
               {
                 "group": "Tools",
                 "pages": [
+                  "tools/apply-patch",
+                  {
+                    "group": "Browser",
+                    "pages": [
+                      "tools/browser",
+                      "tools/browser-login",
+                      "tools/browser-linux-troubleshooting",
+                      "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
+                    ]
+                  },
+                  "tools/btw",
+                  "tools/diffs",
+                  "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
-                  "tools/elevated",
-                  "tools/apply-patch",
-                  "tools/web",
-                  "tools/brave-search",
-                  "tools/firecrawl",
-                  "tools/tavily",
-                  "tools/perplexity-search",
-                  "tools/pdf",
-                  "tools/diffs",
                   "tools/llm-task",
                   "tools/lobster",
+                  "tools/loop-detection",
+                  "tools/pdf",
                   "tools/reactions",
                   "tools/thinking",
-                  "tools/loop-detection",
-                  "tools/btw"
-                ]
-              },
-              {
-                "group": "Browser",
-                "pages": [
-                  "tools/browser",
-                  "tools/browser-login",
-                  "tools/browser-linux-troubleshooting",
-                  "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
+                  {
+                    "group": "Web and search",
+                    "pages": [
+                      "tools/web",
+                      "tools/brave-search",
+                      "tools/firecrawl",
+                      "tools/perplexity-search",
+                      "tools/tavily"
+                    ]
+                  }
                 ]
               },
               {

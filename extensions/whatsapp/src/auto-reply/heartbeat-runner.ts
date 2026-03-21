@@ -1,5 +1,4 @@
 import { appendCronStyleCurrentTimeLine } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveWhatsAppHeartbeatRecipients } from "openclaw/plugin-sdk/channel-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
@@ -25,6 +24,7 @@ import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
 import { newConnectionId } from "../reconnect.js";
+import { resolveWhatsAppHeartbeatRecipients } from "../runtime-api.js";
 import { sendMessageWhatsApp } from "../send.js";
 import { formatError } from "../session.js";
 import { whatsappHeartbeatLog } from "./loggers.js";

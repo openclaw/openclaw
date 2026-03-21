@@ -297,7 +297,7 @@ const defaultHeavyUnitFileLimit =
     : isMacMiniProfile
       ? 90
       : testProfile === "low"
-        ? 20
+        ? 36
         : highMemLocalHost
           ? 80
           : 60;
@@ -307,7 +307,7 @@ const defaultHeavyUnitLaneCount =
     : isMacMiniProfile
       ? 6
       : testProfile === "low"
-        ? 2
+        ? 4
         : highMemLocalHost
           ? 5
           : 4;
@@ -365,11 +365,13 @@ const defaultSingletonBatchLaneCount =
       ? 0
       : isCI
         ? Math.ceil(unitSingletonBatchFiles.length / 6)
-        : highMemLocalHost
-          ? Math.ceil(unitSingletonBatchFiles.length / 8)
-          : lowMemLocalHost
-            ? Math.ceil(unitSingletonBatchFiles.length / 12)
-            : Math.ceil(unitSingletonBatchFiles.length / 10);
+        : testProfile === "low" && highMemLocalHost
+          ? Math.ceil(unitSingletonBatchFiles.length / 8) + 1
+          : highMemLocalHost
+            ? Math.ceil(unitSingletonBatchFiles.length / 8)
+            : lowMemLocalHost
+              ? Math.ceil(unitSingletonBatchFiles.length / 12)
+              : Math.ceil(unitSingletonBatchFiles.length / 10);
 const singletonBatchLaneCount =
   unitSingletonBatchFiles.length === 0
     ? 0
@@ -437,6 +439,22 @@ const unitSingletonEntries = unitSingletonBuckets.map((files, index) => ({
     unitSingletonBuckets.length === 1 ? "unit-singleton" : `unit-singleton-${String(index + 1)}`,
   args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
 }));
+const unitThreadEntries =
+  unitThreadSingletonFiles.length > 0
+    ? [
+        {
+          name: "unit-threads",
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.unit.config.ts",
+            "--pool=threads",
+            ...unitThreadSingletonFiles,
+          ],
+        },
+      ]
+    : [];
 const baseRuns = [
   ...(shouldSplitUnitRuns
     ? [
@@ -469,10 +487,7 @@ const baseRuns = [
             file,
           ],
         })),
-        ...unitThreadSingletonFiles.map((file) => ({
-          name: `${path.basename(file, ".test.ts")}-threads`,
-          args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=threads", file],
-        })),
+        ...unitThreadEntries,
         ...unitVmForkSingletonFiles.map((file) => ({
           name: `${path.basename(file, ".test.ts")}-vmforks`,
           args: [
@@ -695,7 +710,9 @@ const defaultTopLevelParallelLimit =
   testProfile === "serial"
     ? 1
     : testProfile === "low"
-      ? 2
+      ? lowMemLocalHost
+        ? 2
+        : 3
       : testProfile === "max"
         ? 5
         : highMemLocalHost
@@ -1287,9 +1304,16 @@ if (serialPrefixRuns.length > 0) {
   if (failedSerialPrefix !== undefined) {
     process.exit(failedSerialPrefix);
   }
+  const deferredRunConcurrency = isMacMiniProfile ? 3 : testProfile === "low" ? 2 : undefined;
   const failedDeferredParallel = isMacMiniProfile
-    ? await runEntriesWithLimit(deferredParallelRuns, passthroughOptionArgs, 3)
-    : await runEntries(deferredParallelRuns, passthroughOptionArgs);
+    ? await runEntriesWithLimit(deferredParallelRuns, passthroughOptionArgs, deferredRunConcurrency)
+    : deferredRunConcurrency
+      ? await runEntriesWithLimit(
+          deferredParallelRuns,
+          passthroughOptionArgs,
+          deferredRunConcurrency,
+        )
+      : await runEntries(deferredParallelRuns, passthroughOptionArgs);
   if (failedDeferredParallel !== undefined) {
     process.exit(failedDeferredParallel);
   }

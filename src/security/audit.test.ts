@@ -1100,29 +1100,29 @@ description: test skill
       },
     ] as const;
 
-    for (const testCase of cases) {
-      if (!testCase.supported) {
-        continue;
-      }
+    await Promise.all(
+      cases
+        .filter((testCase) => testCase.supported)
+        .map(async (testCase) => {
+          const fixture = await testCase.setup();
+          const configPath = path.join(fixture.stateDir, "openclaw.json");
+          await fs.writeFile(configPath, "{}\n", "utf-8");
+          if (!isWindows) {
+            await fs.chmod(configPath, 0o600);
+          }
 
-      const fixture = await testCase.setup();
-      const configPath = path.join(fixture.stateDir, "openclaw.json");
-      await fs.writeFile(configPath, "{}\n", "utf-8");
-      if (!isWindows) {
-        await fs.chmod(configPath, 0o600);
-      }
+          const res = await runSecurityAudit({
+            config: { agents: { defaults: { workspace: fixture.workspaceDir } } },
+            includeFilesystem: true,
+            includeChannelSecurity: false,
+            stateDir: fixture.stateDir,
+            configPath,
+            execDockerRawFn: execDockerRawUnavailable,
+          });
 
-      const res = await runSecurityAudit({
-        config: { agents: { defaults: { workspace: fixture.workspaceDir } } },
-        includeFilesystem: true,
-        includeChannelSecurity: false,
-        stateDir: fixture.stateDir,
-        configPath,
-        execDockerRawFn: execDockerRawUnavailable,
-      });
-
-      testCase.assert(res, fixture);
-    }
+          testCase.assert(res, fixture);
+        }),
+    );
   });
 
   it("scores small-model risk by tool/sandbox exposure", async () => {
@@ -1554,20 +1554,24 @@ description: test skill
       },
     ] as const;
 
-    for (const testCase of cases) {
-      const res = await audit(testCase.cfg);
-      if ("expectedFinding" in testCase) {
-        expect(res.findings, testCase.name).toEqual(
-          expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        if ("expectedFinding" in testCase) {
+          expect(res.findings, testCase.name).toEqual(
+            expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
+          );
+        }
+        const finding = res.findings.find(
+          (f) => f.checkId === "config.insecure_or_dangerous_flags",
         );
-      }
-      const finding = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
-      expect(finding, testCase.name).toBeTruthy();
-      expect(finding?.severity, testCase.name).toBe("warn");
-      for (const detail of testCase.expectedDangerousDetails) {
-        expect(finding?.detail, `${testCase.name}:${detail}`).toContain(detail);
-      }
-    }
+        expect(finding, testCase.name).toBeTruthy();
+        expect(finding?.severity, testCase.name).toBe("warn");
+        for (const detail of testCase.expectedDangerousDetails) {
+          expect(finding?.detail, `${testCase.name}:${detail}`).toContain(detail);
+        }
+      }),
+    );
   });
 
   it.each([
@@ -3116,17 +3120,19 @@ description: test skill
       },
     ] as const;
 
-    for (const testCase of cases) {
-      const res = await testCase.run();
-      const expectedPresent = "expectedPresent" in testCase ? testCase.expectedPresent : [];
-      for (const checkId of expectedPresent) {
-        expect(hasFinding(res, checkId, "warn"), `${testCase.name}:${checkId}`).toBe(true);
-      }
-      const expectedAbsent = "expectedAbsent" in testCase ? testCase.expectedAbsent : [];
-      for (const checkId of expectedAbsent) {
-        expect(hasFinding(res, checkId), `${testCase.name}:${checkId}`).toBe(false);
-      }
-    }
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await testCase.run();
+        const expectedPresent = "expectedPresent" in testCase ? testCase.expectedPresent : [];
+        for (const checkId of expectedPresent) {
+          expect(hasFinding(res, checkId, "warn"), `${testCase.name}:${checkId}`).toBe(true);
+        }
+        const expectedAbsent = "expectedAbsent" in testCase ? testCase.expectedAbsent : [];
+        for (const checkId of expectedAbsent) {
+          expect(hasFinding(res, checkId), `${testCase.name}:${checkId}`).toBe(false);
+        }
+      }),
+    );
   });
 
   it("evaluates extension tool reachability findings", async () => {
@@ -3339,9 +3345,17 @@ description: test skill
       },
     ] as const;
 
-    for (const testCase of cases) {
-      const result = await testCase.run();
-      testCase.assert(result as never);
+    await Promise.all(
+      cases.slice(0, -1).map(async (testCase) => {
+        const result = await testCase.run();
+        testCase.assert(result as never);
+      }),
+    );
+
+    const scanFailureCase = cases.at(-1);
+    if (scanFailureCase) {
+      const result = await scanFailureCase.run();
+      scanFailureCase.assert(result as never);
     }
   });
 

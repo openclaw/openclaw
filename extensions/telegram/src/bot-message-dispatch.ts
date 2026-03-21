@@ -6,9 +6,12 @@ import {
   modelSupportsVision,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  logAckFailure,
+  logTypingFailure,
+  removeAckReactionAfterReply,
+} from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { removeAckReactionAfterReply } from "openclaw/plugin-sdk/channel-runtime";
-import { logAckFailure, logTypingFailure } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
@@ -19,12 +22,14 @@ import type {
   OpenClawConfig,
   ReplyToMode,
   TelegramAccountConfig,
+  TelegramDirectConfig,
 } from "openclaw/plugin-sdk/config-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveAutoTopicLabelConfig, generateTopicLabel } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
@@ -157,6 +162,7 @@ export const dispatchTelegramMessage = async ({
     msg,
     chatId,
     isGroup,
+    groupConfig,
     threadSpec,
     historyKey,
     historyLimit,
@@ -529,6 +535,28 @@ export const dispatchTelegramMessage = async ({
   let queuedFinal = false;
   let hadErrorReplyFailureOrSkip = false;
 
+  // Determine if this is the first turn in session (for auto-topic-label).
+  const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;
+
+  let isFirstTurnInSession = false;
+  if (isDmTopic) {
+    try {
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
+      const store = loadSessionStore(storePath, { skipCache: true });
+      const sessionKey = ctxPayload.SessionKey;
+      if (sessionKey) {
+        const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+        isFirstTurnInSession = !entry?.systemSent;
+      } else {
+        logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
+      }
+    } catch (err) {
+      logVerbose(
+        `auto-topic-label: session store error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   if (statusReactionController) {
     void statusReactionController.setThinking();
   }
@@ -854,6 +882,46 @@ export const dispatchTelegramMessage = async ({
   if (!hasFinalResponse) {
     clearGroupHistory();
     return;
+  }
+
+  // Fire-and-forget: auto-rename DM topic on first message.
+  if (isDmTopic && isFirstTurnInSession) {
+    const userMessage = (ctxPayload.RawBody ?? ctxPayload.Body ?? "").slice(0, 500);
+    if (userMessage.trim()) {
+      const agentDir = resolveAgentDir(cfg, route.agentId);
+      const directConfig = !isGroup ? (groupConfig as TelegramDirectConfig | undefined) : undefined;
+      const directAutoTopicLabel = directConfig?.autoTopicLabel;
+      const accountAutoTopicLabel = telegramCfg?.autoTopicLabel;
+      const autoTopicConfig = resolveAutoTopicLabelConfig(
+        directAutoTopicLabel,
+        accountAutoTopicLabel,
+      );
+      if (autoTopicConfig) {
+        const topicThreadId = threadSpec.id!;
+        void (async () => {
+          try {
+            const label = await generateTopicLabel({
+              userMessage,
+              prompt: autoTopicConfig.prompt,
+              cfg,
+              agentId: route.agentId,
+              agentDir,
+            });
+            if (!label) {
+              logVerbose("auto-topic-label: LLM returned empty label");
+              return;
+            }
+            logVerbose(`auto-topic-label: generated label (len=${label.length})`);
+            await bot.api.editForumTopic(chatId, topicThreadId, { name: label });
+            logVerbose(`auto-topic-label: renamed topic ${chatId}/${topicThreadId}`);
+          } catch (err) {
+            logVerbose(
+              `auto-topic-label: failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        })();
+      }
+    }
   }
 
   if (statusReactionController) {
