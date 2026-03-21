@@ -326,9 +326,7 @@ export function handleMessageEnd(
   // no text or media content. Without this check, handleMessageEnd silently skips
   // emitting the assistant update, which prevents downstream tool execution from
   // being signalled. See: https://github.com/openclaw/openclaw/issues/13603
-  const hasToolCalls =
-    extractToolCallsFromAssistant(assistantMessage as Extract<AgentMessage, { role: "assistant" }>)
-      .length > 0;
+  const hasToolCalls = extractToolCallsFromAssistant(assistantMessage).length > 0;
 
   if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia || hasToolCalls)) {
     const data = buildAssistantStreamData({
