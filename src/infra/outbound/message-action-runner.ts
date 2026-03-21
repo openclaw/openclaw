@@ -16,7 +16,7 @@ import type {
 import type { OpenClawConfig } from "../../config/config.js";
 import { hasInteractiveReplyBlocks, hasReplyPayloadContent } from "../../interactive/payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { hasPollCreationParams, POLL_CREATION_PARAM_DEFS } from "../../poll-params.js";
+import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -62,6 +62,21 @@ export type MessageActionRunnerGateway = {
   mode: GatewayClientMode;
 };
 
+const POLL_PARAM_KEYS = [
+  "pollQuestion",
+  "pollOption",
+  "pollDurationHours",
+  "pollDurationSeconds",
+  "pollMulti",
+  "pollAnonymous",
+  "pollPublic",
+  "pollId",
+  "pollOptionId",
+  "pollOptionIds",
+  "pollOptionIndex",
+  "pollOptionIndexes",
+] as const;
+
 function prunePollParamsForNonPollAction(
   action: ChannelMessageActionName,
   params: Record<string, unknown>,
@@ -69,7 +84,7 @@ function prunePollParamsForNonPollAction(
   if (action === "poll") {
     return;
   }
-  for (const key of Object.keys(POLL_CREATION_PARAM_DEFS)) {
+  for (const key of POLL_PARAM_KEYS) {
     delete params[key];
   }
 }
