@@ -327,6 +327,7 @@ describe("buildServiceEnvironment", () => {
     const env = buildServiceEnvironment({
       env: {
         HOME: "/home/user",
+        NODE_USE_ENV_PROXY: "1",
         HTTP_PROXY: " http://proxy.local:7890 ",
         HTTPS_PROXY: "https://proxy.local:7890",
         NO_PROXY: "localhost,127.0.0.1",
@@ -336,6 +337,7 @@ describe("buildServiceEnvironment", () => {
       port: 18789,
     });
 
+    expect(env.NODE_USE_ENV_PROXY).toBe("1");
     expect(env.HTTP_PROXY).toBe("http://proxy.local:7890");
     expect(env.HTTPS_PROXY).toBe("https://proxy.local:7890");
     expect(env.NO_PROXY).toBe("localhost,127.0.0.1");
