@@ -1,4 +1,3 @@
-import type { DaemonInstallOptions } from "./types.js";
 import { resolveAutoNodeExtraCaCerts } from "../../bootstrap/node-extra-ca-certs.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
@@ -17,6 +16,7 @@ import {
   failIfNixDaemonInstallMode,
   parsePort,
 } from "./shared.js";
+import type { DaemonInstallOptions } from "./types.js";
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
@@ -141,11 +141,12 @@ async function gatewayServiceNeedsAutoNodeExtraCaCertsRefresh(params: {
     if (!currentExecPath) {
       return false;
     }
-    const currentNodeExtraCaCerts = currentCommand?.environment?.NODE_EXTRA_CA_CERTS?.trim();
+    const currentEnvironment = currentCommand?.environment ?? {};
+    const currentNodeExtraCaCerts = currentEnvironment.NODE_EXTRA_CA_CERTS?.trim();
     const expectedNodeExtraCaCerts = resolveAutoNodeExtraCaCerts({
       env: {
         ...params.env,
-        ...currentCommand.environment,
+        ...currentEnvironment,
         NODE_EXTRA_CA_CERTS: undefined,
       },
       execPath: currentExecPath,
