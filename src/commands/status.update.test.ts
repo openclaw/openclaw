@@ -66,7 +66,7 @@ describe("resolveUpdateAvailability", () => {
 });
 
 describe("formatUpdateOneLiner", () => {
-  it("renders git status and explicit up-to-date registry summary", () => {
+  it("renders git status and registry summary without duplicating up to date", () => {
     const update = buildUpdate({
       installKind: "git",
       git: {
@@ -90,7 +90,35 @@ describe("formatUpdateOneLiner", () => {
     });
 
     expect(formatUpdateOneLiner(update)).toBe(
-      `Update: git main · ↔ origin/main · dirty · behind 2 · up to date · npm latest ${VERSION} · deps ok`,
+      `Update: git main · ↔ origin/main · dirty · behind 2 · npm latest ${VERSION} · deps ok`,
+    );
+  });
+
+  it("renders synced git installs with a single up to date label", () => {
+    const update = buildUpdate({
+      installKind: "git",
+      git: {
+        root: "/tmp/repo",
+        sha: "abc123456789",
+        tag: null,
+        branch: "main",
+        upstream: "origin/main",
+        dirty: false,
+        ahead: 0,
+        behind: 0,
+        fetchOk: true,
+      },
+      registry: { latestVersion: VERSION },
+      deps: {
+        manager: "pnpm",
+        status: "ok",
+        lockfilePath: "pnpm-lock.yaml",
+        markerPath: "node_modules/.modules.yaml",
+      },
+    });
+
+    expect(formatUpdateOneLiner(update)).toBe(
+      `Update: git main · ↔ origin/main · up to date · npm latest ${VERSION} · deps ok`,
     );
   });
 
