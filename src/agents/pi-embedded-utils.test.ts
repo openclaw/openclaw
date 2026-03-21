@@ -575,6 +575,27 @@ All done.`;
     });
   });
 
+  it("unescapes XML entities in arguments", () => {
+    const text = `<minimax:tool_call>
+  <invoke name="Bash">
+    <parameter name="command">ls &amp;&amp; echo &quot;done&quot; &gt; out.txt</parameter>
+  </invoke>
+</minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    expect(msg.content[0]).toMatchObject({
+      type: "toolCall",
+      name: "Bash",
+      arguments: { command: 'ls && echo "done" > out.txt' },
+    });
+  });
+
   it("ignores non-MiniMax XML blocks", () => {
     const text = `<other:tag>data</other:tag>`;
     const msg = makeAssistantMessage({

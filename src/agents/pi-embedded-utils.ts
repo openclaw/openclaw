@@ -454,6 +454,18 @@ export function inferToolMetaFromArgs(toolName: string, args: unknown): string |
   return formatToolDetail(display);
 }
 
+/**
+ * Basic XML entity unescaper for common entities used in tool calls.
+ */
+function unescapeXmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
 type MinimaxToolCallSplitBlock =
   | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> }
   | { type: "text"; text: string };
@@ -516,18 +528,18 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
       // This is a known limitation for this fallback parser.
       for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
         const [, pName, pValue] = pMatch;
-        const trimmedValue = pValue.trim();
+        const unescapedValue = unescapeXmlEntities(pValue.trim());
         try {
           if (
-            (trimmedValue.startsWith("{") && trimmedValue.endsWith("}")) ||
-            (trimmedValue.startsWith("[") && trimmedValue.endsWith("]"))
+            (unescapedValue.startsWith("{") && unescapedValue.endsWith("}")) ||
+            (unescapedValue.startsWith("[") && unescapedValue.endsWith("]"))
           ) {
-            args[pName] = JSON.parse(trimmedValue);
+            args[pName] = JSON.parse(unescapedValue);
           } else {
-            args[pName] = trimmedValue;
+            args[pName] = unescapedValue;
           }
         } catch {
-          args[pName] = trimmedValue;
+          args[pName] = unescapedValue;
         }
       }
 
