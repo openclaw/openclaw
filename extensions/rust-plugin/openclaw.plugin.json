@@ -1,0 +1,36 @@
+{
+  "id": "rust-plugin",
+  "name": "Rust Plugin",
+  "description": "A high-performance OpenClaw plugin built with Rust",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "option1": {
+        "type": "string",
+        "description": "Example configuration option"
+      },
+      "numericOption": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Enable Plugin"
+    },
+    "option1": {
+      "label": "Option 1",
+      "placeholder": "Enter value..."
+    },
+    "numericOption": {
+      "label": "Numeric Option"
+    }
+  }
+}

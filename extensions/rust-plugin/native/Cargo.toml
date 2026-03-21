@@ -1,0 +1,43 @@
+[package]
+name = "rust-plugin"
+version = "0.1.0"
+edition = "2021"
+authors = ["OpenClaw Contributors"]
+description = "High-performance OpenClaw plugin built with Rust"
+license = "MIT"
+repository = "https://github.com/openclaw/openclaw"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+napi = { version = "2", features = ["async", "tokio_rt"] }
+napi-derive = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+sha2 = "0.10"
+blake3 = "1.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+aes-gcm = "0.10"
+argon2 = "0.5"
+hkdf = "0.12"
+hmac = "0.12"
+rand = "0.8"
+hex = "0.4"
+zeroize = "1.8"
+rayon = "1.10"
+parking_lot = "0.12"
+lazy_static = "1.5"
+regex = "1.10"
+uuid = { version = "1.0", features = ["v4"] }
+base64 = "0.22"
+urlencoding = "2.1"
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true
+strip = true
+opt-level = 3

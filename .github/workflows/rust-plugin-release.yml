@@ -1,0 +1,152 @@
+name: Rust Plugin Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "extensions/rust-plugin/**"
+      - ".github/workflows/rust-plugin-release.yml"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA on main to publish from
+        required: true
+        type: string
+
+concurrency:
+  group: rust-plugin-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+  cancel-in-progress: false
+
+env:
+  RUST_VERSION: "1.82.0"
+  NODE_VERSION: "22.x"
+  PNPM_VERSION: "10.23.0"
+
+jobs:
+  build:
+    runs-on: ${{ matrix.settings.host }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+          - host: macos-latest
+            target: x86_64-apple-darwin
+          - host: macos-latest
+            target: aarch64-apple-darwin
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Install @napi-rs/cli
+        run: pnpm add -g @napi-rs/cli
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ matrix.settings.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            extensions/rust-plugin/native/target/
+          key: ${{ runner.os }}-cargo-${{ matrix.settings.target }}-${{ hashFiles('extensions/rust-plugin/native/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.settings.target }}-
+
+      - name: Build with napi-rs
+        working-directory: extensions/rust-plugin
+        run: napi build --platform --release --target ${{ matrix.settings.target }} ./native
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: |
+            extensions/rust-plugin/*.node
+            extensions/rust-plugin/index.d.ts
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Install @napi-rs/cli
+        run: pnpm add -g @napi-rs/cli
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Move bindings to package
+        run: |
+          mkdir -p extensions/rust-plugin
+          find artifacts -name "*.node" -exec mv {} extensions/rust-plugin/ \;
+          find artifacts -name "index.d.ts" -exec mv {} extensions/rust-plugin/ \;
+
+      - name: Check version not already published
+        working-directory: extensions/rust-plugin
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view @openclaw/rust-plugin@$VERSION version >/dev/null 2>&1; then
+            echo "@openclaw/rust-plugin@$VERSION is already published"
+            exit 1
+          fi
+
+      - name: Publish to npm
+        working-directory: extensions/rust-plugin
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: true
+        run: npm publish --access public

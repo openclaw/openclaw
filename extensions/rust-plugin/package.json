@@ -1,0 +1,79 @@
+{
+  "name": "@openclaw/rust-plugin",
+  "version": "2026.3.19",
+  "description": "High-performance OpenClaw plugin powered by Rust",
+  "keywords": [
+    "cryptography",
+    "filesystem",
+    "napi-rs",
+    "native",
+    "openclaw",
+    "performance",
+    "plugin",
+    "rust"
+  ],
+  "homepage": "https://docs.openclaw.ai/plugins/rust-plugin",
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
+  "license": "MIT",
+  "author": "OpenClaw Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw.git",
+    "directory": "extensions/rust-plugin"
+  },
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.d.ts",
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "napi build --platform --release ./native",
+    "build:debug": "napi build --platform ./native",
+    "prepublishOnly": "napi prepublish -t npm",
+    "test": "vitest run tests/",
+    "test:watch": "vitest watch tests/",
+    "version": "napi version"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0",
+    "vitest": "^2.0.0"
+  },
+  "optionalDependencies": {
+    "@openclaw/rust-plugin-darwin-arm64": "2026.3.19",
+    "@openclaw/rust-plugin-darwin-x64": "2026.3.19",
+    "@openclaw/rust-plugin-linux-arm64-gnu": "2026.3.19",
+    "@openclaw/rust-plugin-linux-arm64-musl": "2026.3.19",
+    "@openclaw/rust-plugin-linux-x64-gnu": "2026.3.19",
+    "@openclaw/rust-plugin-linux-x64-musl": "2026.3.19",
+    "@openclaw/rust-plugin-win32-x64-msvc": "2026.3.19"
+  },
+  "napi": {
+    "name": "rust_plugin",
+    "triples": {
+      "defaults": true,
+      "additional": [
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-linux-musl"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">= 18"
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/rust-plugin",
+      "localPath": "extensions/rust-plugin",
+      "defaultChoice": "npm"
+    },
+    "release": {
+      "publishToNpm": true
+    }
+  }
+}

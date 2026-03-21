@@ -1,0 +1,9 @@
+{
+  "name": "@openclaw/rust-plugin-native",
+  "version": "2026.3.19",
+  "license": "MIT",
+  "author": "OpenClaw Contributors",
+  "repository": "https://github.com/openclaw/openclaw",
+  "main": "index.cjs",
+  "types": "index.d.ts"
+}
