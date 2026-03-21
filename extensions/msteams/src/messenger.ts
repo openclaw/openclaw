@@ -264,13 +264,7 @@ export function renderReplyPayloadsToMessages(
   return out;
 }
 
-/** AI-generated content entity added to every outbound AI message. */
-const AI_GENERATED_ENTITY = {
-  type: "https://schema.org/Message",
-  "@type": "Message",
-  "@id": "",
-  additionalType: ["AIGeneratedContent"],
-};
+import { AI_GENERATED_ENTITY } from "./ai-entity.js";
 
 export async function buildActivity(
   msg: MSTeamsRenderedMessage,

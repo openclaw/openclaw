@@ -283,8 +283,6 @@ async function storeSessionLearning(params: {
   sessionKey: string;
   learning: string;
 }): Promise<void> {
-  const core = getMSTeamsRuntime();
-  // Use the session store to append a custom event with the learning
   const fs = await import("node:fs/promises");
   const path = await import("node:path");
 

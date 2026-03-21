@@ -262,6 +262,10 @@ async function handleFeedbackInvoke(
   // No ack message — the reflection follow-up serves as the acknowledgement.
   // Sending anything during the invoke handler causes "unable to reach app" errors.
   if (isNegative && msteamsCfg?.feedbackReflection !== false) {
+    // Note: thumbedDownResponse is not populated here because we don't cache
+    // sent message text. The agent still has full session context for reflection
+    // since the reflection runs in the same session. The user comment (if any)
+    // provides additional signal.
     runFeedbackReflection({
       cfg: deps.cfg,
       adapter: deps.adapter,

@@ -37,13 +37,7 @@ export type TeamsStreamOptions = {
   onError?: (err: unknown) => void;
 };
 
-/** AI-generated content entity added to every outbound AI message. */
-const AI_GENERATED_ENTITY = {
-  type: "https://schema.org/Message",
-  "@type": "Message",
-  "@id": "",
-  additionalType: ["AIGeneratedContent"],
-};
+import { AI_GENERATED_ENTITY } from "./ai-entity.js";
 
 function extractId(response: unknown): string | undefined {
   if (response && typeof response === "object" && "id" in response) {
