@@ -27,6 +27,11 @@ Use these documents in this order when there is any ambiguity:
 - Benchmark protocol is 2 runs per approach/task, using median time.
 - This tracker is the handoff doc for context compaction. Update it before ending a major debugging block.
 - Use `openai-codex/gpt-5.4` for the next comparison wave so results stay comparable.
+- For real-Chrome experiments, keep three lanes separate in both notes and code:
+  - clean debug-profile Chrome
+  - cloned real-profile Chrome
+  - live daily Chrome process
+    Chrome behavior differs across these, so collapsing them into one "user browser" bucket causes fake debugging loops.
 
 ## Workstream registry (single source)
 
@@ -102,7 +107,19 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
     - Browserbase Task 3 rerun `r3` gets past attach/open and fails later on browser-tool timeout while inspecting article contents for summarization.
     - Browserbase Task 1 split rerun on this worktree is more precise: `r1` still fails early on Google Flights with `Remote CDP ... not reachable`, but a fresh-session warm-up run (`status` + `open https://www.google.com/travel/flights`) succeeds on the same lane and then moves the next concrete blocker downstream to a Google Flights `locator.fill` timeout.
     - Browserbase account concurrency is currently very tight (`3` concurrent sessions), so leaked probe sessions quickly trigger `429 Too Many Requests`.
+    - Browserbase is temporarily blocked again by account credits: fresh session creation now returns HTTP `402 Payment Required` (`Free plan browser minutes limit reached`).
     - Browser Use setup research is done, but execution is honestly blocked on missing model/API keys on this machine.
+  - Real-Chrome execution status (2026-03-21 update):
+    - Chrome will not allow CDP on the user's live daily data dir directly; it requires a non-default `--user-data-dir`.
+    - The practical "real browser state" lane is therefore a cloned-profile lane:
+      - detect the real profile via `chrome://version`
+      - clone that profile into a throwaway user-data-dir
+      - launch Chrome against the clone with `--remote-debugging-port`
+      - attach `profile=user` to that CDP endpoint
+    - Founder profile detection is now confirmed:
+      - source profile: `Profile 4`
+    - Emirates benchmark on the cloned `Profile 4` lane passed for `DPS -> DXB` on `2026-03-22`.
+    - The same Emirates benchmark on `profile=openclaw` failed on widget instability before visible flight options loaded.
 
 ## Phase B hardening tracker
 
@@ -118,24 +135,27 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 
 ### Still open
 
-- [ ] Capture one clean `profile=user` Emirates result artifact on the latest dist
-- [ ] Capture one clean `profile=openclaw` Emirates result artifact on the latest dist
+- [x] Capture one clean `profile=user` Emirates result artifact on the latest dist
+- [x] Capture one clean `profile=openclaw` Emirates result artifact on the latest dist
 - [ ] Clean up benchmark artifact capture so JSON results are not polluted by service log lines
 - [ ] Decide whether remaining failures are browser-lane bugs or benchmark-harness bugs
 - [ ] Capture one clean Browserbase Task 1 artifact now that the split rerun has moved the blocker from attach to field interaction
 - [ ] Re-run Browserbase benchmark tasks after clearing leaked provider sessions / avoiding 429 concurrency caps
 - [ ] Run Browser Use as the first external comparison lane once a usable model/API key is available
 - [ ] Keep Agent S3 documented as a later experiment, not a week-1 gate
+- [ ] Productize Chrome profile detection/setup so end users do not need manual `chrome://version` inspection
 
 ### Immediate next 7 actions
 
-1. Inspect `r6` and classify it as real browser failure, real success, or harness/artifact failure.
-2. If `r6` lacks a deterministic terminal artifact, fix benchmark artifact writing before any more lane comparisons.
-3. Keep benchmark lane on `/tmp/openclaw-consumer-bench` and port `19011`; do not reuse the desktop Consumer app runtime.
-4. Re-run screenshots-first Emirates flow on `profile=openclaw` as the stability baseline once the harness is trustworthy.
-5. Re-run screenshots-first Emirates flow on `profile=user` only after the harness is trustworthy and Chrome CDP is explicitly healthy.
-6. Re-run Browserbase with fresh `keepAlive: true` sessions and isolate the remaining deeper browser-tool inspection timeout on real tasks.
-7. Run Browser Use on the smallest 2-3 task smoke set once a usable model/API key is available, before Agent S3.
+1. Keep benchmark lane on `/tmp/openclaw-consumer-bench` and port `19011`; do not reuse the desktop Consumer app runtime.
+2. Treat cloned real-Chrome state as the current best `profile=user` recipe for hostile travel sites.
+3. Keep `profile=openclaw` as the reliability fallback, but not the current winner on Emirates.
+4. Re-run Browserbase with fresh `keepAlive: true` sessions once credits are restored and isolate the remaining deeper browser-tool inspection timeout on real tasks.
+5. Run Browser Use on the smallest 2-3 task smoke set once a usable model/API key is available, before Agent S3.
+6. Design a user-facing Chrome setup flow that can discover or guide selection of the correct profile instead of relying on manual `chrome://version` inspection.
+7. Decide whether week-1 primary browser recommendation becomes:
+   - cloned real-Chrome state for signed-in travel/browser tasks
+   - `openclaw` managed browser as fallback
 
 ### Auth and rate-limit sanity checks
 

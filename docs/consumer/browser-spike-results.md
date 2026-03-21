@@ -35,12 +35,12 @@ Legend:
 
 - `PASS`, `FAIL`, `BLOCKED`, `PENDING`
 
-| Approach                  | Task 1 Flight                                          | Task 2 Form          | Task 3 Web Summary                                  | Task 4 X Summary     | Task 5 Multi-step     | Notes                                                                                                                                                                                                                                                                         |
-| ------------------------- | ------------------------------------------------------ | -------------------- | --------------------------------------------------- | -------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user` (existing-session) | PASS (median `121.0s`; `r1`: `107.2s`, `r2`: `134.9s`) | PASS (`r1`: `63.1s`) | PASS (median `39.0s`; `r1`: `49.2s`, `r2`: `28.7s`) | FAIL (`r1`: `40.3s`) | FAIL (`r1`: `59.3s`)  | Control lane passes when Chrome exposes standard CDP endpoint (example: launch with `--remote-debugging-port=9333` and attach via browser URL); heavier social/travel flows still time out early                                                                              |
-| `openclaw` (managed)      | PASS (median `69.9s`; `r1`: `85.4s`, `r2`: `54.5s`)    | PASS (`r1`: `78.8s`) | PASS (median `33.9s`; `r1`: `29.1s`, `r2`: `38.6s`) | PASS (`r1`: `66.5s`) | FAIL (`r1`: `126.2s`) | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`); survives more sites than `user` but still times out in long multi-step travel workflows                                                                                                |
-| Claude-in-Chrome          | PENDING                                                | PENDING              | PENDING                                             | PENDING              | PENDING               | Investigation/adaptation track                                                                                                                                                                                                                                                |
-| Browserbase               | FAIL (`r1`: `12.2s`)                                   | PENDING              | FAIL (`r1`: `24.0s`, `r2`: `41.6s`, `r3`: `83.6s`)  | PENDING              | PENDING               | Transport is healthy only with fresh `keepAlive: true` sessions; direct Browserbase CLI smoke passes and a minimal local-agent browser task now passes, but real benchmark tasks still fail on either early remote-CDP reachability or later browser-tool inspection timeouts |
+| Approach                  | Task 1 Flight                                          | Task 2 Form          | Task 3 Web Summary                                  | Task 4 X Summary     | Task 5 Multi-step     | Notes                                                                                                                                                                                                                                                                                                      |
+| ------------------------- | ------------------------------------------------------ | -------------------- | --------------------------------------------------- | -------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user` (existing-session) | PASS (median `121.0s`; `r1`: `107.2s`, `r2`: `134.9s`) | PASS (`r1`: `63.1s`) | PASS (median `39.0s`; `r1`: `49.2s`, `r2`: `28.7s`) | FAIL (`r1`: `40.3s`) | FAIL (`r1`: `59.3s`)  | Control lane passes when Chrome exposes standard CDP endpoint (example: launch with `--remote-debugging-port=9333` and attach via browser URL); heavier social/travel flows still time out early                                                                                                           |
+| `openclaw` (managed)      | PASS (median `69.9s`; `r1`: `85.4s`, `r2`: `54.5s`)    | PASS (`r1`: `78.8s`) | PASS (median `33.9s`; `r1`: `29.1s`, `r2`: `38.6s`) | PASS (`r1`: `66.5s`) | FAIL (`r1`: `126.2s`) | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`); survives more sites than `user` but still times out in long multi-step travel workflows. On Emirates `DPS -> DXB` for `2026-03-22`, this lane failed to keep the booking widget stable long enough to load results. |
+| Claude-in-Chrome          | PENDING                                                | PENDING              | PENDING                                             | PENDING              | PENDING               | Investigation/adaptation track                                                                                                                                                                                                                                                                             |
+| Browserbase               | FAIL (`r1`: `12.2s`)                                   | PENDING              | FAIL (`r1`: `24.0s`, `r2`: `41.6s`, `r3`: `83.6s`)  | PENDING              | PENDING               | Transport is healthy only with fresh `keepAlive: true` sessions; direct Browserbase CLI smoke passes and a minimal local-agent browser task now passes, but real benchmark tasks still fail on either early remote-CDP reachability or later browser-tool inspection timeouts                              |
 
 ## Current blocker summary
 
@@ -78,9 +78,18 @@ Legend:
     - The latest Browserbase Task 3 rerun no longer fails at remote-CDP reachability; it opens the target article and then times out later when the browser tool tries to inspect page contents for summarization.
     - Browserbase Task 1 split rerun shows the same pattern: on a fresh `keepAlive: true` session, direct `status` and `open https://www.google.com/travel/flights` pass first, and the next concrete failure moves downstream to Google Flights field interaction (`locator.fill` timeout) rather than initial remote-CDP attachment.
     - A fresh Browserbase Task 1 rerun on this worktree still fails much earlier on Google Flights with `Remote CDP ... not reachable`, even though a tiny same-session smoke (`open https://example.com`) still passes.
-  - Browser Use findings on 2026-03-21:
-    - Side-lane setup research is complete.
-    - Practical benchmarking is currently blocked because this machine does not expose any of the plain model/API keys Browser Use expects (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `BROWSER_USE_API_KEY`, or related fallbacks).
+- Browser Use findings on 2026-03-21:
+  - Side-lane setup research is complete.
+  - Practical benchmarking is currently blocked because this machine does not expose any of the plain model/API keys Browser Use expects (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `BROWSER_USE_API_KEY`, or related fallbacks).
+- Real-Chrome findings on 2026-03-21:
+  - Chrome will not allow CDP on the user's live default data dir/profile directly; it requires a non-default `--user-data-dir`.
+  - The workable compromise is a cloned real-profile lane:
+    - source profile detected via `chrome://version`
+    - current founder profile: `Profile 4`
+    - clone path: throwaway temp dir
+    - launch Chrome against the clone with `--remote-debugging-port=9333`
+  - This cloned-profile lane preserves real-ish cookies/session state without hijacking the user's day-to-day Chrome runtime.
+  - The one-shot repro helper for this lane is `scripts/repro/consumer-user-profile4-clone-emirates.sh`.
 
 Interpretation:
 
@@ -257,6 +266,46 @@ Supplemental real-site commerce smoke, early read:
 - `openclaw` on Emirates booking flow:
   - status: `INCOMPLETE`
   - note: run 1 reached the booking form, then hit selector ambiguity on repeated airport fields before a clean completion/failure summary was produced; run 2 used an explicit screenshot/snapshot-first prompt and avoided the immediate selector failure, but still did not finish cleanly inside the benchmark window
+
+## 2026-03-21 Emirates comparison: cloned real Chrome vs managed browser
+
+Task:
+
+- one-way `Denpasar (DPS) -> Dubai (DXB)`
+- date: `2026-03-22`
+- stop when visible flight options load
+
+Cloned real-Chrome lane (`user`, cloned `Profile 4`):
+
+- result: `PASS`
+- run time: `127.0s`
+- launch mode:
+  - clone real profile into a throwaway `--user-data-dir`
+  - launch Chrome with `--remote-debugging-port=9333`
+  - attach OpenClaw `profile=user` to that CDP endpoint
+- artifact summary:
+  - visible page showed `Choose your outbound flight`
+  - `Sunday, 22 March 2026`
+  - `(5 options)`
+  - top visible nonstop options:
+    - `EK399`, `B777`, `00:25 -> 05:45`, `9h 20m`, `IDR 8,053,600`
+    - `EK369`, `A380`, `19:50 -> 01:10+1`, `9h 20m`, `IDR 8,053,600`
+  - slower one-stop options were visible below and marked worse or sold out
+- interpretation:
+  - cloned real-Chrome state currently beats the managed `openclaw` browser on this travel site
+  - this is the closest working version of the intended "use my real browser state" architecture
+
+Managed browser lane (`openclaw`):
+
+- result: `FAIL`
+- run time: `169.3s`
+- artifact summary:
+  - initial click/fill attempts timed out
+  - booking widget became unstable
+  - page regressed to the static `Book a flight` / `How to book a flight ticket with Emirates` content
+  - no safe visible result list loaded
+- interpretation:
+  - this lane is still viable for some sites, but on Emirates it is currently worse than the cloned real-Chrome lane
 
 ## 2026-03-21 hardening reruns
 
