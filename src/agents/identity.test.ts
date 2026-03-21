@@ -76,4 +76,58 @@ describe("resolveAckReaction", () => {
 
     expect(resolveAckReaction(cfg, "main", { channel: "telegram" })).toBe("");
   });
+
+  it("extracts emoji from a WhatsApp-style object at channel level", () => {
+    const cfg: OpenClawConfig = {
+      messages: { ackReaction: "👀" },
+      agents: { list: [{ id: "main", identity: { emoji: "🔥" } }] },
+      channels: {
+        whatsapp: {
+          ackReaction: { emoji: "🍓", direct: true, group: "mentions" },
+        },
+      },
+    };
+
+    expect(resolveAckReaction(cfg, "main", { channel: "whatsapp" })).toBe("🍓");
+  });
+
+  it("falls back to agent identity emoji when WhatsApp ackReaction has no emoji field", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "kit", identity: { emoji: "🎸" } }] },
+      channels: {
+        whatsapp: {
+          ackReaction: { direct: true, group: "mentions" },
+        },
+      },
+    };
+
+    expect(resolveAckReaction(cfg, "kit", { channel: "whatsapp" })).toBe("🎸");
+  });
+
+  it("treats empty emoji in a WhatsApp object as disabled (does not fall through to identity)", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main", identity: { emoji: "🔥" } }] },
+      channels: {
+        whatsapp: {
+          ackReaction: { emoji: "", direct: true },
+        },
+      },
+    };
+
+    expect(resolveAckReaction(cfg, "main", { channel: "whatsapp" })).toBe("");
+  });
+
+  it("extracts emoji from a WhatsApp-style object at account level", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main", identity: { emoji: "🔥" } }] },
+      channels: {
+        whatsapp: {
+          // oxlint-disable-next-line typescript/no-explicit-any
+          accounts: { biz: { ackReaction: { emoji: "💼" } as any } },
+        },
+      },
+    };
+
+    expect(resolveAckReaction(cfg, "main", { channel: "whatsapp", accountId: "biz" })).toBe("💼");
+  });
 });

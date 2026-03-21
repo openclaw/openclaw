@@ -19,7 +19,7 @@ export function resolveAckReaction(
   if (opts?.channel && opts?.accountId) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
     const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const accountReaction = accounts?.[opts.accountId]?.ackReaction as string | undefined;
+    const accountReaction = extractAckEmoji(accounts?.[opts.accountId]?.ackReaction);
     if (accountReaction !== undefined) {
       return accountReaction.trim();
     }
@@ -28,7 +28,7 @@ export function resolveAckReaction(
   // L2: Channel level
   if (opts?.channel) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
-    const channelReaction = channelCfg?.ackReaction as string | undefined;
+    const channelReaction = extractAckEmoji(channelCfg?.ackReaction);
     if (channelReaction !== undefined) {
       return channelReaction.trim();
     }
@@ -77,6 +77,18 @@ export function resolveMessagePrefix(
   }
 
   return resolveIdentityNamePrefix(cfg, agentId) ?? opts?.fallback ?? "[openclaw]";
+}
+
+/** Extracts the ack emoji from either a plain string or an object with an `emoji` field. */
+function extractAckEmoji(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "object" && value !== null && "emoji" in value) {
+    const emoji = (value as { emoji?: unknown }).emoji;
+    return typeof emoji === "string" ? emoji : undefined;
+  }
+  return undefined;
 }
 
 /** Helper to extract a channel config value by dynamic key. */

@@ -1,4 +1,7 @@
-import { shouldAckReactionForWhatsApp } from "openclaw/plugin-sdk/channel-feedback";
+import {
+  resolveAckReaction,
+  shouldAckReactionForWhatsApp,
+} from "openclaw/plugin-sdk/channel-feedback";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sendReactionWhatsApp } from "../../send.js";
@@ -22,7 +25,16 @@ export function maybeSendAckReaction(params: {
   }
 
   const ackConfig = params.cfg.channels?.whatsapp?.ackReaction;
-  const emoji = (ackConfig?.emoji ?? "").trim();
+  // When ackReaction is not configured at all, preserve the existing no-reaction default.
+  // When it is configured (even without an explicit emoji), use resolveAckReaction so the
+  // agent identity emoji is used as a fallback — enabling per-agent ack reactions.
+  const emoji =
+    ackConfig !== undefined
+      ? resolveAckReaction(params.cfg, params.agentId, {
+          channel: "whatsapp",
+          accountId: params.accountId,
+        })
+      : "";
   const directEnabled = ackConfig?.direct ?? true;
   const groupMode = ackConfig?.group ?? "mentions";
   const conversationIdForCheck = params.msg.conversationId ?? params.msg.from;
