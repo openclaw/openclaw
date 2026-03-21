@@ -56,6 +56,18 @@ while reducing token usage.
 openclaw plugins install @martian-engineering/lossless-claw
 ```
 
+### Lia Memory Engine
+
+Context engine plugin with structured compaction via Haiku, auto-flush to daily
+transcripts, and hybrid BM25 + vector auto-retrieval powered by QMD.
+
+- **npm:** `@kavinbmittal/lia-memory-engine`
+- **repo:** [github.com/kavinbmittal/lia-memory-engine](https://github.com/kavinbmittal/lia-memory-engine)
+
+```bash
+openclaw plugins install @kavinbmittal/lia-memory-engine
+```
+
 ### Opik
 
 Official plugin that exports agent traces to Opik. Monitor agent behavior,
