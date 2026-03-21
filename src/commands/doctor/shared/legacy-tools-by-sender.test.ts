@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  collectLegacyToolsBySenderWarnings,
   maybeRepairLegacyToolsBySenderKeys,
   scanLegacyToolsBySenderKeys,
 } from "./legacy-tools-by-sender.js";
@@ -58,5 +59,25 @@ describe("doctor legacy toolsBySender helpers", () => {
       "id:owner": { allow: ["fs.read"] },
       "id:alice": { deny: ["exec"] },
     });
+  });
+
+  it("formats legacy sender key warnings", () => {
+    const warnings = collectLegacyToolsBySenderWarnings({
+      hits: [
+        {
+          toolsBySenderPath: ["channels", "whatsapp", "groups", "123@g.us", "toolsBySender"],
+          pathLabel: "channels.whatsapp.groups.123@g.us.toolsBySender",
+          key: "owner",
+          targetKey: "id:owner",
+        },
+      ],
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining("legacy untyped toolsBySender key"),
+      expect.stringContaining("explicit prefixes"),
+      expect.stringContaining('Run "openclaw doctor --fix"'),
+    ]);
   });
 });

@@ -12,6 +12,7 @@ import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import {
+  collectDiscordNumericIdWarnings,
   maybeRepairDiscordNumericIds,
   scanDiscordNumericIdEntries,
 } from "./doctor/providers/discord.js";
@@ -22,6 +23,7 @@ import {
   formatMatrixLegacyStatePreview,
 } from "./doctor/providers/matrix.js";
 import {
+  collectTelegramAllowFromUsernameWarnings,
   collectTelegramEmptyAllowlistExtraWarnings,
   maybeRepairTelegramAllowFromUsernames,
   scanTelegramAllowFromUsernameEntries,
@@ -33,16 +35,25 @@ import {
 } from "./doctor/shared/default-account-warnings.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./doctor/shared/empty-allowlist-scan.js";
 import {
+  collectExecSafeBinCoverageWarnings,
+  collectExecSafeBinTrustedDirHintWarnings,
   maybeRepairExecSafeBinProfiles,
   scanExecSafeBinCoverage,
   scanExecSafeBinTrustedDirHints,
 } from "./doctor/shared/exec-safe-bins.js";
 import {
+  collectLegacyToolsBySenderWarnings,
   maybeRepairLegacyToolsBySenderKeys,
   scanLegacyToolsBySenderKeys,
 } from "./doctor/shared/legacy-tools-by-sender.js";
-import { scanMutableAllowlistEntries } from "./doctor/shared/mutable-allowlist.js";
-import { maybeRepairOpenPolicyAllowFrom } from "./doctor/shared/open-policy-allowfrom.js";
+import {
+  collectMutableAllowlistWarnings,
+  scanMutableAllowlistEntries,
+} from "./doctor/shared/mutable-allowlist.js";
+import {
+  collectOpenPolicyAllowFromWarnings,
+  maybeRepairOpenPolicyAllowFrom,
+} from "./doctor/shared/open-policy-allowfrom.js";
 
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
@@ -225,25 +236,22 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   } else {
     const hits = scanTelegramAllowFromUsernameEntries(candidate);
     if (hits.length > 0) {
-      const sampleEntry = sanitizeForLog(hits[0]?.entry ?? "@");
       note(
-        [
-          `- Telegram allowFrom contains ${hits.length} non-numeric entries (e.g. ${sampleEntry}); Telegram authorization requires numeric sender IDs.`,
-          `- Run "${formatCliCommand("openclaw doctor --fix")}" to auto-resolve @username entries to numeric IDs (requires a Telegram bot token).`,
-        ].join("\n"),
+        collectTelegramAllowFromUsernameWarnings({
+          hits,
+          doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+        }).join("\n"),
         "Doctor warnings",
       );
     }
 
     const discordHits = scanDiscordNumericIdEntries(candidate);
     if (discordHits.length > 0) {
-      const samplePath = sanitizeForLog(discordHits[0]?.path ?? "channels.discord.allowFrom");
-      const sampleEntry = sanitizeForLog(String(discordHits[0]?.entry ?? ""));
       note(
-        [
-          `- Discord allowlists contain ${discordHits.length} numeric entries (e.g. ${samplePath}=${sampleEntry}).`,
-          `- Discord IDs must be strings; run "${formatCliCommand("openclaw doctor --fix")}" to convert numeric IDs to quoted strings.`,
-        ].join("\n"),
+        collectDiscordNumericIdWarnings({
+          hits: discordHits,
+          doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+        }).join("\n"),
         "Doctor warnings",
       );
     }
@@ -251,10 +259,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const allowFromScan = maybeRepairOpenPolicyAllowFrom(candidate);
     if (allowFromScan.changes.length > 0) {
       note(
-        [
-          ...allowFromScan.changes.map((line) => sanitizeForLog(line)),
-          `- Run "${formatCliCommand("openclaw doctor --fix")}" to add missing allowFrom wildcards.`,
-        ].join("\n"),
+        collectOpenPolicyAllowFromWarnings({
+          changes: allowFromScan.changes,
+          doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+        }).join("\n"),
         "Doctor warnings",
       );
     }
@@ -272,101 +280,38 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
     const toolsBySenderHits = scanLegacyToolsBySenderKeys(candidate);
     if (toolsBySenderHits.length > 0) {
-      const sample = toolsBySenderHits[0];
-      const sampleLabel = sanitizeForLog(
-        sample ? `${sample.pathLabel}.${sample.key}` : "toolsBySender",
-      );
       note(
-        [
-          `- Found ${toolsBySenderHits.length} legacy untyped toolsBySender key${toolsBySenderHits.length === 1 ? "" : "s"} (for example ${sampleLabel}).`,
-          "- Untyped sender keys are deprecated; use explicit prefixes (id:, e164:, username:, name:).",
-          `- Run "${formatCliCommand("openclaw doctor --fix")}" to migrate legacy keys to typed id: entries.`,
-        ].join("\n"),
+        collectLegacyToolsBySenderWarnings({
+          hits: toolsBySenderHits,
+          doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+        }).join("\n"),
         "Doctor warnings",
       );
     }
 
     const safeBinCoverage = scanExecSafeBinCoverage(candidate);
     if (safeBinCoverage.length > 0) {
-      const interpreterHits = safeBinCoverage.filter((hit) => hit.isInterpreter);
-      const customHits = safeBinCoverage.filter((hit) => !hit.isInterpreter);
-      const lines: string[] = [];
-      if (interpreterHits.length > 0) {
-        for (const hit of interpreterHits.slice(0, 5)) {
-          lines.push(
-            `- ${sanitizeForLog(hit.scopePath)}.safeBins includes interpreter/runtime '${sanitizeForLog(hit.bin)}' without profile.`,
-          );
-        }
-        if (interpreterHits.length > 5) {
-          lines.push(
-            `- ${interpreterHits.length - 5} more interpreter/runtime safeBins entries are missing profiles.`,
-          );
-        }
-      }
-      if (customHits.length > 0) {
-        for (const hit of customHits.slice(0, 5)) {
-          lines.push(
-            `- ${sanitizeForLog(hit.scopePath)}.safeBins entry '${sanitizeForLog(hit.bin)}' is missing safeBinProfiles.${sanitizeForLog(hit.bin)}.`,
-          );
-        }
-        if (customHits.length > 5) {
-          lines.push(
-            `- ${customHits.length - 5} more custom safeBins entries are missing profiles.`,
-          );
-        }
-      }
-      lines.push(
-        `- Run "${formatCliCommand("openclaw doctor --fix")}" to scaffold missing custom safeBinProfiles entries.`,
+      note(
+        collectExecSafeBinCoverageWarnings({
+          hits: safeBinCoverage,
+          doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+        }).join("\n"),
+        "Doctor warnings",
       );
-      note(lines.join("\n"), "Doctor warnings");
     }
 
     const safeBinTrustedDirHints = scanExecSafeBinTrustedDirHints(candidate);
     if (safeBinTrustedDirHints.length > 0) {
-      const lines = safeBinTrustedDirHints
-        .slice(0, 5)
-        .map(
-          (hit) =>
-            `- ${sanitizeForLog(hit.scopePath)}.safeBins entry '${sanitizeForLog(hit.bin)}' resolves to '${sanitizeForLog(hit.resolvedPath)}' outside trusted safe-bin dirs.`,
-        );
-      if (safeBinTrustedDirHints.length > 5) {
-        lines.push(
-          `- ${safeBinTrustedDirHints.length - 5} more safeBins entries resolve outside trusted safe-bin dirs.`,
-        );
-      }
-      lines.push(
-        "- If intentional, add the binary directory to tools.exec.safeBinTrustedDirs (global or agent scope).",
+      note(
+        collectExecSafeBinTrustedDirHintWarnings(safeBinTrustedDirHints).join("\n"),
+        "Doctor warnings",
       );
-      note(lines.join("\n"), "Doctor warnings");
     }
   }
 
   const mutableAllowlistHits = scanMutableAllowlistEntries(candidate);
   if (mutableAllowlistHits.length > 0) {
-    const channels = Array.from(new Set(mutableAllowlistHits.map((hit) => hit.channel))).toSorted();
-    const exampleLines = mutableAllowlistHits
-      .slice(0, 8)
-      .map((hit) => `- ${sanitizeForLog(hit.path)}: ${sanitizeForLog(hit.entry)}`)
-      .join("\n");
-    const remaining =
-      mutableAllowlistHits.length > 8
-        ? `- +${mutableAllowlistHits.length - 8} more mutable allowlist entries.`
-        : null;
-    const flagPaths = Array.from(new Set(mutableAllowlistHits.map((hit) => hit.dangerousFlagPath)));
-    const flagHint =
-      flagPaths.length === 1
-        ? sanitizeForLog(flagPaths[0] ?? "")
-        : `${sanitizeForLog(flagPaths[0] ?? "")} (and ${flagPaths.length - 1} other scope flags)`;
-    note(
-      [
-        `- Found ${mutableAllowlistHits.length} mutable allowlist ${mutableAllowlistHits.length === 1 ? "entry" : "entries"} across ${channels.join(", ")} while name matching is disabled by default.`,
-        exampleLines,
-        ...(remaining ? [remaining] : []),
-        `- Option A (break-glass): enable ${flagHint}=true to keep name/email/nick matching.`,
-        "- Option B (recommended): resolve names/emails/nicks to stable sender IDs and rewrite the allowlist entries.",
-      ].join("\n"),
-      "Doctor warnings",
-    );
+    note(collectMutableAllowlistWarnings(mutableAllowlistHits).join("\n"), "Doctor warnings");
   }
 
   const unknown = stripUnknownConfigKeys(candidate);
