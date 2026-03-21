@@ -326,4 +326,26 @@ describe("runDaemonInstall", () => {
 
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
   });
+
+  it("reinstalls when the installed service still runs from nvm even if the installer runtime does not", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    resolveAutoNodeExtraCaCertsMock.mockImplementation(({ execPath }) =>
+      typeof execPath === "string" && execPath.includes("/.nvm/")
+        ? "/etc/ssl/certs/ca-certificates.crt"
+        : undefined,
+    );
+    service.readCommand.mockResolvedValue({
+      programArguments: ["/home/test/.nvm/versions/node/v22.18.0/bin/node", "dist/entry.js"],
+      environment: {},
+    } as never);
+
+    await runDaemonInstall({ json: true });
+
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    expect(resolveAutoNodeExtraCaCertsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        execPath: "/home/test/.nvm/versions/node/v22.18.0/bin/node",
+      }),
+    );
+  });
 });
