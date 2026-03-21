@@ -14,9 +14,6 @@
 #include <glib.h>
 #include "state.h"
 
-extern void health_probe_gateway_eager(void);
-extern void health_run_deep_probe_eager(void);
-
 static AppState current_state = STATE_NOT_INSTALLED;
 static SystemdState current_sys_state = {0};
 static HealthState current_health_state = {0};
@@ -94,15 +91,9 @@ static void trigger_updates(AppState new_state) {
     tray_update_from_state(current_state);
 }
 
-static gboolean idle_trigger_health_probe(gpointer user_data) {
+static gboolean idle_request_probe_refresh(gpointer user_data) {
     (void)user_data;
-    health_probe_gateway_eager();
-    return G_SOURCE_REMOVE;
-}
-
-static gboolean idle_trigger_deep_probe(gpointer user_data) {
-    (void)user_data;
-    health_run_deep_probe_eager();
+    state_on_probe_refresh_requested();
     return G_SOURCE_REMOVE;
 }
 
@@ -161,8 +152,7 @@ void state_update_systemd(const SystemdState *sys_state) {
         // activation, or unit retargeting) to avoid leaving the UI in a stale or generic 
         // "Running" state until the next periodic timer fires.
         // Defer probes asynchronously to keep state mutation fast and decoupled
-        g_idle_add(idle_trigger_health_probe, NULL);
-        g_idle_add(idle_trigger_deep_probe, NULL);
+        g_idle_add(idle_request_probe_refresh, NULL);
     }
     
     trigger_updates(new_state);

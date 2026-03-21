@@ -21,8 +21,15 @@ extern void systemd_refresh(void);
 extern void health_init(void);
 extern void health_probe_gateway(void);
 extern void health_run_deep_probe(void);
+extern void health_probe_gateway_eager(void);
+extern void health_run_deep_probe_eager(void);
 extern void state_init(void);
 extern void notify_init(void);
+
+void state_on_probe_refresh_requested(void) {
+    health_probe_gateway_eager();
+    health_run_deep_probe_eager();
+}
 
 static gboolean on_status_poll(gpointer user_data) {
     (void)user_data;
