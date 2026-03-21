@@ -569,6 +569,34 @@ describe("model-selection", () => {
         ref: { provider: "openai", model: "@cf/openai/gpt-oss-20b" },
       });
     });
+
+    it("infers provider from allowlist for bare model ids to prevent prefix drift (#48369)", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {},
+              "opencode-go/kimi-k2.5": {},
+              "opencode-go/glm-5": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      // When session default is openai-codex, switching to a bare "kimi-k2.5"
+      // should resolve to opencode-go/kimi-k2.5, not openai-codex/kimi-k2.5
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "kimi-k2.5",
+        defaultProvider: "openai-codex", // session's current provider
+      });
+
+      expect(result).toEqual({
+        key: "opencode-go/kimi-k2.5",
+        ref: { provider: "opencode-go", model: "kimi-k2.5" },
+      });
+    });
   });
 
   describe("resolveModelRefFromString", () => {
