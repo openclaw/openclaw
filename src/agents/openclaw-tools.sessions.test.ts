@@ -87,6 +87,7 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_list", "limit").type).toBe("number");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("number");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
+    expect(schemaProp("sessions_manage", "action").type).toBe("string");
     expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
     expect(schemaProp("sessions_spawn", "thinking").type).toBe("string");
     expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe("number");
@@ -667,6 +668,63 @@ describe("sessions tools", () => {
     expect(waitCalls).toHaveLength(8);
     expect(historyOnlyCalls).toHaveLength(8);
     expect(sendCallCount).toBe(0);
+  });
+
+  it("sessions_manage compacts and resets via gateway methods", async () => {
+    callGatewayMock.mockReset();
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as {
+        method?: string;
+        params?: Record<string, unknown>;
+      };
+      calls.push(request);
+      if (request.method === "sessions.resolve") {
+        return { key: "main" };
+      }
+      if (request.method === "sessions.compact") {
+        return { ok: true, compacted: true };
+      }
+      if (request.method === "sessions.reset") {
+        return { ok: true, key: "main", entry: { key: "main", sessionId: "new-sess" } };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_manage");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_manage tool");
+    }
+
+    const compactResult = await tool.execute("call-manage-1", {
+      sessionKey: "main",
+      action: "compact",
+    });
+    expect(compactResult.details).toMatchObject({
+      status: "ok",
+      action: "compact",
+      sessionKey: "main",
+      compacted: true,
+    });
+
+    const resetResult = await tool.execute("call-manage-2", {
+      sessionKey: "main",
+      action: "reset",
+    });
+    expect(resetResult.details).toMatchObject({
+      status: "ok",
+      action: "reset",
+      sessionKey: "main",
+      resetOk: true,
+    });
+
+    expect(
+      calls.some((call) => call.method === "sessions.compact" && call.params?.key === "main"),
+    ).toBe(true);
+    expect(
+      calls.some((call) => call.method === "sessions.reset" && call.params?.key === "main"),
+    ).toBe(true);
   });
 
   it("sessions_send resolves sessionId inputs", async () => {
