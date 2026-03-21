@@ -582,13 +582,15 @@ describe("createFollowupRunner compaction", () => {
     });
 
     const embeddedCalls: Array<{ extraSystemPrompt?: string }> = [];
-    runEmbeddedPiAgentMock.mockImplementationOnce(async (params: { extraSystemPrompt?: string }) => {
-      embeddedCalls.push({ extraSystemPrompt: params.extraSystemPrompt });
-      return {
-        payloads: [{ text: "final" }],
-        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-      };
-    });
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: { extraSystemPrompt?: string }) => {
+        embeddedCalls.push({ extraSystemPrompt: params.extraSystemPrompt });
+        return {
+          payloads: [{ text: "final" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      },
+    );
 
     const runner = createFollowupRunner({
       opts: { onBlockReply: vi.fn(async () => {}) },
