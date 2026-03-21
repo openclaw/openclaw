@@ -148,7 +148,7 @@ describe("compaction hook wiring", () => {
     expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
       runId: "r2",
       stream: "compaction",
-      data: { phase: "end", willRetry: false, completed: true },
+      data: { phase: "end", willRetry: false },
     });
   });
 
@@ -179,7 +179,7 @@ describe("compaction hook wiring", () => {
     expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
       runId: "r3",
       stream: "compaction",
-      data: { phase: "end", willRetry: true, completed: true },
+      data: { phase: "end", willRetry: true },
     });
   });
 
@@ -298,5 +298,53 @@ describe("compaction hook wiring", () => {
 
     const assistant = messages[0] as { usage?: unknown };
     expect(assistant.usage).toEqual({ totalTokens: 184_297, input: 130_000, output: 2_000 });
+  });
+
+  it("preserves post-compaction assistant usage after the latest compaction summary", () => {
+    const preCompactionUsage = { totalTokens: 180_000, input: 100, output: 50 };
+    const postCompactionUsage = { totalTokens: 12_345, input: 75, output: 30 };
+    const messages = [
+      {
+        role: "assistant",
+        content: "response before compaction",
+        timestamp: "2026-03-20T10:00:00.000Z",
+        usage: preCompactionUsage,
+      },
+      {
+        role: "compactionSummary",
+        summary: "compressed",
+        tokensBefore: 190_000,
+        timestamp: "2026-03-20T10:01:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "response after compaction",
+        timestamp: "2026-03-20T10:02:00.000Z",
+        usage: postCompactionUsage,
+      },
+    ];
+
+    const ctx = {
+      params: { runId: "r6", session: { messages } },
+      state: { compactionInFlight: true },
+      log: { debug: vi.fn(), warn: vi.fn() },
+      maybeResolveCompactionWait: vi.fn(),
+      getCompactionCount: () => 1,
+      incrementCompactionCount: vi.fn(),
+    };
+
+    handleAutoCompactionEnd(
+      ctx as never,
+      {
+        type: "auto_compaction_end",
+        willRetry: false,
+        result: { summary: "compacted" },
+      } as never,
+    );
+
+    const assistantBefore = messages[0] as { usage?: unknown };
+    const assistantAfter = messages[2] as { usage?: unknown };
+    expect(assistantBefore.usage).toEqual(makeZeroUsageSnapshot());
+    expect(assistantAfter.usage).toEqual(postCompactionUsage);
   });
 });

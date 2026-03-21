@@ -74,11 +74,11 @@ export function handleAutoCompactionEnd(
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "compaction",
-    data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
+    data: { phase: "end", willRetry },
   });
   void ctx.params.onAgentEvent?.({
     stream: "compaction",
-    data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
+    data: { phase: "end", willRetry },
   });
 
   // Run after_compaction plugin hook (fire-and-forget)
