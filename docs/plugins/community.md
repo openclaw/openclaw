@@ -83,8 +83,8 @@ openclaw plugins install @sliverp/qqbot
 
 ### wecom
 
-OpenClaw Enterprise WeCom Channel Plugin. 
-A bot plugin powered by WeCom AI Bot WebSocket persistent connections. 
+OpenClaw Enterprise WeCom Channel Plugin.
+A bot plugin powered by WeCom AI Bot WebSocket persistent connections.
 Supports direct messages & group chats, streaming replies, and proactive messaging.
 
 - **npm:** `@wecom/wecom-openclaw-plugin`
