@@ -291,5 +291,23 @@ if __name__ == '__main__':
         cmd_prepare(limit)
     elif sys.argv[1] == 'send':
         cmd_send()
+    elif sys.argv[1] == 'prompts':
+        # Output agent prompts as JSON for programmatic use
+        limit = 5
+        for i, arg in enumerate(sys.argv):
+            if arg == '--limit' and i + 1 < len(sys.argv):
+                limit = int(sys.argv[i + 1])
+        blocks = cmd_prepare(limit)
+        prompts = []
+        for b in blocks:
+            prompts.append({
+                'comment_id': b['comment_id'],
+                'post_id': b['post_id'],
+                'username': b['username'],
+                'prompt': build_agent_prompt(b),
+            })
+        out = Path(__file__).parent / 'shadow-clone-prompts.json'
+        out.write_text(json.dumps(prompts, ensure_ascii=False, indent=2))
+        print(f"\nPrompts saved to {out}")
     else:
         print(__doc__)
