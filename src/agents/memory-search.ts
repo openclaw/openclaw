@@ -230,6 +230,7 @@ function mergeConfig(
   const chunking = {
     tokens: overrides?.chunking?.tokens ?? defaults?.chunking?.tokens ?? DEFAULT_CHUNK_TOKENS,
     overlap: overrides?.chunking?.overlap ?? defaults?.chunking?.overlap ?? DEFAULT_CHUNK_OVERLAP,
+    headingAware: overrides?.chunking?.headingAware ?? defaults?.chunking?.headingAware ?? false,
   };
   const sync = {
     onSessionStart: overrides?.sync?.onSessionStart ?? defaults?.sync?.onSessionStart ?? true,
@@ -336,7 +337,11 @@ function mergeConfig(
     outputDimensionality,
     local,
     store,
-    chunking: { tokens: Math.max(1, chunking.tokens), overlap },
+    chunking: {
+      tokens: Math.max(1, chunking.tokens),
+      overlap: chunking.overlap,
+      headingAware: chunking.headingAware,
+    },
     sync: {
       ...sync,
       sessions: {

@@ -59,6 +59,7 @@ type MemoryIndexMeta = {
   scopeHash?: string;
   chunkTokens: number;
   chunkOverlap: number;
+  chunkHeadingAware?: boolean;
   vectorDims?: number;
 };
 
@@ -999,6 +1000,7 @@ export abstract class MemoryManagerSyncOps {
       meta.scopeHash !== configuredScopeHash ||
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
+      meta.chunkHeadingAware !== this.settings.chunking.headingAware ||
       (vectorReady && !meta?.vectorDims);
     try {
       if (needsFullReindex) {
@@ -1218,6 +1220,7 @@ export abstract class MemoryManagerSyncOps {
         scopeHash: this.resolveConfiguredScopeHash(),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
+        chunkHeadingAware: this.settings.chunking.headingAware ?? false,
       };
       if (!nextMeta) {
         throw new Error("Failed to compute memory index metadata for reindexing.");
@@ -1290,6 +1293,7 @@ export abstract class MemoryManagerSyncOps {
       scopeHash: this.resolveConfiguredScopeHash(),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
+      chunkHeadingAware: this.settings.chunking.headingAware ?? false,
     };
     if (this.vector.available && this.vector.dims) {
       nextMeta.vectorDims = this.vector.dims;
