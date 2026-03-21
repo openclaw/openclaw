@@ -47,7 +47,7 @@ TradingAgents deploys specialized LLM-powered agents (fundamental analyst, senti
 uv tool install tradingagents
 ```
 
-**CLI + Python import** (if you need `from tradingagents ...` in scripts):
+**CLI + Python import** (if you need `from tradingagents ...` in scripts; requires Python 3.10+):
 
 ```bash
 pip install tradingagents
