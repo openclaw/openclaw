@@ -5,7 +5,6 @@ import {
   listAllBindings,
   listBindingsForAccount,
   removeBindingRecord,
-  setBindingRecord,
 } from "./thread-bindings-shared.js";
 
 function summarizeError(err: unknown): string {
@@ -62,57 +61,24 @@ export function registerMatrixSubagentHooks(api: OpenClawPluginApi) {
           "Matrix thread-bound subagent spawns are disabled for this account (set channels.matrix.threadBindings.spawnSubagentSessions=true to enable).",
       };
     }
-    try {
-      const resolvedAccountId = accountId || "default";
-      const manager = getMatrixThreadBindingManager(resolvedAccountId);
-      if (!manager) {
-        return {
-          status: "error" as const,
-          error:
-            "Unable to create or bind a Matrix room for this subagent session. No thread binding manager available for this account.",
-        };
-      }
-
-      // Resolve the room/thread target from the requester origin.
-      const to = event.requester?.to?.trim() || "";
-      const threadId =
-        event.requester?.threadId != null ? String(event.requester.threadId).trim() : "";
-      // Use the thread if available, otherwise fall back to the room target.
-      const conversationId = threadId || to.replace(/^room:/, "");
-      const parentConversationId = threadId ? to.replace(/^room:/, "") : undefined;
-
-      if (!conversationId) {
-        return {
-          status: "error" as const,
-          error:
-            "Unable to create or bind a Matrix room for this subagent session. No target conversation could be resolved.",
-        };
-      }
-
-      const now = Date.now();
-      const record = {
-        accountId: resolvedAccountId,
-        conversationId,
-        ...(parentConversationId ? { parentConversationId } : {}),
-        targetKind: "subagent" as const,
-        targetSessionKey: event.childSessionKey,
-        agentId: event.agentId || undefined,
-        label: event.label || undefined,
-        boundBy: "system",
-        boundAt: now,
-        lastActivityAt: now,
-        idleTimeoutMs: manager.getIdleTimeoutMs(),
-        maxAgeMs: manager.getMaxAgeMs(),
-      };
-      setBindingRecord(record);
-      await manager.persist();
-      return { status: "ok" as const, threadBindingReady: true };
-    } catch (err) {
+    // Verify a thread binding manager exists for this account. The actual
+    // binding (including child thread creation via intro message) is handled
+    // by the SessionBindingAdapter's bind() method in thread-bindings.ts,
+    // which the core invokes with placement="child" after we return
+    // threadBindingReady: true. We do NOT call setBindingRecord here —
+    // the adapter's bind() handles record creation, persistence, and
+    // thread creation atomically.
+    const resolvedAccountId = accountId || "default";
+    const manager = getMatrixThreadBindingManager(resolvedAccountId);
+    if (!manager) {
       return {
         status: "error" as const,
-        error: `Matrix thread bind failed: ${summarizeError(err)}`,
+        error:
+          "Unable to create or bind a Matrix room for this subagent session. No thread binding manager available for this account.",
       };
     }
+
+    return { status: "ok" as const, threadBindingReady: true };
   });
 
   api.on("subagent_ended", async (event) => {

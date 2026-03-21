@@ -197,25 +197,17 @@ describe("matrix subagent hook handlers", () => {
     expect(handlers.has("subagent_ended")).toBe(true);
   });
 
-  it("binds room routing on subagent_spawning", async () => {
+  it("signals readiness on subagent_spawning (binding delegated to adapter)", async () => {
     const handlers = registerHandlersForTest();
     const handler = getRequiredHookHandler(handlers, "subagent_spawning");
 
     const result = await handler(createSpawnEvent(), {});
 
-    expect(hookMocks.setBindingRecord).toHaveBeenCalledTimes(1);
-    expect(hookMocks.setBindingRecord).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "work",
-        conversationId: "$thread-event-1",
-        parentConversationId: "!abc123:example.org",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        label: "banana",
-        boundBy: "system",
-      }),
-    );
+    // The hook does NOT call setBindingRecord — the core invokes
+    // the SessionBindingAdapter's bind() method after we return
+    // threadBindingReady: true. The adapter handles record creation,
+    // persistence, and child thread creation atomically.
+    expect(hookMocks.setBindingRecord).not.toHaveBeenCalled();
     expect(result).toMatchObject({ status: "ok", threadBindingReady: true });
   });
 
@@ -276,7 +268,7 @@ describe("matrix subagent hook handlers", () => {
       },
     });
 
-    expect(hookMocks.setBindingRecord).toHaveBeenCalledTimes(1);
+    expect(hookMocks.setBindingRecord).not.toHaveBeenCalled();
     expect(result).toMatchObject({ status: "ok", threadBindingReady: true });
   });
 
