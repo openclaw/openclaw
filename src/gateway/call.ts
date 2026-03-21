@@ -1,11 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  loadConfig,
-  resolveConfigPath,
-  resolveGatewayPort,
-  resolveStateDir,
-} from "../config/config.js";
+import { loadConfig, resolveConfigPath, resolveStateDir } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
@@ -18,6 +13,10 @@ import {
 } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { GatewayClient } from "./client.js";
+import {
+  buildGatewayConnectionDetailsFromConfig,
+  type GatewayConnectionDetails,
+} from "./connection-details.js";
 import {
   GatewaySecretRefUnavailableError,
   resolveGatewayCredentialsFromConfig,
@@ -32,7 +31,6 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { isSecureWebSocketUrl } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 type CallGatewayBaseOptions = {
@@ -71,14 +69,6 @@ export type CallGatewayCliOptions = CallGatewayBaseOptions & {
 
 export type CallGatewayOptions = CallGatewayBaseOptions & {
   scopes?: OperatorScope[];
-};
-
-export type GatewayConnectionDetails = {
-  url: string;
-  urlSource: string;
-  bindDetail?: string;
-  remoteFallbackNote?: string;
-  message: string;
 };
 
 function shouldAttachDeviceIdentityForGatewayCall(params: {
@@ -156,86 +146,12 @@ export function buildGatewayConnectionDetails(
   } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? loadConfig();
-  const configPath =
-    options.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env));
-  const isRemoteMode = config.gateway?.mode === "remote";
-  const remote = isRemoteMode ? config.gateway?.remote : undefined;
-  const tlsEnabled = config.gateway?.tls?.enabled === true;
-  const localPort = resolveGatewayPort(config);
-  const bindMode = config.gateway?.bind ?? "loopback";
-  const scheme = tlsEnabled ? "wss" : "ws";
-  // Self-connections should always target loopback; bind mode only controls listener exposure.
-  const localUrl = `${scheme}://127.0.0.1:${localPort}`;
-  const cliUrlOverride =
-    typeof options.url === "string" && options.url.trim().length > 0
-      ? options.url.trim()
-      : undefined;
-  const envUrlOverride = cliUrlOverride
-    ? undefined
-    : (trimToUndefined(process.env.OPENCLAW_GATEWAY_URL) ??
-      trimToUndefined(process.env.CLAWDBOT_GATEWAY_URL));
-  const urlOverride = cliUrlOverride ?? envUrlOverride;
-  const remoteUrl =
-    typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
-  const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
-  const urlSourceHint =
-    options.urlSource ?? (cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined);
-  const url = urlOverride || remoteUrl || localUrl;
-  const urlSource = urlOverride
-    ? urlSourceHint === "env"
-      ? "env OPENCLAW_GATEWAY_URL"
-      : "cli --url"
-    : remoteUrl
-      ? "config gateway.remote.url"
-      : remoteMisconfigured
-        ? "missing gateway.remote.url (fallback local)"
-        : "local loopback";
-  const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
-  const remoteFallbackNote = remoteMisconfigured
-    ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
-    : undefined;
-
-  const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
-  // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
-  // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
-  // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
-  if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
-    throw new Error(
-      [
-        `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
-        "Both credentials and chat data would be exposed to network interception.",
-        `Source: ${urlSource}`,
-        `Config: ${configPath}`,
-        "Fix: Use wss:// for remote gateway URLs.",
-        "Safe remote access defaults:",
-        "- keep gateway.bind=loopback and use an SSH tunnel (ssh -N -L 18789:127.0.0.1:18789 user@gateway-host)",
-        "- or use Tailscale Serve/Funnel for HTTPS remote access",
-        allowPrivateWs
-          ? undefined
-          : "Break-glass (trusted private networks only): set OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1",
-        "Doctor: openclaw doctor --fix",
-        "Docs: https://docs.openclaw.ai/gateway/remote",
-      ].join("\n"),
-    );
-  }
-
-  const message = [
-    `Gateway target: ${url}`,
-    `Source: ${urlSource}`,
-    `Config: ${configPath}`,
-    bindDetail,
-    remoteFallbackNote,
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  return {
-    url,
-    urlSource,
-    bindDetail,
-    remoteFallbackNote,
-    message,
-  };
+  return buildGatewayConnectionDetailsFromConfig({
+    config,
+    url: options.url,
+    configPath: options.configPath,
+    urlSource: options.urlSource,
+  });
 }
 
 type GatewayRemoteSettings = {

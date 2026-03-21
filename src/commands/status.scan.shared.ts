@@ -1,6 +1,9 @@
 import { existsSync } from "node:fs";
 import type { OpenClawConfig } from "../config/types.js";
-import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import {
+  buildGatewayConnectionDetailsFromConfig,
+  type GatewayConnectionDetails,
+} from "../gateway/connection-details.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
 import type { MemoryProviderStatus } from "../memory/types.js";
@@ -20,7 +23,7 @@ export type MemoryPluginStatus = {
 };
 
 export type GatewayProbeSnapshot = {
-  gatewayConnection: ReturnType<typeof buildGatewayConnectionDetails>;
+  gatewayConnection: GatewayConnectionDetails;
   remoteUrlMissing: boolean;
   gatewayMode: "local" | "remote";
   gatewayProbeAuth: {
@@ -60,7 +63,7 @@ export async function resolveGatewayProbeSnapshot(params: {
   cfg: OpenClawConfig;
   opts: { timeoutMs?: number; all?: boolean };
 }): Promise<GatewayProbeSnapshot> {
-  const gatewayConnection = buildGatewayConnectionDetails({ config: params.cfg });
+  const gatewayConnection = buildGatewayConnectionDetailsFromConfig({ config: params.cfg });
   const isRemoteMode = params.cfg.gateway?.mode === "remote";
   const remoteUrlRaw =
     typeof params.cfg.gateway?.remote?.url === "string" ? params.cfg.gateway.remote.url : "";

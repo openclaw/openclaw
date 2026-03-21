@@ -12,6 +12,13 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     loadConfig: loadConfigMock,
+  };
+});
+
+vi.mock("../config/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/paths.js")>();
+  return {
+    ...actual,
     resolveGatewayPort: resolveGatewayPortMock,
   };
 });

@@ -79,8 +79,11 @@ vi.mock("./status.scan.deps.runtime.js", () => ({
   getMemorySearchManager: mocks.getMemorySearchManager,
 }));
 
+vi.mock("../gateway/connection-details.js", () => ({
+  buildGatewayConnectionDetailsFromConfig: mocks.buildGatewayConnectionDetails,
+}));
+
 vi.mock("../gateway/call.js", () => ({
-  buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
   callGateway: mocks.callGateway,
 }));
 

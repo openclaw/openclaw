@@ -134,8 +134,8 @@ vi.mock("../agents/memory-search.js", () => ({
   resolveMemorySearchConfig: mocks.resolveMemorySearchConfig,
 }));
 
-vi.mock("../gateway/call.js", () => ({
-  buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+vi.mock("../gateway/connection-details.js", () => ({
+  buildGatewayConnectionDetailsFromConfig: mocks.buildGatewayConnectionDetails,
 }));
 
 vi.mock("../gateway/probe.js", () => ({
