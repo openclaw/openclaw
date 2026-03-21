@@ -56,10 +56,10 @@ const sanitizeOptions = {
 };
 
 let hooksInstalled = false;
-const MARKDOWN_CHAR_LIMIT = 140_000;
-const MARKDOWN_PARSE_LIMIT = 40_000;
+const MARKDOWN_CHAR_LIMIT = 500_000;
+const MARKDOWN_PARSE_LIMIT = 100_000;
 const MARKDOWN_CACHE_LIMIT = 200;
-const MARKDOWN_CACHE_MAX_CHARS = 50_000;
+const MARKDOWN_CACHE_MAX_CHARS = 100_000;
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
