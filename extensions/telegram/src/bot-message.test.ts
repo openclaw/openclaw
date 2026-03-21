@@ -162,4 +162,33 @@ describe("telegram bot message processor", () => {
       expect.stringContaining("failed before reaching Telegram; retrying"),
     );
   });
+
+  it("aborts error-fallback retry sleeps when fetchAbortSignal is aborted", async () => {
+    vi.useFakeTimers();
+    try {
+      const abort = new AbortController();
+      abort.abort();
+      const preConnectErr = Object.assign(new Error("connect ENOTFOUND api.telegram.org"), {
+        code: "ENOTFOUND",
+      });
+      const sendMessage = vi.fn().mockRejectedValueOnce(preConnectErr).mockResolvedValue(undefined);
+      buildTelegramMessageContext.mockResolvedValue({
+        chatId: 123,
+        route: { sessionKey: "agent:main:main" },
+      });
+      dispatchTelegramMessage.mockRejectedValue(new Error("dispatch exploded"));
+      const processMessage = createTelegramMessageProcessor({
+        ...baseDeps,
+        bot: { api: { sendMessage } },
+        opts: { fetchAbortSignal: abort.signal },
+      } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+      await processSampleMessage(processMessage);
+      await vi.runAllTimersAsync();
+
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
