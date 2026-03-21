@@ -103,17 +103,34 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const FILE_EXTENSIONS_PATTERN = Array.from(FILE_REF_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
 const AUTO_LINKED_ANCHOR_PATTERN = /<a\s+href="https?:\/\/([^"]+)"[^>]*>\1<\/a>/gi;
-const FILE_REFERENCE_PATTERN = new RegExp(
-  `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${FILE_EXTENSIONS_PATTERN}))(?=$|[^a-zA-Z0-9_\\-/])`,
-  "gi",
-);
-const ORPHANED_TLD_PATTERN = new RegExp(
-  `([^a-zA-Z0-9]|^)([A-Za-z]\\.(?:${FILE_EXTENSIONS_PATTERN}))(?=[^a-zA-Z0-9/]|$)`,
-  "g",
-);
 const HTML_TAG_PATTERN = /(<\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*?>/gi;
+let fileReferencePattern: RegExp | undefined;
+let orphanedTldPattern: RegExp | undefined;
+
+function getFileReferencePattern(): RegExp {
+  if (fileReferencePattern) {
+    return fileReferencePattern;
+  }
+  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
+  fileReferencePattern = new RegExp(
+    `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${fileExtensionsPattern}))(?=$|[^a-zA-Z0-9_\\-/])`,
+    "gi",
+  );
+  return fileReferencePattern;
+}
+
+function getOrphanedTldPattern(): RegExp {
+  if (orphanedTldPattern) {
+    return orphanedTldPattern;
+  }
+  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
+  orphanedTldPattern = new RegExp(
+    `([^a-zA-Z0-9]|^)([A-Za-z]\\.(?:${fileExtensionsPattern}))(?=[^a-zA-Z0-9/]|$)`,
+    "g",
+  );
+  return orphanedTldPattern;
+}
 
 function wrapStandaloneFileRef(match: string, prefix: string, filename: string): string {
   if (filename.startsWith("//")) {
@@ -134,8 +151,8 @@ function wrapSegmentFileRefs(
   if (!text || codeDepth > 0 || preDepth > 0 || anchorDepth > 0) {
     return text;
   }
-  const wrappedStandalone = text.replace(FILE_REFERENCE_PATTERN, wrapStandaloneFileRef);
-  return wrappedStandalone.replace(ORPHANED_TLD_PATTERN, (match, prefix: string, tld: string) =>
+  const wrappedStandalone = text.replace(getFileReferencePattern(), wrapStandaloneFileRef);
+  return wrappedStandalone.replace(getOrphanedTldPattern(), (match, prefix: string, tld: string) =>
     prefix === ">" ? match : `${prefix}<code>${escapeHtml(tld)}</code>`,
   );
 }
