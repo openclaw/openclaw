@@ -32,6 +32,7 @@
     "enabled": true
   },
   "gateway": {
+    "mode": "local",
     "controlUi": {
       "dangerouslyAllowHostHeaderOriginFallback": true
     }
