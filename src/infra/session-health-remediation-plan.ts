@@ -425,7 +425,7 @@ function buildRecommendation(
   const parts: string[] = [];
 
   if (countByTier[0] > 0) {
-    parts.push(`${countByTier[0]} auto-safe action(s) can run immediately`);
+    parts.push(`${countByTier[0]} auto-safe action(s) safe to execute`);
   }
   if (countByTier[1] > 0) {
     parts.push(`${countByTier[1]} retention cleanup action(s) — review list before enabling`);

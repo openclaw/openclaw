@@ -1,10 +1,9 @@
 # Phase 3C — Manual Remediation Executor
 
-**Status:** Spec (not yet implemented)  
+**Status:** Implemented (246bafb)  
 **Author:** Adx  
 **Date:** 2026-03-20  
-**Depends on:** Phase 3A (remediation plan builder), 3B (trust-fix + UX honesty)  
-**Constraint:** Spec only — no implementation in this pass
+**Depends on:** Phase 3A (remediation plan builder), 3B (trust-fix + UX honesty)
 
 ---
 
@@ -75,12 +74,11 @@ We considered three approaches for referencing reviewed plans:
 
 ### 3.2 Staleness Protection
 
-Even with re-derivation, we add a staleness check:
+**v1 behavior (implemented):** The executor re-derives a fresh plan at execution time and validates that every requested action ID still exists. The confirmation prompt shows the **current** `affectedCount` from the fresh plan, so the operator always sees reality before confirming. If an action ID no longer exists in the fresh plan (the problem resolved itself), validation fails with a clear message directing the operator to re-run `--dry-run`.
 
-- The executor compares the fresh plan's action parameters against what the operator reviewed
-- If an action's `affectedCount` has **increased** since the dry-run, the executor warns and requires re-confirmation
-- If an action's `affectedCount` has **decreased** (things cleaned themselves up), the executor proceeds — fewer affected items is strictly safer
-- If an action ID no longer exists in the fresh plan (the problem resolved itself), the executor skips it with a notice
+v1 does **not** store a reviewed baseline or compare scope deltas between the dry-run and execution. The confirmation block is the operator's checkpoint — it always reflects current state, not a stale review.
+
+**Future consideration:** If `--yes` piped workflows become common (where the operator doesn't see the confirmation block), a scope-increase check comparing the fresh plan's `affectedCount` against the reviewed counts could be added. This is deferred until there is production demand.
 
 ### 3.3 Action ID Stability
 

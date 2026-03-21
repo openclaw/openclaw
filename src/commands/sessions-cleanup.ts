@@ -402,9 +402,11 @@ async function sessionsCleanupExecuteCommand(
       return;
     }
 
-    // 4. Show confirmation prompt
-    const confirmationText = renderConfirmationBlock(validation.actions);
-    runtime.log(confirmationText);
+    // 4. Show confirmation prompt (suppress human text when --json for clean stdout)
+    if (!opts.json) {
+      const confirmationText = renderConfirmationBlock(validation.actions);
+      runtime.log(confirmationText);
+    }
 
     if (!opts.yes) {
       const confirmed = await promptYesNo("Proceed?", false);
@@ -417,8 +419,6 @@ async function sessionsCleanupExecuteCommand(
     // 5. Execute
     const result = await executeRemediation({
       actionIds,
-      skipConfirmation: Boolean(opts.yes),
-      json: Boolean(opts.json),
       cfg,
       snapshot,
     });
@@ -465,6 +465,15 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
 
   if (hasExecute && hasExecuteTier) {
     runtime.error("--execute and --execute-tier are mutually exclusive. Use one or the other.");
+    runtime.exit(1);
+    return;
+  }
+
+  if (isExecutionMode && (opts.agent || opts.allAgents || opts.store)) {
+    runtime.error(
+      "--execute/--execute-tier operates on the default agent store only. " +
+        "--agent, --all-agents, and --store are not supported in execution mode.",
+    );
     runtime.exit(1);
     return;
   }

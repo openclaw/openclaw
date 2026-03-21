@@ -1,20 +1,21 @@
 /**
  * Session Health — Remediation Executor (Phase 3C)
  *
- * Executes reviewed remediation actions from a plan. The executor:
+ * Executes reviewed remediation actions. The executor:
  * 1. Re-derives a fresh plan from a fresh snapshot
- * 2. Validates that requested actions still exist with compatible parameters
- * 3. Shows a confirmation prompt (unless --yes)
- * 4. Executes actions in tier order
- * 5. Reports before/after results
+ * 2. Validates that requested action IDs still exist in the fresh plan
+ * 3. Executes actions in tier order
+ * 4. Returns a structured execution result with before/after reporting
+ *
+ * The executor is a domain-layer module: it validates and executes, but does
+ * NOT handle CLI concerns (confirmation prompts, JSON vs text output, flag
+ * conflict detection). Those belong in the CLI command layer.
  *
  * Hard safety boundaries:
- * - v1 supports Tier 0 and Tier 1 only
+ * - v1 supports Tier 0 and Tier 1 only (V1_MAX_EXECUTION_TIER = 1)
  * - No Tier 2 or Tier 3 execution
- * - No automation / no background cleanup / no cron cleanup
- * - Selection-based execution only
- * - Confirmation prompt by default
- * - Refuses contradictory flags and scope increases
+ * - Refuses unknown or resolved action IDs
+ * - All v1 actions are idempotent
  */
 
 import fs from "node:fs/promises";
@@ -51,22 +52,11 @@ export type ExecuteRemediationOptions = {
   /** Action IDs to execute (from the plan). */
   actionIds: string[];
 
-  /** Skip interactive confirmation. */
-  skipConfirmation: boolean;
-
-  /** JSON output mode. */
-  json: boolean;
-
   /** Pre-resolved config (optional, for testing). */
   cfg?: OpenClawConfig;
 
   /** Pre-collected snapshot (optional, for testing/reuse). */
   snapshot?: SessionHealthRawSnapshot;
-};
-
-export type ExecutorRefusalError = {
-  type: "refusal";
-  message: string;
 };
 
 export type ExecutorValidationResult =

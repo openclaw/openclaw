@@ -738,20 +738,14 @@ describe("sessionsCleanupCommand", () => {
       expect(mocks.promptYesNo).not.toHaveBeenCalled();
       expect(mocks.executeRemediation).toHaveBeenCalled();
 
-      // Should print confirmation block + JSON result
-      const jsonLog = logs.find((l) => {
-        try {
-          JSON.parse(l);
-          return true;
-        } catch {
-          return false;
-        }
-      });
-      expect(jsonLog).toBeDefined();
-      const payload = JSON.parse(jsonLog!) as Record<string, unknown>;
+      // --json should produce exactly one JSON blob, no human text
+      expect(logs).toHaveLength(1);
+      const payload = JSON.parse(logs[0]!) as Record<string, unknown>;
       expect(payload.executedAt).toBeTruthy();
       expect(payload.summary).toBeDefined();
       expect((payload.summary as Record<string, unknown>).executed).toBe(1);
+      // No confirmation block text in stdout
+      expect(logs[0]).not.toContain("CONFIRMATION REQUIRED");
     });
 
     it("executes with --execute-tier 0 and prints text report", async () => {
@@ -828,6 +822,117 @@ describe("sessionsCleanupCommand", () => {
       expect(payload.message).toContain("Nothing to execute");
       expect(Array.isArray(payload.actions)).toBe(true);
       expect((payload.actions as unknown[]).length).toBe(0);
+    });
+
+    // -----------------------------------------------------------------------
+    // Phase 3C hardening — unsupported targeting flags in execute mode
+    // -----------------------------------------------------------------------
+
+    it("refuses --execute with --agent", async () => {
+      const { runtime } = makeRuntime();
+      const errors: string[] = [];
+      let exitCode: number | undefined;
+      runtime.error = (msg: unknown) => errors.push(String(msg));
+      runtime.exit = (code: number) => {
+        exitCode = code;
+      };
+
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+          agent: "work",
+        },
+        runtime,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(errors.some((e) => e.includes("not supported in execution mode"))).toBe(true);
+    });
+
+    it("refuses --execute with --all-agents", async () => {
+      const { runtime } = makeRuntime();
+      const errors: string[] = [];
+      let exitCode: number | undefined;
+      runtime.error = (msg: unknown) => errors.push(String(msg));
+      runtime.exit = (code: number) => {
+        exitCode = code;
+      };
+
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+          allAgents: true,
+        },
+        runtime,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(errors.some((e) => e.includes("not supported in execution mode"))).toBe(true);
+    });
+
+    it("refuses --execute with --store", async () => {
+      const { runtime } = makeRuntime();
+      const errors: string[] = [];
+      let exitCode: number | undefined;
+      runtime.error = (msg: unknown) => errors.push(String(msg));
+      runtime.exit = (code: number) => {
+        exitCode = code;
+      };
+
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+          store: "/tmp/other-sessions.json",
+        },
+        runtime,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(errors.some((e) => e.includes("not supported in execution mode"))).toBe(true);
+    });
+
+    it("--execute-tier 0 --yes --json produces clean stdout (no confirmation block)", async () => {
+      mocks.collectSessionHealth.mockResolvedValue(snapshotWithIssues());
+      mocks.executeRemediation.mockResolvedValue({
+        executedAt: "2026-03-20T22:00:00.000Z",
+        actions: [
+          {
+            id: "cleanup-orphaned-tmp-1",
+            kind: "cleanup-orphaned-tmp",
+            tier: 0,
+            status: "complete",
+            artifactsRemoved: 2,
+            bytesFreed: 4096,
+          },
+        ],
+        summary: {
+          executed: 1,
+          skipped: 0,
+          failed: 0,
+          refused: 0,
+          totalBytesFreed: 4096,
+          storageBefore: 50_000_000,
+          storageAfter: 49_995_904,
+        },
+      });
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          executeTier: "0",
+          yes: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      // stdout should be exactly one JSON blob — no human text
+      expect(logs).toHaveLength(1);
+      const raw = logs[0]!;
+      expect(raw).not.toContain("CONFIRMATION REQUIRED");
+      const payload = JSON.parse(raw) as Record<string, unknown>;
+      expect(payload.executedAt).toBeTruthy();
+      expect((payload.summary as Record<string, unknown>).executed).toBe(1);
     });
   });
 });
