@@ -24,6 +24,18 @@ metadata:
 
 > From [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents) (35k+ stars)
 
+## When to Use
+
+- Analyzing a stock ticker with fundamental, sentiment, technical, and news analysis
+- Getting AI-powered buy/hold/sell decisions with risk assessment
+- Backtesting trading strategies over date ranges
+
+## When NOT to Use
+
+- Real-time order execution or live broker integration
+- Portfolio management with live brokers
+- Analyzing non-equity asset classes
+
 TradingAgents deploys specialized LLM-powered agents (fundamental analyst, sentiment analyst, technical analyst, news analyst, bull/bear researchers, trader, risk manager, portfolio manager) that collaboratively evaluate market conditions and produce trading decisions.
 
 ## Setup
@@ -79,7 +91,7 @@ from tradingagents.default_config import DEFAULT_CONFIG
 # Configure
 config = DEFAULT_CONFIG.copy()
 config["llm_provider"] = "openai"           # or "anthropic", "google", "xai", "ollama"
-config["deep_think_llm"] = "gpt-5-mini"     # heavy reasoning model
+config["deep_think_llm"] = "gpt-5"           # strong reasoning model (e.g. gpt-5, o3)
 config["quick_think_llm"] = "gpt-5-mini"    # fast model for quick tasks
 config["max_debate_rounds"] = 1             # bull vs bear debate rounds
 config["max_risk_discuss_rounds"] = 1       # risk team discussion rounds
