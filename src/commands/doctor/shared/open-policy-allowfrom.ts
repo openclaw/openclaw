@@ -1,9 +1,23 @@
 import type { OpenClawConfig } from "../../../config/config.js";
+import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { resolveAllowFromMode, type AllowFromMode } from "./allow-from-mode.js";
 import { asObjectRecord } from "./object.js";
 
 function hasWildcard(list?: Array<string | number>) {
   return list?.some((v) => String(v).trim() === "*") ?? false;
+}
+
+export function collectOpenPolicyAllowFromWarnings(params: {
+  changes: string[];
+  doctorFixCommand: string;
+}): string[] {
+  if (params.changes.length === 0) {
+    return [];
+  }
+  return [
+    ...params.changes.map((line) => sanitizeForLog(line)),
+    `- Run "${params.doctorFixCommand}" to add missing allowFrom wildcards.`,
+  ];
 }
 
 export function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {

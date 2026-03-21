@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { maybeRepairOpenPolicyAllowFrom } from "./open-policy-allowfrom.js";
+import {
+  collectOpenPolicyAllowFromWarnings,
+  maybeRepairOpenPolicyAllowFrom,
+} from "./open-policy-allowfrom.js";
 
 describe("doctor open-policy allowFrom repair", () => {
   it('adds top-level wildcard when dmPolicy="open" has no allowFrom', () => {
@@ -50,5 +53,17 @@ describe("doctor open-policy allowFrom repair", () => {
       '- channels.discord.dm.allowFrom: added "*" (required by dmPolicy="open")',
     ]);
     expect(result.config.channels?.discord?.dm?.allowFrom).toEqual(["123", "*"]);
+  });
+
+  it("formats open-policy wildcard warnings", () => {
+    const warnings = collectOpenPolicyAllowFromWarnings({
+      changes: ['- channels.signal.allowFrom: set to ["*"] (required by dmPolicy="open")'],
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining('channels.signal.allowFrom: set to ["*"]'),
+      expect.stringContaining('Run "openclaw doctor --fix"'),
+    ]);
   });
 });
