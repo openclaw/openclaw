@@ -384,4 +384,75 @@ describe("web monitor inbox", () => {
 
     await listener.close();
   });
+
+  it("preserves caller audio flags when replying with buffered media", async () => {
+    const audioPayload = {
+      audio: Buffer.from("aud"),
+      mimetype: "audio/ogg",
+      ptt: false,
+    } satisfies AnyMessageContent;
+    const onMessage = vi.fn(async (msg) => {
+      await msg.sendMedia(audioPayload, { replyToId: msg.id });
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage);
+    const upsert = buildMessageUpsert({
+      id: "abc",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(sock.sendMessage).toHaveBeenLastCalledWith("999@s.whatsapp.net", audioPayload, {
+      quoted: expect.objectContaining({
+        key: expect.objectContaining({
+          id: "abc",
+          remoteJid: "999@s.whatsapp.net",
+          fromMe: false,
+        }),
+      }),
+    });
+
+    await listener.close();
+  });
+
+  it("preserves caller media fields when replying with buffered media", async () => {
+    const imagePayload = {
+      image: Buffer.from("img"),
+      caption: "pong",
+      mimetype: "image/jpeg",
+      contextInfo: { mentionedJid: ["123@s.whatsapp.net"] },
+    } satisfies AnyMessageContent;
+    const onMessage = vi.fn(async (msg) => {
+      await msg.sendMedia(imagePayload, { replyToId: msg.id });
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage);
+    const upsert = buildMessageUpsert({
+      id: "abc",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(sock.sendMessage).toHaveBeenLastCalledWith("999@s.whatsapp.net", imagePayload, {
+      quoted: expect.objectContaining({
+        key: expect.objectContaining({
+          id: "abc",
+          remoteJid: "999@s.whatsapp.net",
+          fromMe: false,
+        }),
+      }),
+    });
+
+    await listener.close();
+  });
 });

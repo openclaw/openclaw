@@ -120,6 +120,15 @@ export async function monitorWebInbox(options: {
   const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
   const lidLookup = sock.signalRepository?.lidMapping;
   const quotedMessageCache = createQuotedMessageCache();
+  const sendApi = createWebSendApi({
+    sock: {
+      sendMessage: (jid: string, content: AnyMessageContent, options?: { quoted?: WAMessage }) =>
+        options ? sock.sendMessage(jid, content, options) : sock.sendMessage(jid, content),
+      sendPresenceUpdate: (presence, jid?: string) => sock.sendPresenceUpdate(presence, jid),
+    },
+    defaultAccountId: options.accountId,
+    resolveQuotedMessage: quotedMessageCache.resolve,
+  });
 
   const resolveInboundJid = async (jid: string | null | undefined): Promise<string | null> =>
     resolveJidToE164(jid, { authDir: options.authDir, lidLookup });
@@ -361,83 +370,9 @@ export async function monitorWebInbox(options: {
         createAutoReplySendOptions(options?.replyToId),
       );
     };
-    const sendMedia = async (payload: AnyMessageContent, options?: { replyToId?: string }) => {
-      const caption =
-        "caption" in payload && typeof payload.caption === "string" ? payload.caption : "";
-      const toBuffer = (value: unknown): Buffer | null => {
-        if (Buffer.isBuffer(value)) {
-          return value;
-        }
-        return value instanceof Uint8Array ? Buffer.from(value) : null;
-      };
-      if ("image" in payload && payload.image) {
-        const imageBuffer = toBuffer(payload.image);
-        if (!imageBuffer) {
-          await sendRawMessage(payload, options);
-          return;
-        }
-        await sendApi.sendMessage(
-          chatJid,
-          caption,
-          imageBuffer,
-          typeof payload.mimetype === "string" ? payload.mimetype : "image/jpeg",
-          createAutoReplySendOptions(options?.replyToId),
-        );
-        return;
-      }
-      if ("audio" in payload && payload.audio) {
-        const audioBuffer = toBuffer(payload.audio);
-        if (!audioBuffer) {
-          await sendRawMessage(payload, options);
-          return;
-        }
-        await sendApi.sendMessage(
-          chatJid,
-          caption,
-          audioBuffer,
-          typeof payload.mimetype === "string" ? payload.mimetype : "audio/ogg",
-          createAutoReplySendOptions(options?.replyToId),
-        );
-        return;
-      }
-      if ("video" in payload && payload.video) {
-        const videoBuffer = toBuffer(payload.video);
-        if (!videoBuffer) {
-          await sendRawMessage(payload, options);
-          return;
-        }
-        await sendApi.sendMessage(
-          chatJid,
-          caption,
-          videoBuffer,
-          typeof payload.mimetype === "string" ? payload.mimetype : "video/mp4",
-          {
-            ...(payload.gifPlayback ? { gifPlayback: true } : {}),
-            ...createAutoReplySendOptions(options?.replyToId),
-          },
-        );
-        return;
-      }
-      if ("document" in payload && payload.document) {
-        const documentBuffer = toBuffer(payload.document);
-        if (!documentBuffer) {
-          await sendRawMessage(payload, options);
-          return;
-        }
-        await sendApi.sendMessage(
-          chatJid,
-          caption,
-          documentBuffer,
-          typeof payload.mimetype === "string" ? payload.mimetype : "application/octet-stream",
-          {
-            ...(typeof payload.fileName === "string" ? { fileName: payload.fileName } : {}),
-            ...createAutoReplySendOptions(options?.replyToId),
-          },
-        );
-        return;
-      }
-      await sendRawMessage(payload, options);
-    };
+    // Preserve the caller's Baileys payload; inbox media helpers only add quote context.
+    const sendMedia = async (payload: AnyMessageContent, options?: { replyToId?: string }) =>
+      sendRawMessage(payload, options);
     const timestamp = inbound.messageTimestampMs;
     const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
     const senderName = msg.pushName ?? undefined;
@@ -564,16 +499,6 @@ export async function monitorWebInbox(options: {
     }
   };
   sock.ev.on("connection.update", handleConnectionUpdate);
-
-  const sendApi = createWebSendApi({
-    sock: {
-      sendMessage: (jid: string, content: AnyMessageContent, options?: { quoted?: WAMessage }) =>
-        options ? sock.sendMessage(jid, content, options) : sock.sendMessage(jid, content),
-      sendPresenceUpdate: (presence, jid?: string) => sock.sendPresenceUpdate(presence, jid),
-    },
-    defaultAccountId: options.accountId,
-    resolveQuotedMessage: quotedMessageCache.resolve,
-  });
 
   return {
     close: async () => {

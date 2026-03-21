@@ -426,6 +426,34 @@ describe("gateway send mirroring", () => {
     expect(call.mirror?.sessionKey).toBe(call.session?.key);
   });
 
+  it("derives a threaded session key from replyTo when threadId is omitted", async () => {
+    mockDeliverySuccess("m-reply-thread");
+    vi.mocked(resolveOutboundTarget).mockReturnValue({
+      ok: true,
+      to: "channel:C123",
+    });
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      replyTo: "1710000000.9999",
+      idempotencyKey: "idem-reply-thread",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          key: "agent:main:slack:channel:c123:thread:1710000000.9999",
+        }),
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:c123:thread:1710000000.9999",
+        }),
+        replyToId: "1710000000.9999",
+      }),
+    );
+  });
+
   it("uses explicit agentId for delivery when sessionKey is not provided", async () => {
     mockDeliverySuccess("m-agent");
 

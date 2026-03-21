@@ -244,6 +244,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               accountId,
               target: deliveryTarget,
               resolvedTarget: idLikeTarget,
+              replyToId,
               threadId,
             })
           : null;

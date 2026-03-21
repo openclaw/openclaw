@@ -1,5 +1,6 @@
 import type { AnyMessageContent, WAMessage, WAPresence } from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
 import type { ActiveWebSendOptions } from "../active-listener.js";
 
@@ -49,6 +50,9 @@ export function createWebSendApi(params: {
             replyToId,
           })
         : undefined;
+      if (replyToId && !quoted) {
+        logVerbose(`WhatsApp quoted reply target ${replyToId} was not found for ${jid}`);
+      }
       let payload: AnyMessageContent;
       if (mediaBuffer && mediaType) {
         if (mediaType.startsWith("image/")) {
