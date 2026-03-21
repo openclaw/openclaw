@@ -70,6 +70,50 @@ describe("createTelegramBot network-health fetch wrapper", () => {
     expect(noteNetworkHealthySpy).toHaveBeenCalledTimes(1);
   });
 
+  it("does not treat non-JSON 2xx responses as Telegram health", async () => {
+    const baseFetch = vi.fn(async () => {
+      return new Response("<html>proxy ok</html>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }) as typeof fetch;
+
+    createTelegramBot({
+      token: "tok",
+      telegramTransport: { fetch: baseFetch } as Parameters<
+        typeof createTelegramBot
+      >[0]["telegramTransport"],
+    });
+
+    const clientFetch = getClientFetch();
+    const response = await clientFetch("https://api.telegram.org/bot123/sendMessage");
+
+    expect(response.status).toBe(200);
+    expect(noteNetworkHealthySpy).not.toHaveBeenCalled();
+  });
+
+  it("marks Telegram JSON 2xx responses as network-healthy", async () => {
+    const baseFetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ ok: true, result: true }), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    }) as typeof fetch;
+
+    createTelegramBot({
+      token: "tok",
+      telegramTransport: { fetch: baseFetch } as Parameters<
+        typeof createTelegramBot
+      >[0]["telegramTransport"],
+    });
+
+    const clientFetch = getClientFetch();
+    const response = await clientFetch("https://api.telegram.org/bot123/sendMessage");
+
+    expect(response.status).toBe(200);
+    expect(noteNetworkHealthySpy).toHaveBeenCalledTimes(1);
+  });
+
   it("marks Telegram JSON 5xx responses as network-healthy", async () => {
     const baseFetch = vi.fn(async () => {
       return new Response(

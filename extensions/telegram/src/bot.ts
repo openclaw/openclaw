@@ -138,15 +138,16 @@ function shouldMarkTelegramNetworkHealthy(response: unknown): boolean {
     headers?: unknown;
   };
 
-  if (typed.ok === true) {
-    return true;
-  }
-
   if (typeof typed.status !== "number" || !Number.isFinite(typed.status)) {
     return false;
   }
 
-  if (typed.status < 400 || typed.status === 407) {
+  if (
+    typed.status < 200 ||
+    typed.status >= 600 ||
+    typed.status === 407 ||
+    (typed.status >= 300 && typed.status < 400)
+  ) {
     return false;
   }
 
@@ -162,11 +163,9 @@ function shouldMarkTelegramNetworkHealthy(response: unknown): boolean {
     return false;
   }
 
-  // Telegram Bot API rejections are JSON responses. Proxy-generated 4xx responses
-  // such as 407 often come back as plaintext/HTML before the request ever reaches
-  // Telegram, so they must not clear the outage streak.
-  // JSON 5xx responses also imply round-trip connectivity to Telegram and should
-  // reset the outage streak.
+  // Treat responses as network-healthy only when they look like Bot API JSON.
+  // This avoids resetting outage streaks on proxy/captive-portal placeholders
+  // such as 200 HTML or 407 plaintext.
   const contentType = headers.get("content-type")?.toLowerCase() ?? "";
   return contentType.includes("application/json");
 }
