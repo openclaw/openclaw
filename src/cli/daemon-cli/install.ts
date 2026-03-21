@@ -135,17 +135,24 @@ async function gatewayServiceNeedsAutoNodeExtraCaCertsRefresh(params: {
   service: ReturnType<typeof resolveGatewayService>;
   env: Record<string, string | undefined>;
 }): Promise<boolean> {
-  const expectedNodeExtraCaCerts = resolveAutoNodeExtraCaCerts({
-    env: params.env,
-    execPath: process.execPath,
-  });
-  if (!expectedNodeExtraCaCerts) {
-    return false;
-  }
-
   try {
     const currentCommand = await params.service.readCommand(params.env);
+    const currentExecPath = currentCommand?.programArguments[0]?.trim();
+    if (!currentExecPath) {
+      return false;
+    }
     const currentNodeExtraCaCerts = currentCommand?.environment?.NODE_EXTRA_CA_CERTS?.trim();
+    const expectedNodeExtraCaCerts = resolveAutoNodeExtraCaCerts({
+      env: {
+        ...params.env,
+        ...currentCommand.environment,
+        NODE_EXTRA_CA_CERTS: undefined,
+      },
+      execPath: currentExecPath,
+    });
+    if (!expectedNodeExtraCaCerts) {
+      return false;
+    }
     return currentNodeExtraCaCerts !== expectedNodeExtraCaCerts;
   } catch {
     return false;
