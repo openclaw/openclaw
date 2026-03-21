@@ -127,6 +127,20 @@ export function scanTelegramAllowFromUsernameEntries(
   return hits;
 }
 
+export function collectTelegramAllowFromUsernameWarnings(params: {
+  hits: TelegramAllowFromUsernameHit[];
+  doctorFixCommand: string;
+}): string[] {
+  if (params.hits.length === 0) {
+    return [];
+  }
+  const sampleEntry = sanitizeForLog(params.hits[0]?.entry ?? "@");
+  return [
+    `- Telegram allowFrom contains ${params.hits.length} non-numeric entries (e.g. ${sampleEntry}); Telegram authorization requires numeric sender IDs.`,
+    `- Run "${params.doctorFixCommand}" to auto-resolve @username entries to numeric IDs (requires a Telegram bot token).`,
+  ];
+}
+
 export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promise<{
   config: OpenClawConfig;
   changes: string[];
