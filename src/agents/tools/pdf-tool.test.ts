@@ -533,7 +533,7 @@ describe("createPdfTool", () => {
       const extractModule = await import("../../media/pdf-extract.js");
       vi.spyOn(extractModule, "extractPdfContent").mockResolvedValue({
         text: "Extracted content",
-        images: [{ data: "base64img", mimeType: "image/png" }],
+        images: [{ type: "image", data: "base64img", mimeType: "image/png" }],
       });
 
       completeMock.mockResolvedValue({
