@@ -317,7 +317,8 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "kimi",
     label: "Kimi (Moonshot)",
-    hint: "Moonshot web search",
+    hint: "Requires Moonshot / Kimi API key · Moonshot web search",
+    credentialLabel: "Moonshot / Kimi API key",
     envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
     placeholder: "sk-...",
     signupUrl: "https://platform.moonshot.cn/",

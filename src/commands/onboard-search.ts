@@ -22,6 +22,12 @@ export type SearchProvider = NonNullable<
 type SearchConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>;
 type MutableSearchConfig = SearchConfig & Record<string, unknown>;
 
+function resolveSearchProviderCredentialLabel(
+  entry: Pick<PluginWebSearchProviderEntry, "label" | "credentialLabel">,
+): string {
+  return entry.credentialLabel?.trim() || `${entry.label} API key`;
+}
+
 export const SEARCH_PROVIDER_OPTIONS: readonly PluginWebSearchProviderEntry[] =
   resolvePluginWebSearchProviders({
     bundledAllowlistCompat: true,
@@ -324,6 +330,7 @@ export async function setupSearch(
   if (!entry) {
     return config;
   }
+  const credentialLabel = resolveSearchProviderCredentialLabel(entry);
   const existingKey = resolveExistingKey(config, choice);
   const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);
@@ -355,10 +362,10 @@ export async function setupSearch(
 
   const keyInput = await prompter.text({
     message: keyConfigured
-      ? `${entry.label} API key (leave blank to keep current)`
+      ? `${credentialLabel} (leave blank to keep current)`
       : envAvailable
-        ? `${entry.label} API key (leave blank to use env var)`
-        : `${entry.label} API key`,
+        ? `${credentialLabel} (leave blank to use env var)`
+        : credentialLabel,
     placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
   });
 
@@ -378,7 +385,7 @@ export async function setupSearch(
 
   await prompter.note(
     [
-      "No API key stored — web_search won't work until a key is available.",
+      `No ${credentialLabel} stored — web_search won't work until a key is available.`,
       `Get your key at: ${entry.signupUrl}`,
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
