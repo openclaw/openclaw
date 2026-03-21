@@ -66,6 +66,23 @@ describe("createTelegramRetryRunner", () => {
         expectedValue: "ok",
       },
       {
+        name: "retries grammY HttpError wrapping network failures via regex",
+        runnerOptions: {
+          retry: { ...ZERO_DELAY_RETRY, attempts: 2 },
+        },
+        fnSteps: [
+          {
+            type: "reject" as const,
+            value: Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+              name: "HttpError",
+            }),
+          },
+          { type: "resolve" as const, value: "ok" },
+        ],
+        expectedCalls: 2,
+        expectedValue: "ok",
+      },
+      {
         name: "does not retry unrelated errors when neither predicate nor regex match",
         runnerOptions: {
           retry: { ...ZERO_DELAY_RETRY, attempts: 2 },
