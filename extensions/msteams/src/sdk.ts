@@ -58,14 +58,14 @@ export function createMSTeamsTokenProvider(app: MSTeamsApp): MSTeamsTokenProvide
     async getAccessToken(scope: string): Promise<string> {
       if (scope.includes("graph.microsoft.com")) {
         const token = await (
-          app as unknown as { getAppGraphToken(): Promise<{ value?: string } | null> }
+          app as unknown as { getAppGraphToken(): Promise<{ toString(): string } | null> }
         ).getAppGraphToken();
-        return token?.value ?? "";
+        return token ? String(token) : "";
       }
       const token = await (
-        app as unknown as { getBotToken(): Promise<{ value?: string } | null> }
+        app as unknown as { getBotToken(): Promise<{ toString(): string } | null> }
       ).getBotToken();
-      return token?.value ?? "";
+      return token ? String(token) : "";
     },
   };
 }
@@ -82,9 +82,9 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
   return {
     async continueConversation(_appId, reference, logic) {
       const token = await (
-        app as unknown as { getBotToken(): Promise<{ value?: string } | null> }
+        app as unknown as { getBotToken(): Promise<{ toString(): string } | null> }
       ).getBotToken();
-      const tokenValue = token?.value;
+      const tokenValue = token ? String(token) : undefined;
 
       const serviceUrl = reference.serviceUrl;
       if (!serviceUrl) {
@@ -98,7 +98,7 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
 
       // Build a send context that uses the Bot Framework REST API
       const apiClient = new sdk.Client(serviceUrl, {
-        token: () => (tokenValue ? { value: tokenValue } : undefined),
+        token: () => tokenValue || undefined,
         headers: { "User-Agent": buildUserAgent() },
       } as Record<string, unknown>);
 
@@ -143,9 +143,9 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
       try {
         const activity = request.body;
         const token = await (
-          app as unknown as { getBotToken(): Promise<{ value?: string } | null> }
+          app as unknown as { getBotToken(): Promise<{ toString(): string } | null> }
         ).getBotToken();
-        const tokenValue = token?.value;
+        const tokenValue = token ? String(token) : undefined;
         const serviceUrl = activity?.serviceUrl as string | undefined;
 
         const context = {
@@ -168,7 +168,7 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
             }
 
             const apiClient = new sdk.Client(serviceUrl, {
-              token: () => (tokenValue ? { value: tokenValue } : undefined),
+              token: () => tokenValue || undefined,
               headers: { "User-Agent": buildUserAgent() },
             } as Record<string, unknown>);
 
