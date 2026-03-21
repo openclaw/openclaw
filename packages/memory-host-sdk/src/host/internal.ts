@@ -146,7 +146,8 @@ async function walkDir(dir: string, files: string[], multimodal?: MemoryMultimod
     if (!isAllowedMemoryFilePath(full, multimodal)) {
       continue;
     }
-    files.push(full);
+    // Normalize to forward slashes for cross-platform compatibility
+    files.push(full.replace(/\\/g, "/"));
   }
 }
 
@@ -188,7 +189,8 @@ async function walkRootFiles(dir: string, files: string[], multimodal?: MemoryMu
     if (!isAllowedMemoryFilePath(full, multimodal)) {
       continue;
     }
-    files.push(full);
+    // Normalize to forward slashes for cross-platform compatibility
+    files.push(full.replace(/\\/g, "/"));
   }
 }
 
@@ -210,7 +212,8 @@ export async function listMemoryFiles(
       if (!absPath.endsWith(".md")) {
         return;
       }
-      result.push(absPath);
+      // Normalize to forward slashes for cross-platform compatibility
+      result.push(absPath.replace(/\\/g, "/"));
     } catch {}
   };
 
