@@ -252,4 +252,22 @@ describe("resolveDefaultConfigCandidates nesting guard (#45765)", () => {
       expect(path.dirname(configPath)).toBe(stateDir);
     });
   });
+
+  it("skips flat candidates when nested state dir exists under OPENCLAW_HOME", async () => {
+    await withTempDir({ prefix: "openclaw-nesting-" }, async (root) => {
+      const homeDir = path.join(root, ".clawdbot");
+      const nestedDir = path.join(homeDir, ".openclaw");
+      await fs.mkdir(nestedDir, { recursive: true });
+
+      const env = { OPENCLAW_HOME: homeDir } as NodeJS.ProcessEnv;
+      const candidates = resolveDefaultConfigCandidates(env);
+
+      // Nested config candidates should be present
+      expect(candidates).toContain(path.join(nestedDir, "openclaw.json"));
+
+      // Flat OPENCLAW_HOME candidates must NOT appear when a nested dir exists
+      expect(candidates).not.toContain(path.join(homeDir, "openclaw.json"));
+      expect(candidates).not.toContain(path.join(homeDir, "clawdbot.json"));
+    });
+  });
 });
