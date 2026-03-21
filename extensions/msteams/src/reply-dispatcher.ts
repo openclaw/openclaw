@@ -24,6 +24,7 @@ import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
+import { TeamsHttpStream } from "./streaming-message.js";
 
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
@@ -99,12 +100,25 @@ export function createMSTeamsReplyDispatcher(params: {
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
   });
+  const feedbackLoopEnabled = params.cfg.channels?.msteams?.feedbackEnabled !== false;
+
+  // Streaming for personal (1:1) chats using the Teams streaminfo protocol.
+  const conversationType = params.conversationRef.conversation?.conversationType?.toLowerCase();
+  const isPersonal = conversationType === "personal";
+
+  let stream: TeamsHttpStream | undefined;
+  if (isPersonal) {
+    stream = new TeamsHttpStream({
+      sendActivity: (activity) => params.context.sendActivity(activity),
+      feedbackLoopEnabled,
+      onError: (err) => {
+        params.log.debug?.(`stream error: ${err instanceof Error ? err.message : String(err)}`);
+      },
+    });
+  }
 
   // Accumulate rendered messages from all deliver() calls so the entire turn's
-  // reply is sent in a single sendMSTeamsMessages() call. This avoids Teams
-  // silently dropping blocks 2+ when each deliver() opened its own independent
-  // continueConversation() call — only the first proactive send per turn context
-  // window succeeds. (#29379)
+  // reply is sent in a single sendMSTeamsMessages() call. (#29379)
   const pendingMessages: MSTeamsRenderedMessage[] = [];
 
   const sendMessages = async (messages: MSTeamsRenderedMessage[]): Promise<string[]> => {
@@ -115,7 +129,6 @@ export function createMSTeamsReplyDispatcher(params: {
       conversationRef: params.conversationRef,
       context: params.context,
       messages,
-      // Enable default retry/backoff for throttling/transient failures.
       retry: {},
       onRetry: (event) => {
         params.log.debug?.("retrying send", {
@@ -126,6 +139,7 @@ export function createMSTeamsReplyDispatcher(params: {
       tokenProvider: params.tokenProvider,
       sharePointSiteId: params.sharePointSiteId,
       mediaMaxBytes,
+      feedbackLoopEnabled,
     });
   };
 
@@ -133,16 +147,12 @@ export function createMSTeamsReplyDispatcher(params: {
     if (pendingMessages.length === 0) {
       return;
     }
-    // Copy the buffer before draining so we have a reference for per-message
-    // retry if the batch send fails.
     const toSend = pendingMessages.splice(0);
     const total = toSend.length;
     let ids: string[];
     try {
       ids = await sendMessages(toSend);
     } catch {
-      // Batch send failed (e.g. bad attachment on one message); retry each
-      // message individually so trailing blocks are not silently lost.
       ids = [];
       let failed = 0;
       for (const msg of toSend) {
@@ -175,6 +185,12 @@ export function createMSTeamsReplyDispatcher(params: {
     humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
     typingCallbacks,
     deliver: async (payload) => {
+      // When streaming is active and has sent content, skip delivery —
+      // the stream's finalize() handles the final message.
+      if (stream?.hasContent && !payload.mediaUrl && !payload.mediaUrls?.length) {
+        return;
+      }
+
       // Render the payload to messages and accumulate them. All messages from
       // this turn are flushed together in markDispatchIdle() so they go out
       // in a single continueConversation() call.
@@ -203,8 +219,7 @@ export function createMSTeamsReplyDispatcher(params: {
     },
   });
 
-  // Wrap markDispatchIdle to flush all accumulated messages before signalling idle.
-  // Returns a promise so callers (e.g. onSettled) can await completion.
+  // Wrap markDispatchIdle to flush accumulated messages and finalize stream.
   const markDispatchIdle = (): Promise<void> => {
     return flushPendingMessages()
       .catch((err) => {
@@ -218,14 +233,32 @@ export function createMSTeamsReplyDispatcher(params: {
           hint,
         });
       })
+      .then(() => {
+        if (stream) {
+          return stream.finalize().catch((err) => {
+            params.log.debug?.("stream finalize failed", { error: String(err) });
+          });
+        }
+      })
       .finally(() => {
         baseMarkDispatchIdle();
       });
   };
 
+  // Build reply options with onPartialReply for streaming
+  const streamingReplyOptions = stream
+    ? {
+        onPartialReply: (payload: { text?: string }) => {
+          if (payload.text) {
+            stream!.update(payload.text);
+          }
+        },
+      }
+    : {};
+
   return {
     dispatcher,
-    replyOptions: { ...replyOptions, onModelSelected },
+    replyOptions: { ...replyOptions, ...streamingReplyOptions, onModelSelected },
     markDispatchIdle,
   };
 }

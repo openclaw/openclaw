@@ -71,6 +71,49 @@ export function createMSTeamsTokenProvider(app: MSTeamsApp): MSTeamsTokenProvide
 }
 
 /**
+ * Update an existing activity via the Bot Framework REST API.
+ * PUT /v3/conversations/{conversationId}/activities/{activityId}
+ */
+async function updateActivityViaRest(params: {
+  serviceUrl: string;
+  conversationId: string;
+  activityId: string;
+  activity: Record<string, unknown>;
+  token?: string;
+}): Promise<unknown> {
+  const { serviceUrl, conversationId, activityId, activity, token } = params;
+  const baseUrl = serviceUrl.replace(/\/+$/, "");
+  const url = `${baseUrl}/v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(activityId)}`;
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "User-Agent": buildUserAgent(),
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(url, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      type: "message",
+      ...activity,
+      id: activityId,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw Object.assign(new Error(`updateActivity failed: HTTP ${response.status} ${body}`), {
+      statusCode: response.status,
+    });
+  }
+
+  return await response.json().catch(() => ({ id: activityId }));
+}
+
+/**
  * Build a CloudAdapter-compatible adapter using the Teams SDK REST client.
  *
  * This replaces the previous CloudAdapter from @microsoft/agents-hosting.
@@ -129,6 +172,22 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
 
           return response;
         },
+        async updateActivity(
+          activityUpdate: { id: string } & Record<string, unknown>,
+        ): Promise<unknown> {
+          const activityId = activityUpdate.id;
+          if (!activityId) {
+            throw new Error("updateActivity requires an activity id");
+          }
+          // Bot Framework REST API: PUT /v3/conversations/{conversationId}/activities/{activityId}
+          return await updateActivityViaRest({
+            serviceUrl,
+            conversationId,
+            activityId,
+            activity: activityUpdate,
+            token: tokenValue,
+          });
+        },
       };
 
       await logic(sendContext);
@@ -172,10 +231,20 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
               headers: { "User-Agent": buildUserAgent() },
             } as Record<string, unknown>);
 
+            const botId = (activity?.recipient as Record<string, unknown>)?.id as
+              | string
+              | undefined;
+            const botName = (activity?.recipient as Record<string, unknown>)?.name as
+              | string
+              | undefined;
+            const convType = (activity?.conversation as Record<string, unknown>)
+              ?.conversationType as string | undefined;
+
             return await apiClient.conversations.activities(convId).create({
               type: "message",
               ...msg,
-              conversation: { id: convId, conversationType: "personal" },
+              from: botId ? { id: botId, name: botName ?? "", role: "bot" } : undefined,
+              conversation: { id: convId, conversationType: convType ?? "personal" },
             } as Parameters<
               typeof apiClient.conversations.activities extends (id: string) => {
                 create: (a: infer T) => unknown;
@@ -192,6 +261,27 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
               results.push(await context.sendActivity(act));
             }
             return results;
+          },
+          async updateActivity(
+            activityUpdate: { id: string } & Record<string, unknown>,
+          ): Promise<unknown> {
+            const activityId = activityUpdate.id;
+            if (!activityId || !serviceUrl) {
+              return { id: "unknown" };
+            }
+            const convId = (activity?.conversation as Record<string, unknown>)?.id as
+              | string
+              | undefined;
+            if (!convId) {
+              return { id: "unknown" };
+            }
+            return await updateActivityViaRest({
+              serviceUrl,
+              conversationId: convId,
+              activityId,
+              activity: activityUpdate,
+              token: tokenValue,
+            });
           },
         };
 

@@ -21,6 +21,7 @@ import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-
 import {
   type MSTeamsAdapter,
   type MSTeamsRenderedMessage,
+  buildActivity,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
 } from "./messenger.js";
@@ -293,16 +294,21 @@ describe("msteams messenger", () => {
         expect(firstSent.text).toContain(
           "📎 [upload.txt](https://onedrive.example.com/share/item123)",
         );
-        expect(firstSent.entities).toEqual([
-          {
-            type: "mention",
-            text: "<at>John</at>",
-            mentioned: {
-              id: "29:08q2j2o3jc09au90eucae",
-              name: "John",
+        expect(sent[0]?.entities).toEqual(
+          expect.arrayContaining([
+            {
+              type: "mention",
+              text: "<at>John</at>",
+              mentioned: {
+                id: "29:08q2j2o3jc09au90eucae",
+                name: "John",
+              },
             },
-          },
-        ]);
+            expect.objectContaining({
+              additionalType: ["AIGeneratedContent"],
+            }),
+          ]),
+        );
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }
@@ -475,6 +481,78 @@ describe("msteams messenger", () => {
         "```\nresult = 42\n```",
         "The answer is 42.",
       ]);
+    });
+  });
+
+  describe("buildActivity AI metadata", () => {
+    const baseRef: StoredConversationReference = {
+      activityId: "activity123",
+      user: { id: "user123", name: "User" },
+      agent: { id: "bot123", name: "Bot" },
+      conversation: { id: "conv123", conversationType: "personal" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+    };
+
+    it("adds AI-generated entity to text messages", async () => {
+      const activity = await buildActivity({ text: "hello" }, baseRef);
+      const entities = activity.entities as Array<Record<string, unknown>>;
+      expect(entities).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "https://schema.org/Message",
+            "@type": "Message",
+            additionalType: ["AIGeneratedContent"],
+          }),
+        ]),
+      );
+    });
+
+    it("adds AI-generated entity to media-only messages", async () => {
+      const activity = await buildActivity({ mediaUrl: "https://example.com/img.png" }, baseRef);
+      const entities = activity.entities as Array<Record<string, unknown>>;
+      expect(entities).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            additionalType: ["AIGeneratedContent"],
+          }),
+        ]),
+      );
+    });
+
+    it("preserves mention entities alongside AI entity", async () => {
+      const activity = await buildActivity({ text: "hi <at>@User</at>" }, baseRef);
+      const entities = activity.entities as Array<Record<string, unknown>>;
+      // Should have at least the AI entity
+      expect(entities.length).toBeGreaterThanOrEqual(1);
+      expect(entities).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            additionalType: ["AIGeneratedContent"],
+          }),
+        ]),
+      );
+    });
+
+    it("sets feedbackLoopEnabled in channelData when enabled", async () => {
+      const activity = await buildActivity(
+        { text: "hello" },
+        baseRef,
+        undefined,
+        undefined,
+        undefined,
+        {
+          feedbackLoopEnabled: true,
+        },
+      );
+      const channelData = activity.channelData as Record<string, unknown>;
+      expect(channelData.feedbackLoopEnabled).toBe(true);
+    });
+
+    it("defaults feedbackLoopEnabled to false", async () => {
+      const activity = await buildActivity({ text: "hello" }, baseRef);
+      const channelData = activity.channelData as Record<string, unknown>;
+      expect(channelData.feedbackLoopEnabled).toBe(false);
     });
   });
 });

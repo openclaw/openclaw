@@ -264,24 +264,38 @@ export function renderReplyPayloadsToMessages(
   return out;
 }
 
-async function buildActivity(
+/** AI-generated content entity added to every outbound AI message. */
+const AI_GENERATED_ENTITY = {
+  type: "https://schema.org/Message",
+  "@type": "Message",
+  "@id": "",
+  additionalType: ["AIGeneratedContent"],
+};
+
+export async function buildActivity(
   msg: MSTeamsRenderedMessage,
   conversationRef: StoredConversationReference,
   tokenProvider?: MSTeamsAccessTokenProvider,
   sharePointSiteId?: string,
   mediaMaxBytes?: number,
+  options?: { feedbackLoopEnabled?: boolean },
 ): Promise<Record<string, unknown>> {
   const activity: Record<string, unknown> = { type: "message" };
+
+  // Mark as AI-generated so Teams renders the "AI generated" badge.
+  activity.channelData = {
+    feedbackLoopEnabled: options?.feedbackLoopEnabled ?? false,
+  };
 
   if (msg.text) {
     // Parse mentions from text (format: @[Name](id))
     const { text: formattedText, entities } = parseMentions(msg.text);
     activity.text = formattedText;
 
-    // Add mention entities if any mentions were found
-    if (entities.length > 0) {
-      activity.entities = entities;
-    }
+    // Start with mention entities (if any) + AI-generated entity
+    activity.entities = [...(entities.length > 0 ? entities : []), AI_GENERATED_ENTITY];
+  } else {
+    activity.entities = [AI_GENERATED_ENTITY];
   }
 
   if (msg.mediaUrl) {
@@ -401,6 +415,8 @@ export async function sendMSTeamsMessages(params: {
   sharePointSiteId?: string;
   /** Max media size in bytes. Default: 100MB. */
   mediaMaxBytes?: number;
+  /** Enable the Teams feedback loop (thumbs up/down) on sent messages. */
+  feedbackLoopEnabled?: boolean;
 }): Promise<string[]> {
   const messages = params.messages.filter(
     (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl,
@@ -461,6 +477,7 @@ export async function sendMSTeamsMessages(params: {
             params.tokenProvider,
             params.sharePointSiteId,
             params.mediaMaxBytes,
+            { feedbackLoopEnabled: params.feedbackLoopEnabled },
           ),
         ),
       { messageIndex, messageCount: messages.length },

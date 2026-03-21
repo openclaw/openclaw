@@ -1,5 +1,6 @@
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
+import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
 import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
 import type { MSTeamsAdapter } from "./messenger.js";
@@ -8,7 +9,9 @@ import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
+import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
+import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
 
 export type MSTeamsAccessTokenProvider = {
   getAccessToken: (scope: string) => Promise<string>;
@@ -137,6 +140,134 @@ async function handleFileConsentInvoke(
   return true;
 }
 
+/**
+ * Parse and handle feedback invoke activities (thumbs up/down).
+ * Returns true if the activity was a feedback invoke, false otherwise.
+ */
+async function handleFeedbackInvoke(
+  context: MSTeamsTurnContext,
+  deps: MSTeamsMessageHandlerDeps,
+): Promise<boolean> {
+  const activity = context.activity;
+  const value = activity.value as
+    | { actionName?: string; replyToId?: string; feedback?: { type?: string; message?: string } }
+    | undefined;
+
+  if (!value) {
+    return false;
+  }
+
+  const feedbackType = value.feedback?.type;
+  if (feedbackType !== "like" && feedbackType !== "dislike") {
+    deps.log.debug?.("ignoring non-feedback submitAction", { value });
+    return false;
+  }
+
+  const msteamsCfg = deps.cfg.channels?.msteams;
+  if (msteamsCfg?.feedbackEnabled === false) {
+    deps.log.debug?.("feedback handling disabled");
+    return true; // Still consume the invoke
+  }
+
+  const conversationId = activity.conversation?.id ?? "unknown";
+  const senderId = activity.from?.aadObjectId ?? activity.from?.id ?? "unknown";
+  const messageId = value.replyToId ?? activity.replyToId ?? "unknown";
+  const userComment = value.feedback?.message;
+  const isNegative = feedbackType === "dislike";
+
+  const core = getMSTeamsRuntime();
+  const route = core.channel.routing.resolveAgentRoute({
+    cfg: deps.cfg,
+    channel: "msteams",
+    peer: { kind: "direct", id: senderId },
+  });
+
+  // Log feedback event to session JSONL
+  const feedbackEvent = buildFeedbackEvent({
+    messageId,
+    value: isNegative ? "negative" : "positive",
+    comment: userComment,
+    sessionKey: route.sessionKey,
+    agentId: route.agentId,
+    conversationId,
+  });
+
+  deps.log.info("received feedback", {
+    value: feedbackEvent.value,
+    messageId,
+    conversationId,
+    hasComment: Boolean(userComment),
+  });
+
+  // Write feedback event to session transcript
+  try {
+    const storePath = core.channel.session.resolveStorePath(deps.cfg.session?.store, {
+      agentId: route.agentId,
+    });
+    const fs = await import("node:fs/promises");
+    const pathMod = await import("node:path");
+    const safeKey = route.sessionKey.replace(/[^a-zA-Z0-9_:-]/g, "_");
+    const transcriptFile = pathMod.join(storePath, `${safeKey}.jsonl`);
+    await fs.appendFile(transcriptFile, JSON.stringify(feedbackEvent) + "\n", "utf-8").catch(() => {
+      // Best effort — transcript dir may not exist yet
+    });
+  } catch {
+    // Best effort
+  }
+
+  // For negative feedback, trigger background reflection
+  if (isNegative && msteamsCfg?.feedbackReflection !== false) {
+    // Ack to user
+    try {
+      await context.sendActivity("Thanks for the feedback \u2014 I'll reflect on this.");
+    } catch {
+      // Best effort
+    }
+
+    // Build conversation reference for proactive follow-up
+    const conversationRef = {
+      activityId: activity.id,
+      user: {
+        id: activity.from?.id,
+        name: activity.from?.name,
+        aadObjectId: activity.from?.aadObjectId,
+      },
+      agent: activity.recipient
+        ? { id: activity.recipient.id, name: activity.recipient.name }
+        : undefined,
+      bot: activity.recipient
+        ? { id: activity.recipient.id, name: activity.recipient.name }
+        : undefined,
+      conversation: {
+        id: conversationId,
+        conversationType: activity.conversation?.conversationType,
+        tenantId: activity.conversation?.tenantId,
+      },
+      channelId: activity.channelId ?? "msteams",
+      serviceUrl: activity.serviceUrl,
+      locale: activity.locale,
+    };
+
+    // Fire-and-forget: don't block the invoke response
+    runFeedbackReflection({
+      cfg: deps.cfg,
+      adapter: deps.adapter,
+      appId: deps.appId,
+      conversationRef,
+      sessionKey: route.sessionKey,
+      agentId: route.agentId,
+      conversationId,
+      feedbackMessageId: messageId,
+      userComment,
+      log: deps.log,
+    }).catch((err) => {
+      deps.log.error("feedback reflection failed", { error: String(err) });
+    });
+  }
+
+  return true;
+}
+
 export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   handler: T,
   deps: MSTeamsMessageHandlerDeps,
@@ -168,6 +299,16 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         }
         return;
       }
+
+      // Handle feedback invokes (thumbs up/down on AI-generated messages)
+      if (ctx.activity?.type === "invoke" && ctx.activity?.name === "message/submitAction") {
+        const handled = await handleFeedbackInvoke(ctx, deps);
+        if (handled) {
+          await ctx.sendActivity({ type: "invokeResponse", value: { status: 200 } });
+          return;
+        }
+      }
+
       return originalRun.call(handler, context);
     };
   }
@@ -182,11 +323,51 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   });
 
   handler.onMembersAdded(async (context, next) => {
-    const membersAdded = (context as MSTeamsTurnContext).activity?.membersAdded ?? [];
+    const ctx = context as MSTeamsTurnContext;
+    const membersAdded = ctx.activity?.membersAdded ?? [];
+    const botId = ctx.activity?.recipient?.id;
+    const msteamsCfg = deps.cfg.channels?.msteams;
+
     for (const member of membersAdded) {
-      if (member.id !== (context as MSTeamsTurnContext).activity?.recipient?.id) {
+      if (member.id === botId) {
+        // Bot was added to a conversation — send welcome card if configured.
+        const conversationType =
+          ctx.activity?.conversation?.conversationType?.toLowerCase() ?? "personal";
+        const isPersonal = conversationType === "personal";
+
+        if (isPersonal && msteamsCfg?.welcomeCard !== false) {
+          const botName = ctx.activity?.recipient?.name ?? undefined;
+          const card = buildWelcomeCard({
+            botName,
+            promptStarters: msteamsCfg?.promptStarters,
+          });
+          try {
+            await ctx.sendActivity({
+              type: "message",
+              attachments: [
+                {
+                  contentType: "application/vnd.microsoft.card.adaptive",
+                  content: card,
+                },
+              ],
+            });
+            deps.log.info("sent welcome card");
+          } catch (err) {
+            deps.log.debug?.("failed to send welcome card", { error: String(err) });
+          }
+        } else if (!isPersonal && msteamsCfg?.groupWelcomeCard === true) {
+          const botName = ctx.activity?.recipient?.name ?? undefined;
+          try {
+            await ctx.sendActivity(buildGroupWelcomeText(botName));
+            deps.log.info("sent group welcome message");
+          } catch (err) {
+            deps.log.debug?.("failed to send group welcome", { error: String(err) });
+          }
+        } else {
+          deps.log.debug?.("skipping welcome (disabled by config or conversation type)");
+        }
+      } else {
         deps.log.debug?.("member added", { member: member.id });
-        // Don't send welcome message - let the user initiate conversation.
       }
     }
     await next();
