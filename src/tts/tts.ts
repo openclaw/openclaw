@@ -195,6 +195,7 @@ export type TtsDirectiveOverrides = {
     lang?: string;
     outputFormat?: string;
   };
+};
 
 export type TtsDirectiveParseResult = {
   cleanedText: string;
