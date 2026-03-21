@@ -31,8 +31,8 @@ describe("DeepInfra provider config", () => {
       expect(DEEPINFRA_DEFAULT_MODEL_REF).toBe(`deepinfra/${DEEPINFRA_DEFAULT_MODEL_ID}`);
     });
 
-    it("DEEPINFRA_DEFAULT_MODEL_ID is openai/gpt-oss-120b", () => {
-      expect(DEEPINFRA_DEFAULT_MODEL_ID).toBe("openai/gpt-oss-120b");
+    it("DEEPINFRA_DEFAULT_MODEL_ID is zai-org/GLM-5", () => {
+      expect(DEEPINFRA_DEFAULT_MODEL_ID).toBe("zai-org/GLM-5");
     });
 
     it("DEEPINFRA_DEFAULT_CONTEXT_WINDOW is 128000", () => {

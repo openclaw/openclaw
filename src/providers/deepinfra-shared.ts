@@ -1,5 +1,5 @@
 export const DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai/";
-export const DEEPINFRA_DEFAULT_MODEL_ID = "openai/gpt-oss-120b";
+export const DEEPINFRA_DEFAULT_MODEL_ID = "zai-org/GLM-5";
 export const DEEPINFRA_DEFAULT_MODEL_REF = `deepinfra/${DEEPINFRA_DEFAULT_MODEL_ID}`;
 export type DeepInfraModelCatalogEntry = {
   id: string;
@@ -10,7 +10,7 @@ export type DeepInfraModelCatalogEntry = {
   maxTokens: number;
 };
 
-const DEEPINFRA_DEFAULT_MODEL_NAME = "gpt-oss-120b";
+const DEEPINFRA_DEFAULT_MODEL_NAME = "GLM-5";
 
 /**
  * Static fallback catalog used by the sync onboarding path and as a
@@ -24,8 +24,8 @@ export const DEEPINFRA_MODEL_CATALOG: DeepInfraModelCatalogEntry[] = [
     name: DEEPINFRA_DEFAULT_MODEL_NAME,
     reasoning: true,
     input: ["text"],
-    contextWindow: 131072,
-    maxTokens: 131072,
+    contextWindow: 202752,
+    maxTokens: 202752,
   },
   {
     id: "MiniMaxAI/MiniMax-M2.5",
@@ -36,12 +36,12 @@ export const DEEPINFRA_MODEL_CATALOG: DeepInfraModelCatalogEntry[] = [
     maxTokens: 196608,
   },
   {
-    id: "zai-org/GLM-5",
-    name: "GLM 5",
+    id: "openai/gpt-oss-120b",
+    name: "gpt-oss-120b",
     reasoning: true,
     input: ["text"],
-    contextWindow: 202752,
-    maxTokens: 202752,
+    contextWindow: 131072,
+    maxTokens: 131072,
   },
   {
     id: "moonshotai/Kimi-K2.5",
