@@ -23,11 +23,24 @@ const SESSION_KEY_COMPAT_METHODS = [
   "assemble",
   "compact",
 ] as const;
+const LEGACY_COMPAT_PARAMS = ["sessionKey", "prompt"] as const;
+const LEGACY_COMPAT_METHOD_KEYS = {
+  bootstrap: ["sessionKey"],
+  maintain: ["sessionKey"],
+  ingest: ["sessionKey"],
+  ingestBatch: ["sessionKey"],
+  afterTurn: ["sessionKey"],
+  assemble: ["sessionKey", "prompt"],
+  compact: ["sessionKey"],
+} as const;
 
 type SessionKeyCompatMethodName = (typeof SESSION_KEY_COMPAT_METHODS)[number];
 type SessionKeyCompatParams = {
   sessionKey?: string;
+  prompt?: string;
 };
+type LegacyCompatKey = (typeof LEGACY_COMPAT_PARAMS)[number];
+type LegacyCompatParamMap = Partial<Record<LegacyCompatKey, unknown>>;
 
 function isSessionKeyCompatMethodName(value: PropertyKey): value is SessionKeyCompatMethodName {
   return (
@@ -35,21 +48,29 @@ function isSessionKeyCompatMethodName(value: PropertyKey): value is SessionKeyCo
   );
 }
 
-function hasOwnSessionKey(params: unknown): params is SessionKeyCompatParams {
+function hasOwnLegacyCompatKey<K extends LegacyCompatKey>(
+  params: unknown,
+  key: K,
+): params is SessionKeyCompatParams & Required<Pick<LegacyCompatParamMap, K>> {
   return (
     params !== null &&
     typeof params === "object" &&
-    Object.prototype.hasOwnProperty.call(params, "sessionKey")
+    Object.prototype.hasOwnProperty.call(params, key)
   );
 }
 
-function withoutSessionKey<T extends SessionKeyCompatParams>(params: T): T {
+function withoutLegacyCompatKeys<T extends SessionKeyCompatParams>(
+  params: T,
+  keys: Iterable<LegacyCompatKey>,
+): T {
   const legacyParams = { ...params };
-  delete legacyParams.sessionKey;
+  for (const key of keys) {
+    delete legacyParams[key];
+  }
   return legacyParams;
 }
 
-function issueRejectsSessionKeyStrictly(issue: unknown): boolean {
+function issueRejectsLegacyCompatKeyStrictly(issue: unknown, key: LegacyCompatKey): boolean {
   if (!issue || typeof issue !== "object") {
     return false;
   }
@@ -62,12 +83,12 @@ function issueRejectsSessionKeyStrictly(issue: unknown): boolean {
   if (
     issueRecord.code === "unrecognized_keys" &&
     Array.isArray(issueRecord.keys) &&
-    issueRecord.keys.some((key) => key === "sessionKey")
+    issueRecord.keys.some((issueKey) => issueKey === key)
   ) {
     return true;
   }
 
-  return isSessionKeyCompatibilityError(issueRecord.message);
+  return isLegacyCompatErrorForKey(issueRecord.message, key);
 }
 
 function* iterateErrorChain(error: unknown) {
@@ -83,31 +104,45 @@ function* iterateErrorChain(error: unknown) {
   }
 }
 
-const SESSION_KEY_UNKNOWN_FIELD_PATTERNS = [
-  /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]sessionKey['"`]/i,
-  /\badditional propert(?:y|ies)\b.*['"`]sessionKey['"`]/i,
-  /\bmust not have additional propert(?:y|ies)\b.*['"`]sessionKey['"`]/i,
-  /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]sessionKey['"`]/i,
-  /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]sessionKey['"`]/i,
-  /['"`]sessionKey['"`].*\b(?:was|is)\s+not allowed\b/i,
-  /"code"\s*:\s*"unrecognized_keys"[^]*"sessionKey"/i,
-] as const;
+const LEGACY_UNKNOWN_FIELD_PATTERNS: Record<LegacyCompatKey, readonly RegExp[]> = {
+  sessionKey: [
+    /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]sessionKey['"`]/i,
+    /\badditional propert(?:y|ies)\b.*['"`]sessionKey['"`]/i,
+    /\bmust not have additional propert(?:y|ies)\b.*['"`]sessionKey['"`]/i,
+    /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]sessionKey['"`]/i,
+    /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]sessionKey['"`]/i,
+    /['"`]sessionKey['"`].*\b(?:was|is)\s+not allowed\b/i,
+    /"code"\s*:\s*"unrecognized_keys"[^]*"sessionKey"/i,
+  ],
+  prompt: [
+    /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]prompt['"`]/i,
+    /\badditional propert(?:y|ies)\b.*['"`]prompt['"`]/i,
+    /\bmust not have additional propert(?:y|ies)\b.*['"`]prompt['"`]/i,
+    /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]prompt['"`]/i,
+    /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]prompt['"`]/i,
+    /['"`]prompt['"`].*\b(?:was|is)\s+not allowed\b/i,
+    /"code"\s*:\s*"unrecognized_keys"[^]*"prompt"/i,
+  ],
+} as const;
 
-function isSessionKeyUnknownFieldValidationMessage(message: string): boolean {
-  return SESSION_KEY_UNKNOWN_FIELD_PATTERNS.some((pattern) => pattern.test(message));
+function isLegacyCompatUnknownFieldValidationMessage(
+  message: string,
+  key: LegacyCompatKey,
+): boolean {
+  return LEGACY_UNKNOWN_FIELD_PATTERNS[key].some((pattern) => pattern.test(message));
 }
 
-function isSessionKeyCompatibilityError(error: unknown): boolean {
+function isLegacyCompatErrorForKey(error: unknown, key: LegacyCompatKey): boolean {
   for (const candidate of iterateErrorChain(error)) {
     if (Array.isArray(candidate)) {
-      if (candidate.some((entry) => issueRejectsSessionKeyStrictly(entry))) {
+      if (candidate.some((entry) => issueRejectsLegacyCompatKeyStrictly(entry, key))) {
         return true;
       }
       continue;
     }
 
     if (typeof candidate === "string") {
-      if (isSessionKeyUnknownFieldValidationMessage(candidate)) {
+      if (isLegacyCompatUnknownFieldValidationMessage(candidate, key)) {
         return true;
       }
       continue;
@@ -125,21 +160,21 @@ function isSessionKeyCompatibilityError(error: unknown): boolean {
 
     if (
       Array.isArray(issueContainer.issues) &&
-      issueContainer.issues.some((issue) => issueRejectsSessionKeyStrictly(issue))
+      issueContainer.issues.some((issue) => issueRejectsLegacyCompatKeyStrictly(issue, key))
     ) {
       return true;
     }
 
     if (
       Array.isArray(issueContainer.errors) &&
-      issueContainer.errors.some((issue) => issueRejectsSessionKeyStrictly(issue))
+      issueContainer.errors.some((issue) => issueRejectsLegacyCompatKeyStrictly(issue, key))
     ) {
       return true;
     }
 
     if (
       typeof issueContainer.message === "string" &&
-      isSessionKeyUnknownFieldValidationMessage(issueContainer.message)
+      isLegacyCompatUnknownFieldValidationMessage(issueContainer.message, key)
     ) {
       return true;
     }
@@ -148,25 +183,66 @@ function isSessionKeyCompatibilityError(error: unknown): boolean {
   return false;
 }
 
-async function invokeWithLegacySessionKeyCompat<TResult, TParams extends SessionKeyCompatParams>(
+function detectRejectedLegacyCompatKeys(
+  error: unknown,
+  allowedKeys: readonly LegacyCompatKey[],
+): Set<LegacyCompatKey> {
+  const rejectedKeys = new Set<LegacyCompatKey>();
+  for (const key of allowedKeys) {
+    if (isLegacyCompatErrorForKey(error, key)) {
+      rejectedKeys.add(key);
+    }
+  }
+  return rejectedKeys;
+}
+
+async function invokeWithLegacyCompat<TResult, TParams extends SessionKeyCompatParams>(
   method: (params: TParams) => Promise<TResult> | TResult,
   params: TParams,
+  allowedKeys: readonly LegacyCompatKey[],
   opts?: {
     onLegacyModeDetected?: () => void;
+    onLegacyKeysDetected?: (keys: Set<LegacyCompatKey>) => void;
+    rejectedKeys?: ReadonlySet<LegacyCompatKey>;
   },
 ): Promise<TResult> {
-  if (!hasOwnSessionKey(params)) {
+  const activeRejectedKeys = new Set(opts?.rejectedKeys ?? []);
+  const availableKeys = allowedKeys.filter((key) => hasOwnLegacyCompatKey(params, key));
+  if (availableKeys.length === 0) {
     return await method(params);
   }
 
+  let currentParams =
+    activeRejectedKeys.size > 0 ? withoutLegacyCompatKeys(params, activeRejectedKeys) : params;
+
   try {
-    return await method(params);
+    return await method(currentParams);
   } catch (error) {
-    if (!isSessionKeyCompatibilityError(error)) {
-      throw error;
+    let currentError = error;
+    while (true) {
+      const rejectedKeys = detectRejectedLegacyCompatKeys(currentError, availableKeys);
+      let learnedNewKey = false;
+      for (const key of rejectedKeys) {
+        if (!activeRejectedKeys.has(key)) {
+          activeRejectedKeys.add(key);
+          learnedNewKey = true;
+        }
+      }
+
+      if (!learnedNewKey) {
+        throw currentError;
+      }
+
+      opts?.onLegacyModeDetected?.();
+      opts?.onLegacyKeysDetected?.(rejectedKeys);
+      currentParams = withoutLegacyCompatKeys(params, activeRejectedKeys);
+
+      try {
+        return await method(currentParams);
+      } catch (retryError) {
+        currentError = retryError;
+      }
     }
-    opts?.onLegacyModeDetected?.();
-    return await method(withoutSessionKey(params));
   }
 }
 
@@ -179,6 +255,7 @@ function wrapContextEngineWithSessionKeyCompat(engine: ContextEngine): ContextEn
   }
 
   let isLegacy = false;
+  const rejectedKeys = new Set<LegacyCompatKey>();
   const proxy: ContextEngine = new Proxy(engine, {
     get(target, property, receiver) {
       if (property === LEGACY_SESSION_KEY_COMPAT) {
@@ -196,13 +273,23 @@ function wrapContextEngineWithSessionKeyCompat(engine: ContextEngine): ContextEn
 
       return (params: SessionKeyCompatParams) => {
         const method = value.bind(target) as (params: SessionKeyCompatParams) => unknown;
-        if (isLegacy && hasOwnSessionKey(params)) {
-          return method(withoutSessionKey(params));
+        const allowedKeys = LEGACY_COMPAT_METHOD_KEYS[property];
+        if (
+          isLegacy &&
+          allowedKeys.some((key) => rejectedKeys.has(key) && hasOwnLegacyCompatKey(params, key))
+        ) {
+          return method(withoutLegacyCompatKeys(params, rejectedKeys));
         }
-        return invokeWithLegacySessionKeyCompat(method, params, {
+        return invokeWithLegacyCompat(method, params, allowedKeys, {
           onLegacyModeDetected: () => {
             isLegacy = true;
           },
+          onLegacyKeysDetected: (keys) => {
+            for (const key of keys) {
+              rejectedKeys.add(key);
+            }
+          },
+          rejectedKeys,
         });
       };
     },
