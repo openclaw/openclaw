@@ -58,8 +58,10 @@ describe("memory manager sync failures", () => {
       },
     } as OpenClawConfig;
 
-    manager = await getRequiredMemoryIndexManager({ cfg, agentId: "main" });
-    const syncSpy = vi.spyOn(manager, "sync");
+    manager = await getRequiredMemoryIndexManager({ cfg, agentId: "main", purpose: "status" });
+    const syncSpy = vi
+      .spyOn(manager, "sync")
+      .mockRejectedValueOnce(new Error("openai embeddings failed: 400 bad request"));
 
     // Call the internal scheduler directly; it uses fire-and-forget sync.
     (manager as unknown as { scheduleWatchSync: () => void }).scheduleWatchSync();
