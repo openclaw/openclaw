@@ -9,6 +9,7 @@ export type { DiscordConfig, DiscordPluralKitConfig } from "../config/types.disc
 export type { InspectedDiscordAccount } from "../../extensions/discord/api.js";
 export type { ResolvedDiscordAccount } from "../../extensions/discord/api.js";
 export type { DiscordSendComponents, DiscordSendEmbeds } from "../../extensions/discord/api.js";
+export type { DiscordComponentMessageSpec } from "../../extensions/discord/api.js";
 export type {
   ThreadBindingManager,
   ThreadBindingRecord,
@@ -64,8 +65,10 @@ export {
 } from "./status-helpers.js";
 
 export {
+  buildDiscordComponentMessage,
   createDiscordActionGate,
   listDiscordAccountIds,
+  resolveDiscordAccount,
   resolveDefaultDiscordAccountId,
 } from "../../extensions/discord/api.js";
 export { inspectDiscordAccount } from "../../extensions/discord/api.js";
@@ -105,6 +108,8 @@ export {
   createScheduledEventDiscord,
   createThreadDiscord,
   deleteChannelDiscord,
+  editDiscordComponentMessage,
+  registerBuiltDiscordComponentMessage,
   deleteMessageDiscord,
   editChannelDiscord,
   editMessageDiscord,
