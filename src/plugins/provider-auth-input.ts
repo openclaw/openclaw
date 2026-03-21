@@ -1,4 +1,5 @@
 import {
+  normalizeProviderId,
   loadAuthProfileStore,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
@@ -7,6 +8,7 @@ import {
 import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
+  coerceSecretRef,
   isValidEnvSecretRefId,
   parseEnvTemplateSecretRef,
   type SecretInput,
@@ -169,6 +171,19 @@ async function loadScopedAuthProfileStore(agentDir?: string): Promise<AuthProfil
   }
 }
 
+function resolveProviderApiKeyRef(params: {
+  config: OpenClawConfig;
+  provider: string;
+}): SecretRef | null {
+  const providers = params.config.models?.providers ?? {};
+  const providerEntry =
+    providers[params.provider] ??
+    Object.entries(providers).find(
+      ([key]) => normalizeProviderId(key) === normalizeProviderId(params.provider),
+    )?.[1];
+  return coerceSecretRef(providerEntry?.apiKey, params.config.secrets?.defaults);
+}
+
 async function resolveExistingProviderApiKey(params: {
   config: OpenClawConfig;
   provider: string;
@@ -235,6 +250,28 @@ async function resolveExistingProviderApiKey(params: {
         source: envKey.source,
         credential: envKey.apiKey,
       };
+    }
+
+    const configApiKeyRef = resolveProviderApiKeyRef({
+      config: params.config,
+      provider: params.provider,
+    });
+    if (configApiKeyRef) {
+      try {
+        const resolvedValue = await resolveSecretRefString(configApiKeyRef, {
+          config: params.config,
+          env: process.env,
+        });
+        if (resolvedValue.trim()) {
+          return {
+            apiKey: resolvedValue,
+            source: "models.json",
+            credential: configApiKeyRef,
+          };
+        }
+      } catch {
+        // Fall through to other config-backed detection paths.
+      }
     }
 
     const configApiKey = resolveUsableCustomProviderApiKey({

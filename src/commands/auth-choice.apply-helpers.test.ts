@@ -11,6 +11,7 @@ import {
 
 const ORIGINAL_MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
 const ORIGINAL_MINIMAX_OAUTH_TOKEN = process.env.MINIMAX_OAUTH_TOKEN;
+const ORIGINAL_CUSTOM_MINIMAX_API_KEY = process.env.CUSTOM_MINIMAX_API_KEY;
 
 function restoreMinimaxEnv(): void {
   if (ORIGINAL_MINIMAX_API_KEY === undefined) {
@@ -22,6 +23,11 @@ function restoreMinimaxEnv(): void {
     delete process.env.MINIMAX_OAUTH_TOKEN;
   } else {
     process.env.MINIMAX_OAUTH_TOKEN = ORIGINAL_MINIMAX_OAUTH_TOKEN;
+  }
+  if (ORIGINAL_CUSTOM_MINIMAX_API_KEY === undefined) {
+    delete process.env.CUSTOM_MINIMAX_API_KEY;
+  } else {
+    process.env.CUSTOM_MINIMAX_API_KEY = ORIGINAL_CUSTOM_MINIMAX_API_KEY;
   }
 }
 
@@ -559,6 +565,47 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
+  });
+
+  it("reuses SecretRef-valued models.json API keys without flattening them", async () => {
+    delete process.env.MINIMAX_API_KEY;
+    process.env.CUSTOM_MINIMAX_API_KEY = "ref-models-key"; // pragma: allowlist secret
+    delete process.env.MINIMAX_OAUTH_TOKEN;
+
+    const { confirm, text, setCredential } = createPromptAndCredentialSpies({
+      confirmResult: true,
+      textResult: "prompt-key",
+    });
+
+    const result = await ensureMinimaxApiKey({
+      confirm,
+      text,
+      setCredential,
+      config: {
+        secrets: {
+          providers: {
+            shellenv: { source: "env" },
+          },
+          defaults: {
+            env: "shellenv",
+          },
+        },
+        models: {
+          providers: {
+            minimax: {
+              apiKey: { source: "env", provider: "shellenv", id: "CUSTOM_MINIMAX_API_KEY" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBe("ref-models-key");
+    expect(setCredential).toHaveBeenCalledWith(
+      { source: "env", provider: "shellenv", id: "CUSTOM_MINIMAX_API_KEY" },
+      "plaintext",
+    );
+    expect(text).not.toHaveBeenCalled();
   });
 
   it("does not reuse the main agent store for a secondary agent prompt", async () => {

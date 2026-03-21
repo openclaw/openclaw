@@ -62,6 +62,7 @@ export async function applyLiteLlmApiKeyProvider({
       tokenProvider: normalizedTokenProvider,
       secretInputMode: requestedSecretInputMode,
       config: nextConfig,
+      agentDir: params.agentDir,
       expectedProviders: ["litellm"],
       provider: "litellm",
       envLabel: "LITELLM_API_KEY",

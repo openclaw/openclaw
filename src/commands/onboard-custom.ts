@@ -430,6 +430,7 @@ async function requestAnthropicVerification(params: {
 async function promptBaseUrlAndKey(params: {
   prompter: WizardPrompter;
   config: OpenClawConfig;
+  agentDir?: string;
   secretInputMode?: SecretInputMode;
   initialBaseUrl?: string;
 }): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string }> {
@@ -451,6 +452,7 @@ async function promptBaseUrlAndKey(params: {
   let apiKeyInput: SecretInput | undefined;
   const resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
+    agentDir: params.agentDir,
     provider: providerHint,
     envLabel: "CUSTOM_API_KEY",
     promptMessage: "API Key (leave blank if not required)",
@@ -495,6 +497,7 @@ async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string>
 async function applyCustomApiRetryChoice(params: {
   prompter: WizardPrompter;
   config: OpenClawConfig;
+  agentDir?: string;
   secretInputMode?: SecretInputMode;
   retryChoice: CustomApiRetryChoice;
   current: { baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string };
@@ -504,6 +507,7 @@ async function applyCustomApiRetryChoice(params: {
     const retryInput = await promptBaseUrlAndKey({
       prompter: params.prompter,
       config: params.config,
+      agentDir: params.agentDir,
       secretInputMode: params.secretInputMode,
       initialBaseUrl: baseUrl,
     });
@@ -769,6 +773,7 @@ export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   config: OpenClawConfig;
+  agentDir?: string;
   secretInputMode?: SecretInputMode;
 }): Promise<CustomApiResult> {
   const { prompter, runtime, config } = params;
@@ -776,6 +781,7 @@ export async function promptCustomApiConfig(params: {
   const baseInput = await promptBaseUrlAndKey({
     prompter,
     config,
+    agentDir: params.agentDir,
     secretInputMode: params.secretInputMode,
   });
   let baseUrl = baseInput.baseUrl;
@@ -829,6 +835,7 @@ export async function promptCustomApiConfig(params: {
           ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
             prompter,
             config,
+            agentDir: params.agentDir,
             secretInputMode: params.secretInputMode,
             retryChoice,
             current: { baseUrl, apiKey, resolvedApiKey, modelId },
@@ -860,6 +867,7 @@ export async function promptCustomApiConfig(params: {
     ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
       prompter,
       config,
+      agentDir: params.agentDir,
       secretInputMode: params.secretInputMode,
       retryChoice,
       current: { baseUrl, apiKey, resolvedApiKey, modelId },
