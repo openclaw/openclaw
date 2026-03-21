@@ -61,6 +61,7 @@ const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_AZURE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -119,7 +120,17 @@ export type ResolvedTtsConfig = {
     speed?: number;
     instructions?: string;
   };
-  edge: {
+  
+  azure: {
+    apiKey?: string;
+    region: string;
+    baseUrl: string;
+    voice: string;
+    lang: string;
+    outputFormat: string;
+    timeoutMs?: number;
+  };
+edge: {
     enabled: boolean;
     voice: string;
     lang: string;
@@ -179,7 +190,11 @@ export type TtsDirectiveOverrides = {
     voice?: string;
     outputFormat?: string;
   };
-};
+  azure?: {
+    voice?: string;
+    lang?: string;
+    outputFormat?: string;
+  };
 
 export type TtsDirectiveParseResult = {
   cleanedText: string;
@@ -325,6 +340,18 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
       speed: raw.openai?.speed,
       instructions: raw.openai?.instructions?.trim() || undefined,
+    },
+    azure: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.azure?.apiKey,
+        path: "messages.tts.azure.apiKey",
+      }),
+      region: raw.azure?.region?.trim() || process.env.AZURE_SPEECH_REGION || "eastus",
+      baseUrl: raw.azure?.baseUrl?.trim() || "",
+      voice: raw.azure?.voice || "",
+      lang: raw.azure?.lang?.trim() || "en-US",
+      outputFormat: raw.azure?.outputFormat?.trim() || DEFAULT_AZURE_OUTPUT_FORMAT,
+      timeoutMs: raw.azure?.timeoutMs,
     },
     edge: {
       enabled: rawMicrosoft.enabled ?? true,

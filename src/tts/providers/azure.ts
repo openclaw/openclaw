@@ -27,9 +27,11 @@ export async function listAzureVoices(params: {
   region?: string;
   baseUrl?: string;
 }): Promise<SpeechVoiceOption[]> {
-  const base = normalizeAzureBaseUrl(params.baseUrl);
   const region = params.region || "eastus";
-  const url = `https://${region}.tts.speech.microsoft.com/cognitiveservices/voices/list`;
+  // Use baseUrl if provided, otherwise derive from region
+  const url = params.baseUrl
+    ? `${normalizeAzureBaseUrl(params.baseUrl)}/cognitiveservices/voices/list`
+    : `https://${region}.tts.speech.microsoft.com/cognitiveservices/voices/list`;
 
   const response = await fetch(url, {
     headers: {
@@ -42,8 +44,10 @@ export async function listAzureVoices(params: {
   }
 
   const voices = (await response.json()) as AzureVoiceListEntry[];
+  // Filter deprecated voices BEFORE mapping (Status field is available here)
   return Array.isArray(voices)
     ? voices
+        .filter((voice) => voice.Status !== "Deprecated")
         .map((voice) => ({
           id: voice.ShortName?.trim() ?? "",
           name: voice.DisplayName?.trim() || voice.ShortName?.trim() || undefined,
@@ -51,7 +55,7 @@ export async function listAzureVoices(params: {
           locale: voice.Locale?.trim() || undefined,
           gender: voice.Gender?.trim() || undefined,
         }))
-        .filter((voice) => voice.id.length > 0 && voice.Status !== "Deprecated")
+        .filter((voice) => voice.id.length > 0)
     : [];
 }
 
@@ -74,43 +78,46 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
     listVoices: async (req) => {
       const apiKey =
         req.apiKey ||
-        req.config?.azure?.apiKey ||
+        (req.config as any)?.azure?.apiKey ||
         process.env.AZURE_SPEECH_API_KEY;
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }
       return listAzureVoices({
         apiKey,
-        region: req.config?.azure?.region || process.env.AZURE_SPEECH_REGION,
-        baseUrl: req.config?.azure?.baseUrl,
+        region: (req.config as any)?.azure?.region || process.env.AZURE_SPEECH_REGION,
+        baseUrl: (req.config as any)?.azure?.baseUrl,
       });
     },
     isConfigured: ({ config }) =>
       Boolean(
-        config.azure?.apiKey ||
+        (config as any)?.azure?.apiKey ||
           process.env.AZURE_SPEECH_API_KEY,
       ),
     synthesize: async (req) => {
       const apiKey =
-        req.config.azure?.apiKey || process.env.AZURE_SPEECH_API_KEY;
+        (req.config as any)?.azure?.apiKey || process.env.AZURE_SPEECH_API_KEY;
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }
 
-      const region = req.config?.azure?.region || process.env.AZURE_SPEECH_REGION || "eastus";
-      const baseUrl = normalizeAzureBaseUrl(req.config?.azure?.baseUrl);
-      const voice = req.overrides?.azure?.voice ?? req.config?.azure?.voice;
-      const lang = req.overrides?.azure?.lang ?? req.config?.azure?.lang;
+      const region = (req.config as any)?.azure?.region || process.env.AZURE_SPEECH_REGION || "eastus";
+      const baseUrl = (req.config as any)?.azure?.baseUrl;
+      // Use baseUrl if provided, otherwise derive from region
+      const endpoint = baseUrl
+        ? `${normalizeAzureBaseUrl(baseUrl)}/cognitiveservices/v1`
+        : `https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`;
+
+      const voice = (req.config as any)?.azure?.voice;
+      const lang = (req.config as any)?.azure?.lang;
       const outputFormat =
-        req.overrides?.azure?.outputFormat ??
-        req.config?.azure?.outputFormat ??
+        (req.config as any)?.azure?.outputFormat ??
         DEFAULT_AZURE_OUTPUT_FORMAT;
 
       if (!voice) {
         throw new Error("Azure voice not configured");
       }
 
-      const endpoint = `${baseUrl}/cognitiveservices/v1`;
       const ssml = buildAzureSSML(req.text, voice, lang);
 
       const response = await fetch(endpoint, {
@@ -121,6 +128,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
           "X-Microsoft-OutputFormat": outputFormat,
         },
         body: ssml,
+        signal: AbortSignal.timeout((req.config as any)?.azure?.timeoutMs ?? 30000),
       });
 
       if (!response.ok) {
