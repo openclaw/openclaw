@@ -43,7 +43,12 @@ function extractPermissionError(err: unknown): FeishuPermissionError | null {
     return null;
   }
   const feishuErr = data as { code?: number; msg?: string };
-  if (feishuErr.code !== 99991672) {
+  // Feishu permission/scope error codes: 99991401 (scope not granted) and 99991672 (permission denied)
+  const isPermissionError =
+    feishuErr.code === 99991672 ||
+    feishuErr.code === 99991401 ||
+    (feishuErr.code !== 0 && typeof feishuErr.code === "number" && feishuErr.msg?.toLowerCase().includes("permission"));
+  if (!isPermissionError) {
     return null;
   }
   const msg = feishuErr.msg ?? "";
