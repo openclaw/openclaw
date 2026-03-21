@@ -1,17 +1,6 @@
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveAllowFromMode, type AllowFromMode } from "./allow-from-mode.js";
 import { asObjectRecord } from "./object.js";
-
-type OpenPolicyAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
-
-function resolveAllowFromMode(channelName: string): OpenPolicyAllowFromMode {
-  if (channelName === "googlechat") {
-    return "nestedOnly";
-  }
-  if (channelName === "discord" || channelName === "slack") {
-    return "topOrNested";
-  }
-  return "topOnly";
-}
 
 function hasWildcard(list?: Array<string | number>) {
   return list?.some((v) => String(v).trim() === "*") ?? false;
@@ -32,7 +21,7 @@ export function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
   const ensureWildcard = (
     account: Record<string, unknown>,
     prefix: string,
-    mode: OpenPolicyAllowFromMode,
+    mode: AllowFromMode,
   ) => {
     const dmEntry = account.dm;
     const dm =

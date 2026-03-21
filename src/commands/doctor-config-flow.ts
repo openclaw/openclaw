@@ -58,6 +58,7 @@ import {
   scanDiscordNumericIdEntries,
 } from "./doctor/providers/discord.js";
 import {
+  collectTelegramGroupPolicyWarnings,
   maybeRepairTelegramAllowFromUsernames,
   scanTelegramAllowFromUsernameEntries,
 } from "./doctor/providers/telegram.js";
@@ -280,6 +281,21 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
     parent?: Record<string, unknown>,
     channelName?: string,
   ) => {
+    const accountDm = asObjectRecord(account.dm);
+    const parentDm = asObjectRecord(parent?.dm);
+    const dmPolicy =
+      (account.dmPolicy as string | undefined) ??
+      (accountDm?.policy as string | undefined) ??
+      (parent?.dmPolicy as string | undefined) ??
+      (parentDm?.policy as string | undefined) ??
+      undefined;
+    const effectiveAllowFrom =
+      (account.allowFrom as Array<string | number> | undefined) ??
+      (parent?.allowFrom as Array<string | number> | undefined) ??
+      (accountDm?.allowFrom as Array<string | number> | undefined) ??
+      (parentDm?.allowFrom as Array<string | number> | undefined) ??
+      undefined;
+
     warnings.push(
       ...collectEmptyAllowlistPolicyWarningsForAccount({
         account,
@@ -289,6 +305,22 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
         prefix,
       }),
     );
+    if (
+      channelName === "telegram" &&
+      ((account.groupPolicy as string | undefined) ??
+        (parent?.groupPolicy as string | undefined) ??
+        undefined) === "allowlist"
+    ) {
+      warnings.push(
+        ...collectTelegramGroupPolicyWarnings({
+          account,
+          dmPolicy,
+          effectiveAllowFrom,
+          parent,
+          prefix,
+        }),
+      );
+    }
   };
 
   for (const [channelName, channelConfig] of Object.entries(

@@ -2,20 +2,9 @@ import { normalizeChatChannelId } from "../../../channels/registry.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
+import { resolveAllowFromMode, type AllowFromMode } from "./allow-from-mode.js";
 import { hasAllowFromEntries } from "./allowlist.js";
 import { asObjectRecord } from "./object.js";
-
-type AllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
-
-function resolveAllowFromMode(channelName: string): AllowFromMode {
-  if (channelName === "googlechat") {
-    return "nestedOnly";
-  }
-  if (channelName === "discord" || channelName === "slack") {
-    return "topOrNested";
-  }
-  return "topOnly";
-}
 
 export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise<{
   config: OpenClawConfig;

@@ -1,4 +1,3 @@
-import { collectTelegramGroupPolicyWarnings } from "../providers/telegram.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 import { hasAllowFromEntries } from "./allowlist.js";
 
@@ -77,15 +76,6 @@ export function collectEmptyAllowlistPolicyWarningsForAccount(
   }
 
   if (params.channelName === "telegram") {
-    warnings.push(
-      ...collectTelegramGroupPolicyWarnings({
-        account: params.account,
-        prefix: params.prefix,
-        effectiveAllowFrom,
-        dmPolicy,
-        parent: params.parent,
-      }),
-    );
     return warnings;
   }
 
