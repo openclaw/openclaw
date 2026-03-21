@@ -208,6 +208,7 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
  */
 export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentMessage[] {
   const out: AgentMessage[] = [];
+  let anyChanged = false;
 
   for (const msg of messages) {
     if (!msg || typeof msg !== "object") {
@@ -252,6 +253,7 @@ export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentM
         continue;
       }
       changed = true;
+      anyChanged = true;
     }
 
     if (!changed) {
@@ -266,5 +268,5 @@ export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentM
     out.push({ ...assistantMsg, content: nextContent } as AgentMessage);
   }
 
-  return out;
+  return anyChanged ? out : messages;
 }
