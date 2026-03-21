@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { CliDeps } from "../../cli/deps.js";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
+import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -58,44 +60,62 @@ export function createGatewayHooksRequestHandler(params: {
     });
   };
 
+  const resolveHookDeliverySessionKey = (params: {
+    value: HookAgentDispatchPayload;
+    sessionKey: string;
+    agentId: string;
+  }) => {
+    const sessionTarget = params.value.sessionTarget ?? "isolated";
+    if (sessionTarget === "isolated") {
+      return undefined;
+    }
+    return resolveCronAgentSessionKey({
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+    });
+  };
+
   const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
     const sessionKey = resolveHookAgentRunSessionKey(value);
     const mainSessionKey = resolveMainSessionKeyFromConfig();
     const jobId = randomUUID();
     const now = Date.now();
-    const job: CronJob = {
-      id: jobId,
-      agentId: value.agentId,
-      name: value.name,
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "at", at: new Date(now).toISOString() },
-      sessionTarget: value.sessionTarget ?? "isolated",
-      wakeMode: value.wakeMode,
-      payload: {
-        kind: "agentTurn",
-        message: value.message,
-        model: value.model,
-        thinking: value.thinking,
-        timeoutSeconds: value.timeoutSeconds,
-        deliver: value.deliver,
-        channel: value.channel,
-        to: value.to,
-        allowUnsafeExternalContent: value.allowUnsafeExternalContent,
-      },
-      state: { nextRunAtMs: now },
-    };
 
     const runId = randomUUID();
     void (async () => {
       try {
         const cfg = loadConfig();
+        const agentId = value.agentId?.trim() || resolveDefaultAgentId(cfg);
+        const job: CronJob = {
+          id: jobId,
+          agentId: value.agentId,
+          name: value.name,
+          enabled: true,
+          createdAtMs: now,
+          updatedAtMs: now,
+          schedule: { kind: "at", at: new Date(now).toISOString() },
+          sessionKey: resolveHookDeliverySessionKey({ value, sessionKey, agentId }),
+          sessionTarget: value.sessionTarget ?? "isolated",
+          wakeMode: value.wakeMode,
+          payload: {
+            kind: "agentTurn",
+            message: value.message,
+            model: value.model,
+            thinking: value.thinking,
+            timeoutSeconds: value.timeoutSeconds,
+            deliver: value.deliver,
+            channel: value.channel,
+            to: value.to,
+            allowUnsafeExternalContent: value.allowUnsafeExternalContent,
+          },
+          state: { nextRunAtMs: now },
+        };
         const result = await runCronIsolatedAgentTurn({
           cfg,
           deps,
           job,
           message: value.message,
+          agentId,
           sessionKey,
           lane: "cron",
           deliveryContract: "shared",

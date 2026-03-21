@@ -362,9 +362,10 @@ describe("gateway server hooks", () => {
       await waitForSystemEvent();
 
       const directCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string; job?: { sessionTarget?: string } }
+        | { sessionKey?: string; job?: { sessionKey?: string; sessionTarget?: string } }
         | undefined;
       expect(directCall?.sessionKey).toBe("main");
+      expect(directCall?.job?.sessionKey).toBe("agent:main:main");
       expect(directCall?.job?.sessionTarget).toBe("main");
       drainSystemEvents(resolveMainKey());
 
@@ -374,9 +375,10 @@ describe("gateway server hooks", () => {
       await waitForSystemEvent();
 
       const mappedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string; job?: { sessionTarget?: string } }
+        | { sessionKey?: string; job?: { sessionKey?: string; sessionTarget?: string } }
         | undefined;
       expect(mappedCall?.sessionKey).toBe("main");
+      expect(mappedCall?.job?.sessionKey).toBe("agent:main:main");
       expect(mappedCall?.job?.sessionTarget).toBe("main");
       drainSystemEvents(resolveMainKey());
     });
@@ -406,9 +408,10 @@ describe("gateway server hooks", () => {
       await waitForSystemEvent();
 
       const directCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string; job?: { sessionTarget?: string } }
+        | { sessionKey?: string; job?: { sessionKey?: string; sessionTarget?: string } }
         | undefined;
       expect(directCall?.sessionKey).toBe("custom-thread");
+      expect(directCall?.job?.sessionKey).toBe("agent:main:custom-thread");
       expect(directCall?.job?.sessionTarget).toBe("session:custom-thread");
       drainSystemEvents(resolveMainKey());
 
@@ -418,9 +421,10 @@ describe("gateway server hooks", () => {
       await waitForSystemEvent();
 
       const mappedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string; job?: { sessionTarget?: string } }
+        | { sessionKey?: string; job?: { sessionKey?: string; sessionTarget?: string } }
         | undefined;
       expect(mappedCall?.sessionKey).toBe("project-alpha");
+      expect(mappedCall?.job?.sessionKey).toBe("agent:main:project-alpha");
       expect(mappedCall?.job?.sessionTarget).toBe("session:project-alpha");
       drainSystemEvents(resolveMainKey());
     });
@@ -454,9 +458,10 @@ describe("gateway server hooks", () => {
       await waitForSystemEvent();
 
       const directCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string; job?: { sessionTarget?: string } }
+        | { sessionKey?: string; job?: { sessionKey?: string; sessionTarget?: string } }
         | undefined;
       expect(directCall?.sessionKey).toBe("hook:direct:current");
+      expect(directCall?.job?.sessionKey).toBeUndefined();
       expect(directCall?.job?.sessionTarget).toBe("isolated");
       drainSystemEvents(resolveMainKey());
 
@@ -466,9 +471,10 @@ describe("gateway server hooks", () => {
       await waitForSystemEvent();
 
       const mappedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string; job?: { sessionTarget?: string } }
+        | { sessionKey?: string; job?: { sessionKey?: string; sessionTarget?: string } }
         | undefined;
       expect(mappedCall?.sessionKey).toBe("hook:mapped:current");
+      expect(mappedCall?.job?.sessionKey).toBeUndefined();
       expect(mappedCall?.job?.sessionTarget).toBe("isolated");
       drainSystemEvents(resolveMainKey());
     });
