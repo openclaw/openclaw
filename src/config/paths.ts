@@ -80,8 +80,11 @@ export function resolveStateDir(
     if (ALL_STATE_DIRNAMES.has(path.basename(resolvedHome))) {
       // Backward compat: if a nested state dir already exists from the old
       // buggy behavior, prefer it so we don't orphan existing state data.
-      // Check all known state dirnames, not just .openclaw.
-      for (const nestedName of ALL_STATE_DIRNAMES) {
+      // Check self-named nested dir first (e.g. .clawdbot/.clawdbot) to avoid
+      // being misled by config-only directories created by doctor migration.
+      const selfName = path.basename(resolvedHome);
+      const orderedNames = [selfName, ...[...ALL_STATE_DIRNAMES].filter(n => n !== selfName)];
+      for (const nestedName of orderedNames) {
         const nestedState = path.join(resolvedHome, nestedName);
         try {
           if (fs.existsSync(nestedState)) {
