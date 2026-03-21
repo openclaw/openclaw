@@ -294,6 +294,33 @@ async function sendFormattedSignalMedia(ctx: {
   return attachChannelToResult("signal", result);
 }
 
+async function sendSignalOutboundChunked(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0][cfg];
+  to: string;
+  text: string;
+  accountId?: string | null;
+  replyToId?: string | null;
+  deps?: { [channelId: string]: unknown };
+}): Promise<{ channel: string; messageId: string }> {
+  const limit = resolveTextChunkLimit(params.cfg, "signal", params.accountId ?? undefined);
+  const chunks = chunkText(params.text, limit ?? SIGNAL_TEXT_CHUNK_LIMIT);
+  let lastResult: { channel: string; messageId: string } | undefined;
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    if (!chunk) continue;
+    const result = await sendSignalOutbound({
+      cfg: params.cfg,
+      to: params.to,
+      text: chunk,
+      accountId: params.accountId ?? undefined,
+      replyToId: i === 0 ? (params.replyToId ?? undefined) : undefined,
+      deps: params.deps,
+    });
+    lastResult = { channel: signal, ...result };
+  }
+  return lastResult ?? { channel: signal, messageId:  };
+}
+
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
   createChatChannelPlugin({
     base: {
@@ -483,23 +510,14 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             return lastResult ?? { channel: "signal", messageId: "" };
           }
           // Text-only: chunk and send; only first chunk carries the quote.
-          const limit = resolveTextChunkLimit(ctx.cfg, signal, ctx.accountId ?? undefined);
-          const chunks = chunkText(text, limit ?? SIGNAL_TEXT_CHUNK_LIMIT);
-          let lastResult: { channel: string; messageId: string } | undefined;
-          for (let i = 0; i < chunks.length; i++) {
-            const chunk = chunks[i];
-            if (!chunk) continue;
-            const result = await sendSignalOutbound({
-              cfg: ctx.cfg,
-              to: ctx.to,
-              text: chunk,
-              accountId: ctx.accountId ?? undefined,
-              replyToId: i === 0 ? (ctx.replyToId ?? undefined) : undefined,
-              deps: ctx.deps,
-            });
-            lastResult = { channel: "signal", ...result };
-          }
-          return lastResult ?? { channel: "signal", messageId: "" };
+          return await sendSignalOutboundChunked({
+            cfg: ctx.cfg,
+            to: ctx.to,
+            text,
+            accountId: ctx.accountId,
+            replyToId: ctx.replyToId,
+            deps: ctx.deps,
+          });
         },
       },
       attachedResults: {

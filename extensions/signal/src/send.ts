@@ -78,8 +78,6 @@ function normalizeSignalQuoteAuthorFromTarget(rawTo: string): string | undefined
   }
   if (lower.startsWith("username:")) {
     value = value.slice("username:".length).trim();
-  } else if (lower.startsWith("u:")) {
-    value = value.slice("u:".length).trim();
   }
   return value || undefined;
 }
