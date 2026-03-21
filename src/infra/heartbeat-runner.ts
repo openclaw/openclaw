@@ -82,6 +82,9 @@ import {
 } from "./outbound/targets.js";
 import { peekSystemEventEntries, resolveSystemEventDeliveryContext } from "./system-events.js";
 
+/** Force heartbeat execution after this many ms of continuous queue contention. */
+const HEARTBEAT_FORCE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
     runtime?: RuntimeEnv;
@@ -111,6 +114,7 @@ type HeartbeatAgentState = {
   agentId: string;
   heartbeat?: HeartbeatConfig;
   intervalMs: number;
+  firstSkippedMs?: number;
   lastRunMs?: number;
   nextDueMs: number;
 };
@@ -529,6 +533,7 @@ export async function runHeartbeatOnce(opts: {
   sessionKey?: string;
   heartbeat?: HeartbeatConfig;
   reason?: string;
+  forceBypassQueue?: boolean;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? loadConfig();
@@ -555,7 +560,7 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
-  if (queueSize > 0) {
+  if (queueSize > 0 && !opts.forceBypassQueue) {
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
@@ -1037,6 +1042,7 @@ export function startHeartbeatRunner(opts: {
         agentId: agent.agentId,
         heartbeat: agent.heartbeat,
         intervalMs,
+        firstSkippedMs: prevState?.firstSkippedMs,
         lastRunMs: prevState?.lastRunMs,
         nextDueMs,
       });
@@ -1112,6 +1118,7 @@ export function startHeartbeatRunner(opts: {
           });
           if (res.status !== "skipped" || res.reason !== "disabled") {
             advanceAgentSchedule(targetAgent, now);
+            targetAgent.firstSkippedMs = undefined;
           }
           return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
         } catch (err) {
@@ -1120,6 +1127,7 @@ export function startHeartbeatRunner(opts: {
             error: errMsg,
           });
           advanceAgentSchedule(targetAgent, now);
+          targetAgent.firstSkippedMs = undefined;
           return { status: "failed", reason: errMsg };
         }
       }
@@ -1142,9 +1150,41 @@ export function startHeartbeatRunner(opts: {
           const errMsg = formatErrorMessage(err);
           log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
           advanceAgentSchedule(agent, now);
+          agent.firstSkippedMs = undefined;
           continue;
         }
         if (res.status === "skipped" && res.reason === "requests-in-flight") {
+          agent.firstSkippedMs ??= now;
+          if (now - agent.firstSkippedMs >= HEARTBEAT_FORCE_TIMEOUT_MS) {
+            log.warn("heartbeat runner: forcing execution after queue contention timeout", {
+              agentId: agent.agentId,
+              skippedForMs: now - agent.firstSkippedMs,
+            });
+            try {
+              const forced = await runOnce({
+                cfg: state.cfg,
+                agentId: agent.agentId,
+                heartbeat: agent.heartbeat,
+                reason,
+                forceBypassQueue: true,
+                deps: { runtime: state.runtime },
+              });
+              agent.firstSkippedMs = undefined;
+              if (forced.status !== "skipped" || forced.reason !== "disabled") {
+                advanceAgentSchedule(agent, now);
+              }
+              if (forced.status === "ran") {
+                ran = true;
+              }
+              continue;
+            } catch (err) {
+              const errMsg = formatErrorMessage(err);
+              log.error(`heartbeat runner: forced runOnce threw: ${errMsg}`, { error: errMsg });
+              agent.firstSkippedMs = undefined;
+              advanceAgentSchedule(agent, now);
+              continue;
+            }
+          }
           // Do not advance the schedule — the main lane is busy and the wake
           // layer will retry shortly (DEFAULT_RETRY_MS = 1 s).  Calling
           // scheduleNext() here would register a 0 ms timer that races with
@@ -1154,6 +1194,7 @@ export function startHeartbeatRunner(opts: {
         }
         if (res.status !== "skipped" || res.reason !== "disabled") {
           advanceAgentSchedule(agent, now);
+          agent.firstSkippedMs = undefined;
         }
         if (res.status === "ran") {
           ran = true;
