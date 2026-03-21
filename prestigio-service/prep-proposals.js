@@ -453,7 +453,8 @@ function evaluateCurrentItems(items, previous, now) {
       ignoreCount += 1;
     }
 
-    if (!stateChanged && previousSuppression?.reason === 'snoozed_after_first_ignore' && previousSuppression.snooze_until) {
+    // Once an item is within 7 days of due, surface it again even if it was snoozed.
+    if (!stateChanged && !dueWithin7Days && previousSuppression?.reason === 'snoozed_after_first_ignore' && previousSuppression.snooze_until) {
       const snoozeUntilMs = Date.parse(previousSuppression.snooze_until);
       if (!Number.isNaN(snoozeUntilMs) && now.getTime() < snoozeUntilMs) {
         suppressed.push(createSuppressedRecord({
@@ -484,7 +485,7 @@ function evaluateCurrentItems(items, previous, now) {
       continue;
     }
 
-    if (!stateChanged && previousProposal && ignoreCount === 1) {
+    if (!stateChanged && !dueWithin7Days && previousProposal && ignoreCount === 1) {
       suppressed.push(createSuppressedRecord({
         item,
         draft,
