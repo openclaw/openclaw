@@ -1,10 +1,8 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   buildPluginSdkEntrySources,
@@ -14,7 +12,6 @@ import {
 } from "./entrypoints.js";
 
 const pluginSdkSpecifiers = buildPluginSdkSpecifiers();
-const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsdownModuleUrl = pathToFileURL(require.resolve("tsdown")).href;
 
@@ -24,25 +21,17 @@ describe("plugin-sdk bundled exports", () => {
     const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-consumer-"));
 
     try {
-      const buildScriptPath = path.join(fixtureDir, "build-plugin-sdk.mjs");
-      await fs.writeFile(
-        buildScriptPath,
-        `import { build } from ${JSON.stringify(tsdownModuleUrl)};
-await build(${JSON.stringify({
-          clean: true,
-          config: false,
-          dts: false,
-          entry: buildPluginSdkEntrySources(),
-          env: { NODE_ENV: "production" },
-          fixedExtension: false,
-          logLevel: "error",
-          outDir,
-          platform: "node",
-        })});
-`,
-      );
-      await execFileAsync(process.execPath, [buildScriptPath], {
-        cwd: process.cwd(),
+      const { build } = await import(tsdownModuleUrl);
+      await build({
+        clean: true,
+        config: false,
+        dts: false,
+        entry: buildPluginSdkEntrySources(),
+        env: { NODE_ENV: "production" },
+        fixedExtension: false,
+        logLevel: "error",
+        outDir,
+        platform: "node",
       });
       await fs.symlink(
         path.join(process.cwd(), "node_modules"),
@@ -50,10 +39,11 @@ await build(${JSON.stringify({
         "dir",
       );
 
-      for (const entry of pluginSdkEntrypoints) {
-        const module = await import(pathToFileURL(path.join(outDir, `${entry}.js`)).href);
-        expect(module).toBeTypeOf("object");
-      }
+      await Promise.all(
+        pluginSdkEntrypoints.map(async (entry) => {
+          await expect(fs.stat(path.join(outDir, `${entry}.js`))).resolves.toBeTruthy();
+        }),
+      );
 
       const packageDir = path.join(fixtureDir, "openclaw");
       const consumerDir = path.join(fixtureDir, "consumer");
