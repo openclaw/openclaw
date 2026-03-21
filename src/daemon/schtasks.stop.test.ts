@@ -1,3 +1,4 @@
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/schtasks-base-mocks.js";
@@ -224,6 +225,37 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(5454);
       expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+    });
+  });
+
+  it("prefers the task env config over the caller shell env when OPENCLAW_STATE_DIR differs", async () => {
+    await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
+      const taskEnv = { ...env, OPENCLAW_STATE_DIR: path.join(tmpDir, "task-state") };
+      const shellEnv = { ...env, OPENCLAW_STATE_DIR: path.join(tmpDir, "shell-state") };
+      await writeGatewayScript(taskEnv, GATEWAY_PORT, { includePortEnv: false, includePortFlag: false });
+      await writeGatewayConfig(taskEnv, GATEWAY_PORT);
+      await writeGatewayConfig(shellEnv, 29999);
+      const stdout = new PassThrough();
+      const envWithoutPort = { ...taskEnv };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      pushSuccessfulSchtasksResponses(3);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([6464]);
+      inspectPortUsage.mockResolvedValueOnce(busyPortUsage(6464)).mockResolvedValueOnce(freePortUsage());
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = shellEnv.OPENCLAW_STATE_DIR;
+
+      try {
+        await stopScheduledTask({ env: envWithoutPort, stdout });
+      } finally {
+        if (previousStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+      }
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expectGatewayTermination(6464);
     });
   });
 });
