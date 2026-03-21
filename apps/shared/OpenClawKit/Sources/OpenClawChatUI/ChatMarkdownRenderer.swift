@@ -4,7 +4,7 @@ import Textual
 // Custom StructuredText style based on gitHub but with apricot inline code background
 private struct ApricotStyle: StructuredText.Style {
     let inlineStyle: InlineStyle = InlineStyle()
-        .code(.monospaced, .fontScale(0.85), .backgroundColor(Color(red: 0.35, green: 0.22, blue: 0.04)))
+        .code(.monospaced, .foregroundColor(Color(red: 1.0, green: 0.75, blue: 0.2)))
         .strong(.fontWeight(.semibold))
         .link(.foregroundColor(.accentColor))
     let headingStyle: StructuredText.GitHubHeadingStyle = .gitHub
