@@ -86,6 +86,8 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     if (!context) {
       return;
     }
+    // Current ingress middlewares are execution-oriented only:
+    // outcomes are collected for diagnostics, but dispatch always continues.
     await maybeRunTelegramIngressMiddlewares({
       context,
       cfg,

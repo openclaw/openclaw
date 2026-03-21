@@ -12,6 +12,7 @@ export * from "../channels/conversation-label.js";
 export * from "../channels/draft-stream-controls.js";
 export * from "../channels/draft-stream-loop.js";
 export * from "../channels/inbound-debounce-policy.js";
+export * from "../channels/ingress/runtime.js";
 export * from "../channels/location.js";
 export * from "../channels/logging.js";
 export * from "../channels/mention-gating.js";

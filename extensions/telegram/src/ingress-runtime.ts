@@ -1,6 +1,6 @@
+import { runChannelIngressMiddlewares } from "openclaw/plugin-sdk/channel-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { runChannelIngressMiddlewares } from "../../../src/channels/ingress/runtime.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { TelegramAccountConfig } from "../../../src/config/types.telegram.js";
 import { buildTelegramMessageContext } from "./bot-message-context.js";
@@ -63,6 +63,9 @@ export async function maybeRunTelegramIngressMiddlewares(params: {
     return await runTelegramIngressMiddlewares(params);
   } catch (err) {
     params.runtime.error(danger(`ingress-runtime failed: ${String(err)}`));
-    return { middlewareCount: 0, outcomes: [] };
+    return {
+      middlewareCount: params.telegramCfg.ingressMiddlewares?.length ?? 0,
+      outcomes: [],
+    };
   }
 }

@@ -3,7 +3,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 type IngressRuntimeLogger = Pick<RuntimeEnv, "log" | "error">;
 
 const logIngressWarn = (logger: IngressRuntimeLogger | undefined, text: string) => {
-  logger?.error?.(text);
+  logger?.log?.(text);
 };
 
 export type ChannelIngressMiddlewareConfig =

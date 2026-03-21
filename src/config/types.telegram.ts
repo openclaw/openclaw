@@ -1,3 +1,4 @@
+import type { ChannelIngressMiddlewareConfig } from "../channels/ingress/runtime.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -85,16 +86,7 @@ export type TelegramCustomCommand = {
   description: string;
 };
 
-export type TelegramIngressMiddlewareConfig =
-  | string
-  | {
-      /** Optional logical name for diagnostics/logging. */
-      name?: string;
-      /** ESM module specifier or file:// URL. */
-      module: string;
-      /** Export to call. Defaults to runIngressMiddleware. */
-      exportName?: string;
-    };
+export type TelegramIngressMiddlewareConfig = ChannelIngressMiddlewareConfig;
 
 export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
