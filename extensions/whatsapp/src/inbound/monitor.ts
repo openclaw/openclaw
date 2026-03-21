@@ -464,6 +464,8 @@ export async function monitorWebInbox(options: {
 
       const enriched = await enrichInboundMessage(msg);
       if (!enriched) {
+        // Only messages that produced body/media content are cached as quote
+        // targets; unsupported message shapes are intentionally skipped.
         continue;
       }
 
@@ -471,6 +473,8 @@ export async function monitorWebInbox(options: {
         message: msg,
         messageId: inbound.id,
         remoteJid: inbound.remoteJid,
+        // normalizedJid is the outbound JID shape used by the send path; both
+        // forms are stored as aliases so either can resolve the same entry.
         normalizedJid: inbound.group ? inbound.remoteJid : toWhatsappJid(inbound.from),
         participantJid: msg.key?.participant ?? undefined,
         isGroup: inbound.group,

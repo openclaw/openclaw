@@ -32,6 +32,31 @@ describe("normalizeQuotedMessage", () => {
     });
   });
 
+  it("preserves fromMe for self-chat quoted replies", () => {
+    const normalized = normalizeQuotedMessage({
+      message: {
+        key: {
+          id: "msg-self-1",
+          remoteJid: "1555@s.whatsapp.net",
+          fromMe: true,
+        },
+        message: { conversation: "note to self" },
+      },
+      messageId: "msg-self-1",
+      remoteJid: "1555@s.whatsapp.net",
+      isGroup: false,
+    });
+
+    expect(normalized).toEqual({
+      key: {
+        id: "msg-self-1",
+        remoteJid: "1555@s.whatsapp.net",
+        fromMe: true,
+      },
+      message: { conversation: "note to self" },
+    });
+  });
+
   it("preserves group participant identity while keeping the group jid", () => {
     const normalized = normalizeQuotedMessage({
       message: {

@@ -39,7 +39,7 @@ export function normalizeQuotedMessage(params: {
       ...restKey,
       id: messageId,
       remoteJid,
-      fromMe: false,
+      fromMe: params.message.key?.fromMe ?? false,
       ...(participant ? { participant } : {}),
     },
   };
