@@ -1,14 +1,17 @@
 """
 Inference & Serving Optimizer — vLLM / AWQ / SINQ / model-routing improvements.
 
-Provides five cooperating components that sit between the gateway and
+Provides eight cooperating components that sit between the gateway and
 ``VLLMModelManager`` to improve throughput and latency on a single 16 GB GPU:
 
-1. **SpeculativeDecodingConfig** — draft-then-verify config (vLLM paper).
-2. **DynamicBatchScheduler** — adaptive batch sizing & throttle.
-3. **SmartModelRouter** — task-aware model selection.
-4. **AdaptiveTokenBudget** — per-request token budget estimation.
-5. **InferenceMetricsCollector** — TPS / TTFT / ITL / Prometheus export.
+1. **SpeculativeDecodingConfig** — draft-then-verify config + n-gram fallback (vLLM paper).
+2. **ChunkedPrefillConfig** — break long prompts into chunks to reduce TTFT.
+3. **PrefixCachingConfig** — KV-cache reuse for shared prompt prefixes.
+4. **build_optimized_vllm_args** — helper that merges all config flags into a single CLI list.
+5. **DynamicBatchScheduler** — adaptive batch sizing & throttle.
+6. **SmartModelRouter** — task-aware model selection.
+7. **AdaptiveTokenBudget** — per-request token budget estimation.
+8. **InferenceMetricsCollector** — TPS / TTFT / ITL / Prometheus export.
 
 References
 ----------
@@ -112,21 +115,34 @@ class ModelPerformance:
 class SpeculativeDecodingConfig:
     """Configuration for speculative decoding (vLLM paper).
 
-    Uses a small draft model to generate candidate tokens,
-    then the target model verifies in batch — faster overall inference.
+    Supports two modes:
+    - **Draft-model mode** (``use_ngram=False``): a small draft model generates
+      candidate tokens; the target model verifies in batch.
+    - **N-gram mode** (``use_ngram=True``, default): uses in-prompt n-gram matches
+      as candidates — no extra VRAM required, zero cold-start overhead.
 
     From: vLLM: Efficient Memory Management for LLM Serving (arXiv:2309.06180)
     """
 
     enabled: bool = False
-    draft_model: str = "Qwen/Qwen2.5-0.5B-Instruct"  # Small model for drafting
-    num_speculative_tokens: int = 5  # Tokens to speculate ahead
-    # On 16GB VRAM: draft model takes ~1GB, main model gets ~14GB
+    use_ngram: bool = True                          # prefer n-gram (no extra VRAM)
+    ngram_prompt_lookup_max: int = 4                # max n-gram window size
+    ngram_prompt_lookup_min: int = 1                # min n-gram window size
+    draft_model: str = "Qwen/Qwen2.5-0.5B-Instruct"  # used only when use_ngram=False
+    num_speculative_tokens: int = 5                 # tokens speculated per step
+    # On 16 GB VRAM: draft model takes ~1 GB, main model gets ~14 GB
 
     def to_vllm_args(self) -> List[str]:
         """Return vLLM CLI flags for speculative decoding."""
         if not self.enabled:
             return []
+        if self.use_ngram:
+            return [
+                "--speculative-model", "[ngram]",
+                "--num-speculative-tokens", str(self.num_speculative_tokens),
+                "--ngram-prompt-lookup-max", str(self.ngram_prompt_lookup_max),
+                "--ngram-prompt-lookup-min", str(self.ngram_prompt_lookup_min),
+            ]
         return [
             "--speculative-model", self.draft_model,
             "--num-speculative-tokens", str(self.num_speculative_tokens),
@@ -134,15 +150,104 @@ class SpeculativeDecodingConfig:
         ]
 
     def estimated_vram_overhead_gb(self) -> float:
-        """Estimate extra VRAM used by the draft model."""
+        """Estimate extra VRAM used (n-gram mode costs nothing)."""
         if not self.enabled:
             return 0.0
-        # 0.5B model ≈ 1 GB in fp16, ~0.5 GB quantised
+        if self.use_ngram:
+            return 0.0  # n-gram: no extra model loaded
+        # 0.5B draft model ≈ 1 GB in fp16, ~0.5 GB quantised
         return 1.0
 
 
 # ---------------------------------------------------------------------------
-# 2. Dynamic Batch Scheduler
+# 2. Chunked Prefill Configuration
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ChunkedPrefillConfig:
+    """Chunked prefill — break long prompts into fixed-size chunks.
+
+    Reduces time-to-first-token (TTFT) for long-context requests by
+    interleaving prefill and decode phases.
+
+    From: vLLM chunked prefill documentation.
+    """
+
+    enabled: bool = False
+    max_num_batched_tokens: int = 4096  # tokens processed per prefill chunk
+
+    def to_vllm_args(self) -> List[str]:
+        """Return vLLM CLI flags for chunked prefill."""
+        if not self.enabled:
+            return []
+        return [
+            "--enable-chunked-prefill",
+            "--max-num-batched-tokens", str(self.max_num_batched_tokens),
+        ]
+
+
+# ---------------------------------------------------------------------------
+# 3. Prefix Caching Configuration
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PrefixCachingConfig:
+    """Automatic KV-cache reuse for shared prompt prefixes.
+
+    When many requests share a common prefix (system prompt, few-shot examples,
+    retrieval context) the prefix KV tensors are computed once and reused —
+    cutting TTFT by up to 80 % for the cached portion.
+
+    From: vLLM Automatic Prefix Caching documentation.
+    """
+
+    enabled: bool = False
+
+    def to_vllm_args(self) -> List[str]:
+        """Return vLLM CLI flags for prefix caching."""
+        if not self.enabled:
+            return []
+        return ["--enable-prefix-caching"]
+
+
+# ---------------------------------------------------------------------------
+# 4. Convenience builder
+# ---------------------------------------------------------------------------
+
+
+def build_optimized_vllm_args(
+    speculative: Optional["SpeculativeDecodingConfig"] = None,
+    chunked_prefill: Optional["ChunkedPrefillConfig"] = None,
+    prefix_caching: Optional["PrefixCachingConfig"] = None,
+) -> List[str]:
+    """Merge all optimisation configs into a single vLLM CLI argument list.
+
+    Pass the result to ``VLLMModelManager`` via *vllm_extra_args*.
+    ``None`` configs are silently skipped.
+
+    Example::
+
+        args = build_optimized_vllm_args(
+            speculative=SpeculativeDecodingConfig(enabled=True),
+            chunked_prefill=ChunkedPrefillConfig(enabled=True),
+            prefix_caching=PrefixCachingConfig(enabled=True),
+        )
+        manager = VLLMModelManager(..., vllm_extra_args=args)
+    """
+    result: List[str] = []
+    if speculative is not None:
+        result.extend(speculative.to_vllm_args())
+    if chunked_prefill is not None:
+        result.extend(chunked_prefill.to_vllm_args())
+    if prefix_caching is not None:
+        result.extend(prefix_caching.to_vllm_args())
+    return result
+
+
+# ---------------------------------------------------------------------------
+# 5. Dynamic Batch Scheduler
 # ---------------------------------------------------------------------------
 
 # Sliding-window size for latency / throughput history

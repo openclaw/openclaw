@@ -639,7 +639,16 @@ class TestSpeculativeDecodingConfig:
         assert cfg.estimated_vram_overhead_gb() == 0.0
 
     def test_enabled_args(self):
+        # n-gram mode (default): zero VRAM overhead, uses [ngram] speculative model
         cfg = SpeculativeDecodingConfig(enabled=True, num_speculative_tokens=3)
+        args = cfg.to_vllm_args()
+        assert "--speculative-model" in args
+        assert "3" in args
+        assert cfg.estimated_vram_overhead_gb() == 0.0  # n-gram: no draft model loaded
+
+    def test_enabled_args_draft_model(self):
+        # draft-model mode: 1 GB VRAM overhead for the draft model
+        cfg = SpeculativeDecodingConfig(enabled=True, use_ngram=False, num_speculative_tokens=3)
         args = cfg.to_vllm_args()
         assert "--speculative-model" in args
         assert "3" in args

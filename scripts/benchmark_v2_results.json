@@ -1,0 +1,20 @@
+{
+  "version": "v2",
+  "total_ms": 3740.909399999964,
+  "llm_calls": 12,
+  "tokens": 3072,
+  "avg_tps": 821.1906976416027,
+  "steps": {
+    "estimate_complexity": 304.71460000012485,
+    "decompose": 310.7592999999724,
+    "search_sub_query": 1.7250999994757876,
+    "score_evidence": 312.2438999998849,
+    "detect_contradictions": 314.73209999990104,
+    "verify_facts": 314.7490999999718,
+    "synthesize": 319.53889999999774,
+    "self_critique": 309.36610000003384
+  },
+  "confidence": 0.5,
+  "evidence_count": 12,
+  "status_events": 11
+}
