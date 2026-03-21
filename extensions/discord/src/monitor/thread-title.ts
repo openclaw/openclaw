@@ -1,8 +1,10 @@
 import { complete } from "@mariozechner/pi-ai";
-import { extractAssistantText } from "../../../../src/agents/pi-embedded-utils.js";
-import { prepareSimpleCompletionModelForAgent } from "../../../../src/agents/simple-completion-runtime.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { logVerbose } from "../../../../src/globals.js";
+import {
+  extractAssistantText,
+  prepareSimpleCompletionModelForAgent,
+} from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 
 const DEFAULT_THREAD_TITLE_TIMEOUT_MS = 10_000;
 const MAX_THREAD_TITLE_SOURCE_CHARS = 600;

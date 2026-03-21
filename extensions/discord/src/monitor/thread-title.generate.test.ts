@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
 
 const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
@@ -11,13 +11,14 @@ vi.mock("@mariozechner/pi-ai", () => ({
   complete: hoisted.completeMock,
 }));
 
-vi.mock("../../../../src/agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: hoisted.prepareSimpleCompletionModelForAgentMock,
-}));
-
-vi.mock("../../../../src/agents/pi-embedded-utils.js", () => ({
-  extractAssistantText: hoisted.extractAssistantTextMock,
-}));
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+  return {
+    ...actual,
+    prepareSimpleCompletionModelForAgent: hoisted.prepareSimpleCompletionModelForAgentMock,
+    extractAssistantText: hoisted.extractAssistantTextMock,
+  };
+});
 
 let generateThreadTitle: typeof import("./thread-title.js").generateThreadTitle;
 

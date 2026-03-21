@@ -11,22 +11,22 @@ vi.mock("./thread-title.js", () => ({
   generateThreadTitle: generateThreadTitleMock,
 }));
 
-let maybeCreateDiscordAutoThread: typeof MaybeCreateDiscordAutoThreadFn;
+let maybeCreateDiscordAutoThread: MaybeCreateDiscordAutoThreadFn;
 
 const postMock = vi.fn();
 const getMock = vi.fn();
 const patchMock = vi.fn();
 const mockClient = {
   rest: { post: postMock, get: getMock, patch: patchMock },
-} as unknown as Parameters<typeof MaybeCreateDiscordAutoThreadFn>[0]["client"];
+} as unknown as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["client"];
 const mockMessage = {
   id: "msg1",
   timestamp: "123",
-} as unknown as Parameters<typeof MaybeCreateDiscordAutoThreadFn>[0]["message"];
+} as unknown as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["message"];
 
 function createBaseParams(
-  overrides: Partial<Parameters<typeof MaybeCreateDiscordAutoThreadFn>[0]> = {},
-): Parameters<typeof MaybeCreateDiscordAutoThreadFn>[0] {
+  overrides: Partial<Parameters<MaybeCreateDiscordAutoThreadFn>[0]> = {},
+): Parameters<MaybeCreateDiscordAutoThreadFn>[0] {
   return {
     client: mockClient,
     message: mockMessage,
