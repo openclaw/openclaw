@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { callGateway } from "../gateway/call.js";
-import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
+import { validateSecretsResolveResult } from "../gateway/protocol/validate-secrets-resolve-result.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
   type UnresolvedCommandSecretAssignment,
