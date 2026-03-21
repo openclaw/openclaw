@@ -1330,6 +1330,16 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
     );
   };
 
+  const hasConfiguredGroups = (
+    account: Record<string, unknown>,
+    parent?: Record<string, unknown>,
+  ): boolean => {
+    const groups =
+      (account.groups as Record<string, unknown> | undefined) ??
+      (parent?.groups as Record<string, unknown> | undefined);
+    return Boolean(groups) && Object.keys(groups ?? {}).length > 0;
+  };
+
   const checkAccount = (
     account: Record<string, unknown>,
     prefix: string,
@@ -1372,6 +1382,11 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
       undefined;
 
     if (groupPolicy === "allowlist" && usesSenderBasedGroupAllowlist(channelName)) {
+      if (channelName === "telegram" && !hasConfiguredGroups(account, parent)) {
+        // Fresh Telegram installs default to fail-closed group access until the
+        // operator explicitly configures allowed groups or sender filters.
+        return;
+      }
       const rawGroupAllowFrom =
         (account.groupAllowFrom as Array<string | number> | undefined) ??
         (parent?.groupAllowFrom as Array<string | number> | undefined);
