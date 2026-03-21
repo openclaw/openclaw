@@ -94,18 +94,6 @@ and files.
 openclaw plugins install @sliverp/qqbot
 ```
 
-### WeChat
-
-Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol).
-Supports text, image, and file exchange with keyword-triggered conversations.
-
-- **npm:** `@icesword760/openclaw-wechat`
-- **repo:** [github.com/icesword0760/openclaw-wechat](https://github.com/icesword0760/openclaw-wechat)
-
-```bash
-openclaw plugins install @icesword760/openclaw-wechat
-```
-
 ### wecom
 
 OpenClaw Enterprise WeCom Channel Plugin.
