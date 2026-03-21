@@ -9,6 +9,11 @@ import {
   createThreadBindingManager,
 } from "./thread-bindings.js";
 
+const messageUtilsMocks = vi.hoisted(() => ({
+  resolveMediaList: vi.fn(async () => []),
+  resolveForwardedMediaList: vi.fn(async () => []),
+}));
+
 const sendMocks = vi.hoisted(() => ({
   reactMessageDiscord: vi.fn(async () => {}),
   removeReactionDiscord: vi.fn(async () => {}),
@@ -126,6 +131,15 @@ vi.mock("../../../../src/config/sessions.js", () => ({
   resolveStorePath: configSessionsMocks.resolveStorePath,
 }));
 
+vi.mock("./message-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./message-utils.js")>();
+  return {
+    ...actual,
+    resolveMediaList: messageUtilsMocks.resolveMediaList,
+    resolveForwardedMediaList: messageUtilsMocks.resolveForwardedMediaList,
+  };
+});
+
 const { processDiscordMessage } = await import("./message-handler.process.js");
 
 const createBaseContext = createBaseDiscordMessageContext;
@@ -165,6 +179,8 @@ beforeEach(() => {
   recordInboundSession.mockClear();
   readSessionUpdatedAt.mockClear();
   resolveStorePath.mockClear();
+  messageUtilsMocks.resolveMediaList.mockReset().mockResolvedValue([]);
+  messageUtilsMocks.resolveForwardedMediaList.mockReset().mockResolvedValue([]);
   dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
   recordInboundSession.mockResolvedValue(undefined);
   readSessionUpdatedAt.mockReturnValue(undefined);
@@ -673,5 +689,25 @@ describe("processDiscordMessage draft streaming", () => {
     await runInPartialStreamMode();
 
     expect(draftStream.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("processDiscordMessage attachment fetch resilience", () => {
+  it("continues processing when resolveMediaList throws", async () => {
+    messageUtilsMocks.resolveMediaList.mockRejectedValueOnce(new Error("HTTP 404 Not Found"));
+    const ctx = await createBaseContext();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+    expect(dispatchInboundMessage).toHaveBeenCalled();
+  });
+
+  it("continues processing when resolveForwardedMediaList throws", async () => {
+    messageUtilsMocks.resolveForwardedMediaList.mockRejectedValueOnce(
+      new Error("HTTP 404 Not Found"),
+    );
+    const ctx = await createBaseContext();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+    expect(dispatchInboundMessage).toHaveBeenCalled();
   });
 });

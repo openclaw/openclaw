@@ -121,20 +121,34 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   }
 
   const ssrfPolicy = cfg.browser?.ssrfPolicy;
-  const mediaList = await resolveMediaList(message, mediaMaxBytes, discordRestFetch, ssrfPolicy);
+  const mediaList: Awaited<ReturnType<typeof resolveMediaList>> = [];
+  try {
+    const resolved = await resolveMediaList(message, mediaMaxBytes, discordRestFetch, ssrfPolicy);
+    mediaList.push(...resolved);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "unknown error";
+    logVerbose(`discord: failed to resolve attachments for message ${message.id}: ${reason}`);
+  }
   if (isProcessAborted(abortSignal)) {
     return;
   }
-  const forwardedMediaList = await resolveForwardedMediaList(
-    message,
-    mediaMaxBytes,
-    discordRestFetch,
-    ssrfPolicy,
-  );
+  try {
+    const forwardedMediaList = await resolveForwardedMediaList(
+      message,
+      mediaMaxBytes,
+      discordRestFetch,
+      ssrfPolicy,
+    );
+    mediaList.push(...forwardedMediaList);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "unknown error";
+    logVerbose(
+      `discord: failed to resolve forwarded attachments for message ${message.id}: ${reason}`,
+    );
+  }
   if (isProcessAborted(abortSignal)) {
     return;
   }
-  mediaList.push(...forwardedMediaList);
   const text = messageText;
   if (!text) {
     logVerbose("discord: drop message " + message.id + " (empty content)");
