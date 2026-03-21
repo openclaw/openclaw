@@ -20,6 +20,7 @@ import {
   resolveBrightDataApiToken,
   resolveBrightDataBaseUrl,
   resolveBrightDataBrowserZone,
+  resolveBrightDataBrowserTimeoutSeconds,
 } from "./config.js";
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 120_000;
@@ -402,6 +403,7 @@ async function requestBrowserApiJson(params: {
   pathname: string;
   queryParams?: Record<string, string | number | boolean | undefined>;
   errorLabel: string;
+  timeoutSeconds: number;
 }): Promise<unknown> {
   const apiToken = resolveBrightDataApiToken(params.cfg);
   if (!apiToken) {
@@ -414,6 +416,7 @@ async function requestBrowserApiJson(params: {
   return await withTrustedWebToolsEndpoint(
     {
       url: endpoint,
+      timeoutSeconds: params.timeoutSeconds,
       init: {
         method: "GET",
         headers: {
@@ -479,11 +482,13 @@ async function resolveBrightDataBrowserCdpEndpoint(params: {
 }): Promise<string> {
   const country = normalizeCountry(params.country);
   const zone = resolveBrightDataBrowserZone(params.cfg);
+  const timeoutSeconds = resolveBrightDataBrowserTimeoutSeconds(params.cfg);
 
   const statusPayload = await requestBrowserApiJson({
     cfg: params.cfg,
     pathname: "/status",
     errorLabel: "Bright Data status",
+    timeoutSeconds,
   });
   const customer =
     statusPayload &&
@@ -501,13 +506,14 @@ async function resolveBrightDataBrowserCdpEndpoint(params: {
     throw new Error("Bright Data status returned no customer identifier.");
   }
 
-  await ensureBrightDataBrowserZoneExists(params.cfg);
+  await ensureBrightDataBrowserZoneExists(params.cfg, timeoutSeconds);
 
   const passwordsPayload = await requestBrowserApiJson({
     cfg: params.cfg,
     pathname: "/zone/passwords",
     queryParams: { zone },
     errorLabel: `Bright Data browser zone password (${zone})`,
+    timeoutSeconds,
   });
   const passwords =
     passwordsPayload &&

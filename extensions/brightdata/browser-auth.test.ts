@@ -44,10 +44,11 @@ describe("brightdata browser auth", () => {
 
     withTrustedWebToolsEndpointMock.mockImplementation(
       async (
-        params: { url: string; init?: RequestInit },
+        params: { url: string; init?: RequestInit; timeoutSeconds?: number },
         run: (result: { response: Response; finalUrl: string }) => Promise<unknown>,
       ) => {
         expect(readAuthorizationHeader(params.init)).toBe("Bearer test-token");
+        expect(params.timeoutSeconds).toBe(7);
 
         if (params.url.endsWith("/status")) {
           return await run({
@@ -80,7 +81,23 @@ describe("brightdata browser auth", () => {
       },
     );
 
-    await expect(brightdataBrowserTesting.resolveBrightDataBrowserCdpEndpoint({})).resolves.toBe(
+    await expect(
+      brightdataBrowserTesting.resolveBrightDataBrowserCdpEndpoint({
+        cfg: {
+          plugins: {
+            entries: {
+              brightdata: {
+                config: {
+                  webSearch: {
+                    timeoutSeconds: 7,
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).resolves.toBe(
       "wss://brd-customer-customer-123-zone-mcp_browser:secret-password@brd.superproxy.io:9222",
     );
   });

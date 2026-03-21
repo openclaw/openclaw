@@ -169,6 +169,32 @@ export function resolveBrightDataSearchTimeoutSeconds(override?: number): number
   return DEFAULT_BRIGHTDATA_SEARCH_TIMEOUT_SECONDS;
 }
 
+export function resolveBrightDataBrowserTimeoutSeconds(
+  cfg?: OpenClawConfig,
+  override?: number,
+): number {
+  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
+    return Math.floor(override);
+  }
+  const search = resolveBrightDataSearchConfig(cfg);
+  const fetch = resolveBrightDataFetchConfig(cfg);
+  if (
+    typeof search?.timeoutSeconds === "number" &&
+    Number.isFinite(search.timeoutSeconds) &&
+    search.timeoutSeconds > 0
+  ) {
+    return Math.floor(search.timeoutSeconds);
+  }
+  if (
+    typeof fetch?.timeoutSeconds === "number" &&
+    Number.isFinite(fetch.timeoutSeconds) &&
+    fetch.timeoutSeconds > 0
+  ) {
+    return Math.floor(fetch.timeoutSeconds);
+  }
+  return DEFAULT_BRIGHTDATA_SEARCH_TIMEOUT_SECONDS;
+}
+
 export function resolveBrightDataScrapeTimeoutSeconds(
   cfg?: OpenClawConfig,
   override?: number,
