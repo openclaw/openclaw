@@ -76,6 +76,7 @@ export function resolvePluginTools(params: {
           allowGatewaySubagentBinding: true,
         }
       : undefined,
+    inheritSharedRuntimeOptions: true,
     env,
     logger: createPluginLoaderLogger(log),
   };

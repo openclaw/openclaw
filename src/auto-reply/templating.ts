@@ -123,6 +123,8 @@ export type MsgContext = {
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
+  /** Provider-managed account id when the inbound sender is one of our configured bot accounts. */
+  SenderManagedAccountId?: string;
   SenderId?: string;
   SenderUsername?: string;
   SenderTag?: string;

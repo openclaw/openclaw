@@ -285,17 +285,6 @@ export function buildPluginInspectReport(params: {
   const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
   const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
   const capabilityCount = capabilities.length;
-  const shape = deriveInspectShape({
-    capabilityCount,
-    typedHookCount: typedHooks.length,
-    customHookCount: customHooks.length,
-    toolCount: tools.length,
-    commandCount: plugin.commands.length,
-    cliCount: plugin.cliCommands.length,
-    serviceCount: plugin.services.length,
-    gatewayMethodCount: plugin.gatewayMethods.length,
-    httpRouteCount: plugin.httpRoutes,
-  });
 
   // Populate MCP server info for bundle-format plugins with a known rootDir.
   let mcpServers: PluginInspectReport["mcpServers"] = [];
@@ -316,6 +305,18 @@ export function buildPluginInspectReport(params: {
       })),
     ];
   }
+
+  const shape = deriveInspectShape({
+    capabilityCount,
+    typedHookCount: typedHooks.length,
+    customHookCount: customHooks.length,
+    toolCount: tools.length,
+    commandCount: plugin.commands.length,
+    cliCount: plugin.cliCommands.length,
+    serviceCount: plugin.services.length,
+    gatewayMethodCount: plugin.gatewayMethods.length,
+    httpRouteCount: plugin.httpRoutes,
+  });
 
   // Populate LSP server info for bundle-format plugins with a known rootDir.
   let lspServers: PluginInspectReport["lspServers"] = [];
