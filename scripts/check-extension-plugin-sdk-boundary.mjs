@@ -333,9 +333,20 @@ export async function runExtensionPluginSdkBoundaryCheck(argv = process.argv.sli
     return 0;
   }
 
+  writeLine(streams.stdout, formatInventoryHuman(mode, actual));
+  if (mode === "relative-outside-package") {
+    if (actual.length === 0) {
+      return 0;
+    }
+    writeLine(
+      streams.stderr,
+      `Relative outside-package violations found (${actual.length}); this mode no longer uses a baseline.`,
+    );
+    return 1;
+  }
+
   const expected = await readExpectedInventory(mode);
   const diff = diffInventory(expected, actual);
-  writeLine(streams.stdout, formatInventoryHuman(mode, actual));
   if (diff.missing.length === 0 && diff.unexpected.length === 0) {
     writeLine(streams.stdout, `Baseline matches (${actual.length} entries).`);
     return 0;
