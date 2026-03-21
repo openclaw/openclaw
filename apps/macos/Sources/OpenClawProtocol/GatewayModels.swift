@@ -515,6 +515,8 @@ public struct PollParams: Codable, Sendable {
 public struct AgentParams: Codable, Sendable {
     public let message: String
     public let agentid: String?
+    public let provider: String?
+    public let model: String?
     public let to: String?
     public let replyto: String?
     public let sessionid: String?
@@ -542,6 +544,8 @@ public struct AgentParams: Codable, Sendable {
     public init(
         message: String,
         agentid: String?,
+        provider: String?,
+        model: String?,
         to: String?,
         replyto: String?,
         sessionid: String?,
@@ -568,6 +572,8 @@ public struct AgentParams: Codable, Sendable {
     {
         self.message = message
         self.agentid = agentid
+        self.provider = provider
+        self.model = model
         self.to = to
         self.replyto = replyto
         self.sessionid = sessionid
@@ -596,6 +602,8 @@ public struct AgentParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case message
         case agentid = "agentId"
+        case provider
+        case model
         case to
         case replyto = "replyTo"
         case sessionid = "sessionId"
@@ -1318,6 +1326,124 @@ public struct SessionsResolveParams: Codable, Sendable {
     }
 }
 
+public struct SessionsCreateParams: Codable, Sendable {
+    public let key: String?
+    public let agentid: String?
+    public let label: String?
+    public let model: String?
+    public let parentsessionkey: String?
+    public let task: String?
+    public let message: String?
+
+    public init(
+        key: String?,
+        agentid: String?,
+        label: String?,
+        model: String?,
+        parentsessionkey: String?,
+        task: String?,
+        message: String?)
+    {
+        self.key = key
+        self.agentid = agentid
+        self.label = label
+        self.model = model
+        self.parentsessionkey = parentsessionkey
+        self.task = task
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case agentid = "agentId"
+        case label
+        case model
+        case parentsessionkey = "parentSessionKey"
+        case task
+        case message
+    }
+}
+
+public struct SessionsSendParams: Codable, Sendable {
+    public let key: String
+    public let message: String
+    public let thinking: String?
+    public let attachments: [AnyCodable]?
+    public let timeoutms: Int?
+    public let idempotencykey: String?
+
+    public init(
+        key: String,
+        message: String,
+        thinking: String?,
+        attachments: [AnyCodable]?,
+        timeoutms: Int?,
+        idempotencykey: String?)
+    {
+        self.key = key
+        self.message = message
+        self.thinking = thinking
+        self.attachments = attachments
+        self.timeoutms = timeoutms
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case message
+        case thinking
+        case attachments
+        case timeoutms = "timeoutMs"
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct SessionsMessagesSubscribeParams: Codable, Sendable {
+    public let key: String
+
+    public init(
+        key: String)
+    {
+        self.key = key
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+    }
+}
+
+public struct SessionsMessagesUnsubscribeParams: Codable, Sendable {
+    public let key: String
+
+    public init(
+        key: String)
+    {
+        self.key = key
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+    }
+}
+
+public struct SessionsAbortParams: Codable, Sendable {
+    public let key: String
+    public let runid: String?
+
+    public init(
+        key: String,
+        runid: String?)
+    {
+        self.key = key
+        self.runid = runid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case runid = "runId"
+    }
+}
+
 public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let label: AnyCodable?
@@ -1883,6 +2009,98 @@ public struct TalkConfigResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case config
+    }
+}
+
+public struct TalkSpeakParams: Codable, Sendable {
+    public let text: String
+    public let voiceid: String?
+    public let modelid: String?
+    public let outputformat: String?
+    public let speed: Double?
+    public let stability: Double?
+    public let similarity: Double?
+    public let style: Double?
+    public let speakerboost: Bool?
+    public let seed: Int?
+    public let normalize: String?
+    public let language: String?
+
+    public init(
+        text: String,
+        voiceid: String?,
+        modelid: String?,
+        outputformat: String?,
+        speed: Double?,
+        stability: Double?,
+        similarity: Double?,
+        style: Double?,
+        speakerboost: Bool?,
+        seed: Int?,
+        normalize: String?,
+        language: String?)
+    {
+        self.text = text
+        self.voiceid = voiceid
+        self.modelid = modelid
+        self.outputformat = outputformat
+        self.speed = speed
+        self.stability = stability
+        self.similarity = similarity
+        self.style = style
+        self.speakerboost = speakerboost
+        self.seed = seed
+        self.normalize = normalize
+        self.language = language
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+        case voiceid = "voiceId"
+        case modelid = "modelId"
+        case outputformat = "outputFormat"
+        case speed
+        case stability
+        case similarity
+        case style
+        case speakerboost = "speakerBoost"
+        case seed
+        case normalize
+        case language
+    }
+}
+
+public struct TalkSpeakResult: Codable, Sendable {
+    public let audiobase64: String
+    public let provider: String
+    public let outputformat: String?
+    public let voicecompatible: Bool?
+    public let mimetype: String?
+    public let fileextension: String?
+
+    public init(
+        audiobase64: String,
+        provider: String,
+        outputformat: String?,
+        voicecompatible: Bool?,
+        mimetype: String?,
+        fileextension: String?)
+    {
+        self.audiobase64 = audiobase64
+        self.provider = provider
+        self.outputformat = outputformat
+        self.voicecompatible = voicecompatible
+        self.mimetype = mimetype
+        self.fileextension = fileextension
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case audiobase64 = "audioBase64"
+        case provider
+        case outputformat = "outputFormat"
+        case voicecompatible = "voiceCompatible"
+        case mimetype = "mimeType"
+        case fileextension = "fileExtension"
     }
 }
 

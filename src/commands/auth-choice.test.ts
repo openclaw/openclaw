@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import anthropicPlugin from "../../extensions/anthropic/index.js";
+import chutesPlugin from "../../extensions/chutes/index.js";
 import cloudflareAiGatewayPlugin from "../../extensions/cloudflare-ai-gateway/index.js";
 import googlePlugin from "../../extensions/google/index.js";
 import huggingfacePlugin from "../../extensions/huggingface/index.js";
@@ -26,16 +27,16 @@ import { setDetectZaiEndpointForTesting } from "../../extensions/zai/detect.js";
 import zaiPlugin from "../../extensions/zai/index.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import type { ProviderPlugin } from "../plugins/types.js";
-import { createCapturedPluginRegistration } from "../test-utils/plugin-registration.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
-import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
 import {
   MINIMAX_CN_API_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
-} from "./onboard-auth.js";
+} from "../plugins/provider-model-definitions.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import { registerProviderPlugins } from "../test-utils/plugin-registration.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
+import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
 import type { AuthChoice } from "./onboard-types.js";
 import {
   authProfilePathForAgent,
@@ -82,9 +83,9 @@ type StoredAuthProfile = {
 };
 
 function createDefaultProviderPlugins() {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of [
+  return registerProviderPlugins(
     anthropicPlugin,
+    chutesPlugin,
     cloudflareAiGatewayPlugin,
     googlePlugin,
     huggingfacePlugin,
@@ -106,10 +107,7 @@ function createDefaultProviderPlugins() {
     xaiPlugin,
     xiaomiPlugin,
     zaiPlugin,
-  ]) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
+  );
 }
 
 describe("applyAuthChoice", () => {
@@ -520,9 +518,9 @@ describe("applyAuthChoice", () => {
       {
         tokenProvider: "KIMI-CODING",
         token: "sk-kimi-token-provider-test",
-        profileId: "kimi-coding:default",
-        provider: "kimi-coding",
-        expectedModelPrefix: "kimi-coding/",
+        profileId: "kimi:default",
+        provider: "kimi",
+        expectedModelPrefix: "kimi/",
       },
       {
         tokenProvider: " GOOGLE  ",
@@ -600,9 +598,9 @@ describe("applyAuthChoice", () => {
     {
       authChoice: "kimi-code-api-key",
       tokenProvider: "kimi-code",
-      profileId: "kimi-coding:default",
-      provider: "kimi-coding",
-      modelPrefix: "kimi-coding/",
+      profileId: "kimi:default",
+      provider: "kimi",
+      modelPrefix: "kimi/",
     },
     {
       authChoice: "xiaomi-api-key",
@@ -1349,7 +1347,7 @@ describe("applyAuthChoice", () => {
 
     const runtime = createExitThrowingRuntime();
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
-      if (params.message === "Paste the redirect URL") {
+      if (params.message.startsWith("Paste the redirect URL")) {
         const runtimeLog = runtime.log as ReturnType<typeof vi.fn>;
         const lastLog = runtimeLog.mock.calls.at(-1)?.[0];
         const urlLine = typeof lastLog === "string" ? lastLog : String(lastLog ?? "");
@@ -1374,7 +1372,7 @@ describe("applyAuthChoice", () => {
 
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Paste the redirect URL",
+        message: expect.stringContaining("Paste the redirect URL"),
       }),
     );
     expect(result.config.auth?.profiles?.["chutes:remote-user"]).toMatchObject({
@@ -1425,7 +1423,7 @@ describe("applyAuthChoice", () => {
         profileId: "minimax-portal:default",
         baseUrl: "https://api.minimax.io/anthropic",
         api: "anthropic-messages",
-        defaultModel: "minimax-portal/MiniMax-M2.5",
+        defaultModel: "minimax-portal/MiniMax-M2.7",
         apiKey: "minimax-oauth", // pragma: allowlist secret
       },
     ];

@@ -36,3 +36,20 @@ export type SpeechTelephonySynthesisResult = {
   outputFormat: string;
   sampleRate: number;
 };
+
+export type SpeechVoiceOption = {
+  id: string;
+  name?: string;
+  category?: string;
+  description?: string;
+  locale?: string;
+  gender?: string;
+  personalities?: string[];
+};
+
+export type SpeechListVoicesRequest = {
+  cfg?: OpenClawConfig;
+  config?: ResolvedTtsConfig;
+  apiKey?: string;
+  baseUrl?: string;
+};

@@ -1,14 +1,11 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildMicrosoftSpeechProvider } from "../../src/tts/providers/microsoft.js";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { buildMicrosoftSpeechProvider } from "openclaw/plugin-sdk/speech";
 
-const microsoftPlugin = {
+export default definePluginEntry({
   id: "microsoft",
   name: "Microsoft Speech",
   description: "Bundled Microsoft speech provider",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerSpeechProvider(buildMicrosoftSpeechProvider());
   },
-};
-
-export default microsoftPlugin;
+});

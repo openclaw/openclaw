@@ -1,14 +1,11 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildElevenLabsSpeechProvider } from "../../src/tts/providers/elevenlabs.js";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { buildElevenLabsSpeechProvider } from "openclaw/plugin-sdk/speech";
 
-const elevenLabsPlugin = {
+export default definePluginEntry({
   id: "elevenlabs",
   name: "ElevenLabs Speech",
   description: "Bundled ElevenLabs speech provider",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerSpeechProvider(buildElevenLabsSpeechProvider());
   },
-};
-
-export default elevenLabsPlugin;
+});

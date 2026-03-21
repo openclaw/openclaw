@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MemorySearchConfig } from "../config/types.tools.js";
-import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import type { MemoryIndexManager } from "./index.js";
 
 const { watchMock } = vi.hoisted(() => ({
   watchMock: vi.fn(() => ({
@@ -34,10 +34,23 @@ vi.mock("./embeddings.js", () => ({
   }),
 }));
 
+type MemoryIndexModule = typeof import("./index.js");
+
+let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
+let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
+
 describe("memory watcher config", () => {
   let manager: MemoryIndexManager | null = null;
   let workspaceDir = "";
   let extraDir = "";
+
+  beforeAll(async () => {
+    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
+  });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+  });
 
   afterEach(async () => {
     watchMock.mockClear();
@@ -45,6 +58,7 @@ describe("memory watcher config", () => {
       await manager.close();
       manager = null;
     }
+    await closeAllMemorySearchManagers();
     if (workspaceDir) {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       workspaceDir = "";

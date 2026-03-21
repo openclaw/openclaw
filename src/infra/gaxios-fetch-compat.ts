@@ -7,12 +7,13 @@ import { Agent as UndiciAgent, ProxyAgent } from "undici";
 type ProxyRule = RegExp | URL | string;
 type TlsCert = ConnectionOptions["cert"];
 type TlsKey = ConnectionOptions["key"];
+type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 type GaxiosFetchRequestInit = RequestInit & {
   agent?: unknown;
   cert?: TlsCert;
   dispatcher?: Dispatcher;
-  fetchImplementation?: typeof fetch;
+  fetchImplementation?: FetchLike;
   key?: TlsKey;
   noProxy?: ProxyRule[];
   proxy?: string | URL;
@@ -240,7 +241,9 @@ function installLegacyWindowFetchShim(): void {
   (globalThis as Record<string, unknown>).window = { fetch: globalThis.fetch };
 }
 
-export function createGaxiosCompatFetch(baseFetch: typeof fetch = globalThis.fetch): typeof fetch {
+export function createGaxiosCompatFetch(
+  baseFetch: FetchLike = globalThis.fetch.bind(globalThis),
+): FetchLike {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const gaxiosInit = (init ?? {}) as GaxiosFetchRequestInit;
     const requestUrl =

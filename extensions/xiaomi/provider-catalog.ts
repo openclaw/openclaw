@@ -1,6 +1,6 @@
-import type { ModelProviderConfig } from "../../src/config/types.models.js";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
 
-const XIAOMI_BASE_URL = "https://api.xiaomimimo.com/anthropic";
+const XIAOMI_BASE_URL = "https://api.xiaomimimo.com/v1";
 export const XIAOMI_DEFAULT_MODEL_ID = "mimo-v2-flash";
 const XIAOMI_DEFAULT_CONTEXT_WINDOW = 262144;
 const XIAOMI_DEFAULT_MAX_TOKENS = 8192;
@@ -14,7 +14,7 @@ const XIAOMI_DEFAULT_COST = {
 export function buildXiaomiProvider(): ModelProviderConfig {
   return {
     baseUrl: XIAOMI_BASE_URL,
-    api: "anthropic-messages",
+    api: "openai-completions",
     models: [
       {
         id: XIAOMI_DEFAULT_MODEL_ID,
@@ -24,6 +24,24 @@ export function buildXiaomiProvider(): ModelProviderConfig {
         cost: XIAOMI_DEFAULT_COST,
         contextWindow: XIAOMI_DEFAULT_CONTEXT_WINDOW,
         maxTokens: XIAOMI_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "mimo-v2-pro",
+        name: "Xiaomi MiMo V2 Pro",
+        reasoning: true,
+        input: ["text"],
+        cost: XIAOMI_DEFAULT_COST,
+        contextWindow: 1048576,
+        maxTokens: 32000,
+      },
+      {
+        id: "mimo-v2-omni",
+        name: "Xiaomi MiMo V2 Omni",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: XIAOMI_DEFAULT_COST,
+        contextWindow: XIAOMI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: 32000,
       },
     ],
   };

@@ -9,6 +9,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
@@ -24,12 +25,17 @@ import type {
 import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
+import {
+  OPENAI_DEFAULT_TTS_MODEL as DEFAULT_OPENAI_MODEL,
+  OPENAI_DEFAULT_TTS_VOICE as DEFAULT_OPENAI_VOICE,
+} from "../providers/openai-defaults.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   getSpeechProvider,
   listSpeechProviders,
   normalizeSpeechProviderId,
 } from "./provider-registry.js";
+import type { SpeechVoiceOption } from "./provider-types.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
   isValidOpenAIModel,
@@ -52,8 +58,6 @@ const DEFAULT_MAX_TEXT_LENGTH = 4096;
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
-const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
-const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
@@ -160,14 +164,20 @@ export type TtsDirectiveOverrides = {
   openai?: {
     voice?: string;
     model?: string;
+    speed?: number;
   };
   elevenlabs?: {
     voiceId?: string;
     modelId?: string;
+    outputFormat?: string;
     seed?: number;
     applyTextNormalization?: "auto" | "on" | "off";
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
+  };
+  microsoft?: {
+    voice?: string;
+    outputFormat?: string;
   };
 };
 
@@ -187,6 +197,17 @@ export type TtsResult = {
   provider?: string;
   outputFormat?: string;
   voiceCompatible?: boolean;
+};
+
+export type TtsSynthesisResult = {
+  success: boolean;
+  audioBuffer?: Buffer;
+  error?: string;
+  latencyMs?: number;
+  provider?: string;
+  outputFormat?: string;
+  voiceCompatible?: boolean;
+  fileExtension?: string;
 };
 
 export type TtsTelephonyResult = {
@@ -571,11 +592,35 @@ function buildTtsFailureResult(errors: string[]): { success: false; error: strin
   };
 }
 
+function resolveReadySpeechProvider(params: {
+  provider: TtsProvider;
+  cfg: OpenClawConfig;
+  config: ResolvedTtsConfig;
+  errors: string[];
+  requireTelephony?: boolean;
+}): NonNullable<ReturnType<typeof getSpeechProvider>> | null {
+  const resolvedProvider = getSpeechProvider(params.provider, params.cfg);
+  if (!resolvedProvider) {
+    params.errors.push(`${params.provider}: no provider registered`);
+    return null;
+  }
+  if (!resolvedProvider.isConfigured({ cfg: params.cfg, config: params.config })) {
+    params.errors.push(`${params.provider}: not configured`);
+    return null;
+  }
+  if (params.requireTelephony && !resolvedProvider.synthesizeTelephony) {
+    params.errors.push(`${params.provider}: unsupported for telephony`);
+    return null;
+  }
+  return resolvedProvider;
+}
+
 function resolveTtsRequestSetup(params: {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
   providerOverride?: TtsProvider;
+  disableFallback?: boolean;
 }):
   | {
       config: ResolvedTtsConfig;
@@ -596,7 +641,7 @@ function resolveTtsRequestSetup(params: {
   const provider = normalizeSpeechProviderId(params.providerOverride) ?? userProvider;
   return {
     config,
-    providers: resolveTtsProviderOrder(provider, params.cfg),
+    providers: params.disableFallback ? [provider] : resolveTtsProviderOrder(provider, params.cfg),
   };
 }
 
@@ -606,12 +651,44 @@ export async function textToSpeech(params: {
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
+  disableFallback?: boolean;
 }): Promise<TtsResult> {
+  const synthesis = await synthesizeSpeech(params);
+  if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
+    return buildTtsFailureResult([synthesis.error ?? "TTS conversion failed"]);
+  }
+
+  const tempRoot = resolvePreferredOpenClawTmpDir();
+  mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+  const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+  const audioPath = path.join(tempDir, `voice-${Date.now()}${synthesis.fileExtension}`);
+  writeFileSync(audioPath, synthesis.audioBuffer);
+  scheduleCleanup(tempDir);
+
+  return {
+    success: true,
+    audioPath,
+    latencyMs: synthesis.latencyMs,
+    provider: synthesis.provider,
+    outputFormat: synthesis.outputFormat,
+    voiceCompatible: synthesis.voiceCompatible,
+  };
+}
+
+export async function synthesizeSpeech(params: {
+  text: string;
+  cfg: OpenClawConfig;
+  prefsPath?: string;
+  channel?: string;
+  overrides?: TtsDirectiveOverrides;
+  disableFallback?: boolean;
+}): Promise<TtsSynthesisResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
     cfg: params.cfg,
     prefsPath: params.prefsPath,
     providerOverride: params.overrides?.provider,
+    disableFallback: params.disableFallback,
   });
   if ("error" in setup) {
     return { success: false, error: setup.error };
@@ -626,13 +703,13 @@ export async function textToSpeech(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
-      const resolvedProvider = getSpeechProvider(provider, params.cfg);
+      const resolvedProvider = resolveReadySpeechProvider({
+        provider,
+        cfg: params.cfg,
+        config,
+        errors,
+      });
       if (!resolvedProvider) {
-        errors.push(`${provider}: no provider registered`);
-        continue;
-      }
-      if (!resolvedProvider.isConfigured({ cfg: params.cfg, config })) {
-        errors.push(`${provider}: not configured`);
         continue;
       }
       const synthesis = await resolvedProvider.synthesize({
@@ -642,22 +719,14 @@ export async function textToSpeech(params: {
         target,
         overrides: params.overrides,
       });
-      const latencyMs = Date.now() - providerStart;
-
-      const tempRoot = resolvePreferredOpenClawTmpDir();
-      mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
-      const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-      const audioPath = path.join(tempDir, `voice-${Date.now()}${synthesis.fileExtension}`);
-      writeFileSync(audioPath, synthesis.audioBuffer);
-      scheduleCleanup(tempDir);
-
       return {
         success: true,
-        audioPath,
-        latencyMs,
+        audioBuffer: synthesis.audioBuffer,
+        latencyMs: Date.now() - providerStart,
         provider,
         outputFormat: synthesis.outputFormat,
         voiceCompatible: synthesis.voiceCompatible,
+        fileExtension: synthesis.fileExtension,
       };
     } catch (err) {
       errors.push(formatTtsProviderError(provider, err));
@@ -688,17 +757,14 @@ export async function textToSpeechTelephony(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
-      const resolvedProvider = getSpeechProvider(provider, params.cfg);
-      if (!resolvedProvider) {
-        errors.push(`${provider}: no provider registered`);
-        continue;
-      }
-      if (!resolvedProvider.isConfigured({ cfg: params.cfg, config })) {
-        errors.push(`${provider}: not configured`);
-        continue;
-      }
-      if (!resolvedProvider.synthesizeTelephony) {
-        errors.push(`${provider}: unsupported for telephony`);
+      const resolvedProvider = resolveReadySpeechProvider({
+        provider,
+        cfg: params.cfg,
+        config,
+        errors,
+        requireTelephony: true,
+      });
+      if (!resolvedProvider?.synthesizeTelephony) {
         continue;
       }
       const synthesis = await resolvedProvider.synthesizeTelephony({
@@ -723,6 +789,36 @@ export async function textToSpeechTelephony(params: {
   return buildTtsFailureResult(errors);
 }
 
+export async function listSpeechVoices(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  config?: ResolvedTtsConfig;
+  apiKey?: string;
+  baseUrl?: string;
+}): Promise<SpeechVoiceOption[]> {
+  const provider = normalizeSpeechProviderId(params.provider);
+  if (!provider) {
+    throw new Error("speech provider id is required");
+  }
+  const config = params.config ?? (params.cfg ? resolveTtsConfig(params.cfg) : undefined);
+  if (!config) {
+    throw new Error(`speech provider ${provider} requires cfg or resolved config`);
+  }
+  const resolvedProvider = getSpeechProvider(provider, params.cfg);
+  if (!resolvedProvider) {
+    throw new Error(`speech provider ${provider} is not registered`);
+  }
+  if (!resolvedProvider.listVoices) {
+    throw new Error(`speech provider ${provider} does not support voice listing`);
+  }
+  return await resolvedProvider.listVoices({
+    cfg: params.cfg,
+    config,
+    apiKey: params.apiKey,
+    baseUrl: params.baseUrl,
+  });
+}
+
 export async function maybeApplyTtsToPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
@@ -731,6 +827,10 @@ export async function maybeApplyTtsToPayload(params: {
   inboundAudio?: boolean;
   ttsAuto?: string;
 }): Promise<ReplyPayload> {
+  // Compaction notices are informational UI signals — never synthesise them as speech.
+  if (params.payload.isCompactionNotice) {
+    return params.payload;
+  }
   const config = resolveTtsConfig(params.cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({
@@ -742,7 +842,8 @@ export async function maybeApplyTtsToPayload(params: {
     return params.payload;
   }
 
-  const text = params.payload.text ?? "";
+  const reply = resolveSendableOutboundReplyParts(params.payload);
+  const text = reply.text;
   const directives = parseTtsDirectives(text, config.modelOverrides, config.openai.baseUrl);
   if (directives.warnings.length > 0) {
     logVerbose(`TTS: ignored directive overrides (${directives.warnings.join("; ")})`);
@@ -776,7 +877,7 @@ export async function maybeApplyTtsToPayload(params: {
   if (!ttsText.trim()) {
     return nextPayload;
   }
-  if (params.payload.mediaUrl || (params.payload.mediaUrls?.length ?? 0) > 0) {
+  if (reply.hasMedia) {
     return nextPayload;
   }
   if (text.includes("MEDIA:")) {

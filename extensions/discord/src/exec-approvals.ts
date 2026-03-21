@@ -1,6 +1,6 @@
-import type { ReplyPayload } from "../../../src/auto-reply/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { getExecApprovalReplyMetadata } from "../../../src/infra/exec-approval-reply.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/infra-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 
 export function isDiscordExecApprovalClientEnabled(params: {

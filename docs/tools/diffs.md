@@ -1,7 +1,6 @@
 ---
 title: "Diffs"
 summary: "Read-only diff viewer and file renderer for agents (optional plugin tool)"
-description: "Use the optional Diffs plugin to render before and after text or unified patches as a gateway-hosted diff view, a file (PNG or PDF), or both."
 read_when:
   - You want agents to show code or markdown edits as diffs
   - You want a canvas-ready viewer URL or a rendered diff file
@@ -111,6 +110,7 @@ All fields are optional unless noted:
 - `lang` (`string`): language override hint for before and after mode.
 - `title` (`string`): viewer title override.
 - `mode` (`"view" | "file" | "both"`): output mode. Defaults to plugin default `defaults.mode`.
+  Deprecated alias: `"image"` behaves like `"file"` and is still accepted for backward compatibility.
 - `theme` (`"light" | "dark"`): viewer theme. Defaults to plugin default `defaults.theme`.
 - `layout` (`"unified" | "split"`): diff layout. Defaults to plugin default `defaults.layout`.
 - `expandUnchanged` (`boolean`): expand unchanged sections when full context is available. Per-call option only (not a plugin default key).
@@ -150,9 +150,12 @@ Shared fields for modes that create a viewer:
 - `inputKind`
 - `fileCount`
 - `mode`
+- `context` (`agentId`, `sessionId`, `messageChannel`, `agentAccountId` when available)
 
 File fields when PNG or PDF is rendered:
 
+- `artifactId`
+- `expiresAt`
 - `filePath`
 - `path` (same value as `filePath`, for message tool compatibility)
 - `fileBytes`

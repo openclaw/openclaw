@@ -1,9 +1,11 @@
 import {
   buildUsageHttpErrorSnapshot,
   fetchJson,
-} from "../../src/infra/provider-usage.fetch.shared.js";
-import { clampPercent, PROVIDER_LABELS } from "../../src/infra/provider-usage.shared.js";
-import type { ProviderUsageSnapshot, UsageWindow } from "../../src/infra/provider-usage.types.js";
+  clampPercent,
+  PROVIDER_LABELS,
+  type ProviderUsageSnapshot,
+  type UsageWindow,
+} from "openclaw/plugin-sdk/provider-usage";
 
 type CopilotUsageResponse = {
   quota_snapshots?: {

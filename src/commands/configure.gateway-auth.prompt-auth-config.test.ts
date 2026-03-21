@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   promptCustomApiConfig: vi.fn(),
   resolvePluginProviders: vi.fn(() => []),
   resolveProviderPluginChoice: vi.fn<() => unknown>(() => null),
+  resolvePreferredProviderForAuthChoice: vi.fn<() => Promise<string | undefined>>(
+    async () => undefined,
+  ),
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({
@@ -25,7 +28,7 @@ vi.mock("./auth-choice-prompt.js", () => ({
 
 vi.mock("./auth-choice.js", () => ({
   applyAuthChoice: mocks.applyAuthChoice,
-  resolvePreferredProviderForAuthChoice: vi.fn(async () => undefined),
+  resolvePreferredProviderForAuthChoice: mocks.resolvePreferredProviderForAuthChoice,
 }));
 
 vi.mock("./model-picker.js", async (importActual) => {
@@ -88,7 +91,7 @@ function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
                 minimax: {
                   baseUrl: "https://api.minimax.io/anthropic",
                   api: "anthropic-messages",
-                  models: [{ id: "MiniMax-M2.5", name: "MiniMax M2.5" }],
+                  models: [{ id: "MiniMax-M2.7", name: "MiniMax M2.7" }],
                 },
               }
             : {}),
@@ -127,7 +130,7 @@ describe("promptAuthConfig", () => {
       "anthropic/claude-sonnet-4",
     ]);
     expect(result.models?.providers?.minimax?.models?.map((model) => model.id)).toEqual([
-      "MiniMax-M2.5",
+      "MiniMax-M2.7",
     ]);
   });
 
@@ -154,6 +157,21 @@ describe("promptAuthConfig", () => {
         allowedKeys: ["anthropic/claude-sonnet-4-6"],
         initialSelections: ["anthropic/claude-sonnet-4-6"],
         message: "Anthropic OAuth models",
+      }),
+    );
+  });
+
+  it("scopes the allowlist picker to the selected provider when available", async () => {
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("openai-api-key");
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("openai");
+    mocks.applyAuthChoice.mockResolvedValue({ config: {} });
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+
+    await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferredProvider: "openai",
       }),
     );
   });

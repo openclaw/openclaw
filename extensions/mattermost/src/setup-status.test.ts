@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 
 describe("mattermost setup status", () => {

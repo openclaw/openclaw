@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { PluginLogger } from "openclaw/plugin-sdk/acpx";
+import type { PluginLogger } from "../runtime-api.js";
 import { ACPX_PINNED_VERSION, ACPX_PLUGIN_ROOT, buildAcpxLocalInstallCommand } from "./config.js";
 import {
   resolveSpawnFailure,
@@ -233,7 +233,13 @@ export async function ensureAcpx(params: {
 
     const install = await spawnAndCollect({
       command: "npm",
-      args: ["install", "--omit=dev", "--no-save", `acpx@${installVersion}`],
+      args: [
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        `acpx@${installVersion}`,
+      ],
       cwd: pluginRoot,
       stripProviderAuthEnvVars: params.stripProviderAuthEnvVars,
     });

@@ -512,9 +512,9 @@ function collectGatewayConfigFindings(
       severity: exposed ? "critical" : "warn",
       title: "Control UI allowed origins contains wildcard",
       detail:
-        'gateway.controlUi.allowedOrigins includes "*" which effectively disables origin allowlisting for Control UI/WebChat requests.',
+        'gateway.controlUi.allowedOrigins includes "*" which means allow any browser origin for Control UI/WebChat requests. This disables origin allowlisting and should be treated as an intentional allow-all policy.',
       remediation:
-        "Replace wildcard origins with explicit trusted origins (for example https://control.example.com).",
+        'Replace wildcard origins with explicit trusted origins (for example https://control.example.com). Do not use "*" outside tightly controlled local testing.',
     });
   }
   if (dangerouslyAllowHostHeaderOriginFallback) {

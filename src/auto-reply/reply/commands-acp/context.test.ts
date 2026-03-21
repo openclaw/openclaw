@@ -141,6 +141,27 @@ describe("commands-acp context", () => {
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
   });
 
+  it("resolves Matrix thread context from the current room and thread root", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "matrix",
+      Surface: "matrix",
+      OriginatingChannel: "matrix",
+      OriginatingTo: "room:!room:example.org",
+      AccountId: "work",
+      MessageThreadId: "$thread-root",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "matrix",
+      accountId: "work",
+      threadId: "$thread-root",
+      conversationId: "$thread-root",
+      parentConversationId: "!room:example.org",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("$thread-root");
+    expect(resolveAcpCommandParentConversationId(params)).toBe("!room:example.org");
+  });
+
   it("builds Feishu topic conversation ids from chat target + root message id", () => {
     const params = buildCommandTestParams("/acp status", baseCfg, {
       Provider: "feishu",

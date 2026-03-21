@@ -1,135 +1,43 @@
 import {
-  DEFAULT_ACCOUNT_ID,
-  detectBinary,
-  formatDocsLink,
-  type OpenClawConfig,
-  parseSetupEntriesAllowingWildcard,
-  promptParsedAllowFromForScopedChannel,
-  setChannelDmPolicyWithAllowFrom,
+  createDetectedBinaryStatus,
   setSetupChannelEnabled,
-  type WizardPrompter,
-} from "../../../src/plugin-sdk-internal/setup.js";
-import type {
-  ChannelSetupDmPolicy,
-  ChannelSetupWizard,
-} from "../../../src/plugin-sdk-internal/setup.js";
+  type ChannelSetupWizard,
+} from "openclaw/plugin-sdk/setup";
+import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
+import { listIMessageAccountIds, resolveIMessageAccount } from "./accounts.js";
 import {
-  listIMessageAccountIds,
-  resolveDefaultIMessageAccountId,
-  resolveIMessageAccount,
-} from "./accounts.js";
-import { imessageSetupAdapter, parseIMessageAllowFromEntries } from "./setup-core.js";
+  createIMessageCliPathTextInput,
+  imessageCompletionNote,
+  imessageDmPolicy,
+  imessageSetupAdapter,
+  imessageSetupStatusBase,
+  parseIMessageAllowFromEntries,
+} from "./setup-core.js";
 
 const channel = "imessage" as const;
 
-async function promptIMessageAllowFrom(params: {
-  cfg: OpenClawConfig;
-  prompter: WizardPrompter;
-  accountId?: string;
-}): Promise<OpenClawConfig> {
-  return promptParsedAllowFromForScopedChannel({
-    cfg: params.cfg,
-    channel,
-    accountId: params.accountId,
-    defaultAccountId: resolveDefaultIMessageAccountId(params.cfg),
-    prompter: params.prompter,
-    noteTitle: "iMessage allowlist",
-    noteLines: [
-      "Allowlist iMessage DMs by handle or chat target.",
-      "Examples:",
-      "- +15555550123",
-      "- user@example.com",
-      "- chat_id:123",
-      "- chat_guid:... or chat_identifier:...",
-      "Multiple entries: comma-separated.",
-      `Docs: ${formatDocsLink("/imessage", "imessage")}`,
-    ],
-    message: "iMessage allowFrom (handle or chat_id)",
-    placeholder: "+15555550123, user@example.com, chat_id:123",
-    parseEntries: parseIMessageAllowFromEntries,
-    getExistingAllowFrom: ({ cfg, accountId }) =>
-      resolveIMessageAccount({ cfg, accountId }).config.allowFrom ?? [],
-  });
-}
-
-const imessageDmPolicy: ChannelSetupDmPolicy = {
-  label: "iMessage",
-  channel,
-  policyKey: "channels.imessage.dmPolicy",
-  allowFromKey: "channels.imessage.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.imessage?.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy) =>
-    setChannelDmPolicyWithAllowFrom({
-      cfg,
-      channel,
-      dmPolicy: policy,
-    }),
-  promptAllowFrom: promptIMessageAllowFrom,
-};
-
 export const imessageSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs setup",
-    configuredHint: "imsg found",
-    unconfiguredHint: "imsg missing",
-    configuredScore: 1,
-    unconfiguredScore: 0,
-    resolveConfigured: ({ cfg }) =>
-      listIMessageAccountIds(cfg).some((accountId) => {
-        const account = resolveIMessageAccount({ cfg, accountId });
-        return Boolean(
-          account.config.cliPath ||
-          account.config.dbPath ||
-          account.config.allowFrom ||
-          account.config.service ||
-          account.config.region,
-        );
-      }),
-    resolveStatusLines: async ({ cfg, configured }) => {
-      const cliPath = cfg.channels?.imessage?.cliPath ?? "imsg";
-      const cliDetected = await detectBinary(cliPath);
-      return [
-        `iMessage: ${configured ? "configured" : "needs setup"}`,
-        `imsg: ${cliDetected ? "found" : "missing"} (${cliPath})`,
-      ];
-    },
-    resolveSelectionHint: async ({ cfg }) => {
-      const cliPath = cfg.channels?.imessage?.cliPath ?? "imsg";
-      return (await detectBinary(cliPath)) ? "imsg found" : "imsg missing";
-    },
-    resolveQuickstartScore: async ({ cfg }) => {
-      const cliPath = cfg.channels?.imessage?.cliPath ?? "imsg";
-      return (await detectBinary(cliPath)) ? 1 : 0;
-    },
-  },
+  status: createDetectedBinaryStatus({
+    channelLabel: "iMessage",
+    binaryLabel: "imsg",
+    configuredLabel: imessageSetupStatusBase.configuredLabel,
+    unconfiguredLabel: imessageSetupStatusBase.unconfiguredLabel,
+    configuredHint: imessageSetupStatusBase.configuredHint,
+    unconfiguredHint: imessageSetupStatusBase.unconfiguredHint,
+    configuredScore: imessageSetupStatusBase.configuredScore,
+    unconfiguredScore: imessageSetupStatusBase.unconfiguredScore,
+    resolveConfigured: imessageSetupStatusBase.resolveConfigured,
+    resolveBinaryPath: ({ cfg }) => cfg.channels?.imessage?.cliPath ?? "imsg",
+    detectBinary,
+  }),
   credentials: [],
   textInputs: [
-    {
-      inputKey: "cliPath",
-      message: "imsg CLI path",
-      initialValue: ({ cfg, accountId }) =>
-        resolveIMessageAccount({ cfg, accountId }).config.cliPath ?? "imsg",
-      currentValue: ({ cfg, accountId }) =>
-        resolveIMessageAccount({ cfg, accountId }).config.cliPath ?? "imsg",
-      shouldPrompt: async ({ currentValue }) => !(await detectBinary(currentValue ?? "imsg")),
-      confirmCurrentValue: false,
-      applyCurrentValue: true,
-      helpTitle: "iMessage",
-      helpLines: ["imsg CLI path required to enable iMessage."],
-    },
+    createIMessageCliPathTextInput(async ({ currentValue }) => {
+      return !(await detectBinary(currentValue ?? "imsg"));
+    }),
   ],
-  completionNote: {
-    title: "iMessage next steps",
-    lines: [
-      "This is still a work in progress.",
-      "Ensure OpenClaw has Full Disk Access to Messages DB.",
-      "Grant Automation permission for Messages when prompted.",
-      "List chats with: imsg chats --limit 20",
-      `Docs: ${formatDocsLink("/imessage", "imessage")}`,
-    ],
-  },
+  completionNote: imessageCompletionNote,
   dmPolicy: imessageDmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

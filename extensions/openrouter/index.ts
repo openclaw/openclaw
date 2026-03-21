@@ -1,25 +1,19 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import {
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
+  definePluginEntry,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
-import { DEFAULT_CONTEXT_TOKENS } from "../../src/agents/defaults.js";
+} from "openclaw/plugin-sdk/plugin-entry";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { applyXaiModelCompat, DEFAULT_CONTEXT_TOKENS } from "openclaw/plugin-sdk/provider-models";
 import {
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
-} from "../../src/agents/pi-embedded-runner/openrouter-model-capabilities.js";
-import {
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
-} from "../../src/agents/pi-embedded-runner/proxy-stream-wrappers.js";
-import {
-  applyOpenrouterConfig,
-  OPENROUTER_DEFAULT_MODEL_REF,
-} from "../../src/commands/onboard-auth.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+} from "openclaw/plugin-sdk/provider-stream";
+import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildOpenrouterProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "openrouter";
@@ -79,12 +73,15 @@ function isOpenRouterCacheTtlModel(modelId: string): boolean {
   return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
-const openRouterPlugin = {
+function isXaiOpenRouterModel(modelId: string): boolean {
+  return modelId.trim().toLowerCase().startsWith("x-ai/");
+}
+
+export default definePluginEntry({
   id: "openrouter",
   name: "OpenRouter Provider",
   description: "Bundled OpenRouter provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "OpenRouter",
@@ -136,6 +133,8 @@ const openRouterPlugin = {
         geminiThoughtSignatureSanitization: true,
         geminiThoughtSignatureModelHints: ["gemini"],
       },
+      normalizeResolvedModel: ({ modelId, model }) =>
+        isXaiOpenRouterModel(modelId) ? applyXaiModelCompat(model) : undefined,
       isModernModelRef: () => true,
       wrapStreamFn: (ctx) => {
         let streamFn = ctx.streamFn;
@@ -156,6 +155,4 @@ const openRouterPlugin = {
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
     });
   },
-};
-
-export default openRouterPlugin;
+});

@@ -1,5 +1,7 @@
-import type { DirectoryConfigParams } from "../../../src/channels/plugins/directory-config.js";
-import type { ChannelDirectoryEntry } from "../../../src/channels/plugins/types.js";
+import type {
+  ChannelDirectoryEntry,
+  DirectoryConfigParams,
+} from "openclaw/plugin-sdk/directory-runtime";
 import { resolveSlackAccount } from "./accounts.js";
 import { createSlackWebClient } from "./client.js";
 

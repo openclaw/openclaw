@@ -1,12 +1,12 @@
-import { discoverKilocodeModels } from "../../src/agents/kilocode-models.js";
-import type { ModelProviderConfig } from "../../src/config/types.models.js";
 import {
+  discoverKilocodeModels,
+  type ModelProviderConfig,
   KILOCODE_BASE_URL,
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
   KILOCODE_DEFAULT_COST,
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_MODEL_CATALOG,
-} from "../../src/providers/kilocode-shared.js";
+} from "openclaw/plugin-sdk/provider-models";
 
 export function buildKilocodeProvider(): ModelProviderConfig {
   return {

@@ -1,6 +1,10 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { withBundledPluginAllowlistCompat } from "./bundled-compat.js";
+import {
+  withBundledPluginAllowlistCompat,
+  withBundledPluginEnablementCompat,
+} from "./bundled-compat.js";
+import { hasExplicitPluginConfig } from "./config-state.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
@@ -9,39 +13,17 @@ import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
-function hasExplicitPluginConfig(config: PluginLoadOptions["config"]): boolean {
-  const plugins = config?.plugins;
-  if (!plugins) {
-    return false;
-  }
-  if (typeof plugins.enabled === "boolean") {
-    return true;
-  }
-  if (Array.isArray(plugins.allow) && plugins.allow.length > 0) {
-    return true;
-  }
-  if (Array.isArray(plugins.deny) && plugins.deny.length > 0) {
-    return true;
-  }
-  if (Array.isArray(plugins.load?.paths) && plugins.load.paths.length > 0) {
-    return true;
-  }
-  if (plugins.entries && Object.keys(plugins.entries).length > 0) {
-    return true;
-  }
-  if (plugins.slots && Object.keys(plugins.slots).length > 0) {
-    return true;
-  }
-  return false;
-}
-
 function withBundledProviderVitestCompat(params: {
   config: PluginLoadOptions["config"];
   pluginIds: readonly string[];
   env?: PluginLoadOptions["env"];
 }): PluginLoadOptions["config"] {
   const env = params.env ?? process.env;
-  if (!env.VITEST || hasExplicitPluginConfig(params.config) || params.pluginIds.length === 0) {
+  if (
+    !env.VITEST ||
+    hasExplicitPluginConfig(params.config?.plugins) ||
+    params.pluginIds.length === 0
+  ) {
     return params.config;
   }
 
@@ -81,6 +63,11 @@ function resolveBundledProviderCompatPluginIds(params: {
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
 }
+
+export const __testing = {
+  resolveBundledProviderCompatPluginIds,
+  withBundledProviderVitestCompat,
+} as const;
 
 export function resolveOwningPluginIdsForProvider(params: {
   provider: string;
@@ -160,13 +147,20 @@ export function resolvePluginProviders(params: {
         pluginIds: bundledProviderCompatPluginIds,
       })
     : params.config;
-  const config = params.bundledProviderVitestCompat
+  const maybeVitestCompat = params.bundledProviderVitestCompat
     ? withBundledProviderVitestCompat({
         config: maybeAllowlistCompat,
         pluginIds: bundledProviderCompatPluginIds,
         env: params.env,
       })
     : maybeAllowlistCompat;
+  const config =
+    params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
+      ? withBundledPluginEnablementCompat({
+          config: maybeVitestCompat,
+          pluginIds: bundledProviderCompatPluginIds,
+        })
+      : maybeVitestCompat;
   const registry = loadOpenClawPlugins({
     config,
     workspaceDir: params.workspaceDir,

@@ -8,7 +8,7 @@ echo "Building Docker image..."
 docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
 echo "Running plugins Docker E2E..."
-docker run --rm -i "$IMAGE_NAME" bash -s <<'EOF'
+docker run --rm -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 
 if [ -f dist/index.mjs ]; then

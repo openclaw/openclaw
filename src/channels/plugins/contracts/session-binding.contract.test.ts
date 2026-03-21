@@ -1,151 +1,43 @@
-import { beforeEach, describe, expect } from "vitest";
-import {
-  __testing as feishuThreadBindingTesting,
-  createFeishuThreadBindingManager,
-} from "../../../../extensions/feishu/src/thread-bindings.js";
-import {
-  __testing as telegramThreadBindingTesting,
-  createTelegramThreadBindingManager,
-} from "../../../../extensions/telegram/src/thread-bindings.js";
-import type { OpenClawConfig } from "../../../config/config.js";
-import {
-  __testing as sessionBindingTesting,
-  getSessionBindingService,
-} from "../../../infra/outbound/session-binding-service.js";
+import { beforeEach, describe, vi } from "vitest";
+import { __testing as discordThreadBindingTesting } from "../../../../extensions/discord/src/monitor/thread-bindings.manager.js";
+import { __testing as feishuThreadBindingTesting } from "../../../../extensions/feishu/src/thread-bindings.js";
+import { resetMatrixThreadBindingsForTests } from "../../../../extensions/matrix/api.js";
+import { __testing as telegramThreadBindingTesting } from "../../../../extensions/telegram/src/thread-bindings.js";
+import { __testing as sessionBindingTesting } from "../../../infra/outbound/session-binding-service.js";
+import { sessionBindingContractRegistry } from "./registry.js";
 import { installSessionBindingContractSuite } from "./suites.js";
 
-const baseCfg = {
-  session: { mainKey: "main", scope: "per-sender" },
-} satisfies OpenClawConfig;
+vi.mock("../../../../extensions/matrix/src/matrix/send.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../../../extensions/matrix/src/matrix/send.js")
+  >("../../../../extensions/matrix/src/matrix/send.js");
+  return {
+    ...actual,
+    sendMessageMatrix: vi.fn(
+      async (_to: string, _message: string, opts?: { threadId?: string }) => ({
+        messageId: opts?.threadId ? "$reply" : "$root",
+        roomId: "!room:example",
+      }),
+    ),
+  };
+});
 
-beforeEach(() => {
+beforeEach(async () => {
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  discordThreadBindingTesting.resetThreadBindingsForTests();
   feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
-  telegramThreadBindingTesting.resetTelegramThreadBindingsForTests();
+  resetMatrixThreadBindingsForTests();
+  await telegramThreadBindingTesting.resetTelegramThreadBindingsForTests();
 });
 
-describe("feishu session binding contract", () => {
-  installSessionBindingContractSuite({
-    expectedCapabilities: {
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current"],
-    },
-    getCapabilities: () => {
-      createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
-      return getSessionBindingService().getCapabilities({
-        channel: "feishu",
-        accountId: "default",
-      });
-    },
-    bindAndResolve: async () => {
-      createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
-      const service = getSessionBindingService();
-      const binding = await service.bind({
-        targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-        targetKind: "session",
-        conversation: {
-          channel: "feishu",
-          accountId: "default",
-          conversationId: "oc_group_chat:topic:om_topic_root",
-          parentConversationId: "oc_group_chat",
-        },
-        placement: "current",
-        metadata: {
-          agentId: "codex",
-          label: "codex-main",
-        },
-      });
-      expect(
-        service.resolveByConversation({
-          channel: "feishu",
-          accountId: "default",
-          conversationId: "oc_group_chat:topic:om_topic_root",
-        }),
-      )?.toMatchObject({
-        targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-      });
-      return binding;
-    },
-    cleanup: async () => {
-      const manager = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
-      manager.stop();
-      expect(
-        getSessionBindingService().resolveByConversation({
-          channel: "feishu",
-          accountId: "default",
-          conversationId: "oc_group_chat:topic:om_topic_root",
-        }),
-      ).toBeNull();
-    },
+for (const entry of sessionBindingContractRegistry) {
+  describe(`${entry.id} session binding contract`, () => {
+    installSessionBindingContractSuite({
+      expectedCapabilities: entry.expectedCapabilities,
+      getCapabilities: entry.getCapabilities,
+      bindAndResolve: entry.bindAndResolve,
+      unbindAndVerify: entry.unbindAndVerify,
+      cleanup: entry.cleanup,
+    });
   });
-});
-
-describe("telegram session binding contract", () => {
-  installSessionBindingContractSuite({
-    expectedCapabilities: {
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current"],
-    },
-    getCapabilities: () => {
-      createTelegramThreadBindingManager({
-        accountId: "default",
-        persist: false,
-        enableSweeper: false,
-      });
-      return getSessionBindingService().getCapabilities({
-        channel: "telegram",
-        accountId: "default",
-      });
-    },
-    bindAndResolve: async () => {
-      createTelegramThreadBindingManager({
-        accountId: "default",
-        persist: false,
-        enableSweeper: false,
-      });
-      const service = getSessionBindingService();
-      const binding = await service.bind({
-        targetSessionKey: "agent:main:subagent:child-1",
-        targetKind: "subagent",
-        conversation: {
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "-100200300:topic:77",
-        },
-        placement: "current",
-        metadata: {
-          boundBy: "user-1",
-        },
-      });
-      expect(
-        service.resolveByConversation({
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "-100200300:topic:77",
-        }),
-      )?.toMatchObject({
-        targetSessionKey: "agent:main:subagent:child-1",
-      });
-      return binding;
-    },
-    cleanup: async () => {
-      const manager = createTelegramThreadBindingManager({
-        accountId: "default",
-        persist: false,
-        enableSweeper: false,
-      });
-      manager.stop();
-      expect(
-        getSessionBindingService().resolveByConversation({
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "-100200300:topic:77",
-        }),
-      ).toBeNull();
-    },
-  });
-});
+}

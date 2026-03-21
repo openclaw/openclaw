@@ -163,6 +163,19 @@ const coreEntries: CoreCliEntry[] = [
   {
     commands: [
       {
+        name: "mcp",
+        description: "Manage embedded Pi MCP servers",
+        hasSubcommands: true,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("../mcp-cli.js");
+      mod.registerMcpCli(program);
+    },
+  },
+  {
+    commands: [
+      {
         name: "agent",
         description: "Run one agent turn via the Gateway",
         hasSubcommands: false,

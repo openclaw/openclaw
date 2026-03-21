@@ -1,5 +1,5 @@
-import { parseDiscordTarget } from "../../../extensions/discord/src/targets.js";
-import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
+import { parseDiscordTarget } from "../../../extensions/discord/api.js";
+import { parseTelegramTarget } from "../../../extensions/telegram/api.js";
 import type { ChatType } from "../chat-type.js";
 import { normalizeChatChannelId } from "../registry.js";
 import { getChannelPlugin, normalizeChannelId } from "./registry.js";

@@ -17,19 +17,19 @@ vi.mock("../logging/diagnostic.js", () => ({
   diagnosticLogger: diagnosticMocks.diag,
 }));
 
-import {
-  clearCommandLane,
-  CommandLaneClearedError,
-  enqueueCommand,
-  enqueueCommandInLane,
-  GatewayDrainingError,
-  getActiveTaskCount,
-  getQueueSize,
-  markGatewayDraining,
-  resetAllLanes,
-  setCommandLaneConcurrency,
-  waitForActiveTasks,
-} from "./command-queue.js";
+type CommandQueueModule = typeof import("./command-queue.js");
+
+let clearCommandLane: CommandQueueModule["clearCommandLane"];
+let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
+let enqueueCommand: CommandQueueModule["enqueueCommand"];
+let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
+let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
+let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
+let getQueueSize: CommandQueueModule["getQueueSize"];
+let markGatewayDraining: CommandQueueModule["markGatewayDraining"];
+let resetAllLanes: CommandQueueModule["resetAllLanes"];
+let setCommandLaneConcurrency: CommandQueueModule["setCommandLaneConcurrency"];
+let waitForActiveTasks: CommandQueueModule["waitForActiveTasks"];
 
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -54,7 +54,21 @@ function enqueueBlockedMainTask<T = void>(
 }
 
 describe("command queue", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      clearCommandLane,
+      CommandLaneClearedError,
+      enqueueCommand,
+      enqueueCommandInLane,
+      GatewayDrainingError,
+      getActiveTaskCount,
+      getQueueSize,
+      markGatewayDraining,
+      resetAllLanes,
+      setCommandLaneConcurrency,
+      waitForActiveTasks,
+    } = await import("./command-queue.js"));
     resetAllLanes();
     diagnosticMocks.logLaneEnqueue.mockClear();
     diagnosticMocks.logLaneDequeue.mockClear();

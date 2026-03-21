@@ -1,6 +1,6 @@
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadWebMedia } from "../../whatsapp/src/media.js";
 import {
   __resetDiscordDirectoryCacheForTest,
   rememberDiscordDirectoryUser,
@@ -21,7 +21,7 @@ import {
 } from "./send.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 
-vi.mock("../../whatsapp/src/media.js", async () => {
+vi.mock("openclaw/plugin-sdk/web-media", async () => {
   const { discordWebMediaMockFactory } = await import("./send.test-harness.js");
   return discordWebMediaMockFactory();
 });

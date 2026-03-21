@@ -1,9 +1,9 @@
-import { hasControlCommand } from "../../../../../src/auto-reply/command-detection.js";
-import { parseActivationCommand } from "../../../../../src/auto-reply/group-activation.js";
-import { recordPendingHistoryEntryIfEnabled } from "../../../../../src/auto-reply/reply/history.js";
-import { resolveMentionGating } from "../../../../../src/channels/mention-gating.js";
-import type { loadConfig } from "../../../../../src/config/config.js";
-import { normalizeE164 } from "../../../../../src/utils.js";
+import { resolveMentionGating } from "openclaw/plugin-sdk/channel-inbound";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
+import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { recordPendingHistoryEntryIfEnabled } from "openclaw/plugin-sdk/reply-history";
+import { parseActivationCommand } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
