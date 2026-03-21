@@ -1,11 +1,11 @@
 import {
-  normalizeProviderId,
   loadAuthProfileStore,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   coerceSecretRef,

@@ -593,7 +593,9 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
         models: {
           providers: {
             minimax: {
+              baseUrl: "https://api.minimax.example/v1",
               apiKey: { source: "env", provider: "shellenv", id: "CUSTOM_MINIMAX_API_KEY" },
+              models: [],
             },
           },
         },
