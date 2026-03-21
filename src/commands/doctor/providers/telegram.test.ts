@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectTelegramEmptyAllowlistExtraWarnings,
+  collectTelegramAllowFromUsernameWarnings,
   collectTelegramGroupPolicyWarnings,
   scanTelegramAllowFromUsernameEntries,
 } from "./telegram.js";
@@ -118,6 +119,18 @@ describe("doctor telegram provider warnings", () => {
         path: "channels.telegram.accounts.work.groups.-100123.topics.99.allowFrom",
         entry: "@topic-user",
       },
+    ]);
+  });
+
+  it("formats allowFrom username warnings", () => {
+    const warnings = collectTelegramAllowFromUsernameWarnings({
+      hits: [{ path: "channels.telegram.allowFrom", entry: "@top" }],
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining("Telegram allowFrom contains 1 non-numeric entries"),
+      expect.stringContaining('Run "openclaw doctor --fix"'),
     ]);
   });
 });

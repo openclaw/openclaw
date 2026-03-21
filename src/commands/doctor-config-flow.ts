@@ -12,6 +12,7 @@ import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import {
+  collectDiscordNumericIdWarnings,
   maybeRepairDiscordNumericIds,
   scanDiscordNumericIdEntries,
 } from "./doctor/providers/discord.js";
@@ -23,6 +24,7 @@ import {
 } from "./doctor/providers/matrix.js";
 import {
   collectTelegramEmptyAllowlistExtraWarnings,
+  collectTelegramAllowFromUsernameWarnings,
   maybeRepairTelegramAllowFromUsernames,
   scanTelegramAllowFromUsernameEntries,
 } from "./doctor/providers/telegram.js";
@@ -48,7 +50,10 @@ import {
   collectMutableAllowlistWarnings,
   scanMutableAllowlistEntries,
 } from "./doctor/shared/mutable-allowlist.js";
-import { maybeRepairOpenPolicyAllowFrom } from "./doctor/shared/open-policy-allowfrom.js";
+import {
+  collectOpenPolicyAllowFromWarnings,
+  maybeRepairOpenPolicyAllowFrom,
+} from "./doctor/shared/open-policy-allowfrom.js";
 
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
@@ -231,25 +236,22 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   } else {
     const hits = scanTelegramAllowFromUsernameEntries(candidate);
     if (hits.length > 0) {
-      const sampleEntry = sanitizeForLog(hits[0]?.entry ?? "@");
       note(
-        [
-          `- Telegram allowFrom contains ${hits.length} non-numeric entries (e.g. ${sampleEntry}); Telegram authorization requires numeric sender IDs.`,
-          `- Run "${formatCliCommand("openclaw doctor --fix")}" to auto-resolve @username entries to numeric IDs (requires a Telegram bot token).`,
-        ].join("\n"),
+        collectTelegramAllowFromUsernameWarnings({
+          hits,
+          doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+        }).join("\n"),
         "Doctor warnings",
       );
     }
 
     const discordHits = scanDiscordNumericIdEntries(candidate);
     if (discordHits.length > 0) {
-      const samplePath = sanitizeForLog(discordHits[0]?.path ?? "channels.discord.allowFrom");
-      const sampleEntry = sanitizeForLog(String(discordHits[0]?.entry ?? ""));
       note(
-        [
-          `- Discord allowlists contain ${discordHits.length} numeric entries (e.g. ${samplePath}=${sampleEntry}).`,
-          `- Discord IDs must be strings; run "${formatCliCommand("openclaw doctor --fix")}" to convert numeric IDs to quoted strings.`,
-        ].join("\n"),
+        collectDiscordNumericIdWarnings({
+          hits: discordHits,
+          doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+        }).join("\n"),
         "Doctor warnings",
       );
     }
@@ -257,10 +259,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const allowFromScan = maybeRepairOpenPolicyAllowFrom(candidate);
     if (allowFromScan.changes.length > 0) {
       note(
-        [
-          ...allowFromScan.changes.map((line) => sanitizeForLog(line)),
-          `- Run "${formatCliCommand("openclaw doctor --fix")}" to add missing allowFrom wildcards.`,
-        ].join("\n"),
+        collectOpenPolicyAllowFromWarnings({
+          changes: allowFromScan.changes,
+          doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
+        }).join("\n"),
         "Doctor warnings",
       );
     }
