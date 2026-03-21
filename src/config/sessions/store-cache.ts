@@ -6,6 +6,7 @@ type SessionStoreCacheEntry = {
   mtimeMs?: number;
   sizeBytes?: number;
   serialized?: string;
+  versionToken?: string;
 };
 
 const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
@@ -56,12 +57,17 @@ export function readSessionStoreCache(params: {
   storePath: string;
   mtimeMs?: number;
   sizeBytes?: number;
+  versionToken?: string;
 }): Record<string, SessionEntry> | null {
   const cached = SESSION_STORE_CACHE.get(params.storePath);
   if (!cached) {
     return null;
   }
   if (params.mtimeMs !== cached.mtimeMs || params.sizeBytes !== cached.sizeBytes) {
+    invalidateSessionStoreCache(params.storePath);
+    return null;
+  }
+  if (params.versionToken !== cached.versionToken) {
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
@@ -74,12 +80,14 @@ export function writeSessionStoreCache(params: {
   mtimeMs?: number;
   sizeBytes?: number;
   serialized?: string;
+  versionToken?: string;
 }): void {
   SESSION_STORE_CACHE.set(params.storePath, {
     store: structuredClone(params.store),
     mtimeMs: params.mtimeMs,
     sizeBytes: params.sizeBytes,
     serialized: params.serialized,
+    versionToken: params.versionToken,
   });
   if (params.serialized !== undefined) {
     SESSION_STORE_SERIALIZED_CACHE.set(params.storePath, params.serialized);

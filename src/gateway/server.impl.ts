@@ -8,6 +8,7 @@ import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
+import { listAgentSessionDirs } from "../commands/cleanup-utils.js";
 import { isRestartEnabled } from "../config/commands.js";
 import {
   type ConfigFileSnapshot,
@@ -20,8 +21,11 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { STATE_DIR } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { migrateSessionStoreToDirectory } from "../config/sessions/store.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -534,6 +538,25 @@ export async function startGatewayServer(
     env: process.env,
     log,
   });
+  if (!minimalTestGateway) {
+    const migrationTargets = new Set<string>();
+    for (const sessionsDir of await listAgentSessionDirs(STATE_DIR)) {
+      migrationTargets.add(path.join(sessionsDir, "sessions.json"));
+    }
+    if (cfgAtStart.session?.store) {
+      migrationTargets.add(resolveStorePath(cfgAtStart.session.store));
+    }
+    for (const storePath of migrationTargets) {
+      try {
+        await migrateSessionStoreToDirectory(storePath);
+      } catch (err) {
+        log.warn("session-store directory migration failed", {
+          storePath,
+          error: String(err),
+        });
+      }
+    }
+  }
   const matrixInstallPathIssue = await detectPluginInstallPathIssue({
     pluginId: "matrix",
     install: cfgAtStart.plugins?.installs?.matrix,
