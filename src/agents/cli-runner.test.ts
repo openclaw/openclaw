@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -323,6 +324,55 @@ describe("runCliAgent with process supervisor", () => {
     expect(promptCarrier).toContain("[Bootstrap truncation warning]");
     expect(promptCarrier).toContain("- AGENTS.md: 200 raw -> 20 injected");
     expect(promptCarrier).toContain("hi");
+  });
+
+  it("hydrates prompt media refs into CLI image args", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const tempDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-"),
+    );
+    const sourceImage = path.join(tempDir, "bb-image.png");
+    await fs.writeFile(
+      sourceImage,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+
+    try {
+      await runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: tempDir,
+        prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        timeoutMs: 1_000,
+        runId: "run-prompt-image",
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+    const argv = input.argv ?? [];
+    const imageArgIndex = argv.indexOf("--image");
+    expect(imageArgIndex).toBeGreaterThanOrEqual(0);
+    expect(argv[imageArgIndex + 1]).toContain("openclaw-cli-images-");
+    expect(argv[imageArgIndex + 1]).not.toBe(sourceImage);
   });
 
   it("fails with timeout when no-output watchdog trips", async () => {

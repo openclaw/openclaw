@@ -14,6 +14,7 @@ import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
+import { detectImageReferences, loadImageFromRef } from "../pi-embedded-runner/run/images.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
@@ -322,6 +323,31 @@ export function appendImagePathsToPrompt(prompt: string, paths: string[]): strin
   const trimmed = prompt.trimEnd();
   const separator = trimmed ? "\n\n" : "";
   return `${trimmed}${separator}${paths.join("\n")}`;
+}
+
+export async function loadPromptRefImages(params: {
+  prompt: string;
+  workspaceDir: string;
+}): Promise<ImageContent[]> {
+  const refs = detectImageReferences(params.prompt);
+  if (refs.length === 0) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const images: ImageContent[] = [];
+  for (const ref of refs) {
+    const key = `${ref.type}:${ref.resolved}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const image = await loadImageFromRef(ref, params.workspaceDir);
+    if (image) {
+      images.push(image);
+    }
+  }
+  return images;
 }
 
 export async function writeCliImages(
