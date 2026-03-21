@@ -14,6 +14,7 @@ Text is supported everywhere; media and reactions vary by channel.
 ## Supported channels
 
 - [BlueBubbles](/channels/bluebubbles) — **Recommended for iMessage**; uses the BlueBubbles macOS server REST API with full feature support (bundled plugin; edit, unsend, effects, reactions, group management — edit currently broken on macOS 26 Tahoe).
+- [Campfire](/channels/campfire) — 37signals Campfire webhook integration (plugin, installed separately).
 - [Discord](/channels/discord) — Discord Bot API + Gateway; supports servers, channels, and DMs.
 - [Feishu](/channels/feishu) — Feishu/Lark bot via WebSocket (bundled plugin).
 - [Google Chat](/channels/googlechat) — Google Chat API app via HTTP webhook.

@@ -1005,6 +1005,7 @@
                 "group": "Messaging platforms",
                 "pages": [
                   "channels/bluebubbles",
+                  "channels/campfire",
                   "channels/discord",
                   "channels/feishu",
                   "channels/googlechat",
