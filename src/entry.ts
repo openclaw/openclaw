@@ -3,7 +3,14 @@ import { spawn } from "node:child_process";
 import { enableCompileCache } from "node:module";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
+import {
+  getCommandPathWithRootOptions,
+  getPositiveIntFlagValue,
+  hasFlag,
+  hasHelpOrVersion,
+  isRootHelpInvocation,
+  isRootVersionInvocation,
+} from "./cli/argv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
@@ -12,6 +19,7 @@ import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
+import type { RuntimeEnv } from "./runtime.js";
 
 const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
@@ -164,10 +172,76 @@ if (
       process.argv = parsed.argv;
     }
 
-    if (!tryHandleRootVersionFastPath(process.argv)) {
+    if (!tryHandleRootVersionFastPath(process.argv) && !tryHandleStatusJsonFastPath(process.argv)) {
       runMainOrRootHelp(process.argv);
     }
   }
+}
+
+export function tryHandleStatusJsonFastPath(
+  argv: string[],
+  deps: {
+    statusJsonCommand?: (
+      opts: {
+        deep?: boolean;
+        usage?: boolean;
+        timeoutMs?: number;
+        all?: boolean;
+      },
+      runtime: RuntimeEnv,
+    ) => Promise<void>;
+    runtime?: RuntimeEnv;
+    onError?: (error: unknown) => void;
+  } = {},
+): boolean {
+  const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
+  if (primary !== "status" || secondary !== undefined || !hasFlag(argv, "--json")) {
+    return false;
+  }
+  if (hasHelpOrVersion(argv)) {
+    return false;
+  }
+  const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
+  if (timeoutMs === null) {
+    return false;
+  }
+  const opts = {
+    deep: hasFlag(argv, "--deep"),
+    all: hasFlag(argv, "--all"),
+    usage: hasFlag(argv, "--usage"),
+    timeoutMs,
+  };
+  const handleError =
+    deps.onError ??
+    ((error: unknown) => {
+      console.error(
+        "[openclaw] Failed to render status JSON:",
+        error instanceof Error ? (error.stack ?? error.message) : error,
+      );
+      process.exitCode = 1;
+    });
+  const run = async () => {
+    try {
+      if (deps.statusJsonCommand && deps.runtime) {
+        await deps.statusJsonCommand(opts, deps.runtime);
+        return;
+      }
+      const [{ statusJsonCommand }, { defaultRuntime }] = await Promise.all([
+        import("./commands/status-json.js"),
+        import("./runtime.js"),
+      ]);
+      await statusJsonCommand(opts, defaultRuntime);
+    } finally {
+      try {
+        const { closeAllMemorySearchManagers } = await import("./memory/search-manager.js");
+        await closeAllMemorySearchManagers();
+      } catch {
+        // Best-effort teardown for short-lived CLI processes.
+      }
+    }
+  };
+  void run().catch(handleError);
+  return true;
 }
 
 export function tryHandleRootHelpFastPath(
