@@ -183,7 +183,7 @@ describe("createTelegramBot network-health fetch wrapper", () => {
     expect(noteNetworkHealthySpy).not.toHaveBeenCalled();
   });
 
-  it("does not clone/parse successful getUpdates payloads for health checks", async () => {
+  it("does not mark getUpdates network-healthy before body consumption", async () => {
     const cloneSpy = vi.fn(() => ({
       json: vi.fn(async () => ({ ok: true, result: [] })),
     }));
@@ -211,6 +211,6 @@ describe("createTelegramBot network-health fetch wrapper", () => {
 
     expect(response).toBe(responseLike);
     expect(cloneSpy).not.toHaveBeenCalled();
-    expect(noteNetworkHealthySpy).toHaveBeenCalledTimes(1);
+    expect(noteNetworkHealthySpy).not.toHaveBeenCalled();
   });
 });

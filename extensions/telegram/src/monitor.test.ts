@@ -840,23 +840,23 @@ describe("monitorTelegramProvider (grammY)", () => {
     vi.useRealTimers();
   });
 
-  it("forces restart when in-flight updates remain stuck for too long", async () => {
+  it("does not force-restart polling while in-flight updates remain active", async () => {
     const { monitorTelegramProvider } = await import("./monitor.js");
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();
     const { stop } = mockRunOnceWithStalledPollingRunner({
       size: () => 1,
     });
-    mockRunOnceAndAbort(abort);
 
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
     await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
 
     vi.advanceTimersByTime(11 * 60_000);
-    await monitor;
+    await Promise.resolve();
 
-    expect(stop).toHaveBeenCalled();
-    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(stop).not.toHaveBeenCalled();
+    abort.abort();
+    await monitor;
     vi.useRealTimers();
   });
 

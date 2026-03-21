@@ -127,7 +127,10 @@ function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
   }
 }
 
-async function shouldMarkTelegramNetworkHealthy(response: unknown): Promise<boolean> {
+async function shouldMarkTelegramNetworkHealthy(
+  response: unknown,
+  method?: string | null,
+): Promise<boolean> {
   if (!response || typeof response !== "object") {
     return false;
   }
@@ -171,8 +174,15 @@ async function shouldMarkTelegramNetworkHealthy(response: unknown): Promise<bool
     return false;
   }
 
-  // Success responses already prove transport health; avoid cloning/parsing
-  // response bodies on the hot path.
+  // For getUpdates, defer to grammY's own body-consumption path: a proxy may
+  // still drop a 200 JSON stream mid-read, and we should not clear outage
+  // streaks before that parse succeeds.
+  if (method === "getUpdates" && typed.status >= 200 && typed.status < 300) {
+    return false;
+  }
+
+  // Other success responses already prove transport health; avoid cloning/parsing
+  // response bodies on their hot paths.
   if (typed.status >= 200 && typed.status < 300) {
     return true;
   }
@@ -317,7 +327,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const method = extractTelegramApiMethod(input);
       return Promise.resolve(baseFetch(input, init))
         .then(async (response) => {
-          if (await shouldMarkTelegramNetworkHealthy(response)) {
+          if (await shouldMarkTelegramNetworkHealthy(response, method)) {
             noteTelegramNetworkHealthy?.();
           }
           return response;

@@ -19,7 +19,6 @@ const TELEGRAM_LONG_POLL_TIMEOUT_MS = 30_000;
 const MIN_POLL_STALL_THRESHOLD_MS = TELEGRAM_LONG_POLL_TIMEOUT_MS * 2;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
-const POLL_HUNG_IN_FLIGHT_THRESHOLD_MS = 10 * 60_000;
 
 const resolvePollStallThresholdMs = (value: number | undefined): number => {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -39,12 +38,6 @@ const resolvePollWatchdogIntervalMs = (pollStallThresholdMs: number): number => 
     POLL_WATCHDOG_INTERVAL_MS,
     Math.max(1_000, Math.floor(stallBudgetBeyondLongPollMs / 2)),
   );
-};
-
-const resolveHungInFlightThresholdMs = (pollStallThresholdMs: number): number => {
-  // Keep normal long-running handlers protected from false-positive restarts,
-  // but still recover if in-flight updates appear wedged for an extended period.
-  return Math.max(POLL_HUNG_IN_FLIGHT_THRESHOLD_MS, pollStallThresholdMs * 4);
 };
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
@@ -250,7 +243,6 @@ export class TelegramPollingSession {
     this.#activePollCycleId = pollCycleId;
     const pollStallThresholdMs = resolvePollStallThresholdMs(this.opts.pollStallThresholdMs);
     const pollWatchdogIntervalMs = resolvePollWatchdogIntervalMs(pollStallThresholdMs);
-    const hungInFlightThresholdMs = resolveHungInFlightThresholdMs(pollStallThresholdMs);
 
     let lastGetUpdatesAt = Date.now();
     bot.api.config.use((prev, method, payload, signal) => {
@@ -300,14 +292,10 @@ export class TelegramPollingSession {
       const hasPendingUpdates =
         typeof runner.size === "function" ? Number(runner.size()) > 0 : false;
       const isPollStalled = elapsed > pollStallThresholdMs && !hasPendingUpdates;
-      const isHungInFlight = elapsed > hungInFlightThresholdMs && hasPendingUpdates;
-      if (runner.isRunning() && (isPollStalled || isHungInFlight)) {
+      if (runner.isRunning() && isPollStalled) {
         stalledRestart = true;
-        const stallContext = isHungInFlight
-          ? "pending updates still in flight"
-          : "no pending updates";
         this.opts.log(
-          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}, ${stallContext}); forcing restart.`,
+          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}, no pending updates); forcing restart.`,
         );
         void stopRunner();
         void stopBot();
