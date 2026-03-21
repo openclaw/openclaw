@@ -288,8 +288,8 @@ export class OpenClawApp extends LitElement {
   @state() sessionsSortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
   @state() sessionsSortDir: "asc" | "desc" = "desc";
   @state() sessionsPage = 0;
-  @state() sessionsPageSize = 10;
-  @state() sessionsActionsOpenKey: string | null = null;
+  @state() sessionsPageSize = 25;
+  @state() sessionsSelectedKeys: Set<string> = new Set();
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;
