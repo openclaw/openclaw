@@ -32,6 +32,7 @@ type CachedValidator = {
 };
 
 const schemaCache = new Map<string, CachedValidator>();
+const SCHEMA_CACHE_MAX = 256;
 
 export type JsonSchemaValidationError = {
   path: string;
@@ -140,6 +141,12 @@ export function validateJsonSchemaValue(params: {
     const validate = getAjv().compile(params.schema);
     cached = { validate, schema: params.schema };
     schemaCache.set(params.cacheKey, cached);
+    if (schemaCache.size > SCHEMA_CACHE_MAX) {
+      const oldest = schemaCache.keys().next();
+      if (!oldest.done) {
+        schemaCache.delete(oldest.value);
+      }
+    }
   }
 
   const ok = cached.validate(params.value);

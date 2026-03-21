@@ -6,5 +6,24 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "capabilities": {
+    "register": [
+      "channel",
+      "cli",
+      "command",
+      "gatewayMethod",
+      "hook",
+      "httpRoute",
+      "imageGenerationProvider",
+      "interactive",
+      "mediaUnderstandingProvider",
+      "provider",
+      "service",
+      "speechProvider",
+      "tool",
+      "webSearchProvider"
+    ],
+    "runtime": ["config.read", "logging", "modelAuth"]
   }
 }

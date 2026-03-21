@@ -16,5 +16,9 @@
       "label": "Gateway URL",
       "help": "Public WebSocket URL used for /pair setup codes (ws/wss or http/https)."
     }
+  },
+  "capabilities": {
+    "register": ["command"],
+    "runtime": []
   }
 }

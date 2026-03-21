@@ -9,6 +9,15 @@ import type {
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  createUnrestrictedCapabilities,
+  gateRegistration,
+  gateRuntime,
+  REGISTER_METHOD_CAPABILITIES,
+  type CapabilityDiagnostic,
+  type CapabilityEnforcementMode,
+  type ResolvedCapabilities,
+} from "./capabilities/index.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
@@ -221,6 +230,8 @@ export type PluginRegistryParams = {
   // When true, skip writing to the global plugin command registry during register().
   // Used by non-activating snapshot loads to avoid leaking commands into the running gateway.
   suppressGlobalCommands?: boolean;
+  /** Capability enforcement mode. Defaults to "warn" (log but allow). */
+  capabilityEnforcement?: CapabilityEnforcementMode;
 };
 
 type PluginTypedHookPolicy = {
@@ -872,6 +883,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     return runtime;
   };
 
+  const handleCapabilityDiagnostic = (diagnostic: CapabilityDiagnostic) => {
+    pushDiagnostic({
+      level: "warn",
+      pluginId: diagnostic.pluginId,
+      source: "",
+      message: `capability ${diagnostic.type}:${diagnostic.capability} ${diagnostic.action}`,
+    });
+  };
+
   const createApi = (
     record: PluginRecord,
     params: {
@@ -879,10 +899,24 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginConfig?: Record<string, unknown>;
       hookPolicy?: PluginTypedHookPolicy;
       registrationMode?: PluginRegistrationMode;
+      capabilities?: ResolvedCapabilities;
     },
   ): OpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
-    return {
+    const caps = params.capabilities ?? createUnrestrictedCapabilities();
+    // When no global override is set, auto-enforce for plugins that declared
+    // capabilities (opted in) while keeping warn mode for undeclared plugins
+    // (wildcard access) to preserve backward compatibility.
+    const effectiveMode =
+      registryParams.capabilityEnforcement ?? (caps.isUnrestricted ? "warn" : "enforce");
+    const capOpts = {
+      mode: effectiveMode,
+      onDiagnostic: handleCapabilityDiagnostic,
+    };
+
+    const pluginRuntime = gateRuntime(record.id, resolvePluginRuntime(record.id), caps, capOpts);
+
+    const api: OpenClawPluginApi = {
       id: record.id,
       name: record.name,
       version: record.version,
@@ -892,7 +926,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registrationMode,
       config: params.config,
       pluginConfig: params.pluginConfig,
-      runtime: resolvePluginRuntime(record.id),
+      runtime: pluginRuntime,
       logger: normalizeLogger(registryParams.logger),
       registerTool:
         registrationMode === "full" ? (tool, opts) => registerTool(record, tool, opts) : () => {},
@@ -985,6 +1019,24 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           ? registerTypedHook(record, hookName, handler, opts, params.hookPolicy)
           : undefined,
     };
+
+    // Apply capability gating to all registration methods declared in the
+    // capability map. This preserves TypeScript's contextual type inference
+    // for the lambda parameters above while still enforcing capabilities.
+    for (const methodName of Object.keys(REGISTER_METHOD_CAPABILITIES)) {
+      const original = api[methodName as keyof OpenClawPluginApi];
+      if (typeof original === "function") {
+        (api as Record<string, unknown>)[methodName] = gateRegistration(
+          record.id,
+          methodName,
+          original,
+          caps,
+          capOpts,
+        );
+      }
+    }
+
+    return api;
   };
 
   return {

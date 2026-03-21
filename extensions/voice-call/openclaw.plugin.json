@@ -533,7 +533,7 @@
               "speed": {
                 "type": "number",
                 "minimum": 0.25,
-                "maximum": 4.0
+                "maximum": 4
               },
               "instructions": {
                 "type": "string"
@@ -606,5 +606,9 @@
         "minimum": 1
       }
     }
+  },
+  "capabilities": {
+    "register": ["cli", "gatewayMethod", "service", "tool"],
+    "runtime": ["agent", "config.read", "tts"]
   }
 }

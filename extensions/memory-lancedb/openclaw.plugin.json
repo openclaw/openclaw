@@ -84,5 +84,9 @@
       }
     },
     "required": ["embedding"]
+  },
+  "capabilities": {
+    "register": ["cli", "service", "tool"],
+    "runtime": ["config.read"]
   }
 }

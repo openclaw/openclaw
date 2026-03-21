@@ -39,5 +39,9 @@
         }
       }
     }
+  },
+  "capabilities": {
+    "register": ["webSearchProvider"],
+    "runtime": []
   }
 }

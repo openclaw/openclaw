@@ -6,5 +6,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "capabilities": {
+    "register": ["command"],
+    "runtime": ["config.read", "tts"]
   }
 }

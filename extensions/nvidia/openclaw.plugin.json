@@ -8,5 +8,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "capabilities": {
+    "register": ["provider"],
+    "runtime": ["config.read", "logging", "modelAuth"]
   }
 }

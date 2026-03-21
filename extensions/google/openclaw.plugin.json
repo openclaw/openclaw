@@ -58,5 +58,14 @@
         }
       }
     }
+  },
+  "capabilities": {
+    "register": [
+      "imageGenerationProvider",
+      "mediaUnderstandingProvider",
+      "provider",
+      "webSearchProvider"
+    ],
+    "runtime": ["config.read", "logging", "modelAuth"]
   }
 }

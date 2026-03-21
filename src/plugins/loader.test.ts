@@ -2083,7 +2083,10 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
           );
           expect(routes).toHaveLength(1);
           expect(routes[0]?.path).toBe("/demo");
-          expect(registry.diagnostics).toEqual([]);
+          const nonCapDiags = registry.diagnostics.filter(
+            (d) => !d.message?.includes("no capabilities declaration"),
+          );
+          expect(nonCapDiags).toEqual([]);
         },
       },
       {
@@ -2156,7 +2159,10 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
             (entry) => entry.pluginId === "http-route-overlap-same-auth",
           );
           expect(routes).toHaveLength(2);
-          expect(registry.diagnostics).toEqual([]);
+          const nonCapDiags = registry.diagnostics.filter(
+            (d) => !d.message?.includes("no capabilities declaration"),
+          );
+          expect(nonCapDiags).toEqual([]);
         },
       },
     ] as const;

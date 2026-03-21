@@ -59,5 +59,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "capabilities": {
+    "register": ["mediaUnderstandingProvider", "provider"],
+    "runtime": ["config.read", "logging", "modelAuth"]
   }
 }

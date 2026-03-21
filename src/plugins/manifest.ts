@@ -3,6 +3,7 @@ import path from "node:path";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
+import type { PluginCapabilities } from "./capabilities/types.js";
 import type { PluginConfigUiHint, PluginKind } from "./types.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
@@ -27,6 +28,8 @@ export type PluginManifest = {
   description?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
+  /** Declared capabilities for capability-based access control. */
+  capabilities?: PluginCapabilities;
 };
 
 export type PluginManifestProviderAuthChoice = {
@@ -66,6 +69,23 @@ function normalizeStringList(value: unknown): string[] {
     return [];
   }
   return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+}
+
+function normalizeCapabilities(value: unknown): PluginCapabilities | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const result: PluginCapabilities = {};
+  if (Array.isArray(value.register)) {
+    result.register = normalizeStringList(value.register) as PluginCapabilities["register"];
+  }
+  if (Array.isArray(value.runtime)) {
+    result.runtime = normalizeStringList(value.runtime) as PluginCapabilities["runtime"];
+  }
+  if (!result.register && !result.runtime) {
+    return undefined;
+  }
+  return result;
 }
 
 function normalizeStringListRecord(value: unknown): Record<string, string[]> | undefined {
@@ -208,6 +228,8 @@ export function loadPluginManifest(
     uiHints = raw.uiHints as Record<string, PluginConfigUiHint>;
   }
 
+  const capabilities = normalizeCapabilities(raw.capabilities);
+
   return {
     ok: true,
     manifest: {
@@ -224,6 +246,7 @@ export function loadPluginManifest(
       description,
       version,
       uiHints,
+      capabilities,
     },
     manifestPath,
   };

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
+import type { PluginCapabilities } from "./capabilities/types.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
@@ -57,6 +58,8 @@ export type PluginManifestRecord = {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
+  /** Declared plugin capabilities for capability-based access control. */
+  pluginCapabilities?: PluginCapabilities;
 };
 
 export type PluginManifestRegistry = {
@@ -178,6 +181,7 @@ function buildRecord(params: {
     schemaCacheKey: params.schemaCacheKey,
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
+    pluginCapabilities: params.manifest.capabilities,
   };
 }
 

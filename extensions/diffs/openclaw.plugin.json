@@ -178,5 +178,9 @@
         }
       }
     }
+  },
+  "capabilities": {
+    "register": ["httpRoute", "tool"],
+    "runtime": []
   }
 }

@@ -5,5 +5,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "capabilities": {
+    "register": ["channel", "httpRoute"],
+    "runtime": ["channel", "config.read", "logging"]
   }
 }

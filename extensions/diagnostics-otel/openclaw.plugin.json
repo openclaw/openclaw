@@ -4,5 +4,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "capabilities": {
+    "register": ["service"],
+    "runtime": []
   }
 }

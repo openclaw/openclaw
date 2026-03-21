@@ -6,5 +6,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "capabilities": {
+    "register": ["channel", "tool"],
+    "runtime": ["config.read", "logging"]
   }
 }

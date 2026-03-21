@@ -33,5 +33,14 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "capabilities": {
+    "register": [
+      "imageGenerationProvider",
+      "mediaUnderstandingProvider",
+      "provider",
+      "speechProvider"
+    ],
+    "runtime": ["config.read", "logging", "modelAuth"]
   }
 }

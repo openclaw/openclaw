@@ -38,6 +38,8 @@ export type PluginInstallRecord = Omit<InstallRecordBase, "source"> & {
 export type PluginsConfig = {
   /** Enable or disable plugin loading. */
   enabled?: boolean;
+  /** Capability enforcement mode: "warn" (default) or "enforce". */
+  capabilityEnforcement?: "warn" | "enforce";
   /** Optional plugin allowlist (plugin ids). */
   allow?: string[];
   /** Optional plugin denylist (plugin ids). */

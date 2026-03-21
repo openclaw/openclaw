@@ -936,6 +936,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Plugin system controls for enabling extensions, constraining load scope, configuring entries, and tracking installs. Keep plugin policy explicit and least-privilege in production environments.",
   "plugins.enabled":
     "Enable or disable plugin/extension loading globally during startup and config reload (default: true). Keep enabled only when extension capabilities are required by your deployment.",
+  "plugins.capabilityEnforcement":
+    'Overrides plugin capability enforcement globally. "warn" logs diagnostics but allows calls through. "enforce" silently blocks undeclared access. When unset (default), plugins with declared capabilities are automatically enforced while plugins without declarations remain in warn mode.',
   "plugins.allow":
     "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Use this to enforce approved extension inventories in controlled environments.",
   "plugins.deny":

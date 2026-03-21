@@ -67,5 +67,9 @@
         }
       }
     }
+  },
+  "capabilities": {
+    "register": ["mediaUnderstandingProvider", "provider", "webSearchProvider"],
+    "runtime": ["config.read", "logging", "modelAuth"]
   }
 }

@@ -205,6 +205,7 @@ export function resolvePluginSdkAliasFile(params: {
 }
 
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
+const PLUGIN_SDK_SUBPATH_CACHE_MAX = 128;
 
 export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = {}): string[] {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
@@ -218,6 +219,12 @@ export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = 
   }
   const subpaths = readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? [];
   cachedPluginSdkExportedSubpaths.set(packageRoot, subpaths);
+  if (cachedPluginSdkExportedSubpaths.size > PLUGIN_SDK_SUBPATH_CACHE_MAX) {
+    const oldest = cachedPluginSdkExportedSubpaths.keys().next();
+    if (!oldest.done) {
+      cachedPluginSdkExportedSubpaths.delete(oldest.value);
+    }
+  }
   return subpaths;
 }
 

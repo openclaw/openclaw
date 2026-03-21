@@ -24,5 +24,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "capabilities": {
+    "register": ["imageGenerationProvider", "provider"],
+    "runtime": ["config.read", "logging", "modelAuth"]
   }
 }

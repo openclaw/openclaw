@@ -11,6 +11,7 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
+import { resolveCapabilities } from "./capabilities/resolve.js";
 import { clearPluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
@@ -879,6 +880,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     runtime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
     suppressGlobalCommands: !shouldActivate,
+    capabilityEnforcement: cfg.plugins?.capabilityEnforcement,
   });
 
   const discovery = discoverOpenClawPlugins({
@@ -1175,12 +1177,24 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           );
           continue;
         }
+        const setupCaps = resolveCapabilities(manifestRecord.pluginCapabilities);
         const api = createApi(record, {
           config: cfg,
           pluginConfig: {},
           hookPolicy: entry?.hooks,
           registrationMode,
+          capabilities: setupCaps,
         });
+        if (!manifestRecord.pluginCapabilities && setupCaps.isUnrestricted) {
+          registry.diagnostics.push({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message:
+              "plugin has no capabilities declaration; defaulting to unrestricted access. " +
+              'Add a "capabilities" field to openclaw.plugin.json to opt into enforcement.',
+          });
+        }
         api.registerChannel(setupRegistration.plugin);
         registry.plugins.push(record);
         seenIds.set(pluginId, candidate.origin);
@@ -1264,12 +1278,24 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
+    const pluginCaps = resolveCapabilities(manifestRecord.pluginCapabilities);
     const api = createApi(record, {
       config: cfg,
       pluginConfig: validatedConfig.value,
       hookPolicy: entry?.hooks,
       registrationMode,
+      capabilities: pluginCaps,
     });
+    if (!manifestRecord.pluginCapabilities && pluginCaps.isUnrestricted) {
+      registry.diagnostics.push({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message:
+          "plugin has no capabilities declaration; defaulting to unrestricted access. " +
+          'Add a "capabilities" field to openclaw.plugin.json to opt into enforcement.',
+      });
+    }
 
     try {
       const result = register(api);
