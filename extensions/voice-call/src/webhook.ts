@@ -4,9 +4,9 @@ import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk/voice-call";
+} from "../api.js";
 import { normalizeVoiceCallConfig, type VoiceCallConfig } from "./config.js";
-import type { CoreConfig } from "./core-bridge.js";
+import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
 import { MediaStreamHandler } from "./media-stream.js";
@@ -55,6 +55,7 @@ export class VoiceCallWebhookServer {
   private manager: CallManager;
   private provider: VoiceCallProvider;
   private coreConfig: CoreConfig | null;
+  private agentRuntime: CoreAgentDeps | null;
   private stopStaleCallReaper: (() => void) | null = null;
 
   /** Media stream handler for bidirectional audio (when streaming enabled) */
@@ -65,11 +66,13 @@ export class VoiceCallWebhookServer {
     manager: CallManager,
     provider: VoiceCallProvider,
     coreConfig?: CoreConfig,
+    agentRuntime?: CoreAgentDeps,
   ) {
     this.config = normalizeVoiceCallConfig(config);
     this.manager = manager;
     this.provider = provider;
     this.coreConfig = coreConfig ?? null;
+    this.agentRuntime = agentRuntime ?? null;
 
     // Initialize media stream handler if streaming is enabled
     if (this.config.streaming.enabled) {
@@ -458,6 +461,10 @@ export class VoiceCallWebhookServer {
       console.warn("[voice-call] Core config missing; skipping auto-response");
       return;
     }
+    if (!this.agentRuntime) {
+      console.warn("[voice-call] Agent runtime missing; skipping auto-response");
+      return;
+    }
 
     try {
       const { generateVoiceResponse } = await import("./response-generator.js");
@@ -465,6 +472,7 @@ export class VoiceCallWebhookServer {
       const result = await generateVoiceResponse({
         voiceConfig: this.config,
         coreConfig: this.coreConfig,
+        agentRuntime: this.agentRuntime,
         callId,
         from: call.from,
         transcript: call.transcript,

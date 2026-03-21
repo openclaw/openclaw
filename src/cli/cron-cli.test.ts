@@ -156,7 +156,11 @@ async function expectCronEditWithScheduleLookupExit(
   ).rejects.toThrow("__exit__:1");
 }
 
-async function runCronRunAndCaptureExit(params: { ran: boolean; args?: string[] }) {
+async function runCronRunAndCaptureExit(params: {
+  ran?: boolean;
+  enqueued?: boolean;
+  args?: string[];
+}) {
   resetGatewayMock();
   callGatewayFromCli.mockImplementation(
     async (method: string, _opts: unknown, callParams?: unknown) => {
@@ -164,7 +168,12 @@ async function runCronRunAndCaptureExit(params: { ran: boolean; args?: string[] 
         return { enabled: true };
       }
       if (method === "cron.run") {
-        return { ok: true, params: callParams, ran: params.ran };
+        return {
+          ok: true,
+          params: callParams,
+          ...(typeof params.ran === "boolean" ? { ran: params.ran } : {}),
+          ...(typeof params.enqueued === "boolean" ? { enqueued: params.enqueued } : {}),
+        };
       }
       return { ok: true, params: callParams };
     },
@@ -196,12 +205,17 @@ describe("cron cli", () => {
       expectedExitCode: 0,
     },
     {
+      name: "exits 0 for cron run when job is queued successfully",
+      enqueued: true,
+      expectedExitCode: 0,
+    },
+    {
       name: "exits 1 for cron run when job does not execute",
       ran: false,
       expectedExitCode: 1,
     },
-  ])("$name", async ({ ran, expectedExitCode }) => {
-    const { exitSpy } = await runCronRunAndCaptureExit({ ran });
+  ])("$name", async ({ ran, enqueued, expectedExitCode }) => {
+    const { exitSpy } = await runCronRunAndCaptureExit({ ran, enqueued });
     expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
   });
 

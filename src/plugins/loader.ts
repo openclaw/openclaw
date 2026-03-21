@@ -2,11 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { isChannelConfigured } from "../config/plugin-auto-enable.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
+import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { clearPluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
@@ -17,17 +21,32 @@ import {
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
+import { clearPluginInteractiveHandlers } from "./interactive.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
+import { resolvePluginCacheInputs } from "./roots.js";
 import { setActivePluginRegistry } from "./runtime.js";
-import { createPluginRuntime, type CreatePluginRuntimeOptions } from "./runtime/index.js";
+import type { CreatePluginRuntimeOptions } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
+import {
+  buildPluginLoaderJitiOptions,
+  listPluginSdkAliasCandidates,
+  listPluginSdkExportedSubpaths,
+  resolveLoaderPackageRoot,
+  resolvePluginSdkAliasCandidateOrder,
+  resolvePluginSdkAliasFile,
+  resolvePluginSdkScopedAliasMap,
+  shouldPreferNativeJiti,
+  type LoaderModuleResolveParams,
+} from "./sdk-alias.js";
 import type {
   OpenClawPluginDefinition,
   OpenClawPluginModule,
   PluginDiagnostic,
+  PluginBundleFormat,
+  PluginFormat,
   PluginLogger,
 } from "./types.js";
 
@@ -36,68 +55,107 @@ export type PluginLoadResult = PluginRegistry;
 export type PluginLoadOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
+  // Allows callers to resolve plugin roots and load paths against an explicit env
+  // instead of the process-global environment.
+  env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   runtimeOptions?: CreatePluginRuntimeOptions;
   cache?: boolean;
   mode?: "full" | "validate";
+  onlyPluginIds?: string[];
+  includeSetupOnlyChannelPlugins?: boolean;
+  /**
+   * Prefer `setupEntry` for configured channel plugins that explicitly opt in
+   * via package metadata because their setup entry covers the pre-listen startup surface.
+   */
+  preferSetupRuntimeForChannelPlugins?: boolean;
+  activate?: boolean;
+  throwOnLoadError?: boolean;
 };
 
+export class PluginLoadFailureError extends Error {
+  readonly pluginIds: string[];
+  readonly registry: PluginRegistry;
+
+  constructor(registry: PluginRegistry) {
+    const failedPlugins = registry.plugins.filter((entry) => entry.status === "error");
+    const summary = failedPlugins
+      .map((entry) => `${entry.id}: ${entry.error ?? "unknown plugin load error"}`)
+      .join("; ");
+    super(`plugin load failed: ${summary}`);
+    this.name = "PluginLoadFailureError";
+    this.pluginIds = failedPlugins.map((entry) => entry.id);
+    this.registry = registry;
+  }
+}
+
+const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
 const registryCache = new Map<string, PluginRegistry>();
+const openAllowlistWarningCache = new Set<string>();
+const LAZY_RUNTIME_REFLECTION_KEYS = [
+  "version",
+  "config",
+  "agent",
+  "subagent",
+  "system",
+  "media",
+  "tts",
+  "stt",
+  "tools",
+  "channel",
+  "events",
+  "logging",
+  "state",
+  "modelAuth",
+] as const satisfies readonly (keyof PluginRuntime)[];
+
+export function clearPluginLoaderCache(): void {
+  registryCache.clear();
+  openAllowlistWarningCache.clear();
+}
 
 const defaultLogger = () => createSubsystemLogger("plugins");
 
-type PluginSdkAliasCandidateKind = "dist" | "src";
-
-function resolvePluginSdkAliasCandidateOrder(params: {
-  modulePath: string;
-  isProduction: boolean;
-}): PluginSdkAliasCandidateKind[] {
-  const normalizedModulePath = params.modulePath.replace(/\\/g, "/");
-  const isDistRuntime = normalizedModulePath.includes("/dist/");
-  return isDistRuntime || params.isProduction ? ["dist", "src"] : ["src", "dist"];
+function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string {
+  return params.modulePath ?? fileURLToPath(params.moduleUrl ?? import.meta.url);
 }
 
-function listPluginSdkAliasCandidates(params: {
-  srcFile: string;
-  distFile: string;
-  modulePath: string;
-}) {
-  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
-    modulePath: params.modulePath,
-    isProduction: process.env.NODE_ENV === "production",
+const resolvePluginSdkAlias = (params: LoaderModuleResolveParams = {}): string | null =>
+  resolvePluginSdkAliasFile({
+    srcFile: "root-alias.cjs",
+    distFile: "root-alias.cjs",
+    ...params,
   });
-  let cursor = path.dirname(params.modulePath);
-  const candidates: string[] = [];
-  for (let i = 0; i < 6; i += 1) {
+
+function buildPluginLoaderAliasMap(modulePath: string): Record<string, string> {
+  const pluginSdkAlias = resolvePluginSdkAlias({ modulePath });
+  const extensionApiAlias = resolveExtensionApiAlias({ modulePath });
+  return {
+    ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
+    ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
+    ...resolvePluginSdkScopedAliasMap({ modulePath }),
+  };
+}
+
+const resolveExtensionApiAlias = (params: LoaderModuleResolveParams = {}): string | null => {
+  try {
+    const modulePath = resolveLoaderModulePath(params);
+    const packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
+    if (!packageRoot) {
+      return null;
+    }
+
+    const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+      modulePath,
+      isProduction: process.env.NODE_ENV === "production",
+    });
     const candidateMap = {
-      src: path.join(cursor, "src", "plugin-sdk", params.srcFile),
-      dist: path.join(cursor, "dist", "plugin-sdk", params.distFile),
+      src: path.join(packageRoot, "src", "extensionAPI.ts"),
+      dist: path.join(packageRoot, "dist", "extensionAPI.js"),
     } as const;
     for (const kind of orderedKinds) {
-      candidates.push(candidateMap[kind]);
-    }
-    const parent = path.dirname(cursor);
-    if (parent === cursor) {
-      break;
-    }
-    cursor = parent;
-  }
-  return candidates;
-}
-
-const resolvePluginSdkAliasFile = (params: {
-  srcFile: string;
-  distFile: string;
-  modulePath?: string;
-}): string | null => {
-  try {
-    const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-    for (const candidate of listPluginSdkAliasCandidates({
-      srcFile: params.srcFile,
-      distFile: params.distFile,
-      modulePath,
-    })) {
+      const candidate = candidateMap[kind];
       if (fs.existsSync(candidate)) {
         return candidate;
       }
@@ -108,125 +166,122 @@ const resolvePluginSdkAliasFile = (params: {
   return null;
 };
 
-const resolvePluginSdkAlias = (): string | null =>
-  resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
-
-const pluginSdkScopedAliasEntries = [
-  { subpath: "core", srcFile: "core.ts", distFile: "core.js" },
-  { subpath: "compat", srcFile: "compat.ts", distFile: "compat.js" },
-  { subpath: "telegram", srcFile: "telegram.ts", distFile: "telegram.js" },
-  { subpath: "discord", srcFile: "discord.ts", distFile: "discord.js" },
-  { subpath: "slack", srcFile: "slack.ts", distFile: "slack.js" },
-  { subpath: "signal", srcFile: "signal.ts", distFile: "signal.js" },
-  { subpath: "imessage", srcFile: "imessage.ts", distFile: "imessage.js" },
-  { subpath: "whatsapp", srcFile: "whatsapp.ts", distFile: "whatsapp.js" },
-  { subpath: "line", srcFile: "line.ts", distFile: "line.js" },
-  { subpath: "msteams", srcFile: "msteams.ts", distFile: "msteams.js" },
-  { subpath: "acpx", srcFile: "acpx.ts", distFile: "acpx.js" },
-  { subpath: "bluebubbles", srcFile: "bluebubbles.ts", distFile: "bluebubbles.js" },
-  {
-    subpath: "copilot-proxy",
-    srcFile: "copilot-proxy.ts",
-    distFile: "copilot-proxy.js",
-  },
-  { subpath: "device-pair", srcFile: "device-pair.ts", distFile: "device-pair.js" },
-  {
-    subpath: "diagnostics-otel",
-    srcFile: "diagnostics-otel.ts",
-    distFile: "diagnostics-otel.js",
-  },
-  { subpath: "diffs", srcFile: "diffs.ts", distFile: "diffs.js" },
-  { subpath: "feishu", srcFile: "feishu.ts", distFile: "feishu.js" },
-  {
-    subpath: "google-gemini-cli-auth",
-    srcFile: "google-gemini-cli-auth.ts",
-    distFile: "google-gemini-cli-auth.js",
-  },
-  { subpath: "googlechat", srcFile: "googlechat.ts", distFile: "googlechat.js" },
-  { subpath: "irc", srcFile: "irc.ts", distFile: "irc.js" },
-  { subpath: "llm-task", srcFile: "llm-task.ts", distFile: "llm-task.js" },
-  { subpath: "lobster", srcFile: "lobster.ts", distFile: "lobster.js" },
-  { subpath: "matrix", srcFile: "matrix.ts", distFile: "matrix.js" },
-  { subpath: "mattermost", srcFile: "mattermost.ts", distFile: "mattermost.js" },
-  { subpath: "memory-core", srcFile: "memory-core.ts", distFile: "memory-core.js" },
-  {
-    subpath: "memory-lancedb",
-    srcFile: "memory-lancedb.ts",
-    distFile: "memory-lancedb.js",
-  },
-  {
-    subpath: "minimax-portal-auth",
-    srcFile: "minimax-portal-auth.ts",
-    distFile: "minimax-portal-auth.js",
-  },
-  {
-    subpath: "nextcloud-talk",
-    srcFile: "nextcloud-talk.ts",
-    distFile: "nextcloud-talk.js",
-  },
-  { subpath: "nostr", srcFile: "nostr.ts", distFile: "nostr.js" },
-  { subpath: "open-prose", srcFile: "open-prose.ts", distFile: "open-prose.js" },
-  {
-    subpath: "phone-control",
-    srcFile: "phone-control.ts",
-    distFile: "phone-control.js",
-  },
-  {
-    subpath: "qwen-portal-auth",
-    srcFile: "qwen-portal-auth.ts",
-    distFile: "qwen-portal-auth.js",
-  },
-  {
-    subpath: "synology-chat",
-    srcFile: "synology-chat.ts",
-    distFile: "synology-chat.js",
-  },
-  { subpath: "talk-voice", srcFile: "talk-voice.ts", distFile: "talk-voice.js" },
-  { subpath: "test-utils", srcFile: "test-utils.ts", distFile: "test-utils.js" },
-  {
-    subpath: "thread-ownership",
-    srcFile: "thread-ownership.ts",
-    distFile: "thread-ownership.js",
-  },
-  { subpath: "tlon", srcFile: "tlon.ts", distFile: "tlon.js" },
-  { subpath: "twitch", srcFile: "twitch.ts", distFile: "twitch.js" },
-  { subpath: "voice-call", srcFile: "voice-call.ts", distFile: "voice-call.js" },
-  { subpath: "zalo", srcFile: "zalo.ts", distFile: "zalo.js" },
-  { subpath: "zalouser", srcFile: "zalouser.ts", distFile: "zalouser.js" },
-  { subpath: "account-id", srcFile: "account-id.ts", distFile: "account-id.js" },
-  {
-    subpath: "keyed-async-queue",
-    srcFile: "keyed-async-queue.ts",
-    distFile: "keyed-async-queue.js",
-  },
-] as const;
-
-const resolvePluginSdkScopedAliasMap = (): Record<string, string> => {
-  const aliasMap: Record<string, string> = {};
-  for (const entry of pluginSdkScopedAliasEntries) {
-    const resolved = resolvePluginSdkAliasFile({
-      srcFile: entry.srcFile,
-      distFile: entry.distFile,
+function resolvePluginRuntimeModulePath(params: LoaderModuleResolveParams = {}): string | null {
+  try {
+    const modulePath = resolveLoaderModulePath(params);
+    const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+      modulePath,
+      isProduction: process.env.NODE_ENV === "production",
     });
-    if (resolved) {
-      aliasMap[`openclaw/plugin-sdk/${entry.subpath}`] = resolved;
+    const packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
+    const candidates = packageRoot
+      ? orderedKinds.map((kind) =>
+          kind === "src"
+            ? path.join(packageRoot, "src", "plugins", "runtime", "index.ts")
+            : path.join(packageRoot, "dist", "plugins", "runtime", "index.js"),
+        )
+      : [
+          path.join(path.dirname(modulePath), "runtime", "index.ts"),
+          path.join(path.dirname(modulePath), "runtime", "index.js"),
+        ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
     }
+  } catch {
+    // ignore
   }
-  return aliasMap;
-};
+  return null;
+}
 
 export const __testing = {
+  buildPluginLoaderJitiOptions,
+  buildPluginLoaderAliasMap,
   listPluginSdkAliasCandidates,
+  listPluginSdkExportedSubpaths,
+  resolveExtensionApiAlias,
+  resolvePluginSdkScopedAliasMap,
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
+  resolvePluginRuntimeModulePath,
+  shouldPreferNativeJiti,
+  maxPluginRegistryCacheEntries: MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
 };
+
+function getCachedPluginRegistry(cacheKey: string): PluginRegistry | undefined {
+  const cached = registryCache.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+  // Refresh insertion order so frequently reused registries survive eviction.
+  registryCache.delete(cacheKey);
+  registryCache.set(cacheKey, cached);
+  return cached;
+}
+
+function setCachedPluginRegistry(cacheKey: string, registry: PluginRegistry): void {
+  if (registryCache.has(cacheKey)) {
+    registryCache.delete(cacheKey);
+  }
+  registryCache.set(cacheKey, registry);
+  while (registryCache.size > MAX_PLUGIN_REGISTRY_CACHE_ENTRIES) {
+    const oldestKey = registryCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    registryCache.delete(oldestKey);
+  }
+}
 
 function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
+  installs?: Record<string, PluginInstallRecord>;
+  env: NodeJS.ProcessEnv;
+  onlyPluginIds?: string[];
+  includeSetupOnlyChannelPlugins?: boolean;
+  preferSetupRuntimeForChannelPlugins?: boolean;
+  runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
 }): string {
-  const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
-  return `${workspaceKey}::${JSON.stringify(params.plugins)}`;
+  const { roots, loadPaths } = resolvePluginCacheInputs({
+    workspaceDir: params.workspaceDir,
+    loadPaths: params.plugins.loadPaths,
+    env: params.env,
+  });
+  const installs = Object.fromEntries(
+    Object.entries(params.installs ?? {}).map(([pluginId, install]) => [
+      pluginId,
+      {
+        ...install,
+        installPath:
+          typeof install.installPath === "string"
+            ? resolveUserPath(install.installPath, params.env)
+            : install.installPath,
+        sourcePath:
+          typeof install.sourcePath === "string"
+            ? resolveUserPath(install.sourcePath, params.env)
+            : install.sourcePath,
+      },
+    ]),
+  );
+  const scopeKey = JSON.stringify(params.onlyPluginIds ?? []);
+  const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
+  const startupChannelMode =
+    params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
+  return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
+    ...params.plugins,
+    installs,
+    loadPaths,
+  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${params.runtimeSubagentMode ?? "default"}`;
+}
+
+function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
+  if (!ids) {
+    return undefined;
+  }
+  const normalized = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean))).toSorted();
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function validatePluginConfig(params: {
@@ -273,12 +328,61 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   return {};
 }
 
+function resolveSetupChannelRegistration(moduleExport: unknown): {
+  plugin?: ChannelPlugin;
+} {
+  const resolved =
+    moduleExport &&
+    typeof moduleExport === "object" &&
+    "default" in (moduleExport as Record<string, unknown>)
+      ? (moduleExport as { default: unknown }).default
+      : moduleExport;
+  if (!resolved || typeof resolved !== "object") {
+    return {};
+  }
+  const setup = resolved as {
+    plugin?: unknown;
+  };
+  if (!setup.plugin || typeof setup.plugin !== "object") {
+    return {};
+  }
+  return {
+    plugin: setup.plugin as ChannelPlugin,
+  };
+}
+
+function shouldLoadChannelPluginInSetupRuntime(params: {
+  manifestChannels: string[];
+  setupSource?: string;
+  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  preferSetupRuntimeForChannelPlugins?: boolean;
+}): boolean {
+  if (!params.setupSource || params.manifestChannels.length === 0) {
+    return false;
+  }
+  if (
+    params.preferSetupRuntimeForChannelPlugins &&
+    params.startupDeferConfiguredChannelFullLoadUntilAfterListen === true
+  ) {
+    return true;
+  }
+  return !params.manifestChannels.some((channelId) =>
+    isChannelConfigured(params.cfg, channelId, params.env),
+  );
+}
+
 function createPluginRecord(params: {
   id: string;
   name?: string;
   description?: string;
   version?: string;
+  format?: PluginFormat;
+  bundleFormat?: PluginBundleFormat;
+  bundleCapabilities?: string[];
   source: string;
+  rootDir?: string;
   origin: PluginRecord["origin"];
   workspaceDir?: string;
   enabled: boolean;
@@ -289,7 +393,11 @@ function createPluginRecord(params: {
     name: params.name ?? params.id,
     description: params.description,
     version: params.version,
+    format: params.format ?? "openclaw",
+    bundleFormat: params.bundleFormat,
+    bundleCapabilities: params.bundleCapabilities,
     source: params.source,
+    rootDir: params.rootDir,
     origin: params.origin,
     workspaceDir: params.workspaceDir,
     enabled: params.enabled,
@@ -298,6 +406,10 @@ function createPluginRecord(params: {
     hookNames: [],
     channelIds: [],
     providerIds: [],
+    speechProviderIds: [],
+    mediaUnderstandingProviderIds: [],
+    imageGenerationProviderIds: [],
+    webSearchProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
@@ -321,7 +433,12 @@ function recordPluginError(params: {
   logPrefix: string;
   diagnosticMessagePrefix: string;
 }) {
-  const errorText = String(params.error);
+  const errorText =
+    process.env.OPENCLAW_PLUGIN_LOADER_DEBUG_STACKS === "1" &&
+    params.error instanceof Error &&
+    typeof params.error.stack === "string"
+      ? params.error.stack
+      : String(params.error);
   const deprecatedApiHint =
     errorText.includes("api.registerHttpHandler") && errorText.includes("is not a function")
       ? "deprecated api.registerHttpHandler(...) was removed; use api.registerHttpRoute(...) for plugin-owned routes or registerPluginHttpRoute(...) for dynamic lifecycle routes"
@@ -344,6 +461,19 @@ function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnost
   diagnostics.push(...append);
 }
 
+function maybeThrowOnPluginLoadError(
+  registry: PluginRegistry,
+  throwOnLoadError: boolean | undefined,
+): void {
+  if (!throwOnLoadError) {
+    return;
+  }
+  if (!registry.plugins.some((entry) => entry.status === "error")) {
+    return;
+  }
+  throw new PluginLoadFailureError(registry);
+}
+
 type PathMatcher = {
   exact: Set<string>;
   dirs: string[];
@@ -363,12 +493,16 @@ function createPathMatcher(): PathMatcher {
   return { exact: new Set<string>(), dirs: [] };
 }
 
-function addPathToMatcher(matcher: PathMatcher, rawPath: string): void {
+function addPathToMatcher(
+  matcher: PathMatcher,
+  rawPath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
   const trimmed = rawPath.trim();
   if (!trimmed) {
     return;
   }
-  const resolved = resolveUserPath(trimmed);
+  const resolved = resolveUserPath(trimmed, env);
   if (!resolved) {
     return;
   }
@@ -393,10 +527,11 @@ function matchesPathMatcher(matcher: PathMatcher, sourcePath: string): boolean {
 function buildProvenanceIndex(params: {
   config: OpenClawConfig;
   normalizedLoadPaths: string[];
+  env: NodeJS.ProcessEnv;
 }): PluginProvenanceIndex {
   const loadPathMatcher = createPathMatcher();
   for (const loadPath of params.normalizedLoadPaths) {
-    addPathToMatcher(loadPathMatcher, loadPath);
+    addPathToMatcher(loadPathMatcher, loadPath, params.env);
   }
 
   const installRules = new Map<string, InstallTrackingRule>();
@@ -413,7 +548,7 @@ function buildProvenanceIndex(params: {
       rule.trackedWithoutPaths = true;
     } else {
       for (const trackedPath of trackedPaths) {
-        addPathToMatcher(rule.matcher, trackedPath);
+        addPathToMatcher(rule.matcher, trackedPath, params.env);
       }
     }
     installRules.set(pluginId, rule);
@@ -426,8 +561,9 @@ function isTrackedByProvenance(params: {
   pluginId: string;
   source: string;
   index: PluginProvenanceIndex;
+  env: NodeJS.ProcessEnv;
 }): boolean {
-  const sourcePath = resolveUserPath(params.source);
+  const sourcePath = resolveUserPath(params.source, params.env);
   const installRule = params.index.installRules.get(params.pluginId);
   if (installRule) {
     if (installRule.trackedWithoutPaths) {
@@ -440,10 +576,87 @@ function isTrackedByProvenance(params: {
   return matchesPathMatcher(params.index.loadPathMatcher, sourcePath);
 }
 
+function matchesExplicitInstallRule(params: {
+  pluginId: string;
+  source: string;
+  index: PluginProvenanceIndex;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  const sourcePath = resolveUserPath(params.source, params.env);
+  const installRule = params.index.installRules.get(params.pluginId);
+  if (!installRule || installRule.trackedWithoutPaths) {
+    return false;
+  }
+  return matchesPathMatcher(installRule.matcher, sourcePath);
+}
+
+function resolveCandidateDuplicateRank(params: {
+  candidate: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
+  manifestByRoot: Map<string, ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]>;
+  provenance: PluginProvenanceIndex;
+  env: NodeJS.ProcessEnv;
+}): number {
+  const manifestRecord = params.manifestByRoot.get(params.candidate.rootDir);
+  const pluginId = manifestRecord?.id;
+  const isExplicitInstall =
+    params.candidate.origin === "global" &&
+    pluginId !== undefined &&
+    matchesExplicitInstallRule({
+      pluginId,
+      source: params.candidate.source,
+      index: params.provenance,
+      env: params.env,
+    });
+
+  if (params.candidate.origin === "config") {
+    return 0;
+  }
+  if (params.candidate.origin === "global" && isExplicitInstall) {
+    return 1;
+  }
+  if (params.candidate.origin === "bundled") {
+    // Bundled plugin ids stay reserved unless the operator configured an override.
+    return 2;
+  }
+  if (params.candidate.origin === "workspace") {
+    return 3;
+  }
+  return 4;
+}
+
+function compareDuplicateCandidateOrder(params: {
+  left: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
+  right: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
+  manifestByRoot: Map<string, ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]>;
+  provenance: PluginProvenanceIndex;
+  env: NodeJS.ProcessEnv;
+}): number {
+  const leftPluginId = params.manifestByRoot.get(params.left.rootDir)?.id;
+  const rightPluginId = params.manifestByRoot.get(params.right.rootDir)?.id;
+  if (!leftPluginId || leftPluginId !== rightPluginId) {
+    return 0;
+  }
+  return (
+    resolveCandidateDuplicateRank({
+      candidate: params.left,
+      manifestByRoot: params.manifestByRoot,
+      provenance: params.provenance,
+      env: params.env,
+    }) -
+    resolveCandidateDuplicateRank({
+      candidate: params.right,
+      manifestByRoot: params.manifestByRoot,
+      provenance: params.provenance,
+      env: params.env,
+    })
+  );
+}
+
 function warnWhenAllowlistIsOpen(params: {
   logger: PluginLogger;
   pluginsEnabled: boolean;
   allow: string[];
+  warningCacheKey: string;
   discoverablePlugins: Array<{ id: string; source: string; origin: PluginRecord["origin"] }>;
 }) {
   if (!params.pluginsEnabled) {
@@ -456,11 +669,15 @@ function warnWhenAllowlistIsOpen(params: {
   if (nonBundled.length === 0) {
     return;
   }
+  if (openAllowlistWarningCache.has(params.warningCacheKey)) {
+    return;
+  }
   const preview = nonBundled
     .slice(0, 6)
     .map((entry) => `${entry.id} (${entry.source})`)
     .join(", ");
   const extra = nonBundled.length > 6 ? ` (+${nonBundled.length - 6} more)` : "";
+  openAllowlistWarningCache.add(params.warningCacheKey);
   params.logger.warn(
     `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
   );
@@ -470,6 +687,7 @@ function warnAboutUntrackedLoadedPlugins(params: {
   registry: PluginRegistry;
   provenance: PluginProvenanceIndex;
   logger: PluginLogger;
+  env: NodeJS.ProcessEnv;
 }) {
   for (const plugin of params.registry.plugins) {
     if (plugin.status !== "loaded" || plugin.origin === "bundled") {
@@ -480,6 +698,7 @@ function warnAboutUntrackedLoadedPlugins(params: {
         pluginId: plugin.id,
         source: plugin.source,
         index: params.provenance,
+        env: params.env,
       })
     ) {
       continue;
@@ -502,34 +721,131 @@ function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): voi
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
+  // Snapshot (non-activating) loads must disable the cache to avoid storing a registry
+  // whose commands were never globally registered.
+  if (options.activate === false && options.cache !== false) {
+    throw new Error(
+      "loadOpenClawPlugins: activate:false requires cache:false to prevent command registry divergence",
+    );
+  }
+  const env = options.env ?? process.env;
   // Test env: default-disable plugins unless explicitly configured.
   // This keeps unit/gateway suites fast and avoids loading heavyweight plugin deps by accident.
-  const cfg = applyTestPluginDefaults(options.config ?? {}, process.env);
+  const cfg = applyTestPluginDefaults(options.config ?? {}, env);
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
   const normalized = normalizePluginsConfig(cfg.plugins);
+  const onlyPluginIds = normalizeScopedPluginIds(options.onlyPluginIds);
+  const onlyPluginIdSet = onlyPluginIds ? new Set(onlyPluginIds) : null;
+  const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
+  const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
+  const shouldActivate = options.activate !== false;
+  // NOTE: `activate` is intentionally excluded from the cache key. All non-activating
+  // (snapshot) callers pass `cache: false` via loadOnboardingPluginRegistry(), so they
+  // never read from or write to the cache. Including `activate` here would be misleading
+  // — it would imply mixed-activate caching is supported, when in practice it is not.
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
     plugins: normalized,
+    installs: cfg.plugins?.installs,
+    env,
+    onlyPluginIds,
+    includeSetupOnlyChannelPlugins,
+    preferSetupRuntimeForChannelPlugins,
+    runtimeSubagentMode:
+      options.runtimeOptions?.allowGatewaySubagentBinding === true
+        ? "gateway-bindable"
+        : options.runtimeOptions?.subagent
+          ? "explicit"
+          : "default",
   });
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
-    const cached = registryCache.get(cacheKey);
+    const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
-      activatePluginRegistry(cached, cacheKey);
+      if (shouldActivate) {
+        activatePluginRegistry(cached, cacheKey);
+      }
       return cached;
     }
   }
 
-  // Clear previously registered plugin commands before reloading
-  clearPluginCommands();
+  // Clear previously registered plugin commands before reloading.
+  // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
+  if (shouldActivate) {
+    clearPluginCommands();
+    clearPluginInteractiveHandlers();
+  }
+
+  // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
+  const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+  const getJiti = (modulePath: string) => {
+    const tryNative = shouldPreferNativeJiti(modulePath);
+    const aliasMap = buildPluginLoaderAliasMap(modulePath);
+    const cacheKey = JSON.stringify({
+      tryNative,
+      aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+    });
+    const cached = jitiLoaders.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const loader = createJiti(import.meta.url, {
+      ...buildPluginLoaderJitiOptions(aliasMap),
+      // Source .ts runtime shims import sibling ".js" specifiers that only exist
+      // after build. Disable native loading for source entries so Jiti rewrites
+      // those imports against the source graph, while keeping native dist/*.js
+      // loading for the canonical built module graph.
+      tryNative,
+    });
+    jitiLoaders.set(cacheKey, loader);
+    return loader;
+  };
+
+  let createPluginRuntimeFactory: ((options?: CreatePluginRuntimeOptions) => PluginRuntime) | null =
+    null;
+  const resolveCreatePluginRuntime = (): ((
+    options?: CreatePluginRuntimeOptions,
+  ) => PluginRuntime) => {
+    if (createPluginRuntimeFactory) {
+      return createPluginRuntimeFactory;
+    }
+    const runtimeModulePath = resolvePluginRuntimeModulePath();
+    if (!runtimeModulePath) {
+      throw new Error("Unable to resolve plugin runtime module");
+    }
+    const runtimeModule = getJiti(runtimeModulePath)(runtimeModulePath) as {
+      createPluginRuntime?: (options?: CreatePluginRuntimeOptions) => PluginRuntime;
+    };
+    if (typeof runtimeModule.createPluginRuntime !== "function") {
+      throw new Error("Plugin runtime module missing createPluginRuntime export");
+    }
+    createPluginRuntimeFactory = runtimeModule.createPluginRuntime;
+    return createPluginRuntimeFactory;
+  };
 
   // Lazily initialize the runtime so startup paths that discover/skip plugins do
-  // not eagerly load every channel runtime dependency.
+  // not eagerly load every channel/runtime dependency tree.
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
-    resolvedRuntime ??= createPluginRuntime(options.runtimeOptions);
+    resolvedRuntime ??= resolveCreatePluginRuntime()(options.runtimeOptions);
     return resolvedRuntime;
+  };
+  const lazyRuntimeReflectionKeySet = new Set<PropertyKey>(LAZY_RUNTIME_REFLECTION_KEYS);
+  const resolveLazyRuntimeDescriptor = (prop: PropertyKey): PropertyDescriptor | undefined => {
+    if (!lazyRuntimeReflectionKeySet.has(prop)) {
+      return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
+    }
+    return {
+      configurable: true,
+      enumerable: true,
+      get() {
+        return Reflect.get(resolveRuntime() as object, prop);
+      },
+      set(value: unknown) {
+        Reflect.set(resolveRuntime() as object, prop, value);
+      },
+    };
   };
   const runtime = new Proxy({} as PluginRuntime, {
     get(_target, prop, receiver) {
@@ -539,13 +855,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       return Reflect.set(resolveRuntime(), prop, value, receiver);
     },
     has(_target, prop) {
-      return Reflect.has(resolveRuntime(), prop);
+      return lazyRuntimeReflectionKeySet.has(prop) || Reflect.has(resolveRuntime(), prop);
     },
     ownKeys() {
-      return Reflect.ownKeys(resolveRuntime() as object);
+      return [...LAZY_RUNTIME_REFLECTION_KEYS];
     },
     getOwnPropertyDescriptor(_target, prop) {
-      return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
+      return resolveLazyRuntimeDescriptor(prop);
     },
     defineProperty(_target, prop, attributes) {
       return Reflect.defineProperty(resolveRuntime() as object, prop, attributes);
@@ -557,21 +873,25 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       return Reflect.getPrototypeOf(resolveRuntime() as object);
     },
   });
+
   const { registry, createApi } = createPluginRegistry({
     logger,
     runtime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
+    suppressGlobalCommands: !shouldActivate,
   });
 
   const discovery = discoverOpenClawPlugins({
     workspaceDir: options.workspaceDir,
     extraPaths: normalized.loadPaths,
     cache: options.cache,
+    env,
   });
   const manifestRegistry = loadPluginManifestRegistry({
     config: cfg,
     workspaceDir: options.workspaceDir,
     cache: options.cache,
+    env,
     candidates: discovery.candidates,
     diagnostics: discovery.diagnostics,
   });
@@ -580,55 +900,52 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     logger,
     pluginsEnabled: normalized.enabled,
     allow: normalized.allow,
-    discoverablePlugins: manifestRegistry.plugins.map((plugin) => ({
-      id: plugin.id,
-      source: plugin.source,
-      origin: plugin.origin,
-    })),
+    warningCacheKey: cacheKey,
+    // Keep warning input scoped as well so partial snapshot loads only mention the
+    // plugins that were intentionally requested for this registry.
+    discoverablePlugins: manifestRegistry.plugins
+      .filter((plugin) => !onlyPluginIdSet || onlyPluginIdSet.has(plugin.id))
+      .map((plugin) => ({
+        id: plugin.id,
+        source: plugin.source,
+        origin: plugin.origin,
+      })),
   });
   const provenance = buildProvenanceIndex({
     config: cfg,
     normalizedLoadPaths: normalized.loadPaths,
+    env,
   });
-
-  // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
-  let jitiLoader: ReturnType<typeof createJiti> | null = null;
-  const getJiti = () => {
-    if (jitiLoader) {
-      return jitiLoader;
-    }
-    const pluginSdkAlias = resolvePluginSdkAlias();
-    const aliasMap = {
-      ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-      ...resolvePluginSdkScopedAliasMap(),
-    };
-    jitiLoader = createJiti(import.meta.url, {
-      interopDefault: true,
-      extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-      ...(Object.keys(aliasMap).length > 0
-        ? {
-            alias: aliasMap,
-          }
-        : {}),
-    });
-    return jitiLoader;
-  };
 
   const manifestByRoot = new Map(
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),
   );
+  const orderedCandidates = [...discovery.candidates].toSorted((left, right) => {
+    return compareDuplicateCandidateOrder({
+      left,
+      right,
+      manifestByRoot,
+      provenance,
+      env,
+    });
+  });
 
   const seenIds = new Map<string, PluginRecord["origin"]>();
   const memorySlot = normalized.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   let memorySlotMatched = false;
 
-  for (const candidate of discovery.candidates) {
+  for (const candidate of orderedCandidates) {
     const manifestRecord = manifestByRoot.get(candidate.rootDir);
     if (!manifestRecord) {
       continue;
     }
     const pluginId = manifestRecord.id;
+    // Filter again at import time as a final guard. The earlier manifest filter keeps
+    // warnings scoped; this one prevents loading/registering anything outside the scope.
+    if (onlyPluginIdSet && !onlyPluginIdSet.has(pluginId)) {
+      continue;
+    }
     const existingOrigin = seenIds.get(pluginId);
     if (existingOrigin) {
       const record = createPluginRecord({
@@ -636,7 +953,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         name: manifestRecord.name ?? pluginId,
         description: manifestRecord.description,
         version: manifestRecord.version,
+        format: manifestRecord.format,
+        bundleFormat: manifestRecord.bundleFormat,
+        bundleCapabilities: manifestRecord.bundleCapabilities,
         source: candidate.source,
+        rootDir: candidate.rootDir,
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
         enabled: false,
@@ -653,6 +974,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       origin: candidate.origin,
       config: normalized,
       rootConfig: cfg,
+      enabledByDefault: manifestRecord.enabledByDefault,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({
@@ -660,7 +982,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       name: manifestRecord.name ?? pluginId,
       description: manifestRecord.description,
       version: manifestRecord.version,
+      format: manifestRecord.format,
+      bundleFormat: manifestRecord.bundleFormat,
+      bundleCapabilities: manifestRecord.bundleCapabilities,
       source: candidate.source,
+      rootDir: candidate.rootDir,
       origin: candidate.origin,
       workspaceDir: candidate.workspaceDir,
       enabled: enableState.enabled,
@@ -682,17 +1008,102 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
     };
 
-    if (!enableState.enabled) {
+    const registrationMode = enableState.enabled
+      ? !validateOnly &&
+        shouldLoadChannelPluginInSetupRuntime({
+          manifestChannels: manifestRecord.channels,
+          setupSource: manifestRecord.setupSource,
+          startupDeferConfiguredChannelFullLoadUntilAfterListen:
+            manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
+          cfg,
+          env,
+          preferSetupRuntimeForChannelPlugins,
+        })
+        ? "setup-runtime"
+        : "full"
+      : includeSetupOnlyChannelPlugins && !validateOnly && manifestRecord.channels.length > 0
+        ? "setup-only"
+        : null;
+
+    if (!registrationMode) {
       record.status = "disabled";
       record.error = enableState.reason;
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       continue;
     }
+    if (!enableState.enabled) {
+      record.status = "disabled";
+      record.error = enableState.reason;
+    }
 
+    if (record.format === "bundle") {
+      const unsupportedCapabilities = (record.bundleCapabilities ?? []).filter(
+        (capability) =>
+          capability !== "skills" &&
+          capability !== "mcpServers" &&
+          capability !== "settings" &&
+          !(
+            (capability === "commands" ||
+              capability === "agents" ||
+              capability === "outputStyles" ||
+              capability === "lspServers") &&
+            (record.bundleFormat === "claude" || record.bundleFormat === "cursor")
+          ) &&
+          !(
+            capability === "hooks" &&
+            (record.bundleFormat === "codex" || record.bundleFormat === "claude")
+          ),
+      );
+      for (const capability of unsupportedCapabilities) {
+        registry.diagnostics.push({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `bundle capability detected but not wired into OpenClaw yet: ${capability}`,
+        });
+      }
+      if (
+        enableState.enabled &&
+        record.rootDir &&
+        record.bundleFormat &&
+        (record.bundleCapabilities ?? []).includes("mcpServers")
+      ) {
+        const runtimeSupport = inspectBundleMcpRuntimeSupport({
+          pluginId: record.id,
+          rootDir: record.rootDir,
+          bundleFormat: record.bundleFormat,
+        });
+        for (const message of runtimeSupport.diagnostics) {
+          registry.diagnostics.push({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message,
+          });
+        }
+        if (runtimeSupport.unsupportedServerNames.length > 0) {
+          registry.diagnostics.push({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message:
+              "bundle MCP servers use unsupported transports or incomplete configs " +
+              `(stdio only today): ${runtimeSupport.unsupportedServerNames.join(", ")}`,
+          });
+        }
+      }
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      continue;
+    }
     // Fast-path bundled memory plugins that are guaranteed disabled by slot policy.
     // This avoids opening/importing heavy memory plugin modules that will never register.
-    if (candidate.origin === "bundled" && manifestRecord.kind === "memory") {
+    if (
+      registrationMode === "full" &&
+      candidate.origin === "bundled" &&
+      manifestRecord.kind === "memory"
+    ) {
       const earlyMemoryDecision = resolveMemorySlotDecision({
         id: record.id,
         kind: "memory",
@@ -715,8 +1126,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
 
     const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
+    const loadSource =
+      (registrationMode === "setup-only" || registrationMode === "setup-runtime") &&
+      manifestRecord.setupSource
+        ? manifestRecord.setupSource
+        : candidate.source;
     const opened = openBoundaryFileSync({
-      absolutePath: candidate.source,
+      absolutePath: loadSource,
       rootPath: pluginRoot,
       boundaryLabel: "plugin root",
       rejectHardlinks: candidate.origin !== "bundled",
@@ -731,7 +1147,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti()(safeSource) as OpenClawPluginModule;
+      mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
         logger,
@@ -747,17 +1163,40 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
+    if (
+      (registrationMode === "setup-only" || registrationMode === "setup-runtime") &&
+      manifestRecord.setupSource
+    ) {
+      const setupRegistration = resolveSetupChannelRegistration(mod);
+      if (setupRegistration.plugin) {
+        if (setupRegistration.plugin.id && setupRegistration.plugin.id !== record.id) {
+          pushPluginLoadError(
+            `plugin id mismatch (config uses "${record.id}", setup export uses "${setupRegistration.plugin.id}")`,
+          );
+          continue;
+        }
+        const api = createApi(record, {
+          config: cfg,
+          pluginConfig: {},
+          hookPolicy: entry?.hooks,
+          registrationMode,
+        });
+        api.registerChannel(setupRegistration.plugin);
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
+        continue;
+      }
+    }
+
     const resolved = resolvePluginModuleExport(mod);
     const definition = resolved.definition;
     const register = resolved.register;
 
     if (definition?.id && definition.id !== record.id) {
-      registry.diagnostics.push({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `plugin id mismatch (config uses "${record.id}", export uses "${definition.id}")`,
-      });
+      pushPluginLoadError(
+        `plugin id mismatch (config uses "${record.id}", export uses "${definition.id}")`,
+      );
+      continue;
     }
 
     record.name = definition?.name ?? record.name;
@@ -779,24 +1218,26 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       memorySlotMatched = true;
     }
 
-    const memoryDecision = resolveMemorySlotDecision({
-      id: record.id,
-      kind: record.kind,
-      slot: memorySlot,
-      selectedId: selectedMemoryPluginId,
-    });
+    if (registrationMode === "full") {
+      const memoryDecision = resolveMemorySlotDecision({
+        id: record.id,
+        kind: record.kind,
+        slot: memorySlot,
+        selectedId: selectedMemoryPluginId,
+      });
 
-    if (!memoryDecision.enabled) {
-      record.enabled = false;
-      record.status = "disabled";
-      record.error = memoryDecision.reason;
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      continue;
-    }
+      if (!memoryDecision.enabled) {
+        record.enabled = false;
+        record.status = "disabled";
+        record.error = memoryDecision.reason;
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
+        continue;
+      }
 
-    if (memoryDecision.selected && record.kind === "memory") {
-      selectedMemoryPluginId = record.id;
+      if (memoryDecision.selected && record.kind === "memory") {
+        selectedMemoryPluginId = record.id;
+      }
     }
 
     const validatedConfig = validatePluginConfig({
@@ -827,6 +1268,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       config: cfg,
       pluginConfig: validatedConfig.value,
       hookPolicy: entry?.hooks,
+      registrationMode,
     });
 
     try {
@@ -856,7 +1298,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
   }
 
-  if (typeof memorySlot === "string" && !memorySlotMatched) {
+  // Scoped snapshot loads may intentionally omit the configured memory plugin, so only
+  // emit the missing-memory diagnostic for full registry loads.
+  if (!onlyPluginIdSet && typeof memorySlot === "string" && !memorySlotMatched) {
     registry.diagnostics.push({
       level: "warn",
       message: `memory slot plugin not found or not marked as memory: ${memorySlot}`,
@@ -867,12 +1311,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     registry,
     provenance,
     logger,
+    env,
   });
 
+  maybeThrowOnPluginLoadError(registry, options.throwOnLoadError);
+
   if (cacheEnabled) {
-    registryCache.set(cacheKey, registry);
+    setCachedPluginRegistry(cacheKey, registry);
   }
-  activatePluginRegistry(registry, cacheKey);
+  if (shouldActivate) {
+    activatePluginRegistry(registry, cacheKey);
+  }
   return registry;
 }
 

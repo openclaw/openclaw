@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { listTelegramAccountIds } from "../../extensions/telegram/api.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -21,7 +22,6 @@ import {
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
 } from "../routing/session-key.js";
-import { listTelegramAccountIds } from "../telegram/accounts.js";
 import { isWithinDir } from "./path-safety.js";
 import {
   ensureDir,

@@ -1,15 +1,18 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
 import type {
   WindowsSpawnProgram,
   WindowsSpawnProgramCandidate,
   WindowsSpawnResolution,
-} from "openclaw/plugin-sdk/acpx";
+} from "../../runtime-api.js";
 import {
   applyWindowsSpawnProgramPolicy,
+  listKnownProviderAuthEnvVarNames,
   materializeWindowsSpawnProgram,
+  omitEnvKeysCaseInsensitive,
   resolveWindowsSpawnProgramCandidate,
-} from "openclaw/plugin-sdk/acpx";
+} from "../../runtime-api.js";
 
 export type SpawnExit = {
   code: number | null;
@@ -55,11 +58,76 @@ const DEFAULT_RUNTIME: SpawnRuntime = {
   execPath: process.execPath,
 };
 
+function isExecutableFile(filePath: string, platform: NodeJS.Platform): boolean {
+  try {
+    const stat = statSync(filePath);
+    if (!stat.isFile()) {
+      return false;
+    }
+    if (platform === "win32") {
+      return true;
+    }
+    accessSync(filePath, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveExecutableFromPath(command: string, runtime: SpawnRuntime): string | undefined {
+  const pathEnv = runtime.env.PATH ?? runtime.env.Path;
+  if (!pathEnv) {
+    return undefined;
+  }
+  for (const entry of pathEnv.split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(entry, command);
+    if (isExecutableFile(candidate, runtime.platform)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function resolveNodeShebangScriptPath(command: string, runtime: SpawnRuntime): string | undefined {
+  const commandPath =
+    path.isAbsolute(command) || command.includes(path.sep)
+      ? command
+      : resolveExecutableFromPath(command, runtime);
+  if (!commandPath || !isExecutableFile(commandPath, runtime.platform)) {
+    return undefined;
+  }
+  try {
+    const firstLine = readFileSync(commandPath, "utf8").split(/\r?\n/, 1)[0] ?? "";
+    if (/^#!.*(?:\/usr\/bin\/env\s+node\b|\/node(?:js)?\b)/.test(firstLine)) {
+      return commandPath;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 export function resolveSpawnCommand(
   params: { command: string; args: string[] },
   options?: SpawnCommandOptions,
   runtime: SpawnRuntime = DEFAULT_RUNTIME,
 ): ResolvedSpawnCommand {
+  if (runtime.platform !== "win32") {
+    const nodeShebangScript = resolveNodeShebangScriptPath(params.command, runtime);
+    if (nodeShebangScript) {
+      options?.onResolved?.({
+        command: params.command,
+        cacheHit: false,
+        strictWindowsCmdWrapper: options?.strictWindowsCmdWrapper === true,
+        resolution: "direct",
+      });
+      return {
+        command: runtime.execPath,
+        args: [nodeShebangScript, ...params.args],
+      };
+    }
+  }
+
   const strictWindowsCmdWrapper = options?.strictWindowsCmdWrapper === true;
   const cacheKey = params.command;
   const cachedProgram = options?.cache;
@@ -125,6 +193,7 @@ export function spawnWithResolvedCommand(
     command: string;
     args: string[];
     cwd: string;
+    stripProviderAuthEnvVars?: boolean;
   },
   options?: SpawnCommandOptions,
 ): ChildProcessWithoutNullStreams {
@@ -136,9 +205,15 @@ export function spawnWithResolvedCommand(
     options,
   );
 
+  const childEnv = omitEnvKeysCaseInsensitive(
+    process.env,
+    params.stripProviderAuthEnvVars ? listKnownProviderAuthEnvVarNames() : [],
+  );
+  childEnv.OPENCLAW_SHELL = "acp";
+
   return spawn(resolved.command, resolved.args, {
     cwd: params.cwd,
-    env: { ...process.env, OPENCLAW_SHELL: "acp" },
+    env: childEnv,
     stdio: ["pipe", "pipe", "pipe"],
     shell: resolved.shell,
     windowsHide: resolved.windowsHide,
@@ -180,6 +255,7 @@ export async function spawnAndCollect(
     command: string;
     args: string[];
     cwd: string;
+    stripProviderAuthEnvVars?: boolean;
   },
   options?: SpawnCommandOptions,
   runtime?: {

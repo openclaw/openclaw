@@ -10,6 +10,7 @@ import {
   resolveAcpThreadSessionDetailLines,
 } from "../acp/runtime/session-identifiers.js";
 import type { AcpRuntimeSessionMode } from "../acp/runtime/types.js";
+import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -21,23 +22,41 @@ import {
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
 } from "../channels/thread-bindings-policy.js";
+import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import { callGateway } from "../gateway/call.js";
+import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import {
   getSessionBindingService,
   isSessionBindingError,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
+import {
+  deliveryContextFromSession,
+  formatConversationTarget,
+  normalizeDeliveryContext,
+  resolveConversationDeliveryTarget,
+} from "../utils/delivery-context.js";
 import {
   type AcpSpawnParentRelayHandle,
   resolveAcpSpawnStreamLogPath,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
+import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
+
+const log = createSubsystemLogger("agents/acp-spawn");
 
 export const ACP_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
@@ -50,6 +69,7 @@ export type SpawnAcpParams = {
   task: string;
   label?: string;
   agentId?: string;
+  resumeSessionId?: string;
   cwd?: string;
   mode?: SpawnAcpMode;
   thread?: boolean;
@@ -123,6 +143,95 @@ function resolveAcpSessionMode(mode: SpawnAcpMode): AcpRuntimeSessionMode {
   return mode === "session" ? "persistent" : "oneshot";
 }
 
+function isHeartbeatEnabledForSessionAgent(params: {
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+}): boolean {
+  if (!areHeartbeatsEnabled()) {
+    return false;
+  }
+  const requesterAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
+  if (!requesterAgentId) {
+    return true;
+  }
+
+  const agentEntries = params.cfg.agents?.list ?? [];
+  const hasExplicitHeartbeatAgents = agentEntries.some((entry) => Boolean(entry?.heartbeat));
+  const enabledByPolicy = hasExplicitHeartbeatAgents
+    ? agentEntries.some(
+        (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === requesterAgentId,
+      )
+    : requesterAgentId === resolveDefaultAgentId(params.cfg);
+  if (!enabledByPolicy) {
+    return false;
+  }
+
+  const heartbeatEvery =
+    resolveAgentConfig(params.cfg, requesterAgentId)?.heartbeat?.every ??
+    params.cfg.agents?.defaults?.heartbeat?.every ??
+    DEFAULT_HEARTBEAT_EVERY;
+  const trimmedEvery = typeof heartbeatEvery === "string" ? heartbeatEvery.trim() : "";
+  if (!trimmedEvery) {
+    return false;
+  }
+  try {
+    return parseDurationMs(trimmedEvery, { defaultUnit: "m" }) > 0;
+  } catch {
+    return false;
+  }
+}
+
+function resolveHeartbeatConfigForAgent(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["heartbeat"] {
+  const defaults = params.cfg.agents?.defaults?.heartbeat;
+  const overrides = resolveAgentConfig(params.cfg, params.agentId)?.heartbeat;
+  if (!defaults && !overrides) {
+    return undefined;
+  }
+  return {
+    ...defaults,
+    ...overrides,
+  };
+}
+
+function hasSessionLocalHeartbeatRelayRoute(params: {
+  cfg: OpenClawConfig;
+  parentSessionKey: string;
+  requesterAgentId: string;
+}): boolean {
+  const scope = params.cfg.session?.scope ?? "per-sender";
+  if (scope === "global") {
+    return false;
+  }
+
+  const heartbeat = resolveHeartbeatConfigForAgent({
+    cfg: params.cfg,
+    agentId: params.requesterAgentId,
+  });
+  if ((heartbeat?.target ?? "none") !== "last") {
+    return false;
+  }
+
+  // Explicit delivery overrides are not session-local and can route updates
+  // to unrelated destinations (for example a pinned ops channel).
+  if (typeof heartbeat?.to === "string" && heartbeat.to.trim().length > 0) {
+    return false;
+  }
+  if (typeof heartbeat?.accountId === "string" && heartbeat.accountId.trim().length > 0) {
+    return false;
+  }
+
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.requesterAgentId,
+  });
+  const sessionStore = loadSessionStore(storePath);
+  const parentEntry = sessionStore[params.parentSessionKey];
+  const parentDeliveryContext = deliveryContextFromSession(parentEntry);
+  return Boolean(parentDeliveryContext?.channel && parentDeliveryContext.to);
+}
+
 function resolveTargetAcpAgentId(params: {
   requestedAgentId?: string;
   cfg: OpenClawConfig;
@@ -160,6 +269,50 @@ function summarizeError(err: unknown): string {
     return err;
   }
   return "error";
+}
+
+function resolveRequesterInternalSessionKey(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey?: string;
+}): string {
+  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
+  const requesterSessionKey = params.requesterSessionKey?.trim();
+  return requesterSessionKey
+    ? resolveInternalSessionKey({
+        key: requesterSessionKey,
+        alias,
+        mainKey,
+      })
+    : alias;
+}
+
+async function persistAcpSpawnSessionFileBestEffort(params: {
+  sessionId: string;
+  sessionKey: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  agentId: string;
+  threadId?: string | number;
+  stage: "spawn" | "thread-bind";
+}): Promise<SessionEntry | undefined> {
+  try {
+    const resolvedSessionFile = await resolveSessionTranscriptFile({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+      agentId: params.agentId,
+      threadId: params.threadId,
+    });
+    return resolvedSessionFile.sessionEntry;
+  } catch (error) {
+    log.warn(
+      `ACP session-file persistence failed during ${params.stage} for ${params.sessionKey}: ${summarizeError(error)}`,
+    );
+    return params.sessionEntry;
+  }
 }
 
 function resolveConversationIdForThreadBinding(params: {
@@ -257,6 +410,10 @@ export async function spawnAcpDirect(
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
   const cfg = loadConfig();
+  const requesterInternalKey = resolveRequesterInternalSessionKey({
+    cfg,
+    requesterSessionKey: ctx.agentSessionKey,
+  });
   if (!isAcpEnabledByPolicy(cfg)) {
     return {
       status: "forbidden",
@@ -271,6 +428,8 @@ export async function spawnAcpDirect(
       error: 'sessions_spawn streamTo="parent" requires an active requester session context.',
     };
   }
+
+  const requestThreadBinding = params.thread === true;
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
@@ -284,7 +443,6 @@ export async function spawnAcpDirect(
     };
   }
 
-  const requestThreadBinding = params.thread === true;
   const spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
     threadRequested: requestThreadBinding,
@@ -295,6 +453,52 @@ export async function spawnAcpDirect(
       error: 'mode="session" requires thread=true so the ACP session can stay bound to a thread.',
     };
   }
+
+  const bindingService = getSessionBindingService();
+  const requesterParsedSession = parseAgentSessionKey(parentSessionKey);
+  const requesterIsSubagentSession =
+    Boolean(requesterParsedSession) && isSubagentSessionKey(parentSessionKey);
+  const requesterHasActiveSubagentBinding =
+    requesterIsSubagentSession && parentSessionKey
+      ? bindingService
+          .listBySession(parentSessionKey)
+          .some((record) => record.targetKind === "subagent" && record.status !== "ended")
+      : false;
+  const requesterHasThreadContext =
+    typeof ctx.agentThreadId === "string"
+      ? ctx.agentThreadId.trim().length > 0
+      : ctx.agentThreadId != null;
+  const requesterHeartbeatEnabled = isHeartbeatEnabledForSessionAgent({
+    cfg,
+    sessionKey: parentSessionKey,
+  });
+  const requesterAgentId = requesterParsedSession?.agentId;
+  const requesterHeartbeatRelayRouteUsable =
+    parentSessionKey && requesterAgentId
+      ? hasSessionLocalHeartbeatRelayRoute({
+          cfg,
+          parentSessionKey,
+          requesterAgentId,
+        })
+      : false;
+
+  // For mode=run without thread binding, implicitly route output to parent
+  // only for spawned subagent orchestrator sessions with heartbeat enabled
+  // AND a session-local heartbeat delivery route (target=last + usable last route).
+  // Skip requester sessions that are thread-bound (or carrying thread context)
+  // so user-facing threads do not receive unsolicited ACP progress chatter
+  // unless streamTo="parent" is explicitly requested. Use resolved spawnMode
+  // (not params.mode) so default mode selection works.
+  const implicitStreamToParent =
+    !streamToParentRequested &&
+    spawnMode === "run" &&
+    !requestThreadBinding &&
+    requesterIsSubagentSession &&
+    !requesterHasActiveSubagentBinding &&
+    !requesterHasThreadContext &&
+    requesterHeartbeatEnabled &&
+    requesterHeartbeatRelayRouteUsable;
+  const effectiveStreamToParent = streamToParentRequested || implicitStreamToParent;
 
   const targetAgentResult = resolveTargetAcpAgentId({
     requestedAgentId: params.agentId,
@@ -337,7 +541,6 @@ export async function spawnAcpDirect(
   }
 
   const acpManager = getAcpSessionManager();
-  const bindingService = getSessionBindingService();
   let binding: SessionBindingRecord | null = null;
   let sessionCreated = false;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
@@ -346,16 +549,33 @@ export async function spawnAcpDirect(
       method: "sessions.patch",
       params: {
         key: sessionKey,
+        spawnedBy: requesterInternalKey,
         ...(params.label ? { label: params.label } : {}),
       },
       timeoutMs: 10_000,
     });
     sessionCreated = true;
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
+    const sessionStore = loadSessionStore(storePath);
+    let sessionEntry: SessionEntry | undefined = sessionStore[sessionKey];
+    const sessionId = sessionEntry?.sessionId;
+    if (sessionId) {
+      sessionEntry = await persistAcpSpawnSessionFileBestEffort({
+        sessionId,
+        sessionKey,
+        sessionStore,
+        storePath,
+        sessionEntry,
+        agentId: targetAgentId,
+        stage: "spawn",
+      });
+    }
     const initialized = await acpManager.initializeSession({
       cfg,
       sessionKey,
       agent: targetAgentId,
       mode: runtimeMode,
+      resumeSessionId: params.resumeSessionId,
       cwd: params.cwd,
       backendId: cfg.acp?.backend,
     });
@@ -408,6 +628,21 @@ export async function spawnAcpDirect(
           `Failed to create and bind a ${preparedBinding.channel} thread for this ACP session.`,
         );
       }
+      if (sessionId) {
+        const boundThreadId = String(binding.conversation.conversationId).trim() || undefined;
+        if (boundThreadId) {
+          sessionEntry = await persistAcpSpawnSessionFileBestEffort({
+            sessionId,
+            sessionKey,
+            sessionStore,
+            storePath,
+            sessionEntry,
+            agentId: targetAgentId,
+            threadId: boundThreadId,
+            stage: "thread-bind",
+          });
+        }
+      }
     }
   } catch (err) {
     await cleanupFailedAcpSpawn({
@@ -436,24 +671,34 @@ export async function spawnAcpDirect(
   const fallbackThreadId =
     fallbackThreadIdRaw != null ? String(fallbackThreadIdRaw).trim() || undefined : undefined;
   const deliveryThreadId = boundThreadId ?? fallbackThreadId;
-  const inferredDeliveryTo = boundThreadId
-    ? `channel:${boundThreadId}`
-    : requesterOrigin?.to?.trim() || (deliveryThreadId ? `channel:${deliveryThreadId}` : undefined);
+  const boundDeliveryTarget = resolveConversationDeliveryTarget({
+    channel: requesterOrigin?.channel ?? binding?.conversation.channel,
+    conversationId: binding?.conversation.conversationId,
+    parentConversationId: binding?.conversation.parentConversationId,
+  });
+  const inferredDeliveryTo =
+    boundDeliveryTarget.to ??
+    requesterOrigin?.to?.trim() ??
+    formatConversationTarget({
+      channel: requesterOrigin?.channel,
+      conversationId: deliveryThreadId,
+    });
+  const resolvedDeliveryThreadId = boundDeliveryTarget.threadId ?? deliveryThreadId;
   const hasDeliveryTarget = Boolean(requesterOrigin?.channel && inferredDeliveryTo);
   // Fresh one-shot ACP runs should bootstrap the worker first, then let higher layers
   // decide how to relay status. Inline delivery is reserved for thread-bound sessions.
   const useInlineDelivery =
-    hasDeliveryTarget && spawnMode === "session" && !streamToParentRequested;
+    hasDeliveryTarget && spawnMode === "session" && !effectiveStreamToParent;
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   const streamLogPath =
-    streamToParentRequested && parentSessionKey
+    effectiveStreamToParent && parentSessionKey
       ? resolveAcpSpawnStreamLogPath({
           childSessionKey: sessionKey,
         })
       : undefined;
   let parentRelay: AcpSpawnParentRelayHandle | undefined;
-  if (streamToParentRequested && parentSessionKey) {
+  if (effectiveStreamToParent && parentSessionKey) {
     // Register relay before dispatch so fast lifecycle failures are not missed.
     parentRelay = startAcpSpawnParentStreamRelay({
       runId: childIdem,
@@ -473,7 +718,7 @@ export async function spawnAcpDirect(
         channel: useInlineDelivery ? requesterOrigin?.channel : undefined,
         to: useInlineDelivery ? inferredDeliveryTo : undefined,
         accountId: useInlineDelivery ? (requesterOrigin?.accountId ?? undefined) : undefined,
-        threadId: useInlineDelivery ? deliveryThreadId : undefined,
+        threadId: useInlineDelivery ? resolvedDeliveryThreadId : undefined,
         idempotencyKey: childIdem,
         deliver: useInlineDelivery,
         label: params.label || undefined,
@@ -498,7 +743,7 @@ export async function spawnAcpDirect(
     };
   }
 
-  if (streamToParentRequested && parentSessionKey) {
+  if (effectiveStreamToParent && parentSessionKey) {
     if (parentRelay && childRunId !== childIdem) {
       parentRelay.dispose();
       // Defensive fallback if gateway returns a runId that differs from idempotency key.

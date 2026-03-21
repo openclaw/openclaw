@@ -7,7 +7,7 @@ import { callGatewayTool } from "./tools/gateway.js";
 
 export type RequestExecApprovalDecisionParams = {
   id: string;
-  command: string;
+  command?: string;
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
@@ -35,8 +35,8 @@ function buildExecApprovalRequestToolParams(
 ): ExecApprovalRequestToolParams {
   return {
     id: params.id,
-    command: params.command,
-    commandArgv: params.commandArgv,
+    ...(params.command ? { command: params.command } : {}),
+    ...(params.commandArgv ? { commandArgv: params.commandArgv } : {}),
     systemRunPlan: params.systemRunPlan,
     env: params.env,
     cwd: params.cwd,
@@ -150,7 +150,7 @@ export async function requestExecApprovalDecision(
 
 type HostExecApprovalParams = {
   approvalId: string;
-  command: string;
+  command?: string;
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;

@@ -1,10 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
+  listDirectoryEntriesFromSources,
+  listInspectedDirectoryEntriesFromSources,
   listDirectoryGroupEntriesFromMapKeysAndAllowFrom,
   listDirectoryGroupEntriesFromMapKeys,
+  listResolvedDirectoryGroupEntriesFromMapKeys,
+  listResolvedDirectoryEntriesFromSources,
+  listResolvedDirectoryUserEntriesFromAllowFrom,
   listDirectoryUserEntriesFromAllowFromAndMapKeys,
   listDirectoryUserEntriesFromAllowFrom,
 } from "./directory-config-helpers.js";
+
+function expectUserDirectoryEntries(entries: unknown) {
+  expect(entries).toEqual([
+    { kind: "user", id: "alice" },
+    { kind: "user", id: "carla" },
+  ]);
+}
 
 describe("listDirectoryUserEntriesFromAllowFrom", () => {
   it("normalizes, deduplicates, filters, and limits user ids", () => {
@@ -15,10 +27,7 @@ describe("listDirectoryUserEntriesFromAllowFrom", () => {
       limit: 2,
     });
 
-    expect(entries).toEqual([
-      { kind: "user", id: "alice" },
-      { kind: "user", id: "carla" },
-    ]);
+    expectUserDirectoryEntries(entries);
   });
 });
 
@@ -54,10 +63,7 @@ describe("listDirectoryUserEntriesFromAllowFromAndMapKeys", () => {
       limit: 2,
     });
 
-    expect(entries).toEqual([
-      { kind: "user", id: "alice" },
-      { kind: "user", id: "carla" },
-    ]);
+    expectUserDirectoryEntries(entries);
   });
 });
 
@@ -75,5 +81,97 @@ describe("listDirectoryGroupEntriesFromMapKeysAndAllowFrom", () => {
       { kind: "group", id: "team/a" },
       { kind: "group", id: "team/b" },
     ]);
+  });
+});
+
+describe("listDirectoryEntriesFromSources", () => {
+  it("merges source iterables with dedupe/query/limit", () => {
+    const entries = listDirectoryEntriesFromSources({
+      kind: "user",
+      sources: [
+        ["user:alice", "user:bob"],
+        ["user:carla", "user:alice"],
+      ],
+      normalizeId: (entry) => entry.replace(/^user:/i, ""),
+      query: "a",
+      limit: 2,
+    });
+
+    expectUserDirectoryEntries(entries);
+  });
+});
+
+describe("listInspectedDirectoryEntriesFromSources", () => {
+  it("returns empty when the inspected account is missing", () => {
+    const entries = listInspectedDirectoryEntriesFromSources({
+      cfg: {} as never,
+      kind: "user",
+      inspectAccount: () => null,
+      resolveSources: () => [["user:alice"]],
+      normalizeId: (entry) => entry.replace(/^user:/i, ""),
+    });
+
+    expect(entries).toEqual([]);
+  });
+
+  it("lists entries from inspected account sources", () => {
+    const entries = listInspectedDirectoryEntriesFromSources({
+      cfg: {} as never,
+      kind: "group",
+      inspectAccount: () => ({ ids: [["room:a"], ["room:b", "room:a"]] }),
+      resolveSources: (account) => account.ids,
+      normalizeId: (entry) => entry.replace(/^room:/i, ""),
+      query: "a",
+    });
+
+    expect(entries).toEqual([{ kind: "group", id: "a" }]);
+  });
+});
+
+describe("resolved account directory helpers", () => {
+  const cfg = {} as never;
+  const resolveAccount = () => ({
+    allowFrom: ["user:alice", "user:bob"],
+    groups: { "room:a": {}, "room:b": {} },
+  });
+
+  it("lists user entries from resolved account allowFrom", () => {
+    const entries = listResolvedDirectoryUserEntriesFromAllowFrom({
+      cfg,
+      resolveAccount,
+      resolveAllowFrom: (account) => account.allowFrom,
+      normalizeId: (entry) => entry.replace(/^user:/i, ""),
+      query: "a",
+    });
+
+    expect(entries).toEqual([{ kind: "user", id: "alice" }]);
+  });
+
+  it("lists group entries from resolved account map keys", () => {
+    const entries = listResolvedDirectoryGroupEntriesFromMapKeys({
+      cfg,
+      resolveAccount,
+      resolveGroups: (account) => account.groups,
+      normalizeId: (entry) => entry.replace(/^room:/i, ""),
+    });
+
+    expect(entries).toEqual([
+      { kind: "group", id: "a" },
+      { kind: "group", id: "b" },
+    ]);
+  });
+
+  it("lists entries from resolved account sources", () => {
+    const entries = listResolvedDirectoryEntriesFromSources({
+      cfg,
+      kind: "user",
+      resolveAccount,
+      resolveSources: (account) => [account.allowFrom, ["user:carla", "user:alice"]],
+      normalizeId: (entry) => entry.replace(/^user:/i, ""),
+      query: "a",
+      limit: 2,
+    });
+
+    expectUserDirectoryEntries(entries);
   });
 });

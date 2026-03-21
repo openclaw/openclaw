@@ -11,7 +11,7 @@ Describe the problem and fix in 2–5 bullets:
 
 - [ ] Bug fix
 - [ ] Feature
-- [ ] Refactor
+- [ ] Refactor required for the fix
 - [ ] Docs
 - [ ] Security hardening
 - [ ] Chore/infra
@@ -86,6 +86,13 @@ What you personally verified (not just CI), and how:
 - Verified scenarios:
 - Edge cases checked:
 - What you did **not** verify:
+
+## Review Conversations
+
+- [ ] I replied to or resolved every bot review conversation I addressed in this PR.
+- [ ] I left unresolved only the conversations that still need reviewer or maintainer judgment.
+
+If a bot review conversation is addressed by this PR, resolve that conversation yourself. Do not leave bot review conversation cleanup for maintainers.
 
 ## Compatibility / Migration
 

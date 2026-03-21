@@ -50,13 +50,14 @@ exit 0
 
 async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
   const rootDir = await mkdtemp(join(tmpdir(), "openclaw-docker-setup-"));
-  const scriptPath = join(rootDir, "docker-setup.sh");
+  const scriptPath = join(rootDir, "scripts", "docker", "setup.sh");
   const dockerfilePath = join(rootDir, "Dockerfile");
   const composePath = join(rootDir, "docker-compose.yml");
   const binDir = join(rootDir, "bin");
   const logPath = join(rootDir, "docker-stub.log");
 
-  await copyFile(join(repoRoot, "docker-setup.sh"), scriptPath);
+  await mkdir(join(rootDir, "scripts", "docker"), { recursive: true });
+  await copyFile(join(repoRoot, "scripts", "docker", "setup.sh"), scriptPath);
   await chmod(scriptPath, 0o755);
   await writeFile(dockerfilePath, "FROM scratch\n");
   await writeFile(
@@ -113,6 +114,26 @@ function runDockerSetup(
   });
 }
 
+async function runDockerSetupWithUnsetGatewayToken(
+  sandbox: DockerSetupSandbox,
+  suffix: string,
+  prepare?: (configDir: string) => Promise<void>,
+) {
+  const configDir = join(sandbox.rootDir, `config-${suffix}`);
+  const workspaceDir = join(sandbox.rootDir, `workspace-${suffix}`);
+  await mkdir(configDir, { recursive: true });
+  await prepare?.(configDir);
+
+  const result = runDockerSetup(sandbox, {
+    OPENCLAW_GATEWAY_TOKEN: undefined,
+    OPENCLAW_CONFIG_DIR: configDir,
+    OPENCLAW_WORKSPACE_DIR: workspaceDir,
+  });
+  const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
+
+  return { result, envFile };
+}
+
 async function withUnixSocket<T>(socketPath: string, run: () => Promise<T>): Promise<T> {
   const server = createServer();
   await new Promise<void>((resolve, reject) => {
@@ -148,7 +169,7 @@ function resolveBashForCompatCheck(): string | null {
   return null;
 }
 
-describe("docker-setup.sh", () => {
+describe("scripts/docker/setup.sh", () => {
   let sandbox: DockerSetupSandbox | null = null;
 
   beforeAll(async () => {
@@ -163,7 +184,7 @@ describe("docker-setup.sh", () => {
     sandbox = null;
   });
 
-  it("handles env defaults, home-volume mounts, and apt build args", async () => {
+  it("handles env defaults, home-volume mounts, and Docker build args", async () => {
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {
@@ -205,6 +226,18 @@ describe("docker-setup.sh", () => {
     expect(identityDirStat.isDirectory()).toBe(true);
   });
 
+  it("writes OPENCLAW_TZ into .env when given a real IANA timezone", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_TZ: "Asia/Shanghai",
+    });
+
+    expect(result.status).toBe(0);
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_TZ=Asia/Shanghai");
+  });
+
   it("precreates agent data dirs to avoid EACCES in container", async () => {
     const activeSandbox = requireSandbox(sandbox);
     const configDir = join(activeSandbox.rootDir, "config-agent-dirs");
@@ -221,7 +254,7 @@ describe("docker-setup.sh", () => {
     const sessionsDirStat = await stat(join(configDir, "agents", "main", "sessions"));
     expect(sessionsDirStat.isDirectory()).toBe(true);
 
-    // Verify that a root-user chown step runs before onboarding.
+    // Verify that a root-user chown step runs before setup.
     const log = await readFile(activeSandbox.logPath, "utf8");
     const chownIdx = log.indexOf("--user root");
     const onboardIdx = log.indexOf("onboard");
@@ -231,52 +264,39 @@ describe("docker-setup.sh", () => {
 
   it("reuses existing config token when OPENCLAW_GATEWAY_TOKEN is unset", async () => {
     const activeSandbox = requireSandbox(sandbox);
-    const configDir = join(activeSandbox.rootDir, "config-token-reuse");
-    const workspaceDir = join(activeSandbox.rootDir, "workspace-token-reuse");
-    await mkdir(configDir, { recursive: true });
-    await writeFile(
-      join(configDir, "openclaw.json"),
-      JSON.stringify({ gateway: { auth: { mode: "token", token: "config-token-123" } } }),
+    const { result, envFile } = await runDockerSetupWithUnsetGatewayToken(
+      activeSandbox,
+      "token-reuse",
+      async (configDir) => {
+        await writeFile(
+          join(configDir, "openclaw.json"),
+          JSON.stringify({ gateway: { auth: { mode: "token", token: "config-token-123" } } }),
+        );
+      },
     );
 
-    const result = runDockerSetup(activeSandbox, {
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_CONFIG_DIR: configDir,
-      OPENCLAW_WORKSPACE_DIR: workspaceDir,
-    });
-
     expect(result.status).toBe(0);
-    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_GATEWAY_TOKEN=config-token-123"); // pragma: allowlist secret
   });
 
   it("reuses existing .env token when OPENCLAW_GATEWAY_TOKEN and config token are unset", async () => {
     const activeSandbox = requireSandbox(sandbox);
-    const configDir = join(activeSandbox.rootDir, "config-dotenv-token-reuse");
-    const workspaceDir = join(activeSandbox.rootDir, "workspace-dotenv-token-reuse");
-    await mkdir(configDir, { recursive: true });
     await writeFile(
       join(activeSandbox.rootDir, ".env"),
       "OPENCLAW_GATEWAY_TOKEN=dotenv-token-123\nOPENCLAW_GATEWAY_PORT=18789\n", // pragma: allowlist secret
     );
-
-    const result = runDockerSetup(activeSandbox, {
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_CONFIG_DIR: configDir,
-      OPENCLAW_WORKSPACE_DIR: workspaceDir,
-    });
+    const { result, envFile } = await runDockerSetupWithUnsetGatewayToken(
+      activeSandbox,
+      "dotenv-token-reuse",
+    );
 
     expect(result.status).toBe(0);
-    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_GATEWAY_TOKEN=dotenv-token-123"); // pragma: allowlist secret
     expect(result.stderr).toBe("");
   });
 
   it("reuses the last non-empty .env token and strips CRLF without truncating '='", async () => {
     const activeSandbox = requireSandbox(sandbox);
-    const configDir = join(activeSandbox.rootDir, "config-dotenv-last-wins");
-    const workspaceDir = join(activeSandbox.rootDir, "workspace-dotenv-last-wins");
-    await mkdir(configDir, { recursive: true });
     await writeFile(
       join(activeSandbox.rootDir, ".env"),
       [
@@ -285,15 +305,12 @@ describe("docker-setup.sh", () => {
         "OPENCLAW_GATEWAY_TOKEN=last=token=value\r", // pragma: allowlist secret
       ].join("\n"),
     );
-
-    const result = runDockerSetup(activeSandbox, {
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_CONFIG_DIR: configDir,
-      OPENCLAW_WORKSPACE_DIR: workspaceDir,
-    });
+    const { result, envFile } = await runDockerSetupWithUnsetGatewayToken(
+      activeSandbox,
+      "dotenv-last-wins",
+    );
 
     expect(result.status).toBe(0);
-    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_GATEWAY_TOKEN=last=token=value"); // pragma: allowlist secret
     expect(envFile).not.toContain("OPENCLAW_GATEWAY_TOKEN=first-token");
     expect(envFile).not.toContain("\r");
@@ -411,8 +428,19 @@ describe("docker-setup.sh", () => {
     expect(result.stderr).toContain("OPENCLAW_HOME_VOLUME must match");
   });
 
+  it("rejects OPENCLAW_TZ values that are not present in zoneinfo", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_TZ: "Nope/Bad",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("OPENCLAW_TZ must match a timezone in /usr/share/zoneinfo");
+  });
+
   it("avoids associative arrays so the script remains Bash 3.2-compatible", async () => {
-    const script = await readFile(join(repoRoot, "docker-setup.sh"), "utf8");
+    const script = await readFile(join(repoRoot, "scripts", "docker", "setup.sh"), "utf8");
     expect(script).not.toMatch(/^\s*declare -A\b/m);
 
     const systemBash = resolveBashForCompatCheck();
@@ -429,9 +457,13 @@ describe("docker-setup.sh", () => {
       return;
     }
 
-    const syntaxCheck = spawnSync(systemBash, ["-n", join(repoRoot, "docker-setup.sh")], {
-      encoding: "utf8",
-    });
+    const syntaxCheck = spawnSync(
+      systemBash,
+      ["-n", join(repoRoot, "scripts", "docker", "setup.sh")],
+      {
+        encoding: "utf8",
+      },
+    );
 
     expect(syntaxCheck.status).toBe(0);
     expect(syntaxCheck.stderr).not.toContain("declare: -A: invalid option");
@@ -454,5 +486,10 @@ describe("docker-setup.sh", () => {
     expect(compose.match(/OPENCLAW_GATEWAY_TOKEN: \$\{OPENCLAW_GATEWAY_TOKEN:-\}/g)).toHaveLength(
       2,
     );
+  });
+
+  it("keeps docker-compose timezone env defaults aligned across services", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    expect(compose.match(/TZ: \$\{OPENCLAW_TZ:-UTC\}/g)).toHaveLength(2);
   });
 });

@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveGoogleChatAccount } from "./accounts.js";
 
 describe("resolveGoogleChatAccount", () => {
