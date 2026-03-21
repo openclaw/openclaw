@@ -329,7 +329,7 @@ function syncPostCompactionSessionMemory(params: {
   return Promise.resolve();
 }
 
-async function runPostCompactionSideEffects(params: {
+export async function runPostCompactionSideEffects(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionFile: string;

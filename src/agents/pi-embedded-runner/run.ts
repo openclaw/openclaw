@@ -67,6 +67,7 @@ import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { isLikelyMutatingToolName } from "../tool-mutation.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+import { runPostCompactionSideEffects } from "./compact.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
@@ -761,7 +762,7 @@ export async function runEmbeddedPiAgent(
         }
       };
 
-      const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 1;
+      const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
@@ -1061,14 +1062,13 @@ export async function runEmbeddedPiAgent(
               );
             } else if (tokenUsedRatio > 0.65) {
               const timeoutDiagId = createCompactionDiagId();
-              const nextTimeoutCompactionAttempt = timeoutCompactionAttempts + 1;
+              timeoutCompactionAttempts++;
               log.warn(
                 `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
-                  `attempting compaction before retry diagId=${timeoutDiagId}`,
+                  `attempting compaction before retry (attempt ${timeoutCompactionAttempts}/${MAX_TIMEOUT_COMPACTION_ATTEMPTS}) diagId=${timeoutDiagId}`,
               );
               let timeoutCompactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
               await runOwnsCompactionBeforeHook("timeout recovery");
-              timeoutCompactionAttempts = nextTimeoutCompactionAttempt;
               try {
                 timeoutCompactResult = await contextEngine.compact({
                   sessionId: params.sessionId,
@@ -1098,7 +1098,7 @@ export async function runEmbeddedPiAgent(
                     ownerNumbers: params.ownerNumbers,
                     trigger: "timeout_recovery",
                     diagId: timeoutDiagId,
-                    attempt: nextTimeoutCompactionAttempt,
+                    attempt: timeoutCompactionAttempts,
                     maxAttempts: MAX_TIMEOUT_COMPACTION_ATTEMPTS,
                   },
                 });
@@ -1111,6 +1111,11 @@ export async function runEmbeddedPiAgent(
               await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
               if (timeoutCompactResult.compacted) {
                 autoCompactionCount += 1;
+                await runPostCompactionSideEffects({
+                  config: params.config,
+                  sessionKey: params.sessionKey,
+                  sessionFile: params.sessionFile,
+                });
                 log.info(
                   `[timeout-compaction] compaction succeeded for ${provider}/${modelId}; retrying prompt`,
                 );

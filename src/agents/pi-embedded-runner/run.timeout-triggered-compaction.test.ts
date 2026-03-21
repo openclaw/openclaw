@@ -15,6 +15,7 @@ import {
   resetRunOverflowCompactionHarnessMocks,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
+  mockedRunPostCompactionSideEffects,
   overflowBaseRunParams,
 } from "./run.overflow-compaction.harness.js";
 
@@ -48,6 +49,8 @@ describe("timeout-triggered compaction", () => {
     mockedGlobalHookRunner.runBeforeCompaction.mockReset();
     mockedGlobalHookRunner.runAfterCompaction.mockReset();
     mockedPickFallbackThinkingLevel.mockReset();
+    mockedRunPostCompactionSideEffects.mockReset();
+    mockedRunPostCompactionSideEffects.mockResolvedValue(undefined);
     mockedContextEngine.info.ownsCompaction = false;
     mockedCompactDirect.mockResolvedValue({
       ok: false,
@@ -112,7 +115,7 @@ describe("timeout-triggered compaction", () => {
         runtimeContext: expect.objectContaining({
           trigger: "timeout_recovery",
           attempt: 1,
-          maxAttempts: 1,
+          maxAttempts: 2,
         }),
       }),
     );
@@ -145,6 +148,13 @@ describe("timeout-triggered compaction", () => {
 
     // Verify the loop continued (retry happened)
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    // Post-compaction side effects (transcript update, memory sync) should fire
+    expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledTimes(1);
+    expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: "/tmp/session.json",
+      }),
+    );
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -270,10 +280,10 @@ describe("timeout-triggered compaction", () => {
         } as never,
       }),
     );
-    // Compaction succeeds on first timeout
+    // First compaction succeeds
     mockedCompactDirect.mockResolvedValueOnce(
       makeCompactionSuccess({
-        summary: "timeout recovery compaction",
+        summary: "timeout recovery compaction 1",
         tokensBefore: 150000,
         tokensAfter: 80000,
       }),
@@ -287,13 +297,29 @@ describe("timeout-triggered compaction", () => {
         } as never,
       }),
     );
+    // Second compaction also succeeds
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "timeout recovery compaction 2",
+        tokensBefore: 140000,
+        tokensAfter: 70000,
+      }),
+    );
+    // Third attempt after second compaction: still times out
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        lastAssistant: {
+          usage: { input: 130000 },
+        } as never,
+      }),
+    );
 
     const result = await runEmbeddedPiAgent(overflowBaseRunParams);
 
-    // Compaction was only attempted once (first timeout); second timeout
-    // should NOT trigger compaction because the counter is exhausted.
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    // Both compaction attempts used; third timeout falls through.
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
     // Falls through to timeout error payload (failover rotation path)
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
@@ -367,6 +393,7 @@ describe("timeout-triggered compaction", () => {
 
   it("counts compacted:false timeout compactions against the retry cap across profile rotation", async () => {
     useTwoAuthProfiles();
+    // Attempt 1 (profile-a): timeout → compaction #1 fails → rotate to profile-b
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
         makeAttemptResult({
@@ -377,6 +404,7 @@ describe("timeout-triggered compaction", () => {
           } as never,
         }),
       )
+      // Attempt 2 (profile-b): timeout → compaction #2 fails → cap exhausted → rotation
       .mockResolvedValueOnce(
         makeAttemptResult({
           timedOut: true,
@@ -386,39 +414,49 @@ describe("timeout-triggered compaction", () => {
           } as never,
         }),
       );
-    mockedCompactDirect.mockResolvedValueOnce({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
+    mockedCompactDirect
+      .mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        reason: "nothing to compact",
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        reason: "nothing to compact",
+      });
 
     const result = await runEmbeddedPiAgent(overflowBaseRunParams);
 
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedCompactDirect).toHaveBeenCalledWith(
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(2);
+    expect(mockedCompactDirect).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         runtimeContext: expect.objectContaining({
           authProfileId: "profile-a",
           attempt: 1,
-          maxAttempts: 1,
+          maxAttempts: 2,
+        }),
+      }),
+    );
+    expect(mockedCompactDirect).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        runtimeContext: expect.objectContaining({
+          authProfileId: "profile-b",
+          attempt: 2,
+          maxAttempts: 2,
         }),
       }),
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ authProfileId: "profile-a" }),
-    );
-    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ authProfileId: "profile-b" }),
-    );
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
   it("counts thrown timeout compactions against the retry cap across profile rotation", async () => {
     useTwoAuthProfiles();
+    // Attempt 1 (profile-a): timeout → compaction #1 throws → rotate to profile-b
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
         makeAttemptResult({
@@ -429,6 +467,7 @@ describe("timeout-triggered compaction", () => {
           } as never,
         }),
       )
+      // Attempt 2 (profile-b): timeout → compaction #2 throws → cap exhausted → rotation
       .mockResolvedValueOnce(
         makeAttemptResult({
           timedOut: true,
@@ -438,11 +477,13 @@ describe("timeout-triggered compaction", () => {
           } as never,
         }),
       );
-    mockedCompactDirect.mockRejectedValueOnce(new Error("engine crashed"));
+    mockedCompactDirect
+      .mockRejectedValueOnce(new Error("engine crashed"))
+      .mockRejectedValueOnce(new Error("engine crashed again"));
 
     const result = await runEmbeddedPiAgent(overflowBaseRunParams);
 
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(2);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
       1,

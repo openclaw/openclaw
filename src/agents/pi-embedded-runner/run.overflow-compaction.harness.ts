@@ -62,6 +62,7 @@ export const mockedContextEngine = {
 
 export const mockedContextEngineCompact = mockedContextEngine.compact;
 export const mockedCompactDirect = mockedContextEngine.compact;
+export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void>();
 export const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
 export const mockedRunEmbeddedAttempt =
@@ -246,6 +247,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   );
   mockedResolveAuthProfileOrder.mockReset();
   mockedResolveAuthProfileOrder.mockReturnValue([]);
+  mockedRunPostCompactionSideEffects.mockReset();
+  mockedRunPostCompactionSideEffects.mockResolvedValue(undefined);
 }
 
 export async function loadRunOverflowCompactionHarness(): Promise<{
@@ -413,6 +416,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("./tool-result-truncation.js", () => ({
     truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
     sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
+  }));
+
+  vi.doMock("./compact.js", () => ({
+    runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
   }));
 
   vi.doMock("./utils.js", () => ({
