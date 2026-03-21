@@ -20,6 +20,11 @@ from core.context import ContextBuilder
 from core.feed import FeedEngine
 from adapters.threads import ThreadsAdapter
 from adapters.telegram import TelegramAdapter
+from adapters.gmail import GmailAdapter
+try:
+    from adapters.line_personal import LinePersonalAdapter
+except ImportError:
+    LinePersonalAdapter = None
 
 
 def cmd_status():
@@ -84,6 +89,10 @@ def cmd_scan():
     ctx_builder = ContextBuilder(conn, identity)
 
     adapters = {'threads': ThreadsAdapter()}
+    if LinePersonalAdapter:
+        line = LinePersonalAdapter()
+        if line.is_available():
+            adapters['line_personal'] = line
 
     for name, adapter in adapters.items():
         print(f'Scanning {name}...')
