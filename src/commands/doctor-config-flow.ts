@@ -62,7 +62,6 @@ import {
   scanTelegramAllowFromUsernameEntries,
 } from "./doctor/providers/telegram.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./doctor/shared/allowlist-policy-repair.js";
-import { hasAllowFromEntries } from "./doctor/shared/allowlist.js";
 import { collectEmptyAllowlistPolicyWarningsForAccount } from "./doctor/shared/empty-allowlist-policy.js";
 import { scanMutableAllowlistEntries } from "./doctor/shared/mutable-allowlist.js";
 import { asObjectRecord } from "./doctor/shared/object.js";

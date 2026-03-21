@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { maybeRepairDiscordNumericIds, scanDiscordNumericIdEntries } from "./discord.js";
 
 describe("doctor discord provider repairs", () => {
   it("finds numeric id entries across discord scopes", () => {
-    const hits = scanDiscordNumericIdEntries({
+    const cfg = {
       channels: {
         discord: {
           allowFrom: [123],
@@ -23,7 +24,9 @@ describe("doctor discord provider repairs", () => {
           },
         },
       },
-    });
+    } as unknown as OpenClawConfig;
+
+    const hits = scanDiscordNumericIdEntries(cfg);
 
     expect(hits.map((hit) => hit.path)).toEqual([
       "channels.discord.allowFrom[0]",
@@ -37,7 +40,7 @@ describe("doctor discord provider repairs", () => {
   });
 
   it("repairs numeric discord ids into strings", () => {
-    const result = maybeRepairDiscordNumericIds({
+    const cfg = {
       channels: {
         discord: {
           allowFrom: [123],
@@ -48,7 +51,9 @@ describe("doctor discord provider repairs", () => {
           },
         },
       },
-    });
+    } as unknown as OpenClawConfig;
+
+    const result = maybeRepairDiscordNumericIds(cfg);
 
     expect(result.changes).toEqual([
       expect.stringContaining("channels.discord.allowFrom: converted 1 numeric entry to strings"),
