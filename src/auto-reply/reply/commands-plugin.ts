@@ -8,23 +8,6 @@
 import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
-function coerceFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return undefined;
-    }
-    const parsed = Number(trimmed);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return undefined;
-}
-
 /**
  * Handle plugin-registered commands.
  * Returns a result if a plugin command was matched and executed,
@@ -59,7 +42,11 @@ export const handlePluginCommand: CommandHandler = async (
     from: command.from,
     to: command.to,
     accountId: params.ctx.AccountId ?? undefined,
-    messageThreadId: coerceFiniteNumber(params.ctx.MessageThreadId),
+    messageThreadId:
+      typeof params.ctx.MessageThreadId === "string" ||
+      typeof params.ctx.MessageThreadId === "number"
+        ? params.ctx.MessageThreadId
+        : undefined,
   });
 
   return {

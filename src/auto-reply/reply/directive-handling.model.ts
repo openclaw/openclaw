@@ -1,4 +1,4 @@
-import { buildBrowseProvidersButton } from "openclaw/plugin-sdk/telegram";
+import { buildBrowseProvidersButton } from "../../../extensions/telegram/api.js";
 import {
   ensureAuthProfileStore,
   resolveAuthStorePathForDisplay,

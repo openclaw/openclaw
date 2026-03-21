@@ -1,5 +1,5 @@
-import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "openclaw/plugin-sdk/matrix";
 import { describe, expect, it, vi } from "vitest";
+import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "../../../runtime-api.js";
 import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
@@ -44,6 +44,9 @@ describe("createMatrixRoomMessageHandler thread root media", () => {
             sessionKey: "agent:main:matrix:channel:!room:example.org",
             mainSessionKey: "agent:main:main",
           }),
+        },
+        mentions: {
+          buildMentionRegexes: vi.fn().mockReturnValue([]),
         },
         session: {
           resolveStorePath: vi.fn().mockReturnValue("/tmp/openclaw-test-session.json"),

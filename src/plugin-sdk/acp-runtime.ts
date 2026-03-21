@@ -3,6 +3,12 @@
 export { getAcpSessionManager } from "../acp/control-plane/manager.js";
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
+export {
+  getAcpRuntimeBackend,
+  registerAcpRuntimeBackend,
+  requireAcpRuntimeBackend,
+  unregisterAcpRuntimeBackend,
+} from "../acp/runtime/registry.js";
 export type {
   AcpRuntime,
   AcpRuntimeCapabilities,

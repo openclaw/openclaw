@@ -1,4 +1,5 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { OPENAI_DEFAULT_EMBEDDING_MODEL } from "../providers/openai-defaults.js";
 import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normalize.js";
 import {
   createRemoteEmbeddingProvider,
@@ -13,7 +14,6 @@ export type OpenAiEmbeddingClient = {
   model: string;
 };
 
-export const DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-3-small": 8192,
@@ -24,7 +24,7 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
 export function normalizeOpenAiModel(model: string): string {
   return normalizeEmbeddingModelWithPrefixes({
     model,
-    defaultModel: DEFAULT_OPENAI_EMBEDDING_MODEL,
+    defaultModel: OPENAI_DEFAULT_EMBEDDING_MODEL,
     prefixes: ["openai/"],
   });
 }

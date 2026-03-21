@@ -1,3 +1,3 @@
-import { buildChannelConfigSchema, SlackConfigSchema } from "openclaw/plugin-sdk/slack-core";
+import { buildChannelConfigSchema, SlackConfigSchema } from "./runtime-api.js";
 
 export const SlackChannelConfigSchema = buildChannelConfigSchema(SlackConfigSchema);
