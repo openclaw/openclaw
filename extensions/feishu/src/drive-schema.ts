@@ -50,6 +50,21 @@ export const FeishuDriveSchema = Type.Union([
     type: FileType,
   }),
   Type.Object({
+    action: Type.Literal("download"),
+    file_token: Type.String({ description: "File token to download" }),
+    type: Type.Optional(FileType),
+  }),
+  Type.Object({
+    action: Type.Literal("download_message_attachment"),
+    message_id: Type.String({
+      description: "Message ID (om_xxx) that contains the attachment",
+    }),
+    file_key: Type.String({ description: "File key from message content (file_v3_xxx)" }),
+    resource_type: Type.Optional(
+      Type.String({ description: "Resource type: 'image' or 'file' (default: 'file')" }),
+    ),
+  }),
+  Type.Object({
     action: Type.Literal("list_comments"),
     file_token: Type.String({ description: "Document token" }),
     file_type: Type.Optional(CommentFileType),

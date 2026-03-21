@@ -1,3 +1,6 @@
+import fs from "fs";
+import os from "os";
+import path from "path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
@@ -365,28 +368,53 @@ async function listFolder(client: Lark.Client, folderToken?: string) {
   };
 }
 
-async function getFileInfo(client: Lark.Client, fileToken: string, folderToken?: string) {
-  // Use list with folder_token to find file info
-  const res = await client.drive.file.list({
-    params: folderToken ? { folder_token: folderToken } : {},
+async function getFileInfo(client: Lark.Client, fileToken: string, type?: string) {
+  // Use batch_query meta API to look up file metadata directly by token.
+  // This works for any file the bot has access to, regardless of folder membership.
+  const docType = (type || "file") as
+    | "doc"
+    | "docx"
+    | "sheet"
+    | "bitable"
+    | "file"
+    | "wiki"
+    | "mindnote"
+    | "folder"
+    | "synced_block"
+    | "slides";
+  const res = await client.drive.meta.batchQuery({
+    data: {
+      request_docs: [{ doc_token: fileToken, doc_type: docType }],
+      with_url: true,
+    },
   });
   if (res.code !== 0) {
     throw new Error(res.msg);
   }
 
-  const file = res.data?.files?.find((f) => f.token === fileToken);
-  if (!file) {
+  const failed = res.data?.failed_list?.find(
+    (f: { token?: string }) => f.token === fileToken,
+  );
+  if (failed) {
+    throw new Error(
+      `File not accessible (token: ${fileToken}, code: ${(failed as { code?: number }).code})`,
+    );
+  }
+
+  const meta = res.data?.metas?.[0];
+  if (!meta) {
     throw new Error(`File not found: ${fileToken}`);
   }
 
   return {
-    token: file.token,
-    name: file.name,
-    type: file.type,
-    url: file.url,
-    created_time: file.created_time,
-    modified_time: file.modified_time,
-    owner_id: file.owner_id,
+    token: meta.doc_token,
+    name: meta.title,
+    type: meta.doc_type,
+    url: meta.url,
+    owner_id: meta.owner_id,
+    created_time: meta.create_time,
+    modified_time: meta.latest_modify_time,
+    latest_modify_user: meta.latest_modify_user,
   };
 }
 
@@ -742,6 +770,286 @@ export async function deliverCommentThreadText(
   }
 }
 
+// ============ PDF Text Extraction ============
+
+async function extractPdfText(filePath: string): Promise<string | undefined> {
+  try {
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const data = new Uint8Array(await fs.promises.readFile(filePath));
+    const doc = await pdfjsLib.getDocument({ data, useSystemFonts: true }).promise;
+    const pages: string[] = [];
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pdfjs item type
+      const text = content.items
+        .filter((item: { str?: string }) => "str" in item)
+        .map((item: { str?: string }) => item.str)
+        .join(" ");
+      if (text.trim()) pages.push(text);
+    }
+    return pages.length > 0 ? pages.join("\n\n") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// ============ File Extension Detection ============
+
+const MIME_EXTENSION_MAP: Record<string, string> = {
+  "application/pdf": ".pdf",
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/gif": ".gif",
+  "application/zip": ".zip",
+  "text/plain": ".txt",
+  "text/csv": ".csv",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+};
+
+function detectFileExtension(headers: Record<string, string | undefined>): string {
+  try {
+    const disposition = headers["content-disposition"] ?? "";
+    const fnMatch = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
+    if (fnMatch) {
+      const ext = path.extname(decodeURIComponent(fnMatch[1]));
+      if (ext) return ext;
+    }
+
+    const ct = headers["content-type"] ?? "";
+    for (const [mime, extension] of Object.entries(MIME_EXTENSION_MAP)) {
+      if (ct.includes(mime)) return extension;
+    }
+  } catch {
+    // ignore header parsing errors
+  }
+  return "";
+}
+
+function detectFileName(headers: Record<string, string | undefined>): string {
+  try {
+    const disposition = headers["content-disposition"] ?? "";
+    const fnMatch = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
+    if (fnMatch) return decodeURIComponent(fnMatch[1]);
+  } catch {
+    // ignore
+  }
+  return "";
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type varies
+function resolveResponseHeaders(resAny: any): Record<string, string | undefined> {
+  const headers = resAny.headers ?? {};
+  // Handle both plain-object and Headers (fetch-style) APIs
+  if (typeof headers.get === "function") {
+    return {
+      "content-disposition": headers.get("content-disposition") ?? undefined,
+      "content-type": headers.get("content-type") ?? undefined,
+    };
+  }
+  return headers;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type varies
+async function writeResponseToFile(resAny: any, filePath: string): Promise<void> {
+  if (typeof resAny.writeFile === "function") {
+    await resAny.writeFile(filePath);
+  } else if (typeof resAny.getReadableStream === "function") {
+    const stream = resAny.getReadableStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    await fs.promises.writeFile(filePath, Buffer.concat(chunks));
+  } else if (Buffer.isBuffer(resAny)) {
+    await fs.promises.writeFile(filePath, resAny);
+  } else if (resAny.data && Buffer.isBuffer(resAny.data)) {
+    await fs.promises.writeFile(filePath, resAny.data);
+  } else {
+    throw new Error("Unexpected download response format");
+  }
+}
+
+async function resolveDownloadsDir(): Promise<string> {
+  const homeDir = os.homedir();
+  const dlDir = path.join(homeDir, ".openclaw", "workspace", "downloads");
+  await fs.promises.mkdir(dlDir, { recursive: true });
+  return dlDir;
+}
+
+/** Try to extract readable text from a downloaded file. */
+async function tryExtractText(
+  filePath: string,
+  ext: string,
+  sizeBytes: number,
+): Promise<string | undefined> {
+  if (ext === ".pdf") {
+    const text = await extractPdfText(filePath);
+    if (text) return text;
+  }
+
+  // Try reading small files as UTF-8 text
+  if (sizeBytes < 512 * 1024) {
+    try {
+      const buf = await fs.promises.readFile(filePath);
+      const text = buf.toString("utf-8");
+      const nonPrintable = text.replace(/[\x09\x0A\x0D\x20-\x7E\u00A0-\uFFFF]/g, "");
+      if (nonPrintable.length / text.length < 0.05) {
+        return text;
+      }
+    } catch {
+      // not text, ignore
+    }
+  }
+  return undefined;
+}
+
+// ============ Download Actions ============
+
+async function downloadFile(client: Lark.Client, fileToken: string, fileType?: string) {
+  // For native Lark docs (docx, doc, sheet, bitable), use export task API
+  const nativeTypes = ["doc", "docx", "sheet", "bitable"];
+  if (fileType && nativeTypes.includes(fileType)) {
+    return await downloadViaExport(client, fileToken, fileType);
+  }
+
+  // For uploaded files (PDF, images, etc.), use direct download
+  const res = await client.drive.file.download({
+    path: { file_token: fileToken },
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
+  const resAny = res as any;
+  if (resAny.code !== undefined && resAny.code !== 0) {
+    throw new Error(resAny.msg || `Download failed with code ${resAny.code}`);
+  }
+
+  const headers = resolveResponseHeaders(resAny);
+  const ext = detectFileExtension(headers);
+  const dlDir = await resolveDownloadsDir();
+  const tmpPath = path.join(dlDir, `${fileToken}_${Date.now()}${ext}`);
+
+  await writeResponseToFile(resAny, tmpPath);
+
+  const stat = await fs.promises.stat(tmpPath);
+  const textContent = await tryExtractText(tmpPath, ext, stat.size);
+
+  return {
+    file_path: tmpPath,
+    size_bytes: stat.size,
+    text_content: textContent,
+    note: textContent
+      ? "File content extracted and included as text_content."
+      : `Binary file saved to ${tmpPath}.`,
+  };
+}
+
+async function downloadViaExport(client: Lark.Client, fileToken: string, fileType: string) {
+  const exportType = fileType as "doc" | "sheet" | "bitable" | "docx";
+  const createRes = await client.drive.exportTask.create({
+    data: {
+      file_extension: "pdf",
+      token: fileToken,
+      type: exportType,
+    },
+  });
+  if (createRes.code !== 0) {
+    throw new Error(createRes.msg || `Export task creation failed with code ${createRes.code}`);
+  }
+  const ticket = createRes.data?.ticket;
+  if (!ticket) {
+    throw new Error("No export task ticket returned");
+  }
+
+  // Poll for export task completion (max ~30 seconds)
+  let exportToken: string | undefined;
+  for (let i = 0; i < 15; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const getRes = await client.drive.exportTask.get({
+      params: { token: fileToken },
+      path: { ticket },
+    });
+    if (getRes.code !== 0) {
+      throw new Error(getRes.msg || `Export task query failed with code ${getRes.code}`);
+    }
+    const status = getRes.data?.result?.job_status;
+    if (status === 0) {
+      exportToken = getRes.data?.result?.file_token;
+      break;
+    } else if (status === 1 || status === 2) {
+      continue;
+    } else {
+      throw new Error(
+        `Export task failed with status ${status}: ${getRes.data?.result?.job_error_msg || "unknown error"}`,
+      );
+    }
+  }
+  if (!exportToken) {
+    throw new Error("Export task timed out after 30 seconds");
+  }
+
+  const dlRes = await client.drive.exportTask.download({
+    path: { file_token: exportToken },
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
+  const dlAny = dlRes as any;
+  const dlDir = await resolveDownloadsDir();
+  const tmpPath = path.join(dlDir, `${fileToken}_export_${Date.now()}.pdf`);
+
+  await writeResponseToFile(dlAny, tmpPath);
+
+  const stat = await fs.promises.stat(tmpPath);
+  return {
+    file_path: tmpPath,
+    size_bytes: stat.size,
+    exported_as: "pdf",
+    note: `Native ${fileType} exported as PDF and saved to ${tmpPath}. Use the read tool to view it.`,
+  };
+}
+
+// ============ Message Attachment Download ============
+
+async function downloadMessageAttachment(
+  client: Lark.Client,
+  messageId: string,
+  fileKey: string,
+  resourceType: "image" | "file" = "file",
+) {
+  const response = await client.im.messageResource.get({
+    path: { message_id: messageId, file_key: fileKey },
+    params: { type: resourceType },
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
+  const resAny = response as any;
+  if (resAny.code !== undefined && resAny.code !== 0) {
+    throw new Error(resAny.msg || `Message resource download failed with code ${resAny.code}`);
+  }
+
+  const headers = resolveResponseHeaders(resAny);
+  const ext = detectFileExtension(headers);
+  const fileName = detectFileName(headers);
+  const dlDir = await resolveDownloadsDir();
+  const tmpPath = path.join(dlDir, `${fileKey}_${Date.now()}${ext}`);
+
+  await writeResponseToFile(resAny, tmpPath);
+
+  const stat = await fs.promises.stat(tmpPath);
+  const textContent = await tryExtractText(tmpPath, ext, stat.size);
+
+  return {
+    file_path: tmpPath,
+    file_name: fileName || undefined,
+    size_bytes: stat.size,
+    text_content: textContent,
+    note: textContent
+      ? "File content extracted and included as text_content."
+      : `Binary file saved to ${tmpPath}.`,
+  };
+}
+
 // ============ Tool Registration ============
 
 export function registerFeishuDriveTools(api: OpenClawPluginApi) {
@@ -771,7 +1079,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
         name: "feishu_drive",
         label: "Feishu Drive",
         description:
-          "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete, list_comments, list_comment_replies, add_comment, reply_comment",
+          "Feishu cloud storage and message attachment operations. Actions: list, info, download, create_folder, move, delete, download_message_attachment, list_comments, list_comment_replies, add_comment, reply_comment. Use download_message_attachment with message_id + file_key for files shared in chat messages (file_v3_xxx tokens).",
         parameters: FeishuDriveSchema,
         async execute(_toolCallId, params) {
           const p = params as FeishuDriveExecuteParams;
@@ -785,13 +1093,24 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
               case "list":
                 return jsonToolResult(await listFolder(client, p.folder_token));
               case "info":
-                return jsonToolResult(await getFileInfo(client, p.file_token));
+                return jsonToolResult(await getFileInfo(client, p.file_token, p.type));
               case "create_folder":
                 return jsonToolResult(await createFolder(client, p.name, p.folder_token));
               case "move":
                 return jsonToolResult(await moveFile(client, p.file_token, p.type, p.folder_token));
               case "delete":
                 return jsonToolResult(await deleteFile(client, p.file_token, p.type));
+              case "download":
+                return jsonToolResult(await downloadFile(client, p.file_token, p.type));
+              case "download_message_attachment":
+                return jsonToolResult(
+                  await downloadMessageAttachment(
+                    client,
+                    p.message_id,
+                    p.file_key,
+                    (p.resource_type as "image" | "file") ?? "file",
+                  ),
+                );
               case "list_comments": {
                 const resolved = applyCommentFileTypeDefault(
                   applyAmbientCommentDefaults(p, ctx),
