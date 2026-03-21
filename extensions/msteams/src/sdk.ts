@@ -1,5 +1,6 @@
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsCredentials } from "./token.js";
+import { buildUserAgent } from "./user-agent.js";
 
 /**
  * Resolved Teams SDK modules loaded lazily to avoid importing when the
@@ -98,6 +99,7 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
       // Build a send context that uses the Bot Framework REST API
       const apiClient = new sdk.Client(serviceUrl, {
         token: () => (tokenValue ? { value: tokenValue } : undefined),
+        headers: { "User-Agent": buildUserAgent() },
       } as Record<string, unknown>);
 
       const sendContext = {
@@ -167,6 +169,7 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
 
             const apiClient = new sdk.Client(serviceUrl, {
               token: () => (tokenValue ? { value: tokenValue } : undefined),
+              headers: { "User-Agent": buildUserAgent() },
             } as Record<string, unknown>);
 
             return await apiClient.conversations.activities(convId).create({
