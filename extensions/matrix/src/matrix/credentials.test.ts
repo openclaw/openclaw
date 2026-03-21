@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setMatrixRuntime } from "../runtime.js";
+import { installMatrixTestRuntime } from "../test-runtime.js";
 import {
   credentialsMatchConfig,
   loadMatrixCredentials,
@@ -30,14 +30,7 @@ describe("matrix credentials storage", () => {
   ): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-creds-"));
     tempDirs.push(dir);
-    setMatrixRuntime({
-      config: {
-        loadConfig: () => cfg,
-      },
-      state: {
-        resolveStateDir: () => dir,
-      },
-    } as never);
+    installMatrixTestRuntime({ cfg, stateDir: dir });
     return dir;
   }
 

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { discoverOpenClawPlugins } from "../src/plugins/discovery.js";
+import { collectFilesSync, isCodeFile, relativeToCwd } from "./check-file-utils.js";
 
 // Match exact monolithic-root specifier in any code path:
 // imports/exports, require/dynamic import, and test mocks (vi.mock/jest.mock).
@@ -15,53 +16,15 @@ function hasLegacyCompatImport(content: string): boolean {
   return LEGACY_COMPAT_IMPORT_PATTERN.test(content);
 }
 
-function isSourceFile(filePath: string): boolean {
-  if (filePath.endsWith(".d.ts")) {
-    return false;
-  }
-  return /\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(filePath);
-}
-
 function collectPluginSourceFiles(rootDir: string): string[] {
   const srcDir = path.join(rootDir, "src");
   if (!fs.existsSync(srcDir)) {
     return [];
   }
-
-  const files: string[] = [];
-  const stack: string[] = [srcDir];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      continue;
-    }
-    let entries: fs.Dirent[] = [];
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        if (
-          entry.name === "node_modules" ||
-          entry.name === "dist" ||
-          entry.name === ".git" ||
-          entry.name === "coverage"
-        ) {
-          continue;
-        }
-        stack.push(fullPath);
-        continue;
-      }
-      if (entry.isFile() && isSourceFile(fullPath)) {
-        files.push(fullPath);
-      }
-    }
-  }
-
-  return files;
+  return collectFilesSync(srcDir, {
+    includeFile: (filePath) => isCodeFile(filePath),
+    skipDirNames: new Set(["node_modules", "dist", ".git", "coverage"]),
+  });
 }
 
 function collectSharedExtensionSourceFiles(): string[] {
@@ -127,8 +90,7 @@ function main() {
     if (monolithicOffenders.length > 0) {
       console.error("Bundled plugin source files must not import monolithic openclaw/plugin-sdk.");
       for (const file of monolithicOffenders.toSorted()) {
-        const relative = path.relative(process.cwd(), file) || file;
-        console.error(`- ${relative}`);
+        console.error(`- ${relativeToCwd(file)}`);
       }
     }
     if (legacyCompatOffenders.length > 0) {
@@ -136,8 +98,7 @@ function main() {
         "Bundled plugin source files must not import legacy openclaw/plugin-sdk/compat.",
       );
       for (const file of legacyCompatOffenders.toSorted()) {
-        const relative = path.relative(process.cwd(), file) || file;
-        console.error(`- ${relative}`);
+        console.error(`- ${relativeToCwd(file)}`);
       }
     }
     if (monolithicOffenders.length > 0 || legacyCompatOffenders.length > 0) {

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "../../../runtime-api.js";
-import { setMatrixRuntime } from "../../runtime.js";
+import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
@@ -143,23 +143,7 @@ function createImageEvent(content: Record<string, unknown>): MatrixRawEvent {
 describe("createMatrixRoomMessageHandler media failures", () => {
   beforeEach(() => {
     downloadMatrixMediaMock.mockReset();
-    setMatrixRuntime({
-      channel: {
-        mentions: {
-          matchesMentionPatterns: (text: string, patterns: RegExp[]) =>
-            patterns.some((pattern) => pattern.test(text)),
-        },
-        media: {
-          saveMediaBuffer: vi.fn(),
-        },
-      },
-      config: {
-        loadConfig: () => ({}),
-      },
-      state: {
-        resolveStateDir: () => "/tmp",
-      },
-    } as unknown as PluginRuntime);
+    installMatrixMonitorTestRuntime();
   });
 
   it("replaces bare image filenames with an unavailable marker when unencrypted download fails", async () => {

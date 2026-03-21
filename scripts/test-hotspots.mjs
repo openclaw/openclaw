@@ -1,7 +1,8 @@
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import {
+  collectVitestFileDurations,
+  readJsonFile,
+  runVitestJsonReport,
+} from "./test-report-utils.mjs";
 
 function parseArgs(argv) {
   const args = {
@@ -38,37 +39,15 @@ function formatMs(value) {
 }
 
 const opts = parseArgs(process.argv.slice(2));
-const reportPath =
-  opts.reportPath || path.join(os.tmpdir(), `openclaw-vitest-hotspots-${Date.now()}.json`);
-
-if (!(opts.reportPath && fs.existsSync(reportPath))) {
-  const run = spawnSync(
-    "pnpm",
-    ["vitest", "run", "--config", opts.config, "--reporter=json", "--outputFile", reportPath],
-    {
-      stdio: "inherit",
-      env: process.env,
-    },
-  );
-
-  if (run.status !== 0) {
-    process.exit(run.status ?? 1);
-  }
-}
-
-const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
-const fileResults = (report.testResults ?? [])
-  .map((result) => {
-    const start = typeof result.startTime === "number" ? result.startTime : 0;
-    const end = typeof result.endTime === "number" ? result.endTime : 0;
-    const testCount = Array.isArray(result.assertionResults) ? result.assertionResults.length : 0;
-    return {
-      file: typeof result.name === "string" ? result.name : "unknown",
-      durationMs: Math.max(0, end - start),
-      testCount,
-    };
-  })
-  .toSorted((a, b) => b.durationMs - a.durationMs);
+const reportPath = runVitestJsonReport({
+  config: opts.config,
+  reportPath: opts.reportPath,
+  prefix: "openclaw-vitest-hotspots",
+});
+const report = readJsonFile(reportPath);
+const fileResults = collectVitestFileDurations(report).toSorted(
+  (a, b) => b.durationMs - a.durationMs,
+);
 
 const top = fileResults.slice(0, opts.limit);
 const totalDurationMs = fileResults.reduce((sum, item) => sum + item.durationMs, 0);

@@ -3,7 +3,7 @@ import {
   __testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "../../../../../src/infra/outbound/session-binding-service.js";
-import { setMatrixRuntime } from "../../runtime.js";
+import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import {
   createMatrixHandlerTestHarness,
@@ -26,23 +26,7 @@ vi.mock("../send.js", () => ({
 
 beforeEach(() => {
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
-  setMatrixRuntime({
-    channel: {
-      mentions: {
-        matchesMentionPatterns: (text: string, patterns: RegExp[]) =>
-          patterns.some((pattern) => pattern.test(text)),
-      },
-      media: {
-        saveMediaBuffer: vi.fn(),
-      },
-    },
-    config: {
-      loadConfig: () => ({}),
-    },
-    state: {
-      resolveStateDir: () => "/tmp",
-    },
-  } as never);
+  installMatrixMonitorTestRuntime();
 });
 
 function createReactionHarness(params?: {
