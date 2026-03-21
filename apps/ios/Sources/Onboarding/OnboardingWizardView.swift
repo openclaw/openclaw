@@ -607,7 +607,7 @@ struct OnboardingWizardView: View {
     private var authStep: some View {
         Group {
             Section("Authentication") {
-                TextField("Gateway Auth Token", text: self.$gatewayToken)
+                SecureField("Gateway Auth Token", text: self.$gatewayToken)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 SecureField("Gateway Password", text: self.$gatewayPassword)
@@ -724,6 +724,12 @@ struct OnboardingWizardView: View {
             TextField("Discovery Domain (optional)", text: self.$discoveryDomain)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+            if self.selectedMode == .remoteDomain {
+                SecureField("Gateway Auth Token", text: self.$gatewayToken)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                SecureField("Gateway Password", text: self.$gatewayPassword)
+            }
             self.manualConnectButton
         }
     }
