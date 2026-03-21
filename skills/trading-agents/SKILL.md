@@ -1,12 +1,12 @@
 ---
 name: trading-agents
-description: "Run TradingAgents multi-agent LLM trading analysis via CLI or Python. Use when: (1) analyzing a stock ticker with fundamental, sentiment, technical, and news analysis, (2) getting AI-powered buy/hold/sell decisions with risk assessment, (3) backtesting trading strategies over date ranges. NOT for: real-time order execution, portfolio management with live brokers, or non-equity asset classes. Requires: Python 3.11+, tradingagents package."
+description: "Run TradingAgents multi-agent LLM trading analysis via CLI. Use when: (1) analyzing a stock ticker with fundamental, sentiment, technical, and news analysis, (2) getting AI-powered buy/hold/sell decisions with risk assessment, (3) backtesting trading strategies over date ranges. NOT for: real-time order execution, portfolio management with live brokers, or non-equity asset classes. Requires: tradingagents CLI (installed via uv tool install)."
 metadata:
   {
     "openclaw":
       {
         "emoji": "📈",
-        "requires": { "bins": ["python3"] },
+        "requires": { "bins": ["tradingagents"] },
         "install":
           [
             {
@@ -41,6 +41,14 @@ TradingAgents deploys specialized LLM-powered agents (fundamental analyst, senti
 
 ## Setup
 
+**CLI only** (installed automatically by OpenClaw via `uv tool install`):
+
+```bash
+uv tool install tradingagents
+```
+
+**CLI + Python import** (if you need `from tradingagents ...` in scripts):
+
 ```bash
 pip install tradingagents
 ```
@@ -57,40 +65,19 @@ export OPENROUTER_API_KEY=...      # OpenRouter (any model)
 
 No extra data API keys needed — defaults to yfinance for market data.
 
-## Quick Analysis (Python one-liner)
-
-```bash
-python3 -c "
-from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.default_config import DEFAULT_CONFIG
-config = DEFAULT_CONFIG.copy()
-config['llm_provider'] = 'anthropic'
-config['deep_think_llm'] = 'claude-sonnet-4-20250514'
-config['quick_think_llm'] = 'claude-sonnet-4-20250514'
-ta = TradingAgentsGraph(debug=True, config=config)
-_, decision = ta.propagate('NVDA', '2024-05-10')
-print(decision)
-"
-```
-
 ## CLI Usage
 
-After installing via pip:
+Run the interactive CLI:
 
 ```bash
 tradingagents
 ```
 
-Or if installed from source:
-
-```bash
-cd /path/to/TradingAgents
-python -m cli.main
-```
-
 The CLI provides an interactive interface to select tickers, dates, LLM providers, and research depth.
 
 ## Python Package Usage
+
+> Requires `pip install tradingagents` (not `uv tool install`) for Python import support.
 
 ```python
 from tradingagents.graph.trading_graph import TradingAgentsGraph
