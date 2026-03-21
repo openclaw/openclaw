@@ -290,6 +290,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
+      hookContext: {
+        channelId: "signal",
+        to: ctxPayload.To,
+        accountId: route.accountId,
+      },
       deliver: async (payload) => {
         await deps.deliverReplies({
           replies: [payload],

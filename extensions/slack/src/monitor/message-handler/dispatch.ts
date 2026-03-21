@@ -302,6 +302,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     ...replyPipeline,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+    hookContext: {
+      channelId: "slack",
+      to: message.channel,
+      accountId: route.accountId,
+    },
     deliver: async (payload) => {
       if (useStreaming) {
         await deliverWithStreaming(payload);

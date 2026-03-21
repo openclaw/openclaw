@@ -586,6 +586,11 @@ export const dispatchTelegramMessage = async ({
       cfg,
       dispatcherOptions: {
         ...replyPipeline,
+        hookContext: {
+          channelId: "telegram",
+          to: String(chatId),
+          accountId: route.accountId,
+        },
         deliver: async (payload, info) => {
           if (payload.isError === true) {
             hadErrorReplyFailureOrSkip = true;

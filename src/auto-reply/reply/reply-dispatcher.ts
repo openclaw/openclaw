@@ -1,5 +1,6 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
@@ -40,6 +41,38 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+/**
+ * Emit message_sent plugin hook from the dispatcher path (#47472).
+ * Fire-and-forget: errors are swallowed since delivery already succeeded.
+ */
+function emitMessageSentHookFromDispatcher(
+  hookContext: NonNullable<ReplyDispatcherOptions["hookContext"]>,
+  payload: ReplyPayload,
+): void {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("message_sent")) {
+    return;
+  }
+  const content =
+    typeof payload.text === "string" ? payload.text : "";
+  // Fire-and-forget: don't await, don't throw.
+  hookRunner
+    .runMessageSent(
+      {
+        to: hookContext.to,
+        content,
+        success: true,
+      },
+      {
+        channelId: hookContext.channelId,
+        accountId: hookContext.accountId,
+      },
+    )
+    .catch(() => {
+      // Swallow — delivery already succeeded, hook errors are non-fatal.
+    });
+}
+
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
   responsePrefix?: string;
@@ -56,6 +89,22 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /**
+   * Called after each successful delivery.
+   * Used to emit message_sent plugin hooks from the dispatcher path,
+   * which does not go through deliver.ts (see #47472).
+   */
+  onDelivered?: (payload: ReplyPayload, info: { kind: ReplyDispatchKind }) => void;
+  /**
+   * Channel and destination metadata for automatic message_sent hook emission.
+   * When provided (and onDelivered is not), the dispatcher will automatically
+   * emit the message_sent plugin hook after each successful delivery.
+   */
+  hookContext?: {
+    channelId: string;
+    to: string;
+    accountId?: string;
+  };
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -165,6 +214,17 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
         await options.deliver(normalized, { kind });
+        // Emit message_sent hook after successful delivery (#47472).
+        // This covers the dispatcher path that bypasses deliver.ts.
+        try {
+          if (options.onDelivered) {
+            options.onDelivered(normalized, { kind });
+          } else if (options.hookContext) {
+            emitMessageSentHookFromDispatcher(options.hookContext, normalized);
+          }
+        } catch {
+          // Swallow errors — delivery already succeeded.
+        }
       })
       .catch((err) => {
         options.onError?.(err, { kind });

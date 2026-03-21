@@ -353,6 +353,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       responsePrefix: prefixContext.responsePrefix,
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
+      hookContext: {
+        channelId: "feishu",
+        to: chatId,
+        accountId,
+      },
       onReplyStart: async () => {
         deliveredFinalTexts.clear();
         if (streamingEnabled && renderMode === "card") {
