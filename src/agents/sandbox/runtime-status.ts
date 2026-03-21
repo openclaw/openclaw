@@ -1,6 +1,9 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { canonicalizeMainSessionAlias, resolveAgentMainSessionKey } from "../../config/sessions.js";
+import {
+  canonicalizeMainSessionAlias,
+  resolveAgentMainSessionKey,
+} from "../../config/sessions/main-session.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { expandToolGroups } from "../tool-policy.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
