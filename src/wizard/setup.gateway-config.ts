@@ -19,10 +19,8 @@ import {
 } from "../gateway/gateway-config-prompts.shared.js";
 import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
-import {
-  promptSecretRefForSetup,
-  resolveSecretInputModeForEnvSelection,
-} from "../plugins/provider-auth-input.js";
+import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
+import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import type { WizardPrompter } from "./prompts.js";

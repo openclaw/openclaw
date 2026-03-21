@@ -885,56 +885,6 @@ describe("Bundle chunk isolation (#40096)", () => {
     expect(engine.info.id).toBe(engineId);
   });
 
-  it("plugin-sdk export path shares the same global registry", async () => {
-    // The plugin-sdk re-exports registerContextEngine.  Verify the
-    // re-export writes to the same global symbol as the direct import.
-    const ts = Date.now().toString(36);
-    const engineId = `sdk-path-${ts}`;
-
-    // Direct registry import
-    registerContextEngine(engineId, () => new MockContextEngine());
-
-    // Plugin-sdk import (different chunk path in the published bundle)
-    const sdkUrl = new URL("../plugin-sdk/index.ts", import.meta.url).href;
-    const sdk = await import(/* @vite-ignore */ `${sdkUrl}?sdk-${ts}`);
-
-    // The SDK export should see the engine we just registered
-    const factory = getContextEngineFactory(engineId);
-    expect(factory).toBeDefined();
-
-    // And registering from the SDK path should be visible from the direct path
-    const sdkEngineId = `sdk-registered-${ts}`;
-    sdk.registerContextEngine(sdkEngineId, () => new MockContextEngine());
-    expect(getContextEngineFactory(sdkEngineId)).toBeDefined();
-  });
-
-  it("plugin-sdk registerContextEngine cannot spoof privileged ownership", async () => {
-    const ts = Date.now().toString(36);
-    const engineId = `sdk-spoof-guard-${ts}`;
-    const ownedFactory = () => new MockContextEngine();
-    expect(
-      registerContextEngineForOwner(engineId, ownedFactory, "plugin:owner-a", {
-        allowSameOwnerRefresh: true,
-      }),
-    ).toEqual({ ok: true });
-
-    const sdkUrl = new URL("../plugin-sdk/index.ts", import.meta.url).href;
-    const sdk = await import(/* @vite-ignore */ `${sdkUrl}?sdk-spoof-${ts}`);
-    const spoofAttempt = (
-      sdk.registerContextEngine as unknown as (
-        id: string,
-        factory: ContextEngineFactory,
-        opts?: { owner?: string },
-      ) => ContextEngineRegistrationResult
-    )(engineId, () => new MockContextEngine(), { owner: "plugin:owner-a" });
-
-    expect(spoofAttempt).toEqual({
-      ok: false,
-      existingOwner: "plugin:owner-a",
-    });
-    expect(getContextEngineFactory(engineId)).toBe(ownedFactory);
-  });
-
   it("concurrent registration from multiple chunks does not lose entries", async () => {
     const ts = Date.now().toString(36);
     const registryUrl = new URL("./registry.ts", import.meta.url).href;

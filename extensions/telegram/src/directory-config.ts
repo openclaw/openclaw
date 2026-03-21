@@ -3,7 +3,7 @@ import {
   listInspectedDirectoryEntriesFromSources,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { inspectTelegramAccount, type InspectedTelegramAccount } from "../api.js";
+import { inspectTelegramAccount, type InspectedTelegramAccount } from "./account-inspect.js";
 
 export async function listTelegramDirectoryPeersFromConfig(params: DirectoryConfigParams) {
   return listInspectedDirectoryEntriesFromSources({

@@ -45,9 +45,18 @@ export const bundledChannelSetupPlugins = [
   lineSetupPlugin,
 ] as ChannelPlugin[];
 
-const bundledChannelPluginsById = new Map(
-  bundledChannelPlugins.map((plugin) => [plugin.id, plugin] as const),
-);
+function buildBundledChannelPluginsById(plugins: readonly ChannelPlugin[]) {
+  const byId = new Map<ChannelId, ChannelPlugin>();
+  for (const plugin of plugins) {
+    if (byId.has(plugin.id)) {
+      throw new Error(`duplicate bundled channel plugin id: ${plugin.id}`);
+    }
+    byId.set(plugin.id, plugin);
+  }
+  return byId;
+}
+
+const bundledChannelPluginsById = buildBundledChannelPluginsById(bundledChannelPlugins);
 
 export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
   return bundledChannelPluginsById.get(id);
