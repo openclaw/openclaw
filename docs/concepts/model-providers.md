@@ -254,34 +254,34 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 
 ### Other bundled provider plugins
 
-- OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
-- Example model: `openrouter/anthropic/claude-sonnet-4-6`
-- Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
-- Example model: `kilocode/anthropic/claude-opus-4.6`
-- MiniMax: `minimax` (`MINIMAX_API_KEY`)
-- Moonshot: `moonshot` (`MOONSHOT_API_KEY`)
-- Kimi Coding: `kimi-coding` (`KIMI_API_KEY` or `KIMICODE_API_KEY`)
-- Qianfan: `qianfan` (`QIANFAN_API_KEY`)
-- Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
-- NVIDIA: `nvidia` (`NVIDIA_API_KEY`)
-- Together: `together` (`TOGETHER_API_KEY`)
-- Venice: `venice` (`VENICE_API_KEY`)
-- Xiaomi: `xiaomi` (`XIAOMI_API_KEY`)
-- Vercel AI Gateway: `vercel-ai-gateway` (`AI_GATEWAY_API_KEY`)
-- Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`)
-- Cloudflare AI Gateway: `cloudflare-ai-gateway` (`CLOUDFLARE_AI_GATEWAY_API_KEY`)
-- Volcengine: `volcengine` (`VOLCANO_ENGINE_API_KEY`)
 - BytePlus: `byteplus` (`BYTEPLUS_API_KEY`)
-- xAI: `xai` (`XAI_API_KEY`)
-- Mistral: `mistral` (`MISTRAL_API_KEY`)
-- Example model: `mistral/mistral-large-latest`
-- CLI: `openclaw onboard --auth-choice mistral-api-key`
-- Groq: `groq` (`GROQ_API_KEY`)
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
   - GLM models on Cerebras use ids `zai-glm-4.7` and `zai-glm-4.6`.
   - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
+- Cloudflare AI Gateway: `cloudflare-ai-gateway` (`CLOUDFLARE_AI_GATEWAY_API_KEY`)
 - GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
-- Hugging Face Inference example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
+- Groq: `groq` (`GROQ_API_KEY`)
+- Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`)
+  - Example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
+- Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
+  - Example model: `kilocode/anthropic/claude-opus-4.6`
+- Kimi Coding: `kimi-coding` (`KIMI_API_KEY` or `KIMICODE_API_KEY`)
+- MiniMax: `minimax` (`MINIMAX_API_KEY`)
+- Mistral: `mistral` (`MISTRAL_API_KEY`)
+  - Example model: `mistral/mistral-large-latest`
+  - CLI: `openclaw onboard --auth-choice mistral-api-key`
+- Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
+- Moonshot: `moonshot` (`MOONSHOT_API_KEY`)
+- NVIDIA: `nvidia` (`NVIDIA_API_KEY`)
+- OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
+  - Example model: `openrouter/anthropic/claude-sonnet-4-6`
+- Qianfan: `qianfan` (`QIANFAN_API_KEY`)
+- Together: `together` (`TOGETHER_API_KEY`)
+- Venice: `venice` (`VENICE_API_KEY`)
+- Vercel AI Gateway: `vercel-ai-gateway` (`AI_GATEWAY_API_KEY`)
+- Volcengine: `volcengine` (`VOLCANO_ENGINE_API_KEY`)
+- xAI: `xai` (`XAI_API_KEY`)
+- Xiaomi: `xiaomi` (`XIAOMI_API_KEY`)
 
 ## Providers via `models.providers` (custom/base URL)
 

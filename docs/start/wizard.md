@@ -36,7 +36,7 @@ openclaw agents add <name>
 
 <Tip>
 CLI onboarding includes a web search step where you can pick a provider
-(Perplexity, Brave, Gemini, Grok, or Kimi) and paste your API key so the agent
+(Brave, Gemini, Grok, Kimi, or Perplexity) and paste your API key so the agent
 can use `web_search`. You can also configure this later with
 `openclaw configure --section web`. Docs: [Web tools](/tools/web).
 </Tip>
@@ -75,7 +75,7 @@ Onboarding starts with **QuickStart** (defaults) vs **Advanced** (full control).
 3. **Gateway** — Port, bind address, auth mode, Tailscale exposure.
    In interactive token mode, choose default plaintext token storage or opt into SecretRef.
    Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
-4. **Channels** — WhatsApp, Telegram, Discord, Google Chat, Mattermost, Signal, BlueBubbles, or iMessage.
+4. **Channels** — BlueBubbles, Discord, Google Chat, iMessage, Mattermost, Signal, Telegram, or WhatsApp.
 5. **Daemon** — Installs a LaunchAgent (macOS) or systemd user unit (Linux/WSL2).
    If token auth requires a token and `gateway.auth.token` is SecretRef-managed, daemon install validates it but does not persist the resolved token into supervisor service environment metadata.
    If token auth requires a token and the configured token SecretRef is unresolved, daemon install is blocked with actionable guidance.

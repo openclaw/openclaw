@@ -34,7 +34,7 @@ title: "Features"
 
 **Channels:**
 
-- WhatsApp, Telegram, Discord, iMessage (built-in)
+- Discord, iMessage, Telegram, WhatsApp (built-in)
 - Mattermost, Matrix, Microsoft Teams, Nostr, and more (plugins)
 - Group chat support with mention-based activation
 - DM safety with allowlists and pairing
@@ -68,6 +68,6 @@ title: "Features"
 **Tools and automation:**
 
 - Browser automation, exec, sandboxing
-- Web search (Brave, Perplexity, Gemini, Grok, Kimi, Firecrawl)
+- Web search (Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity)
 - Cron jobs and heartbeat scheduling
 - Skills, plugins, and workflow pipelines (Lobster)
