@@ -23,8 +23,8 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
-vi.mock("../../plugin-sdk/qwen-portal-auth.js", async () => {
-  const actual = await vi.importActual<object>("../../plugin-sdk/qwen-portal-auth.js");
+vi.mock("../../../extensions/qwen-portal-auth/refresh.js", async () => {
+  const actual = await vi.importActual<object>("../../../extensions/qwen-portal-auth/refresh.js");
   return {
     ...actual,
     refreshQwenPortalCredentials: refreshQwenPortalCredentialsMock,

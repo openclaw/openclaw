@@ -24,7 +24,7 @@ export function renderOverviewLogTail(props: OverviewLogTailProps) {
     .join("\n");
 
   return html`
-    <details class="card ov-log-tail">
+    <details class="card ov-log-tail" open>
       <summary class="ov-expandable-toggle">
         <span class="nav-item__icon">${icons.scrollText}</span>
         ${t("overview.logTail.title")}

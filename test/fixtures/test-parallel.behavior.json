@@ -184,6 +184,26 @@
         "reason": "Heartbeat default-unset coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
       },
       {
+        "file": "src/infra/heartbeat-runner.ghost-reminder.test.ts",
+        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
+      },
+      {
+        "file": "src/infra/heartbeat-runner.transcript-prune.test.ts",
+        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
+      },
+      {
+        "file": "src/infra/heartbeat-runner.sender-prefers-delivery-target.test.ts",
+        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
+      },
+      {
+        "file": "src/infra/heartbeat-runner.model-override.test.ts",
+        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
+      },
+      {
+        "file": "src/plugins/loader.git-path-regression.test.ts",
+        "reason": "Constructs a real Jiti boundary and is safer outside shared workers that may have mocked jiti earlier."
+      },
+      {
         "file": "src/infra/outbound/outbound-session.test.ts",
         "reason": "Outbound session coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
       },
@@ -311,6 +331,10 @@
       },
       {
         "file": "src/infra/outbound/message-action-runner.poll.test.ts",
+        "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
+        "file": "src/infra/outbound/message-action-runner.context.test.ts",
         "reason": "Terminates cleanly under threads, but not process forks on this host."
       },
       {
