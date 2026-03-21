@@ -52,10 +52,19 @@ function createStartAccountCtx(params: {
   };
 }
 
-function installGatewayRuntime(params?: { probeOk?: boolean; botUsername?: string }) {
+function installGatewayRuntime(params?: {
+  probeOk?: boolean;
+  botUsername?: string;
+  botId?: number;
+}) {
   const monitorTelegramProvider = vi.fn(async () => undefined);
   const probeTelegram = vi.fn(async () =>
-    params?.probeOk ? { ok: true, bot: { username: params.botUsername ?? "bot" } } : { ok: false },
+    params?.probeOk
+      ? {
+          ok: true,
+          bot: { id: params.botId ?? 123, username: params.botUsername ?? "bot" },
+        }
+      : { ok: false },
   );
   const collectUnmentionedGroupIds = vi.fn(() => ({
     groupIds: [] as string[],
@@ -191,6 +200,30 @@ describe("telegramPlugin duplicate token guard", () => {
         webhookPort: 9876,
       }),
     );
+  });
+
+  it("logs startup bot identity, token source, and fingerprint", async () => {
+    installGatewayRuntime({
+      probeOk: true,
+      botUsername: "opsbot",
+      botId: 456,
+    });
+
+    const ctx = createStartAccountCtx({
+      cfg: createCfg(),
+      accountId: "ops",
+      runtime: createRuntimeEnv(),
+    });
+
+    await telegramPlugin.gateway!.startAccount!(ctx);
+
+    expect(ctx.log.info).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "[ops] starting provider (@opsbot) currentLaneBot=@opsbot id=456 tokenSource=config",
+      ),
+    );
+    expect(ctx.log.info).toHaveBeenCalledWith(expect.stringContaining("tokenFingerprint="));
+    expect(ctx.log.info).toHaveBeenCalledWith(expect.stringContaining("accountName=unnamed"));
   });
 
   it("passes account proxy and network settings into Telegram probes", async () => {

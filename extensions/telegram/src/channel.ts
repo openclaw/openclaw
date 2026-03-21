@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   buildAccountScopedAllowlistConfigEditor,
@@ -68,6 +69,11 @@ type TelegramSendFn = ReturnType<
 >["channel"]["telegram"]["sendMessageTelegram"];
 
 const meta = getChatChannelMeta("telegram");
+
+function maskTelegramTokenFingerprint(token: string): string {
+  // Keep bot identity debuggable without ever printing the raw token.
+  return createHash("sha256").update(token).digest("hex").slice(0, 12);
+}
 
 function findTelegramTokenOwnerAccountId(params: {
   cfg: OpenClawConfig;
@@ -814,13 +820,24 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       }
       const token = (account.token ?? "").trim();
       let telegramBotLabel = "";
+      let startupBotIdentity = "unknown";
       try {
         const probe = await getTelegramRuntime().channel.telegram.probeTelegram(token, 2500, {
           accountId: account.accountId,
           proxyUrl: account.config.proxy,
           network: account.config.network,
         });
+        const botId = probe.ok ? (probe.bot?.id ?? null) : null;
         const username = probe.ok ? probe.bot?.username?.trim() : null;
+        const probeSummary = [
+          username ? `@${username}` : null,
+          botId != null ? `id=${botId}` : null,
+        ]
+          .filter(Boolean)
+          .join(" ");
+        if (probeSummary) {
+          startupBotIdentity = probeSummary;
+        }
         if (username) {
           telegramBotLabel = ` (@${username})`;
         }
@@ -829,7 +846,15 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
           ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
         }
       }
-      ctx.log?.info(`[${account.accountId}] starting provider${telegramBotLabel}`);
+      ctx.log?.info(
+        [
+          `[${account.accountId}] starting provider${telegramBotLabel}`,
+          `currentLaneBot=${startupBotIdentity}`,
+          `tokenSource=${account.tokenSource}`,
+          `tokenFingerprint=${token ? maskTelegramTokenFingerprint(token) : "missing"}`,
+          `accountName=${account.name?.trim() || "unnamed"}`,
+        ].join(" "),
+      );
       return getTelegramRuntime().channel.telegram.monitorTelegramProvider({
         token,
         accountId: account.accountId,

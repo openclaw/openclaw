@@ -35,6 +35,9 @@ ASSIGNED_BOT_TOKEN=""
 ASSIGNED_BOT_ID="unknown"
 ASSIGNED_BOT_USERNAME="unknown"
 ASSIGNED_BOT_NAME="unknown"
+CURRENT_LANE_BOT="unknown"
+RUNTIME_TOKEN_SOURCE="unknown"
+TOKEN_ORIGIN_HINT="unknown"
 TOKEN_CLAIM_COUNT=0
 TOKEN_CLAIM_PATHS=()
 FAIL=0
@@ -406,8 +409,15 @@ ensure_tester_bot_claim() {
   TOKEN_PRESENT="yes"
   ASSIGNED_BOT_TOKEN="$token"
   TOKEN_FINGERPRINT="$(mask_token "$token")"
+  RUNTIME_TOKEN_SOURCE="repo_env_local"
+  TOKEN_ORIGIN_HINT="repo_env_local"
   resolve_token_claims "$token"
   resolve_bot_identity
+  if [[ "${ASSIGNED_BOT_USERNAME}" != "unknown" ]]; then
+    CURRENT_LANE_BOT="@${ASSIGNED_BOT_USERNAME}"
+  elif [[ "${ASSIGNED_BOT_ID}" != "unknown" ]]; then
+    CURRENT_LANE_BOT="id=${ASSIGNED_BOT_ID}"
+  fi
 
   local in_pool="no"
   local line=""
@@ -684,6 +694,9 @@ emit_ensure_proof_lines() {
   echo "token_present=${TOKEN_PRESENT}"
   echo "token_pool_guard=${TOKEN_POOL_GUARD}"
   echo "token_fingerprint=${TOKEN_FINGERPRINT}"
+  echo "current_lane_bot=${CURRENT_LANE_BOT}"
+  echo "runtime_token_source=${RUNTIME_TOKEN_SOURCE}"
+  echo "token_origin_hint=${TOKEN_ORIGIN_HINT}"
   echo "assigned_bot_id=${ASSIGNED_BOT_ID}"
   echo "assigned_bot_username=${ASSIGNED_BOT_USERNAME}"
   echo "assigned_bot_name=${ASSIGNED_BOT_NAME}"
