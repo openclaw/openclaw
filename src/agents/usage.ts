@@ -28,6 +28,7 @@ export type UsageLike = {
   promptTokenCount?: number;
   candidatesTokenCount?: number;
   totalTokenCount?: number;
+  cachedContentTokenCount?: number;
 };
 
 export type NormalizedUsage = {
@@ -121,7 +122,9 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.cache_read ??
       raw.cache_read_input_tokens ??
       raw.cached_tokens ??
-      raw.prompt_tokens_details?.cached_tokens,
+      raw.prompt_tokens_details?.cached_tokens ??
+      // Google/Gemini specific
+      raw.cachedContentTokenCount,
   );
   const cacheWrite = asFiniteNumber(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
