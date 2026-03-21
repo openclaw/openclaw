@@ -13,7 +13,7 @@ export {
   isCloudflareOrHtmlErrorPage,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
-import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
+import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { stableStringify } from "../stable-stringify.js";
 import {
   isAuthErrorMessage,
