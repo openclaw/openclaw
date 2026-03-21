@@ -284,15 +284,15 @@ async function handleTextMessage(
 
 async function handleImageMessage(params: ZaloImageMessageParams): Promise<void> {
   const { message, mediaMaxMb, account, core, runtime } = params;
-  const { photo, caption } = message;
+  const { photo_url, caption } = message;
 
   let mediaPath: string | undefined;
   let mediaType: string | undefined;
 
-  if (photo) {
+  if (photo_url) {
     try {
       const maxBytes = mediaMaxMb * 1024 * 1024;
-      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo, maxBytes });
+      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo_url, maxBytes });
       const saved = await core.channel.media.saveMediaBuffer(
         fetched.buffer,
         fetched.contentType,
@@ -338,7 +338,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   const isGroup = chat.chat_type === "GROUP";
   const chatId = chat.id;
   const senderId = from.id;
-  const senderName = from.name;
+  const senderName = from.display_name ?? from.name;
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));

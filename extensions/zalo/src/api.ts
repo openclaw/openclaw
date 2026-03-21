@@ -25,7 +25,9 @@ export type ZaloMessage = {
   from: {
     id: string;
     name?: string;
+    display_name?: string;
     avatar?: string;
+    is_bot?: boolean;
   };
   chat: {
     id: string;
@@ -33,9 +35,10 @@ export type ZaloMessage = {
   };
   date: number;
   text?: string;
-  photo?: string;
+  photo_url?: string;
   caption?: string;
   sticker?: string;
+  message_type?: string;
 };
 
 export type ZaloUpdate = {
