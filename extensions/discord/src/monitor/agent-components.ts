@@ -59,6 +59,7 @@ import {
   type DiscordComponentEntry,
   type DiscordModalEntry,
 } from "../components.js";
+import { editDiscordComponentMessage } from "../send.components.js";
 import {
   AGENT_BUTTON_KEY,
   AGENT_SELECT_KEY,
@@ -173,6 +174,23 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       decision: pluginBindingApproval.decision,
       senderId: params.interactionCtx.userId,
     });
+    const approvalMessageId = params.messageId?.trim() || params.interaction.message?.id?.trim();
+    if (approvalMessageId) {
+      try {
+        await editDiscordComponentMessage(
+          normalizedConversationId,
+          approvalMessageId,
+          {
+            text: buildPluginBindingResolvedText(resolved),
+          },
+          {
+            accountId: params.ctx.accountId,
+          },
+        );
+      } catch (err) {
+        logError(`discord plugin binding approval: failed to clear prompt: ${String(err)}`);
+      }
+    }
     if (resolved.status !== "approved") {
       try {
         await respond.followUp({

@@ -19,6 +19,7 @@ import {
   resolveDiscordModalEntry,
 } from "../components-registry.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
+import * as sendComponents from "../send.components.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
@@ -344,6 +345,7 @@ describe("agent components", () => {
 });
 
 describe("discord component interactions", () => {
+  let editDiscordComponentMessageMock: ReturnType<typeof vi.spyOn>;
   const createCfg = (): OpenClawConfig =>
     ({
       channels: {
@@ -486,6 +488,12 @@ describe("discord component interactions", () => {
   });
 
   beforeEach(() => {
+    editDiscordComponentMessageMock = vi
+      .spyOn(sendComponents, "editDiscordComponentMessage")
+      .mockResolvedValue({
+        messageId: "msg-1",
+        channelId: "dm-channel",
+      });
     clearDiscordComponentEntries();
     lastDispatchCtx = undefined;
     readAllowFromStoreMock.mockClear().mockResolvedValue([]);
@@ -919,6 +927,12 @@ describe("discord component interactions", () => {
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(editDiscordComponentMessageMock).toHaveBeenCalledWith(
+      "user:123456789",
+      "msg-1",
+      { text: expect.any(String) },
+      { accountId: "default" },
+    );
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 });
