@@ -2,11 +2,10 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { findMatrixAccountConfig, resolveMatrixBaseConfig } from "./account-config.js";
 import {
   getMatrixThreadBindingManager,
+  listAllBindings,
   listBindingsForAccount,
   removeBindingRecord,
-  resolveBindingKey,
   setBindingRecord,
-  toSessionBindingRecord,
 } from "./thread-bindings-shared.js";
 
 function summarizeError(err: unknown): string {
@@ -106,6 +105,7 @@ export function registerMatrixSubagentHooks(api: OpenClawPluginApi) {
         maxAgeMs: manager.getMaxAgeMs(),
       };
       setBindingRecord(record);
+      await manager.persist();
       return { status: "ok" as const, threadBindingReady: true };
     } catch (err) {
       return {
@@ -115,20 +115,26 @@ export function registerMatrixSubagentHooks(api: OpenClawPluginApi) {
     }
   });
 
-  api.on("subagent_ended", (event) => {
+  api.on("subagent_ended", async (event) => {
     const accountId = event.accountId?.trim() || undefined;
     // Find and remove all bindings matching the ended subagent session.
-    const allAccountIds = accountId
-      ? [accountId]
-      : [...new Set(listBindingsForAccount("default").map((b) => b.accountId))];
-    for (const acctId of allAccountIds) {
-      const bindings = listBindingsForAccount(acctId).filter(
-        (entry) =>
-          entry.targetSessionKey === event.targetSessionKey && entry.targetKind === "subagent",
-      );
-      for (const binding of bindings) {
-        removeBindingRecord(binding);
+    const candidates = accountId
+      ? listBindingsForAccount(accountId)
+      : listAllBindings();
+    const matching = candidates.filter(
+      (entry) =>
+        entry.targetSessionKey === event.targetSessionKey && entry.targetKind === "subagent",
+    );
+    const affectedAccountIds = new Set<string>();
+    for (const binding of matching) {
+      if (removeBindingRecord(binding)) {
+        affectedAccountIds.add(binding.accountId);
       }
+    }
+    // Persist for each affected account via its manager.
+    for (const acctId of affectedAccountIds) {
+      const manager = getMatrixThreadBindingManager(acctId);
+      await manager?.persist();
     }
   });
 
@@ -146,9 +152,11 @@ export function registerMatrixSubagentHooks(api: OpenClawPluginApi) {
         ? String(event.requesterOrigin.threadId).trim()
         : "";
 
-    // Collect bindings across all accounts if no specific account is given.
-    const accountId = requesterAccountId || "default";
-    const bindings = listBindingsForAccount(accountId).filter(
+    // Search across all accounts if no specific account is given.
+    const candidates = requesterAccountId
+      ? listBindingsForAccount(requesterAccountId)
+      : listAllBindings();
+    const bindings = candidates.filter(
       (entry) =>
         entry.targetSessionKey === event.childSessionKey && entry.targetKind === "subagent",
     );

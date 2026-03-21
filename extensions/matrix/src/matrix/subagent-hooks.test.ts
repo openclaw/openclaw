@@ -16,19 +16,20 @@ type MockBindingRecord = {
 
 const hookMocks = vi.hoisted(() => ({
   getMatrixThreadBindingManager: vi.fn(
-    (): { getIdleTimeoutMs: () => number; getMaxAgeMs: () => number } | null => ({
+    (): {
+      getIdleTimeoutMs: () => number;
+      getMaxAgeMs: () => number;
+      persist: () => Promise<void>;
+    } | null => ({
       getIdleTimeoutMs: () => 3_600_000,
       getMaxAgeMs: () => 86_400_000,
+      persist: () => Promise.resolve(),
     }),
   ),
   listBindingsForAccount: vi.fn((_accountId?: string): MockBindingRecord[] => []),
+  listAllBindings: vi.fn((): MockBindingRecord[] => []),
   setBindingRecord: vi.fn(),
   removeBindingRecord: vi.fn((): MockBindingRecord | null => null),
-  resolveBindingKey: vi.fn(
-    (params: { accountId: string; conversationId: string; parentConversationId?: string }) =>
-      `${params.accountId}:${params.parentConversationId?.trim() || "-"}:${params.conversationId}`,
-  ),
-  toSessionBindingRecord: vi.fn(),
   findMatrixAccountConfig: vi.fn((): unknown => undefined),
   resolveMatrixBaseConfig: vi.fn(
     (): { threadBindings?: { enabled?: boolean; spawnSubagentSessions?: boolean } } => ({
@@ -40,10 +41,9 @@ const hookMocks = vi.hoisted(() => ({
 vi.mock("./thread-bindings-shared.js", () => ({
   getMatrixThreadBindingManager: hookMocks.getMatrixThreadBindingManager,
   listBindingsForAccount: hookMocks.listBindingsForAccount,
+  listAllBindings: hookMocks.listAllBindings,
   setBindingRecord: hookMocks.setBindingRecord,
   removeBindingRecord: hookMocks.removeBindingRecord,
-  resolveBindingKey: hookMocks.resolveBindingKey,
-  toSessionBindingRecord: hookMocks.toSessionBindingRecord,
 }));
 
 vi.mock("./account-config.js", () => ({
@@ -173,12 +173,14 @@ describe("matrix subagent hook handlers", () => {
     hookMocks.getMatrixThreadBindingManager.mockReturnValue({
       getIdleTimeoutMs: () => 3_600_000,
       getMaxAgeMs: () => 86_400_000,
+      persist: () => Promise.resolve(),
     });
     hookMocks.listBindingsForAccount.mockClear();
     hookMocks.listBindingsForAccount.mockReturnValue([]);
+    hookMocks.listAllBindings.mockClear();
+    hookMocks.listAllBindings.mockReturnValue([]);
     hookMocks.setBindingRecord.mockClear();
     hookMocks.removeBindingRecord.mockClear();
-    hookMocks.resolveBindingKey.mockClear();
     hookMocks.findMatrixAccountConfig.mockClear();
     hookMocks.findMatrixAccountConfig.mockReturnValue(undefined);
     hookMocks.resolveMatrixBaseConfig.mockClear();
@@ -311,7 +313,7 @@ describe("matrix subagent hook handlers", () => {
     expect(errorText).toMatch(/no thread binding manager/i);
   });
 
-  it("unbinds room routing on subagent_ended", () => {
+  it("unbinds room routing on subagent_ended", async () => {
     const mockBindings: MockBindingRecord[] = [
       {
         accountId: "work",
@@ -322,11 +324,18 @@ describe("matrix subagent hook handlers", () => {
       },
     ];
     hookMocks.listBindingsForAccount.mockReturnValue(mockBindings);
+    hookMocks.removeBindingRecord.mockReturnValue(mockBindings[0]);
+    const persistMock = vi.fn(() => Promise.resolve());
+    hookMocks.getMatrixThreadBindingManager.mockReturnValue({
+      getIdleTimeoutMs: () => 3_600_000,
+      getMaxAgeMs: () => 86_400_000,
+      persist: persistMock,
+    });
 
     const handlers = registerHandlersForTest();
     const handler = getRequiredHookHandler(handlers, "subagent_ended");
 
-    handler(
+    await handler(
       {
         targetSessionKey: "agent:main:subagent:child",
         targetKind: "subagent",
@@ -339,6 +348,44 @@ describe("matrix subagent hook handlers", () => {
 
     expect(hookMocks.removeBindingRecord).toHaveBeenCalledTimes(1);
     expect(hookMocks.removeBindingRecord).toHaveBeenCalledWith(mockBindings[0]);
+    expect(persistMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("scans all accounts on subagent_ended when accountId is missing", async () => {
+    const mockBindings: MockBindingRecord[] = [
+      {
+        accountId: "personal",
+        conversationId: "$thread-1",
+        parentConversationId: "!room1:example.org",
+        targetSessionKey: "agent:main:subagent:child",
+        targetKind: "subagent",
+      },
+    ];
+    hookMocks.listAllBindings.mockReturnValue(mockBindings);
+    hookMocks.removeBindingRecord.mockReturnValue(mockBindings[0]);
+    const persistMock = vi.fn(() => Promise.resolve());
+    hookMocks.getMatrixThreadBindingManager.mockReturnValue({
+      getIdleTimeoutMs: () => 3_600_000,
+      getMaxAgeMs: () => 86_400_000,
+      persist: persistMock,
+    });
+
+    const handlers = registerHandlersForTest();
+    const handler = getRequiredHookHandler(handlers, "subagent_ended");
+
+    await handler(
+      {
+        targetSessionKey: "agent:main:subagent:child",
+        targetKind: "subagent",
+        reason: "subagent-complete",
+        sendFarewell: true,
+      },
+      {},
+    );
+
+    expect(hookMocks.listAllBindings).toHaveBeenCalledTimes(1);
+    expect(hookMocks.removeBindingRecord).toHaveBeenCalledTimes(1);
+    expect(persistMock).toHaveBeenCalledTimes(1);
   });
 
   it("resolves delivery target from matching bound room", () => {
