@@ -730,8 +730,8 @@ const memoryPlugin = {
 
           const vector = await embeddings.embed(text);
 
-          // 1. Check for duplicates/contradictions with high similarity
-          const existing = await db.search(vector, 3, 0.85);
+          // 1. Check for duplicates/contradictions with broader similarity (PHOENIX logic)
+          const existing = await db.search(vector, 3, 0.7);
 
           let actionmsg = "created";
           let replacedId: string | undefined;
@@ -1306,8 +1306,29 @@ const memoryPlugin = {
     // ======================================================================
 
     if (cfg.autoRecall) {
-      api.on("before_agent_start", async (event) => {
+      api.on("before_agent_start", async (event, ctx) => {
         if (!event.prompt || event.prompt.length < 5) return;
+
+        // Skip memory search on system events / automated greetings.
+        if (
+          ctx?.trigger === "system" ||
+          ctx?.trigger === "heartbeat" ||
+          ctx?.trigger === "cron" ||
+          ctx?.trigger === "memory"
+        ) {
+          return;
+        }
+
+        const nPrompt = event.prompt.trim().toLowerCase();
+
+        // Skip semantic search for generic commands or basic greetings
+        if (nPrompt.startsWith("/")) return;
+        if (
+          /^(hi|hello|hey|start|new chat|привіт|вітаю|почнемо|started a new chat)[\s.!?]*$/i.test(
+            nPrompt,
+          )
+        )
+          return;
 
         try {
           // Single embed call for both recall injection AND reinforcement

@@ -1,35 +1,46 @@
-# feat(memory): add hybrid memory plugin with Knowledge Graph and free Gemini support
+# feat(memory): BrainClaw - Cognitive Hybrid Memory with AMHR & Gemini Support
 
 ## Summary
 
-Drop-in replacement for `memory-lancedb` that adds **Knowledge Graph**, **5-channel hybrid scoring**, **Smart Capture**, **Memory Reflection**, and **zero-cost Google Gemini support**.
+BrainClaw (formerly `memory-hybrid`) is a cognitive memory layer that replicates human-like recall patterns. It features **Associative Multi-Hop Retrieval (AMHR)**, **7-channel hybrid scoring**, and **Conversation Stacks** to provide agents with a persistent, evolving personality.
+
+### 🧠 The Cognitive Parallel (The "Why")
+
+- **Hippocampus**: `WorkingMemoryBuffer` filters noise, promoting only important facts.
+- **Associative Cortex**: `AMHR` jumps through Knowledge Graph links to find related info.
+- **Synaptic Plasticity**: `Reinforcement Scoring` makes frequently used facts "sticky".
+- **Self-Identity**: `Reflection Engine` builds a holistic user profile from facts.
 
 ## Motivation
 
-The current `memory-lancedb` plugin uses pure vector similarity with OpenAI (paid). This limits recall quality and requires API costs. `memory-hybrid` addresses this by:
+The current `memory-lancedb` plugin uses pure vector similarity (static recall). BrainClaw addresses this by:
 
 1. Adding **free** embedding via Google Gemini (1K req/day) + chat (14.4K req/day)
-2. Producing **higher quality recall** through 5-channel hybrid scoring
-3. **Understanding relationships** via a Knowledge Graph
+2. Producing **higher quality recall** through 7-channel hybrid scoring
+3. **Understanding relationships** via a Knowledge Graph and AMHR
 4. **Self-correcting** — contradictory facts are detected and resolved
-5. **Stability** — fixed `TypeError: 'set' on proxy` bug in multi-retrieval and optimized API key handling in logs
+5. **Stability** — fixed `TypeError: 'set' on proxy` bug in multi-retrieval and zero-latency system short-circuits
 6. **User profiles** — generates personas from accumulated memories (Reflection)
-7. Maintaining full backward compatibility with existing LanceDB storage
+7. **Context Management** — Conversation Stack compresses turns to prevent token exhaustion
+8. Maintaining full backward compatibility with existing LanceDB storage
 
 ## What's New
 
-### Core Features
+### Cognitive Architecture Features
 
-| Feature                      | Description                                                                      |
-| ---------------------------- | -------------------------------------------------------------------------------- |
-| **Knowledge Graph**          | Extracts entities + relationships from memories via LLM                          |
-| **Hybrid Scoring**           | `0.50·Vector + 0.12·Recency + 0.18·Importance + 0.10·Graph + 0.10·Reinforcement` |
-| **Smart Capture**            | LLM extracts individual facts from conversation (not whole messages)             |
-| **Memory Reflection**        | Generates high-level user profile from all memories                              |
-| **Memory Consolidation**     | Merges similar/duplicate memories into stronger facts                            |
-| **Working Memory Buffer**    | Short-term buffer with promotion criteria                                        |
-| **Contradiction Resolution** | Detects conflicting facts and updates accordingly                                |
-| **Google Gemini**            | Free embeddings (`gemini-embedding-001`) + chat (`gemma-3-27b-it`)               |
+| Feature                      | Description                                                                                                       |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **Knowledge Graph**          | Extracts entities + relationships from memories via LLM                                                           |
+| **AMHR**                     | Associative Multi-Hop Retrieval across the Knowledge Graph                                                        |
+| **Hybrid Scoring**           | `0.42·Vector + 0.16·Importance + 0.10·Recency + 0.10·Temporal + 0.08·Graph + 0.08·Reinforcement + 0.06·Emotional` |
+| **Conversation Stack**       | Compresses context into ~30-word summaries (17x compression)                                                      |
+| **Smart Capture**            | LLM extracts individual facts from conversation (not whole messages)                                              |
+| **Working Memory Buffer**    | Short-term buffer with promotion criteria                                                                         |
+| **Memory Reflection**        | Generates high-level user profile from all memories                                                               |
+| **Memory Consolidation**     | Merges similar/duplicate memories into stronger facts                                                             |
+| **Contradiction Resolution** | Detects conflicting facts and updates accordingly                                                                 |
+| **Google Gemini**            | Free embeddings (`gemini-embedding-001`) + chat (`gemma-3-27b-it`)                                                |
+| **Prompt Injection Defense** | Mitigates malicious injection within stored context                                                               |
 
 ### Tools
 
@@ -57,29 +68,36 @@ All files are **new** — `extensions/memory-hybrid/` directory only. Zero modif
 
 | File             | Lines | Purpose                                 |
 | ---------------- | ----- | --------------------------------------- |
-| `index.ts`       | ~950  | Plugin entry — tools, hooks, CLI        |
-| `config.ts`      | ~200  | Configuration schema + validation       |
-| `embeddings.ts`  | ~90   | OpenAI + Google embedding API           |
-| `chat.ts`        | ~200  | LLM client with retry (OpenAI + Google) |
-| `graph.ts`       | ~280  | Knowledge Graph + LLM extraction        |
-| `capture.ts`     | ~210  | Rule-based + Smart Capture              |
-| `recall.ts`      | ~170  | 5-channel hybrid scoring                |
+| `index.ts`       | ~950  | Plugin entry — tools, hooks, CLI, AMHR  |
 | `buffer.ts`      | ~250  | Working Memory Buffer                   |
+| `capture.ts`     | ~210  | Rule-based + Smart Capture              |
+| `chat.ts`        | ~200  | LLM client with retry (OpenAI + Google) |
+| `config.ts`      | ~200  | Configuration schema + validation       |
 | `consolidate.ts` | ~150  | Memory clustering + LLM merging         |
+| `embeddings.ts`  | ~90   | OpenAI + Google embedding API           |
+| `graph.ts`       | ~280  | Knowledge Graph + LLM extraction        |
+| `recall.ts`      | ~170  | 7-channel hybrid scoring                |
 | `reflection.ts`  | ~130  | User profile generation                 |
-| `README.md`      | ~160  | Documentation                           |
+| `stack.ts`       | ~130  | Conversation Stack & Compression        |
+| `tracer.ts`      | ~70   | Out-of-band JSONL observability logging |
+| `README.md`      | ~250  | Documentation                           |
 
 ## Tests
 
-**73 tests passing** across 5 test files:
+**121 tests passing** across 16 test files:
 
-| Test File             | Tests | Coverage                                                              |
-| --------------------- | ----- | --------------------------------------------------------------------- |
-| `index.test.ts`       | 32    | Plugin structure, config parsing, capture logic, injection protection |
-| `buffer.test.ts`      | 15    | Buffer lifecycle, promotion, eviction                                 |
-| `consolidate.test.ts` | 12    | Cosine similarity, clustering                                         |
-| `graph.test.ts`       | 8     | Multi-hop traversal, edge dedup                                       |
-| `chat.test.ts`        | 6     | Contradiction detection, error handling                               |
+| Test Group               | Focus Area                                                            |
+| ------------------------ | --------------------------------------------------------------------- |
+| `index.test.ts`          | Plugin structure, config parsing, capture logic, injection protection |
+| `sota-architecture.test` | Compliance with SOTA cognitive design patterns                        |
+| `amhr.test.ts`           | Associative Multi-Hop Retrieval jump logic                            |
+| `buffer.test.ts`         | Buffer lifecycle, promotion, eviction                                 |
+| `consolidate.test.ts`    | Cosine similarity, clustering                                         |
+| `graph.test.ts`          | Multi-hop traversal, edge dedup                                       |
+| `chat.test.ts`           | Contradiction detection, error handling                               |
+| `plugin.hook.test.ts`    | Cold-start latency / Short-circuit verifications                      |
+| `stack.test.ts`          | Conversation turn compression logic                                   |
+| `tracer.test.ts`         | Async file queue writes                                               |
 
 ```bash
 # Run tests

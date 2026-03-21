@@ -1,41 +1,79 @@
-# Memory (Hybrid) Plugin for OpenClaw
+# BrainClaw (Cognitive Memory Plugin for OpenClaw)
 
-Enhanced long-term memory plugin with **Knowledge Graph**, **Hybrid Recall Scoring**, **Smart Capture**, **Memory Reflection**, and free **Google Gemini** support.
+> **"Code without memory is just a calculator. Code with BrainClaw is an entity."**
 
-## Why This Plugin?
+## 🧠 BrainClaw: The Cognitive Architecture Parallel
 
-The built-in `memory-lancedb` plugin uses vector search with OpenAI embeddings. It works, but has limitations:
+BrainClaw is more than a vector database; it is a technical attempt to replicate the core neurological functions of the human brain within an AI agent.
 
-- **Only OpenAI** — requires a paid API key
-- **Regex-only capture** — misses most personal facts
-- **Vector-only recall** — doesn't consider recency or importance
-- **No knowledge graph** — doesn't understand entity relationships
+### 1. The Hippocampus (Working Memory Buffer)
 
-**memory-hybrid** solves all of these while remaining a drop-in replacement.
+Humans do not store every trivial "okay" or "thanks". Our brains filter noise. **BrainClaw's Working Memory Buffer** (`buffer.ts`) mimics this by staging facts and only "promoting" them to long-term storage (LanceDB) if they cross importance thresholds or are reinforced by repetition.
+
+### 2. Associative Thinking (AMHR & Knowledge Graph)
+
+Human memory is associative, not just semantic. When you think of "Coffee", you might recall "that cafe in Kyiv". **BrainClaw's Associative Multi-Hop Retrieval** (`index.ts`) traverses the Knowledge Graph to surface connected facts even when mathematical vector similarity is low.
+
+### 3. Synaptic Reinforcement (7-Channel Scoring)
+
+The more you think about something, the stronger the neural pathway becomes. **BrainClaw's 7-Channel Scoring** (`recall.ts`) directly applies this. Facts that are frequently recalled (**Reinforcement**), emotionally charged (**Emotional Tone**), or recent (**Recency**) naturally rise to the surface of the agent's consciousness.
+
+### 4. Continuous Reflection (User Profiling)
+
+Just as humans build a self-identity from accumulated experiences, BrainClaw's **Reflection Engine** (`reflection.ts`) analyzes the entire memory pool to generate a psychological persona and deep behavioral patterns.
+
+---
+
+## Why BrainClaw?
+
+Standard RAG (Retrieval-Augmented Generation) systems use simple vector similarity. They miss context, forget old facts, and don't understand _relationships_. BrainClaw solves this while remaining a drop-in replacement for `memory-lancedb`.
 
 ## Features
 
-| Feature                          | memory-lancedb | **memory-hybrid** |
-| -------------------------------- | -------------- | ----------------- |
-| Vector search (LanceDB)          | ✅             | ✅                |
-| Google Gemini (free!)            | ❌             | ✅                |
-| OpenAI support                   | ✅             | ✅                |
-| Knowledge Graph                  | ❌             | ✅                |
-| Smart Capture (LLM)              | ❌             | ✅                |
-| Hybrid Scoring (5-channel)       | ❌             | ✅                |
-| Memory Reflection / User Profile | ❌             | ✅                |
-| Memory Consolidation             | ❌             | ✅                |
-| Memory Reinforcement             | ❌             | ✅                |
-| Contradiction Resolution         | ❌             | ✅                |
-| Working Memory Buffer            | ❌             | ✅                |
-| Retry with backoff               | ❌             | ✅                |
-| Modular codebase                 | ❌             | ✅                |
-| Prompt injection protection      | ✅             | ✅                |
-| GDPR-compliant forget            | ✅             | ✅                |
+| Feature                          | memory-lancedb | **BrainClaw**      |
+| -------------------------------- | -------------- | ------------------ |
+| Vector search (LanceDB)          | ✅             | ✅                 |
+| Google Gemini (free!)            | ❌             | ✅                 |
+| OpenAI support                   | ✅             | ✅                 |
+| Knowledge Graph                  | ❌             | ✅                 |
+| AMHR (Associative Retrieval)     | ❌             | ✅                 |
+| Smart Capture (LLM)              | ❌             | ✅                 |
+| Hybrid Scoring (7-channel)       | ❌             | ✅                 |
+| Conversation Stack (Compression) | ❌             | ✅                 |
+| Memory Reflection / User Profile | ❌             | ✅                 |
+| Memory Consolidation             | ❌             | ✅                 |
+| Contradiction Resolution         | ❌             | ✅ (PHOENIX Logic) |
+| Working Memory Buffer            | ❌             | ✅                 |
+| JSONL Observability Tracer       | ❌             | ✅                 |
+| Prompt injection protection      | ✅             | ✅                 |
+| GDPR-compliant forget            | ✅             | ✅                 |
 
-### Knowledge Graph
+### 🧠 7-Channel Hybrid Recall Scoring
 
-When you store a memory, the plugin uses an LLM to extract entities and relationships:
+Instead of pure vector similarity, memories are ranked by a 7-channel combined mathematical scoring system. This directly mirrors how human neurology prioritizes thoughts:
+
+```javascript
+Score =
+  0.42 * VectorSimilarity +
+  0.16 * Importance +
+  0.1 * Temporal +
+  0.1 * Recency +
+  0.08 * Reinforcement +
+  0.08 * Graph +
+  0.06 * Emotional;
+```
+
+1. **Vector (0.42)** — Pure semantic and contextual similarity.
+2. **Importance (0.16)** — Facts with high emotional or practical weight (injected during Smart Capture) rise to the top.
+3. **Recency (0.10)** — Uses Exponential Decay (`Math.exp(-decay * days)`). Old memories naturally fade unless reinforced.
+4. **Temporal (0.10)** — Aligns "today" with memories matching the current date/context.
+5. **Graph (0.08)** — Multi-hop connections in the Knowledge Graph. Highly connected nodes (like your name or core skills) naturally trigger associated memories.
+6. **Reinforcement (0.08)** — Boosts for frequently recalled facts. The more a memory is accessed, the stronger its neural pathway.
+7. **Emotional (0.06)** — Matches the emotional tone of the current conversation to the original memory's tone.
+
+### 🕸️ Knowledge Graph & AMHR
+
+When you store a memory, BrainClaw uses an LLM to extract entities and relationships:
 
 ```
 Memory: "I use Python for my web projects at Acme Corp"
@@ -43,85 +81,76 @@ Memory: "I use Python for my web projects at Acme Corp"
   → Edges: [User --uses--> Python, User --works_at--> Acme Corp]
 ```
 
-When recalling, graph connections enrich the results — so asking about "Python" also surfaces "Acme Corp".
+**Associative Multi-Hop Retrieval (AMHR)** allows the system to traverse this graph when recalling. Asking about "Python" surfaces "Acme Corp" purely through associative graph links, even if the vector similarity is low.
 
-### Hybrid Recall Scoring
+### 📚 Conversation Stack
 
-Instead of pure vector similarity, memories are ranked by a 5-channel combined score:
+To understand full context without blowing up the 15k context window (e.g. Gemma 3 limits), BrainClaw utilizes a `ConversationStack`.
+It compresses each user/assistant turn into a ~30-word summary, accumulating them into a session-scoped stack.
+**Result:** ~17x token compression with full context retention.
 
-```
-Score = 0.50 × VectorSimilarity
-      + 0.12 × Recency
-      + 0.18 × Importance
-      + 0.10 × GraphConnections
-      + 0.10 × Reinforcement (recall frequency)
-```
+### 💡 Smart Capture & Working Memory Buffer
 
-This means recent, important, frequently-recalled, and well-connected memories rank higher.
+Traditional regex capture only catches obvious patterns like "I prefer X".
+Smart Capture routes via an LLM to extract facts, placing them in a **Working Memory Buffer**. The buffer requires patterns (e.g. `importance >= 0.7`, or `mentioned > 3 times`) before promoting facts to the permanent LanceDB database. This is the exact mechanism of the human Hippocampus.
 
-### Memory Reflection
+### 🪞 Memory Reflection
 
-Generates a high-level "user profile" from all stored memories using LLM analysis:
+Generates a high-level "user profile" from all stored memories using LLM analysis. Instead of searching raw facts, it summarizes patterns.
 
 ```
-Raw facts: "Uses Python", "Builds Telegram bots", "Learning with AI", "Lives in Ukraine"
-
-Reflection:
-  Summary: "User is a Ukrainian developer who is self-teaching programming
-            through AI tools, focusing on practical projects like Telegram bots."
-  Patterns:
-    - Prefers hands-on learning over theory
-    - Focuses on Python ecosystem
-    - Strong interest in AI-assisted development
+Summary: "User is a Ukrainian developer who is self-teaching programming
+          through AI tools, focusing on practical projects like Telegram bots."
+Patterns:
+  - Prefers hands-on learning over theory
+  - Focuses on Python ecosystem
 ```
 
-This goes beyond storing facts — it **understands the person**.
+### 🧹 Memory Consolidation
 
-### Smart Capture
+Merges duplicate or similar memories into stronger consolidated facts via the `openclaw ltm consolidate` CLI command.
 
-Traditional regex capture only catches obvious patterns like "I prefer X" or email addresses.
+## Installation
 
-Smart Capture sends user messages to an LLM which extracts individual facts:
+As an open-source `OpenClaw` plugin, installation is simple:
 
-```
-Message: "Мене звати Вова, мені 25, я працюю з Python і живу в Києві"
-  → Facts:
-    1. "User's name is Vova" (importance: 0.9, category: entity)
-    2. "User is 25 years old" (importance: 0.7, category: fact)
-    3. "User works with Python" (importance: 0.7, category: fact)
-    4. "User lives in Kyiv" (importance: 0.8, category: fact)
-```
+1. **Clone into `extensions/`**:
+   Navigate to your OpenClaw root directory and clone BrainClaw:
+   ```bash
+   git clone https://github.com/vova/BrainClaw.git extensions/memory-hybrid
+   ```
+2. **Install dependencies**:
+   ```bash
+   pnpm install
+   ```
+3. **Configure Settings**:
+   Add the following to your `~/.openclaw/config.json`.
 
-Each fact is stored separately with proper categorization.
-
-### Memory Consolidation
-
-Merges duplicate or similar memories into stronger consolidated facts:
-
-```
-Before: "I like coffee", "Coffee is good", "Drinking coffee daily"
-After:  "User preference: Coffee — drinks daily and enjoys it" (importance: 0.85)
-```
-
-Run via `openclaw ltm consolidate` CLI command.
-
-## Configuration
-
-### With Google Gemini (Free)
+### Configuration (Google Gemini Free Tier)
 
 ```json
 {
-  "embedding": {
-    "apiKey": "${GEMINI_API_KEY}",
-    "model": "gemini-embedding-001"
-  },
-  "autoCapture": true,
-  "autoRecall": true,
-  "smartCapture": true
+  "plugins": {
+    "slots": { "memory": "memory-hybrid" },
+    "entries": {
+      "memory-hybrid": {
+        "enabled": true,
+        "config": {
+          "embedding": {
+            "apiKey": "${GEMINI_API_KEY}",
+            "model": "gemini-embedding-001"
+          },
+          "autoRecall": true,
+          "autoCapture": true,
+          "smartCapture": true
+        }
+      }
+    }
+  }
 }
 ```
 
-### With OpenAI
+### Configuration (OpenAI)
 
 ```json
 {
@@ -134,7 +163,7 @@ Run via `openclaw ltm consolidate` CLI command.
 }
 ```
 
-### All Options
+### All Config Options
 
 | Option             | Default                      | Description                                                                         |
 | ------------------ | ---------------------------- | ----------------------------------------------------------------------------------- |
@@ -151,10 +180,12 @@ Run via `openclaw ltm consolidate` CLI command.
 
 The plugin registers four tools for the AI agent:
 
-- **`memory_recall`** — Search memories by query (uses hybrid scoring)
-- **`memory_store`** — Store a new memory (with graph extraction + contradiction check)
-- **`memory_forget`** — Delete a memory by ID or query (GDPR-compliant)
-- **`memory_reflect`** — Generate a user profile from all memories (requires ≥5 memories)
+| Tool             | Description                                           |
+| ---------------- | ----------------------------------------------------- |
+| `memory_recall`  | Search memories (hybrid scoring + graph enrichment)   |
+| `memory_store`   | Store memory (graph extraction + contradiction check) |
+| `memory_forget`  | Delete memory (GDPR-compliant)                        |
+| `memory_reflect` | Generate user profile from all memories               |
 
 ## CLI Commands
 
@@ -163,33 +194,30 @@ openclaw ltm list           # Show memory count
 openclaw ltm search <query> # Search memories with hybrid scoring
 openclaw ltm graph          # Show knowledge graph stats
 openclaw ltm stats          # Show overall statistics
-openclaw ltm consolidate    # Merge similar memories (use --dry-run to preview)
-openclaw ltm reflect        # Generate user profile from all memories
+openclaw ltm consolidate    # Merge similar memories
+openclaw ltm reflect        # Generate user profile
 ```
 
 ## Architecture
 
-```
-config.ts        → Configuration parsing and validation
-embeddings.ts    → OpenAI + Google embedding API clients
-chat.ts          → LLM client with retry logic (OpenAI + Google)
-graph.ts         → Knowledge Graph storage and LLM extraction
-capture.ts       → Rule-based + LLM-powered memory capture
-recall.ts        → Hybrid scoring (vector + recency + importance + graph + reinforcement)
-buffer.ts        → Working Memory Buffer (short-term → long-term promotion)
-consolidate.ts   → Memory deduplication / clustering / LLM merging
-reflection.ts    → User profile generation from accumulated memories
-index.ts         → Plugin registration, tools, hooks, CLI
-```
+| File             | Purpose                                                  |
+| ---------------- | -------------------------------------------------------- |
+| `config.ts`      | Configuration parsing and validation                     |
+| `embeddings.ts`  | OpenAI + Google embedding API clients                    |
+| `chat.ts`        | LLM client with retry logic (OpenAI + Google)            |
+| `graph.ts`       | Knowledge Graph storage and LLM extraction               |
+| `capture.ts`     | Rule-based + LLM-powered memory capture                  |
+| `stack.ts`       | Conversation Stack (context compression module)          |
+| `recall.ts`      | 7-Channel Hybrid scoring routing & AMHR logic            |
+| `buffer.ts`      | Working Memory Buffer (short-term → long-term promotion) |
+| `tracer.ts`      | Asynchronous JSONL Observability logging                 |
+| `consolidate.ts` | Memory deduplication / clustering / LLM merging          |
+| `reflection.ts`  | User profile generation from accumulated memories        |
+| `index.ts`       | Plugin registration, tools, hooks, CLI                   |
 
 ## Testing
 
 ```bash
-# Run all tests
+# Run all 121 SOTA tests
 pnpm exec vitest run extensions/memory-hybrid/ --config vitest.extensions.config.ts
 ```
-
-## Acknowledgements
-
-Built upon the foundation of `memory-lancedb` by the OpenClaw team.
-AI-assisted development using Gemini.

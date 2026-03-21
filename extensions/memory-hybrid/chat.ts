@@ -159,10 +159,10 @@ OLD Fact: "${safeOld}"
 NEW Fact: "${safeNew}"
 
 Determine the relationship:
-1. CONTRADICTION: New fact makes old fact false (e.g., moved to new city, changed preference). Action: "update".
+1. CONTRADICTION: New fact makes old fact false or explicitly corrects it (e.g., user says "Actually he is X, not Y"). Action: "update".
 2. REFINEMENT: New fact adds detail to old fact without conflict. Action: "keep_both".
-3. UNRELATED: Facts are about different things. Action: "keep_both".
-4. DUPLICATE: New fact contains same info. Action: "ignore_new".
+3. UNRELATED: Facts are about different topics. Action: "keep_both".
+4. DUPLICATE: Same information. Action: "ignore_new".
 
 Return JSON:
 {

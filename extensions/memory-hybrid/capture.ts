@@ -183,20 +183,20 @@ Return ONLY valid JSON:
       "valid_until": "YYYY-MM-DD or null",
       "emotional_tone": "stressed|happy|neutral|frustrated|excited|sad|angry|curious",
       "emotion_score": -1.0 to 1.0,
-      "summary": "1 sentence, max 150 chars summary"
+      "summary": "1 sentence, max 150 chars summary",
+      "is_correction": true/false
     }
   ]
 }
 
 Rules:
 - Extract PERSONAL facts about the user (name, preferences, skills, contacts, decisions)
+- DETECT CORRECTIONS: If the user says "No, actually X", "Not A but B", or "I changed my mind", set "is_correction": true.
 - Do NOT extract commands, code, or generic questions
 - Each fact should be a SHORT, standalone statement (max 100 chars)
 - importance: 0.9+ for contact info, names; 0.7 for preferences; 0.5 for general facts
-- happened_at: date when the event occurred (use today if "now", resolve "yesterday"/"tomorrow" to real dates). null if not time-related
-- valid_until: expiry date for temporary facts (e.g. "going on vacation until Friday"). null if permanent
-- emotional_tone: the user's emotional state when saying this. Default "neutral"
-- emotion_score: -1.0 (very negative/angry) to 1.0 (very positive/excited). 0 = neutral
+- happened_at: date when the event occurred. null if not time-related
+- valid_until: expiry date for temporary facts. null if permanent
 - If nothing worth remembering, return {"should_store": false, "facts": []}`;
 
   try {
