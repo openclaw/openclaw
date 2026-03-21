@@ -148,6 +148,43 @@ export function createFollowupRunner(params: {
           isControlUiVisible: shouldSurfaceToControlUi,
         });
       }
+      const replyToChannel = resolveOriginMessageProvider({
+        originatingChannel: queued.originatingChannel,
+        provider: queued.run.messageProvider,
+      }) as OriginatingChannelType | undefined;
+      const replyToMode = resolveReplyToMode(
+        queued.run.config,
+        replyToChannel,
+        queued.originatingAccountId,
+        queued.originatingChatType,
+      );
+      const currentMessageId = queued.messageId?.trim() || undefined;
+      const applyFollowupReplyThreading = (payloads: ReplyPayload[]) =>
+        applyReplyThreading({
+          payloads,
+          replyToMode,
+          replyToChannel,
+          currentMessageId,
+        });
+      const sendCompactionNotice = async (text: string) => {
+        const noticePayloads = applyFollowupReplyThreading([
+          {
+            text,
+            replyToCurrent: true,
+            isCompactionNotice: true,
+          },
+        ]);
+        if (noticePayloads.length === 0) {
+          return;
+        }
+        try {
+          await sendFollowupPayloads(noticePayloads, queued);
+        } catch (err) {
+          logVerbose(
+            `followup queue: compaction notice delivery failed (non-fatal): ${String(err)}`,
+          );
+        }
+      };
       let autoCompactionCount = 0;
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
@@ -229,6 +266,9 @@ export function createFollowupRunner(params: {
                     return;
                   }
                   const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                  if (phase === "start") {
+                    void sendCompactionNotice("🧹 Compacting context...");
+                  }
                   const completed = evt.data?.completed === true;
                   if (phase === "end" && completed) {
                     attemptCompactionCount += 1;
@@ -284,9 +324,6 @@ export function createFollowupRunner(params: {
       }
 
       const payloadArray = runResult.payloads ?? [];
-      if (payloadArray.length === 0) {
-        return;
-      }
       const sanitizedPayloads = payloadArray.flatMap((payload) => {
         const text = payload.text;
         if (!text || !text.includes("HEARTBEAT_OK")) {
@@ -299,22 +336,7 @@ export function createFollowupRunner(params: {
         }
         return [{ ...payload, text: stripped.text }];
       });
-      const replyToChannel = resolveOriginMessageProvider({
-        originatingChannel: queued.originatingChannel,
-        provider: queued.run.messageProvider,
-      }) as OriginatingChannelType | undefined;
-      const replyToMode = resolveReplyToMode(
-        queued.run.config,
-        replyToChannel,
-        queued.originatingAccountId,
-        queued.originatingChatType,
-      );
-
-      const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
-        payloads: sanitizedPayloads,
-        replyToMode,
-        replyToChannel,
-      });
+      const replyTaggedPayloads = applyFollowupReplyThreading(sanitizedPayloads);
 
       const dedupedPayloads = filterMessagingToolDuplicates({
         payloads: replyTaggedPayloads,
@@ -338,11 +360,7 @@ export function createFollowupRunner(params: {
           accountId: queued.run.agentAccountId,
         }),
       });
-      const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
-
-      if (finalPayloads.length === 0) {
-        return;
-      }
+      let finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
       if (autoCompactionCount > 0) {
         const count = await incrementRunCompactionCount({
@@ -354,12 +372,25 @@ export function createFollowupRunner(params: {
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
         });
-        if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
-          const suffix = typeof count === "number" ? ` (count ${count})` : "";
-          finalPayloads.unshift({
-            text: `🧹 Auto-compaction complete${suffix}.`,
-          });
-        }
+        const suffix = typeof count === "number" ? ` (count ${count})` : "";
+        const completionText =
+          queued.run.verboseLevel && queued.run.verboseLevel !== "off"
+            ? `🧹 Auto-compaction complete${suffix}.`
+            : `✅ Context compacted${suffix}.`;
+        finalPayloads = [
+          ...applyFollowupReplyThreading([
+            {
+              text: completionText,
+              replyToCurrent: true,
+              isCompactionNotice: true,
+            },
+          ]),
+          ...finalPayloads,
+        ];
+      }
+
+      if (finalPayloads.length === 0) {
+        return;
       }
 
       await sendFollowupPayloads(finalPayloads, queued);
