@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
@@ -18,7 +17,6 @@ import {
   type MemoryPluginStatus,
   type MemoryStatusSnapshot,
 } from "./status.scan.shared.js";
-import { getStatusSummary } from "./status.summary.js";
 import { getUpdateCheckResult } from "./status.update.js";
 
 let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
@@ -31,6 +29,10 @@ let commandSecretGatewayModulePromise:
   | Promise<typeof import("../cli/command-secret-gateway.js")>
   | undefined;
 let memorySearchModulePromise: Promise<typeof import("../agents/memory-search.js")> | undefined;
+let statusSummaryModulePromise: Promise<typeof import("./status.summary.js")> | undefined;
+let channelConfigPresenceModulePromise:
+  | Promise<typeof import("../channels/config-presence.js")>
+  | undefined;
 let statusScanDepsRuntimeModulePromise:
   | Promise<typeof import("./status.scan.deps.runtime.js")>
   | undefined;
@@ -70,6 +72,16 @@ function loadStatusScanDepsRuntimeModule() {
   return statusScanDepsRuntimeModulePromise;
 }
 
+function loadStatusSummaryModule() {
+  statusSummaryModulePromise ??= import("./status.summary.js");
+  return statusSummaryModulePromise;
+}
+
+function loadChannelConfigPresenceModule() {
+  channelConfigPresenceModulePromise ??= import("../channels/config-presence.js");
+  return channelConfigPresenceModulePromise;
+}
+
 function shouldSkipMissingConfigFastPath(): boolean {
   return (
     process.env.VITEST === "true" ||
@@ -79,8 +91,23 @@ function shouldSkipMissingConfigFastPath(): boolean {
 }
 
 function shouldCollectPluginCompatibility(cfg: OpenClawConfig): boolean {
-  if (hasPotentialConfiguredChannels(cfg)) {
-    return true;
+  // Inline the lightweight check to avoid eagerly loading channels/config-presence
+  // at module evaluation time. The full module is loaded lazily when needed.
+  const channels = cfg.channels;
+  if (channels && typeof channels === "object" && !Array.isArray(channels)) {
+    for (const [key, value] of Object.entries(channels as Record<string, unknown>)) {
+      if (key === "defaults" || key === "modelByChannel") {
+        continue;
+      }
+      if (
+        value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        Object.keys(value).some((k) => k !== "enabled")
+      ) {
+        return true;
+      }
+    }
   }
   return existsSync(resolveConfigPath(process.env));
 }
@@ -143,9 +170,12 @@ export async function scanStatusJsonFast(
     sourceConfig: loadedRaw,
     commandName: "status --json",
   });
-  if (hasPotentialConfiguredChannels(cfg)) {
-    const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-    ensurePluginRegistryLoaded({ scope: "configured-channels" });
+  if (shouldCollectPluginCompatibility(cfg)) {
+    const { hasPotentialConfiguredChannels } = await loadChannelConfigPresenceModule();
+    if (hasPotentialConfiguredChannels(cfg)) {
+      const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
+      ensurePluginRegistryLoaded({ scope: "configured-channels" });
+    }
   }
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
@@ -156,7 +186,9 @@ export async function scanStatusJsonFast(
     includeRegistry: true,
   });
   const agentStatusPromise = getAgentLocalStatuses(cfg);
-  const summaryPromise = getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
+  const summaryPromise = loadStatusSummaryModule().then(({ getStatusSummary }) =>
+    getStatusSummary({ config: cfg, sourceConfig: loadedRaw }),
+  );
 
   const tailscaleDnsPromise =
     tailscaleMode === "off"
