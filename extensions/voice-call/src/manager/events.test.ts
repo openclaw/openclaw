@@ -27,6 +27,7 @@ function createContext(overrides: Partial<CallManagerContext> = {}): CallManager
     activeTurnCalls: new Set(),
     transcriptWaiters: new Map(),
     maxDurationTimers: new Map(),
+    initialMessageInFlight: new Set(),
     ...overrides,
   };
 }
