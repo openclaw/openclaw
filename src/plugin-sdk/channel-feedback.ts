@@ -7,7 +7,7 @@ export {
   type WhatsAppAckReactionMode,
 } from "../channels/ack-reactions.js";
 export { logAckFailure, logTypingFailure, type LogFn } from "../channels/logging.js";
-export { resolveAckReaction } from "../agents/identity.js";
+export { resolveAckReaction, resolveWhatsAppAckEmoji } from "../agents/identity.js";
 export {
   CODING_TOOL_TOKENS,
   createStatusReactionController,

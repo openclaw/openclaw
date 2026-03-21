@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAckReaction } from "./identity.js";
+import { resolveAckReaction, resolveWhatsAppAckEmoji } from "./identity.js";
 
 describe("resolveAckReaction", () => {
   it("prefers account-level overrides", () => {
@@ -129,5 +129,86 @@ describe("resolveAckReaction", () => {
     };
 
     expect(resolveAckReaction(cfg, "main", { channel: "whatsapp", accountId: "biz" })).toBe("💼");
+  });
+});
+
+describe("resolveWhatsAppAckEmoji", () => {
+  it("returns empty string when ackReaction is not configured", () => {
+    const cfg: OpenClawConfig = {
+      messages: { ackReaction: "👀" },
+      agents: { list: [{ id: "main", identity: { emoji: "🔥" } }] },
+    };
+
+    expect(resolveWhatsAppAckEmoji(cfg, "main")).toBe("");
+  });
+
+  it("does not fall through to messages.ackReaction (L3) when emoji is absent", () => {
+    const cfg: OpenClawConfig = {
+      messages: { ackReaction: "👀" },
+      agents: { list: [{ id: "main", identity: { emoji: "🎸" } }] },
+      channels: {
+        whatsapp: {
+          ackReaction: { direct: false },
+        },
+      },
+    };
+
+    // Must use agent identity emoji, not messages.ackReaction
+    expect(resolveWhatsAppAckEmoji(cfg, "main")).toBe("🎸");
+  });
+
+  it("uses the configured channel emoji", () => {
+    const cfg: OpenClawConfig = {
+      messages: { ackReaction: "👀" },
+      agents: { list: [{ id: "main", identity: { emoji: "🔥" } }] },
+      channels: {
+        whatsapp: {
+          ackReaction: { emoji: "🍓", direct: true },
+        },
+      },
+    };
+
+    expect(resolveWhatsAppAckEmoji(cfg, "main")).toBe("🍓");
+  });
+
+  it("treats empty emoji as disabled (does not fall through to agent identity)", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main", identity: { emoji: "🔥" } }] },
+      channels: {
+        whatsapp: {
+          ackReaction: { emoji: "" },
+        },
+      },
+    };
+
+    expect(resolveWhatsAppAckEmoji(cfg, "main")).toBe("");
+  });
+
+  it("falls back to agent identity emoji when ackReaction is configured but emoji is absent", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "kit", identity: { emoji: "🎸" } }] },
+      channels: {
+        whatsapp: {
+          ackReaction: { direct: true, group: "mentions" },
+        },
+      },
+    };
+
+    expect(resolveWhatsAppAckEmoji(cfg, "kit")).toBe("🎸");
+  });
+
+  it("prefers account-level emoji over channel-level", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main", identity: { emoji: "🔥" } }] },
+      channels: {
+        whatsapp: {
+          ackReaction: { emoji: "🍓" },
+          // oxlint-disable-next-line typescript/no-explicit-any
+          accounts: { biz: { ackReaction: { emoji: "💼" } as any } },
+        },
+      },
+    };
+
+    expect(resolveWhatsAppAckEmoji(cfg, "main", { accountId: "biz" })).toBe("💼");
   });
 });

@@ -91,6 +91,57 @@ function extractAckEmoji(value: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * Resolves the ack reaction emoji for a WhatsApp message, scoped to the responding agent.
+ *
+ * Resolution order (most to least specific):
+ *   L1: channels.whatsapp.accounts[accountId].ackReaction.emoji
+ *   L2: channels.whatsapp.ackReaction.emoji
+ *   L4: agent identity emoji
+ *
+ * Intentionally skips the global messages.ackReaction (L3) — that field is a plain
+ * string used by channels with a flat ack config; mixing it into WhatsApp's object-format
+ * ackReaction would silently change behaviour for users who set messages.ackReaction for
+ * other channels but leave WhatsApp ackReaction.emoji unset.
+ *
+ * Returns "" (no reaction) when channels.whatsapp.ackReaction is absent entirely, preserving
+ * the existing default of no reaction for unconfigured WhatsApp setups.
+ */
+export function resolveWhatsAppAckEmoji(
+  cfg: OpenClawConfig,
+  agentId: string,
+  opts?: { accountId?: string },
+): string {
+  const waConfig = (cfg.channels as Record<string, unknown> | undefined)?.whatsapp as
+    | Record<string, unknown>
+    | undefined;
+
+  // Preserve existing default: no ackReaction config at all → no reaction.
+  if (!waConfig?.ackReaction) {
+    return "";
+  }
+
+  // L1: account-level ackReaction.emoji
+  if (opts?.accountId) {
+    const accounts = waConfig.accounts as Record<string, Record<string, unknown>> | undefined;
+    const accountEmoji = extractAckEmoji(accounts?.[opts.accountId]?.ackReaction);
+    if (accountEmoji !== undefined) {
+      return accountEmoji.trim();
+    }
+  }
+
+  // L2: channel-level ackReaction.emoji
+  const channelEmoji = extractAckEmoji(waConfig.ackReaction);
+  if (channelEmoji !== undefined) {
+    return channelEmoji.trim();
+  }
+
+  // L4: agent identity emoji — enables per-agent ack reactions when ackReaction is
+  // configured but emoji is intentionally left unset.
+  // L3 (messages.ackReaction) is skipped: see function doc.
+  return resolveAgentIdentity(cfg, agentId)?.emoji?.trim() ?? "";
+}
+
 /** Helper to extract a channel config value by dynamic key. */
 function getChannelConfig(
   cfg: OpenClawConfig,
