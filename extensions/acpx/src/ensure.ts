@@ -55,6 +55,31 @@ function resolveVersionFromPackage(command: string, cwd: string): string | null 
   } catch {
     return null;
   }
+
+  // npm on Windows typically provides .cmd wrappers under node_modules/.bin.
+  // In that case, the acpx package.json lives at node_modules/acpx/package.json
+  // and is not on the upward walk from .bin -> node_modules -> plugin root.
+  const commandDir = path.dirname(commandPath);
+  const commandBase = path.basename(commandPath).toLowerCase();
+  if (
+    process.platform === "win32" &&
+    path.basename(commandDir).toLowerCase() === ".bin" &&
+    (commandBase === "acpx.cmd" || commandBase === "acpx.bat")
+  ) {
+    const siblingPackageJson = path.resolve(commandDir, "..", "acpx", "package.json");
+    try {
+      const parsed = JSON.parse(fs.readFileSync(siblingPackageJson, "utf8")) as {
+        name?: unknown;
+        version?: unknown;
+      };
+      if (parsed.name === "acpx" && typeof parsed.version === "string" && parsed.version.trim()) {
+        return parsed.version.trim();
+      }
+    } catch {
+      // no-op; fall back to upward walk
+    }
+  }
+
   while (true) {
     const packageJsonPath = path.join(current, "package.json");
     try {
@@ -103,7 +128,11 @@ function isWindowsCmdWrapperProbeFailure(error: unknown): boolean {
     return false;
   }
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  return message.includes("wrapper resolved") && message.includes("without shell execution");
+  return (
+    (message.includes("acpx.cmd") || message.includes("acpx.bat")) &&
+    message.includes("wrapper resolved") &&
+    message.includes("without shell execution")
+  );
 }
 
 function tryResolveVersionFromPackageForWrapperFailure(params: {
