@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../types.ts";
 import { renderSessions, type SessionsProps } from "./sessions.ts";
 
@@ -12,6 +12,16 @@ function buildResult(session: SessionsListResult["sessions"][number]): SessionsL
     count: 1,
     defaults: { modelProvider: null, model: null, contextTokens: null },
     sessions: [session],
+  };
+}
+
+function buildMultiResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
+  return {
+    ts: Date.now(),
+    path: "(multiple)",
+    count: sessions.length,
+    defaults: { modelProvider: null, model: null, contextTokens: null },
+    sessions,
   };
 }
 
@@ -40,6 +50,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onPatch: () => undefined,
     onToggleSelect: () => undefined,
     onSelectPage: () => undefined,
+    onDeselectPage: () => undefined,
     onDeselectAll: () => undefined,
     onDeleteSelected: () => undefined,
   };
@@ -114,5 +125,44 @@ describe("sessions view", () => {
     const selects = container.querySelectorAll("select");
     const fast = selects[1] as HTMLSelectElement | undefined;
     expect(fast?.value).toBe("on");
+  });
+
+  it("deselects only the current page from the header checkbox", async () => {
+    const onSelectPage = vi.fn();
+    const onDeselectPage = vi.fn();
+    const onDeselectAll = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "page-0",
+              kind: "direct",
+              updatedAt: 20,
+            },
+            {
+              key: "page-1",
+              kind: "direct",
+              updatedAt: 10,
+            },
+          ]),
+        ),
+        pageSize: 1,
+        selectedKeys: new Set(["page-0", "off-page"]),
+        onSelectPage,
+        onDeselectPage,
+        onDeselectAll,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const headerCheckbox = container.querySelector("thead input[type=checkbox]");
+    headerCheckbox?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onDeselectPage).toHaveBeenCalledWith(["page-0"]);
+    expect(onDeselectAll).not.toHaveBeenCalled();
+    expect(onSelectPage).not.toHaveBeenCalled();
   });
 });

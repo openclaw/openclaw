@@ -126,14 +126,14 @@ export async function deleteSessionsAndRefresh(
   state.sessionsLoading = true;
   state.sessionsError = null;
   const deleted: string[] = [];
-  let deleteError: string | null = null;
+  const deleteErrors: string[] = [];
   try {
     for (const key of keys) {
       try {
         await state.client.request("sessions.delete", { key, deleteTranscript: true });
         deleted.push(key);
       } catch (err) {
-        deleteError = String(err);
+        deleteErrors.push(String(err));
       }
     }
   } finally {
@@ -142,8 +142,8 @@ export async function deleteSessionsAndRefresh(
   if (deleted.length > 0) {
     await loadSessions(state);
   }
-  if (deleteError) {
-    state.sessionsError = deleteError;
+  if (deleteErrors.length > 0) {
+    state.sessionsError = deleteErrors.join("; ");
   }
   return deleted;
 }

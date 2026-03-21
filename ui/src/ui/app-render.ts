@@ -778,6 +778,13 @@ export function renderApp(state: AppViewState) {
                     }
                     state.sessionsSelectedKeys = next;
                   },
+                  onDeselectPage: (keys) => {
+                    const next = new Set(state.sessionsSelectedKeys);
+                    for (const k of keys) {
+                      next.delete(k);
+                    }
+                    state.sessionsSelectedKeys = next;
+                  },
                   onDeselectAll: () => {
                     state.sessionsSelectedKeys = new Set();
                   },

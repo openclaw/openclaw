@@ -90,8 +90,8 @@ describe("deleteSessionsAndRefresh", () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "sessions.delete") {
         const p = params as { key: string };
-        if (p.key === "key-b") {
-          throw new Error("delete failed");
+        if (p.key === "key-b" || p.key === "key-c") {
+          throw new Error(`delete failed: ${p.key}`);
         }
         return { ok: true };
       }
@@ -103,10 +103,10 @@ describe("deleteSessionsAndRefresh", () => {
     const state = createState(request);
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
-    const deleted = await deleteSessionsAndRefresh(state, ["key-a", "key-b", "key-c"]);
+    const deleted = await deleteSessionsAndRefresh(state, ["key-a", "key-b", "key-c", "key-d"]);
 
-    expect(deleted).toEqual(["key-a", "key-c"]);
-    expect(state.sessionsError).toContain("delete failed");
+    expect(deleted).toEqual(["key-a", "key-d"]);
+    expect(state.sessionsError).toBe("Error: delete failed: key-b; Error: delete failed: key-c");
     expect(state.sessionsLoading).toBe(false);
   });
 

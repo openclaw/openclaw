@@ -43,6 +43,7 @@ export type SessionsProps = {
   ) => void;
   onToggleSelect: (key: string) => void;
   onSelectPage: (keys: string[]) => void;
+  onDeselectPage: (keys: string[]) => void;
   onDeselectAll: () => void;
   onDeleteSelected: () => void;
   onNavigateToChat?: (sessionKey: string) => void;
@@ -336,7 +337,7 @@ export function renderSessions(props: SessionsProps) {
                         @change=${() => {
                           const allSelected = paginated.every((r) => props.selectedKeys.has(r.key));
                           if (allSelected) {
-                            props.onDeselectAll();
+                            props.onDeselectPage(paginated.map((r) => r.key));
                           } else {
                             props.onSelectPage(paginated.map((r) => r.key));
                           }
