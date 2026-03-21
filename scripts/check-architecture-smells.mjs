@@ -256,17 +256,27 @@ function formatInventoryHuman(inventory) {
   return lines.join("\n");
 }
 
-export async function main(argv = process.argv.slice(2)) {
+function writeLine(stream, text) {
+  stream.write(`${text}\n`);
+}
+
+export async function runArchitectureSmellsCheck(argv = process.argv.slice(2), io) {
+  const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
   const json = argv.includes("--json");
   const inventory = await collectArchitectureSmells();
 
   if (json) {
-    process.stdout.write(`${JSON.stringify(inventory, null, 2)}\n`);
-    return;
+    writeLine(streams.stdout, JSON.stringify(inventory, null, 2));
+    return 0;
   }
 
-  console.log(formatInventoryHuman(inventory));
-  console.log(`${inventory.length} smell${inventory.length === 1 ? "" : "s"} found.`);
+  writeLine(streams.stdout, formatInventoryHuman(inventory));
+  writeLine(streams.stdout, `${inventory.length} smell${inventory.length === 1 ? "" : "s"} found.`);
+  return 0;
+}
+
+export async function main(argv = process.argv.slice(2), io) {
+  return await runArchitectureSmellsCheck(argv, io);
 }
 
 runAsScript(import.meta.url, main);
