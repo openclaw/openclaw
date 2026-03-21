@@ -507,6 +507,7 @@ export async function runMemoryFlushIfNeeded(params: {
     });
   }
   let memoryCompactionCompleted = false;
+  let fallbackFlushAttemptedForCurrentHash = false;
   const memoryFlushNowMs = Date.now();
   const memoryFlushWritePath = resolveMemoryFlushRelativePathForRun({
     cfg: params.cfg,
@@ -523,6 +524,16 @@ export async function runMemoryFlushIfNeeded(params: {
       ...resolveModelFallbackOptions(params.followupRun.run),
       runId: flushRunId,
       run: async (provider, model, runOptions) => {
+        if (contextHashBeforeFlush && fallbackFlushAttemptedForCurrentHash) {
+          logVerbose(
+            `memoryFlush fallback candidate skipped (context hash already attempted): sessionKey=${params.sessionKey} hash=${contextHashBeforeFlush} provider=${provider} model=${model}`,
+          );
+          // A prior candidate already attempted this exact flush context. Be
+          // conservative and skip later candidates so a write-then-throw failure
+          // cannot append the same memory twice during a single fallback cycle.
+          return { payloads: [], meta: {} };
+        }
+        fallbackFlushAttemptedForCurrentHash = Boolean(contextHashBeforeFlush);
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
           run: params.followupRun.run,
           sessionCtx: params.sessionCtx,

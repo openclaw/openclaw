@@ -31,7 +31,10 @@ type EmbeddedRunParams = {
   memoryFlushWritePath?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
-  onAgentEvent?: (evt: { stream?: string; data?: { phase?: string; willRetry?: boolean } }) => void;
+  onAgentEvent?: (evt: {
+    stream?: string;
+    data?: { phase?: string; willRetry?: boolean; completed?: boolean };
+  }) => void;
 };
 
 const state = vi.hoisted(() => ({
@@ -2029,6 +2032,121 @@ describe("runReplyAgent memory flush", () => {
       });
 
       expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
+    });
+  });
+
+  it("skips duplicate memory writes across memory-flush fallback retries", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionFile = "session-relative.jsonl";
+      const fixtureDir = path.dirname(storePath);
+      const transcriptPath = path.join(fixtureDir, sessionFile);
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(
+        transcriptPath,
+        [
+          JSON.stringify({ message: { role: "user", content: "Remember alpha." } }),
+          JSON.stringify({ message: { role: "assistant", content: "Stored alpha." } }),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const sessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        sessionFile,
+        totalTokens: 80_000,
+        compactionCount: 1,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      let flushAttemptCount = 0;
+      let memoryFilePath: string | undefined;
+      const prompts: string[] = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        prompts.push(params.prompt ?? "");
+        if (params.prompt?.includes("Pre-compaction memory flush.")) {
+          flushAttemptCount += 1;
+          memoryFilePath = path.join(fixtureDir, params.memoryFlushWritePath ?? "memory/flush.md");
+          await fs.mkdir(path.dirname(memoryFilePath), { recursive: true });
+          await fs.appendFile(memoryFilePath, "remember alpha\n", "utf-8");
+          if (flushAttemptCount === 1) {
+            throw new Error("flush failed after write");
+          }
+          return { payloads: [], meta: {} };
+        }
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const fallbackSpy = vi
+        .spyOn(modelFallbackModule, "runWithModelFallback")
+        .mockImplementationOnce(
+          async ({
+            provider,
+            model,
+            run,
+          }: {
+            provider: string;
+            model: string;
+            run: (provider: string, model: string) => Promise<unknown>;
+          }) => {
+            try {
+              await run(provider, model);
+            } catch {
+              // Simulate advancing to the next fallback candidate after the first
+              // memory flush attempt already wrote and then failed.
+            }
+            return {
+              result: await run("openai", "gpt-5.4"),
+              provider: "openai",
+              model: "gpt-5.4",
+              attempts: [
+                {
+                  provider,
+                  model,
+                  error: "flush failed after write",
+                  reason: "unknown",
+                },
+              ],
+            };
+          },
+        );
+
+      try {
+        const baseRun = createBaseRun({
+          storePath,
+          sessionEntry,
+          runOverrides: {
+            sessionFile,
+            workspaceDir: fixtureDir,
+          },
+        });
+
+        await runReplyAgentWithBase({
+          baseRun,
+          storePath,
+          sessionKey,
+          sessionEntry,
+          commandBody: "hello",
+        });
+      } finally {
+        fallbackSpy.mockRestore();
+      }
+
+      expect(flushAttemptCount).toBe(1);
+      expect(
+        prompts.filter((prompt) => prompt.includes("Pre-compaction memory flush.")),
+      ).toHaveLength(1);
+      expect(memoryFilePath).toBeDefined();
+      await expect(fs.readFile(memoryFilePath!, "utf-8")).resolves.toBe("remember alpha\n");
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].memoryFlushAt).toBeTypeOf("number");
+      expect(stored[sessionKey].memoryFlushContextHash).toMatch(/^[0-9a-f]{16}$/);
     });
   });
 
