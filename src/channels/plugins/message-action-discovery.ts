@@ -161,7 +161,7 @@ export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageAc
   return Array.from(actions);
 }
 
-export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
+function collectChannelCapabilities(cfg: OpenClawConfig): Set<ChannelMessageCapability> {
   const capabilities = new Set<ChannelMessageCapability>();
   for (const plugin of listChannelPlugins()) {
     for (const capability of resolveMessageActionDiscoveryForPlugin({
@@ -173,7 +173,11 @@ export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMess
       capabilities.add(capability);
     }
   }
-  return Array.from(capabilities);
+  return capabilities;
+}
+
+export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
+  return Array.from(collectChannelCapabilities(cfg));
 }
 
 export function listChannelMessageCapabilitiesForChannel(params: {
@@ -263,7 +267,7 @@ export function channelSupportsMessageCapability(
   cfg: OpenClawConfig,
   capability: ChannelMessageCapability,
 ): boolean {
-  return listChannelMessageCapabilities(cfg).includes(capability);
+  return collectChannelCapabilities(cfg).has(capability);
 }
 
 export function channelSupportsMessageCapabilityForChannel(
@@ -281,7 +285,25 @@ export function channelSupportsMessageCapabilityForChannel(
   },
   capability: ChannelMessageCapability,
 ): boolean {
-  return listChannelMessageCapabilitiesForChannel(params).includes(capability);
+  const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
+  if (!channelId) {
+    return false;
+  }
+  const plugin = getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
+  if (!plugin?.actions) {
+    return false;
+  }
+  for (const cap of resolveMessageActionDiscoveryForPlugin({
+    pluginId: plugin.id,
+    actions: plugin.actions,
+    context: createMessageActionDiscoveryContext(params),
+    includeCapabilities: true,
+  }).capabilities) {
+    if (cap === capability) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export const __testing = {

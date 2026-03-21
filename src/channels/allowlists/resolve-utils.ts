@@ -46,12 +46,22 @@ export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutio
   const resolvedOk = (entry: T) => Boolean(entry.resolved && entry.id);
   const formatResolved = opts?.formatResolved ?? ((entry: T) => `${entry.input}→${entry.id}`);
   const formatUnresolved = opts?.formatUnresolved ?? ((entry: T) => entry.input);
-  const mapping = resolvedUsers.filter(resolvedOk).map(formatResolved);
-  const additions = resolvedUsers
-    .filter(resolvedOk)
-    .map((entry) => entry.id)
-    .filter((entry): entry is string => Boolean(entry));
-  const unresolved = resolvedUsers.filter((entry) => !resolvedOk(entry)).map(formatUnresolved);
+
+  const mapping: string[] = [];
+  const additions: string[] = [];
+  const unresolved: string[] = [];
+
+  for (const entry of resolvedUsers) {
+    if (resolvedOk(entry)) {
+      mapping.push(formatResolved(entry));
+      if (entry.id) {
+        additions.push(entry.id);
+      }
+    } else {
+      unresolved.push(formatUnresolved(entry));
+    }
+  }
+
   return { resolvedMap, mapping, unresolved, additions };
 }
 
