@@ -63,6 +63,17 @@ describe("resolveUpdateAvailability", () => {
     expect(availability.hasRegistryUpdate).toBe(true);
     expect(availability.latestVersion).toBe(latestVersion);
   });
+  it("reports no update available when installed version equals registry latest", () => {
+    const update = buildUpdate({
+      installKind: "package",
+      packageManager: "pnpm",
+      registry: { latestVersion: VERSION },
+    });
+    const availability = resolveUpdateAvailability(update);
+    expect(availability.available).toBe(false);
+    expect(availability.hasRegistryUpdate).toBe(false);
+    expect(availability.latestVersion).toBeNull();
+  });
 });
 
 describe("formatUpdateOneLiner", () => {
@@ -90,7 +101,7 @@ describe("formatUpdateOneLiner", () => {
     });
 
     expect(formatUpdateOneLiner(update)).toBe(
-      `Update: git main · ↔ origin/main · dirty · behind 2 · npm latest ${VERSION} · deps ok`,
+      `Update: git main · ↔ origin/main · dirty · behind 2 · npm ${VERSION} (up to date) · deps ok`,
     );
   });
 
