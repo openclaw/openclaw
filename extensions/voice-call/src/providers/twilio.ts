@@ -31,6 +31,10 @@ import { twilioApiRequest } from "./twilio/api.js";
 import { decideTwimlResponse, readTwimlRequestView } from "./twilio/twiml-policy.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 
+type StreamSendResult = {
+  sent: boolean;
+};
+
 function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: string): string {
   if (verifiedRequestKey) {
     return verifiedRequestKey;
@@ -76,6 +80,7 @@ export interface TwilioProviderOptions {
 
 export class TwilioProvider implements VoiceCallProvider {
   readonly name = "twilio" as const;
+  private static readonly TTS_SYNTH_TIMEOUT_MS = 8000;
 
   private readonly accountSid: string;
   private readonly authToken: string;
@@ -172,9 +177,27 @@ export class TwilioProvider implements VoiceCallProvider {
     this.callStreamMap.set(callSid, streamSid);
   }
 
-  unregisterCallStream(callSid: string): void {
+  hasRegisteredStream(callSid: string): boolean {
+    return this.callStreamMap.has(callSid);
+  }
+
+  unregisterCallStream(callSid: string, streamSid?: string): void {
+    const currentStreamSid = this.callStreamMap.get(callSid);
+    if (!currentStreamSid) {
+      if (!streamSid) {
+        this.activeStreamCalls.delete(callSid);
+      }
+      return;
+    }
+    if (streamSid && currentStreamSid !== streamSid) {
+      return;
+    }
     this.callStreamMap.delete(callSid);
     this.activeStreamCalls.delete(callSid);
+  }
+
+  isConversationStreamConnectEnabled(): boolean {
+    return Boolean(this.mediaStreamHandler && this.getStreamUrl());
   }
 
   isValidStreamToken(callSid: string, token?: string): boolean {
@@ -194,11 +217,12 @@ export class TwilioProvider implements VoiceCallProvider {
    * Clear TTS queue for a call (barge-in).
    * Used when user starts speaking to interrupt current TTS playback.
    */
-  clearTtsQueue(callSid: string): void {
+  clearTtsQueue(callSid: string, reason = "unspecified"): void {
     const streamSid = this.callStreamMap.get(callSid);
-    if (streamSid && this.mediaStreamHandler) {
-      this.mediaStreamHandler.clearTtsQueue(streamSid);
+    if (!streamSid || !this.mediaStreamHandler) {
+      return;
     }
+    this.mediaStreamHandler.clearTtsQueue(streamSid, reason);
   }
 
   /**
@@ -550,28 +574,32 @@ export class TwilioProvider implements VoiceCallProvider {
    * Play TTS audio via Twilio.
    *
    * Two modes:
-   * 1. Core TTS + Media Streams: If TTS provider and media stream are available,
-   *    generates audio via core TTS and streams it through WebSocket (preferred).
-   * 2. TwiML <Say>: Falls back to Twilio's native TTS with Polly voices.
-   *    Note: This may not work on all Twilio accounts.
+   * 1. Core TTS + Media Streams: when an active stream exists, stream playback is required.
+   *    If telephony TTS is unavailable in that state, playback fails rather than mixing paths.
+   * 2. TwiML <Say>: fallback only when there is no active stream for the call.
    */
   async playTts(input: PlayTtsInput): Promise<void> {
-    // Try telephony TTS via media stream first (if configured)
     const streamSid = this.callStreamMap.get(input.providerCallId);
-    if (this.ttsProvider && this.mediaStreamHandler && streamSid) {
+    if (streamSid) {
+      if (!this.ttsProvider || !this.mediaStreamHandler) {
+        throw new Error(
+          "Telephony TTS unavailable while media stream is active; refusing TwiML fallback",
+        );
+      }
+
       try {
         await this.playTtsViaStream(input.text, streamSid);
         return;
       } catch (err) {
         console.warn(
-          `[voice-call] Telephony TTS failed, falling back to Twilio <Say>:`,
+          `[voice-call] Telephony TTS failed:`,
           err instanceof Error ? err.message : err,
         );
-        // Fall through to TwiML <Say> fallback
+        throw err instanceof Error ? err : new Error(String(err));
       }
     }
 
-    // Fall back to TwiML <Say> (may not work on all accounts)
+    // Fall back to TwiML <Say> only when no active stream exists.
     const webhookUrl = this.callWebhookUrls.get(input.providerCallId);
     if (!webhookUrl) {
       throw new Error("Missing webhook URL for this call (provider state not initialized)");
@@ -608,28 +636,111 @@ export class TwilioProvider implements VoiceCallProvider {
     // Stream audio in 20ms chunks (160 bytes at 8kHz mu-law)
     const CHUNK_SIZE = 160;
     const CHUNK_DELAY_MS = 20;
+    const SILENCE_CHUNK = Buffer.alloc(CHUNK_SIZE, 0xff);
 
     const handler = this.mediaStreamHandler;
     const ttsProvider = this.ttsProvider;
+
+    const normalizeSendResult = (raw: unknown): StreamSendResult => {
+      if (!raw || typeof raw !== "object") {
+        return { sent: true };
+      }
+      const typed = raw as {
+        sent?: unknown;
+      };
+      return {
+        sent: typed.sent === undefined ? true : Boolean(typed.sent),
+      };
+    };
+
+    const sendAudioChunk = (audio: Buffer): StreamSendResult => {
+      const raw = (handler as { sendAudio: (sid: string, chunk: Buffer) => unknown }).sendAudio(
+        streamSid,
+        audio,
+      );
+      return normalizeSendResult(raw);
+    };
+
+    const sendPlaybackMark = (name: string): StreamSendResult => {
+      const raw = (handler as { sendMark: (sid: string, markName: string) => unknown }).sendMark(
+        streamSid,
+        name,
+      );
+      return normalizeSendResult(raw);
+    };
+
     await handler.queueTts(streamSid, async (signal) => {
+      const sendKeepAlive = () => {
+        sendAudioChunk(SILENCE_CHUNK);
+      };
+      sendKeepAlive();
+      const keepAlive = setInterval(() => {
+        if (!signal.aborted) {
+          sendKeepAlive();
+        }
+      }, CHUNK_DELAY_MS);
+
       // Generate audio with core TTS (returns mu-law at 8kHz)
-      const muLawAudio = await ttsProvider.synthesizeForTelephony(text);
+      let muLawAudio: Buffer;
+      let synthTimeout: ReturnType<typeof setTimeout> | null = null;
+      try {
+        const synthPromise = ttsProvider.synthesizeForTelephony(text);
+        const timeoutPromise = new Promise<Buffer>((_, reject) => {
+          synthTimeout = setTimeout(() => {
+            reject(
+              new Error(
+                `Telephony TTS synthesis timed out after ${TwilioProvider.TTS_SYNTH_TIMEOUT_MS}ms`,
+              ),
+            );
+          }, TwilioProvider.TTS_SYNTH_TIMEOUT_MS);
+        });
+        muLawAudio = await Promise.race([synthPromise, timeoutPromise]);
+      } finally {
+        if (synthTimeout) {
+          clearTimeout(synthTimeout);
+        }
+        clearInterval(keepAlive);
+      }
+
+      let chunkAttempts = 0;
+      let chunkDelivered = 0;
+      let nextChunkDueAt = Date.now() + CHUNK_DELAY_MS;
       for (const chunk of chunkAudio(muLawAudio, CHUNK_SIZE)) {
         if (signal.aborted) {
           break;
         }
-        handler.sendAudio(streamSid, chunk);
+        chunkAttempts += 1;
+        const chunkResult = sendAudioChunk(chunk);
+        if (chunkResult.sent) {
+          chunkDelivered += 1;
+        }
 
-        // Pace the audio to match real-time playback
-        await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
+        // Drift-corrected pacing: schedule against an absolute clock to avoid cumulative delay.
+        const waitMs = nextChunkDueAt - Date.now();
+        if (waitMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, Math.ceil(waitMs)));
+        }
+        nextChunkDueAt += CHUNK_DELAY_MS;
         if (signal.aborted) {
           break;
         }
       }
 
+      let markSent = true;
       if (!signal.aborted) {
         // Send a mark to track when audio finishes
-        handler.sendMark(streamSid, `tts-${Date.now()}`);
+        markSent = sendPlaybackMark(`tts-${Date.now()}`).sent;
+      }
+
+      if (!signal.aborted && chunkAttempts > 0 && (chunkDelivered === 0 || !markSent)) {
+        const failures: string[] = [];
+        if (chunkDelivered === 0) {
+          failures.push("no audio chunks delivered");
+        }
+        if (!markSent) {
+          failures.push("completion mark not delivered");
+        }
+        throw new Error(`Telephony stream playback failed: ${failures.join("; ")}`);
       }
     });
   }

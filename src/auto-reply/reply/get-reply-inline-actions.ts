@@ -3,7 +3,7 @@ import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
-import { getChannelDock } from "../../channels/dock.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -59,6 +59,17 @@ function resolveSlashCommandName(commandBodyNormalized: string): string | null {
   const match = trimmed.match(/^\/([^\s:]+)(?::|\s|$)/);
   const name = match?.[1]?.trim().toLowerCase() ?? "";
   return name ? name : null;
+}
+
+function expandBundleCommandPromptTemplate(template: string, args?: string): string {
+  const normalizedArgs = args?.trim() || "";
+  const rendered = template.includes("$ARGUMENTS")
+    ? template.replaceAll("$ARGUMENTS", normalizedArgs)
+    : template;
+  if (!normalizedArgs || template.includes("$ARGUMENTS")) {
+    return rendered.trim();
+  }
+  return `${rendered.trim()}\n\nUser input:\n${normalizedArgs}`;
 }
 
 export type InlineActionResult =
@@ -220,6 +231,7 @@ export async function handleInlineActions(params: {
         agentDir,
         workspaceDir,
         config: cfg,
+        allowGatewaySubagentBinding: true,
       });
       const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
@@ -247,11 +259,17 @@ export async function handleInlineActions(params: {
       }
     }
 
-    const promptParts = [
-      `Use the "${skillInvocation.command.skillName}" skill for this request.`,
-      skillInvocation.args ? `User input:\n${skillInvocation.args}` : null,
-    ].filter((entry): entry is string => Boolean(entry));
-    const rewrittenBody = promptParts.join("\n\n");
+    const rewrittenBody = skillInvocation.command.promptTemplate
+      ? expandBundleCommandPromptTemplate(
+          skillInvocation.command.promptTemplate,
+          skillInvocation.args,
+        )
+      : [
+          `Use the "${skillInvocation.command.skillName}" skill for this request.`,
+          skillInvocation.args ? `User input:\n${skillInvocation.args}` : null,
+        ]
+          .filter((entry): entry is string => Boolean(entry))
+          .join("\n\n");
     ctx.Body = rewrittenBody;
     ctx.BodyForAgent = rewrittenBody;
     sessionCtx.Body = rewrittenBody;
@@ -402,7 +420,7 @@ export async function handleInlineActions(params: {
 
   const isEmptyConfig = Object.keys(cfg).length === 0;
   const skipWhenConfigEmpty = command.channelId
-    ? Boolean(getChannelDock(command.channelId)?.commands?.skipWhenConfigEmpty)
+    ? Boolean(getChannelPlugin(command.channelId)?.commands?.skipWhenConfigEmpty)
     : false;
   if (
     skipWhenConfigEmpty &&

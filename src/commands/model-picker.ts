@@ -11,10 +11,13 @@ import {
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { formatTokenK } from "./models/shared.js";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
+
+export { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 
 const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
@@ -46,6 +49,11 @@ type PromptModelAllowlistResult = { models?: string[] };
 async function loadModelPickerRuntime() {
   return import("./model-picker.runtime.js");
 }
+
+const loadResolvedModelPickerRuntime = createLazyRuntimeSurface(
+  loadModelPickerRuntime,
+  ({ modelPickerRuntime }) => modelPickerRuntime,
+);
 
 function hasAuthForProvider(
   provider: string,
@@ -154,12 +162,14 @@ function addModelSelectOption(params: {
   params.seen.add(key);
 }
 
-function isAnthropicLegacyModel(entry: { provider: string; id: string }): boolean {
-  return (
-    entry.provider === "anthropic" &&
-    typeof entry.id === "string" &&
-    entry.id.toLowerCase().startsWith("claude-3")
-  );
+function matchesPreferredProvider(entryProvider: string, preferredProvider: string): boolean {
+  if (preferredProvider === "volcengine") {
+    return entryProvider === "volcengine" || entryProvider === "volcengine-plan";
+  }
+  if (preferredProvider === "byteplus") {
+    return entryProvider === "byteplus" || entryProvider === "byteplus-plan";
+  }
+  return entryProvider === preferredProvider;
 }
 
 async function promptManualModel(params: {
@@ -261,18 +271,7 @@ export async function promptDefaultModel(
   }
 
   if (hasPreferredProvider && preferredProvider) {
-    models = models.filter((entry) => {
-      if (preferredProvider === "volcengine") {
-        return entry.provider === "volcengine" || entry.provider === "volcengine-plan";
-      }
-      if (preferredProvider === "byteplus") {
-        return entry.provider === "byteplus" || entry.provider === "byteplus-plan";
-      }
-      return entry.provider === preferredProvider;
-    });
-    if (preferredProvider === "anthropic") {
-      models = models.filter((entry) => !isAnthropicLegacyModel(entry));
-    }
+    models = models.filter((entry) => matchesPreferredProvider(entry.provider, preferredProvider));
   }
 
   const agentDir = params.agentDir;
@@ -293,7 +292,7 @@ export async function promptDefaultModel(
     options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
   }
   if (includeProviderPluginSetups && agentDir) {
-    const { resolveProviderModelPickerEntries } = await loadModelPickerRuntime();
+    const { resolveProviderModelPickerEntries } = await loadResolvedModelPickerRuntime();
     options.push(
       ...resolveProviderModelPickerEntries({
         config: cfg,
@@ -352,7 +351,7 @@ export async function promptDefaultModel(
   if (selection.startsWith("provider-plugin:")) {
     pluginResolution = selection;
   } else if (!selection.includes("/")) {
-    const { resolvePluginProviders } = await loadModelPickerRuntime();
+    const { resolvePluginProviders } = await loadResolvedModelPickerRuntime();
     pluginProviders = resolvePluginProviders({
       config: cfg,
       workspaceDir: params.workspaceDir,
@@ -377,7 +376,7 @@ export async function promptDefaultModel(
       resolveProviderPluginChoice,
       runProviderModelSelectedHook,
       runProviderPluginAuthMethod,
-    } = await loadModelPickerRuntime();
+    } = await loadResolvedModelPickerRuntime();
     if (pluginProviders.length === 0) {
       pluginProviders = resolvePluginProviders({
         config: cfg,
@@ -413,7 +412,7 @@ export async function promptDefaultModel(
     return { model: applied.defaultModel, config: applied.config };
   }
   const model = String(selection);
-  const { runProviderModelSelectedHook } = await loadModelPickerRuntime();
+  const { runProviderModelSelectedHook } = await loadResolvedModelPickerRuntime();
   await runProviderModelSelectedHook({
     config: cfg,
     model,
@@ -432,11 +431,16 @@ export async function promptModelAllowlist(params: {
   agentDir?: string;
   allowedKeys?: string[];
   initialSelections?: string[];
+  preferredProvider?: string;
 }): Promise<PromptModelAllowlistResult> {
   const cfg = params.config;
   const existingKeys = resolveConfiguredModelKeys(cfg);
   const allowedKeys = normalizeModelKeys(params.allowedKeys ?? []);
   const allowedKeySet = allowedKeys.length > 0 ? new Set(allowedKeys) : null;
+  const preferredProviderRaw = params.preferredProvider?.trim();
+  const preferredProvider = preferredProviderRaw
+    ? normalizeProviderId(preferredProviderRaw)
+    : undefined;
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -459,7 +463,7 @@ export async function promptModelAllowlist(params: {
         params.message ??
         "Allowlist models (comma-separated provider/model; blank to keep current)",
       initialValue: existingKeys.join(", "),
-      placeholder: `${OPENAI_CODEX_DEFAULT_MODEL}, anthropic/claude-opus-4-6`,
+      placeholder: "provider/model, other-provider/model",
     });
     const parsed = String(raw ?? "")
       .split(",")
@@ -480,9 +484,16 @@ export async function promptModelAllowlist(params: {
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
 
-  const filteredCatalog = allowedKeySet
+  const allowedCatalog = allowedKeySet
     ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
     : catalog;
+  const filteredCatalog =
+    preferredProvider &&
+    allowedCatalog.some((entry) => matchesPreferredProvider(entry.provider, preferredProvider))
+      ? allowedCatalog.filter((entry) =>
+          matchesPreferredProvider(entry.provider, preferredProvider),
+        )
+      : allowedCatalog;
 
   for (const entry of filteredCatalog) {
     addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
@@ -526,33 +537,6 @@ export async function promptModelAllowlist(params: {
     return {};
   }
   return { models: [] };
-}
-
-export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
-  const defaults = cfg.agents?.defaults;
-  const existingModel = defaults?.model;
-  const existingModels = defaults?.models;
-  const fallbacks =
-    typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
-      ? (existingModel as { fallbacks?: string[] }).fallbacks
-      : undefined;
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        model: {
-          ...(fallbacks ? { fallbacks } : undefined),
-          primary: model,
-        },
-        models: {
-          ...existingModels,
-          [model]: existingModels?.[model] ?? {},
-        },
-      },
-    },
-  };
 }
 
 export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): OpenClawConfig {

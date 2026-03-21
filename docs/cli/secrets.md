@@ -14,9 +14,9 @@ Use `openclaw secrets` to manage SecretRefs and keep the active runtime snapshot
 Command roles:
 
 - `reload`: gateway RPC (`secrets.reload`) that re-resolves refs and swaps runtime snapshot only on full success (no config writes).
-- `audit`: read-only scan of configuration/auth/generated-model stores and legacy residues for plaintext, unresolved refs, and precedence drift.
+- `audit`: read-only scan of configuration/auth/generated-model stores and legacy residues for plaintext, unresolved refs, and precedence drift (exec refs are skipped unless `--allow-exec` is set).
 - `configure`: interactive planner for provider setup, target mapping, and preflight (TTY required).
-- `apply`: execute a saved plan (`--dry-run` for validation only), then scrub targeted plaintext residues.
+- `apply`: execute a saved plan (`--dry-run` for validation only; dry-run skips exec checks by default, and write mode rejects exec-containing plans unless `--allow-exec` is set), then scrub targeted plaintext residues.
 
 Recommended operator loop:
 
@@ -28,6 +28,8 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
 openclaw secrets audit --check
 openclaw secrets reload
 ```
+
+If your plan includes `exec` SecretRefs/providers, pass `--allow-exec` on both dry-run and write apply commands.
 
 Exit code note for CI/gates:
 
@@ -73,6 +75,7 @@ Header residue note:
 openclaw secrets audit
 openclaw secrets audit --check
 openclaw secrets audit --json
+openclaw secrets audit --allow-exec
 ```
 
 Exit behavior:
@@ -83,6 +86,7 @@ Exit behavior:
 Report shape highlights:
 
 - `status`: `clean | findings | unresolved`
+- `resolution`: `refsChecked`, `skippedExecRefs`, `resolvabilityComplete`
 - `summary`: `plaintextCount`, `unresolvedRefCount`, `shadowedRefCount`, `legacyResidueCount`
 - finding codes:
   - `PLAINTEXT_FOUND`
@@ -115,6 +119,7 @@ Flags:
 - `--providers-only`: configure `secrets.providers` only, skip credential mapping.
 - `--skip-provider-setup`: skip provider setup and map credentials to existing providers.
 - `--agent <id>`: scope `auth-profiles.json` target discovery and writes to one agent store.
+- `--allow-exec`: allow exec SecretRef checks during preflight/apply (may execute provider commands).
 
 Notes:
 
@@ -124,6 +129,7 @@ Notes:
 - `configure` supports creating new `auth-profiles.json` mappings directly in the picker flow.
 - Canonical supported surface: [SecretRef Credential Surface](/reference/secretref-credential-surface).
 - It performs preflight resolution before apply.
+- If preflight/apply includes exec refs, keep `--allow-exec` set for both steps.
 - Generated plans default to scrub options (`scrubEnv`, `scrubAuthProfilesForProviderTargets`, `scrubLegacyAuthJson` all enabled).
 - Apply path is one-way for scrubbed plaintext values.
 - Without `--apply`, CLI still prompts `Apply this plan now?` after preflight.
@@ -141,9 +147,18 @@ Apply or preflight a plan generated previously:
 
 ```bash
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --allow-exec
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run --allow-exec
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --json
 ```
+
+Exec behavior:
+
+- `--dry-run` validates preflight without writing files.
+- exec SecretRef checks are skipped by default in dry-run.
+- write mode rejects plans that contain exec SecretRefs/providers unless `--allow-exec` is set.
+- Use `--allow-exec` to opt in to exec provider checks/execution in either mode.
 
 Plan contract details (allowed target paths, validation rules, and failure semantics):
 

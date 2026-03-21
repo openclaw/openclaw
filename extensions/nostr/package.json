@@ -11,6 +11,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "nostr",
       "label": "Nostr",
@@ -26,10 +27,8 @@
       "localPath": "extensions/nostr",
       "defaultChoice": "npm"
     },
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "nostr-tools"
-      ]
+    "release": {
+      "publishToNpm": true
     }
   }
 }

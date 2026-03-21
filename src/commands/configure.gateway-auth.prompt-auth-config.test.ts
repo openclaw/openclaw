@@ -8,6 +8,11 @@ const mocks = vi.hoisted(() => ({
   promptModelAllowlist: vi.fn(),
   promptDefaultModel: vi.fn(),
   promptCustomApiConfig: vi.fn(),
+  resolvePluginProviders: vi.fn(() => []),
+  resolveProviderPluginChoice: vi.fn<() => unknown>(() => null),
+  resolvePreferredProviderForAuthChoice: vi.fn<() => Promise<string | undefined>>(
+    async () => undefined,
+  ),
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({
@@ -23,7 +28,7 @@ vi.mock("./auth-choice-prompt.js", () => ({
 
 vi.mock("./auth-choice.js", () => ({
   applyAuthChoice: mocks.applyAuthChoice,
-  resolvePreferredProviderForAuthChoice: vi.fn(async () => undefined),
+  resolvePreferredProviderForAuthChoice: mocks.resolvePreferredProviderForAuthChoice,
 }));
 
 vi.mock("./model-picker.js", async (importActual) => {
@@ -37,6 +42,14 @@ vi.mock("./model-picker.js", async (importActual) => {
 
 vi.mock("./onboard-custom.js", () => ({
   promptCustomApiConfig: mocks.promptCustomApiConfig,
+}));
+
+vi.mock("../plugins/providers.js", () => ({
+  resolvePluginProviders: mocks.resolvePluginProviders,
+}));
+
+vi.mock("../plugins/provider-wizard.js", () => ({
+  resolveProviderPluginChoice: mocks.resolveProviderPluginChoice,
 }));
 
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -78,7 +91,7 @@ function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
                 minimax: {
                   baseUrl: "https://api.minimax.io/anthropic",
                   api: "anthropic-messages",
-                  models: [{ id: "MiniMax-M2.5", name: "MiniMax M2.5" }],
+                  models: [{ id: "MiniMax-M2.7", name: "MiniMax M2.7" }],
                 },
               }
             : {}),
@@ -94,6 +107,8 @@ async function runPromptAuthConfigWithAllowlist(includeMinimaxProvider = false) 
   mocks.promptModelAllowlist.mockResolvedValue({
     models: ["kilocode/kilo/auto"],
   });
+  mocks.resolvePluginProviders.mockReturnValue([]);
+  mocks.resolveProviderPluginChoice.mockReturnValue(null);
 
   return promptAuthConfig({}, makeRuntime(), noopPrompter);
 }
@@ -115,7 +130,49 @@ describe("promptAuthConfig", () => {
       "anthropic/claude-sonnet-4",
     ]);
     expect(result.models?.providers?.minimax?.models?.map((model) => model.id)).toEqual([
-      "MiniMax-M2.5",
+      "MiniMax-M2.7",
     ]);
+  });
+
+  it("uses plugin-owned allowlist metadata for provider auth choices", async () => {
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("token");
+    mocks.applyAuthChoice.mockResolvedValue({ config: {} });
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    mocks.resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "anthropic", label: "Anthropic", auth: [] },
+      method: { id: "setup-token", label: "setup-token", kind: "token" },
+      wizard: {
+        modelAllowlist: {
+          allowedKeys: ["anthropic/claude-sonnet-4-6"],
+          initialSelections: ["anthropic/claude-sonnet-4-6"],
+          message: "Anthropic OAuth models",
+        },
+      },
+    });
+
+    await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedKeys: ["anthropic/claude-sonnet-4-6"],
+        initialSelections: ["anthropic/claude-sonnet-4-6"],
+        message: "Anthropic OAuth models",
+      }),
+    );
+  });
+
+  it("scopes the allowlist picker to the selected provider when available", async () => {
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("openai-api-key");
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("openai");
+    mocks.applyAuthChoice.mockResolvedValue({ config: {} });
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+
+    await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferredProvider: "openai",
+      }),
+    );
   });
 });

@@ -6,7 +6,7 @@ import {
   promptDefaultModel,
   promptModelAllowlist,
 } from "./model-picker.js";
-import { makePrompter } from "./onboarding/__tests__/test-utils.js";
+import { makePrompter } from "./setup/__tests__/test-utils.js";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn());
 vi.mock("../agents/model-catalog.js", () => ({
@@ -40,11 +40,13 @@ const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 const runProviderPluginAuthMethod = vi.hoisted(() => vi.fn());
 vi.mock("./model-picker.runtime.js", () => ({
-  resolveProviderModelPickerEntries,
-  resolveProviderPluginChoice,
-  runProviderModelSelectedHook,
-  resolvePluginProviders,
-  runProviderPluginAuthMethod,
+  modelPickerRuntime: {
+    resolveProviderModelPickerEntries,
+    resolveProviderPluginChoice,
+    runProviderModelSelectedHook,
+    resolvePluginProviders,
+    runProviderPluginAuthMethod,
+  },
 }));
 
 const OPENROUTER_CATALOG = [
@@ -76,7 +78,7 @@ beforeEach(() => {
 });
 
 describe("promptDefaultModel", () => {
-  it("supports configuring vLLM during onboarding", async () => {
+  it("supports configuring vLLM during setup", async () => {
     loadModelCatalog.mockResolvedValue([
       {
         provider: "anthropic",
@@ -177,6 +179,42 @@ describe("promptModelAllowlist", () => {
     const options = multiselect.mock.calls[0]?.[0]?.options ?? [];
     expect(options.map((opt: { value: string }) => opt.value)).toEqual([
       "anthropic/claude-opus-4-5",
+    ]);
+  });
+
+  it("scopes the initial allowlist picker to the preferred provider", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 Mini",
+      },
+    ]);
+
+    const multiselect = createSelectAllMultiselect();
+    const prompter = makePrompter({ multiselect });
+    const config = { agents: { defaults: {} } } as OpenClawConfig;
+
+    await promptModelAllowlist({
+      config,
+      prompter,
+      preferredProvider: "openai",
+    });
+
+    const options = multiselect.mock.calls[0]?.[0]?.options ?? [];
+    expect(options.map((opt: { value: string }) => opt.value)).toEqual([
+      "openai/gpt-5.4",
+      "openai/gpt-5.4-mini",
     ]);
   });
 });

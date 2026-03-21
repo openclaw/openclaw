@@ -1,6 +1,6 @@
 import * as crypto from "crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "openclaw/plugin-sdk/feishu";
+import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import {
@@ -10,6 +10,7 @@ import {
   type FeishuBotAddedEvent,
 } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
+import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 import { createEventDispatcher } from "./client.js";
 import {
   hasProcessedFeishuMessage,
@@ -513,7 +514,7 @@ function registerEventHandlers(
       try {
         const event = data as {
           event_key?: string;
-          timestamp?: number;
+          timestamp?: string | number;
           operator?: {
             operator_name?: string;
             operator_id?: { open_id?: string; user_id?: string; union_id?: string };
@@ -543,15 +544,46 @@ function registerEventHandlers(
             }),
           },
         };
-        const promise = handleFeishuMessage({
+        const syntheticMessageId = syntheticEvent.message.message_id;
+        if (await hasProcessedFeishuMessage(syntheticMessageId, accountId, log)) {
+          log(`feishu[${accountId}]: dropping duplicate bot-menu event for ${syntheticMessageId}`);
+          return;
+        }
+        if (!tryBeginFeishuMessageProcessing(syntheticMessageId, accountId)) {
+          log(`feishu[${accountId}]: dropping in-flight bot-menu event for ${syntheticMessageId}`);
+          return;
+        }
+        const handleLegacyMenu = () =>
+          handleFeishuMessage({
+            cfg,
+            event: syntheticEvent,
+            botOpenId: botOpenIds.get(accountId),
+            botName: botNames.get(accountId),
+            runtime,
+            chatHistories,
+            accountId,
+            processingClaimHeld: true,
+          });
+
+        const promise = maybeHandleFeishuQuickActionMenu({
           cfg,
-          event: syntheticEvent,
-          botOpenId: botOpenIds.get(accountId),
-          botName: botNames.get(accountId),
+          eventKey,
+          operatorOpenId,
           runtime,
-          chatHistories,
           accountId,
-        });
+        })
+          .then(async (handledMenu) => {
+            if (handledMenu) {
+              await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
+              releaseFeishuMessageProcessing(syntheticMessageId, accountId);
+              return;
+            }
+            return await handleLegacyMenu();
+          })
+          .catch((err) => {
+            releaseFeishuMessageProcessing(syntheticMessageId, accountId);
+            throw err;
+          });
         if (fireAndForget) {
           promise.catch((err) => {
             error(`feishu[${accountId}]: error handling bot menu event: ${String(err)}`);

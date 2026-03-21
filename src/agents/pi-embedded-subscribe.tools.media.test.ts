@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { extractToolResultMediaPaths } from "./pi-embedded-subscribe.tools.js";
+import {
+  extractToolResultMediaPaths,
+  isToolResultMediaTrusted,
+} from "./pi-embedded-subscribe.tools.js";
 
 describe("extractToolResultMediaPaths", () => {
   it("returns empty array for null/undefined", () => {
@@ -228,5 +231,9 @@ describe("extractToolResultMediaPaths", () => {
       ],
     };
     expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/page1.png", "/tmp/page2.png"]);
+  });
+
+  it("trusts image_generate local MEDIA paths", () => {
+    expect(isToolResultMediaTrusted("image_generate")).toBe(true);
   });
 });

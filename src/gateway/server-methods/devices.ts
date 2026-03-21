@@ -11,7 +11,7 @@ import {
   summarizeDeviceTokens,
 } from "../../infra/device-pairing.js";
 import { normalizeDeviceAuthScopes } from "../../shared/device-auth.js";
-import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../../shared/operator-scope-compat.js";
 import {
   ErrorCodes,
   errorShape,
@@ -35,25 +35,6 @@ function redactPairedDevice(
     ...rest,
     tokens: summarizeDeviceTokens(tokens),
   };
-}
-
-function resolveMissingRequestedScope(params: {
-  role: string;
-  requestedScopes: readonly string[];
-  callerScopes: readonly string[];
-}): string | null {
-  for (const scope of params.requestedScopes) {
-    if (
-      !roleScopesAllow({
-        role: params.role,
-        requestedScopes: [scope],
-        allowedScopes: params.callerScopes,
-      })
-    ) {
-      return scope;
-    }
-  }
-  return null;
 }
 
 function logDeviceTokenRotationDenied(params: {
@@ -234,7 +215,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     const missingScope = resolveMissingRequestedScope({
       role,
       requestedScopes,
-      callerScopes,
+      allowedScopes: callerScopes,
     });
     if (missingScope) {
       logDeviceTokenRotationDenied({

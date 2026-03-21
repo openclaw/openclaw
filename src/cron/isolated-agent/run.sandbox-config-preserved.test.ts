@@ -9,7 +9,6 @@ import {
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-const { resolveSandboxConfigForAgent } = await import("../../agents/sandbox/config.js");
 
 function makeJob(overrides?: Record<string, unknown>) {
   return {
@@ -126,6 +125,7 @@ describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
 
     expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
     const runCfg = runWithModelFallbackMock.mock.calls[0]?.[0]?.cfg;
+    const { resolveSandboxConfigForAgent } = await import("../../agents/sandbox/config.js");
     const resolvedSandbox = resolveSandboxConfigForAgent(runCfg, "specialist");
 
     expectDefaultSandboxPreserved(runCfg);

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   copyBundledPluginMetadata,
   rewritePackageExtensions,
@@ -152,6 +152,49 @@ describe("copyBundledPluginMetadata", () => {
     expect(bundledManifest.skills).toEqual(["./bundled-skills/@tloncorp/tlon-skill"]);
   });
 
+  it("falls back to repo-root hoisted node_modules skill paths", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-hoisted-skill-");
+    const pluginDir = path.join(repoRoot, "extensions", "tlon");
+    const hoistedSkillDir = path.join(repoRoot, "node_modules", "@tloncorp", "tlon-skill");
+    fs.mkdirSync(hoistedSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(hoistedSkillDir, "SKILL.md"), "# Hoisted Tlon Skill\n", "utf8");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "tlon",
+      configSchema: { type: "object" },
+      skills: ["node_modules/@tloncorp/tlon-skill"],
+    });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/tlon",
+      openclaw: { extensions: ["./index.ts"] },
+    });
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(
+      fs.readFileSync(
+        path.join(
+          repoRoot,
+          "dist",
+          "extensions",
+          "tlon",
+          "bundled-skills",
+          "@tloncorp",
+          "tlon-skill",
+          "SKILL.md",
+        ),
+        "utf8",
+      ),
+    ).toContain("Hoisted Tlon Skill");
+    const bundledManifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "dist", "extensions", "tlon", "openclaw.plugin.json"),
+        "utf8",
+      ),
+    ) as { skills?: string[] };
+    expect(bundledManifest.skills).toEqual(["./bundled-skills/@tloncorp/tlon-skill"]);
+  });
+
   it("omits missing declared skill paths and removes stale generated outputs", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-missing-skill-");
     const pluginDir = path.join(repoRoot, "extensions", "tlon");
@@ -192,5 +235,107 @@ describe("copyBundledPluginMetadata", () => {
       false,
     );
     expect(fs.existsSync(staleNodeModulesDir)).toBe(false);
+  });
+
+  it("retries transient skill copy races from concurrent runtime postbuilds", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-retry-");
+    const pluginDir = path.join(repoRoot, "extensions", "diffs");
+    fs.mkdirSync(path.join(pluginDir, "skills", "diffs"), { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "skills", "diffs", "SKILL.md"), "# Diffs\n", "utf8");
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "diffs",
+      configSchema: { type: "object" },
+      skills: ["./skills"],
+    });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/diffs",
+      openclaw: { extensions: ["./index.ts"] },
+    });
+
+    const realCpSync = fs.cpSync.bind(fs);
+    let attempts = 0;
+    const cpSyncSpy = vi.spyOn(fs, "cpSync").mockImplementation((...args) => {
+      attempts += 1;
+      if (attempts === 1) {
+        const error = Object.assign(new Error("race"), { code: "EEXIST" });
+        throw error;
+      }
+      return realCpSync(...args);
+    });
+
+    try {
+      copyBundledPluginMetadata({ repoRoot });
+    } finally {
+      cpSyncSpy.mockRestore();
+    }
+
+    expect(attempts).toBe(2);
+    expect(
+      fs.readFileSync(
+        path.join(repoRoot, "dist", "extensions", "diffs", "skills", "diffs", "SKILL.md"),
+        "utf8",
+      ),
+    ).toContain("Diffs");
+  });
+
+  it("removes generated outputs for plugins no longer present in source", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-removed-");
+    const staleBundledSkillDir = path.join(
+      repoRoot,
+      "dist",
+      "extensions",
+      "removed-plugin",
+      "bundled-skills",
+      "@scope",
+      "skill",
+    );
+    fs.mkdirSync(staleBundledSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(staleBundledSkillDir, "SKILL.md"), "# stale\n", "utf8");
+    const staleNodeModulesDir = path.join(
+      repoRoot,
+      "dist",
+      "extensions",
+      "removed-plugin",
+      "node_modules",
+    );
+    fs.mkdirSync(staleNodeModulesDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, "dist", "extensions", "removed-plugin", "index.js"),
+      "export default {}\n",
+      "utf8",
+    );
+    writeJson(path.join(repoRoot, "dist", "extensions", "removed-plugin", "openclaw.plugin.json"), {
+      id: "removed-plugin",
+      configSchema: { type: "object" },
+      skills: ["./bundled-skills/@scope/skill"],
+    });
+    writeJson(path.join(repoRoot, "dist", "extensions", "removed-plugin", "package.json"), {
+      name: "@openclaw/removed-plugin",
+    });
+    fs.mkdirSync(path.join(repoRoot, "extensions"), { recursive: true });
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "removed-plugin"))).toBe(false);
+  });
+
+  it("removes stale dist outputs when a source extension directory no longer has a manifest", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-manifestless-source-");
+    const sourcePluginDir = path.join(repoRoot, "extensions", "google-gemini-cli-auth");
+    fs.mkdirSync(path.join(sourcePluginDir, "node_modules"), { recursive: true });
+    const staleDistDir = path.join(repoRoot, "dist", "extensions", "google-gemini-cli-auth");
+    fs.mkdirSync(staleDistDir, { recursive: true });
+    fs.writeFileSync(path.join(staleDistDir, "index.js"), "export default {}\n", "utf8");
+    writeJson(path.join(staleDistDir, "openclaw.plugin.json"), {
+      id: "google-gemini-cli-auth",
+      configSchema: { type: "object" },
+    });
+    writeJson(path.join(staleDistDir, "package.json"), {
+      name: "@openclaw/google-gemini-cli-auth",
+    });
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(staleDistDir)).toBe(false);
   });
 });

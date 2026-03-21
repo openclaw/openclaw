@@ -1,5 +1,5 @@
+import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { vi } from "vitest";
-import type { MockFn } from "../../../src/test-utils/vitest-mock-fn.js";
 
 export const sendMock: MockFn = vi.fn();
 export const reactMock: MockFn = vi.fn();
@@ -8,15 +8,19 @@ export const dispatchMock: MockFn = vi.fn();
 export const readAllowFromStoreMock: MockFn = vi.fn();
 export const upsertPairingRequestMock: MockFn = vi.fn();
 
-vi.mock("./send.js", () => ({
-  sendMessageDiscord: (...args: unknown[]) => sendMock(...args),
-  reactMessageDiscord: async (...args: unknown[]) => {
-    reactMock(...args);
-  },
-}));
+vi.mock("./send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./send.js")>();
+  return {
+    ...actual,
+    sendMessageDiscord: (...args: unknown[]) => sendMock(...args),
+    reactMessageDiscord: async (...args: unknown[]) => {
+      reactMock(...args);
+    },
+  };
+});
 
-vi.mock("../../../src/auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/auto-reply/dispatch.js")>();
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {
     ...actual,
     dispatchInboundMessage: (...args: unknown[]) => dispatchMock(...args),
@@ -36,10 +40,16 @@ function createPairingStoreMocks() {
   };
 }
 
-vi.mock("../../../src/pairing/pairing-store.js", () => createPairingStoreMocks());
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    ...createPairingStoreMocks(),
+  };
+});
 
-vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/sessions.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),

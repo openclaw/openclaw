@@ -48,6 +48,22 @@
     "target": "快速开始"
   },
   {
+    "source": "Capability Cookbook",
+    "target": "能力扩展手册"
+  },
+  {
+    "source": "Setup Wizard Reference",
+    "target": "设置向导参考"
+  },
+  {
+    "source": "CLI Setup Reference",
+    "target": "CLI 设置参考"
+  },
+  {
+    "source": "Setup Wizard (CLI)",
+    "target": "设置向导（CLI）"
+  },
+  {
     "source": "Docs directory",
     "target": "文档目录"
   },

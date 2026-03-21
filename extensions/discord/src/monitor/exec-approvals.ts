@@ -10,30 +10,27 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, Routes } from "discord-api-types/v10";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { loadSessionStore, resolveStorePath } from "../../../../src/config/sessions.js";
-import type { DiscordExecApprovalConfig } from "../../../../src/config/types.discord.js";
-import { GatewayClient } from "../../../../src/gateway/client.js";
-import { createOperatorApprovalsGatewayClient } from "../../../../src/gateway/operator-approvals-client.js";
-import type { EventFrame } from "../../../../src/gateway/protocol/index.js";
-import { resolveExecApprovalCommandDisplay } from "../../../../src/infra/exec-approval-command-display.js";
-import { getExecApprovalApproverDmNoticeText } from "../../../../src/infra/exec-approval-reply.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
+import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import { createOperatorApprovalsGatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import type { EventFrame } from "openclaw/plugin-sdk/gateway-runtime";
+import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
+import { getExecApprovalApproverDmNoticeText } from "openclaw/plugin-sdk/infra-runtime";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
   ExecApprovalResolved,
-} from "../../../../src/infra/exec-approvals.js";
-import { logDebug, logError } from "../../../../src/logger.js";
+} from "openclaw/plugin-sdk/infra-runtime";
 import {
   normalizeAccountId,
+  normalizeMessageChannel,
   resolveAgentIdFromSessionKey,
-} from "../../../../src/routing/session-key.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
-import {
-  compileSafeRegex,
-  testRegexWithBoundedInput,
-} from "../../../../src/security/safe-regex.js";
-import { normalizeMessageChannel } from "../../../../src/utils/message-channel.js";
+} from "openclaw/plugin-sdk/routing";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
+import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
 import { DiscordUiContainer } from "../ui.js";
 
