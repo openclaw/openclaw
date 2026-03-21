@@ -1463,6 +1463,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     // turn's re-delivery completes in deliver(), preventing one turn's delivery
     // from removing another turn's preview (ID=2965255734).
     const pendingOrphanDeletes: string[] = [];
+    // FIFO queue of preview post IDs that were successfully finalized via
+    // patchMattermostPost in onAssistantMessageStart (normal streamedTurnCount path).
+    // Used by the skipped-turn media branch to delete the finalized preview and
+    // replace it with a combined text+media post (ID=2969665547).
+    const finalizedPreviewIds: string[] = [];
     const STREAM_PATCH_INTERVAL_MS = 200;
 
     // Edit-in-place streaming is opt-in: only activate when blockStreaming is
@@ -1632,13 +1637,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             if (hasMedia) {
               // The streamed preview post already contains the text. Delivering the
               // full payload (text + media) creates a duplicate caption alongside the
-              // preview. Instead, delete the preview first and then deliver the
-              // complete payload — text + media in a single post (ID=2967028353).
-              // If the preview was already finalized via patchMattermostPost (normal
-              // streamedTurnCount path), its id is not in pendingOrphanDeletes, so
-              // we capture any queued orphan and clear the preview via streaming state.
-              const orphanId =
-                pendingOrphanDeletes.length > 0 ? pendingOrphanDeletes.shift() : null;
+              // preview. Delete the preview first, then deliver text+media as one post.
+              //
+              // Source priority for the preview ID to delete (ID=2969665547):
+              // 1. finalizedPreviewIds: set by onAssistantMessageStart after a
+              //    successful patchMattermostPost (normal streamedTurnCount path).
+              // 2. pendingOrphanDeletes: set when the boundary patch was over-limit
+              //    or failed — do NOT shift here if turn A's preview is queued and
+              //    turn B triggers this branch (ID=2969665550). Only shift when the
+              //    queue head belongs to this specific turn (turn that just decremented
+              //    streamedTurnCount, i.e. the front of finalizedPreviewIds is empty).
+              const orphanId = finalizedPreviewIds.length > 0 ? finalizedPreviewIds.shift() : null; // Do NOT touch pendingOrphanDeletes here — it tracks failed turns
               if (orphanId && blockStreamingClient) {
                 await deleteMattermostPost(blockStreamingClient, orphanId).catch(() => {});
               }
@@ -1896,14 +1905,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 // Best-effort — the run is already complete.
               });
             }
-            // Also drain any queued over-limit orphan previews that were never
-            // re-delivered (e.g. aborted run or no-final path). Without this,
-            // stale partial preview posts remain in-channel (ID=2969630963).
-            if (pendingOrphanDeletes.length > 0) {
-              const toDelete = pendingOrphanDeletes.splice(0);
-              for (const id of toDelete) {
-                void deleteMattermostPost(client, id).catch(() => {});
-              }
+            // Also drain any queued orphan previews that were never re-delivered
+            // (aborted run, no-final path). Without this, stale partial preview
+            // posts remain in-channel (ID=2969630963).
+            const orphansToDelete = [
+              ...pendingOrphanDeletes.splice(0),
+              ...finalizedPreviewIds.splice(0),
+            ];
+            for (const id of orphansToDelete) {
+              void deleteMattermostPost(client, id).catch(() => {});
             }
           })();
         }
@@ -1997,6 +2007,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                       // skips this turn if we know the complete text is visible.
                       // If the patch fails, deliver() falls back to normal re-delivery.
                       streamedTurnCount++;
+                      // Record the finalized preview ID so the skipped-turn media
+                      // branch can delete it and deliver text+media as one post.
+                      finalizedPreviewIds.push(finalizeId);
                       runtime.log?.(`stream-patch finalized turn ${finalizeId}`);
                     } catch (err) {
                       logVerboseMessage(
