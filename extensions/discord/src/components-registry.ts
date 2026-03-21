@@ -1,9 +1,23 @@
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
 const DEFAULT_COMPONENT_TTL_MS = 30 * 60 * 1000;
+const DISCORD_COMPONENT_ENTRIES_KEY = Symbol.for("openclaw.discord.componentEntries");
+const DISCORD_MODAL_ENTRIES_KEY = Symbol.for("openclaw.discord.modalEntries");
 
-const componentEntries = new Map<string, DiscordComponentEntry>();
-const modalEntries = new Map<string, DiscordModalEntry>();
+function resolveGlobalMap<TKey, TValue>(key: symbol): Map<TKey, TValue> {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  if (globalStore[key] instanceof Map) {
+    return globalStore[key] as Map<TKey, TValue>;
+  }
+  const created = new Map<TKey, TValue>();
+  globalStore[key] = created;
+  return created;
+}
+
+const componentEntries = resolveGlobalMap<string, DiscordComponentEntry>(
+  DISCORD_COMPONENT_ENTRIES_KEY,
+);
+const modalEntries = resolveGlobalMap<string, DiscordModalEntry>(DISCORD_MODAL_ENTRIES_KEY);
 
 function isExpired(entry: { expiresAt?: number }, now: number) {
   return typeof entry.expiresAt === "number" && entry.expiresAt <= now;
