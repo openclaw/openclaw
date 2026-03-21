@@ -297,6 +297,25 @@ function preserveDiscoveredTransportMetadata(params: {
   const dynamicHeaders = sanitizeModelHeaders(dynamicModel.headers, {
     stripSecretRefMarkers: true,
   });
+  // Headers use a 3-way merge: dynamic template < discovered < configured.
+  // dynamicModel.headers already includes configured overrides from
+  // applyConfiguredProviderOverrides, so we extract configured headers separately
+  // and apply them last to ensure they win over stale discovered headers.
+  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const configuredModelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const mergedHeaders =
+    dynamicHeaders || discoveredHeaders || providerHeaders || configuredModelHeaders
+      ? {
+          ...dynamicHeaders,
+          ...discoveredHeaders,
+          ...providerHeaders,
+          ...configuredModelHeaders,
+        }
+      : undefined;
   return {
     ...dynamicModel,
     api: configuredModel?.api ?? providerConfig?.api ?? discoveredModel.api ?? dynamicModel.api,
@@ -306,13 +325,7 @@ function preserveDiscoveredTransportMetadata(params: {
     maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens ?? dynamicModel.maxTokens,
     reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning ?? dynamicModel.reasoning,
     cost: discoveredModel.cost ?? dynamicModel.cost,
-    headers:
-      discoveredHeaders || dynamicHeaders
-        ? {
-            ...dynamicHeaders,
-            ...discoveredHeaders,
-          }
-        : undefined,
+    headers: mergedHeaders,
   };
 }
 
