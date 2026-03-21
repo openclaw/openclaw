@@ -25,6 +25,13 @@ static guint64 current_health_generation = 0;
 static gboolean initial_hydration_done = FALSE;
 static gboolean initial_probe_fired = FALSE;
 
+static gboolean is_probe_disabled_state(AppState state) {
+    return state == STATE_NOT_INSTALLED || 
+           state == STATE_USER_SYSTEMD_UNAVAILABLE || 
+           state == STATE_SYSTEM_UNSUPPORTED || 
+           state == STATE_STOPPED;
+}
+
 static AppState compute_state(void) {
     // Note: The primary normalized state is computed strictly from:
     // 1. systemd properties
@@ -100,6 +107,7 @@ static gboolean idle_trigger_deep_probe(gpointer user_data) {
 }
 
 void state_update_systemd(SystemdState *sys_state) {
+    AppState old_state = current_state;
     gboolean became_active = (!current_sys_state.active && sys_state->active);
     gboolean unit_changed = (g_strcmp0(current_sys_state.unit_name, sys_state->unit_name) != 0);
 
@@ -127,14 +135,22 @@ void state_update_systemd(SystemdState *sys_state) {
         current_sys_state.environment = NULL;
     }
     
-    if (became_active || unit_changed) {
+    AppState new_state = compute_state();
+    
+    // Clear stale diagnostics when entering a state where background probes are disabled.
+    // This prevents the UI from showing old "Healthy" or "Reachable" strings for dead services.
+    if (!is_probe_disabled_state(old_state) && is_probe_disabled_state(new_state)) {
+        current_health_state.last_updated = 0;
+        current_probe_state.last_updated = 0;
+        g_free(current_probe_state.summary);
+        current_probe_state.summary = NULL;
+        current_health_generation++;
+    } else if (became_active || unit_changed) {
         // Reset the health snapshot explicitly on the relevant systemd transition
         // or unit retargeting so the state model has a clear freshness boundary.
         current_health_state.last_updated = 0;
         current_health_generation++;
     }
-    
-    AppState new_state = compute_state();
     
     gboolean is_supported = (new_state != STATE_NOT_INSTALLED && new_state != STATE_SYSTEM_UNSUPPORTED && new_state != STATE_USER_SYSTEMD_UNAVAILABLE);
     gboolean should_trigger_probes = is_supported && (!initial_probe_fired || became_active || unit_changed);
