@@ -38,10 +38,37 @@ const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
   "thread-reply",
   "broadcast",
 ]);
+const POLL_PARAM_KEYS = [
+  "pollQuestion",
+  "pollOption",
+  "pollDurationHours",
+  "pollDurationSeconds",
+  "pollMulti",
+  "pollAnonymous",
+  "pollPublic",
+  "pollId",
+  "pollOptionId",
+  "pollOptionIds",
+  "pollOptionIndex",
+  "pollOptionIndexes",
+] as const;
 
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
   return EXPLICIT_TARGET_ACTIONS.has(action);
 }
+
+function prunePollParamsForNonPollAction(
+  action: ChannelMessageActionName,
+  params: Record<string, unknown>,
+): void {
+  if (action === "poll") {
+    return;
+  }
+  for (const key of Object.keys(POLL_CREATION_PARAM_DEFS)) {
+    delete params[key];
+  }
+}
+
 function buildRoutingSchema() {
   return {
     channel: Type.Optional(Type.String()),
@@ -681,6 +708,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+<<<<<<< HEAD
       let cfg = options?.config;
       if (!cfg) {
         const loadedRaw = loadConfig();
@@ -707,6 +735,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           })
         ).resolvedConfig;
       }
+=======
+      prunePollParamsForNonPollAction(action, params);
+>>>>>>> 71ad2665f (fix(message): ignore poll params for non-poll actions)
       const requireExplicitTarget = options?.requireExplicitTarget === true;
       if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
         const explicitTarget =
