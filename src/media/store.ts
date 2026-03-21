@@ -175,6 +175,43 @@ function looksLikeUrl(src: string) {
 }
 
 /**
+ * Headers that are safe to forward on cross-origin redirects.
+ * Sensitive headers like Authorization and Cookie must be stripped when the
+ * redirect target differs in origin from the original request.
+ */
+const CROSS_ORIGIN_SAFE_HEADERS = new Set([
+  "accept",
+  "accept-encoding",
+  "accept-language",
+  "cache-control",
+  "user-agent",
+]);
+
+/**
+ * Strip sensitive headers when a redirect crosses origins (different scheme,
+ * host, or port). Only headers known to be safe are retained.
+ */
+function retainSafeHeadersOnCrossOriginRedirect(
+  originalUrl: URL,
+  redirectUrl: URL,
+  headers?: Record<string, string>,
+): Record<string, string> | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  if (originalUrl.origin === redirectUrl.origin) {
+    return headers;
+  }
+  const safe: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (CROSS_ORIGIN_SAFE_HEADERS.has(key.toLowerCase())) {
+      safe[key] = value;
+    }
+  }
+  return Object.keys(safe).length > 0 ? safe : undefined;
+}
+
+/**
  * Download media to disk while capturing the first few KB for mime sniffing.
  */
 async function downloadToFile(
@@ -203,11 +240,21 @@ async function downloadToFile(
           if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
             const location = res.headers.location;
             if (!location || maxRedirects <= 0) {
+              res.resume(); // drain the response body before rejecting
               reject(new Error(`Redirect loop or missing Location header`));
               return;
             }
-            const redirectUrl = new URL(location, url).href;
-            resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
+            const redirectParsedUrl = new URL(location, url);
+            const redirectUrl = redirectParsedUrl.href;
+            // Strip sensitive headers (Authorization, Cookie, etc.) on
+            // cross-origin redirects to prevent credential leakage.
+            const redirectHeaders = retainSafeHeadersOnCrossOriginRedirect(
+              parsedUrl,
+              redirectParsedUrl,
+              headers,
+            );
+            res.resume(); // drain the redirect response body
+            resolve(downloadToFile(redirectUrl, dest, redirectHeaders, maxRedirects - 1));
             return;
           }
           if (!res.statusCode || res.statusCode >= 400) {
