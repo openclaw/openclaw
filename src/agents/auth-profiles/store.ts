@@ -19,6 +19,7 @@ type LoadAuthProfileStoreOptions = {
 const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
 
 const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
+const loadedAuthStoreCache = new Map<string, { mtimeMs: number | null; store: AuthProfileStore }>();
 
 function resolveRuntimeStoreKey(agentDir?: string): string {
   return resolveAuthStorePath(agentDir);
@@ -75,6 +76,37 @@ export function replaceRuntimeAuthProfileStoreSnapshots(
 
 export function clearRuntimeAuthProfileStoreSnapshots(): void {
   runtimeAuthStoreSnapshots.clear();
+  loadedAuthStoreCache.clear();
+}
+
+function readAuthStoreMtimeMs(authPath: string): number | null {
+  try {
+    return fs.statSync(authPath).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+function readCachedAuthProfileStore(
+  authPath: string,
+  mtimeMs: number | null,
+): AuthProfileStore | null {
+  const cached = loadedAuthStoreCache.get(authPath);
+  if (!cached || cached.mtimeMs !== mtimeMs) {
+    return null;
+  }
+  return cloneAuthProfileStore(cached.store);
+}
+
+function writeCachedAuthProfileStore(
+  authPath: string,
+  mtimeMs: number | null,
+  store: AuthProfileStore,
+): void {
+  loadedAuthStoreCache.set(authPath, {
+    mtimeMs,
+    store: cloneAuthProfileStore(store),
+  });
 }
 
 export async function updateAuthProfileStoreWithLock(params: {
@@ -396,6 +428,12 @@ function loadAuthProfileStoreForAgent(
 ): AuthProfileStore {
   const readOnly = options?.readOnly === true;
   const authPath = resolveAuthStorePath(agentDir);
+  if (!readOnly) {
+    const cached = readCachedAuthProfileStore(authPath, readAuthStoreMtimeMs(authPath));
+    if (cached) {
+      return cached;
+    }
+  }
   const asStore = loadCoercedStore(authPath);
   if (asStore) {
     // Runtime secret activation must remain read-only:
@@ -403,6 +441,9 @@ function loadAuthProfileStoreForAgent(
     const synced = syncExternalCliCredentialsTimed(asStore, { log: !readOnly });
     if (synced && !readOnly) {
       saveJsonFile(authPath, asStore);
+    }
+    if (!readOnly) {
+      writeCachedAuthProfileStore(authPath, readAuthStoreMtimeMs(authPath), asStore);
     }
     return asStore;
   }
@@ -416,6 +457,7 @@ function loadAuthProfileStoreForAgent(
       // Clone main store to subagent directory for auth inheritance
       saveJsonFile(authPath, mainStore);
       log.info("inherited auth-profiles from main agent", { agentDir });
+      writeCachedAuthProfileStore(authPath, readAuthStoreMtimeMs(authPath), mainStore);
       return mainStore;
     }
   }
@@ -456,6 +498,9 @@ function loadAuthProfileStoreForAgent(
     }
   }
 
+  if (!readOnly) {
+    writeCachedAuthProfileStore(authPath, readAuthStoreMtimeMs(authPath), store);
+  }
   return store;
 }
 
@@ -525,4 +570,5 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
     usageStats: store.usageStats ?? undefined,
   } satisfies AuthProfileStore;
   saveJsonFile(authPath, payload);
+  writeCachedAuthProfileStore(authPath, readAuthStoreMtimeMs(authPath), payload);
 }
