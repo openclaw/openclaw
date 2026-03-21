@@ -13,6 +13,14 @@ import {
   resetSystemEventsForTest,
 } from "./system-events.js";
 
+type SystemEventsModule = typeof import("./system-events.js");
+
+const systemEventsModuleUrl = new URL("./system-events.ts", import.meta.url).href;
+
+async function importSystemEventsModule(cacheBust: string): Promise<SystemEventsModule> {
+  return (await import(`${systemEventsModuleUrl}?t=${cacheBust}`)) as SystemEventsModule;
+}
+
 const cfg = {} as unknown as OpenClawConfig;
 const mainKey = resolveMainSessionKey(cfg);
 
@@ -106,6 +114,26 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents(key)).toEqual(
       Array.from({ length: 20 }, (_, index) => `event ${index + 3}`),
     );
+  });
+
+  it("shares queued events across duplicate module instances", async () => {
+    const first = await importSystemEventsModule(`first-${Date.now()}`);
+    const second = await importSystemEventsModule(`second-${Date.now()}`);
+    const key = "agent:main:test-duplicate-module";
+
+    first.resetSystemEventsForTest();
+    second.enqueueSystemEvent("Node connected", { sessionKey: key, contextKey: "build:123" });
+
+    expect(first.peekSystemEventEntries(key)).toEqual([
+      expect.objectContaining({
+        text: "Node connected",
+        contextKey: "build:123",
+      }),
+    ]);
+    expect(first.isSystemEventContextChanged(key, "build:123")).toBe(false);
+    expect(first.drainSystemEvents(key)).toEqual(["Node connected"]);
+
+    first.resetSystemEventsForTest();
   });
 
   it("filters heartbeat/noise lines, returning undefined", async () => {
