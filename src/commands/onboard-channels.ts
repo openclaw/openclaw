@@ -361,7 +361,12 @@ async function maybeConfigureDmPolicies(params: {
     const current = policy.getCurrent(cfg, accountId);
     if (nextPolicy !== current) {
       cfg = policy.setPolicy(cfg, nextPolicy, accountId);
+    } else {
+      if (policy.channel === "feishu" && cfg.channels?.feishu?.dmPolicy === undefined) {
+        cfg = policy.setPolicy(cfg, nextPolicy, accountId);
+      }
     }
+
     if (nextPolicy === "allowlist" && policy.promptAllowFrom) {
       cfg = await policy.promptAllowFrom({
         cfg,
