@@ -1263,7 +1263,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         for (const img of imagesToPersist) {
           saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound").catch((err) => {
             context.logGateway.warn(
-              `webchat: failed to persist inbound image (${img.mimeType}): ${formatForLog(err)}`,
+              `chat.send: failed to persist inbound image (${img.mimeType}): ${formatForLog(err)}`,
             );
           });
         }
