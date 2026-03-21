@@ -37,7 +37,6 @@ import {
   DEFAULT_WORKSPACE,
   ensureWorkspaceAndSessions,
   guardCancel,
-  printWizardHeader,
   probeGatewayReachable,
   resolveControlUiLinks,
   summarizeExistingConfig,
@@ -326,7 +325,6 @@ export async function runConfigureWizard(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   try {
-    printWizardHeader(runtime);
     intro(opts.command === "update" ? "OpenClaw update wizard" : "OpenClaw configure");
     const prompter = createClackPrompter();
 
