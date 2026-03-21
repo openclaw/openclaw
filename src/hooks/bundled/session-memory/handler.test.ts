@@ -46,13 +46,22 @@ afterAll(async () => {
  * Create a mock session JSONL file with various entry types
  */
 function createMockSessionContent(
-  entries: Array<{ role: string; content: string } | ({ type: string } & Record<string, unknown>)>,
+  entries: Array<
+    | { role: string; content: string; timestamp?: string | number | Date }
+    | ({ type: string } & Record<string, unknown>)
+  >,
 ): string {
   return entries
     .map((entry) => {
       if ("role" in entry) {
         return JSON.stringify({
           type: "message",
+          ...(entry.timestamp != null
+            ? {
+                timestamp:
+                  entry.timestamp instanceof Date ? entry.timestamp.toISOString() : entry.timestamp,
+              }
+            : {}),
           message: {
             role: entry.role,
             content: entry.content,
@@ -659,5 +668,61 @@ describe("session-memory hook", () => {
     expect(files).toHaveLength(1);
     expect(files[0]).toBe("2026-03-19-0030.md");
     expect(memoryContent).toContain("# Session: 2026-03-19 00:20:00 (Asia/Shanghai)");
+  });
+
+  it("uses the last transcript message timestamp instead of updatedAt for day labels", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([
+        {
+          role: "user",
+          content: "That near-miss on the ride home was brutal",
+          timestamp: "2026-03-20T15:50:00.000Z", // 2026-03-20 23:50 +08:00
+        },
+        {
+          role: "assistant",
+          content: "Good thing the seat belt caught it",
+          timestamp: "2026-03-20T15:51:00.000Z",
+        },
+      ]),
+    });
+
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: tempDir,
+          userTimezone: "Asia/Shanghai",
+        },
+      },
+      hooks: {
+        internal: {
+          entries: {
+            "session-memory": {
+              enabled: true,
+              llmSlug: false,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      cfg,
+      eventTimestamp: new Date(Date.UTC(2026, 2, 20, 16, 10, 0)), // 2026-03-21 00:10 +08:00
+      previousSessionEntry: {
+        sessionId: "test-123",
+        sessionFile,
+        updatedAt: Date.UTC(2026, 2, 20, 16, 15, 0), // control-path write after midnight
+      },
+    });
+
+    expect(files).toHaveLength(1);
+    expect(files[0]).toBe("2026-03-20-0010.md");
+    expect(memoryContent).toContain("# Session: 2026-03-20 23:51:00 (Asia/Shanghai)");
   });
 });

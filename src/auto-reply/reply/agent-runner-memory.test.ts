@@ -3,17 +3,20 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearMemoryPluginState,
   registerMemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
 import {
+  resolveMemoryFlushResetAtHour,
   runMemoryFlushIfNeeded,
   runPreflightCompactionIfNeeded,
   setAgentRunnerMemoryTestDeps,
 } from "./agent-runner-memory.js";
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
+import { resolveMemoryFlushRelativePathForRun } from "./memory-flush.js";
 
 const compactEmbeddedPiSessionMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
@@ -767,5 +770,79 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.silentExpected).toBe(true);
     expect(flushCall.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(flushCall.bootstrapPromptWarningSignature).toBe("sig-b");
+  });
+});
+
+const DIRECT_SESSION_CONTEXT = {
+  Provider: "whatsapp",
+  OriginatingChannel: "telegram",
+  ChatType: "direct",
+} as unknown as TemplateContext;
+
+describe("resolveMemoryFlushResetAtHour", () => {
+  it("uses the direct session daily reset boundary", () => {
+    const cfg = {
+      session: {
+        reset: {
+          atHour: 4,
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveMemoryFlushResetAtHour({
+        cfg,
+        sessionCtx: DIRECT_SESSION_CONTEXT,
+        sessionKey: "main",
+      }),
+    ).toBe(4);
+  });
+
+  it("skips reset-cycle day keys for non-daily reset policies", () => {
+    const cfg = {
+      session: {
+        reset: {
+          mode: "idle",
+          idleMinutes: 30,
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveMemoryFlushResetAtHour({
+        cfg,
+        sessionCtx: DIRECT_SESSION_CONTEXT,
+        sessionKey: "main",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("uses the reset-cycle day key before the daily reset hour", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          userTimezone: "Asia/Shanghai",
+        },
+      },
+      session: {
+        reset: {
+          atHour: 4,
+        },
+      },
+    } as OpenClawConfig;
+
+    const resetAtHour = resolveMemoryFlushResetAtHour({
+      cfg,
+      sessionCtx: DIRECT_SESSION_CONTEXT,
+      sessionKey: "main",
+    });
+
+    expect(
+      resolveMemoryFlushRelativePathForRun({
+        cfg,
+        nowMs: Date.UTC(2026, 2, 20, 17, 10, 0), // 2026-03-21 01:10 +08:00
+        resetAtHour,
+      }),
+    ).toBe("memory/2026-03-20.md");
   });
 });

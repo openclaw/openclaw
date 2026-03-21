@@ -29,7 +29,10 @@ import {
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
+import {
+  findPreviousSessionFile,
+  getRecentSessionExcerptWithResetFallback,
+} from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
 
@@ -125,13 +128,6 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     const sessionFile = currentSessionFile || undefined;
     const eventTimestampMs = event.timestamp.getTime();
-    const sessionTimestampMs =
-      typeof sessionEntry.updatedAt === "number" && Number.isFinite(sessionEntry.updatedAt)
-        ? Math.floor(sessionEntry.updatedAt)
-        : eventTimestampMs;
-    const dateStr = formatHumanDayKey(sessionTimestampMs, cfg);
-    const timeStr = formatHumanTime(sessionTimestampMs, cfg, { includeSeconds: true });
-    const timeZone = resolveHumanTimezone(cfg);
 
     // Read message count from hook config (default: 15)
     const hookConfig = resolveHookConfig(cfg, "session-memory");
@@ -142,10 +138,16 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     let slug: string | null = null;
     let sessionContent: string | null = null;
+    let lastMessageTimestampMs: number | undefined;
 
     if (sessionFile) {
       // Get recent conversation content, with fallback to rotated reset transcript.
-      sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
+      const transcriptExcerpt = await getRecentSessionExcerptWithResetFallback(
+        sessionFile,
+        messageCount,
+      );
+      sessionContent = transcriptExcerpt.content;
+      lastMessageTimestampMs = transcriptExcerpt.lastMessageTimestampMs;
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,
@@ -166,6 +168,15 @@ const saveSessionToMemory: HookHandler = async (event) => {
         log.debug("Generated slug", { slug });
       }
     }
+
+    const sessionTimestampMs =
+      lastMessageTimestampMs ??
+      (typeof sessionEntry.updatedAt === "number" && Number.isFinite(sessionEntry.updatedAt)
+        ? Math.floor(sessionEntry.updatedAt)
+        : eventTimestampMs);
+    const dateStr = formatHumanDayKey(sessionTimestampMs, cfg);
+    const timeStr = formatHumanTime(sessionTimestampMs, cfg, { includeSeconds: true });
+    const timeZone = resolveHumanTimezone(cfg);
 
     // If no slug, use timestamp
     if (!slug) {

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeTimestamp } from "../../../agents/date-time.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 
 function extractTextMessageContent(content: unknown): string | undefined {
@@ -21,15 +22,21 @@ function extractTextMessageContent(content: unknown): string | undefined {
   return undefined;
 }
 
-export async function getRecentSessionContent(
+export type SessionTranscriptExcerpt = {
+  content: string | null;
+  lastMessageTimestampMs?: number;
+};
+
+export async function getRecentSessionExcerpt(
   sessionFilePath: string,
   messageCount: number = 15,
-): Promise<string | null> {
+): Promise<SessionTranscriptExcerpt> {
   try {
     const content = await fs.readFile(sessionFilePath, "utf-8");
     const lines = content.trim().split("\n");
 
     const allMessages: string[] = [];
+    let lastMessageTimestampMs: number | undefined;
     for (const line of lines) {
       try {
         const entry = JSON.parse(line);
@@ -47,6 +54,10 @@ export async function getRecentSessionContent(
             const text = extractTextMessageContent(msg.content);
             if (text && !text.startsWith("/")) {
               allMessages.push(`${role}: ${text}`);
+              const normalizedTimestamp = normalizeTimestamp(entry.timestamp ?? msg.timestamp);
+              if (normalizedTimestamp) {
+                lastMessageTimestampMs = normalizedTimestamp.timestampMs;
+              }
             }
           }
         }
@@ -55,18 +66,29 @@ export async function getRecentSessionContent(
       }
     }
 
-    return allMessages.slice(-messageCount).join("\n");
+    const recentMessages = allMessages.slice(-messageCount);
+    return {
+      content: recentMessages.length > 0 ? recentMessages.join("\n") : null,
+      lastMessageTimestampMs,
+    };
   } catch {
-    return null;
+    return { content: null };
   }
 }
 
-export async function getRecentSessionContentWithResetFallback(
+export async function getRecentSessionContent(
   sessionFilePath: string,
   messageCount: number = 15,
 ): Promise<string | null> {
-  const primary = await getRecentSessionContent(sessionFilePath, messageCount);
-  if (primary) {
+  return (await getRecentSessionExcerpt(sessionFilePath, messageCount)).content;
+}
+
+export async function getRecentSessionExcerptWithResetFallback(
+  sessionFilePath: string,
+  messageCount: number = 15,
+): Promise<SessionTranscriptExcerpt> {
+  const primary = await getRecentSessionExcerpt(sessionFilePath, messageCount);
+  if (primary.content) {
     return primary;
   }
 
@@ -82,13 +104,21 @@ export async function getRecentSessionContentWithResetFallback(
     }
 
     const latestResetPath = path.join(dir, resetCandidates[resetCandidates.length - 1]);
-    return (await getRecentSessionContent(latestResetPath, messageCount)) || primary;
+    const fallback = await getRecentSessionExcerpt(latestResetPath, messageCount);
+    return fallback.content ? fallback : primary;
   } catch {
     return primary;
   }
 }
 
-function stripResetSuffix(fileName: string): string {
+export async function getRecentSessionContentWithResetFallback(
+  sessionFilePath: string,
+  messageCount: number = 15,
+): Promise<string | null> {
+  return (await getRecentSessionExcerptWithResetFallback(sessionFilePath, messageCount)).content;
+}
+
+export function stripResetSuffix(fileName: string): string {
   const resetIndex = fileName.indexOf(".reset.");
   return resetIndex === -1 ? fileName : fileName.slice(0, resetIndex);
 }
