@@ -662,7 +662,7 @@ function renderPinnedSection(
       }}>
         ${icons.bookmark}
         ${entries.length} pinned
-        ${vs.pinnedExpanded ? icons.chevronDown : icons.chevronRight}
+        <span class="collapse-chevron ${vs.pinnedExpanded ? "" : "collapse-chevron--collapsed"}">${icons.chevronDown}</span>
       </button>
       ${
         vs.pinnedExpanded
