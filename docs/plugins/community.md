@@ -91,7 +91,7 @@ Supports direct messages & group chats, streaming replies, and proactive messagi
 - **repo:** [github.com/WecomTeam/wecom-openclaw-plugin](https://github.com/WecomTeam/wecom-openclaw-plugin)
 
 ```bash
-  install: `openclaw plugins install @wecom/wecom-openclaw-plugin`
+openclaw plugins install @wecom/wecom-openclaw-plugin
 ```
 
 ## Submit your plugin
