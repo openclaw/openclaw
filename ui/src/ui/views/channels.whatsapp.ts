@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { WhatsAppStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
+import { resolveChannelConfigured } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
 export function renderWhatsAppCard(params: {
@@ -10,6 +11,7 @@ export function renderWhatsAppCard(params: {
   accountCountLabel: unknown;
 }) {
   const { props, whatsapp, accountCountLabel } = params;
+  const configured = resolveChannelConfigured("whatsapp", props);
 
   return html`
     <div class="card">
@@ -20,7 +22,7 @@ export function renderWhatsAppCard(params: {
       <div class="status-list" style="margin-top: 16px;">
         <div>
           <span class="label">Configured</span>
-          <span>${whatsapp?.configured ? "Yes" : "No"}</span>
+          <span>${configured == null ? "n/a" : configured ? "Yes" : "No"}</span>
         </div>
         <div>
           <span class="label">Linked</span>
