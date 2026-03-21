@@ -303,18 +303,34 @@ async function sendSignalOutboundChunked(params: {
   deps?: { [channelId: string]: unknown };
 }): Promise<{ channel: string; messageId: string }> {
   const limit = resolveTextChunkLimit(params.cfg, "signal", params.accountId ?? undefined);
-  const chunks = chunkText(params.text, limit ?? SIGNAL_TEXT_CHUNK_LIMIT);
+  const tableMode = resolveMarkdownTableMode({
+    cfg: params.cfg,
+    channel: "signal",
+    accountId: params.accountId ?? undefined,
+  });
+  let chunks =
+    limit === undefined
+      ? markdownToSignalTextChunks(params.text, Number.POSITIVE_INFINITY, { tableMode })
+      : markdownToSignalTextChunks(params.text, limit, { tableMode });
+  if (chunks.length === 0 && params.text) {
+    chunks = [{ text: params.text, styles: [] }];
+  }
+  const { send, maxBytes } = await resolveSignalSendContext({
+    cfg: params.cfg,
+    accountId: params.accountId ?? undefined,
+    deps: params.deps,
+  });
   let lastResult: { channel: string; messageId: string } | undefined;
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
     if (!chunk) continue;
-    const result = await sendSignalOutbound({
+    const result = await send(params.to, chunk.text, {
       cfg: params.cfg,
-      to: params.to,
-      text: chunk,
+      maxBytes,
       accountId: params.accountId ?? undefined,
+      textMode: "plain",
+      textStyles: chunk.styles,
       replyToId: i === 0 ? (params.replyToId ?? undefined) : undefined,
-      deps: params.deps,
     });
     lastResult = { channel: signal, ...result };
   }
