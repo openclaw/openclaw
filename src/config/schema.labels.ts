@@ -467,6 +467,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
   "agents.defaults.compaction.timeoutSeconds": "Compaction Timeout (Seconds)",
   "agents.defaults.compaction.model": "Compaction Model Override",
+  "agents.defaults.compaction.truncateAfterCompaction": "Truncate After Compaction",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
@@ -731,6 +732,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.telegram.network.autoSelectFamily": "Telegram autoSelectFamily",
   "channels.telegram.timeoutSeconds": "Telegram API Timeout (seconds)",
   "channels.telegram.silentErrorReplies": "Telegram Silent Error Replies",
+  "channels.telegram.apiRoot": "Telegram API Root URL",
   "channels.telegram.capabilities.inlineButtons": "Telegram Inline Buttons",
   "channels.telegram.execApprovals": "Telegram Exec Approvals",
   "channels.telegram.execApprovals.enabled": "Telegram Exec Approvals Enabled",

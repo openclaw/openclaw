@@ -265,6 +265,82 @@ export async function getDriveItemProperties(params: {
 }
 
 /**
+ * Resolve the Graph API-native chat ID from a Bot Framework conversation ID.
+ *
+ * Bot Framework personal DM conversation IDs use formats like `a:1xxx@unq.gbl.spaces`
+ * or `8:orgid:xxx` that the Graph API does not accept. Graph API requires the
+ * `19:xxx@thread.tacv2` or `19:xxx@unq.gbl.spaces` format.
+ *
+ * This function looks up the matching Graph chat by querying the bot's chats filtered
+ * by the target user's AAD object ID.
+ *
+ * Returns the Graph chat ID if found, or null if resolution fails.
+ */
+export async function resolveGraphChatId(params: {
+  /** Bot Framework conversation ID (may be in non-Graph format for personal DMs) */
+  botFrameworkConversationId: string;
+  /** AAD object ID of the user in the conversation (used for filtering chats) */
+  userAadObjectId?: string;
+  tokenProvider: MSTeamsAccessTokenProvider;
+  fetchFn?: typeof fetch;
+}): Promise<string | null> {
+  const { botFrameworkConversationId, userAadObjectId, tokenProvider } = params;
+  const fetchFn = params.fetchFn ?? fetch;
+
+  // If the conversation ID already looks like a valid Graph chat ID, return it directly.
+  // Graph chat IDs start with "19:" — Bot Framework group chat IDs already use this format.
+  if (botFrameworkConversationId.startsWith("19:")) {
+    return botFrameworkConversationId;
+  }
+
+  // For personal DMs with non-Graph conversation IDs (e.g. `a:1xxx` or `8:orgid:xxx`),
+  // query the bot's chats to find the matching one.
+  const token = await tokenProvider.getAccessToken(GRAPH_SCOPE);
+
+  // Build filter: if we have the user's AAD object ID, narrow the search to 1:1 chats
+  // with that member. Otherwise, fall back to listing all 1:1 chats.
+  let path: string;
+  if (userAadObjectId) {
+    const encoded = encodeURIComponent(
+      `chatType eq 'oneOnOne' and members/any(m:m/microsoft.graph.aadUserConversationMember/userId eq '${userAadObjectId}')`,
+    );
+    path = `/me/chats?$filter=${encoded}&$select=id`;
+  } else {
+    // Fallback: list all 1:1 chats when no user ID is available.
+    // Only safe when the bot has exactly one 1:1 chat; returns null otherwise to
+    // avoid sending to the wrong person's chat.
+    path = `/me/chats?$filter=${encodeURIComponent("chatType eq 'oneOnOne'")}&$select=id`;
+  }
+
+  const res = await fetchFn(`${GRAPH_ROOT}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const data = (await res.json()) as {
+    value?: Array<{ id?: string }>;
+  };
+
+  const chats = data.value ?? [];
+
+  // When filtered by userAadObjectId, any non-empty result is the right 1:1 chat.
+  if (userAadObjectId && chats.length > 0 && chats[0]?.id) {
+    return chats[0].id;
+  }
+
+  // Without a user ID we can only be certain when exactly one chat is returned;
+  // multiple results would be ambiguous and could route to the wrong person.
+  if (!userAadObjectId && chats.length === 1 && chats[0]?.id) {
+    return chats[0].id;
+  }
+
+  return null;
+}
+
+/**
  * Get members of a Teams chat for per-user sharing.
  * Used to create sharing links scoped to only the chat participants.
  */

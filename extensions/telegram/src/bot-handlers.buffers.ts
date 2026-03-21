@@ -1,10 +1,10 @@
 import type { Message } from "@grammyjs/types";
-import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
-} from "openclaw/plugin-sdk/reply-runtime";
+  shouldDebounceTextInbound,
+} from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
   hasInboundMedia,
