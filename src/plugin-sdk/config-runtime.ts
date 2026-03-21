@@ -1,6 +1,8 @@
 // Shared config/runtime boundary for plugins that need config loading,
 // config writes, or session-store helpers without importing src internals.
 
+import * as sessionConfig from "../config/sessions.js";
+
 export {
   getRuntimeConfigSnapshot,
   loadConfig,
@@ -73,16 +75,44 @@ export type {
   TelegramTopicConfig,
   TtsConfig,
 } from "../config/types.js";
-export { resolveStorePath } from "../config/sessions/paths.js";
-export { resolveSessionKey } from "../config/sessions/session-key.js";
-export {
-  loadSessionStore,
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  resolveSessionStoreEntry,
-  updateLastRoute,
-  updateSessionStore,
-} from "../config/sessions/store.js";
+export function loadSessionStore(...args: Parameters<typeof sessionConfig.loadSessionStore>) {
+  return sessionConfig.loadSessionStore(...args);
+}
+
+export function readSessionUpdatedAt(
+  ...args: Parameters<typeof sessionConfig.readSessionUpdatedAt>
+) {
+  return sessionConfig.readSessionUpdatedAt(...args);
+}
+
+export function recordSessionMetaFromInbound(
+  ...args: Parameters<typeof sessionConfig.recordSessionMetaFromInbound>
+) {
+  return sessionConfig.recordSessionMetaFromInbound(...args);
+}
+
+export function resolveSessionKey(...args: Parameters<typeof sessionConfig.resolveSessionKey>) {
+  return sessionConfig.resolveSessionKey(...args);
+}
+
+export function resolveStorePath(...args: Parameters<typeof sessionConfig.resolveStorePath>) {
+  return sessionConfig.resolveStorePath(...args);
+}
+
+export function updateLastRoute(...args: Parameters<typeof sessionConfig.updateLastRoute>) {
+  return sessionConfig.updateLastRoute(...args);
+}
+
+export function updateSessionStore(...args: Parameters<typeof sessionConfig.updateSessionStore>) {
+  return sessionConfig.updateSessionStore(...args);
+}
+
+export function resolveSessionStoreEntry(
+  ...args: Parameters<typeof sessionConfig.resolveSessionStoreEntry>
+) {
+  return sessionConfig.resolveSessionStoreEntry(...args);
+}
+
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export {
   evaluateSessionFreshness,

@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -57,6 +60,8 @@ beforeEach(() => {
   mocks.getAgentLocalStatuses.mockResolvedValue({
     defaultId: "main",
     agents: [],
+    totalSessions: 0,
+    bootstrapPendingCount: 0,
   });
   mocks.getStatusSummary.mockResolvedValue({
     linkChannel: undefined,
@@ -186,5 +191,56 @@ describe("scanStatusJsonFast", () => {
       agentId: "main",
       purpose: "status",
     });
+  });
+
+  it("skips heavy status summary loading on the missing-config fast path", async () => {
+    const previous = {
+      VITEST: process.env.VITEST,
+      VITEST_POOL_ID: process.env.VITEST_POOL_ID,
+      NODE_ENV: process.env.NODE_ENV,
+      OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+      OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+      CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR,
+      CLAWDBOT_CONFIG_PATH: process.env.CLAWDBOT_CONFIG_PATH,
+    };
+    const tmpStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-fast-"));
+
+    try {
+      delete process.env.VITEST;
+      delete process.env.VITEST_POOL_ID;
+      delete process.env.NODE_ENV;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.CLAWDBOT_STATE_DIR;
+      delete process.env.CLAWDBOT_CONFIG_PATH;
+      process.env.OPENCLAW_STATE_DIR = tmpStateDir;
+
+      const result = await scanStatusJsonFast({}, {} as never);
+
+      expect(mocks.readBestEffortConfig).not.toHaveBeenCalled();
+      expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+      expect(mocks.getStatusSummary).not.toHaveBeenCalled();
+      expect(result.summary).toEqual(
+        expect.objectContaining({
+          heartbeat: expect.objectContaining({ defaultAgentId: "main", agents: [] }),
+          channelSummary: [],
+          queuedSystemEvents: [],
+          sessions: expect.objectContaining({
+            count: 0,
+            defaults: { model: null, contextTokens: null },
+            recent: [],
+            byAgent: [],
+          }),
+        }),
+      );
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+      await fs.rm(tmpStateDir, { recursive: true, force: true });
+    }
   });
 });

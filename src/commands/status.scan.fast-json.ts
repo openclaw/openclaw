@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { getAgentLocalStatuses } from "./status.agent-local.js";
+import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import type { StatusScanResult } from "./status.scan.js";
 import {
   buildTailscaleHttpsUrl,
@@ -18,12 +18,16 @@ import {
   type MemoryPluginStatus,
   type MemoryStatusSnapshot,
 } from "./status.scan.shared.js";
-import { getStatusSummary } from "./status.summary.js";
-import { getUpdateCheckResult } from "./status.update.js";
+import type { StatusSummary } from "./status.types.js";
+
+type AgentLocalStatuses = Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
 
 let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
 let pluginStatusModulePromise: Promise<typeof import("../plugins/status.js")> | undefined;
 let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
+let statusSummaryModulePromise: Promise<typeof import("./status.summary.js")> | undefined;
+let statusUpdateModulePromise: Promise<typeof import("./status.update.js")> | undefined;
+let statusAgentLocalModulePromise: Promise<typeof import("./status.agent-local.js")> | undefined;
 let commandSecretTargetsModulePromise:
   | Promise<typeof import("../cli/command-secret-targets.js")>
   | undefined;
@@ -48,6 +52,21 @@ function loadPluginStatusModule() {
 function loadConfigIoModule() {
   configIoModulePromise ??= import("../config/io.js");
   return configIoModulePromise;
+}
+
+function loadStatusSummaryModule() {
+  statusSummaryModulePromise ??= import("./status.summary.js");
+  return statusSummaryModulePromise;
+}
+
+function loadStatusUpdateModule() {
+  statusUpdateModulePromise ??= import("./status.update.js");
+  return statusUpdateModulePromise;
+}
+
+function loadStatusAgentLocalModule() {
+  statusAgentLocalModulePromise ??= import("./status.agent-local.js");
+  return statusAgentLocalModulePromise;
 }
 
 function loadCommandSecretTargetsModule() {
@@ -91,7 +110,7 @@ function resolveDefaultMemoryStorePath(agentId: string): string {
 
 async function resolveMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
-  agentStatus: Awaited<ReturnType<typeof getAgentLocalStatuses>>;
+  agentStatus: AgentLocalStatuses;
   memoryPlugin: MemoryPluginStatus;
 }): Promise<MemoryStatusSnapshot | null> {
   const { resolveMemorySearchConfig } = await loadMemorySearchModule();
@@ -106,8 +125,12 @@ async function resolveMemoryStatusSnapshot(params: {
   });
 }
 
+function hasMissingConfigFastPath(): boolean {
+  return !shouldSkipMissingConfigFastPath() && !existsSync(resolveConfigPath(process.env));
+}
+
 async function readStatusSourceConfig(): Promise<OpenClawConfig> {
-  if (!shouldSkipMissingConfigFastPath() && !existsSync(resolveConfigPath(process.env))) {
+  if (hasMissingConfigFastPath()) {
     return {};
   }
   const { readBestEffortConfig } = await loadConfigIoModule();
@@ -118,7 +141,7 @@ async function resolveStatusConfig(params: {
   sourceConfig: OpenClawConfig;
   commandName: "status --json";
 }): Promise<{ resolvedConfig: OpenClawConfig; diagnostics: string[] }> {
-  if (!shouldSkipMissingConfigFastPath() && !existsSync(resolveConfigPath(process.env))) {
+  if (hasMissingConfigFastPath()) {
     return { resolvedConfig: params.sourceConfig, diagnostics: [] };
   }
   const [{ resolveCommandSecretRefsViaGateway }, { getStatusCommandSecretTargetIds }] =
@@ -129,6 +152,43 @@ async function resolveStatusConfig(params: {
     targetIds: getStatusCommandSecretTargetIds(),
     mode: "read_only_status",
   });
+}
+
+function buildLeanAgentLocalStatuses(): AgentLocalStatuses {
+  return {
+    defaultId: "main",
+    agents: [],
+    totalSessions: 0,
+    bootstrapPendingCount: 0,
+  };
+}
+
+function buildLeanStatusSummary(params: { agentStatus: AgentLocalStatuses }): StatusSummary {
+  return {
+    heartbeat: {
+      defaultAgentId: params.agentStatus.defaultId,
+      agents: params.agentStatus.agents.map((agent) => ({
+        agentId: agent.id,
+        enabled: false,
+        every: "off",
+        everyMs: null,
+      })),
+    },
+    channelSummary: [],
+    queuedSystemEvents: [],
+    sessions: {
+      paths: params.agentStatus.agents.map((agent) => agent.sessionsPath),
+      count: params.agentStatus.totalSessions,
+      defaults: { model: null, contextTokens: null },
+      recent: [],
+      byAgent: params.agentStatus.agents.map((agent) => ({
+        agentId: agent.id,
+        path: agent.sessionsPath,
+        count: agent.sessionsCount,
+        recent: [],
+      })),
+    },
+  };
 }
 
 export async function scanStatusJsonFast(
@@ -150,13 +210,17 @@ export async function scanStatusJsonFast(
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;
-  const updatePromise = getUpdateCheckResult({
-    timeoutMs: updateTimeoutMs,
-    fetchGit: true,
-    includeRegistry: true,
-  });
-  const agentStatusPromise = getAgentLocalStatuses(cfg);
-  const summaryPromise = getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
+  const updatePromise = loadStatusUpdateModule().then(({ getUpdateCheckResult }) =>
+    getUpdateCheckResult({
+      timeoutMs: updateTimeoutMs,
+      fetchGit: true,
+      includeRegistry: true,
+    }),
+  );
+  const canUseLeanSummary = hasMissingConfigFastPath() && !hasPotentialConfiguredChannels(cfg);
+  const agentStatusPromise = canUseLeanSummary
+    ? Promise.resolve(buildLeanAgentLocalStatuses())
+    : loadStatusAgentLocalModule().then(({ getAgentLocalStatuses }) => getAgentLocalStatuses(cfg));
 
   const tailscaleDnsPromise =
     tailscaleMode === "off"
@@ -171,13 +235,17 @@ export async function scanStatusJsonFast(
 
   const gatewayProbePromise = resolveGatewayProbeSnapshot({ cfg, opts });
 
-  const [tailscaleDns, update, agentStatus, gatewaySnapshot, summary] = await Promise.all([
+  const [tailscaleDns, update, agentStatus, gatewaySnapshot] = await Promise.all([
     tailscaleDnsPromise,
     updatePromise,
     agentStatusPromise,
     gatewayProbePromise,
-    summaryPromise,
   ]);
+  const summary = canUseLeanSummary
+    ? buildLeanStatusSummary({ agentStatus })
+    : await loadStatusSummaryModule().then(({ getStatusSummary }) =>
+        getStatusSummary({ config: cfg, sourceConfig: loadedRaw }),
+      );
   const tailscaleHttpsUrl = buildTailscaleHttpsUrl({
     tailscaleMode,
     tailscaleDns,

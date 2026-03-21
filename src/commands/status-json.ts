@@ -1,12 +1,12 @@
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
-import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 import { scanStatusJsonFast } from "./status.scan.fast-json.js";
 
 let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
 let securityAuditModulePromise: Promise<typeof import("../security/audit.runtime.js")> | undefined;
 let gatewayCallModulePromise: Promise<typeof import("../gateway/call.js")> | undefined;
+let updateChannelsModulePromise: Promise<typeof import("../infra/update-channels.js")> | undefined;
+let statusDaemonModulePromise: Promise<typeof import("./status.daemon.js")> | undefined;
 
 function loadProviderUsage() {
   providerUsagePromise ??= import("../infra/provider-usage.js");
@@ -21,6 +21,33 @@ function loadSecurityAuditModule() {
 function loadGatewayCallModule() {
   gatewayCallModulePromise ??= import("../gateway/call.js");
   return gatewayCallModulePromise;
+}
+
+function loadUpdateChannelsModule() {
+  updateChannelsModulePromise ??= import("../infra/update-channels.js");
+  return updateChannelsModulePromise;
+}
+
+function loadStatusDaemonModule() {
+  statusDaemonModulePromise ??= import("./status.daemon.js");
+  return statusDaemonModulePromise;
+}
+
+function shouldUseLeanDaemonSummary(scan: { cfg?: object; sourceConfig?: object }): boolean {
+  return (
+    Object.keys(scan.sourceConfig ?? {}).length === 0 && Object.keys(scan.cfg ?? {}).length === 0
+  );
+}
+
+function buildLeanDaemonSummary(label: string) {
+  return {
+    label,
+    installed: null,
+    managedByOpenClaw: false,
+    externallyManaged: false,
+    loadedText: "unknown",
+    runtimeShort: null,
+  };
 }
 
 export async function statusJsonCommand(
@@ -72,12 +99,23 @@ export async function statusJsonCommand(
         }).catch(() => null)
       : null;
 
-  const [daemon, nodeDaemon] = await Promise.all([
-    getDaemonStatusSummary(),
-    getNodeDaemonStatusSummary(),
+  const daemonSummariesPromise = shouldUseLeanDaemonSummary(scan)
+    ? Promise.resolve([buildLeanDaemonSummary("Daemon"), buildLeanDaemonSummary("Node")] as const)
+    : loadStatusDaemonModule().then(
+        ({ getDaemonStatusSummary, getNodeDaemonStatusSummary }) =>
+          Promise.all([getDaemonStatusSummary(), getNodeDaemonStatusSummary()]) as Promise<
+            readonly [
+              Awaited<ReturnType<typeof getDaemonStatusSummary>>,
+              Awaited<ReturnType<typeof getNodeDaemonStatusSummary>>,
+            ]
+          >,
+      );
+  const [updateChannels, [daemon, nodeDaemon]] = await Promise.all([
+    loadUpdateChannelsModule(),
+    daemonSummariesPromise,
   ]);
-  const channelInfo = resolveUpdateChannelDisplay({
-    configChannel: normalizeUpdateChannel(scan.cfg.update?.channel),
+  const channelInfo = updateChannels.resolveUpdateChannelDisplay({
+    configChannel: updateChannels.normalizeUpdateChannel(scan.cfg.update?.channel),
     installKind: scan.update.installKind,
     gitTag: scan.update.git?.tag ?? null,
     gitBranch: scan.update.git?.branch ?? null,
