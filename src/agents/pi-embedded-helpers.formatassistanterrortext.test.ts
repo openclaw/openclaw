@@ -125,6 +125,27 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
+
+  it("returns a connection-refused message for ECONNREFUSED failures", () => {
+    const msg = makeAssistantError("connect ECONNREFUSED 127.0.0.1:443 during upstream call");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: connection refused by the provider endpoint.",
+    );
+  });
+
+  it("returns a DNS-specific message for provider lookup failures", () => {
+    const msg = makeAssistantError("dial tcp: lookup api.example.com: no such host (ENOTFOUND)");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: DNS lookup for the provider endpoint failed.",
+    );
+  });
+
+  it("returns an interrupted-connection message for socket hang ups", () => {
+    const msg = makeAssistantError("socket hang up");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: network connection was interrupted.",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
