@@ -45,7 +45,7 @@ describe("chat.abort stops embedded Pi agent and sub-agents", () => {
     });
 
     expect(abortEmbeddedPiRun).toHaveBeenCalledWith("sess-1");
-    expect(clearSessionQueues).toHaveBeenCalled();
+    expect(clearSessionQueues).toHaveBeenCalledWith(["main", "sess-1"]);
     expect(stopSubagentsForRequester).toHaveBeenCalledWith(
       expect.objectContaining({ requesterSessionKey: "main" }),
     );
