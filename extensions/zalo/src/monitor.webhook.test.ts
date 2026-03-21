@@ -30,13 +30,6 @@ async function withServer(handler: RequestListener, fn: (baseUrl: string) => Pro
   }
 }
 
-async function settleAsyncWork(): Promise<void> {
-  for (let i = 0; i < 6; i += 1) {
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-}
-
 const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   accountId: "default",
   enabled: true,
@@ -348,16 +341,17 @@ describe("handleZaloWebhookRequest", () => {
         });
 
         expect(response.status).toBe(200);
-        await settleAsyncWork();
       });
     } finally {
       unregister();
     }
 
-    expect(fetchRemoteMediaMock).toHaveBeenCalledWith({
-      url: "https://example.com/test-image.jpg",
-      maxBytes: 5 * 1024 * 1024,
-    });
+    await vi.waitFor(() =>
+      expect(fetchRemoteMediaMock).toHaveBeenCalledWith({
+        url: "https://example.com/test-image.jpg",
+        maxBytes: 5 * 1024 * 1024,
+      }),
+    );
     expect(saveMediaBufferMock).toHaveBeenCalledTimes(1);
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
