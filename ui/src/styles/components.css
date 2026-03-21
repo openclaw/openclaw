@@ -3840,13 +3840,171 @@
 /* Bottom grid (event log + log tail) */
 .ov-bottom-grid {
   display: grid;
-  gap: 20px;
+  gap: 16px;
   grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+}
+
+/* Expandable log panels */
+.ov-event-log,
+.ov-log-tail {
+  padding: 0;
+  overflow: hidden;
+}
+
+.ov-expandable-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+  letter-spacing: -0.01em;
+  user-select: none;
+  list-style: none;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.ov-expandable-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.ov-expandable-toggle::marker {
+  content: "";
+}
+
+.ov-expandable-toggle:hover {
+  background: var(--card-highlight);
+}
+
+.ov-expandable-toggle .nav-item__icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.ov-expandable-toggle::after {
+  content: "";
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  flex-shrink: 0;
+  background: currentColor;
+  opacity: 0.35;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E");
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+details[open] > .ov-expandable-toggle::after {
+  transform: rotate(90deg);
+}
+
+.ov-count-badge {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--bg-muted);
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  line-height: 1.5;
+}
+
+/* Event log entries */
+.ov-event-log-list {
+  border-top: 1px solid var(--border);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.ov-event-log-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 16px;
+  font-size: 12px;
+  line-height: 1.5;
+  border-bottom: 1px solid var(--border);
+}
+
+.ov-event-log-entry:last-child {
+  border-bottom: none;
+}
+
+.ov-event-log-entry:hover {
+  background: var(--card-highlight);
+}
+
+.ov-event-log-ts {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  flex-shrink: 0;
+  min-width: 72px;
+}
+
+.ov-event-log-name {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.ov-event-log-payload {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Gateway log tail */
+.ov-log-tail-content {
+  margin: 0;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text);
+  max-height: 320px;
+  overflow-y: auto;
+  overflow-x: auto;
+  white-space: pre;
+  word-break: break-all;
+}
+
+.ov-log-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+.ov-log-refresh:hover {
+  color: var(--text);
+  background: var(--bg-muted);
 }
 
 @media (max-width: 768px) {
   .ov-bottom-grid {
     grid-template-columns: 1fr;
+  }
+
+  .ov-event-log-list,
+  .ov-log-tail-content {
+    max-height: 240px;
   }
 
   .ov-access-grid {
