@@ -23,7 +23,7 @@
 
 如果你想要一个私人的、单用户的助手，感觉本地化、快速且始终在线，这就是它。
 
-[网站](https://openclaw.ai) · [文档](https://docs.openclaw.ai) · [愿景](VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [入门指南](https://docs.openclaw.ai/start/getting-started) · [更新](https://docs.openclaw.ai/install/updating) · [展示](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/help/faq) · [新手引导](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
+[网站](https://openclaw.ai) · [文档](https://docs.openclaw.ai) · [愿景](../../VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [入门指南](https://docs.openclaw.ai/start/getting-started) · [更新](https://docs.openclaw.ai/install/updating) · [展示](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/help/faq) · [新手引导](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
 
 推荐安装方式：在终端中运行 `openclaw onboard`。
 OpenClaw Onboard 逐步引导你设置 Gateway、工作区、渠道和 Skills。这是推荐的 CLI 安装路径，适用于 **macOS、Linux 和 Windows（通过 WSL2；强烈推荐）**。
@@ -34,7 +34,7 @@ OpenClaw Onboard 逐步引导你设置 Gateway、工作区、渠道和 Skills。
 
 | OpenAI                                                            | Vercel                                                            | Blacksmith                                                                   | Convex                                                                |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| [![OpenAI](docs/assets/sponsors/openai.svg)](https://openai.com/) | [![Vercel](docs/assets/sponsors/vercel.svg)](https://vercel.com/) | [![Blacksmith](docs/assets/sponsors/blacksmith.svg)](https://blacksmith.sh/) | [![Convex](docs/assets/sponsors/convex.svg)](https://www.convex.dev/) |
+| [![OpenAI](../assets/sponsors/openai.svg)](https://openai.com/) | [![Vercel](../assets/sponsors/vercel.svg)](https://vercel.com/) | [![Blacksmith](../assets/sponsors/blacksmith.svg)](https://blacksmith.sh/) | [![Convex](../assets/sponsors/convex.svg)](https://www.convex.dev/) |
 
 **订阅（OAuth）：**
 

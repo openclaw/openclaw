@@ -6,20 +6,21 @@
 ## 翻译内容
 
 ### 1. README.md 中文翻译
-- **源文件**: `/home/admin/openclaw/workspace/openclaw-official/README.md`
-- **目标文件**: `/home/admin/openclaw/workspace/openclaw-official/docs/zh-CN/README.md`
+- **源文件**: `README.md`
+- **目标文件**: `docs/zh-CN/README.md`
 - **文件大小**: 23,439 字节
 - **状态**: ✅ 完成
 
 ### 2. quickstart.md 状态检查
-- **源文件**: `/home/admin/openclaw/workspace/openclaw-official/docs/start/quickstart.md`
-- **目标文件**: `/home/admin/openclaw/workspace/openclaw-official/docs/zh-CN/start/quickstart.md`
+- **源文件**: `docs/start/quickstart.md`
+- **目标文件**: `docs/zh-CN/start/quickstart.md`
 - **状态**: ✅ 已有翻译（由 AI 自动生成，质量良好）
 
 ## 翻译原则
 
 ### 术语处理
-- **保留英文的术语**: API、PR、Issue、CLI、Gateway、Canvas、Skills、WebChat、Node、DM、OAuth、TTS、PTT、WebSocket、WS、CDP、TCC、RFC、TCP、HTTP、HTTPS、SSH、Docker、Nix、npm、pnpm、bun、TypeScript、JavaScript、Node、macOS、iOS、Android、Windows、Linux、Discord、Slack、Telegram、WhatsApp、Signal、iMessage、BlueBubbles、Matrix、LINE、Mattermost、Nextcloud、Nostr、Synology、Tlon、Twitch、Zalo、Gmail、Pub/Sub、Webhook、Cron、JWT、JSON、Markdown、UI、UX、IDE、Git、GitHub、CI/CD、Tailscale、Serve、Funnel、tailnet、launchd、systemd、stdout、stderr、TCC、ACL、DMCA、EULA、ToS、API、SDK、CLI、GUI、IDE、VM、VPS、CDN、DNS、SSL、TLS、SSH、SFTP、FTP、HTTP、HTTPS、WebSocket、REST、GraphQL、RPC、JSON、XML、YAML、TOML、INI、CSV、TSV、SQL、NoSQL、RDBMS、ORM、MVC、MVVM、SPA、PWA、SSR、CSR、SEO、A/B、KPI、OKR、ROI、DAU、MAU、ARPU、LTV、CAC、 churn、NPS、CSAT、CES、SLA、SLO、SLI、MTTR、MTBF、RPO、RTO、DR、BCP、SOC、SIEM、IDS、IPS、WAF、DDoS、XSS、CSRF、SQLi、RCE、LFI、RFI、XXE、SSRF、IDOR、ACL、RBAC、ABAC、MFA、2FA、OTP、TOTP、HOTP、FIDO、U2F、WebAuthn、OAuth、OIDC、SAML、LDAP、AD、IAM、PAM、SCIM、JWT、JWE、JWS、JWK、JWKS、PKCE、PKI、CA、CRL、OCSP、HSM、KMS、TPM、SGX、TEE、MPC、FHE、ZKP、zk-SNARK、zk-STARK、DAG、DLT、PoW、PoS、PoA、PoH、PoC、PoT、PoE、DeFi、NFT、DAO、DEX、CEX、AMM、LP、APY、APR、TVL、FUD、FOMO、DYOR、HODL、NGMI、WAGMI、GM、GN、GA、WBU、HMU、IMO、IMHO、TBH、ICYMI、TL;DR、TMI、TBT、YOLO、GOAT、GOATed、banger、flex、cap、no cap、vibe、based、cringe、mid、sus、AFK、BRB、GTG、TTYL、IMHO、YMMV、IANAL、IIRC、AFAIK、AFAICT、IIUC、CMIIW、ELI5、TIL、AMA、EL15、FTW、FTL、SMH、Facepalm、SMH、YMMV、IANAL、IIRC、AFAIK、AFAICT、IIUC、CMIIW、ELI5、TIL、AMA、EL15、FTW、FTL、SMH、Facepalm
+- **保留英文的术语** (仅与 OpenClaw 相关的核心技术术语):
+  API、PR、Issue、CLI、Gateway、Canvas、Skills、WebChat、Node、DM、OAuth、TTS、PTT、WebSocket、WS、CDP、HTTP、HTTPS、SSH、Docker、Nix、npm、pnpm、bun、TypeScript、JavaScript、macOS、iOS、Android、Windows、Linux、Discord、Slack、Telegram、WhatsApp、Signal、iMessage、BlueBubbles、Matrix、LINE、Mattermost、Nextcloud、Nostr、Synology、Tlon、Twitch、Zalo、Gmail、Pub/Sub、Webhook、Cron、JWT、JSON、Markdown、UI、UX、IDE、Git、GitHub、CI/CD、Tailscale、Serve、Funnel、tailnet、launchd、systemd、stdout、stderr、ACL、REST、GraphQL、RPC、XML、YAML、TOML、CSV、SQL、NoSQL、RDBMS、ORM、SPA、PWA、SSR、CSR、SEO、SSL、TLS、SFTP、FTP、TCP、UDP、DNS、CDN、VPS、VM、MFA、2FA、OTP、TOTP、OIDC、SAML、LDAP、IAM、SCIM、JWK、JWKS、PKCE、PKI、CA、HSM、KMS、TPM、TEE、MPC、ZKP
 
 - **翻译的术语**:
   - Gateway → Gateway 网关（保留 Gateway 但添加中文注释）
@@ -193,7 +194,7 @@
 3. **保持格式一致**：Markdown 格式、代码块、链接等保持原样
 4. **考虑中文用户**：翻译时考虑中文用户的阅读习惯和文化背景
 
-翻译后的文档位于：`/home/admin/openclaw/workspace/openclaw-official/docs/zh-CN/README.md`
+翻译后的文档位于：`docs/zh-CN/README.md`
 
 ---
 
