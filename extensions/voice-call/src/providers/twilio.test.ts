@@ -189,7 +189,7 @@ describe("TwilioProvider", () => {
     expect(event?.turnToken).toBe("turn-xyz");
   });
 
-  it("falls back to TwiML when an active stream exists but telephony TTS is unavailable", async () => {
+  it("fails when an active stream exists but telephony TTS is unavailable", async () => {
     const provider = createProvider();
     const apiRequest = vi.fn<
       (
@@ -220,13 +220,58 @@ describe("TwilioProvider", () => {
         providerCallId: "CA-stream",
         text: "Hello stream",
       }),
+    ).rejects.toThrow("refusing TwiML fallback");
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it("falls back to TwiML when no active stream exists and telephony TTS is unavailable", async () => {
+    const provider = createProvider();
+    const apiRequest = vi.fn<
+      (
+        endpoint: string,
+        params: Record<string, string | string[]>,
+        options?: { allowNotFound?: boolean },
+      ) => Promise<unknown>
+    >(async () => ({}));
+    (
+      provider as unknown as {
+        apiRequest: (
+          endpoint: string,
+          params: Record<string, string | string[]>,
+          options?: { allowNotFound?: boolean },
+        ) => Promise<unknown>;
+      }
+    ).apiRequest = apiRequest;
+    (
+      provider as unknown as {
+        callWebhookUrls: Map<string, string>;
+      }
+    ).callWebhookUrls.set("CA-nostream", "https://example.ngrok.app/voice/twilio");
+
+    await expect(
+      provider.playTts({
+        callId: "call-nostream",
+        providerCallId: "CA-nostream",
+        text: "Hello TwiML",
+      }),
     ).resolves.toBeUndefined();
     expect(apiRequest).toHaveBeenCalledTimes(1);
     const call = apiRequest.mock.calls[0]!;
     const endpoint = call[0];
     const params = call[1] as { Twiml?: string };
-    expect(endpoint).toBe("/Calls/CA-stream.json");
+    expect(endpoint).toBe("/Calls/CA-nostream.json");
     expect(params.Twiml).toContain("<Say");
+  });
+
+  it("ignores stale stream unregister requests that do not match current stream SID", () => {
+    const provider = createProvider();
+    provider.registerCallStream("CA-reconnect", "MZ-new");
+
+    provider.unregisterCallStream("CA-reconnect", "MZ-old");
+    expect(provider.hasRegisteredStream("CA-reconnect")).toBe(true);
+
+    provider.unregisterCallStream("CA-reconnect", "MZ-new");
+    expect(provider.hasRegisteredStream("CA-reconnect")).toBe(false);
   });
 
   it("times out telephony synthesis in stream mode and does not send completion mark", async () => {

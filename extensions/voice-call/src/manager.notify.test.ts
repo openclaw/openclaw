@@ -155,6 +155,34 @@ describe("CallManager notify and mapping", () => {
     expect(provider.playTtsCalls).toHaveLength(0);
   });
 
+  it("speaks on answered when Twilio streaming is enabled but stream-connect path is unavailable", async () => {
+    const twilioProvider = new FakeProvider("twilio");
+    twilioProvider.twilioStreamConnectEnabled = false;
+    const { manager, provider } = await createManagerHarness(
+      { streaming: { enabled: true } },
+      twilioProvider,
+    );
+
+    const { callId, success } = await manager.initiateCall("+15550000009", undefined, {
+      message: "Twilio stream unavailable",
+      mode: "conversation",
+    });
+    expect(success).toBe(true);
+
+    manager.processEvent({
+      id: "evt-conversation-twilio-stream-unavailable",
+      type: "call.answered",
+      callId,
+      providerCallId: "call-uuid",
+      timestamp: Date.now(),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(provider.playTtsCalls).toHaveLength(1);
+    expect(provider.playTtsCalls[0]?.text).toBe("Twilio stream unavailable");
+  });
+
   it("preserves initialMessage after a failed first playback and retries on next trigger", async () => {
     const provider = new FailFirstPlayTtsProvider("plivo");
     const { manager } = await createManagerHarness({}, provider);

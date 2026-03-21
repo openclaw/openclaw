@@ -40,7 +40,7 @@ export interface MediaStreamConfig {
   /** Callback when speech starts (barge-in) */
   onSpeechStart?: (callId: string) => void;
   /** Callback when stream disconnects */
-  onDisconnect?: (callId: string) => void;
+  onDisconnect?: (callId: string, streamSid: string) => void;
 }
 
 /**
@@ -76,6 +76,19 @@ const DEFAULT_PRE_START_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_PENDING_CONNECTIONS = 32;
 const DEFAULT_MAX_PENDING_CONNECTIONS_PER_IP = 4;
 const DEFAULT_MAX_CONNECTIONS = 128;
+const MAX_WS_BUFFERED_BYTES = 1024 * 1024;
+const CLOSE_REASON_LOG_MAX_CHARS = 120;
+
+function sanitizeLogText(value: string, maxChars: number): string {
+  const sanitized = value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (sanitized.length <= maxChars) {
+    return sanitized;
+  }
+  return `${sanitized.slice(0, maxChars)}...`;
+}
 
 /**
  * Manages WebSocket connections for Twilio media streams.
@@ -178,7 +191,8 @@ export class MediaStreamHandler {
     });
 
     ws.on("close", (code, reason) => {
-      const reasonText = Buffer.isBuffer(reason) ? reason.toString() : String(reason || "none");
+      const rawReason = Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason || "");
+      const reasonText = sanitizeLogText(rawReason, CLOSE_REASON_LOG_MAX_CHARS);
       console.log(
         `[MediaStream] WebSocket closed (code: ${code}, reason: ${reasonText || "none"})`,
       );
@@ -269,7 +283,7 @@ export class MediaStreamHandler {
     this.clearTtsState(session.streamSid);
     session.sttSession.close();
     this.sessions.delete(session.streamSid);
-    this.config.onDisconnect?.(session.callId);
+    this.config.onDisconnect?.(session.callId, session.streamSid);
   }
 
   private getStreamToken(request: IncomingMessage): string | undefined {
@@ -378,14 +392,41 @@ export class MediaStreamHandler {
         bufferedAfterBytes: session.ws.bufferedAmount,
       };
     }
+    if (bufferedBeforeBytes > MAX_WS_BUFFERED_BYTES) {
+      try {
+        session.ws.close(1013, "Backpressure: send buffer exceeded");
+      } catch {
+        // Best-effort close; caller still receives sent:false.
+      }
+      return {
+        sent: false,
+        readyState,
+        bufferedBeforeBytes,
+        bufferedAfterBytes: session.ws.bufferedAmount,
+      };
+    }
 
     try {
       session.ws.send(JSON.stringify(message));
+      const bufferedAfterBytes = session.ws.bufferedAmount;
+      if (bufferedAfterBytes > MAX_WS_BUFFERED_BYTES) {
+        try {
+          session.ws.close(1013, "Backpressure: send buffer exceeded");
+        } catch {
+          // Best-effort close; caller still receives sent:false.
+        }
+        return {
+          sent: false,
+          readyState,
+          bufferedBeforeBytes,
+          bufferedAfterBytes,
+        };
+      }
       return {
         sent: true,
         readyState,
         bufferedBeforeBytes,
-        bufferedAfterBytes: session.ws.bufferedAmount,
+        bufferedAfterBytes,
       };
     } catch {
       return {

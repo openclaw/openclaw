@@ -181,9 +181,23 @@ export class TwilioProvider implements VoiceCallProvider {
     return this.callStreamMap.has(callSid);
   }
 
-  unregisterCallStream(callSid: string): void {
+  unregisterCallStream(callSid: string, streamSid?: string): void {
+    const currentStreamSid = this.callStreamMap.get(callSid);
+    if (!currentStreamSid) {
+      if (!streamSid) {
+        this.activeStreamCalls.delete(callSid);
+      }
+      return;
+    }
+    if (streamSid && currentStreamSid !== streamSid) {
+      return;
+    }
     this.callStreamMap.delete(callSid);
     this.activeStreamCalls.delete(callSid);
+  }
+
+  isConversationStreamConnectEnabled(): boolean {
+    return Boolean(this.mediaStreamHandler && this.getStreamUrl());
   }
 
   isValidStreamToken(callSid: string, token?: string): boolean {
@@ -560,16 +574,19 @@ export class TwilioProvider implements VoiceCallProvider {
    * Play TTS audio via Twilio.
    *
    * Two modes:
-   * 1. Core TTS + Media Streams: If TTS provider and media stream are available,
-   *    generates audio via core TTS and streams it through WebSocket (preferred).
-   * 2. TwiML <Say>: Falls back to Twilio's native TTS with Polly voices.
-   *    Note: This may not work on all Twilio accounts.
+   * 1. Core TTS + Media Streams: when an active stream exists, stream playback is required.
+   *    If telephony TTS is unavailable in that state, playback fails rather than mixing paths.
+   * 2. TwiML <Say>: fallback only when there is no active stream for the call.
    */
   async playTts(input: PlayTtsInput): Promise<void> {
-    // Try telephony TTS via media stream first (if configured)
     const streamSid = this.callStreamMap.get(input.providerCallId);
+    if (streamSid) {
+      if (!this.ttsProvider || !this.mediaStreamHandler) {
+        throw new Error(
+          "Telephony TTS unavailable while media stream is active; refusing TwiML fallback",
+        );
+      }
 
-    if (this.ttsProvider && this.mediaStreamHandler && streamSid) {
       try {
         await this.playTtsViaStream(input.text, streamSid);
         return;
@@ -582,7 +599,7 @@ export class TwilioProvider implements VoiceCallProvider {
       }
     }
 
-    // Fall back to TwiML <Say> (may not work on all accounts)
+    // Fall back to TwiML <Say> only when no active stream exists.
     const webhookUrl = this.callWebhookUrls.get(input.providerCallId);
     if (!webhookUrl) {
       throw new Error("Missing webhook URL for this call (provider state not initialized)");

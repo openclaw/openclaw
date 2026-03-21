@@ -271,6 +271,21 @@ export class CallManager {
     processManagerEvent(this.getContext(), event);
   }
 
+  private shouldDeferConversationInitialMessageUntilStreamConnect(): boolean {
+    if (!this.provider || this.provider.name !== "twilio" || !this.config.streaming.enabled) {
+      return false;
+    }
+
+    const streamAwareProvider = this.provider as VoiceCallProvider & {
+      isConversationStreamConnectEnabled?: () => boolean;
+    };
+    if (typeof streamAwareProvider.isConversationStreamConnectEnabled !== "function") {
+      return false;
+    }
+
+    return streamAwareProvider.isConversationStreamConnectEnabled();
+  }
+
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
     const initialMessage =
       typeof call.metadata?.initialMessage === "string" ? call.metadata.initialMessage.trim() : "";
@@ -280,12 +295,12 @@ export class CallManager {
     }
 
     // Notify mode should speak as soon as the provider reports "answered".
-    // Conversation mode should only defer when Twilio streaming is enabled,
-    // because stream-connected playback handles first-turn audio in that path.
+    // Conversation mode should defer only when the Twilio stream-connect path
+    // is actually available; otherwise speak immediately on answered.
     const mode = (call.metadata?.mode as string | undefined) ?? "conversation";
     if (mode === "conversation") {
       const shouldWaitForStreamConnect =
-        this.provider?.name === "twilio" && this.config.streaming.enabled;
+        this.shouldDeferConversationInitialMessageUntilStreamConnect();
       if (shouldWaitForStreamConnect) {
         return;
       }

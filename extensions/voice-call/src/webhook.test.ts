@@ -360,7 +360,7 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
     vi.useRealTimers();
   });
 
-  it("delays auto-end on disconnect and cancels it when stream reconnects within grace window", async () => {
+  it("ignores stale stream disconnects after reconnect and only hangs up on current stream disconnect", async () => {
     const call = createCall(Date.now() - 1_000);
     call.providerCallId = "CA-stream-1";
 
@@ -378,7 +378,7 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
       processEvent: vi.fn(),
     } as unknown as CallManager;
 
-    let hasStream = true;
+    let currentStreamSid: string | null = "MZ-new";
     const twilioProvider = {
       name: "twilio" as const,
       verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:test" }),
@@ -390,13 +390,19 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
       stopListening: async () => {},
       getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
       isValidStreamToken: () => true,
-      registerCallStream: () => {
-        hasStream = true;
+      registerCallStream: (_callSid: string, streamSid: string) => {
+        currentStreamSid = streamSid;
       },
-      unregisterCallStream: () => {
-        hasStream = false;
+      unregisterCallStream: (_callSid: string, streamSid?: string) => {
+        if (!currentStreamSid) {
+          return;
+        }
+        if (streamSid && currentStreamSid !== streamSid) {
+          return;
+        }
+        currentStreamSid = null;
       },
-      hasRegisteredStream: () => hasStream,
+      hasRegisteredStream: () => currentStreamSid !== null,
       clearTtsQueue: () => {},
     };
 
@@ -416,21 +422,18 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
 
     const mediaHandler = server.getMediaStreamHandler() as unknown as {
       config: {
-        onDisconnect?: (providerCallId: string) => void;
+        onDisconnect?: (providerCallId: string, streamSid: string) => void;
         onConnect?: (providerCallId: string, streamSid: string) => void;
       };
     };
     expect(mediaHandler).toBeTruthy();
 
-    mediaHandler.config.onDisconnect?.("CA-stream-1");
-    await vi.advanceTimersByTimeAsync(1_000);
+    mediaHandler.config.onConnect?.("CA-stream-1", "MZ-new");
+    mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-old");
+    await vi.advanceTimersByTimeAsync(2_100);
     expect(endCall).not.toHaveBeenCalled();
 
-    mediaHandler.config.onConnect?.("CA-stream-1", "MZ-reconnect");
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(endCall).not.toHaveBeenCalled();
-
-    mediaHandler.config.onDisconnect?.("CA-stream-1");
+    mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-new");
     await vi.advanceTimersByTimeAsync(2_100);
     expect(endCall).toHaveBeenCalledTimes(1);
     expect(endCall).toHaveBeenCalledWith(call.callId);

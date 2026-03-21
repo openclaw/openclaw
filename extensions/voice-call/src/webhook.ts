@@ -243,10 +243,10 @@ export class VoiceCallWebhookServer {
           console.warn(`[voice-call] Failed to speak initial message:`, err);
         });
       },
-      onDisconnect: (callId) => {
-        console.log(`[voice-call] Media stream disconnected: ${callId}`);
+      onDisconnect: (callId, streamSid) => {
+        console.log(`[voice-call] Media stream disconnected: ${callId} (${streamSid})`);
         if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).unregisterCallStream(callId);
+          (this.provider as TwilioProvider).unregisterCallStream(callId, streamSid);
         }
 
         this.clearPendingDisconnectHangup(callId);
