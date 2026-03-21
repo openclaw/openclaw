@@ -4,8 +4,8 @@ import {
   listTelegramAccountIds,
   lookupTelegramChatId,
   normalizeTelegramAllowFromEntry,
-} from "../../extensions/telegram/api.js";
-import type { TelegramNetworkConfig } from "../config/types.telegram.js";
+} from "openclaw/plugin-sdk/telegram";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/telegram";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";

@@ -11,7 +11,7 @@ import type { ChannelSetupAdapter, ChannelSetupDmPolicy } from "openclaw/plugin-
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import type { TelegramNetworkConfig } from "../runtime-api.js";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
-import { fetchTelegramChatId, resolveTelegramChatLookupFetch } from "./api-fetch.js";
+import { lookupTelegramChatId } from "./api-fetch.js";
 
 const channel = "telegram" as const;
 
@@ -51,10 +51,6 @@ export async function resolveTelegramAllowFromEntries(params: {
   proxyUrl?: string;
   network?: TelegramNetworkConfig;
 }) {
-  const fetchImpl = resolveTelegramChatLookupFetch({
-    proxyUrl: params.proxyUrl,
-    network: params.network,
-  });
   return await Promise.all(
     params.entries.map(async (entry) => {
       const numericId = parseTelegramAllowFromId(entry);
@@ -66,11 +62,12 @@ export async function resolveTelegramAllowFromEntries(params: {
         return { input: entry, resolved: false, id: null };
       }
       const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-      const id = await fetchTelegramChatId({
+      const id = await lookupTelegramChatId({
         token: params.credentialValue,
         chatId: username,
         apiRoot: params.apiRoot,
-        fetchImpl,
+        proxyUrl: params.proxyUrl,
+        network: params.network,
       });
       return { input: entry, resolved: Boolean(id), id };
     }),

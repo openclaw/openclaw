@@ -11,6 +11,26 @@ export function resolveTelegramChatLookupFetch(params?: {
   return resolveTelegramFetch(proxyFetch, { network: params?.network });
 }
 
+export async function lookupTelegramChatId(params: {
+  token: string;
+  chatId: string;
+  signal?: AbortSignal;
+  apiRoot?: string;
+  proxyUrl?: string;
+  network?: TelegramNetworkConfig;
+}): Promise<string | null> {
+  return fetchTelegramChatId({
+    token: params.token,
+    chatId: params.chatId,
+    signal: params.signal,
+    apiRoot: params.apiRoot,
+    fetchImpl: resolveTelegramChatLookupFetch({
+      proxyUrl: params.proxyUrl,
+      network: params.network,
+    }),
+  });
+}
+
 export async function fetchTelegramChatId(params: {
   token: string;
   chatId: string;
