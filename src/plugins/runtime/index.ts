@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import {
   getApiKeyForModel as getApiKeyForModelRaw,
   resolveApiKeyForProvider as resolveApiKeyForProviderRaw,
@@ -16,6 +15,7 @@ import {
   transcribeAudioFile,
 } from "../../media-understanding/runtime.js";
 import { listSpeechVoices, textToSpeech, textToSpeechTelephony } from "../../tts/runtime.js";
+import { VERSION } from "../../version.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -26,23 +26,6 @@ import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
 import { createRuntimeTools } from "./runtime-tools.js";
 import type { PluginRuntime } from "./types.js";
-
-let cachedVersion: string | null = null;
-
-function resolveVersion(): string {
-  if (cachedVersion) {
-    return cachedVersion;
-  }
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require("../../../package.json") as { version?: string };
-    cachedVersion = pkg.version ?? "unknown";
-    return cachedVersion;
-  } catch {
-    cachedVersion = "unknown";
-    return cachedVersion;
-  }
-}
 
 function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   const unavailable = () => {
@@ -137,7 +120,7 @@ export type CreatePluginRuntimeOptions = {
 
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const runtime = {
-    version: resolveVersion(),
+    version: VERSION,
     config: createRuntimeConfig(),
     agent: createRuntimeAgent(),
     subagent: createLateBindingSubagent(
@@ -171,7 +154,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     modelAuth: {
       // Wrap model-auth helpers so plugins cannot steer credential lookups:
       // - agentDir / store: stripped (prevents reading other agents' stores)
-      // - profileId / preferredProfile: stripped (prevents cross-provider
+      // - profileId / preferredProfile: stripped (prevents cross-profile
       //   credential access via profile steering)
       // Plugins only specify provider/model; the core auth pipeline picks
       // the appropriate credential automatically.
