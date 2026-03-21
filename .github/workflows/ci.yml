@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -359,6 +359,11 @@ jobs:
         continue-on-error: true
         run: pnpm test:gateway:watch-regression
 
+      - name: Check config docs drift statefile
+        id: config_docs_drift
+        continue-on-error: true
+        run: pnpm config:docs:check
+
       - name: Upload gateway watch regression artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -376,6 +381,7 @@ jobs:
           EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME: ${{ steps.extension_plugin_sdk_internal_boundary.outcome }}
           NO_RAW_WINDOW_OPEN_OUTCOME: ${{ steps.no_raw_window_open.outcome }}
           GATEWAY_WATCH_REGRESSION_OUTCOME: ${{ steps.gateway_watch_regression.outcome }}
+          CONFIG_DOCS_DRIFT_OUTCOME: ${{ steps.config_docs_drift.outcome }}
         run: |
           failures=0
           for result in \
@@ -384,7 +390,8 @@ jobs:
             "extension-src-outside-plugin-sdk-boundary|$EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME" \
             "extension-plugin-sdk-internal-boundary|$EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME" \
             "lint:ui:no-raw-window-open|$NO_RAW_WINDOW_OPEN_OUTCOME" \
-            "gateway-watch-regression|$GATEWAY_WATCH_REGRESSION_OUTCOME"; do
+            "gateway-watch-regression|$GATEWAY_WATCH_REGRESSION_OUTCOME" \
+            "config-docs-drift|$CONFIG_DOCS_DRIFT_OUTCOME"; do
             name="${result%%|*}"
             outcome="${result#*|}"
             if [ "$outcome" != "success" ]; then

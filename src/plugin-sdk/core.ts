@@ -1,21 +1,29 @@
+import {
+  createScopedAccountReplyToModeResolver,
+  createTopLevelChannelReplyToModeResolver,
+} from "../channels/plugins/threading-helpers.js";
+import type {
+  ChannelOutboundAdapter,
+  ChannelPairingAdapter,
+  ChannelSecurityAdapter,
+} from "../channels/plugins/types.adapters.js";
 import type {
   ChannelMessagingAdapter,
   ChannelOutboundSessionRoute,
+  ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { getChatChannelMeta } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ReplyToMode } from "../config/types.base.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import type {
-  OpenClawPluginApi,
-  OpenClawPluginCommandDefinition,
-  OpenClawPluginConfigSchema,
-  OpenClawPluginDefinition,
-  PluginCommandContext,
-  PluginInteractiveTelegramHandlerContext,
-} from "../plugins/types.js";
+import type { OpenClawPluginApi, OpenClawPluginConfigSchema } from "../plugins/types.js";
+import { createScopedDmSecurityResolver } from "./channel-config-helpers.js";
+import { createTextPairingAdapter } from "./channel-pairing.js";
+import { createAttachedChannelResultAdapter } from "./channel-send-result.js";
+import { definePluginEntry } from "./plugin-entry.js";
 
 export type {
   AnyAgentTool,
@@ -77,6 +85,7 @@ export type { OpenClawPluginApi } from "../plugins/types.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export { definePluginEntry } from "./plugin-entry.js";
 export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
@@ -122,8 +131,6 @@ export {
   type RoutePeer,
   type RoutePeerKind,
 } from "../routing/resolve-route.js";
-export { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
-export { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
 export { resolveThreadSessionKeys } from "../routing/session-key.js";
 
 export type ChannelOutboundSessionRouteParams = Parameters<
@@ -179,27 +186,10 @@ type DefineChannelPluginEntryOptions<TPlugin extends ChannelPlugin = ChannelPlug
   name: string;
   description: string;
   plugin: TPlugin;
-  configSchema?: DefinePluginEntryOptions["configSchema"];
+  configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
   setRuntime?: (runtime: PluginRuntime) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
 };
-
-type DefinePluginEntryOptions = {
-  id: string;
-  name: string;
-  description: string;
-  kind?: OpenClawPluginDefinition["kind"];
-  configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
-  register: (api: OpenClawPluginApi) => void;
-};
-
-type DefinedPluginEntry = {
-  id: string;
-  name: string;
-  description: string;
-  configSchema: OpenClawPluginConfigSchema;
-  register: NonNullable<OpenClawPluginDefinition["register"]>;
-} & Pick<OpenClawPluginDefinition, "kind">;
 
 type CreateChannelPluginBaseOptions<TResolvedAccount> = {
   id: ChannelPlugin<TResolvedAccount>["id"];
@@ -237,31 +227,6 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
     >
   >;
 
-function resolvePluginConfigSchema(
-  configSchema: DefinePluginEntryOptions["configSchema"] = emptyPluginConfigSchema,
-): OpenClawPluginConfigSchema {
-  return typeof configSchema === "function" ? configSchema() : configSchema;
-}
-
-// Shared generic plugin-entry boilerplate for bundled and third-party plugins.
-export function definePluginEntry({
-  id,
-  name,
-  description,
-  kind,
-  configSchema = emptyPluginConfigSchema,
-  register,
-}: DefinePluginEntryOptions): DefinedPluginEntry {
-  return {
-    id,
-    name,
-    description,
-    ...(kind ? { kind } : {}),
-    configSchema: resolvePluginConfigSchema(configSchema),
-    register,
-  };
-}
-
 // Shared channel-plugin entry boilerplate for bundled and third-party channels.
 export function defineChannelPluginEntry<TPlugin extends ChannelPlugin>({
   id,
@@ -291,6 +256,161 @@ export function defineChannelPluginEntry<TPlugin extends ChannelPlugin>({
 // Shared setup-entry shape so bundled channels do not duplicate `{ plugin }`.
 export function defineSetupPluginEntry<TPlugin>(plugin: TPlugin) {
   return { plugin };
+}
+
+type ChatChannelPluginBase<TResolvedAccount, Probe, Audit> = Omit<
+  ChannelPlugin<TResolvedAccount, Probe, Audit>,
+  "security" | "pairing" | "threading" | "outbound"
+> &
+  Partial<
+    Pick<
+      ChannelPlugin<TResolvedAccount, Probe, Audit>,
+      "security" | "pairing" | "threading" | "outbound"
+    >
+  >;
+
+type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | null }> = {
+  dm: {
+    channelKey: string;
+    resolvePolicy: (account: TResolvedAccount) => string | null | undefined;
+    resolveAllowFrom: (account: TResolvedAccount) => Array<string | number> | null | undefined;
+    resolveFallbackAccountId?: (account: TResolvedAccount) => string | null | undefined;
+    defaultPolicy?: string;
+    allowFromPathSuffix?: string;
+    policyPathSuffix?: string;
+    approveChannelId?: string;
+    approveHint?: string;
+    normalizeEntry?: (raw: string) => string;
+  };
+  collectWarnings?: ChannelSecurityAdapter<TResolvedAccount>["collectWarnings"];
+};
+
+type ChatChannelPairingOptions = {
+  text: {
+    idLabel: string;
+    message: string;
+    normalizeAllowEntry?: ChannelPairingAdapter["normalizeAllowEntry"];
+    notify: Parameters<typeof createTextPairingAdapter>[0]["notify"];
+  };
+};
+
+type ChatChannelThreadingReplyModeOptions<TResolvedAccount> =
+  | { topLevelReplyToMode: string }
+  | {
+      scopedAccountReplyToMode: {
+        resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => TResolvedAccount;
+        resolveReplyToMode: (
+          account: TResolvedAccount,
+          chatType?: string | null,
+        ) => ReplyToMode | null | undefined;
+        fallback?: ReplyToMode;
+      };
+    }
+  | {
+      resolveReplyToMode: NonNullable<ChannelThreadingAdapter["resolveReplyToMode"]>;
+    };
+
+type ChatChannelThreadingOptions<TResolvedAccount> =
+  ChatChannelThreadingReplyModeOptions<TResolvedAccount> &
+    Omit<ChannelThreadingAdapter, "resolveReplyToMode">;
+
+type ChatChannelAttachedOutboundOptions = {
+  base: Omit<ChannelOutboundAdapter, "sendText" | "sendMedia" | "sendPoll">;
+  attachedResults: Parameters<typeof createAttachedChannelResultAdapter>[0];
+};
+
+function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: string | null }>(
+  security:
+    | ChannelSecurityAdapter<TResolvedAccount>
+    | ChatChannelSecurityOptions<TResolvedAccount>
+    | undefined,
+): ChannelSecurityAdapter<TResolvedAccount> | undefined {
+  if (!security) {
+    return undefined;
+  }
+  if (!("dm" in security)) {
+    return security;
+  }
+  return {
+    resolveDmPolicy: createScopedDmSecurityResolver<TResolvedAccount>(security.dm),
+    ...(security.collectWarnings ? { collectWarnings: security.collectWarnings } : {}),
+  };
+}
+
+function resolveChatChannelPairing(
+  pairing: ChannelPairingAdapter | ChatChannelPairingOptions | undefined,
+): ChannelPairingAdapter | undefined {
+  if (!pairing) {
+    return undefined;
+  }
+  if (!("text" in pairing)) {
+    return pairing;
+  }
+  return createTextPairingAdapter(pairing.text);
+}
+
+function resolveChatChannelThreading<TResolvedAccount>(
+  threading: ChannelThreadingAdapter | ChatChannelThreadingOptions<TResolvedAccount> | undefined,
+): ChannelThreadingAdapter | undefined {
+  if (!threading) {
+    return undefined;
+  }
+  if (!("topLevelReplyToMode" in threading) && !("scopedAccountReplyToMode" in threading)) {
+    return threading;
+  }
+
+  let resolveReplyToMode: ChannelThreadingAdapter["resolveReplyToMode"];
+  if ("topLevelReplyToMode" in threading) {
+    resolveReplyToMode = createTopLevelChannelReplyToModeResolver(threading.topLevelReplyToMode);
+  } else {
+    resolveReplyToMode = createScopedAccountReplyToModeResolver<TResolvedAccount>(
+      threading.scopedAccountReplyToMode,
+    );
+  }
+
+  return {
+    ...threading,
+    resolveReplyToMode,
+  };
+}
+
+function resolveChatChannelOutbound(
+  outbound: ChannelOutboundAdapter | ChatChannelAttachedOutboundOptions | undefined,
+): ChannelOutboundAdapter | undefined {
+  if (!outbound) {
+    return undefined;
+  }
+  if (!("attachedResults" in outbound)) {
+    return outbound;
+  }
+  return {
+    ...outbound.base,
+    ...createAttachedChannelResultAdapter(outbound.attachedResults),
+  };
+}
+
+// Shared higher-level builder for chat-style channels that mostly compose
+// scoped DM security, text pairing, reply threading, and attached send results.
+export function createChatChannelPlugin<
+  TResolvedAccount extends { accountId?: string | null },
+  Probe = unknown,
+  Audit = unknown,
+>(params: {
+  base: ChatChannelPluginBase<TResolvedAccount, Probe, Audit>;
+  security?:
+    | ChannelSecurityAdapter<TResolvedAccount>
+    | ChatChannelSecurityOptions<TResolvedAccount>;
+  pairing?: ChannelPairingAdapter | ChatChannelPairingOptions;
+  threading?: ChannelThreadingAdapter | ChatChannelThreadingOptions<TResolvedAccount>;
+  outbound?: ChannelOutboundAdapter | ChatChannelAttachedOutboundOptions;
+}): ChannelPlugin<TResolvedAccount, Probe, Audit> {
+  return {
+    ...params.base,
+    ...(params.security ? { security: resolveChatChannelSecurity(params.security) } : {}),
+    ...(params.pairing ? { pairing: resolveChatChannelPairing(params.pairing) } : {}),
+    ...(params.threading ? { threading: resolveChatChannelThreading(params.threading) } : {}),
+    ...(params.outbound ? { outbound: resolveChatChannelOutbound(params.outbound) } : {}),
+  } as ChannelPlugin<TResolvedAccount, Probe, Audit>;
 }
 
 // Shared base object for channel plugins that only need to override a few optional surfaces.

@@ -10,7 +10,7 @@ import {
   ensureAuthProfileStore,
   listProfilesForProvider,
 } from "openclaw/plugin-sdk/provider-auth";
-import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-oauth";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import {
   minimaxMediaUnderstandingProvider,

@@ -1,4 +1,4 @@
-import { hasAnyWhatsAppAuth } from "openclaw/plugin-sdk/whatsapp";
+import { hasAnyWhatsAppAuth } from "../../extensions/whatsapp/auth-presence.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { hasMeaningfulChannelConfig } from "../channels/config-presence.js";
 import {

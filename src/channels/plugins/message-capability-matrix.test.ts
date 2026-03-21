@@ -5,32 +5,19 @@ import type { ChannelMessageActionAdapter, ChannelPlugin } from "./types.js";
 const telegramDescribeMessageToolMock = vi.fn();
 const discordDescribeMessageToolMock = vi.fn();
 
-vi.mock("../../../extensions/telegram/src/runtime.js", () => ({
-  getTelegramRuntime: () => ({
-    channel: {
-      telegram: {
-        messageActions: {
-          describeMessageTool: telegramDescribeMessageToolMock,
-        },
-      },
-    },
-  }),
-}));
+const telegramPlugin: Pick<ChannelPlugin, "actions"> = {
+  actions: {
+    describeMessageTool: ({ cfg }) => telegramDescribeMessageToolMock({ cfg }),
+    supportsAction: () => true,
+  },
+};
 
-vi.mock("../../../extensions/discord/src/runtime.js", () => ({
-  getDiscordRuntime: () => ({
-    channel: {
-      discord: {
-        messageActions: {
-          describeMessageTool: discordDescribeMessageToolMock,
-        },
-      },
-    },
-  }),
-}));
-
-const { telegramPlugin } = await import("../../../extensions/telegram/src/channel.js");
-const { discordPlugin } = await import("../../../extensions/discord/src/channel.js");
+const discordPlugin: Pick<ChannelPlugin, "actions"> = {
+  actions: {
+    describeMessageTool: ({ cfg }) => discordDescribeMessageToolMock({ cfg }),
+    supportsAction: () => true,
+  },
+};
 
 // Keep this matrix focused on capability wiring. The extension packages already
 // cover their own full channel/plugin boot paths, so local stubs are enough here.

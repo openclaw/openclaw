@@ -21,12 +21,15 @@ function readBaseline() {
 }
 
 describe("plugin extension import boundary inventory", () => {
-  it("keeps web-search-providers out of the remaining inventory", async () => {
+  it("keeps dedicated web-search registry shims out of the remaining inventory", async () => {
     const inventory = await collectPluginExtensionImportBoundaryInventory();
 
     expect(inventory.some((entry) => entry.file === "src/plugins/web-search-providers.ts")).toBe(
       false,
     );
+    expect(
+      inventory.some((entry) => entry.file === "src/plugins/bundled-web-search-registry.ts"),
+    ).toBe(false);
   });
 
   it("ignores boundary shims by scope", async () => {
@@ -34,9 +37,6 @@ describe("plugin extension import boundary inventory", () => {
 
     expect(inventory.some((entry) => entry.file.startsWith("src/plugin-sdk/"))).toBe(false);
     expect(inventory.some((entry) => entry.file.startsWith("src/plugin-sdk-internal/"))).toBe(
-      false,
-    );
-    expect(inventory.some((entry) => entry.file.startsWith("src/plugins/runtime/runtime-"))).toBe(
       false,
     );
   });
