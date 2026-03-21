@@ -68,17 +68,17 @@ cost, tokens, errors, and more.
 openclaw plugins install @opik/opik-openclaw
 ```
 
-### QQbot
+### QQ Bot
 
-Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
-mentions, channel messages, and rich media including voice, images, videos,
-and files.
+Official QQ Bot channel plugin. Connect OpenClaw to QQ with support for
+private chats, groups, guild channels, rich media (images, voice, video,
+files), and more.
 
-- **npm:** `@sliverp/qqbot`
-- **repo:** [github.com/sliverp/qqbot](https://github.com/sliverp/qqbot)
+- **npm:** `@tencent-connect/openclaw-qqbot`
+- **repo:** [github.com/tencent-connect/openclaw-qqbot](https://github.com/tencent-connect/openclaw-qqbot)
 
 ```bash
-openclaw plugins install @sliverp/qqbot
+openclaw plugins install @tencent-connect/openclaw-qqbot
 ```
 
 ### wecom
