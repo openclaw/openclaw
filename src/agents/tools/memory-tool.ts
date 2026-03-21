@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
+import { readAgentMemoryFile } from "../../memory/read-file.js";
 import type { MemorySearchResult } from "../../memory/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -165,6 +166,22 @@ export function createMemoryGetTool(options: {
         const relPath = readStringParam(params, "path", { required: true });
         const from = readNumberParam(params, "from", { integer: true });
         const lines = readNumberParam(params, "lines", { integer: true });
+        const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+        if (resolved.backend === "builtin") {
+          try {
+            const result = await readAgentMemoryFile({
+              cfg,
+              agentId,
+              relPath,
+              from: from ?? undefined,
+              lines: lines ?? undefined,
+            });
+            return jsonResult(result);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return jsonResult({ path: relPath, text: "", disabled: true, error: message });
+          }
+        }
         const memory = await getMemoryManagerContextWithPurpose({
           cfg,
           agentId,
