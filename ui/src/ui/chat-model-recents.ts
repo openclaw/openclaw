@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "../../../src/agents/provider-id.ts";
+import { getSafeLocalStorage } from "../local-storage.ts";
 import { buildChatModelOption } from "./chat-model-ref.ts";
 import type { ModelCatalogEntry } from "./types.ts";
 
@@ -51,10 +52,7 @@ function storageOrNull(storage?: Storage): Storage | null {
   if (storage) {
     return storage;
   }
-  if (typeof window === "undefined" || !window.localStorage) {
-    return null;
-  }
-  return window.localStorage;
+  return getSafeLocalStorage();
 }
 
 export function normalizeChatModelKey(value: string): string {

@@ -300,7 +300,7 @@ describe("buildChatModelOptions", () => {
   });
 
   it("prioritizes recent models from localStorage and ignores stale recent entries", () => {
-    const previousWindow = globalThis.window;
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
     const storage = {
       getItem: () =>
         JSON.stringify([
@@ -314,8 +314,8 @@ describe("buildChatModelOptions", () => {
       length: 1,
     } as unknown as Storage;
 
-    Object.defineProperty(globalThis, "window", {
-      value: { localStorage: storage },
+    Object.defineProperty(globalThis, "localStorage", {
+      value: storage,
       configurable: true,
     });
 
@@ -332,10 +332,9 @@ describe("buildChatModelOptions", () => {
         ).map((entry) => entry.value),
       ).toEqual(["anthropic/claude-sonnet", "custom/foo", "openai/gpt-5"]);
     } finally {
-      Object.defineProperty(globalThis, "window", {
-        value: previousWindow,
-        configurable: true,
-      });
+      if (previous) {
+        Object.defineProperty(globalThis, "localStorage", previous);
+      }
     }
   });
 
@@ -357,18 +356,16 @@ describe("buildChatModelOptions", () => {
 
 describe("rememberResolvedChatModelRecent", () => {
   it("stores the canonical resolved model ref for recent-model tracking", () => {
-    const previousWindow = globalThis.window;
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
     const setItem = vi.fn();
-    Object.defineProperty(globalThis, "window", {
+    Object.defineProperty(globalThis, "localStorage", {
       value: {
-        localStorage: {
-          getItem: () => null,
-          setItem,
-          removeItem: () => undefined,
-          clear: () => undefined,
-          key: () => null,
-          length: 0,
-        },
+        getItem: () => null,
+        setItem,
+        removeItem: () => undefined,
+        clear: () => undefined,
+        key: () => null,
+        length: 0,
       },
       configurable: true,
     });
@@ -380,10 +377,9 @@ describe("rememberResolvedChatModelRecent", () => {
       expect(setItem).toHaveBeenCalled();
       expect(setItem.mock.calls.at(-1)?.[1]).toContain("openai/gpt-5-mini");
     } finally {
-      Object.defineProperty(globalThis, "window", {
-        value: previousWindow,
-        configurable: true,
-      });
+      if (previous) {
+        Object.defineProperty(globalThis, "localStorage", previous);
+      }
     }
   });
 });

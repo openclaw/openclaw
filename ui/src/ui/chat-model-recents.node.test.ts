@@ -117,4 +117,22 @@ describe("chat-model-recents", () => {
 
     expect(ranked.map((entry) => entry.value)).toEqual(["custom/foo", "openai/gpt-5"]);
   });
+
+  it("returns an empty list when localStorage access throws", () => {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get() {
+        throw new Error("blocked");
+      },
+    });
+
+    try {
+      expect(loadRecentChatModels()).toEqual([]);
+    } finally {
+      if (previous) {
+        Object.defineProperty(globalThis, "localStorage", previous);
+      }
+    }
+  });
 });
