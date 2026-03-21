@@ -92,7 +92,15 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
       configurable: true,
       enumerable: true,
       writable: true,
-      value: actual.resolveStorePath,
+      value:
+        typeof actual.resolveStorePath === "function"
+          ? actual.resolveStorePath
+          : (store: { path?: string } | string | undefined, opts?: { agentId?: string }) => {
+              if (typeof store === "string") return store;
+              if (store?.path) return store.path;
+              const agentId = opts?.agentId?.trim() || "main";
+              return `/tmp/openclaw-session-${agentId}.json`;
+            },
     },
   });
   return mockModule;
