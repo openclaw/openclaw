@@ -344,6 +344,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             chatId,
             text: params.text,
             messageId: lastMessageId,
+            threadId: rootId,
             senderBotOpenId: botOpenIds.get(accountId ?? "default"),
             senderBotName: botNames.get(accountId ?? "default"),
           });
@@ -426,18 +427,20 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
             if (info?.kind === "final") {
               streamText = mergeStreamingText(streamText, text);
+              // Save messageId before closeStreaming() clears the streaming object
+              const streamingMsgId = streaming?.getMessageId();
               await closeStreaming();
               deliveredFinalTexts.add(text);
               // Cross-bot relay: trigger after streaming final
               const feishuCfg = resolveFeishuAccount({ cfg, accountId }).config;
               if (feishuCfg?.crossBotRelay && chatId?.startsWith("oc_") && text?.trim()) {
                 try {
-                  const streamingMsgId = (streaming as any)?.state?.messageId;
                   await relayOutboundToOtherBots({
                     senderAccountId: accountId ?? "default",
                     chatId,
                     text,
                     messageId: streamingMsgId,
+                    threadId: rootId,
                     senderBotOpenId: botOpenIds.get(accountId ?? "default"),
                     senderBotName: botNames.get(accountId ?? "default"),
                   });
@@ -461,7 +464,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               useCard: true,
               infoKind: info?.kind,
               sendChunk: async ({ chunk, isFirst }) => {
-                await sendStructuredCardFeishu({
+                return sendStructuredCardFeishu({
                   cfg,
                   to: chatId,
                   text: chunk,
@@ -480,7 +483,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               useCard: false,
               infoKind: info?.kind,
               sendChunk: async ({ chunk, isFirst }) => {
-                await sendMessageFeishu({
+                return sendMessageFeishu({
                   cfg,
                   to: chatId,
                   text: chunk,

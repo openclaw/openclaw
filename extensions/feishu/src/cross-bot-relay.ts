@@ -48,6 +48,8 @@ export type RelayOutboundParams = {
   text: string;
   /** Message ID returned by Feishu API after sending */
   messageId?: string;
+  /** Thread/topic ID for topic group messages (root_id in Feishu events) */
+  threadId?: string;
   /** Bot's open_id (sender identity) */
   senderBotOpenId?: string;
   /** Bot's display name */
@@ -55,7 +57,8 @@ export type RelayOutboundParams = {
 };
 
 export async function relayOutboundToOtherBots(params: RelayOutboundParams): Promise<void> {
-  const { senderAccountId, chatId, text, messageId, senderBotOpenId, senderBotName } = params;
+  const { senderAccountId, chatId, text, messageId, threadId, senderBotOpenId, senderBotName } =
+    params;
 
   // Only relay to group chats
   if (!chatId) return;
@@ -123,6 +126,8 @@ export async function relayOutboundToOtherBots(params: RelayOutboundParams): Pro
           content: JSON.stringify({ text }),
           create_time: String(Date.now()),
           mentions,
+          // Preserve thread/topic metadata so relay messages stay in the correct topic
+          ...(threadId ? { root_id: threadId, thread_id: threadId } : {}),
         },
       };
       const log = target.runtime?.log ?? console.log;

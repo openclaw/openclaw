@@ -120,6 +120,25 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
       const renderMode = account.config?.renderMode ?? "auto";
       const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+      // Cross-bot relay helper — extracted to avoid duplication between card and text paths
+      const triggerRelay = (result: { messageId?: string }) => {
+        const feishuCfg = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined }).config;
+        const effectiveAccountId = accountId ?? undefined;
+        if (feishuCfg?.crossBotRelay && to.startsWith("oc_") && text?.trim()) {
+          void relayOutboundToOtherBots({
+            senderAccountId: effectiveAccountId ?? "default",
+            chatId: to,
+            text,
+            messageId: result.messageId,
+            threadId: threadId != null ? String(threadId) : undefined,
+            senderBotOpenId: botOpenIds.get(effectiveAccountId ?? "default"),
+            senderBotName: botNames.get(effectiveAccountId ?? "default"),
+          }).catch((err) => {
+            console.error(`[feishu] cross-bot relay failed:`, err);
+          });
+        }
+      };
+
       if (useCard) {
         const header = identity
           ? {
@@ -129,7 +148,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
               template: "blue" as const,
             }
           : undefined;
-        return await sendStructuredCardFeishu({
+        const cardResult = await sendStructuredCardFeishu({
           cfg,
           to,
           text,
@@ -138,6 +157,9 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           accountId: accountId ?? undefined,
           header: header?.title ? header : undefined,
         });
+        // Relay card messages too — previously skipped by early return
+        triggerRelay(cardResult);
+        return cardResult;
       }
       const result = await sendOutboundText({
         cfg,
@@ -147,21 +169,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         replyToMessageId,
       });
 
-      // Cross-bot relay: notify other bots in the same group
-      const feishuCfg = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined }).config;
-      if (feishuCfg?.crossBotRelay && to.startsWith("oc_") && text?.trim()) {
-        const effectiveAccountId = accountId ?? undefined;
-        void relayOutboundToOtherBots({
-          senderAccountId: effectiveAccountId ?? "default",
-          chatId: to,
-          text,
-          messageId: result.messageId,
-          senderBotOpenId: botOpenIds.get(effectiveAccountId ?? "default"),
-          senderBotName: botNames.get(effectiveAccountId ?? "default"),
-        }).catch((err) => {
-          console.error(`[feishu] cross-bot relay failed:`, err);
-        });
-      }
+      triggerRelay(result);
 
       return result;
     },
