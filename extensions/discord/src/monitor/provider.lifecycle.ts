@@ -364,20 +364,89 @@ export async function runDiscordGatewayLifecycle(params: {
           return;
         }
         if (reconnected === "timeout" && !lifecycleStopping) {
-          const error = new Error(
-            `discord gateway did not reach READY within ${DISCORD_GATEWAY_READY_TIMEOUT_MS}ms after a forced reconnect`,
-          );
-          const startupFailureAt = Date.now();
-          pushStatus({
-            connected: false,
-            lastEventAt: startupFailureAt,
-            lastDisconnect: {
-              at: startupFailureAt,
-              error: "startup-reconnect-timeout",
-            },
-            lastError: error.message,
-          });
-          throw error;
+          // The forced reconnect also timed out — likely a transient network
+          // outage during startup. Rather than giving up immediately (which
+          // leaves the channel permanently dead until the gateway restarts),
+          // retry with exponential backoff, mirroring the post-connected
+          // reconnect-stall-watchdog behaviour.
+          const STARTUP_MAX_BACKOFF_ATTEMPTS = 8;
+          const STARTUP_BACKOFF_BASE_MS = DISCORD_GATEWAY_READY_TIMEOUT_MS;
+          const STARTUP_BACKOFF_MAX_MS = RECONNECT_STALL_TIMEOUT_MS;
+
+          let startupRecovered = false;
+          for (
+            let backoffAttempt = 1;
+            backoffAttempt <= STARTUP_MAX_BACKOFF_ATTEMPTS && !lifecycleStopping;
+            backoffAttempt++
+          ) {
+            const delayMs = Math.min(
+              STARTUP_BACKOFF_BASE_MS * (1 << Math.min(backoffAttempt - 1, 5)),
+              STARTUP_BACKOFF_MAX_MS,
+            );
+            const stuckAt = Date.now();
+            params.runtime.error?.(
+              danger(
+                `discord: gateway startup stalled; backing off ${Math.round(delayMs / 1000)}s before retry (attempt ${backoffAttempt}/${STARTUP_MAX_BACKOFF_ATTEMPTS})`,
+              ),
+            );
+            pushStatus({
+              connected: false,
+              lastEventAt: stuckAt,
+              lastDisconnect: {
+                at: stuckAt,
+                error: "startup-reconnect-timeout",
+              },
+            });
+
+            await new Promise<void>((resolve) => {
+              const t = setTimeout(resolve, delayMs);
+              t.unref?.();
+              params.abortSignal?.addEventListener("abort", () => {
+                clearTimeout(t);
+                resolve();
+              }, { once: true });
+            });
+
+            if (lifecycleStopping || params.abortSignal?.aborted) {
+              return;
+            }
+
+            clearResumeState();
+            gateway?.disconnect();
+            gateway?.connect(false);
+
+            const backoffReady = await waitForDiscordGatewayReady({
+              gateway,
+              abortSignal: params.abortSignal,
+              timeoutMs: DISCORD_GATEWAY_READY_TIMEOUT_MS,
+              beforePoll: drainPendingGatewayErrors,
+            });
+
+            if (backoffReady === "stopped" || lifecycleStopping) {
+              return;
+            }
+            if (backoffReady !== "timeout") {
+              startupRecovered = true;
+              break;
+            }
+          }
+
+          if (!startupRecovered && !lifecycleStopping) {
+            const error = new Error(
+              `discord gateway did not reach READY after ${STARTUP_MAX_BACKOFF_ATTEMPTS + 2} startup attempts`,
+            );
+            const startupFailureAt = Date.now();
+            pushStatus({
+              connected: false,
+              lastEventAt: startupFailureAt,
+              lastDisconnect: {
+                at: startupFailureAt,
+                error: "startup-reconnect-timeout",
+              },
+              lastError: error.message,
+            });
+            throw error;
+          }
         }
       }
     }
