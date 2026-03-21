@@ -13,7 +13,16 @@ function relativeSymlinkTarget(sourcePath, targetPath) {
 }
 
 function symlinkPath(sourcePath, targetPath, type) {
-  fs.symlinkSync(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+  const targetType = type || (fs.statSync(sourcePath).isDirectory() ? symlinkType() : "file");
+  try {
+    fs.symlinkSync(relativeSymlinkTarget(sourcePath, targetPath), targetPath, targetType);
+  } catch (err) {
+    if (process.platform === "win32" && targetType === "file") {
+      fs.copyFileSync(sourcePath, targetPath);
+    } else {
+      throw err;
+    }
+  }
 }
 
 function shouldWrapRuntimeJsFile(sourcePath) {
@@ -63,7 +72,22 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir) {
     }
 
     if (dirent.isSymbolicLink()) {
-      fs.symlinkSync(fs.readlinkSync(sourcePath), targetPath);
+      const linkTarget = fs.readlinkSync(sourcePath);
+      try {
+        fs.symlinkSync(linkTarget, targetPath, dirent.isDirectory() ? symlinkType() : "file");
+      } catch (err) {
+        if (process.platform === "win32") {
+          // Fallback: copy the target if it's a file
+          const resolvedSource = path.resolve(path.dirname(sourcePath), linkTarget);
+          if (fs.statSync(resolvedSource).isFile()) {
+            fs.copyFileSync(resolvedSource, targetPath);
+          } else {
+            throw err;
+          }
+        } else {
+          throw err;
+        }
+      }
       continue;
     }
 
