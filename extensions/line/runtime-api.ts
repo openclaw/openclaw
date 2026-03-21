@@ -3,6 +3,8 @@
 
 export * from "../../src/plugin-sdk/line.js";
 export {
+  formatDocsLink,
+  resolveExactLineGroupConfigKey,
   setSetupChannelEnabled,
   splitSetupEntries,
   type ChannelSetupDmPolicy,

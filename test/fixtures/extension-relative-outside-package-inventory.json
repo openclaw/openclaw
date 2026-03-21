@@ -89,7 +89,7 @@
   },
   {
     "file": "extensions/line/runtime-api.ts",
-    "line": 13,
+    "line": 12,
     "kind": "export",
     "specifier": "../../src/plugin-sdk/line-core.js",
     "resolvedPath": "src/plugin-sdk/line-core.js",
