@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 
 const resolveMatrixTargetsMock = vi.hoisted(() => vi.fn(async () => []));
 
@@ -19,11 +20,7 @@ describe("matrix resolver adapter", () => {
       accountId: "ops",
       inputs: ["Alice"],
       kind: "user",
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      },
+      runtime: createRuntimeEnv({ throwOnExit: false }),
     });
 
     expect(resolveMatrixTargetsMock).toHaveBeenCalledWith({
