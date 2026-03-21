@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/MiniMax: merge the bundled MiniMax API and MiniMax OAuth plugin surfaces into a single default-on `minimax` plugin, while keeping legacy `minimax-portal-auth` config ids aliased for compatibility.
 - Telegram/actions: add `topic-edit` for forum-topic renames and icon updates while sharing the same Telegram topic-edit transport used by the plugin runtime. (#47798) Thanks @obviyus.
 - Telegram/error replies: add a default-off `channels.telegram.silentErrorReplies` setting so bot error replies can be delivered silently across regular replies, native commands, and fallback sends. (#19776) Thanks @ImLukeF.
+- Doctor/refactor: start splitting doctor provider checks into `src/commands/doctor/providers/*` by extracting Telegram first-run and group allowlist warnings into a provider-specific module, keeping the current setup guidance and warning behavior intact. Thanks @vincentkoc.
 - Refactor/channels: remove the legacy channel shim directories and point channel-specific imports directly at the extension-owned implementations. (#45967) Thanks @scoootscooob.
 - Docs/Zalo: clarify the Marketplace-bot support matrix and config guidance so the Zalo channel docs match current Bot Creator behavior more closely. (#47552) Thanks @No898.
 - secrets: harden read-only SecretRef command paths and diagnostics. (#47794) Thanks @joshavant.
@@ -58,6 +59,8 @@ Docs: https://docs.openclaw.ai
 - Telegram/topics: auto-rename DM forum topics on first message with LLM-generated labels, with per-account and per-DM `autoTopicLabel` overrides. (#51502) Thanks @Lukavyi.
 - Docs/plugins: add the community wecom plugin listing to the docs catalog. (#29905) Thanks @sliverp.
 - Models/GitHub Copilot: allow forward-compat dynamic model ids without code updates, while preserving configured provider and per-model overrides for those synthetic models. (#51325) Thanks @fuller-stack-dev.
+- Agents/compaction: notify users when followup auto-compaction starts and finishes, keeping those notices out of TTS and preserving reply threading for the real assistant reply. (#38805) Thanks @zidongdesign.
+- Models/OpenAI: switch the default OpenAI setup model to `openai/gpt-5.4`, keep Codex on `openai-codex/gpt-5.4`, and centralize OpenAI chat, image, TTS, transcription, and embedding defaults in one shared module so future default-model updates stay low-churn. Thanks @vincentkoc.
 
 ### Fixes
 
@@ -65,6 +68,7 @@ Docs: https://docs.openclaw.ai
 - CLI/Ollama onboarding: keep the interactive model picker for explicit `openclaw onboard --auth-choice ollama` runs so setup still selects a default model without reintroducing pre-picker auto-pulls. (#49249) Thanks @BruceMacD.
 - Plugins/bundler TDZ: fix `RESERVED_COMMANDS` temporal dead zone error that prevented device-pair, phone-control, and talk-voice plugins from registering when the bundler placed the commands module after call sites in the same output chunk. Thanks @BunsDev.
 - Plugins/imports: fix stale googlechat runtime-api import paths and signal SDK circular re-exports broken by recent plugin-sdk refactors. Thanks @BunsDev.
+- Telegram/setup: seed fresh setups with `channels.telegram.groups["*"].requireMention=true` so new bots stay mention-gated in groups unless you explicitly open them up. Thanks @vincentkoc.
 - Google auth/Node 25: patch `gaxios` to use native fetch without injecting `globalThis.window`, while translating proxy and mTLS transport settings so Google Vertex and Google Chat auth keep working on Node 25. (#47914) Thanks @pdd-cli.
 - Gateway/startup: load bundled channel plugins from compiled `dist/extensions` entries in built installs, so gateway boot no longer recompiles bundled extension TypeScript on every startup and WhatsApp-class cold starts drop back to seconds instead of tens of seconds or worse. (#47560) Thanks @ngutman.
 - Agents/openai-responses: strip `prompt_cache_key` and `prompt_cache_retention` for non-OpenAI-compatible Responses endpoints while keeping them on direct OpenAI and Azure OpenAI paths, so third-party OpenAI-compatible providers no longer reject those requests with HTTP 400. (#49877) Thanks @ShaunTsai.
@@ -77,6 +81,7 @@ Docs: https://docs.openclaw.ai
 - Configure/startup: move outbound send-deps resolution into a lightweight helper so `openclaw configure` no longer stalls after the banner while eagerly loading channel plugins. (#46301) Thanks @scoootscooob.
 - CLI/startup: lazy-load channel add and root help startup paths to trim avoidable RSS and help latency on constrained hosts. (#46784) Thanks @vincentkoc.
 - CLI/onboarding: import static provider definitions directly for onboarding model/config helpers so those paths no longer pull provider discovery just for built-in defaults. (#47467) Thanks @vincentkoc.
+- CLI/configure: clarify fresh-setup memory-search warnings so they say semantic recall needs at least one embedding provider, and scope the initial model allowlist picker to the provider selected in configure. Thanks @vincentkoc.
 - CLI/auth choice: lazy-load plugin/provider fallback resolution so mapped auth choices stay on the static path and only unknown choices pay the heavy provider load. (#47495) Thanks @vincentkoc.
 - CLI: avoid loading provider discovery during startup model normalization. (#46522) Thanks @ItsAditya-xyz and @vincentkoc.
 - Security/device pairing: harden `device.token.rotate` deny handling by keeping public failures generic while logging internal deny reasons and preserving approved-baseline enforcement. (`GHSA-7jrw-x62h-64p8`)
@@ -88,11 +93,13 @@ Docs: https://docs.openclaw.ai
 - ACP/approvals: use canonical tool identity for prompting decisions and fail closed when conflicting tool identity hints are present. (#46817) Thanks @zpbrent and @vincentkoc.
 - ACP: require admin scope for mutating internal actions. (#46789) Thanks @tdjackey and @vincentkoc.
 - Subagents/follow-ups: require the same controller ownership checks for `/subagents send` as other control actions, so leaf sessions cannot message nested child runs they do not control. (#46801) Thanks @vincentkoc.
+- Web search/onboarding: clarify provider labels, key prompts, and missing-key notes so setup/configure more clearly names the required provider credential for Gemini, Kimi, Grok, Brave Search, Firecrawl, Perplexity, and Tavily. Thanks @vincentkoc.
 - macOS/canvas actions: keep unattended local agent actions on trusted in-app canvas surfaces only, and stop exposing the deep-link fallback key to arbitrary page scripts. (#46790) Thanks @vincentkoc.
 - Agents/compaction: extend the enclosing run deadline once while compaction is actively in flight, and abort the underlying SDK compaction on timeout/cancel so large-session compactions stop freezing mid-run. (#46889) Thanks @asyncjason.
 - Agents/openai-compatible tool calls: deduplicate repeated tool call ids across live assistant messages and replayed history so OpenAI-compatible backends no longer reject duplicate `tool_call_id` values with HTTP 400. (#40996) Thanks @xaeon2026.
 - Models/openai-completions: default non-native OpenAI-compatible providers to omit tool-definition `strict` fields unless users explicitly opt back in, so tool calling keeps working on providers that reject that option. (#45497) Thanks @sahancava.
 - Telegram/setup: warn when setup leaves DMs on pairing without an allowlist, and show valid account-scoped remediation commands. (#50710) Thanks @ernestodeoliveira.
+- Doctor/Telegram: replace the fresh-install empty group-allowlist false positive with first-run guidance that explains DM pairing approval and the next group setup steps, so new Telegram installs get actionable setup help instead of a broken-config warning. Thanks @vincentkoc.
 - Models/OpenRouter runtime capabilities: fetch uncatalogued OpenRouter model metadata on first use so newly added vision models keep image input instead of silently degrading to text-only, with top-level capability field fallbacks for `/api/v1/models`. (#45824) Thanks @DJjjjhao.
 - Channels/plugins: keep shared interactive payloads merge-ready by fixing Slack custom callback routing and repeat-click dedupe, allowing interactive-only sends, and preserving ordered Discord shared text blocks. (#47715) Thanks @vincentkoc.
 - Slack/interactive replies: preserve `channelData.slack.blocks` through live DM delivery and preview-finalized edits so Block Kit button and select directives render instead of falling back to raw text. (#45890) Thanks @vincentkoc.
@@ -202,6 +209,9 @@ Docs: https://docs.openclaw.ai
 - Gateway/probe: honor caller `--timeout` for active local loopback probes in `gateway status`, keep inactive remote-mode loopback probes fast, and clamp probe timers to JS-safe bounds so slow local/container gateways stop reporting false timeouts. (#47533) Thanks @MonkeyLeeT.
 - Config/startup: keep bundled web-search allowlist compatibility on a lightweight manifest path so config validation no longer pulls bundled web-search registry imports into startup, while still avoiding accidental auto-allow of config-loaded override plugins. (#51574) Thanks @RichardCao.
 - Gateway/chat.send: persist uploaded image references across reloads and compaction without delaying first-turn dispatch or double-submitting the same image to vision models. (#51324) Thanks @fuller-stack-dev.
+- Plugins/runtime state: share plugin-facing infra singleton state across duplicate module graphs and keep session-binding adapter ownership stable until the active owner unregisters. (#50725) thanks @huntharo.
+- Agents/compaction safeguard: preserve split-turn context and preserved recent turns when capped retry fallback reuses the last successful summary. (#27727) thanks @Pandadadadazxf.
+- Discord/pickers: keep `/codex_resume --browse-projects` picker callbacks alive in Discord by sharing component callback state across duplicate module graphs, preserving callback fallbacks, and acknowledging matched plugin interactions before dispatch. (#51260) Thanks @huntharo.
 
 ### Breaking
 

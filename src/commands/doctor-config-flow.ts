@@ -76,6 +76,7 @@ import {
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
+import { collectTelegramGroupPolicyWarnings } from "./doctor/providers/telegram.js";
 
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
 
@@ -1372,6 +1373,18 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
       undefined;
 
     if (groupPolicy === "allowlist" && usesSenderBasedGroupAllowlist(channelName)) {
+      if (channelName === "telegram") {
+        warnings.push(
+          ...collectTelegramGroupPolicyWarnings({
+            account,
+            prefix,
+            effectiveAllowFrom,
+            dmPolicy,
+            parent,
+          }),
+        );
+        return;
+      }
       const rawGroupAllowFrom =
         (account.groupAllowFrom as Array<string | number> | undefined) ??
         (parent?.groupAllowFrom as Array<string | number> | undefined);
