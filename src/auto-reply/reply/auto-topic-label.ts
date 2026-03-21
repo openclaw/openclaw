@@ -21,12 +21,8 @@ const TIMEOUT_MS = 15_000;
 export type AutoTopicLabelParams = {
   /** The user's first message text. */
   userMessage: string;
-  /** Telegram chat ID. */
-  chatId: string | number;
-  /** Telegram message thread ID (DM topic). */
-  messageThreadId: number;
-  /** Telegram account ID. */
-  accountId?: string;
+  /** System prompt for the LLM. */
+  prompt: string;
   /** The full config object. */
   cfg: OpenClawConfig;
   /** Agent ID for model resolution. */

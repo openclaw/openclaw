@@ -545,10 +545,13 @@ export const dispatchTelegramMessage = async ({
       if (sessionKey) {
         const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
         isFirstTurnInSession = !entry?.systemSent;
-
+      } else {
+        logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
       }
     } catch (err) {
-      logVerbose(`auto-topic-label: session store error: ${err instanceof Error ? err.message : String(err)}`);
+      logVerbose(
+        `auto-topic-label: session store error: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -880,8 +883,8 @@ export const dispatchTelegramMessage = async ({
   }
 
   // Fire-and-forget: auto-rename DM topic on first message.
-  if (isDmTopic && isFirstTurnInSession && threadSpec.id != null) {
-    const userMessage = ctxPayload.Body ?? ctxPayload.RawBody ?? "";
+  if (isDmTopic && isFirstTurnInSession) {
+    const userMessage = (ctxPayload.RawBody ?? ctxPayload.Body ?? "").slice(0, 500);
     if (userMessage.trim()) {
       const chatIdStr = String(chatId);
       const directAutoTopicLabel = cfg.channels?.telegram?.direct?.[chatIdStr]?.autoTopicLabel;
@@ -891,7 +894,7 @@ export const dispatchTelegramMessage = async ({
         accountAutoTopicLabel,
       );
       if (autoTopicConfig) {
-        const topicThreadId = threadSpec.id;
+        const topicThreadId = threadSpec.id!;
         void (async () => {
           try {
             const label = await generateTopicLabel({
@@ -904,9 +907,9 @@ export const dispatchTelegramMessage = async ({
               logVerbose("auto-topic-label: LLM returned empty label");
               return;
             }
-            logVerbose(`auto-topic-label: generated label "${label}"`);
+            logVerbose(`auto-topic-label: generated label (len=${label.length})`);
             await bot.api.editForumTopic(chatId, topicThreadId, { name: label });
-            logVerbose(`auto-topic-label: renamed topic ${chatId}/${topicThreadId} to "${label}"`);
+            logVerbose(`auto-topic-label: renamed topic ${chatId}/${topicThreadId}`);
           } catch (err) {
             logVerbose(
               `auto-topic-label: failed: ${err instanceof Error ? err.message : String(err)}`,

@@ -5,7 +5,7 @@
 import type { AutoTopicLabelConfig } from "../../config/types.telegram.js";
 
 export const AUTO_TOPIC_LABEL_DEFAULT_PROMPT =
-  "Generate a short topic label (max 50 chars) for a chat conversation based on the user's first message below. Start with a relevant emoji. Use the same language as the message. Be concise and descriptive. Return ONLY the topic name, nothing else.";
+  "Generate a very short topic label (2-4 words, max 25 chars) for a chat conversation based on the user's first message below. No emoji. Use the same language as the message. Be concise and descriptive. Return ONLY the topic name, nothing else.";
 
 /**
  * Resolve whether auto topic labeling is enabled and get the prompt.

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
 
 describe("resolveAutoTopicLabelConfig", () => {
-  const DEFAULT_PROMPT_SUBSTRING = "Generate a short topic label";
+  const DEFAULT_PROMPT_SUBSTRING = "Generate a very short topic label";
 
   it("returns enabled with default prompt when both configs are undefined", () => {
     const result = resolveAutoTopicLabelConfig(undefined, undefined);
