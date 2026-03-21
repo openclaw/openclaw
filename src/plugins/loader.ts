@@ -9,6 +9,11 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  clearMemoryPromptSection,
+  getMemoryPromptSectionBuilder,
+  restoreMemoryPromptSection,
+} from "../memory/prompt-section.js";
 import { resolveUserPath } from "../utils.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { clearPluginCommands } from "./commands.js";
@@ -90,8 +95,13 @@ export class PluginLoadFailureError extends Error {
   }
 }
 
+type CachedPluginState = {
+  registry: PluginRegistry;
+  memoryPromptBuilder: ReturnType<typeof getMemoryPromptSectionBuilder>;
+};
+
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
-const registryCache = new Map<string, PluginRegistry>();
+const registryCache = new Map<string, CachedPluginState>();
 const openAllowlistWarningCache = new Set<string>();
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
@@ -113,6 +123,7 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
 export function clearPluginLoaderCache(): void {
   registryCache.clear();
   openAllowlistWarningCache.clear();
+  clearMemoryPromptSection();
 }
 
 const defaultLogger = () => createSubsystemLogger("plugins");
@@ -209,7 +220,7 @@ export const __testing = {
   maxPluginRegistryCacheEntries: MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
 };
 
-function getCachedPluginRegistry(cacheKey: string): PluginRegistry | undefined {
+function getCachedPluginRegistry(cacheKey: string): CachedPluginState | undefined {
   const cached = registryCache.get(cacheKey);
   if (!cached) {
     return undefined;
@@ -220,11 +231,11 @@ function getCachedPluginRegistry(cacheKey: string): PluginRegistry | undefined {
   return cached;
 }
 
-function setCachedPluginRegistry(cacheKey: string, registry: PluginRegistry): void {
+function setCachedPluginRegistry(cacheKey: string, state: CachedPluginState): void {
   if (registryCache.has(cacheKey)) {
     registryCache.delete(cacheKey);
   }
-  registryCache.set(cacheKey, registry);
+  registryCache.set(cacheKey, state);
   while (registryCache.size > MAX_PLUGIN_REGISTRY_CACHE_ENTRIES) {
     const oldestKey = registryCache.keys().next().value;
     if (!oldestKey) {
@@ -763,18 +774,20 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
+      restoreMemoryPromptSection(cached.memoryPromptBuilder);
       if (shouldActivate) {
-        activatePluginRegistry(cached, cacheKey);
+        activatePluginRegistry(cached.registry, cacheKey);
       }
-      return cached;
+      return cached.registry;
     }
   }
 
-  // Clear previously registered plugin commands before reloading.
+  // Clear previously registered plugin state before reloading.
   // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
   if (shouldActivate) {
     clearPluginCommands();
     clearPluginInteractiveHandlers();
+    clearMemoryPromptSection();
   }
 
   // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
@@ -1270,6 +1283,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       hookPolicy: entry?.hooks,
       registrationMode,
     });
+    const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
 
     try {
       const result = register(api);
@@ -1281,9 +1295,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           message: "plugin register returned a promise; async registration is ignored",
         });
       }
+      // Snapshot loads should not replace process-global runtime prompt state.
+      if (!shouldActivate) {
+        restoreMemoryPromptSection(previousMemoryPromptBuilder);
+      }
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
     } catch (err) {
+      restoreMemoryPromptSection(previousMemoryPromptBuilder);
       recordPluginError({
         logger,
         registry,
@@ -1317,7 +1336,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   maybeThrowOnPluginLoadError(registry, options.throwOnLoadError);
 
   if (cacheEnabled) {
-    setCachedPluginRegistry(cacheKey, registry);
+    setCachedPluginRegistry(cacheKey, {
+      registry,
+      memoryPromptBuilder: getMemoryPromptSectionBuilder(),
+    });
   }
   if (shouldActivate) {
     activatePluginRegistry(registry, cacheKey);
