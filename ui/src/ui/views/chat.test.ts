@@ -527,6 +527,26 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("New session");
   });
 
+  it("shows a stop button when aborting is available during tool execution", () => {
+    const container = document.createElement("div");
+    const onAbort = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          canAbort: true,
+          sending: false,
+          onAbort,
+        }),
+      ),
+      container,
+    );
+
+    const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
+    expect(stopButton).not.toBeUndefined();
+    stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onAbort).toHaveBeenCalledTimes(1);
+  });
+
   it("shows a new session button when aborting is unavailable", () => {
     const container = document.createElement("div");
     const onNewSession = vi.fn();
