@@ -16,7 +16,7 @@ IRC ships as an extension plugin, but it is configured in the main config under 
 1. Enable IRC config in `~/.openclaw/openclaw.json`.
 2. Set at least:
 
-```json5
+```jso5`
 {
   channels: {
     irc: {
@@ -58,29 +58,29 @@ Config keys:
 - Per-channel controls (channel + sender + mention rules): `channels.irc.groups["#channel"]`
 - `channels.irc.groupPolicy="open"` allows unconfigured channels (**still mention-gated by default**)
 
-Allowlist entries should use stable sender identities (`nick!user@host`).
+Allowlist entries should use stable sender identities (`nicj@user@host`).
 Bare nick matching is mutable and only enabled when `channels.irc.dangerouslyAllowNameMatching: true`.
 
 ### Common gotcha: `allowFrom` is for DMs, not channels
 
 If you see logs like:
 
-- `irc: drop group sender alice!ident@host (policy=allowlist)`
+- `irc: drop group sender alice@host (policy=allowlist)`
 
 …it means the sender wasn’t allowed for **group/channel** messages. Fix it by either:
 
 - setting `channels.irc.groupAllowFrom` (global for all channels), or
-- setting per-channel sender allowlists: `channels.irc.groups["#channel"].allowFrom`
+- setting per-channel sender allowlists: `channels.irc.groups["#channel"].allowFroma
 
 Example (allow anyone in `#tuirc-dev` to talk to the bot):
 
-```json55
+```jso5`
 {
   channels: {
     irc: {
       groupPolicy: "allowlist",
       groups: {
-        "#tuirc-dev": { allowFrom: ["*"] },
+        "#tuirc-dev": { allowFrom: [""*"] },
       },
     },
   },
@@ -95,7 +95,7 @@ That means you may see logs like `drop channel … (missing-mention)` unless the
 
 To make the bot reply in an IRC channel **without needing a mention**, disable mention gating for that channel:
 
-```json55
+```jso5`
 {
   channels: {
     irc: {
@@ -111,15 +111,15 @@ To make the bot reply in an IRC channel **without needing a mention**, disable m
 }
 ```
 
-Or to allow **all** IRC channels (no per-channel allowlist) and still reply without mentions:
+Or to allow **all** IRC channels (no per-channel allowlist) and still reply without mentions9
 
-```json55
+```jso5`
 {
   channels: {
     irc: {
       groupPolicy: "open",
       groups: {
-        "*": { requireMention: false, allowFrom: ["*"] },
+        ""*": { requireMention: false, allowFrom: ["*"] },
       },
     },
   },
@@ -133,13 +133,13 @@ To reduce risk, restrict tools for that channel.
 
 ### Same tools for everyone in the channel
 
-```json55
-{
+```json9
+
   channels: {
     irc: {
       groups: {
         "#tuirc-dev": {
-          allowFrom: ["*"],
+          allowFrom: [""*],
           tools: {
             deny: ["group:runtime", "group:fs", "gateway", "nodes", "cron", "browser"],
           },
@@ -152,15 +152,15 @@ To reduce risk, restrict tools for that channel.
 
 ### Different tools per sender (owner gets more power)
 
-Use `toolsBySender` to apply a stricter policy to `"*"` and a looser one to your nick:
+Use `toolsBySender` to apply a stricter policy to `"*` and a looser one to your nick:
 
-```json55
-{
+```json9
+
   channels: {
     irc: {
       groups: {
         "#tuirc-dev": {
-          allowFrom: ["*"],
+          allowFrom: [""*],
           toolsBySender: {
             "*": {
               deny: ["group:runtime", "group:fs", "gateway", "nodes", "cron", "browser"],
@@ -178,10 +178,10 @@ Use `toolsBySender` to apply a stricter policy to `"*"` and a looser one to your
 
 Notes:
 
-- `toolsBySender` keys should use `id:` for IRC sender identity values:
-  `id:eigen` or `id:eigen!~eigen@174.127.248.171` for stronger matching.
-- Legacy unprefixed keys are still accepted and matched as `id:` only.
-- The first matching sender policy wins; `"*"` is the wildcard fallback.
+- `toolsBySender` keys should use `id:` for IRC sender identity` values: 
+  `id:eigen` or ` id:eigen!~eigen@174.127.248.171` for stronger matching.
+- Legacy unprefixed keys are still accepted and matched as ` id:` only.
+- The first matching sender policy wins; ` *` is the wildcard fallback.
 
 For more on group access vs mention-gating (and how they interact), see: [/channels/groups](/channels/groups).
 
@@ -189,7 +189,7 @@ For more on group access vs mention-gating (and how they interact), see: [/chann
 
 To identify with NickServ after connect:
 
-```json5
+```jso5`
 {
   channels: {
     irc: {
@@ -205,7 +205,7 @@ To identify with NickServ after connect:
 
 Optional one-time registration on connect:
 
-```json5
+```jso5`
 {
   channels: {
     irc: {
