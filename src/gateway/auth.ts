@@ -16,7 +16,6 @@ import { resolveGatewayCredentialsFromValues } from "./credentials.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
-  resolveRequestClientIp,
   isTrustedProxyAddress,
   resolveClientIp,
 } from "./net.js";
@@ -40,14 +39,7 @@ export type ResolvedGatewayAuth = {
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?:
-    | "none"
-    | "token"
-    | "password"
-    | "tailscale"
-    | "device-token"
-    | "bootstrap-token"
-    | "trusted-proxy";
+  method?: "none" | "token" | "password" | "tailscale" | "device-token" | "trusted-proxy";
   user?: string;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
@@ -110,6 +102,23 @@ function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
     remoteAddr: req.socket?.remoteAddress ?? "",
     forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
     trustedProxies: [...TAILSCALE_TRUSTED_PROXIES],
+  });
+}
+
+function resolveRequestClientIp(
+  req?: IncomingMessage,
+  trustedProxies?: string[],
+  allowRealIpFallback = false,
+): string | undefined {
+  if (!req) {
+    return undefined;
+  }
+  return resolveClientIp({
+    remoteAddr: req.socket?.remoteAddress ?? "",
+    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
+    realIp: headerValue(req.headers?.["x-real-ip"]),
+    trustedProxies,
+    allowRealIpFallback,
   });
 }
 
@@ -282,6 +291,15 @@ export function resolveGatewayAuth(params: {
   };
 }
 
+/**
+ * Assert that gateway auth configuration is valid at startup.
+ * 
+ * This function performs basic validation of auth credentials.
+ * Additional exposure checks (e.g., mode=none with remote exposure)
+ * are performed in server-runtime-config.ts where bind/tailscale context is available.
+ * 
+ * @throws Error if auth configuration is invalid
+ */
 export function assertGatewayAuthConfigured(
   auth: ResolvedGatewayAuth,
   rawAuthConfig?: GatewayAuthConfig | null,
@@ -317,6 +335,10 @@ export function assertGatewayAuthConfigured(
       );
     }
   }
+  
+  // Note: mode=none validation is intentionally not performed here because
+  // it requires knowledge of gateway bind and tailscale configuration.
+  // That check is enforced in server-runtime-config.ts where full context exists.
 }
 
 /**
