@@ -253,6 +253,7 @@ async function promptWebToolsConfig(
       nextSearch = { ...nextSearch, provider: providerChoice };
 
       const entry = searchProviderOptions.find((e) => e.id === providerChoice)!;
+      const credentialLabel = entry.credentialLabel?.trim() || `${entry.label} API key`;
       const existingKey = resolveExistingKey(nextConfig, providerChoice);
       const keyConfigured = hasExistingKey(nextConfig, providerChoice);
       const envAvailable = entry.envVars.some((k) => Boolean(process.env[k]?.trim()));
@@ -262,11 +263,11 @@ async function promptWebToolsConfig(
         await text({
           message: keyConfigured
             ? envAvailable
-              ? `${entry.label} API key (leave blank to keep current or use ${envVarNames})`
-              : `${entry.label} API key (leave blank to keep current)`
+              ? `${credentialLabel} (leave blank to keep current or use ${envVarNames})`
+              : `${credentialLabel} (leave blank to keep current)`
             : envAvailable
-              ? `${entry.label} API key (paste it here; leave blank to use ${envVarNames})`
-              : `${entry.label} API key`,
+              ? `${credentialLabel} (paste it here; leave blank to use ${envVarNames})`
+              : credentialLabel,
           placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
         }),
         runtime,
@@ -284,7 +285,7 @@ async function promptWebToolsConfig(
         note(
           [
             "No key stored yet — web_search won't work until a key is available.",
-            `Store a key here or set ${envVarNames} in the Gateway environment.`,
+            `Store your ${credentialLabel} here or set ${envVarNames} in the Gateway environment.`,
             `Get your API key at: ${entry.signupUrl}`,
             "Docs: https://docs.openclaw.ai/tools/web",
           ].join("\n"),
