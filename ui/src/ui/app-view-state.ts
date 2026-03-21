@@ -287,6 +287,11 @@ export type AppViewState = {
     browserProfiles: import("./controllers/browser.ts").BrowserProfile[];
     browserPollInterval: number | null;
     browserNewTabUrl: string;
+    browserNewTabProfile: string | null;
+    browserNewProfileName: string;
+    browserActionBusy: boolean;
+    browserAutoRefreshActive: boolean;
+    browserTappedTabs: Set<string>;
     terminalLoading: boolean;
     terminalError: string | null;
     terminalSessions: Array<{ name: string; windows: number; attached: boolean }>;

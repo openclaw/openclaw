@@ -1,16 +1,33 @@
 import { html, nothing } from "lit";
-import type { BrowserProfile } from "../controllers/browser.ts";
+import type { BrowserProfile, BrowserTab } from "../controllers/browser.ts";
 
 export type BrowserProps = {
   loading: boolean;
   error: string | null;
   profiles: BrowserProfile[];
   onRefresh: () => void;
-  onOpenTab: (profile: string, url: string) => void;
-  onCloseTab: (profile: string, targetId: string) => void;
-  onStartProfile: (profile: string) => void;
+  /** URL input for opening a new tab */
   newTabUrl: string;
   onNewTabUrlChange: (v: string) => void;
+  /** Which profile to open a new tab into */
+  newTabProfile: string | null;
+  onNewTabProfileChange: (v: string) => void;
+  onOpenTab: (profile: string, url: string) => void;
+  onCloseTab: (profile: string, targetId: string) => void;
+  onFocusTab: (profile: string, targetId: string) => void;
+  onStartProfile: (profile: string) => void;
+  onStopProfile: (profile: string) => void;
+  onDeleteProfile: (profile: string) => void;
+  /** New profile creation */
+  newProfileName: string;
+  onNewProfileNameChange: (v: string) => void;
+  onCreateProfile: (name: string) => void;
+  /** Tap in/out — signals human is viewing */
+  tappedTabs: Set<string>;
+  onTapIn: (tab: BrowserTab, profile: string) => void;
+  onTapOut: (targetId: string) => void;
+  actionBusy: boolean;
+  autoRefreshActive: boolean;
 };
 
 export function renderBrowser(props: BrowserProps) {
@@ -20,6 +37,7 @@ export function renderBrowser(props: BrowserProps) {
 
   return html`
     <section class="card">
+      <!-- Header row -->
       <div class="row" style="justify-content: space-between; align-items: center;">
         <div>
           <div class="card-title">Browser Sessions</div>
@@ -31,17 +49,93 @@ export function renderBrowser(props: BrowserProps) {
             }
           </div>
         </div>
-        <button class="btn btn-sm" @click=${props.onRefresh} ?disabled=${props.loading}>
-          ${props.loading ? "Loading…" : "Refresh"}
-        </button>
+        <div class="row" style="gap:8px; align-items:center;">
+          ${
+            props.autoRefreshActive
+              ? html`
+                  <span style="font-size: 0.75rem; color: var(--fg-muted)">Auto-refresh on</span>
+                `
+              : nothing
+          }
+          <button class="btn btn-sm" @click=${props.onRefresh} ?disabled=${props.loading}>
+            ${props.loading ? "Loading…" : "Refresh"}
+          </button>
+        </div>
       </div>
 
+      <!-- Error banner -->
       ${
         props.error
           ? html`<div class="alert alert-error" style="margin-top:12px;">${props.error}</div>`
           : nothing
       }
 
+      <!-- Open tab form (shared across profiles) -->
+      ${
+        runningProfiles.length > 0
+          ? html`
+              <div class="row" style="margin-top:14px; gap:8px; flex-wrap:wrap;">
+                ${
+                  props.profiles.length > 1
+                    ? html`
+                        <select
+                          class="input input-sm"
+                          style="flex:0 0 auto; min-width:120px;"
+                          .value=${props.newTabProfile ?? ""}
+                          @change=${(e: Event) =>
+                            props.onNewTabProfileChange((e.target as HTMLSelectElement).value)}
+                        >
+                          ${props.profiles
+                            .filter((p) => p.running)
+                            .map(
+                              (p) => html`
+                                <option value=${p.name} ?selected=${props.newTabProfile === p.name}>
+                                  ${p.name}
+                                </option>
+                              `,
+                            )}
+                        </select>
+                      `
+                    : nothing
+                }
+                <input
+                  class="input input-sm"
+                  style="flex:1; min-width:180px;"
+                  type="text"
+                  placeholder="https://…"
+                  .value=${props.newTabUrl}
+                  @input=${(e: Event) =>
+                    props.onNewTabUrlChange((e.target as HTMLInputElement).value)}
+                  @keydown=${(e: KeyboardEvent) => {
+                    const profile = props.newTabProfile ?? runningProfiles[0]?.name;
+                    if (e.key === "Enter" && props.newTabUrl.trim() && profile) {
+                      props.onOpenTab(profile, props.newTabUrl.trim());
+                    }
+                  }}
+                  ?disabled=${props.actionBusy}
+                />
+                <button
+                  class="btn btn-sm btn-primary"
+                  ?disabled=${
+                    props.actionBusy ||
+                    !props.newTabUrl.trim() ||
+                    !(props.newTabProfile ?? runningProfiles[0]?.name)
+                  }
+                  @click=${() => {
+                    const profile = props.newTabProfile ?? runningProfiles[0]?.name;
+                    if (profile && props.newTabUrl.trim()) {
+                      props.onOpenTab(profile, props.newTabUrl.trim());
+                    }
+                  }}
+                >
+                  ${props.actionBusy ? "Working…" : "Open Tab"}
+                </button>
+              </div>
+            `
+          : nothing
+      }
+
+      <!-- Empty state -->
       ${
         !props.loading && props.profiles.length === 0
           ? html`
@@ -49,16 +143,18 @@ export function renderBrowser(props: BrowserProps) {
                 <div style="font-size: 2rem">🌐</div>
                 <div style="margin-top: 8px">No browser profiles configured.</div>
                 <div style="font-size: 0.85rem; margin-top: 4px">
-                  Browser profiles appear here once OpenClaw's browser service is enabled.
+                  Create a profile below to get started, or enable OpenClaw's browser service.
                 </div>
               </div>
             `
           : nothing
       }
 
+      <!-- Running profiles -->
       ${runningProfiles.map(
         (p) => html`
           <div class="card" style="margin-top:14px; border:1px solid var(--border);">
+            <!-- Profile header -->
             <div class="row" style="justify-content:space-between; align-items:center;">
               <div class="row" style="gap:8px; align-items:center;">
                 ${
@@ -69,33 +165,26 @@ export function renderBrowser(props: BrowserProps) {
                 <div>
                   <span style="font-weight:600; font-size:0.95rem;">${p.name}</span>
                   <span class="badge badge-ok" style="margin-left:6px; font-size:0.72rem;">running</span>
-                  ${p.driver ? html`<span style="font-size:0.78rem; color:var(--fg-muted); margin-left:6px;">${p.driver}</span>` : nothing}
+                  ${
+                    p.driver
+                      ? html`<span style="font-size:0.78rem; color:var(--fg-muted); margin-left:6px;">${p.driver}</span>`
+                      : nothing
+                  }
                 </div>
               </div>
-              <div class="row" style="gap:6px; align-items:center;">
-                <input
-                  class="input input-sm"
-                  style="width:220px;"
-                  type="text"
-                  placeholder="https://…"
-                  .value=${props.newTabUrl}
-                  @input=${(e: Event) => props.onNewTabUrlChange((e.target as HTMLInputElement).value)}
-                  @keydown=${(e: KeyboardEvent) => {
-                    if (e.key === "Enter" && props.newTabUrl.trim()) {
-                      props.onOpenTab(p.name, props.newTabUrl.trim());
-                    }
-                  }}
-                />
+              <div class="row" style="gap:6px;">
                 <button
-                  class="btn btn-sm btn-primary"
-                  ?disabled=${!props.newTabUrl.trim()}
-                  @click=${() => props.onOpenTab(p.name, props.newTabUrl.trim())}
+                  class="btn btn-sm"
+                  title="Stop this browser profile"
+                  ?disabled=${props.actionBusy}
+                  @click=${() => props.onStopProfile(p.name)}
                 >
-                  Open Tab
+                  Stop
                 </button>
               </div>
             </div>
 
+            <!-- Tabs -->
             ${
               p.tabs.length === 0
                 ? html`
@@ -105,7 +194,10 @@ export function renderBrowser(props: BrowserProps) {
                     <div style="margin-top:10px; display:flex; flex-direction:column; gap:6px;">
                       ${p.tabs.map(
                         (t) => html`
-                          <div class="row" style="justify-content:space-between; align-items:center; padding:6px 8px; background:var(--bg-subtle,var(--bg-2)); border-radius:6px; gap:8px;">
+                          <div
+                            class="row"
+                            style="justify-content:space-between; align-items:center; padding:6px 8px; background:var(--bg-subtle,var(--bg-2)); border-radius:6px; gap:8px;"
+                          >
                             <div style="min-width:0; flex:1;">
                               <div style="font-size:0.85rem; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                                 ${t.title || t.url}
@@ -113,15 +205,57 @@ export function renderBrowser(props: BrowserProps) {
                               <div style="font-size:0.75rem; color:var(--fg-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                                 ${t.url}
                               </div>
+                              ${
+                                props.tappedTabs.has(t.targetId)
+                                  ? html`
+                                      <span class="badge badge-warn" style="font-size: 0.72rem; margin-top: 3px">👤 Human Viewing</span>
+                                    `
+                                  : nothing
+                              }
                             </div>
-                            <button
-                              class="btn btn-sm"
-                              style="flex-shrink:0;"
-                              title="Close tab"
-                              @click=${() => props.onCloseTab(p.name, t.targetId)}
-                            >
-                              ✕
-                            </button>
+                            <div class="row" style="gap:6px; flex-shrink:0; flex-wrap:wrap; justify-content:flex-end;">
+                              <!-- Copy URL -->
+                              <button
+                                class="btn btn-sm"
+                                title="Copy URL to clipboard"
+                                @click=${() => {
+                                  void navigator.clipboard.writeText(t.url);
+                                }}
+                              >
+                                Copy
+                              </button>
+                              <!-- Tap In / Tap Out -->
+                              ${
+                                props.tappedTabs.has(t.targetId)
+                                  ? html`
+                                      <button
+                                        class="btn btn-sm"
+                                        title="Hand back to agent"
+                                        @click=${() => props.onTapOut(t.targetId)}
+                                      >
+                                        Tap Out
+                                      </button>
+                                    `
+                                  : html`
+                                      <button
+                                        class="btn btn-sm btn-primary"
+                                        title="Open in your browser and mark as human-controlled"
+                                        @click=${() => props.onTapIn(t, p.name)}
+                                      >
+                                        Tap In
+                                      </button>
+                                    `
+                              }
+                              <!-- Close tab -->
+                              <button
+                                class="btn btn-sm btn-danger"
+                                title="Close tab"
+                                ?disabled=${props.actionBusy}
+                                @click=${() => props.onCloseTab(p.name, t.targetId)}
+                              >
+                                ✕
+                              </button>
+                            </div>
                           </div>
                         `,
                       )}
@@ -132,20 +266,46 @@ export function renderBrowser(props: BrowserProps) {
         `,
       )}
 
+      <!-- Stopped profiles -->
       ${
         stoppedProfiles.length > 0
           ? html`
               <div style="margin-top:14px;">
-                <div style="font-size:0.8rem; color:var(--fg-muted); margin-bottom:6px;">Stopped profiles</div>
+                <div style="font-size:0.8rem; color:var(--fg-muted); margin-bottom:6px;">
+                  Stopped profiles
+                </div>
                 ${stoppedProfiles.map(
                   (p) => html`
-                    <div class="row" style="justify-content:space-between; align-items:center; padding:8px 10px; border:1px solid var(--border); border-radius:6px; margin-bottom:6px;">
+                    <div
+                      class="row"
+                      style="justify-content:space-between; align-items:center; padding:8px 10px; border:1px solid var(--border); border-radius:6px; margin-bottom:6px;"
+                    >
                       <div class="row" style="gap:8px; align-items:center;">
-                        ${p.color ? html`<span style="width:10px;height:10px;border-radius:50%;background:${p.color};display:inline-block;opacity:0.4;"></span>` : nothing}
+                        ${
+                          p.color
+                            ? html`<span style="width:10px;height:10px;border-radius:50%;background:${p.color};display:inline-block;opacity:0.4;"></span>`
+                            : nothing
+                        }
                         <span style="font-size:0.9rem; color:var(--fg-muted);">${p.name}</span>
                         <span class="badge" style="font-size:0.72rem; opacity:0.7;">stopped</span>
                       </div>
-                      <button class="btn btn-sm" @click=${() => props.onStartProfile(p.name)}>Start</button>
+                      <div class="row" style="gap:6px;">
+                        <button
+                          class="btn btn-sm btn-primary"
+                          ?disabled=${props.actionBusy}
+                          @click=${() => props.onStartProfile(p.name)}
+                        >
+                          Start
+                        </button>
+                        <button
+                          class="btn btn-sm btn-danger"
+                          title="Delete profile"
+                          ?disabled=${props.actionBusy}
+                          @click=${() => props.onDeleteProfile(p.name)}
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
                   `,
                 )}
@@ -153,6 +313,48 @@ export function renderBrowser(props: BrowserProps) {
             `
           : nothing
       }
+
+      <!-- Create new profile -->
+      <div style="margin-top:18px; border-top:1px solid var(--border); padding-top:14px;">
+        <div style="font-size:0.8rem; color:var(--fg-muted); margin-bottom:8px; font-weight:500;">
+          New Profile
+        </div>
+        <div class="row" style="gap:8px;">
+          <input
+            class="input input-sm"
+            style="flex:1;"
+            type="text"
+            placeholder="Profile name (e.g. work, research)"
+            .value=${props.newProfileName}
+            @input=${(e: Event) =>
+              props.onNewProfileNameChange((e.target as HTMLInputElement).value)}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === "Enter" && props.newProfileName.trim()) {
+                props.onCreateProfile(props.newProfileName.trim());
+              }
+            }}
+            ?disabled=${props.actionBusy}
+          />
+          <button
+            class="btn btn-sm btn-primary"
+            ?disabled=${props.actionBusy || !props.newProfileName.trim()}
+            @click=${() => {
+              if (props.newProfileName.trim()) {
+                props.onCreateProfile(props.newProfileName.trim());
+              }
+            }}
+          >
+            ${props.actionBusy ? "Working…" : "Create"}
+          </button>
+        </div>
+      </div>
+
+      <!-- Footer hint -->
+      <div style="margin-top:14px; font-size:0.8rem; color:var(--fg-muted);">
+        <strong>Tap In</strong> opens the tab in your browser and marks it as human-controlled.
+        <strong>Tap Out</strong> hands it back to the agent. Agents can see which tabs are open
+        and will avoid interfering with human-controlled tabs.
+      </div>
     </section>
   `;
 }

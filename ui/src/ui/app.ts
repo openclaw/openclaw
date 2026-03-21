@@ -420,6 +420,11 @@ export class OpenClawApp extends LitElement {
   @state() browserError: string | null = null;
   @state() browserProfiles: import("./controllers/browser.ts").BrowserProfile[] = [];
   @state() browserNewTabUrl = "";
+  @state() browserNewTabProfile: string | null = null;
+  @state() browserNewProfileName = "";
+  @state() browserActionBusy = false;
+  @state() browserAutoRefreshActive = false;
+  @state() browserTappedTabs: Set<string> = new Set();
   private browserPollInterval: number | null = null;
 
   @state() terminalLoading = false;

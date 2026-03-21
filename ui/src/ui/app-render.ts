@@ -24,7 +24,13 @@ import {
   loadBrowserSessions,
   openBrowserTab,
   closeBrowserTab,
+  focusBrowserTab,
   startBrowserProfile,
+  stopBrowserProfile,
+  createBrowserProfile,
+  deleteBrowserProfile,
+  tapInBrowserTab,
+  tapOutBrowserTab,
 } from "./controllers/browser.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
@@ -1992,11 +1998,22 @@ export function renderApp(state: AppViewState) {
                   error: state.browserError,
                   profiles: state.browserProfiles,
                   newTabUrl: state.browserNewTabUrl,
+                  newTabProfile: state.browserNewTabProfile,
+                  newProfileName: state.browserNewProfileName,
+                  tappedTabs: state.browserTappedTabs,
+                  actionBusy: state.browserActionBusy,
+                  autoRefreshActive: state.browserAutoRefreshActive,
                   onRefresh: () => {
                     void loadBrowserSessions(state);
                   },
                   onNewTabUrlChange: (v) => {
                     state.browserNewTabUrl = v;
+                  },
+                  onNewTabProfileChange: (v) => {
+                    state.browserNewTabProfile = v;
+                  },
+                  onNewProfileNameChange: (v) => {
+                    state.browserNewProfileName = v;
                   },
                   onOpenTab: (profile, url) => {
                     void openBrowserTab(state, profile, url);
@@ -2004,8 +2021,26 @@ export function renderApp(state: AppViewState) {
                   onCloseTab: (profile, targetId) => {
                     void closeBrowserTab(state, profile, targetId);
                   },
+                  onFocusTab: (profile, targetId) => {
+                    void focusBrowserTab(state, profile, targetId);
+                  },
                   onStartProfile: (profile) => {
                     void startBrowserProfile(state, profile);
+                  },
+                  onStopProfile: (profile) => {
+                    void stopBrowserProfile(state, profile);
+                  },
+                  onCreateProfile: (name) => {
+                    void createBrowserProfile(state, name);
+                  },
+                  onDeleteProfile: (name) => {
+                    void deleteBrowserProfile(state, name);
+                  },
+                  onTapIn: (tab) => {
+                    tapInBrowserTab(state, tab);
+                  },
+                  onTapOut: (targetId) => {
+                    tapOutBrowserTab(state, targetId);
                   },
                 }),
               )
