@@ -185,7 +185,7 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
-  it("falls back to send when a final preview edit is aborted by the caller", async () => {
+  it("retains preview when a final preview edit is aborted by the caller", async () => {
     computeBackoff.mockClear();
     sleepWithAbort.mockClear();
     const abortController = new AbortController();
@@ -199,18 +199,15 @@ describe("createLaneTextDeliverer", () => {
     });
     harness.editPreview.mockRejectedValueOnce(abortErr);
 
-    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
+    await expectFinalPreviewRetained({
+      harness,
+      expectedLogSnippet: "aborted with unknown delivery state; keeping existing preview",
+    });
 
-    expect(result.kind).toBe("sent");
     expect(harness.editPreview).toHaveBeenCalledTimes(1);
     expect(computeBackoff).not.toHaveBeenCalled();
     expect(sleepWithAbort).not.toHaveBeenCalled();
-    expect(harness.sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({ text: HELLO_FINAL }),
-    );
-    expect(harness.log).toHaveBeenCalledWith(
-      expect.stringContaining("preview final edit aborted before completion; falling back"),
-    );
+    expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
   it("retains preview when ambiguous final-edit retries are aborted during backoff", async () => {

@@ -182,4 +182,35 @@ describe("createTelegramBot network-health fetch wrapper", () => {
     expect(response.status).toBe(401);
     expect(noteNetworkHealthySpy).not.toHaveBeenCalled();
   });
+
+  it("does not clone/parse successful getUpdates payloads for health checks", async () => {
+    const cloneSpy = vi.fn(() => ({
+      json: vi.fn(async () => ({ ok: true, result: [] })),
+    }));
+    const responseLike = {
+      status: 200,
+      ok: true,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? "application/json; charset=utf-8" : null,
+      },
+      clone: cloneSpy,
+    } as unknown as Response;
+
+    const baseFetch = vi.fn(async () => responseLike) as typeof fetch;
+
+    createTelegramBot({
+      token: "tok",
+      telegramTransport: { fetch: baseFetch } as Parameters<
+        typeof createTelegramBot
+      >[0]["telegramTransport"],
+    });
+
+    const clientFetch = getClientFetch();
+    const response = await clientFetch("https://api.telegram.org/bot123/getUpdates");
+
+    expect(response).toBe(responseLike);
+    expect(cloneSpy).not.toHaveBeenCalled();
+    expect(noteNetworkHealthySpy).toHaveBeenCalledTimes(1);
+  });
 });

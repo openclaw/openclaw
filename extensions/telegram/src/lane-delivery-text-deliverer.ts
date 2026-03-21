@@ -448,9 +448,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         }
         if (isAnyAbortError(err)) {
           params.log(
-            `telegram: ${args.laneName} preview final edit aborted before completion; falling back to standard send (${String(err)})`,
+            `telegram: ${args.laneName} preview final edit aborted with unknown delivery state; keeping existing preview to avoid duplicate (${String(err)})`,
           );
-          return "fallback";
+          params.markDelivered();
+          return "retained";
         }
         if (isRecoverableTelegramNetworkError(err, { allowMessageMatch: true })) {
           params.log(
