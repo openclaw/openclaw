@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectTelegramEmptyAllowlistExtraWarnings,
   collectTelegramGroupPolicyWarnings,
   scanTelegramAllowFromUsernameEntries,
 } from "./telegram.js";
@@ -55,6 +56,33 @@ describe("doctor telegram provider warnings", () => {
     });
 
     expect(warnings).toEqual([]);
+  });
+
+  it("returns extra empty-allowlist warnings only for telegram allowlist groups", () => {
+    const warnings = collectTelegramEmptyAllowlistExtraWarnings({
+      account: {
+        botToken: "123:abc",
+        groupPolicy: "allowlist",
+        groups: {
+          ops: { allow: true },
+        },
+      },
+      channelName: "telegram",
+      prefix: "channels.telegram",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining(
+        'channels.telegram.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty',
+      ),
+    ]);
+    expect(
+      collectTelegramEmptyAllowlistExtraWarnings({
+        account: { groupPolicy: "allowlist" },
+        channelName: "signal",
+        prefix: "channels.signal",
+      }),
+    ).toEqual([]);
   });
 
   it("finds non-numeric telegram allowFrom username entries across account scopes", () => {
