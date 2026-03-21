@@ -621,9 +621,18 @@ static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointe
 }
 
 static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *res, gpointer user_data) {
-    (void)user_data;
+    gchar *requested_unit_name = (gchar *)user_data;
     g_autoptr(GError) error = NULL;
     g_autoptr(GVariant) result = g_dbus_proxy_call_finish(G_DBUS_PROXY(source_object), res, &error);
+
+    // If the canonical unit has changed since we requested this unit, discard the stale reply
+    if (requested_unit_name) {
+        if (g_strcmp0(requested_unit_name, systemd_get_canonical_unit_name()) != 0) {
+            g_free(requested_unit_name);
+            return;
+        }
+        g_free(requested_unit_name);
+    }
 
     // 1. Refresh config unconditionally, so reconfigurations or deletions update the cache
     g_free(cached_exec_start);
@@ -634,9 +643,18 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
     cached_environment = NULL;
     extract_service_config_from_file(&cached_exec_start, &cached_environment, &cached_working_directory);
 
-    // 2. If GetUnitFileState fails, treat as not installed
-    if (!result) {
-        // Failed to get file state -> assume not installed
+    gboolean is_installed = FALSE;
+    if (result) {
+        const gchar *state_str = NULL;
+        g_variant_get(result, "(&s)", &state_str);
+        if (g_strcmp0(state_str, "not-found") != 0) {
+            is_installed = TRUE;
+        }
+    }
+
+    // 2. If GetUnitFileState fails or state is "not-found", treat as not installed
+    if (!is_installed) {
+        // Failed to get file state or unit not found -> assume not installed
         SystemdState sys_state = {0};
         if (check_system_scope_units()) {
             sys_state.system_installed_unsupported = TRUE;
@@ -668,7 +686,7 @@ void systemd_refresh(void) {
         manager_proxy, "GetUnitFileState",
         g_variant_new("(s)", unit_name),
         G_DBUS_CALL_FLAGS_NONE, -1, NULL,
-        on_get_unit_file_state_ready, NULL);
+        on_get_unit_file_state_ready, g_strdup(unit_name));
 }
 
 void systemd_start_gateway(void) {
