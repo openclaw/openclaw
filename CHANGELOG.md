@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Models/Anthropic Vertex: add core `anthropic-vertex` provider support for Claude via Google Vertex AI, including GCP auth/discovery and main run-path routing. (#43356) Thanks @sallyom and @yossiovadia.
 - Commands/btw: add `/btw` side questions for quick tool-less answers about the current session without changing future session context, with dismissible in-session TUI answers and explicit BTW replies on external channels. (#45444) Thanks @ngutman.
 - Gateway/docs: clarify that empty URL input allowlists are treated as unset, document `allowUrl: false` as the deny-all switch, and add regression coverage for the normalization path.
 - Sandbox/runtime: add pluggable sandbox backends, ship an OpenShell backend with `mirror` and `remote` workspace modes, and make sandbox list/recreate/prune backend-aware instead of Docker-only.
@@ -52,6 +53,7 @@ Docs: https://docs.openclaw.ai
 - Docs/plugins: add the community DingTalk plugin listing to the docs catalog. (#29913) Thanks @sliverp.
 - Docs/plugins: add the community QQbot plugin listing to the docs catalog. (#29898) Thanks @sliverp.
 - Plugins/context engines: pass the embedded runner `modelId` into context-engine `assemble()` so plugins can adapt context formatting per model. (#47437) thanks @jscianna.
+- Plugins/context engines: add transcript maintenance rewrites for context engines, preserve active-branch transcript metadata during rewrites, and harden overflow-recovery truncation to rewrite sessions under the normal session write lock. (#51191) Thanks @jalehman.
 
 ### Fixes
 
