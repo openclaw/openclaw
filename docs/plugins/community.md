@@ -68,6 +68,19 @@ cost, tokens, errors, and more.
 openclaw plugins install @opik/opik-openclaw
 ```
 
+### OpenHer Persona Engine
+
+AI Being engine for OpenClaw — personality computed from neural networks,
+drive metabolism, and Hebbian learning. Each persona runs a 13-step pipeline
+per message producing emergent behavior, not hardcoded prompts.
+
+- **npm:** `@openher/openclaw-plugin`
+- **repo:** [github.com/kellyvv/openher-openclaw-plugin](https://github.com/kellyvv/openher-openclaw-plugin)
+
+```bash
+openclaw plugins install @openher/openclaw-plugin
+```
+
 ### QQbot
 
 Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
