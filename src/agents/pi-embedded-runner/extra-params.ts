@@ -90,6 +90,14 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
   }
+  const resolvedToolChoice = resolveAliasedParamValue(
+    [extraParams],
+    "tool_choice",
+    "toolChoice",
+  );
+  if (resolvedToolChoice !== undefined) {
+    streamParams.toolChoice = resolvedToolChoice as CacheRetentionStreamOptions["toolChoice"];
+  }
   const transport = extraParams.transport;
   if (transport === "sse" || transport === "websocket" || transport === "auto") {
     streamParams.transport = transport;

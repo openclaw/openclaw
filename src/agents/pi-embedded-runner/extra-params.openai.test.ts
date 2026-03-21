@@ -1,5 +1,6 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { runExtraParamsCase } from "./extra-params.test-support.js";
 
@@ -91,5 +92,37 @@ describe("extra-params: OpenAI attribution", () => {
       originator: "openclaw",
       "User-Agent": "openclaw/2026.3.14",
     });
+  });
+});
+
+describe("extra-params: tool choice forwarding", () => {
+  it("forwards tool_choice from agent model params into stream options", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4": {
+              params: {
+                tool_choice: "required",
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const capture = runExtraParamsCase({
+      applyModelId: "gpt-5.4",
+      applyProvider: "openai",
+      cfg,
+      model: {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as Model<"openai-completions">,
+      payload: {},
+    });
+
+    expect((capture.options as { toolChoice?: string } | undefined)?.toolChoice).toBe("required");
   });
 });
