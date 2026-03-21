@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   updateSessionStore: vi.fn(),
   enforceSessionDiskBudget: vi.fn(),
   collectSessionHealth: vi.fn(),
+  promptYesNo: vi.fn(),
+  executeRemediation: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -41,6 +43,19 @@ vi.mock("../config/sessions.js", () => ({
 vi.mock("../infra/session-health-collector.js", () => ({
   collectSessionHealth: mocks.collectSessionHealth,
 }));
+
+vi.mock("../cli/prompt.js", () => ({
+  promptYesNo: mocks.promptYesNo,
+}));
+
+vi.mock("../infra/session-health-remediation-executor.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../infra/session-health-remediation-executor.js")>();
+  return {
+    ...actual,
+    executeRemediation: mocks.executeRemediation,
+  };
+});
 
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
 
@@ -575,5 +590,244 @@ describe("sessionsCleanupCommand", () => {
     const plan = payload.remediationPlan as Record<string, unknown>;
     const summary = plan.summary as Record<string, unknown>;
     expect(summary.totalActions).toBeGreaterThan(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 3C — Execution path
+  // -------------------------------------------------------------------------
+
+  describe("execution path (Phase 3C)", () => {
+    it("refuses --execute with --dry-run", async () => {
+      const { runtime } = makeRuntime();
+      const errors: string[] = [];
+      let exitCode: number | undefined;
+      runtime.error = (msg: unknown) => errors.push(String(msg));
+      runtime.exit = (code: number) => {
+        exitCode = code;
+      };
+
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+          dryRun: true,
+        },
+        runtime,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(errors.some((e) => e.includes("contradictory"))).toBe(true);
+    });
+
+    it("refuses --execute with --enforce", async () => {
+      const { runtime } = makeRuntime();
+      const errors: string[] = [];
+      let exitCode: number | undefined;
+      runtime.error = (msg: unknown) => errors.push(String(msg));
+      runtime.exit = (code: number) => {
+        exitCode = code;
+      };
+
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+          enforce: true,
+        },
+        runtime,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(errors.some((e) => e.includes("legacy maintenance"))).toBe(true);
+    });
+
+    it("refuses --execute-tier > 1 in v1", async () => {
+      mocks.collectSessionHealth.mockResolvedValue(snapshotWithIssues());
+
+      const { runtime } = makeRuntime();
+      const errors: string[] = [];
+      let exitCode: number | undefined;
+      runtime.error = (msg: unknown) => errors.push(String(msg));
+      runtime.exit = (code: number) => {
+        exitCode = code;
+      };
+
+      await sessionsCleanupCommand(
+        {
+          executeTier: "2",
+        },
+        runtime,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(errors.some((e) => e.includes("not supported in v1"))).toBe(true);
+    });
+
+    it("refuses --execute and --execute-tier together", async () => {
+      const { runtime } = makeRuntime();
+      const errors: string[] = [];
+      let exitCode: number | undefined;
+      runtime.error = (msg: unknown) => errors.push(String(msg));
+      runtime.exit = (code: number) => {
+        exitCode = code;
+      };
+
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+          executeTier: "0",
+        },
+        runtime,
+      );
+
+      expect(exitCode).toBe(1);
+      expect(errors.some((e) => e.includes("mutually exclusive"))).toBe(true);
+    });
+
+    it("prompts for confirmation by default and aborts on decline", async () => {
+      mocks.collectSessionHealth.mockResolvedValue(snapshotWithIssues());
+      mocks.promptYesNo.mockResolvedValue(false);
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+        },
+        runtime,
+      );
+
+      expect(mocks.promptYesNo).toHaveBeenCalled();
+      expect(logs.some((l) => l.includes("Aborted"))).toBe(true);
+      expect(mocks.executeRemediation).not.toHaveBeenCalled();
+    });
+
+    it("executes with --yes and prints JSON report", async () => {
+      mocks.collectSessionHealth.mockResolvedValue(snapshotWithIssues());
+      mocks.executeRemediation.mockResolvedValue({
+        executedAt: "2026-03-20T22:00:00.000Z",
+        actions: [
+          {
+            id: "cleanup-orphaned-tmp-1",
+            kind: "cleanup-orphaned-tmp",
+            tier: 0,
+            status: "complete",
+            artifactsRemoved: 2,
+            bytesFreed: 4096,
+            detail: "Removed 2 .tmp file(s).",
+          },
+        ],
+        summary: {
+          executed: 1,
+          skipped: 0,
+          failed: 0,
+          refused: 0,
+          totalBytesFreed: 4096,
+          storageBefore: 50_000_000,
+          storageAfter: 49_995_904,
+        },
+      });
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          execute: ["cleanup-orphaned-tmp-1"],
+          yes: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      expect(mocks.promptYesNo).not.toHaveBeenCalled();
+      expect(mocks.executeRemediation).toHaveBeenCalled();
+
+      // Should print confirmation block + JSON result
+      const jsonLog = logs.find((l) => {
+        try {
+          JSON.parse(l);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      expect(jsonLog).toBeDefined();
+      const payload = JSON.parse(jsonLog!) as Record<string, unknown>;
+      expect(payload.executedAt).toBeTruthy();
+      expect(payload.summary).toBeDefined();
+      expect((payload.summary as Record<string, unknown>).executed).toBe(1);
+    });
+
+    it("executes with --execute-tier 0 and prints text report", async () => {
+      mocks.collectSessionHealth.mockResolvedValue(snapshotWithIssues());
+      mocks.executeRemediation.mockResolvedValue({
+        executedAt: "2026-03-20T22:00:00.000Z",
+        actions: [
+          {
+            id: "cleanup-orphaned-tmp-1",
+            kind: "cleanup-orphaned-tmp",
+            tier: 0,
+            status: "complete",
+            artifactsRemoved: 2,
+            bytesFreed: 4096,
+          },
+        ],
+        summary: {
+          executed: 1,
+          skipped: 0,
+          failed: 0,
+          refused: 0,
+          totalBytesFreed: 4096,
+          storageBefore: 50_000_000,
+          storageAfter: 49_995_904,
+        },
+      });
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          executeTier: "0",
+          yes: true,
+        },
+        runtime,
+      );
+
+      const fullOutput = logs.join("\n");
+      expect(fullOutput).toContain("CONFIRMATION REQUIRED");
+      expect(fullOutput).toContain("COMPLETE");
+    });
+
+    it("handles empty tier (no actions in plan) gracefully", async () => {
+      mocks.collectSessionHealth.mockResolvedValue(cleanSnapshot());
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          executeTier: "0",
+          yes: true,
+        },
+        runtime,
+      );
+
+      const fullOutput = logs.join("\n");
+      expect(fullOutput).toContain("Nothing to execute");
+      expect(mocks.executeRemediation).not.toHaveBeenCalled();
+    });
+
+    it("handles empty tier in JSON mode", async () => {
+      mocks.collectSessionHealth.mockResolvedValue(cleanSnapshot());
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          executeTier: "0",
+          yes: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      expect(logs).toHaveLength(1);
+      const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+      expect(payload.message).toContain("Nothing to execute");
+      expect(Array.isArray(payload.actions)).toBe(true);
+      expect((payload.actions as unknown[]).length).toBe(0);
+    });
   });
 });

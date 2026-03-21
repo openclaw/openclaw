@@ -261,6 +261,70 @@ export type ApprovalModel = {
 };
 
 // ---------------------------------------------------------------------------
+// Execution Types (Phase 3C)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-action execution result produced by an action executor.
+ */
+export type ActionExecutionResult = {
+  /** The action ID from the plan. */
+  id: string;
+
+  /** The action kind. */
+  kind: RemediationActionKind;
+
+  /** Risk tier. */
+  tier: RemediationRiskTier;
+
+  /** Outcome of execution. */
+  status: "complete" | "skipped" | "failed" | "refused";
+
+  /** Number of artifacts actually removed/renamed. */
+  artifactsRemoved: number;
+
+  /** Actual bytes freed (measured, not estimated). */
+  bytesFreed: number;
+
+  /** Human-readable detail message. */
+  detail?: string;
+
+  /** Warning messages (e.g., partial failures). */
+  warnings?: string[];
+
+  /** Error message when status is "failed" or "refused". */
+  error?: string;
+};
+
+/**
+ * Summary of a full execution run.
+ */
+export type ExecutionSummary = {
+  executed: number;
+  skipped: number;
+  failed: number;
+  refused: number;
+  totalBytesFreed: number;
+  storageBefore: number;
+  storageAfter: number;
+};
+
+/**
+ * Complete result from a remediation execution pass.
+ */
+export type ExecutionResult = {
+  executedAt: string;
+  actions: ActionExecutionResult[];
+  summary: ExecutionSummary;
+};
+
+/**
+ * Maximum risk tier the v1 executor supports.
+ * Hard safety boundary — anything above this is refused.
+ */
+export const V1_MAX_EXECUTION_TIER: RemediationRiskTier = 1;
+
+// ---------------------------------------------------------------------------
 // Plan Generator Input
 // ---------------------------------------------------------------------------
 
