@@ -237,7 +237,7 @@ Each program should have:
 - Review agent logs weekly to verify standing orders are being followed
 - Update standing orders as your needs evolve — they're living documents
 
-### Don't
+### Do not
 
 - Grant broad authority on day one ("do whatever you think is best")
 - Skip escalation rules — every program needs a "when to stop and ask" clause
