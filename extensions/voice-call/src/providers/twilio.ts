@@ -31,33 +31,9 @@ import { twilioApiRequest } from "./twilio/api.js";
 import { decideTwimlResponse, readTwimlRequestView } from "./twilio/twiml-policy.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 
-type TwilioTtsTiming = {
-  stage: string;
-  callId?: string;
-  providerCallId?: string;
-  streamSid?: string;
-  [key: string]: string | number | boolean | undefined;
-};
-
-type StreamQueueDiagnostics = {
-  queueDepth: number;
-  playing: boolean;
-  hasActivePlayback: boolean;
-};
-
 type StreamSendResult = {
   sent: boolean;
-  bufferedAfterBytes: number;
 };
-
-function logTwilioTtsTiming(entry: TwilioTtsTiming): void {
-  console.log(
-    `[voice-call][timing] ${JSON.stringify({
-      component: "twilio-tts",
-      ...entry,
-    })}`,
-  );
-}
 
 function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: string): string {
   if (verifiedRequestKey) {
@@ -229,23 +205,10 @@ export class TwilioProvider implements VoiceCallProvider {
    */
   clearTtsQueue(callSid: string, reason = "unspecified"): void {
     const streamSid = this.callStreamMap.get(callSid);
-    if (streamSid && this.mediaStreamHandler) {
-      logTwilioTtsTiming({
-        stage: "stream.queue.clear.request",
-        providerCallId: callSid,
-        streamSid,
-        reason,
-      });
-      this.mediaStreamHandler.clearTtsQueue(streamSid, reason);
+    if (!streamSid || !this.mediaStreamHandler) {
       return;
     }
-    logTwilioTtsTiming({
-      stage: "stream.queue.clear.skipped",
-      providerCallId: callSid,
-      reason,
-      missingStreamSid: !streamSid,
-      missingHandler: !this.mediaStreamHandler,
-    });
+    this.mediaStreamHandler.clearTtsQueue(streamSid, reason);
   }
 
   /**
@@ -603,46 +566,15 @@ export class TwilioProvider implements VoiceCallProvider {
    *    Note: This may not work on all Twilio accounts.
    */
   async playTts(input: PlayTtsInput): Promise<void> {
-    const startedAt = Date.now();
-
     // Try telephony TTS via media stream first (if configured)
     const streamSid = this.callStreamMap.get(input.providerCallId);
     const shouldAvoidTwimlFallback = Boolean(streamSid);
-    logTwilioTtsTiming({
-      stage: "play-tts.start",
-      callId: input.callId,
-      providerCallId: input.providerCallId,
-      streamSid,
-      textChars: input.text.length,
-      hasTtsProvider: Boolean(this.ttsProvider),
-      hasMediaStreamHandler: Boolean(this.mediaStreamHandler),
-    });
 
     if (this.ttsProvider && this.mediaStreamHandler && streamSid) {
       try {
-        await this.playTtsViaStream(input.text, streamSid, {
-          callId: input.callId,
-          providerCallId: input.providerCallId,
-        });
-        logTwilioTtsTiming({
-          stage: "play-tts.done",
-          callId: input.callId,
-          providerCallId: input.providerCallId,
-          streamSid,
-          mode: "stream",
-          elapsedMs: Date.now() - startedAt,
-        });
+        await this.playTtsViaStream(input.text, streamSid);
         return;
       } catch (err) {
-        logTwilioTtsTiming({
-          stage: "play-tts.error",
-          callId: input.callId,
-          providerCallId: input.providerCallId,
-          streamSid,
-          mode: "stream",
-          elapsedMs: Date.now() - startedAt,
-          error: err instanceof Error ? err.message : String(err),
-        });
         console.warn(
           `[voice-call] Telephony TTS failed:`,
           err instanceof Error ? err.message : err,
@@ -652,15 +584,6 @@ export class TwilioProvider implements VoiceCallProvider {
     }
 
     if (shouldAvoidTwimlFallback) {
-      logTwilioTtsTiming({
-        stage: "play-tts.error",
-        callId: input.callId,
-        providerCallId: input.providerCallId,
-        streamSid,
-        mode: "stream",
-        elapsedMs: Date.now() - startedAt,
-        error: "twiml-fallback-blocked-active-stream",
-      });
       throw new Error(
         "Cannot use TwiML fallback while media stream is active; telephony TTS is unavailable",
       );
@@ -688,13 +611,6 @@ export class TwilioProvider implements VoiceCallProvider {
     await this.apiRequest(`/Calls/${input.providerCallId}.json`, {
       Twiml: twiml,
     });
-    logTwilioTtsTiming({
-      stage: "play-tts.done",
-      callId: input.callId,
-      providerCallId: input.providerCallId,
-      mode: "twiml-fallback",
-      elapsedMs: Date.now() - startedAt,
-    });
   }
 
   /**
@@ -702,11 +618,7 @@ export class TwilioProvider implements VoiceCallProvider {
    * Generates audio with core TTS, converts to mu-law, and streams via WebSocket.
    * Uses a queue to serialize playback and prevent overlapping audio.
    */
-  private async playTtsViaStream(
-    text: string,
-    streamSid: string,
-    context?: { callId?: string; providerCallId?: string },
-  ): Promise<void> {
+  private async playTtsViaStream(text: string, streamSid: string): Promise<void> {
     if (!this.ttsProvider || !this.mediaStreamHandler) {
       throw new Error("TTS provider and media stream handler required");
     }
@@ -718,47 +630,16 @@ export class TwilioProvider implements VoiceCallProvider {
 
     const handler = this.mediaStreamHandler;
     const ttsProvider = this.ttsProvider;
-    const getQueueDiagnostics = (): StreamQueueDiagnostics => {
-      const diagnosticsGetter = (handler as { getTtsDiagnostics?: (sid: string) => unknown })
-        .getTtsDiagnostics;
-      if (typeof diagnosticsGetter !== "function") {
-        return { queueDepth: 0, playing: false, hasActivePlayback: false };
-      }
-
-      const raw = diagnosticsGetter.call(handler, streamSid);
-      if (!raw || typeof raw !== "object") {
-        return { queueDepth: 0, playing: false, hasActivePlayback: false };
-      }
-
-      const diagnostics = raw as {
-        queueDepth?: unknown;
-        playing?: unknown;
-        hasActivePlayback?: unknown;
-      };
-      return {
-        queueDepth:
-          typeof diagnostics.queueDepth === "number" && Number.isFinite(diagnostics.queueDepth)
-            ? diagnostics.queueDepth
-            : 0,
-        playing: Boolean(diagnostics.playing),
-        hasActivePlayback: Boolean(diagnostics.hasActivePlayback),
-      };
-    };
 
     const normalizeSendResult = (raw: unknown): StreamSendResult => {
       if (!raw || typeof raw !== "object") {
-        return { sent: true, bufferedAfterBytes: 0 };
+        return { sent: true };
       }
       const typed = raw as {
         sent?: unknown;
-        bufferedAfterBytes?: unknown;
       };
       return {
         sent: typed.sent === undefined ? true : Boolean(typed.sent),
-        bufferedAfterBytes:
-          typeof typed.bufferedAfterBytes === "number" && Number.isFinite(typed.bufferedAfterBytes)
-            ? typed.bufferedAfterBytes
-            : 0,
       };
     };
 
@@ -778,44 +659,9 @@ export class TwilioProvider implements VoiceCallProvider {
       return normalizeSendResult(raw);
     };
 
-    const queuedAt = Date.now();
-    const queueSnapshotAtWait = getQueueDiagnostics();
-    logTwilioTtsTiming({
-      stage: "stream.queue.wait",
-      callId: context?.callId,
-      providerCallId: context?.providerCallId,
-      streamSid,
-      queueDepth: queueSnapshotAtWait.queueDepth,
-      queuePlaying: queueSnapshotAtWait.playing,
-      queueHasActivePlayback: queueSnapshotAtWait.hasActivePlayback,
-    });
     await handler.queueTts(streamSid, async (signal) => {
-      const dequeuedAt = Date.now();
-      const queueSnapshotAtDequeue = getQueueDiagnostics();
-      logTwilioTtsTiming({
-        stage: "stream.queue.dequeue",
-        callId: context?.callId,
-        providerCallId: context?.providerCallId,
-        streamSid,
-        queueWaitMs: dequeuedAt - queuedAt,
-        queueDepth: queueSnapshotAtDequeue.queueDepth,
-        queuePlaying: queueSnapshotAtDequeue.playing,
-        queueHasActivePlayback: queueSnapshotAtDequeue.hasActivePlayback,
-      });
-      let keepAliveSent = 0;
-      let keepAliveDropped = 0;
-      let keepAliveMaxBufferedAfterBytes = 0;
       const sendKeepAlive = () => {
-        const result = sendAudioChunk(SILENCE_CHUNK);
-        if (!result.sent) {
-          keepAliveDropped += 1;
-          return;
-        }
-        keepAliveSent += 1;
-        keepAliveMaxBufferedAfterBytes = Math.max(
-          keepAliveMaxBufferedAfterBytes,
-          result.bufferedAfterBytes,
-        );
+        sendAudioChunk(SILENCE_CHUNK);
       };
       sendKeepAlive();
       const keepAlive = setInterval(() => {
@@ -827,7 +673,6 @@ export class TwilioProvider implements VoiceCallProvider {
       // Generate audio with core TTS (returns mu-law at 8kHz)
       let muLawAudio: Buffer;
       let synthTimeout: ReturnType<typeof setTimeout> | null = null;
-      const synthStartedAt = Date.now();
       try {
         const synthPromise = ttsProvider.synthesizeForTelephony(text);
         const timeoutPromise = new Promise<Buffer>((_, reject) => {
@@ -840,88 +685,24 @@ export class TwilioProvider implements VoiceCallProvider {
           }, TwilioProvider.TTS_SYNTH_TIMEOUT_MS);
         });
         muLawAudio = await Promise.race([synthPromise, timeoutPromise]);
-        logTwilioTtsTiming({
-          stage: "stream.synth.done",
-          callId: context?.callId,
-          providerCallId: context?.providerCallId,
-          streamSid,
-          elapsedMs: Date.now() - synthStartedAt,
-          audioBytes: muLawAudio.length,
-        });
       } finally {
         if (synthTimeout) {
           clearTimeout(synthTimeout);
         }
         clearInterval(keepAlive);
-        logTwilioTtsTiming({
-          stage: "stream.keepalive.done",
-          callId: context?.callId,
-          providerCallId: context?.providerCallId,
-          streamSid,
-          keepAliveSent,
-          keepAliveDropped,
-          keepAliveMaxBufferedAfterBytes,
-        });
       }
 
-      const playbackStartedAt = Date.now();
-      let chunkCount = 0;
-      let bytesSent = 0;
-      let sendFailures = 0;
-      let maxBufferedAfterBytes = 0;
-      let minChunkIntervalMs = Number.POSITIVE_INFINITY;
-      let maxChunkIntervalMs = 0;
-      let totalChunkIntervalMs = 0;
-      let chunkIntervalSamples = 0;
-      let previousChunkSentAt: number | null = null;
-      let minTimerDelayMs = Number.POSITIVE_INFINITY;
-      let maxTimerDelayMs = 0;
-      let totalTimerDelayMs = 0;
-      let timerDelaySamples = 0;
-      let timerDelayOverrunCount = 0;
-      let scheduleBehindCount = 0;
-      let maxScheduleBehindMs = 0;
-      let totalScheduleBehindMs = 0;
-      let nextChunkDueAt = playbackStartedAt + CHUNK_DELAY_MS;
+      let nextChunkDueAt = Date.now() + CHUNK_DELAY_MS;
       for (const chunk of chunkAudio(muLawAudio, CHUNK_SIZE)) {
         if (signal.aborted) {
           break;
         }
-        const chunkSentAt = Date.now();
-        if (previousChunkSentAt !== null) {
-          const intervalMs = chunkSentAt - previousChunkSentAt;
-          minChunkIntervalMs = Math.min(minChunkIntervalMs, intervalMs);
-          maxChunkIntervalMs = Math.max(maxChunkIntervalMs, intervalMs);
-          totalChunkIntervalMs += intervalMs;
-          chunkIntervalSamples += 1;
-        }
-        previousChunkSentAt = chunkSentAt;
-        chunkCount += 1;
-        bytesSent += chunk.length;
-        const sendResult = sendAudioChunk(chunk);
-        if (!sendResult.sent) {
-          sendFailures += 1;
-        }
-        maxBufferedAfterBytes = Math.max(maxBufferedAfterBytes, sendResult.bufferedAfterBytes);
+        sendAudioChunk(chunk);
 
         // Drift-corrected pacing: schedule against an absolute clock to avoid cumulative delay.
         const waitMs = nextChunkDueAt - Date.now();
         if (waitMs > 0) {
-          const timerStartedAt = Date.now();
           await new Promise((resolve) => setTimeout(resolve, Math.ceil(waitMs)));
-          const timerDelayMs = Date.now() - timerStartedAt;
-          minTimerDelayMs = Math.min(minTimerDelayMs, timerDelayMs);
-          maxTimerDelayMs = Math.max(maxTimerDelayMs, timerDelayMs);
-          totalTimerDelayMs += timerDelayMs;
-          timerDelaySamples += 1;
-          if (timerDelayMs > CHUNK_DELAY_MS + 5) {
-            timerDelayOverrunCount += 1;
-          }
-        } else if (waitMs < -1) {
-          const behindMs = Math.abs(waitMs);
-          scheduleBehindCount += 1;
-          maxScheduleBehindMs = Math.max(maxScheduleBehindMs, behindMs);
-          totalScheduleBehindMs += behindMs;
         }
         nextChunkDueAt += CHUNK_DELAY_MS;
         if (signal.aborted) {
@@ -929,62 +710,10 @@ export class TwilioProvider implements VoiceCallProvider {
         }
       }
 
-      let markSent = false;
-      let markBufferedAfterBytes = 0;
       if (!signal.aborted) {
         // Send a mark to track when audio finishes
-        const markResult = sendPlaybackMark(`tts-${Date.now()}`);
-        markSent = markResult.sent;
-        markBufferedAfterBytes = markResult.bufferedAfterBytes;
+        sendPlaybackMark(`tts-${Date.now()}`);
       }
-      const playbackElapsedMs = Date.now() - playbackStartedAt;
-      const expectedPlaybackMs = chunkCount * CHUNK_DELAY_MS;
-      logTwilioTtsTiming({
-        stage: "stream.playback.done",
-        callId: context?.callId,
-        providerCallId: context?.providerCallId,
-        streamSid,
-        elapsedMs: playbackElapsedMs,
-        expectedPlaybackMs,
-        pacingDriftMs: playbackElapsedMs - expectedPlaybackMs,
-        chunkCount,
-        bytesSent,
-        sendFailures,
-        maxBufferedAfterBytes,
-        minChunkIntervalMs: Number.isFinite(minChunkIntervalMs) ? minChunkIntervalMs : undefined,
-        maxChunkIntervalMs: chunkIntervalSamples > 0 ? maxChunkIntervalMs : undefined,
-        avgChunkIntervalMs:
-          chunkIntervalSamples > 0
-            ? Number((totalChunkIntervalMs / chunkIntervalSamples).toFixed(2))
-            : undefined,
-        minTimerDelayMs: Number.isFinite(minTimerDelayMs) ? minTimerDelayMs : undefined,
-        maxTimerDelayMs: timerDelaySamples > 0 ? maxTimerDelayMs : undefined,
-        avgTimerDelayMs:
-          timerDelaySamples > 0
-            ? Number((totalTimerDelayMs / timerDelaySamples).toFixed(2))
-            : undefined,
-        timerDelayOverrunCount,
-        scheduleBehindCount,
-        maxScheduleBehindMs: scheduleBehindCount > 0 ? maxScheduleBehindMs : undefined,
-        avgScheduleBehindMs:
-          scheduleBehindCount > 0
-            ? Number((totalScheduleBehindMs / scheduleBehindCount).toFixed(2))
-            : undefined,
-        markSent,
-        markBufferedAfterBytes,
-        aborted: signal.aborted,
-      });
-    });
-    const queueSnapshotAtDone = getQueueDiagnostics();
-    logTwilioTtsTiming({
-      stage: "stream.queue.done",
-      callId: context?.callId,
-      providerCallId: context?.providerCallId,
-      streamSid,
-      elapsedMs: Date.now() - queuedAt,
-      queueDepth: queueSnapshotAtDone.queueDepth,
-      queuePlaying: queueSnapshotAtDone.playing,
-      queueHasActivePlayback: queueSnapshotAtDone.hasActivePlayback,
     });
   }
 

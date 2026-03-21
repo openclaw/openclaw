@@ -67,12 +67,6 @@ type StreamSendResult = {
   bufferedAfterBytes: number;
 };
 
-type TtsDiagnostics = {
-  queueDepth: number;
-  playing: boolean;
-  hasActivePlayback: boolean;
-};
-
 type PendingConnection = {
   ip: string;
   timeout: ReturnType<typeof setTimeout>;
@@ -468,17 +462,6 @@ export class MediaStreamHandler {
     queue.length = 0;
     this.ttsActiveControllers.get(streamSid)?.abort();
     this.clearAudio(streamSid);
-  }
-
-  /**
-   * Get queue/playback diagnostics for the stream TTS pipeline.
-   */
-  getTtsDiagnostics(streamSid: string): TtsDiagnostics {
-    return {
-      queueDepth: this.ttsQueues.get(streamSid)?.length ?? 0,
-      playing: Boolean(this.ttsPlaying.get(streamSid)),
-      hasActivePlayback: this.ttsActiveControllers.has(streamSid),
-    };
   }
 
   /**
