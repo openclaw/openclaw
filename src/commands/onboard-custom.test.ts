@@ -416,6 +416,40 @@ describe("promptCustomApiConfig", () => {
       id: "CUSTOM_PROVIDER_API_KEY",
     });
   });
+
+  it("does not offer stored-key reuse when multiple providers share the same base URL", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://proxy.example.com/v1", "fresh-key", "detected-model", "custom", ""],
+      select: ["plaintext", "openai"],
+    });
+    stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(prompter, {
+      models: {
+        providers: {
+          "custom-proxy-a": {
+            baseUrl: "https://proxy.example.com/v1",
+            api: "openai-completions",
+            apiKey: "tenant-a-key",
+            models: [],
+          },
+          "custom-proxy-b": {
+            baseUrl: "https://proxy.example.com/v1",
+            api: "openai-completions",
+            apiKey: "tenant-b-key",
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "API Key (leave blank if not required)",
+      }),
+    );
+  });
 });
 
 describe("applyCustomApiConfig", () => {

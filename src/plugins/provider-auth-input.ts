@@ -1,4 +1,5 @@
 import {
+  loadAuthProfileStoreForInspection,
   loadAuthProfileStore,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
@@ -150,25 +151,7 @@ async function loadScopedAuthProfileStore(agentDir?: string): Promise<AuthProfil
   if (!agentDir) {
     return loadAuthProfileStore();
   }
-
-  const previousOpenClawAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const previousPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
-  process.env.OPENCLAW_AGENT_DIR = agentDir;
-  process.env.PI_CODING_AGENT_DIR = agentDir;
-  try {
-    return loadAuthProfileStore();
-  } finally {
-    if (previousOpenClawAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousOpenClawAgentDir;
-    }
-    if (previousPiCodingAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiCodingAgentDir;
-    }
-  }
+  return loadAuthProfileStoreForInspection(agentDir);
 }
 
 function resolveProviderApiKeyRef(params: {

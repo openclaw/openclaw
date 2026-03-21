@@ -220,9 +220,15 @@ function buildEndpointAuthHintFromUrl(baseUrl: string): string {
 function findExistingProviderIdForBaseUrl(
   config: OpenClawConfig,
   baseUrl: string,
-): string | undefined {
+): { providerId?: string; ambiguous: boolean } {
   const providers = config.models?.providers ?? {};
-  return Object.entries(providers).find(([, provider]) => provider?.baseUrl === baseUrl)?.[0];
+  const matches = Object.entries(providers)
+    .filter(([, provider]) => provider?.baseUrl === baseUrl)
+    .map(([providerId]) => providerId);
+  if (matches.length === 1) {
+    return { providerId: matches[0], ambiguous: false };
+  }
+  return { ambiguous: matches.length > 1 };
 }
 
 function resolveUniqueEndpointId(params: {
@@ -469,10 +475,11 @@ async function promptBaseUrlAndKey(params: {
     },
   });
   const baseUrl = baseUrlInput.trim();
-  const providerHint =
-    findExistingProviderIdForBaseUrl(params.config, baseUrl) ??
-    buildEndpointAuthHintFromUrl(baseUrl) ??
-    "custom";
+  const existingProviderMatch = findExistingProviderIdForBaseUrl(params.config, baseUrl);
+  // Ambiguous exact baseUrl matches are not safe reuse candidates.
+  const providerHint = existingProviderMatch.ambiguous
+    ? "__custom-ambiguous__"
+    : (existingProviderMatch.providerId ?? buildEndpointAuthHintFromUrl(baseUrl) ?? "custom");
   let apiKeyInput: SecretInput | undefined;
   const resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
