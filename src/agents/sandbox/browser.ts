@@ -73,6 +73,7 @@ function buildSandboxBrowserResolvedConfig(params: {
     enabled: true,
     evaluateEnabled: params.evaluateEnabled,
     controlPort: params.controlPort,
+    ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
     cdpProtocol: "http",
     cdpHost,
     cdpIsLoopback: true,
