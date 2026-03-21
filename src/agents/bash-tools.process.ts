@@ -477,11 +477,17 @@ export function createProcessTool(
           if (!resolved.ok) {
             return resolved.result;
           }
-          const { data, warnings } = encodeKeySequence({
-            keys: params.keys,
-            hex: params.hex,
-            literal: params.literal,
-          });
+          // Use session's cursor key mode to select correct escape sequences.
+          // 'application' mode (smkx) uses SS3 sequences, 'normal' mode uses CSI.
+          const cursorKeyMode = resolved.session.cursorKeyMode ?? "normal";
+          const { data, warnings } = encodeKeySequence(
+            {
+              keys: params.keys,
+              hex: params.hex,
+              literal: params.literal,
+            },
+            cursorKeyMode,
+          );
           if (!data) {
             return {
               content: [
@@ -496,7 +502,7 @@ export function createProcessTool(
           await writeToStdin(resolved.stdin, data);
           return runningSessionResult(
             resolved.session,
-            `Sent ${data.length} bytes to session ${params.sessionId}.` +
+            `Sent ${data.length} bytes to session ${params.sessionId} (cursor mode: ${cursorKeyMode}).` +
               (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : ""),
           );
         }

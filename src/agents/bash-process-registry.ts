@@ -52,6 +52,8 @@ export interface ProcessSession {
   exited: boolean;
   truncated: boolean;
   backgrounded: boolean;
+  /** PTY cursor key mode: 'normal' (CSI sequences) or 'application' (SS3 sequences). */
+  cursorKeyMode?: "normal" | "application";
 }
 
 export interface FinishedSession {
