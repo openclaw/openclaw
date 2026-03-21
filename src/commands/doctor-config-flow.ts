@@ -74,13 +74,7 @@ import {
 } from "./doctor/providers/telegram.js";
 import { hasAllowFromEntries } from "./doctor/shared/allowlist.js";
 import { collectEmptyAllowlistPolicyWarningsForAccount } from "./doctor/shared/empty-allowlist-policy.js";
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
+import { asObjectRecord } from "./doctor/shared/object.js";
 
 function normalizeBindingChannelKey(raw?: string | null): string {
   const normalized = normalizeChatChannelId(raw);

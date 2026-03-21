@@ -12,6 +12,7 @@ import type { TelegramNetworkConfig } from "../../../config/types.telegram.js";
 import { resolveTelegramAccount } from "../../../plugin-sdk/account-resolution.js";
 import { describeUnknownError } from "../../../secrets/shared.js";
 import { hasAllowFromEntries } from "../shared/allowlist.js";
+import { asObjectRecord } from "../shared/object.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
@@ -28,13 +29,6 @@ type ResolvedTelegramLookupAccount = {
   proxyUrl?: string;
   network?: TelegramNetworkConfig;
 };
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
 
 export function collectTelegramAccountScopes(
   cfg: OpenClawConfig,

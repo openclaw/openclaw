@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../../config/config.js";
+import { asObjectRecord } from "../shared/object.js";
 import type { DoctorAccountRecord } from "../types.js";
 
 type DiscordNumericIdHit = { path: string; entry: number };
@@ -8,13 +9,6 @@ type DiscordIdListRef = {
   holder: Record<string, unknown>;
   key: string;
 };
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
 
 export function collectDiscordAccountScopes(
   cfg: OpenClawConfig,
