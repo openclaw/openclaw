@@ -4,6 +4,7 @@ import path from "node:path";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
+import type { UpdateCheckResult } from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
@@ -261,6 +262,14 @@ function buildLeanStatusSummary(params: { agentStatus: AgentLocalStatuses }): St
   };
 }
 
+function buildLeanUpdateCheckResult(): UpdateCheckResult {
+  return {
+    root: null,
+    installKind: "unknown",
+    packageManager: "unknown",
+  };
+}
+
 function buildLeanGatewayProbeSnapshot(): GatewayProbeSnapshot {
   const port = resolveGatewayPortFast(process.env);
   const url = `ws://127.0.0.1:${port}`;
@@ -314,14 +323,16 @@ export async function scanStatusJsonFast(
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;
-  const updatePromise = loadStatusUpdateModule().then(({ getUpdateCheckResult }) =>
-    getUpdateCheckResult({
-      timeoutMs: updateTimeoutMs,
-      fetchGit: true,
-      includeRegistry: true,
-    }),
-  );
   const canUseLeanSummary = hasMissingConfigFastPath() && !hasPotentialConfiguredChannels(cfg);
+  const updatePromise = canUseLeanSummary
+    ? Promise.resolve(buildLeanUpdateCheckResult())
+    : loadStatusUpdateModule().then(({ getUpdateCheckResult }) =>
+        getUpdateCheckResult({
+          timeoutMs: updateTimeoutMs,
+          fetchGit: true,
+          includeRegistry: true,
+        }),
+      );
   const agentStatusPromise = canUseLeanSummary
     ? Promise.resolve(buildLeanAgentLocalStatuses())
     : loadStatusAgentLocalModule().then(({ getAgentLocalStatuses }) => getAgentLocalStatuses(cfg));
