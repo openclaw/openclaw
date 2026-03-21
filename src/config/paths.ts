@@ -231,6 +231,18 @@ export function resolveDefaultConfigCandidates(
     candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(resolved, name)));
   }
 
+  // Nesting guard: when OPENCLAW_HOME basename is a known state dir, include
+  // it directly as a candidate location so CONFIG_PATH stays consistent with
+  // resolveStateDir (which returns OPENCLAW_HOME itself in this case).
+  const explicitHome = env.OPENCLAW_HOME?.trim();
+  if (explicitHome) {
+    const home = effectiveHomedir();
+    if (ALL_STATE_DIRNAMES.has(path.basename(home))) {
+      candidates.push(path.join(home, CONFIG_FILENAME));
+      candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(home, name)));
+    }
+  }
+
   const defaultDirs = [newStateDir(effectiveHomedir), ...legacyStateDirs(effectiveHomedir)];
   for (const dir of defaultDirs) {
     candidates.push(path.join(dir, CONFIG_FILENAME));

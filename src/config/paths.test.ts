@@ -191,3 +191,54 @@ describe("resolveStateDir nesting guard (#45765)", () => {
     vi.restoreAllMocks();
   });
 });
+
+describe("resolveDefaultConfigCandidates nesting guard (#45765)", () => {
+  it("includes OPENCLAW_HOME dir in candidates when basename is a state dirname", () => {
+    const home = "/home/user/.clawdbot";
+    const resolvedHome = path.resolve(home);
+    const env = { OPENCLAW_HOME: home } as NodeJS.ProcessEnv;
+    const candidates = resolveDefaultConfigCandidates(env);
+
+    expect(candidates).toContain(path.join(resolvedHome, "openclaw.json"));
+    expect(candidates).toContain(path.join(resolvedHome, "clawdbot.json"));
+  });
+
+  it("does not add flat candidates when OPENCLAW_HOME basename is not a state dirname", () => {
+    const home = "/srv/app";
+    const resolvedHome = path.resolve(home);
+    const env = { OPENCLAW_HOME: home } as NodeJS.ProcessEnv;
+    const candidates = resolveDefaultConfigCandidates(env);
+
+    expect(candidates).not.toContain(path.join(resolvedHome, "openclaw.json"));
+    expect(candidates).toContain(path.join(resolvedHome, ".openclaw", "openclaw.json"));
+  });
+
+  it("CONFIG_PATH finds legacy config in OPENCLAW_HOME when basename is a state dirname", async () => {
+    await withTempDir({ prefix: "openclaw-nesting-" }, async (root) => {
+      const homeDir = path.join(root, ".clawdbot");
+      await fs.mkdir(homeDir, { recursive: true });
+      const legacyConfig = path.join(homeDir, "clawdbot.json");
+      await fs.writeFile(legacyConfig, "{}", "utf-8");
+
+      const env = { OPENCLAW_HOME: homeDir } as NodeJS.ProcessEnv;
+      const resolved = resolveConfigPathCandidate(env);
+
+      expect(resolved).toBe(legacyConfig);
+    });
+  });
+
+  it("config path and state dir are consistent when OPENCLAW_HOME is a state dir", async () => {
+    await withTempDir({ prefix: "openclaw-nesting-" }, async (root) => {
+      const homeDir = path.join(root, ".clawdbot");
+      await fs.mkdir(homeDir, { recursive: true });
+      await fs.writeFile(path.join(homeDir, "clawdbot.json"), "{}", "utf-8");
+
+      const env = { OPENCLAW_HOME: homeDir } as NodeJS.ProcessEnv;
+      const stateDir = resolveStateDir(env);
+      const configPath = resolveConfigPathCandidate(env);
+
+      // Both should resolve within the same directory
+      expect(path.dirname(configPath)).toBe(stateDir);
+    });
+  });
+});
