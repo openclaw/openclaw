@@ -61,15 +61,16 @@ function isRetryableGetFileError(err: unknown): boolean {
 }
 
 /**
- * Returns true if the download error is a transient network error that should be retried.
- * Returns false for permanent errors like HTTP 4xx, max_bytes policy violations.
+ * Returns true if the download error is a transient HTTP 5xx server error
+ * that should be retried at the outer level.
+ *
+ * `fetch_failed` errors are NOT retried here because they are already handled
+ * by the transport fallback dispatcher (`dispatcherAttempts`) inside
+ * `fetchRemoteMedia`. Retrying them at the outer level would fan out to up to
+ * 9 total fetch attempts in degraded-network environments.
  */
 function isRetryableDownloadError(err: unknown): boolean {
   if (err instanceof MediaFetchError) {
-    // Retry transient fetch failures (network issues, timeouts, connection drops).
-    if (err.code === "fetch_failed") {
-      return true;
-    }
     // Retry transient HTTP 5xx server errors; do not retry 4xx or policy violations.
     if (err.code === "http_error") {
       const match = /HTTP (\d{3})/.exec(err.message);
@@ -80,15 +81,7 @@ function isRetryableDownloadError(err: unknown): boolean {
     }
     return false;
   }
-  // For non-MediaFetchError, check if it looks like a transient network error.
-  const msg = formatErrorMessage(err).toLowerCase();
-  return (
-    msg.includes("fetch failed") ||
-    msg.includes("network") ||
-    msg.includes("econnreset") ||
-    msg.includes("etimedout") ||
-    msg.includes("econnrefused")
-  );
+  return false;
 }
 
 function resolveMediaFileRef(msg: TelegramContext["message"]) {
@@ -193,7 +186,7 @@ async function downloadAndSaveTelegramFile(params: {
         ssrfPolicy: buildTelegramMediaSsrfPolicy(params.apiRoot),
       }),
     {
-      attempts: 3,
+      attempts: 2,
       minDelayMs: 500,
       maxDelayMs: 2000,
       jitter: 0.2,
