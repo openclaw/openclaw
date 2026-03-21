@@ -1,0 +1,123 @@
+import { EventEmitter } from "node:events";
+import type { IncomingMessage } from "node:http";
+import { describe, expect, it, vi } from "vitest";
+import { createMockServerResponse } from "../../../../test/helpers/extensions/mock-http-response.js";
+import { createCampfireWebhookHandler } from "./index.js";
+
+function createJsonRequest(params: {
+  method?: string;
+  url?: string;
+  body?: unknown;
+  rawBody?: string;
+  headers?: Record<string, string>;
+}): IncomingMessage {
+  const req = new EventEmitter() as IncomingMessage & {
+    destroyed?: boolean;
+    destroy: (error?: Error) => IncomingMessage;
+    on: (event: string, listener: (...args: unknown[]) => void) => IncomingMessage;
+  };
+  req.method = params.method ?? "POST";
+  req.url = params.url ?? "/channels/campfire/webhook/default";
+  req.headers = {
+    "content-type": "application/json",
+    ...(params.headers ?? {}),
+  };
+  req.destroyed = false;
+  (req as unknown as { socket: { remoteAddress: string } }).socket = {
+    remoteAddress: "127.0.0.1",
+  };
+  req.destroy = () => {
+    req.destroyed = true;
+    return req;
+  };
+
+  const encodedBody = params.rawBody ?? JSON.stringify(params.body ?? {});
+  const originalOn = req.on.bind(req);
+  let bodyScheduled = false;
+  req.on = ((event: string, listener: (...args: unknown[]) => void) => {
+    const result = originalOn(event, listener);
+    if (!bodyScheduled && (event === "data" || event === "end")) {
+      bodyScheduled = true;
+      void Promise.resolve().then(() => {
+        if (encodedBody.length > 0) {
+          req.emit("data", Buffer.from(encodedBody, "utf-8"));
+        }
+        if (!req.destroyed) {
+          req.emit("end");
+        }
+      });
+    }
+    return result;
+  }) as IncomingMessage["on"];
+
+  return req;
+}
+
+const validPayload = {
+  user: { id: 42, name: "Alice" },
+  room: {
+    id: 7,
+    name: "General",
+    path: "https://campfire.example.com/rooms/7/42-AbCdEf/messages",
+  },
+  message: {
+    id: 99,
+    body: { plain: "Hey help me" },
+    path: "https://campfire.example.com/rooms/7/@99",
+  },
+};
+
+describe("createCampfireWebhookHandler", () => {
+  it("rejects non-POST requests", async () => {
+    const handler = createCampfireWebhookHandler({ onInbound: vi.fn() });
+    const req = createJsonRequest({ method: "GET" });
+    const res = createMockServerResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(405);
+    expect(res.getHeader("allow")).toBe("POST");
+  });
+
+  it("rejects webhook requests with a mismatched secret", async () => {
+    const handler = createCampfireWebhookHandler({
+      webhookSecret: "expected",
+      onInbound: vi.fn(),
+    });
+    const req = createJsonRequest({
+      url: "/channels/campfire/webhook/default?secret=wrong",
+      body: validPayload,
+    });
+    const res = createMockServerResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("rejects malformed payloads", async () => {
+    const handler = createCampfireWebhookHandler({ onInbound: vi.fn() });
+    const req = createJsonRequest({ body: { user: { id: 42 } } });
+    const res = createMockServerResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("returns 200 and dispatches inbound asynchronously", async () => {
+    const onInbound = vi.fn();
+    const handler = createCampfireWebhookHandler({ onInbound });
+    const req = createJsonRequest({ body: validPayload });
+    const res = createMockServerResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(onInbound).not.toHaveBeenCalled();
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(onInbound).toHaveBeenCalledWith(validPayload);
+  });
+});
