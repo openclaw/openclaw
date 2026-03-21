@@ -106,7 +106,7 @@ static gboolean idle_trigger_deep_probe(gpointer user_data) {
     return G_SOURCE_REMOVE;
 }
 
-void state_update_systemd(SystemdState *sys_state) {
+void state_update_systemd(const SystemdState *sys_state) {
     AppState old_state = current_state;
     gboolean became_active = (!current_sys_state.active && sys_state->active);
     gboolean unit_changed = (g_strcmp0(current_sys_state.unit_name, sys_state->unit_name) != 0);
@@ -173,7 +173,7 @@ void state_set_health_in_flight(gboolean in_flight) {
     current_health_state.in_flight = in_flight;
 }
 
-void state_update_health(HealthState *health_state) {
+void state_update_health(const HealthState *health_state) {
     g_free(current_health_state.bind_host);
     g_free(current_health_state.probe_url);
     
@@ -197,7 +197,7 @@ void state_set_probe_in_flight(gboolean in_flight) {
     current_probe_state.in_flight = in_flight;
 }
 
-void state_update_probe(ProbeState *probe_state) {
+void state_update_probe(const ProbeState *probe_state) {
     g_free(current_probe_state.summary);
     
     // Note: Probe updates do not feed compute_state(). 

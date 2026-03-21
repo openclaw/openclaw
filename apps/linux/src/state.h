@@ -70,13 +70,13 @@ typedef struct {
 } ProbeState;
 
 void state_init(void);
-void state_update_systemd(SystemdState *sys_state);
+void state_update_systemd(const SystemdState *sys_state);
 
 void state_set_health_in_flight(gboolean in_flight);
-void state_update_health(HealthState *health_state);
+void state_update_health(const HealthState *health_state);
 
 void state_set_probe_in_flight(gboolean in_flight);
-void state_update_probe(ProbeState *probe_state);
+void state_update_probe(const ProbeState *probe_state);
 
 AppState state_get_current(void);
 const char* state_get_current_string(void);
