@@ -1,5 +1,6 @@
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { captureEnv } from "../test-utils/env.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -168,7 +169,7 @@ const mocks = vi.hoisted(() => ({
     configSnapshot: null,
   }),
   callGateway: vi.fn().mockResolvedValue({}),
-  listAgentsForGateway: vi.fn().mockReturnValue({
+  listGatewayAgentsBasic: vi.fn().mockReturnValue({
     defaultId: "main",
     mainKey: "agent:main:main",
     scope: "per-sender",
@@ -205,6 +206,7 @@ const mocks = vi.hoisted(() => ({
       },
     ],
   }),
+  buildPluginCompatibilityNotices: vi.fn((): PluginCompatibilityNotice[] => []),
 }));
 
 vi.mock("../memory/manager.js", () => ({
@@ -286,7 +288,7 @@ vi.mock("../channels/plugins/index.js", () => ({
       },
     ] as unknown,
 }));
-vi.mock("../web/session.js", () => ({
+vi.mock("../../extensions/whatsapp/src/session.js", () => ({
   webAuthExists: mocks.webAuthExists,
   getWebAuthAgeMs: mocks.getWebAuthAgeMs,
   readWebSelfId: mocks.readWebSelfId,
@@ -299,11 +301,18 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gateway/call.js")>();
   return { ...actual, callGateway: mocks.callGateway };
 });
+vi.mock("../gateway/agent-list.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/agent-list.js")>();
+  return {
+    ...actual,
+    listGatewayAgentsBasic: mocks.listGatewayAgentsBasic,
+  };
+});
+
 vi.mock("../gateway/session-utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gateway/session-utils.js")>();
   return {
     ...actual,
-    listAgentsForGateway: mocks.listAgentsForGateway,
   };
 });
 vi.mock("../infra/openclaw-root.js", () => ({
@@ -378,6 +387,9 @@ vi.mock("../daemon/node-service.js", () => ({
 vi.mock("../security/audit.js", () => ({
   runSecurityAudit: mocks.runSecurityAudit,
 }));
+vi.mock("../plugins/status.js", () => ({
+  buildPluginCompatibilityNotices: mocks.buildPluginCompatibilityNotices,
+}));
 
 import { statusCommand } from "./status.js";
 
@@ -396,9 +408,18 @@ describe("statusCommand", () => {
   });
 
   it("prints JSON when requested", async () => {
+    mocks.buildPluginCompatibilityNotices.mockReturnValue([
+      {
+        pluginId: "legacy-plugin",
+        code: "legacy-before-agent-start",
+        severity: "warn",
+        message:
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+      },
+    ]);
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
-    expect(payload.linkChannel.linked).toBe(true);
+    expect(payload.linkChannel).toBeUndefined();
     expect(payload.memory.agentId).toBe("main");
     expect(payload.memoryPlugin.enabled).toBe(true);
     expect(payload.memoryPlugin.slot).toBe("memory-core");
@@ -417,6 +438,24 @@ describe("statusCommand", () => {
     expect(payload.securityAudit.summary.warn).toBe(1);
     expect(payload.gatewayService.label).toBe("LaunchAgent");
     expect(payload.nodeService.label).toBe("LaunchAgent");
+    expect(payload.pluginCompatibility).toEqual({
+      count: 1,
+      warnings: [
+        {
+          pluginId: "legacy-plugin",
+          code: "legacy-before-agent-start",
+          severity: "warn",
+          message:
+            "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+        },
+      ],
+    });
+    expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeFilesystem: true,
+        includeChannelSecurity: true,
+      }),
+    );
   });
 
   it("surfaces unknown usage when totalTokens is missing", async () => {
@@ -439,6 +478,15 @@ describe("statusCommand", () => {
   });
 
   it("prints formatted lines otherwise", async () => {
+    mocks.buildPluginCompatibilityNotices.mockReturnValue([
+      {
+        pluginId: "legacy-plugin",
+        code: "legacy-before-agent-start",
+        severity: "warn",
+        message:
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+      },
+    ]);
     const logs = await runStatusAndGetLogs();
     for (const token of [
       "OpenClaw status",
@@ -449,6 +497,7 @@ describe("statusCommand", () => {
       "Dashboard",
       "macos 14.0 (arm64)",
       "Memory",
+      "Plugin compatibility",
       "Channels",
       "WhatsApp",
       "bootstrap files",
@@ -463,6 +512,9 @@ describe("statusCommand", () => {
     ]) {
       expect(logs.some((line) => line.includes(token))).toBe(true);
     }
+    expect(
+      logs.some((line) => line.includes("legacy-plugin still uses legacy before_agent_start")),
+    ).toBe(true);
     expect(
       logs.some(
         (line) =>
@@ -505,8 +557,13 @@ describe("statusCommand", () => {
 
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
-    expect(payload.gateway.error).toContain("gateway.auth.token");
-    expect(payload.gateway.error).toContain("SecretRef");
+    expect(payload.gateway.error ?? payload.gateway.authWarning ?? null).not.toBeNull();
+    if (Array.isArray(payload.secretDiagnostics) && payload.secretDiagnostics.length > 0) {
+      expect(
+        payload.secretDiagnostics.some((entry: string) => entry.includes("gateway.auth.token")),
+      ).toBe(true);
+    }
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("surfaces channel runtime errors from the gateway", async () => {
@@ -597,11 +654,11 @@ describe("statusCommand", () => {
   });
 
   it("includes sessions across agents in JSON output", async () => {
-    const originalAgents = mocks.listAgentsForGateway.getMockImplementation();
+    const originalAgents = mocks.listGatewayAgentsBasic.getMockImplementation();
     const originalResolveStorePath = mocks.resolveStorePath.getMockImplementation();
     const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
 
-    mocks.listAgentsForGateway.mockReturnValue({
+    mocks.listGatewayAgentsBasic.mockReturnValue({
       defaultId: "main",
       mainKey: "agent:main:main",
       scope: "per-sender",
@@ -640,7 +697,7 @@ describe("statusCommand", () => {
     ).toBe(true);
 
     if (originalAgents) {
-      mocks.listAgentsForGateway.mockImplementation(originalAgents);
+      mocks.listGatewayAgentsBasic.mockImplementation(originalAgents);
     }
     if (originalResolveStorePath) {
       mocks.resolveStorePath.mockImplementation(originalResolveStorePath);

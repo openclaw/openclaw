@@ -104,16 +104,26 @@ describe("QmdMemoryManager", () => {
   let stateDir: string;
   let cfg: OpenClawConfig;
   const agentId = "main";
+  const openManagers = new Set<QmdMemoryManager>();
+
+  function trackManager<T extends QmdMemoryManager | null>(manager: T): T {
+    if (manager) {
+      openManagers.add(manager);
+    }
+    return manager;
+  }
 
   async function createManager(params?: { mode?: "full" | "status"; cfg?: OpenClawConfig }) {
     const cfgToUse = params?.cfg ?? cfg;
     const resolved = resolveMemoryBackendConfig({ cfg: cfgToUse, agentId });
-    const manager = await QmdMemoryManager.create({
-      cfg: cfgToUse,
-      agentId,
-      resolved,
-      mode: params?.mode ?? "status",
-    });
+    const manager = trackManager(
+      await QmdMemoryManager.create({
+        cfg: cfgToUse,
+        agentId,
+        resolved,
+        mode: params?.mode ?? "status",
+      }),
+    );
     expect(manager).toBeTruthy();
     if (!manager) {
       throw new Error("manager missing");
@@ -161,7 +171,14 @@ describe("QmdMemoryManager", () => {
     } as OpenClawConfig;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await Promise.all(
+      Array.from(openManagers, async (manager) => {
+        await manager.close();
+      }),
+    );
+    openManagers.clear();
+    await fs.rm(tmpRoot, { recursive: true, force: true });
     vi.useRealTimers();
     delete process.env.OPENCLAW_STATE_DIR;
     if (originalPath === undefined) {
@@ -365,12 +382,14 @@ describe("QmdMemoryManager", () => {
     });
 
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: devAgentId });
-    const manager = await QmdMemoryManager.create({
-      cfg,
-      agentId: devAgentId,
-      resolved,
-      mode: "full",
-    });
+    const manager = trackManager(
+      await QmdMemoryManager.create({
+        cfg,
+        agentId: devAgentId,
+        resolved,
+        mode: "full",
+      }),
+    );
     expect(manager).toBeTruthy();
     await manager?.close();
 
@@ -755,7 +774,7 @@ describe("QmdMemoryManager", () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved, mode: "status" });
     await vi.advanceTimersByTimeAsync(0);
-    const manager = await createPromise;
+    const manager = trackManager(await createPromise);
     expect(manager).toBeTruthy();
     if (!manager) {
       throw new Error("manager missing");
@@ -1985,7 +2004,7 @@ describe("QmdMemoryManager", () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved, mode: "status" });
     await vi.advanceTimersByTimeAsync(0);
-    const manager = await createPromise;
+    const manager = trackManager(await createPromise);
     expect(manager).toBeTruthy();
     if (!manager) {
       throw new Error("manager missing");

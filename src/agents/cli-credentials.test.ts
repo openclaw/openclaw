@@ -46,6 +46,12 @@ async function readCachedClaudeCliCredentials(allowKeychainPrompt: boolean) {
   });
 }
 
+function createJwtWithExp(expSeconds: number): string {
+  const encode = (value: Record<string, unknown>) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${encode({ alg: "RS256", typ: "JWT" })}.${encode({ exp: expSeconds })}.signature`;
+}
+
 describe("cli credentials", () => {
   beforeAll(async () => {
     ({
@@ -229,6 +235,7 @@ describe("cli credentials", () => {
   it("reads Codex credentials from keychain when available", async () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
     process.env.CODEX_HOME = tempHome;
+    const expSeconds = Math.floor(Date.parse("2026-03-23T00:48:49Z") / 1000);
 
     const accountHash = "cli|";
 
@@ -238,7 +245,7 @@ describe("cli credentials", () => {
       expect(cmd).toContain(accountHash);
       return JSON.stringify({
         tokens: {
-          access_token: "keychain-access",
+          access_token: createJwtWithExp(expSeconds),
           refresh_token: "keychain-refresh",
         },
         last_refresh: "2026-01-01T00:00:00Z",
@@ -248,15 +255,17 @@ describe("cli credentials", () => {
     const creds = readCodexCliCredentials({ platform: "darwin", execSync: execSyncMock });
 
     expect(creds).toMatchObject({
-      access: "keychain-access",
+      access: createJwtWithExp(expSeconds),
       refresh: "keychain-refresh",
       provider: "openai-codex",
+      expires: expSeconds * 1000,
     });
   });
 
   it("falls back to Codex auth.json when keychain is unavailable", async () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
     process.env.CODEX_HOME = tempHome;
+    const expSeconds = Math.floor(Date.parse("2026-03-24T12:34:56Z") / 1000);
     execSyncMock.mockImplementation(() => {
       throw new Error("not found");
     });
@@ -267,7 +276,7 @@ describe("cli credentials", () => {
       authPath,
       JSON.stringify({
         tokens: {
-          access_token: "file-access",
+          access_token: createJwtWithExp(expSeconds),
           refresh_token: "file-refresh",
         },
       }),
@@ -277,9 +286,10 @@ describe("cli credentials", () => {
     const creds = readCodexCliCredentials({ execSync: execSyncMock });
 
     expect(creds).toMatchObject({
-      access: "file-access",
+      access: createJwtWithExp(expSeconds),
       refresh: "file-refresh",
       provider: "openai-codex",
+      expires: expSeconds * 1000,
     });
   });
 });

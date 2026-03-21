@@ -1,4 +1,4 @@
-import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/msteams";
+import type { ChannelDirectoryEntry } from "../runtime-api.js";
 import { searchGraphUsers } from "./graph-users.js";
 import {
   type GraphChannel,

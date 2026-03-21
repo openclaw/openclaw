@@ -7,13 +7,15 @@ const normalizeEnvMock = vi.hoisted(() => vi.fn());
 const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
 const closeAllMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
+const outputRootHelpMock = vi.hoisted(() => vi.fn());
+const buildProgramMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./route.js", () => ({
   tryRouteCli: tryRouteCliMock,
 }));
 
-vi.mock("../infra/dotenv.js", () => ({
-  loadDotEnv: loadDotEnvMock,
+vi.mock("./dotenv.js", () => ({
+  loadCliDotEnv: loadDotEnvMock,
 }));
 
 vi.mock("../infra/env.js", () => ({
@@ -32,6 +34,14 @@ vi.mock("../memory/search-manager.js", () => ({
   closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
 }));
 
+vi.mock("./program/root-help.js", () => ({
+  outputRootHelp: outputRootHelpMock,
+}));
+
+vi.mock("./program.js", () => ({
+  buildProgram: buildProgramMock,
+}));
+
 const { runCli } = await import("./run-main.js");
 
 describe("runCli exit behavior", () => {
@@ -48,6 +58,21 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "status"]);
 
     expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
+    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledTimes(1);
+    expect(exitSpy).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it("renders root help without building the full program", async () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`unexpected process.exit(${String(code)})`);
+    }) as typeof process.exit);
+
+    await runCli(["node", "openclaw", "--help"]);
+
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(outputRootHelpMock).toHaveBeenCalledTimes(1);
+    expect(buildProgramMock).not.toHaveBeenCalled();
     expect(closeAllMemorySearchManagersMock).toHaveBeenCalledTimes(1);
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();

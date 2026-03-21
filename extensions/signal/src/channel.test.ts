@@ -32,3 +32,22 @@ describe("signalPlugin outbound sendMedia", () => {
     );
   });
 });
+
+describe("signalPlugin actions", () => {
+  it("owns unified message tool discovery", () => {
+    const discovery = signalPlugin.actions?.describeMessageTool?.({
+      cfg: {
+        channels: {
+          signal: {
+            actions: { reactions: false },
+            accounts: {
+              work: { account: "+15550001111", actions: { reactions: true } },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(discovery?.actions).toEqual(["send", "react"]);
+  });
+});

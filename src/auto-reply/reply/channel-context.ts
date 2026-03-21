@@ -24,6 +24,10 @@ export function isTelegramSurface(params: DiscordSurfaceParams): boolean {
   return resolveCommandSurfaceChannel(params) === "telegram";
 }
 
+export function isMatrixSurface(params: DiscordSurfaceParams): boolean {
+  return resolveCommandSurfaceChannel(params) === "matrix";
+}
+
 export function resolveCommandSurfaceChannel(params: DiscordSurfaceParams): string {
   const channel =
     params.ctx.OriginatingChannel ??

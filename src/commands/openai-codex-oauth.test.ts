@@ -13,11 +13,11 @@ vi.mock("../agents/openai-codex-oauth.js", () => ({
   loginOpenAICodexOAuthFlow: mocks.loginOpenAICodexOAuthFlow,
 }));
 
-vi.mock("./oauth-flow.js", () => ({
+vi.mock("../plugins/provider-oauth-flow.js", () => ({
   createVpsAwareOAuthHandlers: mocks.createVpsAwareOAuthHandlers,
 }));
 
-vi.mock("./oauth-tls-preflight.js", () => ({
+vi.mock("../plugins/provider-openai-codex-oauth-tls.js", () => ({
   runOpenAIOAuthTlsPreflight: mocks.runOpenAIOAuthTlsPreflight,
   formatOpenAIOAuthTlsPreflightFix: mocks.formatOpenAIOAuthTlsPreflightFix,
 }));

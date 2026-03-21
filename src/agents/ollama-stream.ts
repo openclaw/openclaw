@@ -10,6 +10,7 @@ import type {
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { OLLAMA_DEFAULT_BASE_URL } from "./ollama-defaults.js";
 import {
   buildAssistantMessage as buildStreamAssistantMessage,
   buildStreamErrorAssistantMessage,
@@ -18,7 +19,7 @@ import {
 
 const log = createSubsystemLogger("ollama-stream");
 
-export const OLLAMA_NATIVE_BASE_URL = "http://127.0.0.1:11434";
+export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
 export function resolveOllamaBaseUrlForRun(params: {
   modelBaseUrl?: string;
@@ -340,10 +341,9 @@ export function buildAssistantMessage(
 ): AssistantMessage {
   const content: (TextContent | ToolCall)[] = [];
 
-  // Ollama-native reasoning models may emit their answer in `thinking` or
-  // `reasoning` with an empty `content`. Fall back so replies are not dropped.
-  const text =
-    response.message.content || response.message.thinking || response.message.reasoning || "";
+  // Native Ollama reasoning fields are internal model output. The reply text
+  // must come from `content`; reasoning visibility is controlled elsewhere.
+  const text = response.message.content || "";
   if (text) {
     content.push({ type: "text", text });
   }
@@ -497,20 +497,12 @@ export function createOllamaStreamFn(
 
         const reader = response.body.getReader();
         let accumulatedContent = "";
-        let fallbackContent = "";
-        let sawContent = false;
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
 
         for await (const chunk of parseNdjsonStream(reader)) {
           if (chunk.message?.content) {
-            sawContent = true;
             accumulatedContent += chunk.message.content;
-          } else if (!sawContent && chunk.message?.thinking) {
-            fallbackContent += chunk.message.thinking;
-          } else if (!sawContent && chunk.message?.reasoning) {
-            // Backward compatibility for older/native variants that still use reasoning.
-            fallbackContent += chunk.message.reasoning;
           }
 
           // Ollama sends tool_calls in intermediate (done:false) chunks,
@@ -529,7 +521,7 @@ export function createOllamaStreamFn(
           throw new Error("Ollama API stream ended without a final response");
         }
 
-        finalResponse.message.content = accumulatedContent || fallbackContent;
+        finalResponse.message.content = accumulatedContent;
         if (accumulatedToolCalls.length > 0) {
           finalResponse.message.tool_calls = accumulatedToolCalls;
         }

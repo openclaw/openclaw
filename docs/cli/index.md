@@ -88,7 +88,7 @@ OpenClaw uses a lobster palette for CLI output.
 - `error` (#E23D2D): errors, failures.
 - `muted` (#8B7F77): de-emphasis, metadata.
 
-Palette source of truth: `src/terminal/palette.ts` (aka “lobster seam”).
+Palette source of truth: `src/terminal/palette.ts` (the “lobster palette”).
 
 ## Command tree
 
@@ -101,6 +101,8 @@ openclaw [--dev] [--profile <name>] <command>
     get
     set
     unset
+    file
+    validate
   completion
   doctor
   dashboard
@@ -274,17 +276,18 @@ Note: plugins can add additional top-level commands (for example `openclaw voice
 ## Secrets
 
 - `openclaw secrets reload` — re-resolve refs and atomically swap the runtime snapshot.
-- `openclaw secrets audit` — scan for plaintext residues, unresolved refs, and precedence drift.
-- `openclaw secrets configure` — interactive helper for provider setup + SecretRef mapping + preflight/apply.
-- `openclaw secrets apply --from <plan.json>` — apply a previously generated plan (`--dry-run` supported).
+- `openclaw secrets audit` — scan for plaintext residues, unresolved refs, and precedence drift (`--allow-exec` to execute exec providers during audit).
+- `openclaw secrets configure` — interactive helper for provider setup + SecretRef mapping + preflight/apply (`--allow-exec` to execute exec providers during preflight and exec-containing apply flows).
+- `openclaw secrets apply --from <plan.json>` — apply a previously generated plan (`--dry-run` supported; use `--allow-exec` to permit exec providers in dry-run and exec-containing write plans).
 
 ## Plugins
 
 Manage extensions and their config:
 
 - `openclaw plugins list` — discover plugins (use `--json` for machine output).
-- `openclaw plugins info <id>` — show details for a plugin.
-- `openclaw plugins install <path|.tgz|npm-spec>` — install a plugin (or add a plugin path to `plugins.load.paths`).
+- `openclaw plugins inspect <id>` — show details for a plugin (`info` is an alias).
+- `openclaw plugins install <path|.tgz|npm-spec|plugin@marketplace>` — install a plugin (or add a plugin path to `plugins.load.paths`).
+- `openclaw plugins marketplace list <marketplace>` — list marketplace entries before install.
 - `openclaw plugins enable <id>` / `disable <id>` — toggle `plugins.entries.<id>.enabled`.
 - `openclaw plugins doctor` — report plugin load errors.
 
@@ -317,22 +320,22 @@ Initialize config + workspace.
 Options:
 
 - `--workspace <dir>`: agent workspace path (default `~/.openclaw/workspace`).
-- `--wizard`: run the onboarding wizard.
-- `--non-interactive`: run wizard without prompts.
-- `--mode <local|remote>`: wizard mode.
+- `--wizard`: run onboarding.
+- `--non-interactive`: run onboarding without prompts.
+- `--mode <local|remote>`: onboard mode.
 - `--remote-url <url>`: remote Gateway URL.
 - `--remote-token <token>`: remote Gateway token.
 
-Wizard auto-runs when any wizard flags are present (`--non-interactive`, `--mode`, `--remote-url`, `--remote-token`).
+Onboarding auto-runs when any onboarding flags are present (`--non-interactive`, `--mode`, `--remote-url`, `--remote-token`).
 
 ### `onboard`
 
-Interactive wizard to set up gateway, workspace, and skills.
+Interactive onboarding for gateway, workspace, and skills.
 
 Options:
 
 - `--workspace <dir>`
-- `--reset` (reset config + credentials + sessions before wizard)
+- `--reset` (reset config + credentials + sessions before onboarding)
 - `--reset-scope <config|config+creds+sessions|full>` (default `config+creds+sessions`; use `full` to also remove workspace)
 - `--non-interactive`
 - `--mode <local|remote>`
@@ -392,7 +395,15 @@ subcommand launches the wizard.
 Subcommands:
 
 - `config get <path>`: print a config value (dot/bracket path).
-- `config set <path> <value>`: set a value (JSON5 or raw string).
+- `config set`: supports four assignment modes:
+  - value mode: `config set <path> <value>` (JSON5-or-string parsing)
+  - SecretRef builder mode: `config set <path> --ref-provider <provider> --ref-source <source> --ref-id <id>`
+  - provider builder mode: `config set secrets.providers.<alias> --provider-source <env|file|exec> ...`
+  - batch mode: `config set --batch-json '<json>'` or `config set --batch-file <path>`
+- `config set --dry-run`: validate assignments without writing `openclaw.json` (exec SecretRef checks are skipped by default).
+- `config set --allow-exec --dry-run`: opt in to exec SecretRef dry-run checks (may execute provider commands).
+- `config set --dry-run --json`: emit machine-readable dry-run output (checks + completeness signal, operations, refs checked/skipped, errors).
+- `config set --strict-json`: require JSON5 parsing for path/value input. `--json` remains a legacy alias for strict parsing outside dry-run output mode.
 - `config unset <path>`: remove a value.
 - `config file`: print the active config file path.
 - `config validate`: validate the current config against the schema without starting the gateway.
@@ -413,7 +424,7 @@ Options:
 
 ### `channels`
 
-Manage chat channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/MS Teams).
+Manage chat channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/Microsoft Teams).
 
 Subcommands:
 
@@ -676,7 +687,7 @@ Surfaces:
 Notes:
 
 - Data comes directly from provider usage endpoints (no estimates).
-- Providers: Anthropic, GitHub Copilot, OpenAI Codex OAuth, plus Gemini CLI/Antigravity when those provider plugins are enabled.
+- Providers: Anthropic, GitHub Copilot, OpenAI Codex OAuth, plus Gemini CLI via the bundled `google` plugin and Antigravity where configured.
 - If no matching credentials exist, usage is hidden.
 - Details: see [Usage tracking](/concepts/usage-tracking).
 
@@ -780,9 +791,10 @@ Subcommands:
 Notes:
 
 - `gateway status` probes the Gateway RPC by default using the service’s resolved port/config (override with `--url/--token/--password`).
-- `gateway status` supports `--no-probe`, `--deep`, and `--json` for scripting.
+- `gateway status` supports `--no-probe`, `--deep`, `--require-rpc`, and `--json` for scripting.
 - `gateway status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans). Profile-named OpenClaw services are treated as first-class and aren't flagged as "extra".
 - `gateway status` prints which config path the CLI uses vs which config the service likely uses (service env), plus the resolved probe target URL.
+- If gateway auth SecretRefs are unresolved in the current command path, `gateway status --json` reports `rpc.authWarning` only when probe connectivity/auth fails (warnings are suppressed when probe succeeds).
 - On Linux systemd installs, status token-drift checks include both `Environment=` and `EnvironmentFile=` unit sources.
 - `gateway install|uninstall|start|stop|restart` support `--json` for scripting (default output stays human-friendly).
 - `gateway install` defaults to Node runtime; bun is **not recommended** (WhatsApp/Telegram bugs).

@@ -202,7 +202,6 @@ export function buildAgentSystemPrompt(params: {
   userTime?: string;
   userTimeFormat?: ResolvedTimeFormat;
   contextFiles?: EmbeddedContextFile[];
-  bootstrapTruncationWarningLines?: string[];
   skillsPrompt?: string;
   heartbeatPrompt?: string;
   docsPath?: string;
@@ -269,6 +268,7 @@ export function buildAgentSystemPrompt(params: {
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     image: "Analyze an image with the configured image model",
+    image_generate: "Generate images with the configured image-generation model",
   };
 
   const toolOrder = [
@@ -296,6 +296,7 @@ export function buildAgentSystemPrompt(params: {
     "subagents",
     "session_status",
     "image",
+    "image_generate",
   ];
 
   const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
@@ -614,13 +615,10 @@ export function buildAgentSystemPrompt(params: {
   }
 
   const contextFiles = params.contextFiles ?? [];
-  const bootstrapTruncationWarningLines = (params.bootstrapTruncationWarningLines ?? []).filter(
-    (line) => line.trim().length > 0,
-  );
   const validContextFiles = contextFiles.filter(
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
-  if (validContextFiles.length > 0 || bootstrapTruncationWarningLines.length > 0) {
+  if (validContextFiles.length > 0) {
     lines.push("# Project Context", "");
     if (validContextFiles.length > 0) {
       const hasSoulFile = validContextFiles.some((file) => {
@@ -633,13 +631,6 @@ export function buildAgentSystemPrompt(params: {
         lines.push(
           "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
         );
-      }
-      lines.push("");
-    }
-    if (bootstrapTruncationWarningLines.length > 0) {
-      lines.push("⚠ Bootstrap truncation warning:");
-      for (const warningLine of bootstrapTruncationWarningLines) {
-        lines.push(`- ${warningLine}`);
       }
       lines.push("");
     }
