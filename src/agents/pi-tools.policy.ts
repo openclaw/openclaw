@@ -3,6 +3,7 @@ import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import { resolveBundledWebSearchPluginId } from "../plugins/bundled-web-search.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
@@ -231,8 +232,8 @@ function resolveImplicitProfileAlsoAllow(params: {
   }
   if (params.profile === "coding") {
     const search = params.config?.tools?.web?.search;
-    const provider = search?.enabled !== false ? search?.provider?.trim() : undefined;
-    if (provider) {
+    const provider = search?.enabled !== false ? search?.provider?.trim().toLowerCase() : undefined;
+    if (provider && resolveBundledWebSearchPluginId(provider)) {
       implicit.add(provider);
     }
   }

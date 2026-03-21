@@ -271,4 +271,36 @@ describe("resolveEffectiveToolPolicy", () => {
     const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "coder" });
     expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
   });
+
+  it("implicitly re-exposes bundled web search providers for the coding profile", () => {
+    const cfg = {
+      tools: {
+        profile: "coding",
+        web: {
+          search: {
+            enabled: true,
+            provider: "  GEMINI  ",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toEqual(["gemini"]);
+  });
+
+  it("ignores non-bundled web search provider ids for the coding profile", () => {
+    const cfg = {
+      tools: {
+        profile: "coding",
+        web: {
+          search: {
+            enabled: true,
+            provider: "exec",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toBeUndefined();
+  });
 });
