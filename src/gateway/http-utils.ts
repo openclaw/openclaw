@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { isTrustedProxyAddress } from "./net.js";
 
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[name.toLowerCase()];
@@ -26,10 +27,11 @@ export function getBearerToken(req: IncomingMessage): string | undefined {
 export function resolveIngressSenderIsOwner(params: {
   req: IncomingMessage;
   publicMode?: boolean;
+  trustedProxies?: string[];
 }): boolean {
   const raw = getHeader(params.req, "x-openclaw-sender-is-owner")?.trim().toLowerCase();
   if (raw === "true") {
-    return true;
+    return isTrustedProxyAddress(params.req.socket?.remoteAddress, params.trustedProxies);
   }
   if (raw === "false") {
     return false;

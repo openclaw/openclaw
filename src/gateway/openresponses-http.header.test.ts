@@ -38,4 +38,50 @@ describe("openresponses owner header handling", () => {
 
     expect(command.senderIsOwner).toBe(false);
   });
+
+  it("ignores x-openclaw-sender-is-owner=true from an untrusted caller", () => {
+    const command = __testOnlyOpenResponsesHttp.buildResponsesAgentCommandInput({
+      req: {
+        headers: {
+          "x-openclaw-sender-is-owner": "true",
+        },
+        socket: { remoteAddress: "203.0.113.9" },
+      } as never,
+      message: "hi",
+      images: [],
+      clientTools: [],
+      extraSystemPrompt: "",
+      streamParams: undefined,
+      sessionKey: "agent:main:test",
+      runId: "run-1",
+      messageChannel: "webchat",
+      publicMode: true,
+      trustedProxies: ["127.0.0.1"],
+    });
+
+    expect(command.senderIsOwner).toBe(false);
+  });
+
+  it("honors x-openclaw-sender-is-owner=true from a trusted proxy", () => {
+    const command = __testOnlyOpenResponsesHttp.buildResponsesAgentCommandInput({
+      req: {
+        headers: {
+          "x-openclaw-sender-is-owner": "true",
+        },
+        socket: { remoteAddress: "127.0.0.1" },
+      } as never,
+      message: "hi",
+      images: [],
+      clientTools: [],
+      extraSystemPrompt: "",
+      streamParams: undefined,
+      sessionKey: "agent:main:test",
+      runId: "run-1",
+      messageChannel: "webchat",
+      publicMode: true,
+      trustedProxies: ["127.0.0.1"],
+    });
+
+    expect(command.senderIsOwner).toBe(true);
+  });
 });

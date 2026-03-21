@@ -536,7 +536,11 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
   it("defaults public-mode agents to non-owner ingress unless explicitly trusted", async () => {
     testState.agentsConfig = {
-      list: [{ id: "beta", publicMode: true }],
+      defaults: { publicMode: true },
+      list: [
+        { id: "beta", publicMode: false },
+        { id: "gamma", publicMode: true },
+      ],
     };
 
     agentCommand.mockClear();
@@ -560,7 +564,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         model: "openclaw",
         input: "hi",
       },
-      { "x-openclaw-agent-id": "beta" },
+      { "x-openclaw-agent-id": "gamma" },
     );
     expect(publicRes.status).toBe(200);
     const publicOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
@@ -570,7 +574,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await ensureResponseConsumed(publicRes);
 
     agentCommand.mockClear();
-    const trustedPublicRes = await postResponses(
+    const routedPublicRes = await postResponses(
       enabledPort,
       {
         model: "openclaw",
@@ -578,15 +582,15 @@ describe("OpenResponses HTTP API (e2e)", () => {
       },
       {
         "x-openclaw-agent-id": "beta",
-        "x-openclaw-sender-is-owner": "true",
+        "x-openclaw-session-key": "agent:gamma:openresponses:routed-public",
       },
     );
-    expect(trustedPublicRes.status).toBe(200);
-    const trustedPublicOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+    expect(routedPublicRes.status).toBe(200);
+    const routedPublicOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
       | { senderIsOwner?: boolean }
       | undefined;
-    expect(trustedPublicOpts?.senderIsOwner).toBe(true);
-    await ensureResponseConsumed(trustedPublicRes);
+    expect(routedPublicOpts?.senderIsOwner).toBe(false);
+    await ensureResponseConsumed(routedPublicRes);
   });
 
   it("streams OpenResponses SSE events", async () => {

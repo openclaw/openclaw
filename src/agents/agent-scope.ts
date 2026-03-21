@@ -125,9 +125,15 @@ export function resolveAgentConfig(
   if (!entry) {
     return undefined;
   }
+  const defaultPublicMode = cfg.agents?.defaults?.publicMode;
   return {
     name: typeof entry.name === "string" ? entry.name : undefined,
-    publicMode: entry.publicMode === true ? true : undefined,
+    publicMode:
+      typeof entry.publicMode === "boolean"
+        ? entry.publicMode
+        : typeof defaultPublicMode === "boolean"
+          ? defaultPublicMode
+          : undefined,
     workspace: typeof entry.workspace === "string" ? entry.workspace : undefined,
     agentDir: typeof entry.agentDir === "string" ? entry.agentDir : undefined,
     model:

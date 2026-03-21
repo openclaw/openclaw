@@ -638,7 +638,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
   it("defaults public-mode agents to non-owner ingress unless explicitly trusted", async () => {
     testState.agentsConfig = {
-      list: [{ id: "beta", publicMode: true }],
+      defaults: { publicMode: true },
+      list: [
+        { id: "beta", publicMode: false },
+        { id: "gamma", publicMode: true },
+      ],
     };
 
     agentCommand.mockClear();
@@ -662,7 +666,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         model: "openclaw",
         messages: [{ role: "user", content: "hi" }],
       },
-      { "x-openclaw-agent-id": "beta" },
+      { "x-openclaw-agent-id": "gamma" },
     );
     expect(publicRes.status).toBe(200);
     const publicOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
@@ -672,7 +676,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     await publicRes.text();
 
     agentCommand.mockClear();
-    const trustedPublicRes = await postChatCompletions(
+    const routedPublicRes = await postChatCompletions(
       enabledPort,
       {
         model: "openclaw",
@@ -680,15 +684,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       },
       {
         "x-openclaw-agent-id": "beta",
-        "x-openclaw-sender-is-owner": "true",
+        "x-openclaw-session-key": "agent:gamma:openai:routed-public",
       },
     );
-    expect(trustedPublicRes.status).toBe(200);
-    const trustedPublicOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+    expect(routedPublicRes.status).toBe(200);
+    const routedPublicOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
       | { senderIsOwner?: boolean }
       | undefined;
-    expect(trustedPublicOpts?.senderIsOwner).toBe(true);
-    await trustedPublicRes.text();
+    expect(routedPublicOpts?.senderIsOwner).toBe(false);
+    await routedPublicRes.text();
   });
 
   it("streams SSE chunks when stream=true", async () => {

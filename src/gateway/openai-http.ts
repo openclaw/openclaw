@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolveAgentPublicMode } from "../agents/agent-scope.js";
+import { resolveAgentPublicMode, resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -110,10 +110,12 @@ function buildAgentCommandInput(params: {
   runId: string;
   messageChannel: string;
   publicMode?: boolean;
+  trustedProxies?: string[];
 }) {
   const senderIsOwner = resolveIngressSenderIsOwner({
     req: params.req,
     publicMode: params.publicMode,
+    trustedProxies: params.trustedProxies,
   });
   return {
     message: params.prompt.message,
@@ -441,7 +443,7 @@ export async function handleOpenAiHttpRequest(
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
 
-  const { agentId, sessionKey, messageChannel } = resolveGatewayRequestContext({
+  const { sessionKey, messageChannel } = resolveGatewayRequestContext({
     req,
     model,
     user,
@@ -449,7 +451,9 @@ export async function handleOpenAiHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: true,
   });
-  const publicMode = resolveAgentPublicMode(opts.runtimeConfig ?? {}, agentId);
+  const runtimeConfig = opts.runtimeConfig ?? {};
+  const effectiveAgentId = resolveSessionAgentId({ sessionKey, config: runtimeConfig });
+  const publicMode = resolveAgentPublicMode(runtimeConfig, effectiveAgentId);
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
   const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
   let images: ImageContent[] = [];
@@ -489,6 +493,7 @@ export async function handleOpenAiHttpRequest(
     runId,
     messageChannel,
     publicMode,
+    trustedProxies: opts.trustedProxies,
   });
 
   if (!stream) {

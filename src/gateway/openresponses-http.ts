@@ -8,7 +8,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolveAgentPublicMode } from "../agents/agent-scope.js";
+import { resolveAgentPublicMode, resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
@@ -246,10 +246,12 @@ function buildResponsesAgentCommandInput(params: {
   runId: string;
   messageChannel: string;
   publicMode?: boolean;
+  trustedProxies?: string[];
 }) {
   const senderIsOwner = resolveIngressSenderIsOwner({
     req: params.req,
     publicMode: params.publicMode,
+    trustedProxies: params.trustedProxies,
   });
   return {
     message: params.message,
@@ -277,6 +279,7 @@ async function runResponsesAgentCommand(params: {
   runId: string;
   messageChannel: string;
   publicMode?: boolean;
+  trustedProxies?: string[];
   deps: ReturnType<typeof createDefaultDeps>;
 }) {
   return agentCommandFromIngress(
@@ -464,7 +467,7 @@ export async function handleOpenResponsesHttpRequest(
     });
     return true;
   }
-  const { agentId, sessionKey, messageChannel } = resolveGatewayRequestContext({
+  const { sessionKey, messageChannel } = resolveGatewayRequestContext({
     req,
     model,
     user,
@@ -472,7 +475,9 @@ export async function handleOpenResponsesHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: false,
   });
-  const publicMode = resolveAgentPublicMode(opts.runtimeConfig ?? {}, agentId);
+  const runtimeConfig = opts.runtimeConfig ?? {};
+  const effectiveAgentId = resolveSessionAgentId({ sessionKey, config: runtimeConfig });
+  const publicMode = resolveAgentPublicMode(runtimeConfig, effectiveAgentId);
 
   // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);
@@ -521,6 +526,7 @@ export async function handleOpenResponsesHttpRequest(
         runId: responseId,
         messageChannel,
         publicMode,
+        trustedProxies: opts.trustedProxies,
         deps,
       });
 
