@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "../../../src/agents/provider-id.ts";
 import { buildChatModelOption } from "./chat-model-ref.ts";
 import type { ModelCatalogEntry } from "./types.ts";
 
@@ -16,23 +17,34 @@ export type RankedChatModelOption = {
 const RECENT_CHAT_MODELS_KEY = "openclaw.chat.recentModels";
 const MAX_RECENT_CHAT_MODELS = 8;
 const BUILTIN_PROVIDER_IDS = new Set([
+  "amazon-bedrock",
   "anthropic",
   "azure-openai",
-  "bedrock",
+  "cerebras",
   "deepseek",
   "fireworks",
+  "github-copilot",
   "google",
   "groq",
   "huggingface",
+  "kimi",
+  "lmstudio",
+  "minimax",
   "mistral",
   "ollama",
   "openai",
+  "openai-codex",
+  "opencode",
+  "opencode-go",
   "openrouter",
+  "qwen-portal",
   "sglang",
+  "synthetic",
   "together",
   "vertex",
   "vllm",
   "xai",
+  "zai",
 ]);
 
 function storageOrNull(storage?: Storage): Storage | null {
@@ -50,7 +62,11 @@ export function normalizeChatModelKey(value: string): string {
 }
 
 export function isCustomProvider(provider?: string | null): boolean {
-  const normalized = String(provider ?? "").trim().toLowerCase();
+  const raw = String(provider ?? "").trim();
+  if (!raw) {
+    return false;
+  }
+  const normalized = normalizeProviderId(raw);
   return normalized.length > 0 && !BUILTIN_PROVIDER_IDS.has(normalized);
 }
 

@@ -655,7 +655,11 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
       model: nextModel || null,
     });
     if (nextModel) {
-      rememberRecentChatModel(nextModel);
+      try {
+        rememberRecentChatModel(nextModel);
+      } catch {
+        // Non-critical: local storage may be unavailable or quota-limited.
+      }
     }
     await refreshSessionOptions(state);
   } catch (err) {
