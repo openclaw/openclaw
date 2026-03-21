@@ -73,6 +73,7 @@ import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleSessionKillHttpRequest } from "./session-kill-http.js";
 import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
+import { handleAgentEventsSSE, isAgentEventsSSERequest } from "./agent-events-sse.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -825,6 +826,16 @@ export function createGatewayHttpServer(opts: {
         {
           name: "slack",
           run: () => handleSlackHttpRequest(req, res),
+        },
+        {
+          name: "agent-events-sse",
+          run: () => {
+            if (isAgentEventsSSERequest(requestPath)) {
+              handleAgentEventsSSE(req, res);
+              return true;
+            }
+            return false;
+          },
         },
       ];
       if (openResponsesEnabled) {
