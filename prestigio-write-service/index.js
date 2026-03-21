@@ -40,7 +40,7 @@ const ACTION_FIELDS = {
 const CONFIRMABLE_ACTIONS = ['set-order-item-production-field', 'set-item-spec-field'];
 
 function computeConfirmDigest(action, params) {
-  const secret = process.env.STITCH_SERVICE_KEY;
+  const secret = process.env.STITCH_SERVICE_KEY || process.env.SUPABASE_SERVICE_KEY;
   if (!secret) {
     return null;
   }
@@ -151,7 +151,7 @@ function checkForRequest() {
       if (!digest) {
         writeResponse({
           success: false,
-          error: 'Missing STITCH_SERVICE_KEY for confirmable action',
+          error: 'Missing confirmation secret for confirmable action',
           completed_at: new Date().toISOString()
         });
         return;
