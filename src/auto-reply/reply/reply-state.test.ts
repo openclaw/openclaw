@@ -358,7 +358,7 @@ describe("shouldRunMemoryFlush", () => {
     ).toBe(false);
   });
 
-  it("triggers when reserveTokensFloor equals contextWindowTokens", () => {
+  it("skips flush when reserveTokensFloor equals contextWindowTokens", () => {
     expect(
       shouldRunMemoryFlush({
         entry: { totalTokens: 199_000, compactionCount: 0 },
@@ -366,7 +366,7 @@ describe("shouldRunMemoryFlush", () => {
         reserveTokensFloor: 200_000,
         softThresholdTokens: 4_000,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 

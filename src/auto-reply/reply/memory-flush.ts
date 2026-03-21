@@ -202,14 +202,17 @@ export function shouldRunMemoryFlush(params: {
   const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
   const rawReserve = Math.max(0, Math.floor(params.reserveTokensFloor));
   const maxReserve = Math.max(0, contextWindow - softThreshold - 1);
-  const warnKey = `${rawReserve}:${maxReserve}`;
-  if (rawReserve > maxReserve && !_warnedReserve.has(warnKey)) {
-    _warnedReserve.add(warnKey);
-    console.warn(
-      `reserveTokensFloor (${rawReserve}) exceeds contextWindow - softThreshold - 1 (${maxReserve}), clamping to ${maxReserve}`,
-    );
+  if (rawReserve > maxReserve) {
+    const warnKey = `${rawReserve}:${maxReserve}`;
+    if (!_warnedReserve.has(warnKey)) {
+      _warnedReserve.add(warnKey);
+      console.warn(
+        `reserveTokensFloor (${rawReserve}) exceeds contextWindow - softThreshold - 1 (${maxReserve}); skipping memory flush`,
+      );
+    }
+    return false;
   }
-  const reserveTokens = Math.min(rawReserve, maxReserve);
+  const reserveTokens = rawReserve;
   const threshold = contextWindow - reserveTokens - softThreshold;
   if (threshold <= 0) {
     return false;
