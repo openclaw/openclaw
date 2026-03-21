@@ -201,7 +201,7 @@ describe("config schema", () => {
     expect(tags).toContain("performance");
   });
 
-  it("accepts web fetch readability and firecrawl config in the runtime zod schema", () => {
+  it("accepts web fetch readability and hosted extractor config in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       web: {
         fetch: {
@@ -213,6 +213,13 @@ describe("config schema", () => {
             onlyMainContent: true,
             maxAgeMs: 60_000,
             timeoutSeconds: 15,
+          },
+          brightdata: {
+            enabled: true,
+            apiKey: "brightdata-test-key",
+            baseUrl: "https://api.brightdata.com",
+            unlockerZone: "mcp_unlocker",
+            timeoutSeconds: 20,
           },
         },
       },
@@ -228,6 +235,13 @@ describe("config schema", () => {
         maxAgeMs: 60_000,
         timeoutSeconds: 15,
       },
+      brightdata: {
+        enabled: true,
+        apiKey: "brightdata-test-key",
+        baseUrl: "https://api.brightdata.com",
+        unlockerZone: "mcp_unlocker",
+        timeoutSeconds: 20,
+      },
     });
   });
 
@@ -237,6 +251,21 @@ describe("config schema", () => {
         web: {
           fetch: {
             firecrawl: {
+              enabled: true,
+              nope: true,
+            },
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects unknown keys inside web fetch brightdata config", () => {
+    expect(() =>
+      ToolsSchema.parse({
+        web: {
+          fetch: {
+            brightdata: {
               enabled: true,
               nope: true,
             },

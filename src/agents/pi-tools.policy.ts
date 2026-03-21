@@ -210,6 +210,8 @@ function hasExplicitToolSection(section: unknown): boolean {
 function resolveImplicitProfileAlsoAllow(params: {
   globalTools?: OpenClawConfig["tools"];
   agentTools?: AgentToolsConfig;
+  profile?: string;
+  config?: OpenClawConfig;
 }): string[] | undefined {
   const implicit = new Set<string>();
   if (
@@ -226,6 +228,13 @@ function resolveImplicitProfileAlsoAllow(params: {
     implicit.add("read");
     implicit.add("write");
     implicit.add("edit");
+  }
+  if (params.profile === "coding") {
+    const search = params.config?.tools?.web?.search;
+    const provider = search?.enabled !== false ? search?.provider?.trim() : undefined;
+    if (provider) {
+      implicit.add(provider);
+    }
   }
   return implicit.size > 0 ? Array.from(implicit) : undefined;
 }
@@ -262,7 +271,12 @@ export function resolveEffectiveToolPolicy(params: {
   });
   const explicitProfileAlsoAllow =
     resolveExplicitProfileAlsoAllow(agentTools) ?? resolveExplicitProfileAlsoAllow(globalTools);
-  const implicitProfileAlsoAllow = resolveImplicitProfileAlsoAllow({ globalTools, agentTools });
+  const implicitProfileAlsoAllow = resolveImplicitProfileAlsoAllow({
+    globalTools,
+    agentTools,
+    profile,
+    config: params.config,
+  });
   const profileAlsoAllow =
     explicitProfileAlsoAllow || implicitProfileAlsoAllow
       ? Array.from(

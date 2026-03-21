@@ -524,6 +524,18 @@ export type ToolsConfig = {
         /** Timeout in seconds for Firecrawl requests. */
         timeoutSeconds?: number;
       };
+      brightdata?: {
+        /** Enable Bright Data fallback (default: true when apiKey is set). */
+        enabled?: boolean;
+        /** Bright Data API token (optional; defaults to BRIGHTDATA_API_TOKEN env var). */
+        apiKey?: SecretInput;
+        /** Bright Data API base URL (default: https://api.brightdata.com). */
+        baseUrl?: string;
+        /** Bright Data unlocker zone (default: mcp_unlocker). */
+        unlockerZone?: string;
+        /** Timeout in seconds for Bright Data requests. */
+        timeoutSeconds?: number;
+      };
     };
   };
   media?: MediaToolsConfig;

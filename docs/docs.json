@@ -1131,6 +1131,7 @@
                       "tools/web-fetch",
                       "tools/web",
                       "tools/brave-search",
+                      "tools/brightdata",
                       "tools/duckduckgo-search",
                       "tools/exa-search",
                       "tools/firecrawl",

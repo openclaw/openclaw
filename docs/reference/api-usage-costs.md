@@ -37,7 +37,7 @@ OpenClaw can pick up credentials from:
 
 - **Auth profiles** (per-agent, stored in `auth-profiles.json`).
 - **Environment variables** (e.g. `OPENAI_API_KEY`, `BRAVE_API_KEY`, `FIRECRAWL_API_KEY`).
-- **Config** (`models.providers.*.apiKey`, `tools.web.search.*`, `tools.web.fetch.firecrawl.*`,
+- **Config** (`models.providers.*.apiKey`, `tools.web.search.*`, `tools.web.fetch.firecrawl.*`, `tools.web.fetch.brightdata.*`,
   `memorySearch.*`, `talk.apiKey`).
 - **Skills** (`skills.entries.<name>.apiKey`) which may export keys to the skill process env.
 
@@ -80,6 +80,7 @@ See [Memory](/concepts/memory).
 `web_search` uses API keys and may incur usage charges depending on your provider:
 
 - **Brave Search API**: `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey`
+- **Bright Data Search**: `BRIGHTDATA_API_TOKEN` or `plugins.entries.brightdata.config.webSearch.apiKey`
 - **Gemini (Google Search)**: `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
 - **Grok (xAI)**: `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
 - **Kimi (Moonshot)**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `plugins.entries.moonshot.config.webSearch.apiKey`
@@ -92,15 +93,20 @@ free credit. The Search plan costs \$5 per 1,000 requests, so the credit covers
 1,000 requests/month at no charge. Set your usage limit in the Brave dashboard
 to avoid unexpected charges.
 
+**Bright Data pricing note:** Bright Data billing depends on the product and zone you use
+(for example SERP, Web Unlocker, Browser API, or datasets). Check your Bright Data dashboard
+for current pricing, quota, and any free-tier limits on the default zones.
+
 See [Web tools](/tools/web).
 
-### 5) Web fetch tool (Firecrawl)
+### 5) Web fetch tool (Firecrawl / Bright Data)
 
-`web_fetch` can call **Firecrawl** when an API key is present:
+`web_fetch` can call **Firecrawl** or **Bright Data** when hosted fallback credentials are present:
 
 - `FIRECRAWL_API_KEY` or `tools.web.fetch.firecrawl.apiKey`
+- `BRIGHTDATA_API_TOKEN` or `tools.web.fetch.brightdata.apiKey`
 
-If Firecrawl isn’t configured, the tool falls back to direct fetch + readability (no paid API).
+If neither hosted fallback is configured, the tool falls back to direct fetch + readability (no paid API).
 
 See [Web tools](/tools/web).
 

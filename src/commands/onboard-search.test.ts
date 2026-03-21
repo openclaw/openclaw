@@ -199,6 +199,20 @@ describe("setupSearch", () => {
     expect(readFirecrawlPluginApiKey(result)).toBe("fc-disabled-key");
   });
 
+  it("sets provider and key for brightdata and enables the plugin", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "brightdata",
+      textValue: "brd-test-key",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("brightdata");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.brightdata?.apiKey).toBeUndefined();
+    expect(pluginWebSearchApiKey(result, "brightdata")).toBe("brd-test-key");
+    expect(result.plugins?.entries?.brightdata?.enabled).toBe(true);
+  });
+
   it("sets provider and key for grok", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({
@@ -555,11 +569,14 @@ describe("setupSearch", () => {
     expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-plain");
   });
 
-  it("exports all 7 providers in alphabetical order", () => {
+  it("exports all 10 providers in alphabetical order", () => {
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.id);
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(7);
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(10);
     expect(values).toEqual([
       "brave",
+      "brightdata",
+      "duckduckgo",
+      "exa",
       "firecrawl",
       "gemini",
       "grok",

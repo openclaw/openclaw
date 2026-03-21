@@ -237,6 +237,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.firecrawl.onlyMainContent": "Firecrawl Main Content Only",
   "tools.web.fetch.firecrawl.maxAgeMs": "Firecrawl Cache Max Age (ms)",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Firecrawl Timeout (sec)",
+  "tools.web.fetch.brightdata.enabled": "Enable Bright Data Fallback",
+  "tools.web.fetch.brightdata.apiKey": "Bright Data API Token", // pragma: allowlist secret
+  "tools.web.fetch.brightdata.baseUrl": "Bright Data API Base URL",
+  "tools.web.fetch.brightdata.unlockerZone": "Bright Data Unlocker Zone",
+  "tools.web.fetch.brightdata.timeoutSeconds": "Bright Data Timeout (sec)",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.controlUi.root": "Control UI Assets Root",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",
@@ -865,6 +870,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.apiKey": "Plugin API Key", // pragma: allowlist secret
   "plugins.entries.*.env": "Plugin Environment Variables",
   "plugins.entries.*.config": "Plugin Config",
+  "plugins.entries.brightdata.config.webSearch": "Bright Data Web Search",
+  "plugins.entries.brightdata.config.webSearch.apiKey": "Bright Data API Token", // pragma: allowlist secret
+  "plugins.entries.brightdata.config.webSearch.baseUrl": "Bright Data API Base URL",
   "plugins.installs": "Plugin Install Records",
   "plugins.installs.*.source": "Plugin Install Source",
   "plugins.installs.*.spec": "Plugin Install Spec",

@@ -261,6 +261,15 @@ importers:
 
   extensions/brave: {}
 
+  extensions/brightdata:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+      playwright:
+        specifier: 1.58.2
+        version: 1.58.2
+
   extensions/byteplus: {}
 
   extensions/chutes: {}

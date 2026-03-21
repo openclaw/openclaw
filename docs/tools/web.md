@@ -1,9 +1,9 @@
 ---
-summary: "web_search tool -- search the web with Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily"
+summary: "web_search tool -- search the web with Brave, Bright Data, DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily"
 read_when:
   - You want to enable or configure web_search
   - You need to choose a search provider
-  - You want to understand auto-detection and provider fallback
+  - You want to understand auto-detection and provider-specific behavior
 title: "Web Search"
 sidebarTitle: "Web Search"
 ---
@@ -31,7 +31,7 @@ returns results. Results are cached by query for 15 minutes (configurable).
     openclaw configure --section web
     ```
     This stores the key and sets the provider. You can also set an env var
-    (e.g. `BRAVE_API_KEY`) and skip this step.
+    (for example `BRAVE_API_KEY`) and skip this step.
   </Step>
   <Step title="Use it">
     The agent can now call `web_search`:
@@ -47,16 +47,22 @@ returns results. Results are cached by query for 15 minutes (configurable).
 
 <CardGroup cols={2}>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
-    Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
+    Structured results with snippets. Supports `llm-context` mode, country,
+    language, and time filters.
+  </Card>
+  <Card title="Bright Data" icon="globe" href="/tools/brightdata">
+    Structured SERP results plus hosted scrape, browser, and dataset-backed
+    Bright Data tools.
   </Card>
   <Card title="DuckDuckGo" icon="bird" href="/tools/duckduckgo-search">
-    Key-free fallback. No API key needed. Unofficial HTML-based integration.
+    Key-free fallback. No API key needed. Supports region and SafeSearch.
   </Card>
   <Card title="Exa" icon="brain" href="/tools/exa-search">
-    Neural + keyword search with content extraction (highlights, text, summaries).
+    Neural + keyword search with content extraction, highlights, and summaries.
   </Card>
   <Card title="Firecrawl" icon="flame" href="/tools/firecrawl">
-    Structured results. Best paired with `firecrawl_search` and `firecrawl_scrape` for deep extraction.
+    Structured results. Best paired with `firecrawl_search` and
+    `firecrawl_scrape` for deeper extraction.
   </Card>
   <Card title="Gemini" icon="sparkles" href="/tools/gemini-search">
     AI-synthesized answers with citations via Google Search grounding.
@@ -70,32 +76,34 @@ returns results. Results are cached by query for 15 minutes (configurable).
   <Card title="Perplexity" icon="search" href="/tools/perplexity-search">
     Structured results with content extraction controls and domain filtering.
   </Card>
-  <Card title="Tavily" icon="globe" href="/tools/tavily">
-    Structured results with search depth, topic filtering, and `tavily_extract` for URL extraction.
+  <Card title="Tavily" icon="compass" href="/tools/tavily">
+    Structured results with search depth, topic filtering, and
+    `tavily_extract` for URL extraction.
   </Card>
 </CardGroup>
 
 ### Provider comparison
 
-| Provider                               | Result style               | Filters                                          | API key                                     |
-| -------------------------------------- | -------------------------- | ------------------------------------------------ | ------------------------------------------- |
-| [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
-| [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | --                                               | None (key-free)                             |
-| [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                               |
-| [Firecrawl](/tools/firecrawl)          | Structured snippets        | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                         |
-| [Gemini](/tools/gemini-search)         | AI-synthesized + citations | --                                               | `GEMINI_API_KEY`                            |
-| [Grok](/tools/grok-search)             | AI-synthesized + citations | --                                               | `XAI_API_KEY`                               |
-| [Kimi](/tools/kimi-search)             | AI-synthesized + citations | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
-| [Perplexity](/tools/perplexity-search) | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
-| [Tavily](/tools/tavily)                | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                            |
+| Provider                               | Result style               | Filters                                             | API key                                     |
+| -------------------------------------- | -------------------------- | --------------------------------------------------- | ------------------------------------------- |
+| [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode         | `BRAVE_API_KEY`                             |
+| [Bright Data](/tools/brightdata)       | Structured snippets        | Engine, cursor, and geo targeting via `brightdata_search` | `BRIGHTDATA_API_TOKEN`                |
+| [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | Region, SafeSearch                                  | None (key-free)                             |
+| [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction       | `EXA_API_KEY`                               |
+| [Firecrawl](/tools/firecrawl)          | Structured snippets        | Via `firecrawl_search` tool                         | `FIRECRAWL_API_KEY`                         |
+| [Gemini](/tools/gemini-search)         | AI-synthesized + citations | --                                                  | `GEMINI_API_KEY`                            |
+| [Grok](/tools/grok-search)             | AI-synthesized + citations | --                                                  | `XAI_API_KEY`                               |
+| [Kimi](/tools/kimi-search)             | AI-synthesized + citations | --                                                  | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
+| [Perplexity](/tools/perplexity-search) | Structured snippets        | Country, language, time, domains, content limits    | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| [Tavily](/tools/tavily)                | Structured snippets        | Via `tavily_search` tool                            | `TAVILY_API_KEY`                            |
 
 ## Auto-detection
 
 Provider lists in docs and setup flows are alphabetical. Auto-detection keeps a
 separate precedence order:
 
-If no `provider` is set, OpenClaw checks for API keys in this order and uses
-the first one found:
+If no `provider` is set, OpenClaw checks for configured credentials in this
+order and uses the first one found:
 
 1. **Brave** -- `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey`
 2. **Gemini** -- `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
@@ -103,14 +111,19 @@ the first one found:
 4. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey`
 5. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey`
 6. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
-7. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
+7. **Bright Data** -- `BRIGHTDATA_API_TOKEN` or `plugins.entries.brightdata.config.webSearch.apiKey`
+8. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`
+9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
 
-If no keys are found, it falls back to Brave (you will get a missing-key error
-prompting you to configure one).
+DuckDuckGo is key-free and is not selected by key-based auto-detection. Choose
+`duckduckgo` explicitly if you want to use it.
+
+If no keys are found, OpenClaw falls back to Brave and prompts you to configure
+one.
 
 <Note>
   All provider key fields support SecretRef objects. In auto-detect mode,
-  OpenClaw resolves only the selected provider key -- non-selected SecretRefs
+  OpenClaw resolves only the selected provider key. Non-selected SecretRefs
   stay inactive.
 </Note>
 
@@ -160,7 +173,7 @@ examples.
 
   </Tab>
   <Tab title="Environment variable">
-    Set the provider env var in the Gateway process environment:
+    Set the provider env var in the gateway process environment:
 
     ```bash
     export BRAVE_API_KEY="YOUR_KEY"
@@ -174,25 +187,29 @@ examples.
 
 ## Tool parameters
 
-| Parameter             | Description                                           |
-| --------------------- | ----------------------------------------------------- |
-| `query`               | Search query (required)                               |
-| `count`               | Results to return (1-10, default: 5)                  |
-| `country`             | 2-letter ISO country code (e.g. "US", "DE")           |
-| `language`            | ISO 639-1 language code (e.g. "en", "de")             |
-| `freshness`           | Time filter: `day`, `week`, `month`, or `year`        |
-| `date_after`          | Results after this date (YYYY-MM-DD)                  |
-| `date_before`         | Results before this date (YYYY-MM-DD)                 |
-| `ui_lang`             | UI language code (Brave only)                         |
-| `domain_filter`       | Domain allowlist/denylist array (Perplexity only)     |
-| `max_tokens`          | Total content budget, default 25000 (Perplexity only) |
-| `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)  |
+| Parameter             | Description                                               |
+| --------------------- | --------------------------------------------------------- |
+| `query`               | Search query (required)                                   |
+| `count`               | Results to return (1-10, default: 5)                      |
+| `country`             | 2-letter ISO country code (for providers that support it) |
+| `language`            | ISO 639-1 language code (for providers that support it)   |
+| `freshness`           | Time filter: `day`, `week`, `month`, or `year`            |
+| `date_after`          | Results after this date (YYYY-MM-DD)                      |
+| `date_before`         | Results before this date (YYYY-MM-DD)                     |
+| `ui_lang`             | UI language code (Brave only)                             |
+| `region`              | DuckDuckGo region code such as `us-en`                    |
+| `safeSearch`          | DuckDuckGo SafeSearch level                               |
+| `domain_filter`       | Domain allowlist/denylist array (Perplexity only)         |
+| `max_tokens`          | Total content budget, default 25000 (Perplexity only)     |
+| `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)      |
 
 <Warning>
-  Not all parameters work with all providers. Brave `llm-context` mode
-  rejects `ui_lang`, `freshness`, `date_after`, and `date_before`.
-  Firecrawl and Tavily only support `query` and `count` through `web_search`
-  -- use their dedicated tools for advanced options.
+  Available parameters vary by provider. Bright Data, Firecrawl, and Tavily
+  only support `query` and `count` through `web_search`; use their dedicated
+  tools for advanced options. DuckDuckGo adds `region` and `safeSearch`. Exa
+  supports additional search and content extraction options on its dedicated
+  page. Brave `llm-context` mode rejects `ui_lang`, `freshness`, `date_after`,
+  and `date_before`.
 </Warning>
 
 ## Examples
@@ -236,5 +253,6 @@ If you use tool profiles or allowlists, add `web_search` or `group:web`:
 
 ## Related
 
+- [Bright Data](/tools/brightdata) -- Bright Data search, scrape, browser, and `web_fetch` fallback
 - [Web Fetch](/tools/web-fetch) -- fetch a URL and extract readable content
 - [Web Browser](/tools/browser) -- full browser automation for JS-heavy sites

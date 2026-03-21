@@ -2,7 +2,14 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
-type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "duckduckgo";
+type ProviderUnderTest =
+  | "brave"
+  | "gemini"
+  | "grok"
+  | "kimi"
+  | "perplexity"
+  | "brightdata"
+  | "duckduckgo";
 
 const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
@@ -79,6 +86,13 @@ function createTestProvider(params: {
   order: number;
 }): PluginWebSearchProviderEntry {
   const credentialPath = `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
+  const readSearchConfigKey = (searchConfig?: Record<string, unknown>): unknown => {
+    const providerConfig =
+      searchConfig?.[params.provider] && typeof searchConfig[params.provider] === "object"
+        ? (searchConfig[params.provider] as { apiKey?: unknown })
+        : undefined;
+    return providerConfig?.apiKey ?? searchConfig?.apiKey;
+  };
   return {
     pluginId: params.pluginId,
     id: params.provider,
@@ -92,9 +106,16 @@ function createTestProvider(params: {
     credentialPath: params.provider === "duckduckgo" ? "" : credentialPath,
     inactiveSecretPaths: params.provider === "duckduckgo" ? [] : [credentialPath],
     getCredentialValue: (searchConfig) =>
-      params.provider === "duckduckgo" ? "duckduckgo-no-key-needed" : searchConfig?.apiKey,
+      params.provider === "duckduckgo"
+        ? "duckduckgo-no-key-needed"
+        : readSearchConfigKey(searchConfig),
     setCredentialValue: (searchConfigTarget, value) => {
-      searchConfigTarget.apiKey = value;
+      if (params.provider === "brave") {
+        searchConfigTarget.apiKey = value;
+        return;
+      }
+      const scoped = ensureRecord(searchConfigTarget, params.provider);
+      scoped.apiKey = value;
     },
     getConfiguredCredentialValue: (config) => {
       const entryConfig = config?.plugins?.entries?.[params.pluginId]?.config;
@@ -122,6 +143,7 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
     createTestProvider({ provider: "grok", pluginId: "xai", order: 30 }),
     createTestProvider({ provider: "kimi", pluginId: "moonshot", order: 40 }),
     createTestProvider({ provider: "perplexity", pluginId: "perplexity", order: 50 }),
+    createTestProvider({ provider: "brightdata", pluginId: "brightdata", order: 65 }),
     createTestProvider({ provider: "duckduckgo", pluginId: "duckduckgo", order: 100 }),
   ];
 }
@@ -294,6 +316,11 @@ describe("runtime web tools resolution", () => {
       envRefId: "PERPLEXITY_PROVIDER_REF",
       resolvedKey: "pplx-provider-key",
     },
+    {
+      provider: "brightdata" as const,
+      envRefId: "BRIGHTDATA_PROVIDER_REF",
+      resolvedKey: "brightdata-provider-key",
+    },
   ])(
     "resolves configured provider SecretRef for $provider",
     async ({ provider, envRefId, resolvedKey }) => {
@@ -360,6 +387,12 @@ describe("runtime web tools resolution", () => {
                 webSearch: { apiKey: { source: "env", provider: "default", id: "PERPLEXITY_REF" } },
               },
             },
+            brightdata: {
+              enabled: true,
+              config: {
+                webSearch: { apiKey: { source: "env", provider: "default", id: "BRIGHTDATA_REF" } },
+              },
+            },
           },
         },
       }),
@@ -369,6 +402,7 @@ describe("runtime web tools resolution", () => {
         GROK_REF: "grok-precedence-key",
         KIMI_REF: "kimi-precedence-key",
         PERPLEXITY_REF: "pplx-precedence-key",
+        BRIGHTDATA_REF: "brightdata-precedence-key",
       },
     });
 
@@ -381,6 +415,7 @@ describe("runtime web tools resolution", () => {
         expect.objectContaining({ path: "plugins.entries.xai.config.webSearch.apiKey" }),
         expect.objectContaining({ path: "plugins.entries.moonshot.config.webSearch.apiKey" }),
         expect.objectContaining({ path: "plugins.entries.perplexity.config.webSearch.apiKey" }),
+        expect.objectContaining({ path: "plugins.entries.brightdata.config.webSearch.apiKey" }),
       ]),
     );
   });

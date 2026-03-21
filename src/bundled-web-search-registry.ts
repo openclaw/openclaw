@@ -1,4 +1,5 @@
 import bravePlugin from "../extensions/brave/index.js";
+import brightdataPlugin from "../extensions/brightdata/index.js";
 import duckduckgoPlugin from "../extensions/duckduckgo/index.js";
 import exaPlugin from "../extensions/exa/index.js";
 import firecrawlPlugin from "../extensions/firecrawl/index.js";
@@ -26,15 +27,21 @@ export const bundledWebSearchPluginRegistrations: ReadonlyArray<{
   },
   {
     get plugin() {
-      return exaPlugin;
+      return brightdataPlugin;
     },
-    credentialValue: "exa-test",
+    credentialValue: "brd-test",
   },
   {
     get plugin() {
       return duckduckgoPlugin;
     },
     credentialValue: "duckduckgo-no-key-needed",
+  },
+  {
+    get plugin() {
+      return exaPlugin;
+    },
+    credentialValue: "exa-test",
   },
   {
     get plugin() {

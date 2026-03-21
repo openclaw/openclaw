@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/brightdata-plugin",
+  "version": "2026.3.19",
+  "private": true,
+  "description": "OpenClaw Bright Data plugin",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "playwright": "1.58.2"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

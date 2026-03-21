@@ -28,6 +28,7 @@ const ignoredDirNames = new Set([
 
 const bundledProviderPluginToSearchProvider = new Map([
   ["brave", "brave"],
+  ["brightdata", "brightdata"],
   ["firecrawl", "firecrawl"],
   ["google", "gemini"],
   ["moonshot", "kimi"],
@@ -37,6 +38,7 @@ const bundledProviderPluginToSearchProvider = new Map([
 
 const providerIds = new Set([
   "brave",
+  "brightdata",
   "firecrawl",
   "gemini",
   "grok",
@@ -118,7 +120,10 @@ function scanWebSearchProviderRegistry(lines, relativeFile, inventory) {
   for (const [index, line] of lines.entries()) {
     const lineNumber = index + 1;
 
-    if (line.includes("firecrawl-search-provider.js")) {
+    if (
+      line.includes("brightdata-search-provider.js") ||
+      line.includes("firecrawl-search-provider.js")
+    ) {
       pushEntry(inventory, {
         provider: "shared",
         file: relativeFile,
@@ -149,7 +154,9 @@ function scanWebSearchProviderRegistry(lines, relativeFile, inventory) {
       });
     }
 
-    const providerMatch = line.match(/id:\s*"(brave|firecrawl|gemini|grok|kimi|perplexity)"/);
+    const providerMatch = line.match(
+      /id:\s*"(brave|brightdata|firecrawl|gemini|grok|kimi|perplexity)"/,
+    );
     if (providerMatch) {
       pushEntry(inventory, {
         provider: providerMatch[1],

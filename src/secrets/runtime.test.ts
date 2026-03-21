@@ -6,7 +6,14 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
-type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
+type WebProviderUnderTest =
+  | "brave"
+  | "gemini"
+  | "grok"
+  | "kimi"
+  | "perplexity"
+  | "firecrawl"
+  | "brightdata";
 
 const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvidersMock } =
   vi.hoisted(() => ({
@@ -92,6 +99,7 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
     createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
     createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
     createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
+    createTestProvider({ id: "brightdata", pluginId: "brightdata", order: 65 }),
   ];
 }
 
@@ -492,6 +500,9 @@ describe("secrets runtime snapshot", () => {
               enabled: true,
               provider: "brave",
               apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_API_KEY" },
+              brightdata: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_BRIGHTDATA_API_KEY" },
+              },
               grok: {
                 apiKey: { source: "env", provider: "default", id: "MISSING_GROK_API_KEY" },
               },
@@ -507,6 +518,11 @@ describe("secrets runtime snapshot", () => {
     });
 
     expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
+    expect(snapshot.config.tools?.web?.search?.brightdata?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_BRIGHTDATA_API_KEY",
+    });
     expect(snapshot.config.tools?.web?.search?.grok?.apiKey).toEqual({
       source: "env",
       provider: "default",
@@ -514,6 +530,10 @@ describe("secrets runtime snapshot", () => {
     });
     expect(snapshot.warnings).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "plugins.entries.brightdata.config.webSearch.apiKey",
+        }),
         expect.objectContaining({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
           path: "plugins.entries.xai.config.webSearch.apiKey",
@@ -533,6 +553,13 @@ describe("secrets runtime snapshot", () => {
               gemini: {
                 apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
               },
+              brightdata: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "MISSING_WEB_SEARCH_BRIGHTDATA_API_KEY",
+                },
+              },
             },
           },
         },
@@ -551,9 +578,18 @@ describe("secrets runtime snapshot", () => {
       provider: "default",
       id: "WEB_SEARCH_GEMINI_API_KEY",
     });
+    expect(snapshot.config.tools?.web?.search?.brightdata?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_WEB_SEARCH_BRIGHTDATA_API_KEY",
+    });
     expect(snapshot.webTools.search.selectedProvider).toBe("brave");
     expect(snapshot.warnings).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "plugins.entries.brightdata.config.webSearch.apiKey",
+        }),
         expect.objectContaining({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
           path: "plugins.entries.google.config.webSearch.apiKey",
@@ -817,7 +853,7 @@ describe("secrets runtime snapshot", () => {
       snapshot.warnings.filter(
         (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
       ),
-    ).toHaveLength(10);
+    ).toHaveLength(11);
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
       expect.arrayContaining([
         "agents.defaults.memorySearch.remote.apiKey",
@@ -825,6 +861,7 @@ describe("secrets runtime snapshot", () => {
         "channels.telegram.botToken",
         "channels.telegram.accounts.disabled.botToken",
         "plugins.entries.brave.config.webSearch.apiKey",
+        "plugins.entries.brightdata.config.webSearch.apiKey",
         "plugins.entries.google.config.webSearch.apiKey",
       ]),
     );

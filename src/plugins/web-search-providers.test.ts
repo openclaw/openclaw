@@ -7,6 +7,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
 
     expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
       "brave:brave",
+      "brightdata:brightdata",
       "duckduckgo:duckduckgo",
       "exa:exa",
       "firecrawl:firecrawl",
@@ -18,6 +19,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
     ]);
     expect(providers.map((provider) => provider.credentialPath)).toEqual([
       "plugins.entries.brave.config.webSearch.apiKey",
+      "plugins.entries.brightdata.config.webSearch.apiKey",
       "",
       "plugins.entries.exa.config.webSearch.apiKey",
       "plugins.entries.firecrawl.config.webSearch.apiKey",
@@ -30,6 +32,9 @@ describe("resolveBundledPluginWebSearchProviders", () => {
     expect(providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig).toEqual(
       expect.any(Function),
     );
+    expect(
+      providers.find((provider) => provider.id === "brightdata")?.applySelectionConfig,
+    ).toEqual(expect.any(Function));
     expect(
       providers.find((provider) => provider.id === "perplexity")?.resolveRuntimeMetadata,
     ).toEqual(expect.any(Function));
@@ -47,6 +52,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
 
     expect(providers.map((provider) => provider.pluginId)).toEqual([
       "brave",
+      "brightdata",
       "duckduckgo",
       "exa",
       "firecrawl",
@@ -103,6 +109,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
 
     expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
       "brave:brave",
+      "brightdata:brightdata",
       "duckduckgo:duckduckgo",
       "exa:exa",
       "firecrawl:firecrawl",

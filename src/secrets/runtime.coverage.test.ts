@@ -30,7 +30,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 function createTestProvider(params: {
-  id: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl" | "tavily";
+  id: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl" | "brightdata" | "tavily";
   pluginId: string;
   order: number;
 }): PluginWebSearchProviderEntry {
@@ -90,6 +90,7 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
     createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
     createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
     createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
+    createTestProvider({ id: "brightdata", pluginId: "brightdata", order: 65 }),
     createTestProvider({ id: "tavily", pluginId: "tavily", order: 70 }),
   ];
 }
@@ -207,6 +208,9 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   }
   if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");
+  }
+  if (entry.id === "plugins.entries.brightdata.config.webSearch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "brightdata");
   }
   return config;
 }

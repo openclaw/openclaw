@@ -698,6 +698,15 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
+  "tools.web.fetch.brightdata.enabled":
+    "Enable Bright Data fallback for web_fetch (if configured).",
+  "tools.web.fetch.brightdata.apiKey":
+    "Bright Data API token (fallback: BRIGHTDATA_API_TOKEN env var).",
+  "tools.web.fetch.brightdata.baseUrl":
+    "Bright Data API base URL (default: https://api.brightdata.com).",
+  "tools.web.fetch.brightdata.unlockerZone":
+    "Bright Data unlocker zone for web_fetch fallback requests (default: mcp_unlocker).",
+  "tools.web.fetch.brightdata.timeoutSeconds": "Timeout in seconds for Bright Data requests.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
@@ -978,6 +987,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-plugin environment variable map injected for that plugin runtime context only. Use this to scope provider credentials to one plugin instead of sharing global process environment.",
   "plugins.entries.*.config":
     "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
+  "plugins.entries.brightdata.config.webSearch":
+    "Bright Data web search plugin settings for API authentication and endpoint overrides used by the bundled Bright Data search, scrape, and browser tools.",
+  "plugins.entries.brightdata.config.webSearch.apiKey":
+    "Bright Data API token for the bundled Bright Data plugin (fallback: BRIGHTDATA_API_TOKEN env var).",
+  "plugins.entries.brightdata.config.webSearch.baseUrl":
+    "Bright Data API base URL override (default: https://api.brightdata.com).",
   "plugins.installs":
     "CLI-managed install metadata (used by `openclaw plugins update` to locate install sources).",
   "plugins.installs.*.source": 'Install source ("npm", "archive", or "path").',

@@ -1,0 +1,63 @@
+{
+  "id": "brightdata",
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Bright Data API Token",
+      "help": "Bright Data API token for search and scraping (fallback: BRIGHTDATA_API_TOKEN env var).",
+      "sensitive": true,
+      "placeholder": "..."
+    },
+    "webSearch.baseUrl": {
+      "label": "Bright Data API Base URL",
+      "help": "Bright Data API base URL override."
+    },
+    "webSearch.unlockerZone": {
+      "label": "Bright Data Unlocker Zone",
+      "help": "Bright Data Web Unlocker zone name (default: mcp_unlocker)."
+    },
+    "webSearch.browserZone": {
+      "label": "Bright Data Browser Zone",
+      "help": "Bright Data Browser API zone name (default: mcp_browser)."
+    },
+    "webSearch.timeoutSeconds": {
+      "label": "Bright Data Timeout (sec)",
+      "help": "Default timeout in seconds for Bright Data search, scrape, and browser credential requests."
+    },
+    "webSearch.pollingTimeoutSeconds": {
+      "label": "Bright Data Polling Timeout (sec)",
+      "help": "Default polling timeout in seconds for dataset-backed Bright Data tools."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "unlockerZone": {
+            "type": "string"
+          },
+          "browserZone": {
+            "type": "string"
+          },
+          "timeoutSeconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "pollingTimeoutSeconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}
