@@ -20,13 +20,13 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { loadConfig } from "../config/config.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { logInfo } from "../logger.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import { sendGatewayAuthFailure } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
-import { resolveRequestClientIp } from "./net.js";
 
 /** Event streams to include in SSE output. Empty set = all streams allowed. */
 const ALLOWED_STREAMS = new Set([
@@ -133,9 +133,9 @@ function sendHeartbeat(res: ServerResponse) {
 /** Options for handleAgentEventsSSE. */
 export type AgentEventsSSEOptions = {
   auth: ResolvedGatewayAuth;
-  trustedProxies: string[];
-  allowRealIpFallback: boolean;
-  rateLimiter: AuthRateLimiter;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
 };
 
 /**
@@ -144,10 +144,8 @@ export type AgentEventsSSEOptions = {
 export async function handleAgentEventsSSE(
   req: IncomingMessage,
   res: ServerResponse,
-  options: AgentEventsSSEOptions,
+  opts: AgentEventsSSEOptions,
 ): Promise<boolean> {
-  const { auth, trustedProxies, allowRealIpFallback, rateLimiter } = options;
-
   // Check if this is an SSE request
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   if (!isAgentEventsSSERequest(url.pathname)) {
@@ -155,15 +153,15 @@ export async function handleAgentEventsSSE(
   }
 
   // Authorize the request
-  const clientIp = resolveRequestClientIp(req, { trustedProxies, allowRealIpFallback });
+  const cfg = loadConfig();
   const token = getBearerToken(req);
   const authResult = await authorizeHttpGatewayConnect({
-    req,
-    auth,
+    auth: opts.auth,
     connectAuth: token ? { token, password: token } : null,
-    trustedProxies,
-    allowRealIpFallback,
-    rateLimiter,
+    req,
+    trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
+    rateLimiter: opts.rateLimiter,
   });
 
   if (!authResult.ok) {
