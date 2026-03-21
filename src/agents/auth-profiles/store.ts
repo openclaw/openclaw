@@ -3,7 +3,12 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOAuthPath } from "../../config/paths.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
-import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
+import {
+  AUTH_STORE_LOCK_OPTIONS,
+  AUTH_STORE_VERSION,
+  EXTERNAL_CLI_SYNC_TTL_MS,
+  log,
+} from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
 import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
@@ -19,7 +24,10 @@ type LoadAuthProfileStoreOptions = {
 const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
 
 const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
-const loadedAuthStoreCache = new Map<string, { mtimeMs: number | null; store: AuthProfileStore }>();
+const loadedAuthStoreCache = new Map<
+  string,
+  { mtimeMs: number | null; syncedAtMs: number; store: AuthProfileStore }
+>();
 
 function resolveRuntimeStoreKey(agentDir?: string): string {
   return resolveAuthStorePath(agentDir);
@@ -95,6 +103,9 @@ function readCachedAuthProfileStore(
   if (!cached || cached.mtimeMs !== mtimeMs) {
     return null;
   }
+  if (Date.now() - cached.syncedAtMs >= EXTERNAL_CLI_SYNC_TTL_MS) {
+    return null;
+  }
   return cloneAuthProfileStore(cached.store);
 }
 
@@ -105,6 +116,7 @@ function writeCachedAuthProfileStore(
 ): void {
   loadedAuthStoreCache.set(authPath, {
     mtimeMs,
+    syncedAtMs: Date.now(),
     store: cloneAuthProfileStore(store),
   });
 }
