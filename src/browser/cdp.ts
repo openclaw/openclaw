@@ -1,4 +1,5 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { logWarn } from "../logger.js";
 import {
   appendCdpPath,
   fetchJson,
