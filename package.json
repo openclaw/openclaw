@@ -313,6 +313,10 @@
       "types": "./dist/plugin-sdk/llm-task.d.ts",
       "default": "./dist/plugin-sdk/llm-task.js"
     },
+    "./plugin-sdk/memory-core": {
+      "types": "./dist/plugin-sdk/memory-core.d.ts",
+      "default": "./dist/plugin-sdk/memory-core.js"
+    },
     "./plugin-sdk/memory-lancedb": {
       "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
       "default": "./dist/plugin-sdk/memory-lancedb.js"
