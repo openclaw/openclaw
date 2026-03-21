@@ -443,7 +443,7 @@ export function renderApp(state: AppViewState) {
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
             <div class="topbar-status">
-              ${state.lastError ? html`<div class="pill danger">${state.lastError}</div>` : nothing}
+              ${!isChat && state.lastError ? html`<div class="pill danger">${state.lastError}</div>` : nothing}
               ${isChat ? renderChatMobileToggle(state) : nothing}
               ${renderTopbarThemeModeToggle(state)}
             </div>
