@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveConfigPath } from "../../config/config.js";
 import { vi } from "vitest";
 import type { PortUsage } from "../../infra/ports-types.js";
 import type { killProcessTree as killProcessTreeImpl } from "../../process/kill-tree.js";
@@ -41,17 +42,47 @@ export function resetSchtasksBaseMocks() {
 export async function writeGatewayScript(
   env: Record<string, string>,
   port = Number(env.OPENCLAW_GATEWAY_PORT || "18789"),
+  options: {
+    includePortEnv?: boolean;
+    includePortFlag?: boolean;
+  } = {},
 ) {
+  const includePortEnv = options.includePortEnv ?? true;
+  const includePortFlag = options.includePortFlag ?? true;
   const scriptPath = resolveTaskScriptPath(env);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+  const command = [
+    `"C:\\Program Files\\nodejs\\node.exe"`,
+    `"C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js"`,
+    "gateway",
+    ...(includePortFlag ? ["--port", String(port)] : []),
+  ].join(" ");
   await fs.writeFile(
     scriptPath,
     [
       "@echo off",
-      `set "OPENCLAW_GATEWAY_PORT=${port}"`,
-      `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port ${port}`,
+      ...(includePortEnv ? [`set "OPENCLAW_GATEWAY_PORT=${port}"`] : []),
+      command,
       "",
     ].join("\r\n"),
+    "utf8",
+  );
+}
+
+export async function writeGatewayConfig(env: Record<string, string>, port = 18789) {
+  const configPath = resolveConfigPath(env);
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        gateway: {
+          port,
+        },
+      },
+      null,
+      2,
+    ),
     "utf8",
   );
 }

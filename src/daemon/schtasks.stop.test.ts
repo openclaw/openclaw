@@ -8,6 +8,7 @@ import {
   schtasksCalls,
   schtasksResponses,
   withWindowsEnv,
+  writeGatewayConfig,
   writeGatewayScript,
 } from "./test-helpers/schtasks-fixtures.js";
 const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() =>
@@ -164,6 +165,45 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(5151);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+      expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+    });
+  });
+
+  it("resolves the stop port from config when the task script omits both --port and OPENCLAW_GATEWAY_PORT", async () => {
+    await withWindowsEnv("openclaw-win-stop-", async ({ env }) => {
+      await writeGatewayScript(env, GATEWAY_PORT, { includePortEnv: false, includePortFlag: false });
+      await writeGatewayConfig(env, GATEWAY_PORT);
+      const stdout = new PassThrough();
+      const envWithoutPort = { ...env };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      pushSuccessfulSchtasksResponses(3);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4343]);
+      inspectPortUsage.mockResolvedValueOnce(busyPortUsage(4343)).mockResolvedValueOnce(freePortUsage());
+
+      await stopScheduledTask({ env: envWithoutPort, stdout });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expectGatewayTermination(4343);
+    });
+  });
+
+  it("resolves the restart port from config when the task script omits both --port and OPENCLAW_GATEWAY_PORT", async () => {
+    await withWindowsEnv("openclaw-win-stop-", async ({ env }) => {
+      await writeGatewayScript(env, GATEWAY_PORT, { includePortEnv: false, includePortFlag: false });
+      await writeGatewayConfig(env, GATEWAY_PORT);
+      const stdout = new PassThrough();
+      const envWithoutPort = { ...env };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      pushSuccessfulSchtasksResponses(4);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5454]);
+      inspectPortUsage.mockResolvedValueOnce(busyPortUsage(5454)).mockResolvedValueOnce(freePortUsage());
+
+      await expect(restartScheduledTask({ env: envWithoutPort, stdout })).resolves.toEqual({
+        outcome: "completed",
+      });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expectGatewayTermination(5454);
       expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });
   });
