@@ -109,6 +109,48 @@ describe("doctor config flow", () => {
     ).toBe(false);
   });
 
+  it("does not warn for fresh Telegram baseline without configured groups", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          botToken: "123:abc",
+          groupPolicy: "allowlist",
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.telegram.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not warn for account-scoped Telegram baseline without configured groups", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: "123:abc",
+              groupPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.telegram.accounts.default.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+  });
+
   it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {
