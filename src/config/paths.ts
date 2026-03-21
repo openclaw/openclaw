@@ -231,9 +231,18 @@ export function resolveDefaultConfigCandidates(
     candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(resolved, name)));
   }
 
+  const defaultDirs = [newStateDir(effectiveHomedir), ...legacyStateDirs(effectiveHomedir)];
+  for (const dir of defaultDirs) {
+    candidates.push(path.join(dir, CONFIG_FILENAME));
+    candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(dir, name)));
+  }
+
   // Nesting guard: when OPENCLAW_HOME basename is a known state dir, include
   // it directly as a candidate location so CONFIG_PATH stays consistent with
   // resolveStateDir (which returns OPENCLAW_HOME itself in this case).
+  // Added AFTER defaultDirs so that existing nested configs (e.g.
+  // ~/.clawdbot/.openclaw/openclaw.json) are found before flat candidates
+  // (e.g. ~/.clawdbot/clawdbot.json), matching resolveStateDir()'s preference.
   const explicitHome = env.OPENCLAW_HOME?.trim();
   if (explicitHome) {
     const home = effectiveHomedir();
@@ -241,12 +250,6 @@ export function resolveDefaultConfigCandidates(
       candidates.push(path.join(home, CONFIG_FILENAME));
       candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(home, name)));
     }
-  }
-
-  const defaultDirs = [newStateDir(effectiveHomedir), ...legacyStateDirs(effectiveHomedir)];
-  for (const dir of defaultDirs) {
-    candidates.push(path.join(dir, CONFIG_FILENAME));
-    candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(dir, name)));
   }
   return candidates;
 }
