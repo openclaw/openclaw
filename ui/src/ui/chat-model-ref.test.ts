@@ -66,6 +66,19 @@ describe("chat-model-ref helpers", () => {
     ).toBe("openrouter/anthropic/claude-sonnet-4-6");
   });
 
+  it("qualifies slash-containing catalog model IDs with their provider", () => {
+    expect(
+      buildChatModelOption({
+        id: "moonshotai/Kimi-K2.5",
+        name: "Kimi K2.5",
+        provider: "together",
+      }),
+    ).toEqual({
+      value: "together/moonshotai/Kimi-K2.5",
+      label: "moonshotai/Kimi-K2.5 · together",
+    });
+  });
+
   it("reports the override resolution source for unique catalog matches", () => {
     expect(resolveChatModelOverride(createChatModelOverride("gpt-5-mini"), catalog)).toEqual({
       value: "openai/gpt-5-mini",

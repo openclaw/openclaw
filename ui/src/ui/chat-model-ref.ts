@@ -25,11 +25,6 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
   if (!trimmedModel) {
     return "";
   }
-  // If the model string already contains "/" it is already provider-qualified
-  // (e.g. "ollama/gpt-oss:120b-cloud"); return as-is to avoid double-qualifying.
-  if (trimmedModel.includes("/")) {
-    return trimmedModel;
-  }
   const trimmedProvider = provider?.trim();
   return trimmedProvider ? `${trimmedProvider}/${trimmedModel}` : trimmedModel;
 }
@@ -94,7 +89,17 @@ export function resolveServerChatModelValue(
   if (typeof model !== "string") {
     return "";
   }
-  return buildQualifiedChatModelValue(model, provider);
+  const trimmed = model.trim();
+  if (!trimmed) {
+    return "";
+  }
+  // Values from the model picker are already provider-qualified (e.g.,
+  // "ollama/gpt-oss:120b-cloud", "together/moonshotai/Kimi-K2.5").
+  // Return as-is to avoid double-qualifying with a different default provider.
+  if (trimmed.includes("/")) {
+    return trimmed;
+  }
+  return buildQualifiedChatModelValue(trimmed, provider);
 }
 
 export function resolvePreferredServerChatModel(
