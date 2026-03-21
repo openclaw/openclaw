@@ -84,6 +84,11 @@ type TelegramAllowFromListRef = {
   key: "allowFrom" | "groupAllowFrom";
 };
 
+type ResolvedTelegramLookupAccount = {
+  token: string;
+  apiRoot?: string;
+};
+
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -399,29 +404,32 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
     return inspected.enabled && inspected.tokenStatus === "configured_unavailable";
   });
   const tokenResolutionWarnings: string[] = [];
-  const tokens = Array.from(
-    new Set(
-      listTelegramAccountIds(resolvedConfig)
-        .map((accountId) => {
-          try {
-            return resolveTelegramAccount({ cfg: resolvedConfig, accountId });
-          } catch (error) {
-            tokenResolutionWarnings.push(
-              `- Telegram account ${accountId}: failed to inspect bot token (${describeUnknownError(error)}).`,
-            );
-            return null;
-          }
-        })
-        .filter((account): account is NonNullable<ReturnType<typeof resolveTelegramAccount>> =>
-          Boolean(account),
-        )
-        .map((account) => (account.tokenSource === "none" ? "" : account.token))
-        .map((token) => token.trim())
-        .filter(Boolean),
-    ),
-  );
+  const lookupAccounts: ResolvedTelegramLookupAccount[] = [];
+  const seenLookupAccounts = new Set<string>();
+  for (const accountId of listTelegramAccountIds(resolvedConfig)) {
+    let account: NonNullable<ReturnType<typeof resolveTelegramAccount>>;
+    try {
+      account = resolveTelegramAccount({ cfg: resolvedConfig, accountId });
+    } catch (error) {
+      tokenResolutionWarnings.push(
+        `- Telegram account ${accountId}: failed to inspect bot token (${describeUnknownError(error)}).`,
+      );
+      continue;
+    }
+    const token = account.tokenSource === "none" ? "" : account.token.trim();
+    if (!token) {
+      continue;
+    }
+    const apiRoot = account.config.apiRoot?.trim() || undefined;
+    const cacheKey = `${token}::${apiRoot ?? ""}`;
+    if (seenLookupAccounts.has(cacheKey)) {
+      continue;
+    }
+    seenLookupAccounts.add(cacheKey);
+    lookupAccounts.push({ token, apiRoot });
+  }
 
-  if (tokens.length === 0) {
+  if (lookupAccounts.length === 0) {
     return {
       config: cfg,
       changes: [
@@ -449,14 +457,15 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
       return null;
     }
     const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-    for (const token of tokens) {
+    for (const account of lookupAccounts) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
       try {
         const id = await fetchTelegramChatId({
-          token,
+          token: account.token,
           chatId: username,
           signal: controller.signal,
+          apiRoot: account.apiRoot,
         });
         if (id) {
           return id;

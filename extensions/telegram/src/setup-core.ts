@@ -46,6 +46,7 @@ export function parseTelegramAllowFromId(raw: string): string | null {
 export async function resolveTelegramAllowFromEntries(params: {
   entries: string[];
   credentialValue?: string;
+  apiRoot?: string;
 }) {
   return await Promise.all(
     params.entries.map(async (entry) => {
@@ -61,6 +62,7 @@ export async function resolveTelegramAllowFromEntries(params: {
       const id = await fetchTelegramChatId({
         token: params.credentialValue,
         chatId: username,
+        apiRoot: params.apiRoot,
       });
       return { input: entry, resolved: Boolean(id), id };
     }),
@@ -96,6 +98,7 @@ export async function promptTelegramAllowFromForAccount(params: {
       resolveTelegramAllowFromEntries({
         credentialValue: token,
         entries,
+        apiRoot: resolved.config.apiRoot,
       }),
   });
   return patchChannelConfigForAccount({
