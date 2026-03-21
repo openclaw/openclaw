@@ -40,10 +40,10 @@ const ACTION_FIELDS = {
 const CONFIRMABLE_ACTIONS = ['set-order-item-production-field', 'set-item-spec-field'];
 
 function computeConfirmDigest(action, params) {
-  const secret =
-    process.env.STITCH_SERVICE_KEY
-    || process.env.SUPABASE_SERVICE_ROLE_KEY
-    || process.env.SUPABASE_SERVICE_KEY;
+  const secret = process.env.STITCH_SERVICE_KEY;
+  if (!secret) {
+    return null;
+  }
   let canonical;
 
   if (action === 'set-order-item-production-field') {
@@ -147,8 +147,17 @@ function checkForRequest() {
     }
 
     if (CONFIRMABLE_ACTIONS.includes(action)) {
+      const digest = computeConfirmDigest(action, fields);
+      if (!digest) {
+        writeResponse({
+          success: false,
+          error: 'Missing STITCH_SERVICE_KEY for confirmable action',
+          completed_at: new Date().toISOString()
+        });
+        return;
+      }
+
       if (!fields.confirmed) {
-        const digest = computeConfirmDigest(action, fields);
         writeResponse({
           success: false,
           requires_confirmation: true,
@@ -159,8 +168,7 @@ function checkForRequest() {
         return;
       }
 
-      const expected = computeConfirmDigest(action, fields);
-      if (fields.confirm_digest !== expected) {
+      if (fields.confirm_digest !== digest) {
         writeResponse({
           success: false,
           error: 'DIGEST_MISMATCH',
