@@ -1,16 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-// Dynamic import to avoid esbuild bundling issues with ESM/CJS interop
-let SlackBolt: unknown;
-let SlackBoltNamespace: Record<string, unknown> | undefined;
-
-async function loadSlackBolt() {
-  if (!SlackBolt) {
-    const slackModule = await import("@slack/bolt");
-    SlackBolt = slackModule.default ?? slackModule;
-    SlackBoltNamespace = slackModule as Record<string, unknown>;
-  }
-  return { SlackBolt, SlackBoltNamespace };
-}
+import type { App as SlackAppType, HTTPReceiver as SlackHTTPReceiverType } from "@slack/bolt";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -56,6 +45,23 @@ import {
 } from "./reconnect-policy.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
+
+// Dynamic import to avoid esbuild bundling issues with ESM/CJS interop
+// Caches the Promise itself for concurrency safety
+let slackBoltLoadPromise: Promise<{
+  SlackBolt: unknown;
+  SlackBoltNamespace: Record<string, unknown>;
+}> | null = null;
+
+async function loadSlackBolt() {
+  if (!slackBoltLoadPromise) {
+    slackBoltLoadPromise = import("@slack/bolt").then((slackModule) => ({
+      SlackBolt: slackModule.default ?? slackModule,
+      SlackBoltNamespace: slackModule as Record<string, unknown>,
+    }));
+  }
+  return slackBoltLoadPromise;
+}
 
 type SlackAppConstructor = typeof import("@slack/bolt").App;
 type SlackHttpReceiverConstructor = typeof import("@slack/bolt").HTTPReceiver;
@@ -124,18 +130,19 @@ function resolveSlackBoltInterop(params: {
   throw new TypeError("Unable to resolve @slack/bolt App/HTTPReceiver exports");
 }
 
-// Lazy-loaded Slack Bolt exports (loaded dynamically to avoid bundling issues)
-let slackBoltExports: SlackBoltResolvedExports | null = null;
+// Lazy-loaded Slack Bolt exports (concurrency-safe via Promise caching)
+let slackBoltExportsPromise: Promise<SlackBoltResolvedExports> | null = null;
 
-async function getSlackBoltExports(): Promise<SlackBoltResolvedExports> {
-  if (!slackBoltExports) {
-    const { SlackBolt, SlackBoltNamespace } = await loadSlackBolt();
-    slackBoltExports = resolveSlackBoltInterop({
-      defaultImport: SlackBolt,
-      namespaceImport: SlackBoltNamespace,
-    });
+function getSlackBoltExports(): Promise<SlackBoltResolvedExports> {
+  if (!slackBoltExportsPromise) {
+    slackBoltExportsPromise = loadSlackBolt().then(({ SlackBolt, SlackBoltNamespace }) =>
+      resolveSlackBoltInterop({
+        defaultImport: SlackBolt,
+        namespaceImport: SlackBoltNamespace,
+      })
+    );
   }
-  return slackBoltExports;
+  return slackBoltExportsPromise;
 }
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
