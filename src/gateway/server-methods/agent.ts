@@ -692,7 +692,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
-    const wantsDelivery = request.deliver === true;
+    let wantsDelivery = request.deliver === true;
     const explicitTo =
       typeof request.replyTo === "string" && request.replyTo.trim()
         ? request.replyTo.trim()
@@ -745,8 +745,13 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedAccountId,
         };
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
-        return;
+        // P2 fix: Channel auto-selection failed - proceed without delivery
+        // This restores the previous behavior where failed delivery does not block the call
+        wantsDelivery = false;
+        resolvedChannel = INTERNAL_MESSAGE_CHANNEL;
+        context.logGateway.debug(
+          `channel auto-selection failed, proceeding without delivery: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
 
@@ -763,7 +768,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
-    if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
+    // Only reject if delivery was explicitly requested but no channel available
+    // (user passed --channel/--reply-channel but it couldn't be resolved)
+    if (
+      wantsDelivery &&
+      resolvedChannel === INTERNAL_MESSAGE_CHANNEL &&
+      deliveryTargetMode === "explicit"
+    ) {
       respond(
         false,
         undefined,
