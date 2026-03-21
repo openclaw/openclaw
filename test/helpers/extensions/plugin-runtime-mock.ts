@@ -205,6 +205,13 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           accountId: "default",
           sessionKey: "agent:main:test:dm:peer",
         })) as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+        resolveConfiguredBindingRoute: vi.fn((params) => ({
+          bindingResolution: null,
+          route: params.route,
+        })) as unknown as PluginRuntime["channel"]["routing"]["resolveConfiguredBindingRoute"],
+        ensureConfiguredBindingRouteReady: vi.fn(() =>
+          Promise.resolve({ ok: true as const }),
+        ) as unknown as PluginRuntime["channel"]["routing"]["ensureConfiguredBindingRouteReady"],
       },
       pairing: {
         buildPairingReply: vi.fn(
