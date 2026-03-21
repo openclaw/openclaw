@@ -15,8 +15,8 @@ title: "AIsa"
 | Model | Developer | Input $/1M | Output $/1M | Context | Vision | Reasoning |
 |---|---|---|---|---|---|---|
 | `minimax-m2.1` | MiniMax | $0.21 | $0.84 | 200k | — | — |
-| `seed-1-8-251228` | ByteDance | $0.225 | $1.80 | 128k | — | ✓ |
-| `deepseek-v3.2` | DeepSeek | $0.28 | $0.42 | 128k | — | ✓ |
+| `seed-1-8-251228` | ByteDance | $0.225 | $1.80 | 128k | — | — |
+| `deepseek-v3.2` | DeepSeek | $0.28 | $0.42 | 128k | — | — |
 | `kimi-k2.5` _(default)_ | Moonshot AI | $0.40 | $2.11 | 256k | — | ✓ |
 | `qwen3-max` | Alibaba | $0.72 | $3.60 | 256k | ✓ | ✓ |
 | `glm-5` | Zhipu AI | $1.00 | $3.20 | 200k | ✓ | ✓ |
