@@ -1,6 +1,6 @@
 {
   "name": "@wayazi/rust-plugin",
-  "version": "2026.4.0",
+  "version": "2026.4.1",
   "description": "High-performance OpenClaw plugin powered by Rust",
   "keywords": [
     "cryptography",
