@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { bundledWebSearchPluginRegistrations } from "../bundled-web-search-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "./bundled-web-search-ids.js";
 import {
   listBundledWebSearchProviders,
   resolveBundledWebSearchPluginIds,
@@ -75,6 +77,14 @@ describe("bundled web search metadata", () => {
       "tavily",
       "xai",
     ]);
+  });
+
+  it("keeps bundled web search fast-path ids aligned with the registry", () => {
+    expect([...BUNDLED_WEB_SEARCH_PLUGIN_IDS]).toEqual(
+      bundledWebSearchPluginRegistrations
+        .map(({ plugin }) => plugin.id)
+        .toSorted((left, right) => left.localeCompare(right)),
+    );
   });
 
   it("keeps fast-path bundled provider metadata aligned with bundled plugin contracts", async () => {
