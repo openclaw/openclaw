@@ -70,6 +70,24 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Session history looks corrupted");
     expect(result).toContain("/new");
   });
+  it("returns a safe message for orphaned tool_result errors without leaking raw API details", () => {
+    const msg = makeAssistantError(
+      "messages.144.content.1: unexpected tool_use_id found in tool_result blocks: toolu_01HjX9c7NLJaBLDzyBasSkKw. Each tool_result block must have a corresponding tool_use block in the previous message.",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe("⚠️ Session context error. Use /new to start a fresh session.");
+    expect(result).not.toContain("tool_use_id");
+    expect(result).not.toContain("messages.144");
+    expect(result).not.toContain("toolu_");
+  });
+  it("returns a safe message for JSON-wrapped orphaned tool_result errors", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.12.content.0: unexpected tool_use_id found in tool_result blocks: toolu_abc123"}}',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe("⚠️ Session context error. Use /new to start a fresh session.");
+    expect(result).not.toContain("toolu_abc123");
+  });
   it("handles JSON-wrapped role errors", () => {
     const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
     const result = formatAssistantErrorText(msg);

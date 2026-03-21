@@ -607,6 +607,10 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (isOrphanedToolResultError(raw)) {
+    return "⚠️ Session context error. Use /new to start a fresh session.";
+  }
+
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
@@ -660,6 +664,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
         "Message ordering conflict - please try again. " +
         "If this persists, use /new to start a fresh session."
       );
+    }
+
+    if (isOrphanedToolResultError(trimmed)) {
+      return "⚠️ Session context error. Use /new to start a fresh session.";
     }
 
     if (shouldRewriteContextOverflowText(trimmed)) {
@@ -721,6 +729,16 @@ export function isMissingToolCallInputError(raw: string): boolean {
     return false;
   }
   return TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw);
+}
+
+const ORPHANED_TOOL_RESULT_RE =
+  /unexpected tool_use_id found in tool_result|tool_result.*must have a corresponding tool_use/i;
+
+export function isOrphanedToolResultError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  return ORPHANED_TOOL_RESULT_RE.test(raw);
 }
 
 export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {

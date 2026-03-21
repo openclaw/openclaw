@@ -30,6 +30,7 @@ export {
   isCloudCodeAssistFormatError,
   isCompactionFailureError,
   isContextOverflowError,
+  isOrphanedToolResultError,
   isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
