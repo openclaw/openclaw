@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveConfigPath } from "../../config/config.js";
 import { vi } from "vitest";
+import { resolveConfigPath } from "../../config/config.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 import type { killProcessTree as killProcessTreeImpl } from "../../process/kill-tree.js";
 import type { MockFn } from "../../test-utils/vitest-mock-fn.js";
