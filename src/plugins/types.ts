@@ -891,6 +891,7 @@ export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  credentialLabel?: string;
   envVars: string[];
   placeholder: string;
   signupUrl: string;
