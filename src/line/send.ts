@@ -24,6 +24,7 @@ const userProfileCache = new Map<
   { displayName: string; pictureUrl?: string; fetchedAt: number }
 >();
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const PROFILE_CACHE_MAX = 2048;
 
 interface LineSendOpts {
   cfg?: OpenClawConfig;
@@ -454,6 +455,12 @@ export async function getUserProfile(
       ...result,
       fetchedAt: Date.now(),
     });
+    if (userProfileCache.size > PROFILE_CACHE_MAX) {
+      const oldest = userProfileCache.keys().next();
+      if (!oldest.done) {
+        userProfileCache.delete(oldest.value);
+      }
+    }
 
     return result;
   } catch (err) {

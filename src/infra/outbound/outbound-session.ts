@@ -52,6 +52,17 @@ export type ResolveOutboundSessionRouteParams = {
 
 // Cache Slack channel type lookups to avoid repeated API calls.
 const SLACK_CHANNEL_TYPE_CACHE = new Map<string, "channel" | "group" | "dm" | "unknown">();
+const SLACK_CHANNEL_TYPE_CACHE_MAX = 2048;
+
+function cacheSlackChannelType(key: string, value: "channel" | "group" | "dm" | "unknown") {
+  SLACK_CHANNEL_TYPE_CACHE.set(key, value);
+  if (SLACK_CHANNEL_TYPE_CACHE.size > SLACK_CHANNEL_TYPE_CACHE_MAX) {
+    const oldest = SLACK_CHANNEL_TYPE_CACHE.keys().next();
+    if (!oldest.done) {
+      SLACK_CHANNEL_TYPE_CACHE.delete(oldest.value);
+    }
+  }
+}
 
 function normalizeThreadId(value?: string | number | null): string | undefined {
   if (value == null) {
@@ -147,7 +158,7 @@ async function resolveSlackChannelType(params: {
     groupChannels.includes(`group:${channelIdLower}`) ||
     groupChannels.includes(`mpim:${channelIdLower}`)
   ) {
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, "group");
+    cacheSlackChannelType(`${account.accountId}:${channelId}`, "group");
     return "group";
   }
 
@@ -162,13 +173,13 @@ async function resolveSlackChannelType(params: {
       );
     })
   ) {
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, "channel");
+    cacheSlackChannelType(`${account.accountId}:${channelId}`, "channel");
     return "channel";
   }
 
   const token = account.botToken?.trim() || account.userToken || "";
   if (!token) {
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, "unknown");
+    cacheSlackChannelType(`${account.accountId}:${channelId}`, "unknown");
     return "unknown";
   }
 
@@ -177,10 +188,10 @@ async function resolveSlackChannelType(params: {
     const info = await client.conversations.info({ channel: channelId });
     const channel = info.channel as { is_im?: boolean; is_mpim?: boolean } | undefined;
     const type = channel?.is_im ? "dm" : channel?.is_mpim ? "group" : "channel";
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, type);
+    cacheSlackChannelType(`${account.accountId}:${channelId}`, type);
     return type;
   } catch {
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, "unknown");
+    cacheSlackChannelType(`${account.accountId}:${channelId}`, "unknown");
     return "unknown";
   }
 }

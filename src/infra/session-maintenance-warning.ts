@@ -14,6 +14,7 @@ type WarningParams = {
 };
 
 const warnedContexts = new Map<string, string>();
+const WARNED_CONTEXTS_MAX = 1024;
 const log = createSubsystemLogger("session-maintenance-warning");
 let deliverRuntimePromise: Promise<typeof import("./outbound/deliver-runtime.js")> | null = null;
 
@@ -82,6 +83,12 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
     return;
   }
   warnedContexts.set(params.sessionKey, contextKey);
+  if (warnedContexts.size > WARNED_CONTEXTS_MAX) {
+    const oldest = warnedContexts.keys().next();
+    if (!oldest.done) {
+      warnedContexts.delete(oldest.value);
+    }
+  }
 
   const text = buildWarningText(params.warning);
   const target = resolveSessionDeliveryTarget({

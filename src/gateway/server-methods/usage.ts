@@ -5,6 +5,7 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type {
   CostUsageSummary,
@@ -58,6 +59,7 @@ type CostUsageCacheEntry = {
 };
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
+const COST_USAGE_CACHE_MAX = 512;
 
 function resolveSessionUsageFileOrRespond(
   key: string,
@@ -324,6 +326,7 @@ async function loadCostUsageSummaryCached(params: {
 
   entry.inFlight = inFlight;
   costUsageCache.set(cacheKey, entry);
+  pruneMapToMaxSize(costUsageCache, COST_USAGE_CACHE_MAX);
 
   if (entry.summary) {
     return entry.summary;

@@ -80,6 +80,7 @@ const hookPresetMappings: Record<string, HookMappingConfig[]> = {
 };
 
 const transformCache = new Map<string, HookTransformFn>();
+const TRANSFORM_CACHE_MAX = 256;
 
 type HookTransformResult = Partial<{
   kind: HookAction["kind"];
@@ -334,6 +335,12 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
   const mod = await importFileModule({ modulePath: transform.modulePath });
   const fn = resolveTransformFn(mod, transform.exportName);
   transformCache.set(cacheKey, fn);
+  if (transformCache.size > TRANSFORM_CACHE_MAX) {
+    const oldest = transformCache.keys().next();
+    if (!oldest.done) {
+      transformCache.delete(oldest.value);
+    }
+  }
   return fn;
 }
 

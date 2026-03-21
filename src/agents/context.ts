@@ -6,6 +6,7 @@ import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -80,6 +81,7 @@ export function applyConfiguredContextWindows(params: {
 }
 
 const MODEL_CACHE = new Map<string, number>();
+const MODEL_CACHE_MAX = 256;
 let loadPromise: Promise<void> | null = null;
 let configuredConfig: OpenClawConfig | undefined;
 let configLoadFailures = 0;
@@ -219,6 +221,7 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
       cache: MODEL_CACHE,
       modelsConfig: cfg.models as ModelsConfig | undefined,
     });
+    pruneMapToMaxSize(MODEL_CACHE, MODEL_CACHE_MAX);
   })().catch(() => {
     // Keep lookup best-effort.
   });

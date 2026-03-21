@@ -13,6 +13,7 @@ type TargetNormalizerCacheEntry = {
 };
 
 const targetNormalizerCacheByChannelId = new Map<string, TargetNormalizerCacheEntry>();
+const TARGET_NORMALIZER_CACHE_MAX = 256;
 
 function resolveTargetNormalizer(channelId: ChannelId): TargetNormalizer {
   const version = getActivePluginRegistryVersion();
@@ -26,6 +27,12 @@ function resolveTargetNormalizer(channelId: ChannelId): TargetNormalizer {
     version,
     normalizer,
   });
+  if (targetNormalizerCacheByChannelId.size > TARGET_NORMALIZER_CACHE_MAX) {
+    const oldest = targetNormalizerCacheByChannelId.keys().next();
+    if (!oldest.done) {
+      targetNormalizerCacheByChannelId.delete(oldest.value);
+    }
+  }
   return normalizer;
 }
 
