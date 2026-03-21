@@ -6,6 +6,7 @@ import { vi } from "vitest";
 import type { PortUsage } from "../../infra/ports-types.js";
 import type { killProcessTree as killProcessTreeImpl } from "../../process/kill-tree.js";
 import type { MockFn } from "../../test-utils/vitest-mock-fn.js";
+import { resolveGatewayStateDir } from "../paths.js";
 import { resolveTaskScriptPath } from "../schtasks.js";
 
 export const schtasksResponses: Array<{ code: number; stdout: string; stderr: string }> = [];
@@ -70,7 +71,7 @@ export async function writeGatewayScript(
 }
 
 export async function writeGatewayConfig(env: Record<string, string>, port = 18789) {
-  const configPath = resolveConfigPath(env);
+  const configPath = resolveConfigPath(env, resolveGatewayStateDir(env));
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(
     configPath,
