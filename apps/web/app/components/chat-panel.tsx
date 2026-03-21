@@ -170,6 +170,10 @@ type AttachedFile = {
 	uploading?: boolean;
 	/** Local blob URL for instant preview before upload completes. */
 	localUrl?: string;
+	/** MIME type of the file (e.g. "image/png"). */
+	mimeType?: string;
+	/** Base64 data URL for sending image content to the AI model. */
+	base64Data?: string;
 };
 
 function getFileCategory(
@@ -1706,11 +1710,19 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				// Build message with optional attachment prefix
 				let messageText = userText;
 
-				// Merge mention paths and attachment paths
+				// Separate image attachments (have base64 data) from non-image file references
+				const imageAttachments = currentAttachments.filter(
+					(f) => f.base64Data && f.mimeType?.startsWith("image/"),
+				);
+				const nonImageAttachments = currentAttachments.filter(
+					(f) => !f.base64Data || !f.mimeType?.startsWith("image/"),
+				);
+
+				// Build file path prefix for non-image attachments and mentions
 				const allFilePaths = [
 					...mentionedFiles.map((f) => f.path),
-					...currentAttachments.map((f) => f.path),
-				];
+					...nonImageAttachments.map((f) => f.path),
+				].filter(Boolean);
 				if (allFilePaths.length > 0) {
 					const prefix = `[Attached files: ${allFilePaths.join(", ")}]`;
 					messageText = messageText
@@ -1724,6 +1736,16 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					isFirstFileMessageRef.current = false;
 				}
 
+				// Build FileUIPart[] for image attachments
+				const fileParts = imageAttachments
+					.filter((f) => f.base64Data && f.mimeType)
+					.map((f) => ({
+						type: "file" as const,
+						mediaType: f.mimeType!,
+						url: f.base64Data!,
+						filename: f.name,
+					}));
+
 				// Store HTML for display and pipe to server via transport
 				userHtmlMapRef.current.set(messageText, html);
 				pendingHtmlRef.current = html;
@@ -1731,25 +1753,39 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				userScrolledAwayRef.current = false;
 
 				if (gatewaySessionKey) {
+					const msgParts: UIMessage["parts"] = [
+						{ type: "text" as const, text: messageText },
+						...fileParts,
+					];
 					const userMsg = {
 						id: `user-${Date.now()}`,
 						role: "user" as const,
-						parts: [{ type: "text" as const, text: messageText }] as UIMessage["parts"],
+						parts: msgParts,
 					};
 					setMessages((prev) => [...prev, userMsg]);
 
 					try {
+						const attachments = imageAttachments
+							.filter((f) => f.base64Data && f.mimeType)
+							.map((f) => ({ mediaType: f.mimeType!, data: f.base64Data! }));
 						const res = await fetch("/api/gateway/chat", {
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({ sessionKey: gatewaySessionKey, message: messageText }),
+							body: JSON.stringify({
+								sessionKey: gatewaySessionKey,
+								message: messageText,
+								...(attachments.length > 0 ? { attachments } : {}),
+							}),
 						});
 						if (res.ok && res.body) {
 							await attemptReconnect(gatewaySessionKey, [], { sessionKey: gatewaySessionKey });
 						}
 					} catch { /* ignore */ }
 				} else {
-					void sendMessage({ text: messageText });
+					void sendMessage({
+						text: messageText,
+						...(fileParts.length > 0 ? { files: fileParts } : {}),
+					});
 				}
 			},
 			[
@@ -2029,7 +2065,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		}, []);
 
 		/** Upload native files (e.g. dropped from Finder/Desktop) and attach them.
-		 *  Shows files instantly with a local preview, then uploads in the background. */
+		 *  Shows files instantly with a local preview, then uploads in the background.
+		 *  For images, also reads the file as a base64 data URL for AI vision. */
 		const uploadAndAttachNativeFiles = useCallback(
 			(files: FileList) => {
 				const fileArray = Array.from(files);
@@ -2041,6 +2078,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					path: "",
 					uploading: true,
 					localUrl: URL.createObjectURL(file),
+					mimeType: file.type || undefined,
 				}));
 				setAttachedFiles((prev) => [...prev, ...placeholders]);
 
@@ -2049,6 +2087,23 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					const file = fileArray[i];
 					const placeholderId = placeholders[i].id;
 					const localUrl = placeholders[i].localUrl;
+
+					// For image files, read as base64 for AI vision
+					const isImage = file.type.startsWith("image/");
+					if (isImage) {
+						const reader = new FileReader();
+						reader.onload = () => {
+							const dataUrl = reader.result as string;
+							setAttachedFiles((prev) =>
+								prev.map((f) =>
+									f.id === placeholderId
+										? { ...f, base64Data: dataUrl, mimeType: file.type }
+										: f,
+								),
+							);
+						};
+						reader.readAsDataURL(file);
+					}
 
 					const form = new FormData();
 					form.append("file", file);
@@ -2059,7 +2114,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						.then((res) => res.ok ? res.json() : null)
 						.then((json: { ok?: boolean; path?: string } | null) => {
 							if (json?.ok && json.path) {
-								// Replace placeholder with the real uploaded file
 								setAttachedFiles((prev) =>
 									prev.map((f) =>
 										f.id === placeholderId
@@ -2068,7 +2122,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 									),
 								);
 							} else {
-								// Upload failed — remove the placeholder
 								setAttachedFiles((prev) => prev.filter((f) => f.id !== placeholderId));
 								if (localUrl) {URL.revokeObjectURL(localUrl);}
 							}

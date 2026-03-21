@@ -145,6 +145,8 @@ type SpawnGatewayProcessParams = {
 	sessionKey?: string;
 	afterSeq: number;
 	lane?: string;
+	/** Image attachments to send alongside the message for vision models. */
+	attachments?: Array<{ mediaType: string; data: string }>;
 };
 
 type BuildConnectParamsOptions = {
@@ -801,6 +803,7 @@ class GatewayProcessHandle
 				startRes = await this.client.request("chat.send", {
 					message: msg,
 					...(sessionKey ? { sessionKey } : {}),
+					...(this.params.attachments?.length ? { attachments: this.params.attachments } : {}),
 					idempotencyKey: randomUUID(),
 					deliver: false,
 				});
@@ -1220,11 +1223,13 @@ export async function callGatewayRpc(
 /**
  * Start an agent run via the Gateway WebSocket and return a process handle.
  * @param overrideAgentId - Use a specific agent ID instead of the workspace default.
+ * @param attachments - Image attachments for vision models.
  */
 export function spawnAgentProcess(
 	message: string,
 	agentSessionId?: string,
 	overrideAgentId?: string,
+	attachments?: Array<{ mediaType: string; data: string }>,
 ): AgentProcessHandle {
 	const agentId = overrideAgentId ?? resolveActiveAgentId();
 	const sessionKey = agentSessionId
@@ -1236,6 +1241,7 @@ export function spawnAgentProcess(
 		sessionKey,
 		afterSeq: 0,
 		lane: agentSessionId ? `web:${agentSessionId}` : "web",
+		attachments,
 	});
 }
 

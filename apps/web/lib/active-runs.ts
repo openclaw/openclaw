@@ -551,8 +551,10 @@ export function startRun(params: {
 	agentSessionId?: string;
 	/** Use a specific agent ID instead of the workspace default. */
 	overrideAgentId?: string;
+	/** Image attachments to forward to the gateway for vision models. */
+	attachments?: Array<{ mediaType: string; data: string }>;
 }): ActiveRun {
-	const { sessionId, message, agentSessionId, overrideAgentId } = params;
+	const { sessionId, message, agentSessionId, overrideAgentId, attachments } = params;
 
 	const existing = activeRuns.get(sessionId);
 	if (existing?.status === "running") {
@@ -566,7 +568,7 @@ export function startRun(params: {
 		? `agent:${agentId}:web:${agentSessionId}`
 		: undefined;
 	const abortController = new AbortController();
-	const child = spawnAgentProcess(message, agentSessionId, overrideAgentId);
+	const child = spawnAgentProcess(message, agentSessionId, overrideAgentId, attachments);
 
 	const run: ActiveRun = {
 		sessionId,

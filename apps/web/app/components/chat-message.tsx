@@ -785,17 +785,46 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onS
 			.join("\n");
 
 		const attachmentInfo = parseAttachments(textContent);
+
+		// Extract inline image parts (FileUIPart with image/* mediaType)
+		const inlineImages = message.parts.filter(
+			(p): p is { type: "file"; mediaType: string; url: string; filename?: string } =>
+				(p as Record<string, unknown>).type === "file" &&
+				typeof (p as Record<string, unknown>).mediaType === "string" &&
+				((p as Record<string, unknown>).mediaType as string).startsWith("image/") &&
+				typeof (p as Record<string, unknown>).url === "string",
+		);
+
+		const hasImages = inlineImages.length > 0;
+		const hasPathAttachments = !!attachmentInfo;
+
 		const richHtml = userHtmlMap?.get(message.id) ?? userHtmlMap?.get(textContent) ?? userHtmlMap?.get(attachmentInfo?.message ?? "");
 
+		const displayText = attachmentInfo?.message ?? textContent;
 		const bubbleContent = richHtml
 			? <div className="chat-user-html-content" dangerouslySetInnerHTML={{ __html: richHtml }} />
-			: <p className="whitespace-pre-wrap break-words">{attachmentInfo?.message ?? textContent}</p>;
+			: displayText ? <p className="whitespace-pre-wrap break-words">{displayText}</p> : null;
 
-		if (attachmentInfo) {
+		if (hasImages || hasPathAttachments) {
 			return (
 				<div className="flex flex-col items-end gap-1.5 py-2">
-					<AttachedFilesCard paths={attachmentInfo.paths} />
-					{(attachmentInfo.message || richHtml) && (
+					{hasPathAttachments && <AttachedFilesCard paths={attachmentInfo.paths} />}
+					{hasImages && (
+						<div className="flex flex-wrap gap-1.5 justify-end">
+							{inlineImages.map((img, i) => (
+								<div key={i} className="relative rounded-xl overflow-hidden shrink-0">
+									<img
+										src={img.url}
+										alt={img.filename ?? "Attached image"}
+										className="block rounded-xl object-cover"
+										style={{ maxHeight: 200, maxWidth: 240, background: "rgba(0,0,0,0.04)" }}
+										loading="lazy"
+									/>
+								</div>
+							))}
+						</div>
+					)}
+					{(displayText || richHtml) && (
 						<div
 							className="max-w-[80%] w-fit rounded-2xl rounded-br-sm px-3 py-2 text-sm leading-6 break-words chat-message-font"
 							style={{

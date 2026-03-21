@@ -9,7 +9,11 @@ import {
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-	const { sessionKey, message }: { sessionKey: string; message: string } = await req.json();
+	const { sessionKey, message, attachments }: {
+		sessionKey: string;
+		message: string;
+		attachments?: Array<{ mediaType: string; data: string }>;
+	} = await req.json();
 
 	if (!sessionKey || !message?.trim()) {
 		return new Response("sessionKey and message are required", { status: 400 });

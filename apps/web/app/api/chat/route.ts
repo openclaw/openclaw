@@ -78,7 +78,19 @@ export async function POST(req: Request) {
 			.map((p) => p.text)
 			.join("\n") ?? "";
 
-	if (!userText.trim()) {
+	// Extract image file parts for vision-capable models
+	type FilePart = { type: "file"; mediaType: string; url: string; filename?: string };
+	const imageAttachments: Array<{ mediaType: string; data: string }> =
+		(lastUserMessage?.parts ?? [])
+			.filter((p): p is FilePart =>
+				(p as FilePart).type === "file" &&
+				typeof (p as FilePart).mediaType === "string" &&
+				(p as FilePart).mediaType.startsWith("image/") &&
+				typeof (p as FilePart).url === "string",
+			)
+			.map((p) => ({ mediaType: p.mediaType, data: p.url }));
+
+	if (!userText.trim() && imageAttachments.length === 0) {
 		return new Response("No message provided", { status: 400 });
 	}
 
@@ -106,9 +118,21 @@ export async function POST(req: Request) {
 	let agentMessage = userText;
 	const wsPrefix = resolveAgentWorkspacePrefix();
 	if (wsPrefix) {
-		agentMessage = userText.replace(
+		agentMessage = agentMessage.replace(
 			/\[Context: workspace file '([^']+)'\]/,
 			`[Context: workspace file '${wsPrefix}/$1']`,
+		);
+		agentMessage = agentMessage.replace(
+			/\[Attached files: (.+?)\]/,
+			(_, paths: string) => {
+				const prefixed = paths
+					.split(", ")
+					.map((p: string) => p.trim())
+					.filter(Boolean)
+					.map((p: string) => p.startsWith("/") ? p : `${wsPrefix}/${p}`)
+					.join(", ");
+				return `[Attached files: ${prefixed}]`;
+			},
 		);
 	}
 
@@ -151,6 +175,7 @@ export async function POST(req: Request) {
 				message: agentMessage,
 				agentSessionId: sessionId,
 				overrideAgentId: effectiveAgentId,
+				attachments: imageAttachments.length > 0 ? imageAttachments : undefined,
 			});
 		} catch (err) {
 			return new Response(
