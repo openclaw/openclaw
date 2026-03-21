@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { withTrustedWebToolsEndpointMock } = vi.hoisted(() => ({
+const { logVerboseMock, withTrustedWebToolsEndpointMock } = vi.hoisted(() => ({
+  logVerboseMock: vi.fn(),
   withTrustedWebToolsEndpointMock: vi.fn(),
 }));
 
@@ -14,10 +15,21 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: logVerboseMock,
+  };
+});
+
 describe("brightdata unlocker zone bootstrap", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.unstubAllEnvs();
+    logVerboseMock.mockReset();
     withTrustedWebToolsEndpointMock.mockReset();
     vi.stubEnv("BRIGHTDATA_API_TOKEN", "test-token");
   });
@@ -99,5 +111,28 @@ describe("brightdata unlocker zone bootstrap", () => {
         String(call[0]?.url).endsWith("/request"),
       ),
     ).toHaveLength(2);
+  });
+
+  it("logs zone bootstrap failures before returning false", async () => {
+    const { __testing, ensureBrightDataUnlockerZoneExists } =
+      await import("./src/brightdata-client.js");
+    __testing.resetEnsuredBrightDataZones();
+
+    withTrustedWebToolsEndpointMock.mockImplementation(
+      async (
+        params: { url: string; init?: RequestInit },
+        _run: (result: { response: Response; finalUrl: string }) => Promise<unknown>,
+      ) => {
+        if (params.url.endsWith("/zone/get_active_zones")) {
+          throw new Error("invalid token");
+        }
+        throw new Error(`Unexpected URL in test mock: ${params.url}`);
+      },
+    );
+
+    await expect(ensureBrightDataUnlockerZoneExists()).resolves.toBe(false);
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      "[brightdata] Zone bootstrap failed (unlocker/mcp_unlocker): invalid token",
+    );
   });
 });

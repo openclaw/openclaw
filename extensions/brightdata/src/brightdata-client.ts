@@ -11,6 +11,7 @@ import {
   withTrustedWebToolsEndpoint,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
 import {
   DEFAULT_BRIGHTDATA_BASE_URL,
@@ -341,6 +342,13 @@ async function ensureConfiguredBrightDataZoneExists(params: {
     zoneName,
     kind: params.kind,
     timeoutSeconds,
+    onError: (error) => {
+      logVerbose(
+        `[brightdata] Zone bootstrap failed (${params.kind}/${zoneName}): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    },
   });
 }
 

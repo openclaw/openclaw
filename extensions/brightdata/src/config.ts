@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 
 export const DEFAULT_BRIGHTDATA_BASE_URL = "https://api.brightdata.com";
 export const DEFAULT_BRIGHTDATA_UNLOCKER_ZONE = "mcp_unlocker";
