@@ -82,6 +82,10 @@ describe("createOpenClawTools plugin context", () => {
   });
 
   it("injects messageThreadId from agentThreadId when tool schema supports messageThreadId", async () => {
+    const executeMock = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "ok" }],
+      details: {},
+    }));
     const threadTool: AnyAgentTool = {
       name: "plugin-message-thread-test",
       label: "plugin-message-thread-test",
@@ -91,10 +95,7 @@ describe("createOpenClawTools plugin context", () => {
         type: "object",
         properties: { messageThreadId: { type: "number" } },
       },
-      execute: vi.fn(async () => ({
-        content: [{ type: "text" as const, text: "ok" }],
-        details: {},
-      })),
+      execute: executeMock,
     };
 
     resolvePluginToolsMock.mockReturnValue([threadTool]);
@@ -109,11 +110,16 @@ describe("createOpenClawTools plugin context", () => {
       return;
     }
 
+    expect(tool).toBe(threadTool);
     await tool.execute("call1", {});
-    expect(threadTool.execute).toHaveBeenCalledWith("call1", { messageThreadId: 77 });
+    expect(executeMock).toHaveBeenCalledWith("call1", { messageThreadId: 77 });
   });
 
   it("does not override explicit params.messageThreadId provided by the caller", async () => {
+    const executeMock = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "ok" }],
+      details: {},
+    }));
     const threadTool: AnyAgentTool = {
       name: "plugin-message-thread-test-override",
       label: "plugin-message-thread-test-override",
@@ -123,10 +129,7 @@ describe("createOpenClawTools plugin context", () => {
         type: "object",
         properties: { messageThreadId: { type: "number" } },
       },
-      execute: vi.fn(async () => ({
-        content: [{ type: "text" as const, text: "ok" }],
-        details: {},
-      })),
+      execute: executeMock,
     };
 
     resolvePluginToolsMock.mockReturnValue([threadTool]);
@@ -141,11 +144,50 @@ describe("createOpenClawTools plugin context", () => {
       return;
     }
 
+    expect(tool).toBe(threadTool);
     await tool.execute("call1", { messageThreadId: 5 });
-    expect(threadTool.execute).toHaveBeenCalledWith("call1", { messageThreadId: 5 });
+    expect(executeMock).toHaveBeenCalledWith("call1", { messageThreadId: 5 });
+  });
+
+  it("does not override explicit params.message_thread_id provided by the caller", async () => {
+    const executeMock = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "ok" }],
+      details: {},
+    }));
+    const threadTool: AnyAgentTool = {
+      name: "plugin-message-thread-test-snake-override",
+      label: "plugin-message-thread-test-snake-override",
+      description: "test",
+      ownerOnly: false,
+      parameters: {
+        type: "object",
+        properties: { messageThreadId: { type: "number" } },
+      },
+      execute: executeMock,
+    };
+
+    resolvePluginToolsMock.mockReturnValue([threadTool]);
+
+    const tools = createOpenClawTools({
+      config: {} as never,
+      agentThreadId: 77,
+    });
+    const tool = tools.find((candidate) => candidate.name === threadTool.name);
+    expect(tool).toBeDefined();
+    if (!tool) {
+      return;
+    }
+
+    expect(tool).toBe(threadTool);
+    await tool.execute("call1", { message_thread_id: 5 });
+    expect(executeMock).toHaveBeenCalledWith("call1", { message_thread_id: 5 });
   });
 
   it("coerces numeric string agentThreadId into a number before injecting messageThreadId", async () => {
+    const executeMock = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "ok" }],
+      details: {},
+    }));
     const threadTool: AnyAgentTool = {
       name: "plugin-message-thread-test-string",
       label: "plugin-message-thread-test-string",
@@ -155,10 +197,7 @@ describe("createOpenClawTools plugin context", () => {
         type: "object",
         properties: { messageThreadId: { type: "number" } },
       },
-      execute: vi.fn(async () => ({
-        content: [{ type: "text" as const, text: "ok" }],
-        details: {},
-      })),
+      execute: executeMock,
     };
 
     resolvePluginToolsMock.mockReturnValue([threadTool]);
@@ -173,7 +212,8 @@ describe("createOpenClawTools plugin context", () => {
       return;
     }
 
+    expect(tool).toBe(threadTool);
     await tool.execute("call1", {});
-    expect(threadTool.execute).toHaveBeenCalledWith("call1", { messageThreadId: 77 });
+    expect(executeMock).toHaveBeenCalledWith("call1", { messageThreadId: 77 });
   });
 });

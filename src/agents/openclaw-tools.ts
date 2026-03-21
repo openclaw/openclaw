@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
+import { readSnakeCaseParamRaw } from "../param-key.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -308,26 +309,24 @@ export function createOpenClawTools(
       return tool;
     }
     const originalExecute = tool.execute.bind(tool);
-    return {
-      ...tool,
-      execute: async (...args: unknown[]) => {
-        const params = args[1];
-        const paramsRecord =
-          params && typeof params === "object" && !Array.isArray(params)
-            ? (params as Record<string, unknown>)
-            : null;
-        if (!paramsRecord) {
-          return await originalExecute(...(args as Parameters<typeof originalExecute>));
-        }
-        if (paramsRecord.messageThreadId !== undefined) {
-          return await originalExecute(...(args as Parameters<typeof originalExecute>));
-        }
-        const nextParams = { ...paramsRecord, messageThreadId: normalizedMessageThreadId };
-        const nextArgs = [...args];
-        nextArgs[1] = nextParams;
-        return await originalExecute(...(nextArgs as Parameters<typeof originalExecute>));
-      },
+    tool.execute = async (...args: unknown[]) => {
+      const params = args[1];
+      const paramsRecord =
+        params && typeof params === "object" && !Array.isArray(params)
+          ? (params as Record<string, unknown>)
+          : null;
+      if (!paramsRecord) {
+        return await originalExecute(...(args as Parameters<typeof originalExecute>));
+      }
+      if (readSnakeCaseParamRaw(paramsRecord, "messageThreadId") !== undefined) {
+        return await originalExecute(...(args as Parameters<typeof originalExecute>));
+      }
+      const nextParams = { ...paramsRecord, messageThreadId: normalizedMessageThreadId };
+      const nextArgs = [...args];
+      nextArgs[1] = nextParams;
+      return await originalExecute(...(nextArgs as Parameters<typeof originalExecute>));
     };
+    return tool;
   });
 
   return [...tools, ...wrappedPluginTools];
