@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../../config/config.js";
+import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "../shared/object.js";
 import type { DoctorAccountRecord } from "../types.js";
 
@@ -112,6 +113,21 @@ export function scanDiscordNumericIdEntries(cfg: OpenClawConfig): DiscordNumeric
   }
 
   return hits;
+}
+
+export function collectDiscordNumericIdWarnings(params: {
+  hits: DiscordNumericIdHit[];
+  doctorFixCommand: string;
+}): string[] {
+  if (params.hits.length === 0) {
+    return [];
+  }
+  const samplePath = sanitizeForLog(params.hits[0]?.path ?? "channels.discord.allowFrom");
+  const sampleEntry = sanitizeForLog(String(params.hits[0]?.entry ?? ""));
+  return [
+    `- Discord allowlists contain ${params.hits.length} numeric entries (e.g. ${samplePath}=${sampleEntry}).`,
+    `- Discord IDs must be strings; run "${params.doctorFixCommand}" to convert numeric IDs to quoted strings.`,
+  ];
 }
 
 export function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
