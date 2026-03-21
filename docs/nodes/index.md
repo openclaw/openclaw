@@ -68,7 +68,7 @@ Approval note:
 On the node machine:
 
 ```bash
-openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
+openclaw node run --host <gateway-host> --port 3000 --display-name "Build Node"
 ```
 
 ### Remote gateway via SSH tunnel (loopback bind)
@@ -80,12 +80,12 @@ node host at the local end of the tunnel.
 Example (node host -> gateway host):
 
 ```bash
-# Terminal A (keep running): forward local 18790 -> gateway 127.0.0.1:18789
-ssh -N -L 18790:127.0.0.1:18789 user@gateway-host
+# Terminal A (keep running): forward local 3000 -> gateway 127.0.0.1:3000
+ssh -N -L 3000:127.0.0.1:3000 user@gateway-host
 
 # Terminal B: export the gateway token and connect through the tunnel
 export OPENCLAW_GATEWAY_TOKEN="<gateway-token>"
-openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node"
+openclaw node run --host 127.0.0.1 --port 3000 --display-name "Build Node"
 ```
 
 Notes:
@@ -101,7 +101,7 @@ Notes:
 ### Start a node host (service)
 
 ```bash
-openclaw node install --host <gateway-host> --port 18789 --display-name "Build Node"
+openclaw node install --host <gateway-host> --port 3000 --display-name "Build Node"
 openclaw node restart
 ```
 
@@ -364,7 +364,7 @@ or for running a minimal node alongside a server.
 Start it:
 
 ```bash
-openclaw node run --host <gateway-host> --port 18789
+openclaw node run --host <gateway-host> --port 3000
 ```
 
 Notes:

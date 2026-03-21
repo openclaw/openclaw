@@ -78,7 +78,7 @@ Optional env vars:
 
 After it finishes:
 
-- Open `http://127.0.0.1:18789/` in your browser.
+- Open `http://127.0.0.1:3000/` in your browser.
 - Paste the token into the Control UI (Settings → token).
 - Need the URL again? Run `docker compose run --rm openclaw-cli dashboard --no-open`.
 
@@ -471,8 +471,8 @@ URL you land on and paste it back into the wizard to finish auth.
 Container probe endpoints (no auth required):
 
 ```bash
-curl -fsS http://127.0.0.1:18789/healthz
-curl -fsS http://127.0.0.1:18789/readyz
+curl -fsS http://127.0.0.1:3000/healthz
+curl -fsS http://127.0.0.1:3000/readyz
 ```
 
 Aliases: `/health` and `/ready`.
@@ -508,7 +508,7 @@ pnpm test:docker:qr
 ### LAN vs loopback (Docker Compose)
 
 `docker-setup.sh` defaults `OPENCLAW_GATEWAY_BIND=lan` so host access to
-`http://127.0.0.1:18789` works with Docker port publishing.
+`http://127.0.0.1:3000` works with Docker port publishing.
 
 - `lan` (default): host browser + host CLI can reach the published gateway port.
 - `loopback`: only processes inside the container network namespace can reach
@@ -521,13 +521,13 @@ Legacy config note: use bind mode values in `gateway.bind` (`lan` / `loopback` /
 `custom` / `tailnet` / `auto`), not host aliases (`0.0.0.0`, `127.0.0.1`,
 `localhost`, `::`, `::1`).
 
-If you see `Gateway target: ws://172.x.x.x:18789` or repeated `pairing required`
+If you see `Gateway target: ws://172.x.x.x:3000` or repeated `pairing required`
 errors from Docker CLI commands, run:
 
 ```bash
 docker compose run --rm openclaw-cli config set gateway.mode local
 docker compose run --rm openclaw-cli config set gateway.bind lan
-docker compose run --rm openclaw-cli devices list --url ws://127.0.0.1:18789
+docker compose run --rm openclaw-cli devices list --url ws://127.0.0.1:3000
 ```
 
 ### Notes

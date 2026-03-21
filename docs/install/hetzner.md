@@ -137,7 +137,7 @@ Create `.env` in the repository root.
 OPENCLAW_IMAGE=openclaw:latest
 OPENCLAW_GATEWAY_TOKEN=change-me-now
 OPENCLAW_GATEWAY_BIND=lan
-OPENCLAW_GATEWAY_PORT=18789
+OPENCLAW_GATEWAY_PORT=3000
 
 OPENCLAW_CONFIG_DIR=/root/.openclaw
 OPENCLAW_WORKSPACE_DIR=/root/.openclaw/workspace
@@ -184,7 +184,7 @@ services:
     ports:
       # Recommended: keep the Gateway loopback-only on the VPS; access via SSH tunnel.
       # To expose it publicly, remove the `127.0.0.1:` prefix and firewall accordingly.
-      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:3000"
     command:
       [
         "node",
@@ -218,12 +218,12 @@ Use the shared runtime guide for the common Docker host flow:
 After the shared build and launch steps, tunnel from your laptop:
 
 ```bash
-ssh -N -L 18789:127.0.0.1:18789 root@YOUR_VPS_IP
+ssh -N -L 3000:127.0.0.1:3000 root@YOUR_VPS_IP
 ```
 
 Open:
 
-`http://127.0.0.1:18789/`
+`http://127.0.0.1:3000/`
 
 Paste your gateway token.
 

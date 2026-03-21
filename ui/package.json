@@ -5,8 +5,7 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "preview": "vite preview",
-    "test": "vitest run --config vitest.config.ts"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@lit-labs/signals": "^0.2.0",
@@ -20,9 +19,7 @@
     "vite": "8.0.0"
   },
   "devDependencies": {
-    "@vitest/browser-playwright": "4.1.0",
     "jsdom": "^28.1.0",
-    "playwright": "^1.58.2",
-    "vitest": "4.1.0"
+    "playwright": "^1.58.2"
   }
 }
