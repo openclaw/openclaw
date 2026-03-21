@@ -83,6 +83,7 @@ export class TeamsHttpStream {
   private sequenceNumber = 0;
   private stopped = false;
   private finalized = false;
+  private streamFailed = false;
   private loop: DraftStreamLoop;
 
   constructor(options: TeamsStreamOptions) {
@@ -112,8 +113,10 @@ export class TeamsHttpStream {
       return;
     }
 
-    // Don't stream if text is too long (Teams limit)
+    // Don't stream if text is too long (Teams limit).
+    // Mark as failed so deliver callback falls through to chunked delivery.
     if (this.accumulatedText.length > TEAMS_MAX_CHARS) {
+      this.streamFailed = true;
       return;
     }
 
@@ -161,9 +164,9 @@ export class TeamsHttpStream {
     }
   }
 
-  /** Whether any streaming content has been sent. */
+  /** Whether streaming successfully delivered content (at least one chunk sent, not failed). */
   get hasContent(): boolean {
-    return this.accumulatedText.length > 0;
+    return this.accumulatedText.length > 0 && !this.streamFailed;
   }
 
   /** Whether the stream has been finalized. */
@@ -211,6 +214,7 @@ export class TeamsHttpStream {
           `stream POST failed (HTTP ${statusCode ?? "?"}): ${msg}${responseBody ? ` body=${responseBody}` : ""}`,
         ),
       );
+      this.streamFailed = true;
       return false;
     }
   }

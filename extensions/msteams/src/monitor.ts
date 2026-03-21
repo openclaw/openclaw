@@ -18,7 +18,12 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { createMSTeamsAdapter, createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
+import {
+  createBotFrameworkJwtValidator,
+  createMSTeamsAdapter,
+  createMSTeamsTokenProvider,
+  loadMSTeamsSdkWithAuth,
+} from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 import {
   applyMSTeamsWebhookTimeouts,
@@ -256,6 +261,32 @@ export async function monitorMSTeamsProvider(
       return;
     }
     next(err);
+  });
+
+  // JWT validation — verify Bot Framework tokens using the Teams SDK's
+  // JwtValidator (validates signature via JWKS, audience, issuer, expiration).
+  const jwtValidator = await createBotFrameworkJwtValidator(creds);
+  expressApp.use((req: Request, res: Response, next: (err?: unknown) => void) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const serviceUrl = (req.body as Record<string, unknown>)?.serviceUrl as string | undefined;
+    jwtValidator
+      .validate(authHeader, serviceUrl)
+      .then((valid) => {
+        if (!valid) {
+          log.debug?.("JWT validation failed");
+          res.status(401).json({ error: "Unauthorized" });
+          return;
+        }
+        next();
+      })
+      .catch((err) => {
+        log.debug?.(`JWT validation error: ${String(err)}`);
+        res.status(401).json({ error: "Unauthorized" });
+      });
   });
 
   // Set up the messages endpoint - use configured path and /api/messages as fallback

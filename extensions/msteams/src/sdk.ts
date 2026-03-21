@@ -215,6 +215,12 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
                 ? ({ type: "message", text: textOrActivity } as Record<string, unknown>)
                 : (textOrActivity as Record<string, unknown>);
 
+            // invokeResponse is handled by the HTTP response from process(),
+            // not by posting a new activity to Bot Framework.
+            if (msg.type === "invokeResponse") {
+              return { id: "invokeResponse" };
+            }
+
             if (!serviceUrl) {
               return { id: "unknown" };
             }
@@ -298,4 +304,37 @@ export async function loadMSTeamsSdkWithAuth(creds: MSTeamsCredentials) {
   const sdk = await loadMSTeamsSdk();
   const app = createMSTeamsApp(creds, sdk);
   return { sdk, app };
+}
+
+/**
+ * Create a Bot Framework JWT validator using the Teams SDK's built-in
+ * JwtValidator pre-configured for Bot Framework signing keys.
+ *
+ * Validates: signature (JWKS), audience (appId), issuer (api.botframework.com),
+ * and expiration (5-minute clock tolerance).
+ */
+export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials): Promise<{
+  validate: (authHeader: string, serviceUrl?: string) => Promise<boolean>;
+}> {
+  const { createServiceTokenValidator } =
+    await import("@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js");
+  const validator = createServiceTokenValidator(creds.appId, creds.tenantId);
+
+  return {
+    async validate(authHeader: string, serviceUrl?: string): Promise<boolean> {
+      const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
+      if (!token) {
+        return false;
+      }
+      try {
+        const result = await validator.validateAccessToken(
+          token,
+          serviceUrl ? { validateServiceUrl: { expectedServiceUrl: serviceUrl } } : undefined,
+        );
+        return result != null;
+      } catch {
+        return false;
+      }
+    },
+  };
 }
