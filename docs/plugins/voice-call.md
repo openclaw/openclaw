@@ -204,7 +204,7 @@ Example with a stable public host:
 
 ## TTS for calls
 
-Voice Call uses the core `messages.tts` configuration (OpenAI or ElevenLabs) for
+Voice Call uses the core `messages.tts` configuration for
 streaming speech on calls. You can override it under the plugin config with the
 **same shape** — it deep‑merges with `messages.tts`.
 
@@ -222,7 +222,7 @@ streaming speech on calls. You can override it under the plugin config with the
 
 Notes:
 
-- **Edge TTS is ignored for voice calls** (telephony audio needs PCM; Edge output is unreliable).
+- **Microsoft speech is ignored for voice calls** (telephony audio needs PCM; the current Microsoft transport does not expose telephony PCM output).
 - Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
 
 ### More examples
@@ -296,6 +296,12 @@ Inbound policy defaults to `disabled`. To enable inbound calls, set:
 }
 ```
 
+`inboundPolicy: "allowlist"` is a low-assurance caller-ID screen. The plugin
+normalizes the provider-supplied `From` value and compares it to `allowFrom`.
+Webhook verification authenticates provider delivery and payload integrity, but
+it does not prove PSTN/VoIP caller-number ownership. Treat `allowFrom` as
+caller-ID filtering, not strong caller identity.
+
 Auto-responses use the agent system. Tune with:
 
 - `responseModel`
@@ -306,13 +312,20 @@ Auto-responses use the agent system. Tune with:
 
 ```bash
 openclaw voicecall call --to "+15555550123" --message "Hello from OpenClaw"
+openclaw voicecall start --to "+15555550123"   # alias for call
 openclaw voicecall continue --call-id <id> --message "Any questions?"
 openclaw voicecall speak --call-id <id> --message "One moment"
 openclaw voicecall end --call-id <id>
 openclaw voicecall status --call-id <id>
 openclaw voicecall tail
+openclaw voicecall latency                     # summarize turn latency from logs
 openclaw voicecall expose --mode funnel
 ```
+
+`latency` reads `calls.jsonl` from the default voice-call storage path. Use
+`--file <path>` to point at a different log and `--last <n>` to limit analysis
+to the last N records (default 200). Output includes p50/p90/p99 for turn
+latency and listen-wait times.
 
 ## Agent tool
 

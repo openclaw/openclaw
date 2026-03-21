@@ -66,12 +66,18 @@ function createGatewayTokenRefFixture() {
   };
 }
 
-function decodeSetupCode(setupCode: string): { url?: string; token?: string; password?: string } {
+function decodeSetupCode(setupCode: string): {
+  url?: string;
+  bootstrapToken?: string;
+} {
   const padded = setupCode.replace(/-/g, "+").replace(/_/g, "/");
   const padLength = (4 - (padded.length % 4)) % 4;
   const normalized = padded + "=".repeat(padLength);
   const json = Buffer.from(normalized, "base64").toString("utf8");
-  return JSON.parse(json) as { url?: string; token?: string; password?: string };
+  return JSON.parse(json) as {
+    url?: string;
+    bootstrapToken?: string;
+  };
 }
 
 async function runCli(args: string[]): Promise<void> {
@@ -109,7 +115,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     delete process.env.SHARED_GATEWAY_TOKEN;
   });
 
-  it("uses the same resolved token SecretRef for both qr and dashboard commands", async () => {
+  it("uses the same resolved token SecretRef for qr auth validation and dashboard commands", async () => {
     const fixture = createGatewayTokenRefFixture();
     process.env.SHARED_GATEWAY_TOKEN = "shared-token-123";
     loadConfigMock.mockReturnValue(fixture);
@@ -126,7 +132,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     expect(setupCode).toBeTruthy();
     const payload = decodeSetupCode(setupCode ?? "");
     expect(payload.url).toBe("ws://gateway.local:18789");
-    expect(payload.token).toBe("shared-token-123");
+    expect(payload.bootstrapToken).toBeTruthy();
     expect(runtimeErrors).toEqual([]);
 
     runtimeLogs.length = 0;

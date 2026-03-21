@@ -61,10 +61,10 @@ function listExtensionFiles(): {
 
 function listHighRiskRuntimeCfgFiles(): string[] {
   return [
-    "src/agents/tools/telegram-actions.ts",
-    "src/discord/monitor/reply-delivery.ts",
-    "src/discord/monitor/thread-bindings.discord-api.ts",
-    "src/discord/monitor/thread-bindings.manager.ts",
+    "extensions/telegram/src/action-runtime.ts",
+    "extensions/discord/src/monitor/reply-delivery.ts",
+    "extensions/discord/src/monitor/thread-bindings.discord-api.ts",
+    "extensions/discord/src/monitor/thread-bindings.manager.ts",
   ];
 }
 
