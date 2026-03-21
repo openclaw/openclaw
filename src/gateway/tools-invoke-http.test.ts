@@ -8,6 +8,7 @@ type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
 type RunBeforeToolCallHookResult = Awaited<ReturnType<RunBeforeToolCallHook>>;
 
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
+
 const hookMocks = vi.hoisted(() => ({
   resolveToolLoopDetectionConfig: vi.fn(() => ({ warnAt: 3 })),
   runBeforeToolCallHook: vi.fn(
@@ -377,6 +378,14 @@ describe("POST /tools/invoke", () => {
         }),
       }),
     );
+  });
+
+  it("opts direct gateway tool invocation into gateway subagent binding", async () => {
+    allowAgentsListForMain();
+    const res = await invokeAgentsListAuthed({ sessionKey: "main" });
+
+    expect(res.status).toBe(200);
+    expect(lastCreateOpenClawToolsContext?.allowGatewaySubagentBinding).toBe(true);
   });
 
   it("blocks tool execution when before_tool_call rejects the invoke", async () => {

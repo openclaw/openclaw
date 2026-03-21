@@ -30,9 +30,9 @@ openclaw plugins install @openclaw/feishu
 
 There are two ways to add the Feishu channel:
 
-### Method 1: onboarding wizard (recommended)
+### Method 1: onboarding (recommended)
 
-If you just installed OpenClaw, run the wizard:
+If you just installed OpenClaw, run onboarding:
 
 ```bash
 openclaw onboard
@@ -193,16 +193,18 @@ Edit `~/.openclaw/openclaw.json`:
 }
 ```
 
-If you use `connectionMode: "webhook"`, set `verificationToken`. The Feishu webhook server binds to `127.0.0.1` by default; set `webhookHost` only if you intentionally need a different bind address.
+If you use `connectionMode: "webhook"`, set both `verificationToken` and `encryptKey`. The Feishu webhook server binds to `127.0.0.1` by default; set `webhookHost` only if you intentionally need a different bind address.
 
-#### Verification Token (webhook mode)
+#### Verification Token and Encrypt Key (webhook mode)
 
-When using webhook mode, set `channels.feishu.verificationToken` in your config. To get the value:
+When using webhook mode, set both `channels.feishu.verificationToken` and `channels.feishu.encryptKey` in your config. To get the values:
 
 1. In Feishu Open Platform, open your app
 2. Go to **Development** → **Events & Callbacks** (开发配置 → 事件与回调)
 3. Open the **Encryption** tab (加密策略)
-4. Copy **Verification Token**
+4. Copy **Verification Token** and **Encrypt Key**
+
+The screenshot below shows where to find the **Verification Token**. The **Encrypt Key** is listed in the same **Encryption** section.
 
 ![Verification Token location](../images/feishu-verification-token.png)
 
@@ -530,6 +532,75 @@ Feishu supports streaming replies via interactive cards. When enabled, the bot u
 
 Set `streaming: false` to wait for the full reply before sending.
 
+### ACP sessions
+
+Feishu supports ACP for:
+
+- DMs
+- group topic conversations
+
+Feishu ACP is text-command driven. There are no native slash-command menus, so use `/acp ...` messages directly in the conversation.
+
+#### Persistent ACP bindings
+
+Use top-level typed ACP bindings to pin a Feishu DM or topic conversation to a persistent ACP session.
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "codex",
+        runtime: {
+          type: "acp",
+          acp: {
+            agent: "codex",
+            backend: "acpx",
+            mode: "persistent",
+            cwd: "/workspace/openclaw",
+          },
+        },
+      },
+    ],
+  },
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "feishu",
+        accountId: "default",
+        peer: { kind: "direct", id: "ou_1234567890" },
+      },
+    },
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "feishu",
+        accountId: "default",
+        peer: { kind: "group", id: "oc_group_chat:topic:om_topic_root" },
+      },
+      acp: { label: "codex-feishu-topic" },
+    },
+  ],
+}
+```
+
+#### Thread-bound ACP spawn from chat
+
+In a Feishu DM or topic conversation, you can spawn and bind an ACP session in place:
+
+```text
+/acp spawn codex --thread here
+```
+
+Notes:
+
+- `--thread here` works for DMs and Feishu topics.
+- Follow-up messages in the bound DM/topic route directly to that ACP session.
+- v1 does not target generic non-topic group chats.
+
 ### Multi-agent routing
 
 Use `bindings` to route Feishu DMs or groups to different agents.
@@ -600,6 +671,7 @@ Key options:
 | `channels.feishu.connectionMode`                  | Event transport mode                    | `websocket`      |
 | `channels.feishu.defaultAccount`                  | Default account ID for outbound routing | `default`        |
 | `channels.feishu.verificationToken`               | Required for webhook mode               | -                |
+| `channels.feishu.encryptKey`                      | Required for webhook mode               | -                |
 | `channels.feishu.webhookPath`                     | Webhook route path                      | `/feishu/events` |
 | `channels.feishu.webhookHost`                     | Webhook bind host                       | `127.0.0.1`      |
 | `channels.feishu.webhookPort`                     | Webhook bind port                       | `3000`           |
@@ -639,7 +711,7 @@ Key options:
 - ✅ Images
 - ✅ Files
 - ✅ Audio
-- ✅ Video
+- ✅ Video/media
 - ✅ Stickers
 
 ### Send
@@ -648,4 +720,28 @@ Key options:
 - ✅ Images
 - ✅ Files
 - ✅ Audio
-- ⚠️ Rich text (partial support)
+- ✅ Video/media
+- ✅ Interactive cards
+- ⚠️ Rich text (post-style formatting and cards, not arbitrary Feishu authoring features)
+
+### Threads and replies
+
+- ✅ Inline replies
+- ✅ Topic-thread replies where Feishu exposes `reply_in_thread`
+- ✅ Media replies stay thread-aware when replying to a thread/topic message
+
+## Runtime action surface
+
+Feishu currently exposes these runtime actions:
+
+- `send`
+- `read`
+- `edit`
+- `thread-reply`
+- `pin`
+- `list-pins`
+- `unpin`
+- `member-info`
+- `channel-info`
+- `channel-list`
+- `react` and `reactions` when reactions are enabled in config

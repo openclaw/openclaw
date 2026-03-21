@@ -55,7 +55,7 @@ describe("ensureMatrixCryptoRuntime", () => {
   it("rethrows non-crypto module errors without bootstrapping", async () => {
     const runCommand = vi.fn();
     const requireFn = vi.fn(() => {
-      throw new Error("Cannot find module '@vector-im/matrix-bot-sdk'");
+      throw new Error("Cannot find module 'not-the-matrix-crypto-runtime'");
     });
 
     await expect(
@@ -66,7 +66,7 @@ describe("ensureMatrixCryptoRuntime", () => {
         resolveFn: () => "/tmp/download-lib.js",
         nodeExecutable: "/usr/bin/node",
       }),
-    ).rejects.toThrow("Cannot find module '@vector-im/matrix-bot-sdk'");
+    ).rejects.toThrow("Cannot find module 'not-the-matrix-crypto-runtime'");
 
     expect(runCommand).not.toHaveBeenCalled();
     expect(requireFn).toHaveBeenCalledTimes(1);

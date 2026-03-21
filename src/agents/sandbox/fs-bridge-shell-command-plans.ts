@@ -1,4 +1,4 @@
-import type { PathSafetyCheck } from "./fs-bridge-path-safety.js";
+import type { AnchoredSandboxEntry, PathSafetyCheck } from "./fs-bridge-path-safety.js";
 import type { SandboxResolvedFsPath } from "./fs-paths.js";
 
 export type SandboxFsCommandPlan = {
@@ -10,11 +10,14 @@ export type SandboxFsCommandPlan = {
   allowFailure?: boolean;
 };
 
-export function buildStatPlan(target: SandboxResolvedFsPath): SandboxFsCommandPlan {
+export function buildStatPlan(
+  target: SandboxResolvedFsPath,
+  anchoredTarget: AnchoredSandboxEntry,
+): SandboxFsCommandPlan {
   return {
     checks: [{ target, options: { action: "stat files" } }],
-    script: 'set -eu; stat -c "%F|%s|%Y" -- "$1"',
-    args: [target.containerPath],
+    script: 'set -eu\ncd -- "$1"\nstat -c "%F|%s|%Y" -- "$2"',
+    args: [anchoredTarget.canonicalParentPath, anchoredTarget.basename],
     allowFailure: true,
   };
 }

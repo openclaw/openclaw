@@ -698,4 +698,74 @@ export const usageStylesPart1 = `
   .usage-list-item.button:hover {
     color: var(--text-strong);
   }
+
+  /* ===== RESPONSIVE ===== */
+  @media (max-width: 768px) {
+    .usage-page-title {
+      font-size: 22px;
+    }
+    .usage-query-bar {
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+    .usage-query-input {
+      min-width: 0;
+    }
+    .usage-query-actions {
+      justify-self: stretch;
+    }
+    .usage-filters-inline input[type="text"] {
+      min-width: 140px;
+    }
+    .usage-filter-popover {
+      min-width: 180px;
+    }
+    .usage-mosaic-grid {
+      grid-template-columns: 1fr;
+    }
+    .usage-hour-grid {
+      grid-template-columns: repeat(12, minmax(8px, 1fr));
+    }
+    .usage-summary-grid {
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    }
+    .usage-daypart-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+  @media (max-width: 480px) {
+    .usage-page-title {
+      font-size: 20px;
+    }
+    .usage-filters-inline input[type="text"] {
+      min-width: 0;
+      width: 100%;
+    }
+    details.usage-filter-select {
+      min-width: 0;
+      flex: 1;
+    }
+    .usage-filter-row {
+      gap: 6px;
+    }
+    .usage-hour-grid {
+      grid-template-columns: repeat(8, minmax(6px, 1fr));
+    }
+    .usage-hour-cell {
+      height: 22px;
+    }
+    .usage-daypart-grid {
+      grid-template-columns: 1fr;
+    }
+    .usage-summary-grid {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+    .usage-summary-card {
+      padding: 10px;
+    }
+    .usage-summary-value {
+      font-size: 14px;
+    }
+  }
 `;

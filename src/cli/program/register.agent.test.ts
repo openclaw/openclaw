@@ -174,7 +174,7 @@ describe("registerAgentCommands", () => {
       "--agent",
       "ops",
       "--bind",
-      "matrix-js:ops",
+      "matrix:ops",
       "--bind",
       "telegram",
       "--json",
@@ -182,7 +182,7 @@ describe("registerAgentCommands", () => {
     expect(agentsBindCommandMock).toHaveBeenCalledWith(
       {
         agent: "ops",
-        bind: ["matrix-js:ops", "telegram"],
+        bind: ["matrix:ops", "telegram"],
         json: true,
       },
       runtime,

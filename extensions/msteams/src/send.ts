@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/msteams";
-import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/msteams";
+import type { OpenClawConfig } from "../runtime-api.js";
+import { loadOutboundMediaFromUrl } from "../runtime-api.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
   classifyMSTeamsSendError,
@@ -206,7 +206,9 @@ export async function sendMessageMSTeams(
           contentType: media.contentType,
           tokenProvider,
           siteId: sharePointSiteId,
-          chatId: conversationId,
+          // Use the Graph-native chat ID (19:xxx format) — the Bot Framework conversationId
+          // for personal DMs uses a different format that Graph API rejects.
+          chatId: ctx.graphChatId ?? conversationId,
           usePerUserSharing: conversationType === "groupChat",
         });
 

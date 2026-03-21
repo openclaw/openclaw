@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/zalouser";
+import { resolvePreferredOpenClawTmpDir } from "../runtime-api.js";
 
 export async function writeQrDataUrlToTempFile(
   qrDataUrl: string,

@@ -9,16 +9,18 @@ export function makeOverflowError(message: string = DEFAULT_OVERFLOW_ERROR_MESSA
 
 export function makeCompactionSuccess(params: {
   summary: string;
-  firstKeptEntryId: string;
-  tokensBefore: number;
+  firstKeptEntryId?: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
 }) {
   return {
     ok: true as const,
     compacted: true as const,
     result: {
       summary: params.summary,
-      firstKeptEntryId: params.firstKeptEntryId,
-      tokensBefore: params.tokensBefore,
+      ...(params.firstKeptEntryId ? { firstKeptEntryId: params.firstKeptEntryId } : {}),
+      ...(params.tokensBefore !== undefined ? { tokensBefore: params.tokensBefore } : {}),
+      ...(params.tokensAfter !== undefined ? { tokensAfter: params.tokensAfter } : {}),
     },
   };
 }
@@ -55,8 +57,9 @@ type MockCompactDirect = {
     compacted: true;
     result: {
       summary: string;
-      firstKeptEntryId: string;
-      tokensBefore: number;
+      firstKeptEntryId?: string;
+      tokensBefore?: number;
+      tokensAfter?: number;
     };
   }) => unknown;
 };

@@ -11,6 +11,7 @@ import {
 } from "./live-auth-keys.js";
 import { isModernModelRef } from "./live-model-filter.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
+import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { isRateLimitErrorMessage } from "./pi-embedded-helpers/errors.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
@@ -116,6 +117,10 @@ function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
 }
 
+function isRefreshTokenReused(raw: string): boolean {
+  return /refresh_token_reused/i.test(raw);
+}
+
 function isInstructionsRequiredError(raw: string): boolean {
   return /instructions are required/i.test(raw);
 }
@@ -202,6 +207,31 @@ function resolveTestReasoning(
   return "low";
 }
 
+function resolveLiveSystemPrompt(model: Model<Api>): string | undefined {
+  if (model.provider === "openai-codex") {
+    return "You are a concise assistant. Follow the user's instruction exactly.";
+  }
+  return undefined;
+}
+
+describe("resolveLiveSystemPrompt", () => {
+  it("adds instructions for openai-codex probes", () => {
+    expect(
+      resolveLiveSystemPrompt({
+        provider: "openai-codex",
+      } as Model<Api>),
+    ).toContain("Follow the user's instruction exactly.");
+  });
+
+  it("keeps other providers unchanged", () => {
+    expect(
+      resolveLiveSystemPrompt({
+        provider: "openai",
+      } as Model<Api>),
+    ).toBeUndefined();
+  });
+});
+
 async function completeSimpleWithTimeout<TApi extends Api>(
   model: Model<TApi>,
   context: Parameters<typeof completeSimple<TApi>>[1],
@@ -246,6 +276,7 @@ async function completeOkWithRetry(params: {
     const res = await completeSimpleWithTimeout(
       params.model,
       {
+        systemPrompt: resolveLiveSystemPrompt(params.model),
         messages: [
           {
             role: "user",
@@ -317,6 +348,9 @@ describeLive("live models (profile keys)", () => {
       }> = [];
 
       for (const model of models) {
+        if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
+          continue;
+        }
         if (providers && !providers.has(model.provider)) {
           continue;
         }
@@ -611,6 +645,15 @@ describeLive("live models (profile keys)", () => {
             ) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (rate limit)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "openai-codex" &&
+              isRefreshTokenReused(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (codex refresh token reused)`);
               break;
             }
             if (
