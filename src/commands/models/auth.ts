@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
   cancel,
   confirm as clackConfirm,
@@ -23,6 +25,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { resolvePluginProviders } from "../../plugins/providers.js";
 import type {
@@ -79,6 +82,83 @@ const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
 
 function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
+}
+
+/** Resolve real path, returning null if the target doesn't exist. */
+function safeRealpathSync(dir: string): string | null {
+  try {
+    return fs.realpathSync(path.resolve(dir));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Discover all sibling agent directories under the standard agents root.
+ * Returns the primary dir plus any discovered siblings (deduplicated by realpath).
+ */
+function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
+  const normalized = path.resolve(primaryAgentDir);
+  const parentOfAgent = path.dirname(normalized);
+  const candidateAgentsRoot = path.dirname(parentOfAgent);
+  const looksLikeStandardLayout =
+    path.basename(normalized) === "agent" && path.basename(candidateAgentsRoot) === "agents";
+
+  const agentsRoot = looksLikeStandardLayout
+    ? candidateAgentsRoot
+    : path.join(resolveStateDir(), "agents");
+
+  const entries = (() => {
+    try {
+      return fs.readdirSync(agentsRoot, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+  })();
+  const discovered = entries
+    .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+    .map((entry) => path.join(agentsRoot, entry.name, "agent"));
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const dir of [normalized, ...discovered]) {
+    const real = safeRealpathSync(dir);
+    if (real && !seen.has(real)) {
+      seen.add(real);
+      result.push(real);
+    }
+  }
+  return result;
+}
+
+/**
+ * Sync an auth profile credential to all sibling agent directories.
+ * Best-effort: individual sibling failures are silently ignored.
+ */
+function syncAuthProfileToSiblings(params: {
+  profileId: string;
+  credential: AuthProfileCredential;
+  primaryAgentDir: string;
+}): void {
+  const resolvedPrimary = path.resolve(params.primaryAgentDir);
+  const siblingDirs = resolveSiblingAgentDirs(resolvedPrimary);
+  const primaryReal = safeRealpathSync(resolvedPrimary);
+
+  for (const siblingDir of siblingDirs) {
+    const siblingReal = safeRealpathSync(siblingDir);
+    if (siblingReal && primaryReal && siblingReal === primaryReal) {
+      continue;
+    }
+    try {
+      upsertAuthProfile({
+        profileId: params.profileId,
+        credential: params.credential,
+        agentDir: siblingDir,
+      });
+    } catch {
+      // Best-effort: sibling sync failure must not block primary onboarding.
+    }
+  }
 }
 
 type ResolvedModelsAuthContext = {
@@ -223,6 +303,13 @@ async function persistProviderAuthResult(params: {
       profileId: profile.profileId,
       credential: profile.credential,
       agentDir: params.agentDir,
+    });
+
+    // Sync to sibling agent directories (best-effort, mirrors OAuth path).
+    syncAuthProfileToSiblings({
+      profileId: profile.profileId,
+      credential: profile.credential,
+      primaryAgentDir: params.agentDir,
     });
   }
 
@@ -377,14 +464,26 @@ export async function modelsAuthPasteTokenCommand(
       ? Date.now() + parseDurationMs(String(opts.expiresIn ?? "").trim(), { defaultUnit: "d" })
       : undefined;
 
+  const credential: AuthProfileCredential = {
+    type: "token",
+    provider,
+    token,
+    ...(expires ? { expires } : {}),
+  };
+
+  const { agentDir } = await resolveModelsAuthContext();
+
   upsertAuthProfile({
     profileId,
-    credential: {
-      type: "token",
-      provider,
-      token,
-      ...(expires ? { expires } : {}),
-    },
+    credential,
+    agentDir,
+  });
+
+  // Sync to sibling agent directories (best-effort, mirrors OAuth path).
+  syncAuthProfileToSiblings({
+    profileId,
+    credential,
+    primaryAgentDir: agentDir,
   });
 
   await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));

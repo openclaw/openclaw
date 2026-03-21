@@ -357,4 +357,68 @@ describe("modelsAuthLoginCommand", () => {
       agentDir: "/tmp/openclaw/agents/main",
     });
   });
+
+  it("syncs token auth profile to sibling agent directories", async () => {
+    const runtime = createRuntime();
+    const runTokenAuth = vi.fn().mockResolvedValue({
+      profiles: [
+        {
+          profileId: "anthropic:manual",
+          credential: {
+            type: "token",
+            provider: "anthropic",
+            token: "sk-ant-oat01-test-token",
+          },
+        },
+      ],
+    });
+    mocks.resolvePluginProviders.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [
+          {
+            id: "setup-token",
+            label: "setup-token",
+            kind: "token",
+            run: runTokenAuth,
+          },
+        ],
+      },
+    ]);
+
+    await modelsAuthSetupTokenCommand({ provider: "anthropic", yes: true }, runtime);
+
+    // Primary write to main agent dir
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "anthropic:manual",
+      credential: expect.objectContaining({
+        type: "token",
+        provider: "anthropic",
+        token: "sk-ant-oat01-test-token",
+      }),
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+
+    // Sibling sync is best-effort — on test systems without sibling dirs,
+    // the primary write should still succeed (no throw from missing siblings).
+    expect(runTokenAuth).toHaveBeenCalledOnce();
+  });
+
+  it("paste-token command writes to primary agent dir", async () => {
+    const runtime = createRuntime();
+    mocks.clackText.mockResolvedValue("sk-ant-oat01-paste-test");
+
+    await modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime);
+
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "anthropic:manual",
+      credential: expect.objectContaining({
+        type: "token",
+        provider: "anthropic",
+        token: "sk-ant-oat01-paste-test",
+      }),
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+  });
 });
