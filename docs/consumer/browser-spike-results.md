@@ -35,12 +35,12 @@ Legend:
 
 - `PASS`, `FAIL`, `BLOCKED`, `PENDING`
 
-| Approach                  | Task 1 Flight                                          | Task 2 Form          | Task 3 Web Summary                                  | Task 4 X Summary     | Task 5 Multi-step     | Notes                                                                                                                                                                                            |
-| ------------------------- | ------------------------------------------------------ | -------------------- | --------------------------------------------------- | -------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `user` (existing-session) | PASS (median `121.0s`; `r1`: `107.2s`, `r2`: `134.9s`) | PASS (`r1`: `63.1s`) | PASS (median `39.0s`; `r1`: `49.2s`, `r2`: `28.7s`) | FAIL (`r1`: `40.3s`) | FAIL (`r1`: `59.3s`)  | Control lane passes when Chrome exposes standard CDP endpoint (example: launch with `--remote-debugging-port=9333` and attach via browser URL); heavier social/travel flows still time out early |
-| `openclaw` (managed)      | PASS (median `69.9s`; `r1`: `85.4s`, `r2`: `54.5s`)    | PASS (`r1`: `78.8s`) | PASS (median `33.9s`; `r1`: `29.1s`, `r2`: `38.6s`) | PASS (`r1`: `66.5s`) | FAIL (`r1`: `126.2s`) | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`); survives more sites than `user` but still times out in long multi-step travel workflows                   |
-| Claude-in-Chrome          | PENDING                                                | PENDING              | PENDING                                             | PENDING              | PENDING               | Investigation/adaptation track                                                                                                                                                                   |
-| Browserbase               | PENDING                                                | PENDING              | FAIL (`r1`: `24.0s`)                                | PENDING              | PENDING               | Transport smoke passes only when Browserbase sessions are created with `keepAlive: true`; current local-agent Task 3 still fails on remote-CDP reachability inside the browser-tool path         |
+| Approach                  | Task 1 Flight                                          | Task 2 Form          | Task 3 Web Summary                                  | Task 4 X Summary     | Task 5 Multi-step     | Notes                                                                                                                                                                                                       |
+| ------------------------- | ------------------------------------------------------ | -------------------- | --------------------------------------------------- | -------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user` (existing-session) | PASS (median `121.0s`; `r1`: `107.2s`, `r2`: `134.9s`) | PASS (`r1`: `63.1s`) | PASS (median `39.0s`; `r1`: `49.2s`, `r2`: `28.7s`) | FAIL (`r1`: `40.3s`) | FAIL (`r1`: `59.3s`)  | Control lane passes when Chrome exposes standard CDP endpoint (example: launch with `--remote-debugging-port=9333` and attach via browser URL); heavier social/travel flows still time out early            |
+| `openclaw` (managed)      | PASS (median `69.9s`; `r1`: `85.4s`, `r2`: `54.5s`)    | PASS (`r1`: `78.8s`) | PASS (median `33.9s`; `r1`: `29.1s`, `r2`: `38.6s`) | PASS (`r1`: `66.5s`) | FAIL (`r1`: `126.2s`) | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`); survives more sites than `user` but still times out in long multi-step travel workflows                              |
+| Claude-in-Chrome          | PENDING                                                | PENDING              | PENDING                                             | PENDING              | PENDING               | Investigation/adaptation track                                                                                                                                                                              |
+| Browserbase               | PENDING                                                | PENDING              | FAIL (`r1`: `24.0s`, `r2`: `41.6s`)                 | PENDING              | PENDING               | Transport smoke passes only when Browserbase sessions are created with `keepAlive: true`; direct Browserbase CLI smoke passes, but the local-agent/browser-tool path still fails on remote-CDP reachability |
 
 ## Current blocker summary
 
@@ -156,14 +156,17 @@ Critical compatibility rule:
 - With `keepAlive: false`, OpenClaw can connect once, then the session is completed and the next action fails on a dead `connectUrl`.
 - Browserbase's concurrent-session limit is currently `3`; leaked probe sessions quickly trigger `429 Too Many Requests`.
 
-Task 3, run 1:
+Task 3, runs 1-2:
 
 - `browserbase`
   - result: `FAIL`
   - run 1: `24.0s`
   - artifact: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task3_r1/agent.json`
   - note: file is polluted by a leading `[browser/service] ...` line, but the payload content is still readable and reports a browser-tool failure: `Remote CDP for profile "browserbase" is not reachable`
-  - interpretation: Browserbase transport is now proven viable, but the local-agent/browser-tool path still needs a Browserbase-specific hardening pass before the lane is benchmark-ready
+  - run 2: `41.6s`
+  - artifact: `.artifacts/browser-spike-20260321-browserbase-smoke/runs/browserbase_task3_r2/agent.json`
+  - note: second rerun fails the same way even after a fresh `keepAlive: true` session, so this is not a one-off dead-session flake
+  - interpretation: Browserbase transport is now proven viable, and direct OpenClaw browser CLI smoke (`status`, `open`, `tabs`) succeeds on the same lane; the remaining bug is specifically in the local-agent/browser-tool path
 
 Task 1, run 2:
 

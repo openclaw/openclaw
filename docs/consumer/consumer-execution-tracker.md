@@ -98,7 +98,7 @@ This file is the only master tracker. Do not create per-worktree tracker copies.
     - Browserbase credentials are now verified.
     - Browserbase transport is viable only when sessions are created with `keepAlive: true`; the provider default (`keepAlive: false`) is not compatible with OpenClaw's current probe/connect lifecycle.
     - Direct OpenClaw Browserbase CLI smoke now passes (`status`, `open`, `tabs`) with `keepAlive: true`.
-    - The first Browserbase local-agent Task 3 run still fails on remote-CDP reachability inside the browser-tool path, so Browserbase is unblocked but not benchmark-ready yet.
+    - Browserbase local-agent Task 3 reruns (`r1`, `r2`) both still fail on remote-CDP reachability inside the browser-tool path, even though direct Browserbase CLI smoke (`status`, `open`, `tabs`) succeeds on the same lane.
     - Browserbase account concurrency is currently very tight (`3` concurrent sessions), so leaked probe sessions quickly trigger `429 Too Many Requests`.
     - Browser Use setup research is done, but execution is honestly blocked on missing model/API keys on this machine.
 
@@ -238,14 +238,14 @@ OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm opencla
 
 ## Benchmark tracker template
 
-| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                                                                               |
-| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | --------------------------------------------------------------------------------------------------- |
-| user (existing-session) | pending       | pending     | pending            | pending          | pending           | ready-with-cdp-url | control lane passes when Chrome exposes standard CDP endpoint (for example `http://127.0.0.1:9333`) |
-| openclaw (managed)      | pending       | pending     | pending            | pending          | pending           | ready-for-runs     | control lane is healthy on clean gateway; benchmark task runs can proceed                           |
-| Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds                                                                                     |
-| Browser Use             | pending       | pending     | pending            | pending          | pending           | side-experiment    | direct-CDP external comparison; promote only if it materially beats current lanes                   |
-| Agent S3                | later         | later       | later              | later            | later             | deferred           | computer-use comparison, not part of the default week-1 gate                                        |
-| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | revisit only if the direct-CDP paths still leave a clear gap                                        |
+| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                                                                                                   |
+| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| user (existing-session) | pending       | pending     | pending            | pending          | pending           | ready-with-cdp-url | control lane passes when Chrome exposes standard CDP endpoint (for example `http://127.0.0.1:9333`)                     |
+| openclaw (managed)      | pending       | pending     | pending            | pending          | pending           | ready-for-runs     | control lane is healthy on clean gateway; benchmark task runs can proceed                                               |
+| Browserbase             | pending       | pending     | fail (`r1`,`r2`)   | pending          | pending           | transport-proven   | creds verified; `keepAlive: true` required; direct CLI smoke passes, but local-agent/browser-tool still needs hardening |
+| Browser Use             | pending       | pending     | pending            | pending          | pending           | side-experiment    | direct-CDP external comparison; promote only if it materially beats current lanes                                       |
+| Agent S3                | later         | later       | later              | later            | later             | deferred           | computer-use comparison, not part of the default week-1 gate                                                            |
+| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | revisit only if the direct-CDP paths still leave a clear gap                                                            |
 
 ## Scope guardrails (week 1)
 
