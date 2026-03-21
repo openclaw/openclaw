@@ -76,16 +76,13 @@ import {
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
+import {
+  collectTelegramAccountScopes,
+  collectTelegramAllowFromLists,
+  scanTelegramAllowFromUsernameEntries,
+} from "./doctor/providers/telegram.js";
 import { hasAllowFromEntries } from "./doctor/shared/allowlist.js";
 import { collectEmptyAllowlistPolicyWarningsForAccount } from "./doctor/shared/empty-allowlist-policy.js";
-
-type TelegramAllowFromUsernameHit = { path: string; entry: string };
-
-type TelegramAllowFromListRef = {
-  pathLabel: string;
-  holder: Record<string, unknown>;
-  key: "allowFrom" | "groupAllowFrom";
-};
 
 type ResolvedTelegramLookupAccount = {
   token: string;
@@ -242,101 +239,6 @@ export function collectMissingExplicitDefaultAccountWarnings(cfg: OpenClawConfig
   }
 
   return warnings;
-}
-
-function collectTelegramAccountScopes(
-  cfg: OpenClawConfig,
-): Array<{ prefix: string; account: Record<string, unknown> }> {
-  const scopes: Array<{ prefix: string; account: Record<string, unknown> }> = [];
-  const telegram = asObjectRecord(cfg.channels?.telegram);
-  if (!telegram) {
-    return scopes;
-  }
-
-  scopes.push({ prefix: "channels.telegram", account: telegram });
-  const accounts = asObjectRecord(telegram.accounts);
-  if (!accounts) {
-    return scopes;
-  }
-  for (const key of Object.keys(accounts)) {
-    const account = asObjectRecord(accounts[key]);
-    if (!account) {
-      continue;
-    }
-    scopes.push({ prefix: `channels.telegram.accounts.${key}`, account });
-  }
-
-  return scopes;
-}
-
-function collectTelegramAllowFromLists(
-  prefix: string,
-  account: Record<string, unknown>,
-): TelegramAllowFromListRef[] {
-  const refs: TelegramAllowFromListRef[] = [
-    { pathLabel: `${prefix}.allowFrom`, holder: account, key: "allowFrom" },
-    { pathLabel: `${prefix}.groupAllowFrom`, holder: account, key: "groupAllowFrom" },
-  ];
-  const groups = asObjectRecord(account.groups);
-  if (!groups) {
-    return refs;
-  }
-
-  for (const groupId of Object.keys(groups)) {
-    const group = asObjectRecord(groups[groupId]);
-    if (!group) {
-      continue;
-    }
-    refs.push({
-      pathLabel: `${prefix}.groups.${groupId}.allowFrom`,
-      holder: group,
-      key: "allowFrom",
-    });
-    const topics = asObjectRecord(group.topics);
-    if (!topics) {
-      continue;
-    }
-    for (const topicId of Object.keys(topics)) {
-      const topic = asObjectRecord(topics[topicId]);
-      if (!topic) {
-        continue;
-      }
-      refs.push({
-        pathLabel: `${prefix}.groups.${groupId}.topics.${topicId}.allowFrom`,
-        holder: topic,
-        key: "allowFrom",
-      });
-    }
-  }
-  return refs;
-}
-
-function scanTelegramAllowFromUsernameEntries(cfg: OpenClawConfig): TelegramAllowFromUsernameHit[] {
-  const hits: TelegramAllowFromUsernameHit[] = [];
-
-  const scanList = (pathLabel: string, list: unknown) => {
-    if (!Array.isArray(list)) {
-      return;
-    }
-    for (const entry of list) {
-      const normalized = normalizeTelegramAllowFromEntry(entry);
-      if (!normalized || normalized === "*") {
-        continue;
-      }
-      if (isNumericTelegramUserId(normalized)) {
-        continue;
-      }
-      hits.push({ path: pathLabel, entry: String(entry).trim() });
-    }
-  };
-
-  for (const scope of collectTelegramAccountScopes(cfg)) {
-    for (const ref of collectTelegramAllowFromLists(scope.prefix, scope.account)) {
-      scanList(ref.pathLabel, ref.holder[ref.key]);
-    }
-  }
-
-  return hits;
 }
 
 function formatMatrixLegacyStatePreview(
