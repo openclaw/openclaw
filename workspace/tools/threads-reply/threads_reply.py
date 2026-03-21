@@ -90,17 +90,36 @@ def cmd_scan():
     """Scan recent posts and their conversation threads, upsert into DB."""
     print("🔍 Scanning posts...")
 
-    # Fetch my recent posts
+    # Fetch my recent posts (default 25, use --all for full scan)
+    scan_limit = 25
+    if "--all" in sys.argv:
+        scan_limit = 999  # Will paginate to get all
     data = api_get(f"{USER_ID}/threads", {
         "fields": "id,text,timestamp,like_count,repost_count",
-        "limit": 10
+        "limit": min(scan_limit, 50)
     })
     if not data or "data" not in data:
         print("  ❌ Failed to fetch posts")
         return
 
     conn = db.get_conn()
-    posts = data["data"]
+    posts = list(data["data"])
+
+    # Paginate if --all
+    if scan_limit > 50:
+        import time as _paginate_time
+        while data.get("paging", {}).get("cursors", {}).get("after") and len(posts) < scan_limit:
+            data = api_get(f"{USER_ID}/threads", {
+                "fields": "id,text,timestamp,like_count,repost_count",
+                "limit": 50,
+                "after": data["paging"]["cursors"]["after"]
+            })
+            if data and "data" in data:
+                posts.extend(data["data"])
+            else:
+                break
+            _paginate_time.sleep(0.3)
+
     print(f"  Found {len(posts)} posts")
 
     # Ensure own profile exists
