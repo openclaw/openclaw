@@ -170,16 +170,27 @@ export function extractToolResultText(result: unknown): string | undefined {
   return texts.join("\n");
 }
 
-function normalizeMediaArtifact(value: unknown): ToolMediaArtifact | undefined {
+/**
+ * Parse an unknown value into a ToolMediaArtifact.
+ * An optional `urlFilter` predicate controls which URLs are kept;
+ * when omitted all URLs pass through.
+ */
+function normalizeMediaArtifact(
+  value: unknown,
+  urlFilter?: (url: string) => boolean,
+): ToolMediaArtifact | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
   const record = value as Record<string, unknown>;
-  const mediaUrl = typeof record.mediaUrl === "string" ? record.mediaUrl : undefined;
+  const isValidUrl = (entry: unknown): entry is string =>
+    typeof entry === "string" && entry.trim().length > 0;
+  const isAllowed = (url: string) => !urlFilter || urlFilter(url);
+
+  const mediaUrl =
+    typeof record.mediaUrl === "string" && isAllowed(record.mediaUrl) ? record.mediaUrl : undefined;
   const mediaUrls = Array.isArray(record.mediaUrls)
-    ? record.mediaUrls.filter(
-        (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-      )
+    ? record.mediaUrls.filter((entry): entry is string => isValidUrl(entry) && isAllowed(entry))
     : undefined;
   const audioAsVoice = record.audioAsVoice === true;
   if (!mediaUrl && !mediaUrls?.length && !audioAsVoice) {
@@ -192,38 +203,10 @@ function normalizeMediaArtifact(value: unknown): ToolMediaArtifact | undefined {
   };
 }
 
-function isToolResultMediaTrusted(toolName: string): boolean {
-  return TRUSTED_TOOL_RESULT_MEDIA.has(normalizeToolName(toolName));
-}
-
-function filterMediaArtifactUrls(
-  toolName: string,
-  artifact: ToolMediaArtifact,
-): ToolMediaArtifact | undefined {
-  const allowLocalPaths = isToolResultMediaTrusted(toolName);
-  const isAllowed = (url: string) => allowLocalPaths || HTTP_URL_RE.test(url.trim());
-  const mediaUrl =
-    artifact.mediaUrl && isAllowed(artifact.mediaUrl) ? artifact.mediaUrl : undefined;
-  const mediaUrls = artifact.mediaUrls?.filter(isAllowed);
-  if (!mediaUrl && !mediaUrls?.length && !artifact.audioAsVoice) {
-    return undefined;
-  }
-  const filtered: ToolMediaArtifact = {};
-  if (mediaUrl) {
-    filtered.mediaUrl = mediaUrl;
-  }
-  if (mediaUrls?.length) {
-    filtered.mediaUrls = mediaUrls;
-  }
-  if (artifact.audioAsVoice) {
-    filtered.audioAsVoice = true;
-  }
-  return filtered;
-}
-
 /**
  * Extract media artifacts from a tool result's `details.media` field.
  * Returns undefined when the tool did not produce any deliverable media.
+ * Untrusted tools have local file paths filtered out (only HTTP URLs pass).
  */
 export function extractToolMediaArtifact(
   toolName: string,
@@ -237,11 +220,12 @@ export function extractToolMediaArtifact(
     record.details && typeof record.details === "object" && !Array.isArray(record.details)
       ? (record.details as Record<string, unknown>)
       : undefined;
-  const raw = normalizeMediaArtifact(record.media) ?? normalizeMediaArtifact(details?.media);
-  if (!raw) {
-    return undefined;
-  }
-  return filterMediaArtifactUrls(toolName, raw);
+  const allowLocalPaths = TRUSTED_TOOL_RESULT_MEDIA.has(normalizeToolName(toolName));
+  const urlFilter = allowLocalPaths ? undefined : (url: string) => HTTP_URL_RE.test(url.trim());
+  return (
+    normalizeMediaArtifact(record.media, urlFilter) ??
+    normalizeMediaArtifact(details?.media, urlFilter)
+  );
 }
 
 /** Resolve all media URLs from a ToolMediaArtifact into a flat list. */
