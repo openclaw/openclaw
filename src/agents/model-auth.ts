@@ -10,6 +10,7 @@ import {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
 } from "../utils/normalize-secret-input.js";
+import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
@@ -21,11 +22,12 @@ import {
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
+  GCP_VERTEX_CREDENTIALS_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   OLLAMA_LOCAL_AUTH_MARKER,
 } from "./model-auth-markers.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { normalizeProviderId, normalizeProviderIdForAuth } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
@@ -35,6 +37,14 @@ const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
 const AWS_PROFILE_ENV = "AWS_PROFILE";
+let providerRuntimePromise:
+  | Promise<typeof import("../plugins/provider-runtime.runtime.js")>
+  | undefined;
+
+function loadProviderRuntime() {
+  providerRuntimePromise ??= import("../plugins/provider-runtime.runtime.js");
+  return providerRuntimePromise;
+}
 
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
@@ -194,7 +204,7 @@ function resolveSyntheticLocalProviderAuth(params: {
 
   // Custom providers pointing at a local server (e.g. llama.cpp, vLLM, LocalAI)
   // typically don't require auth. Synthesize a local key so the auth resolver
-  // doesn't reject them when the user left the API key blank during onboarding.
+  // doesn't reject them when the user left the API key blank during setup.
   if (providerConfig.baseUrl && isLocalBaseUrl(providerConfig.baseUrl)) {
     return {
       apiKey: CUSTOM_LOCAL_AUTH_MARKER,
@@ -358,13 +368,20 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
-  if (provider === "openai") {
-    const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
-    if (hasCodex) {
-      throw new Error(
-        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
-      );
-    }
+  const { buildProviderMissingAuthMessageWithPlugin } = await loadProviderRuntime();
+  const pluginMissingAuthMessage = buildProviderMissingAuthMessageWithPlugin({
+    provider,
+    config: cfg,
+    context: {
+      config: cfg,
+      agentDir: params.agentDir,
+      env: process.env,
+      provider,
+      listProfileIds: (providerId) => listProfilesForProvider(store, providerId),
+    },
+  });
+  if (pluginMissingAuthMessage) {
+    throw new Error(pluginMissingAuthMessage);
   }
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
@@ -385,7 +402,7 @@ export function resolveEnvApiKey(
   provider: string,
   env: NodeJS.ProcessEnv = process.env,
 ): EnvApiKeyResult | null {
-  const normalized = normalizeProviderId(provider);
+  const normalized = normalizeProviderIdForAuth(provider);
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = normalizeOptionalSecretInput(env[envVar]);
@@ -413,6 +430,16 @@ export function resolveEnvApiKey(
     }
     return { apiKey: envKey, source: "gcloud adc" };
   }
+
+  if (normalized === "anthropic-vertex") {
+    // Vertex AI uses GCP credentials (SA JSON or ADC), not API keys.
+    // Return a sentinel so the model resolver considers this provider available.
+    if (hasAnthropicVertexAvailableAuth(env)) {
+      return { apiKey: GCP_VERTEX_CREDENTIALS_MARKER, source: "gcloud adc" };
+    }
+    return null;
+  }
+
   return null;
 }
 
@@ -470,6 +497,56 @@ export function resolveModelAuthMode(
   }
 
   return "unknown";
+}
+
+export async function hasAvailableAuthForProvider(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  preferredProfile?: string;
+  store?: AuthProfileStore;
+  agentDir?: string;
+}): Promise<boolean> {
+  const { provider, cfg, preferredProfile } = params;
+  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+
+  const authOverride = resolveProviderAuthOverride(cfg, provider);
+  if (authOverride === "aws-sdk") {
+    return true;
+  }
+
+  const order = resolveAuthProfileOrder({
+    cfg,
+    store,
+    provider,
+    preferredProfile,
+  });
+  for (const candidate of order) {
+    try {
+      const resolved = await resolveApiKeyForProfile({
+        cfg,
+        store,
+        profileId: candidate,
+        agentDir: params.agentDir,
+      });
+      if (resolved) {
+        return true;
+      }
+    } catch (err) {
+      log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
+    }
+  }
+
+  if (resolveEnvApiKey(provider)) {
+    return true;
+  }
+  if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
+    return true;
+  }
+  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
+    return true;
+  }
+
+  return authOverride === undefined && normalizeProviderId(provider) === "amazon-bedrock";
 }
 
 export async function getApiKeyForModel(params: {

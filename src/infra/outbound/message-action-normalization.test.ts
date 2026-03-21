@@ -115,6 +115,47 @@ describe("normalizeMessageActionInput", () => {
     expect("to" in normalized).toBe(false);
   });
 
+  it("keeps Feishu message and chat aliases without forcing canonical targets", () => {
+    const pin = normalizeMessageActionInput({
+      action: "pin",
+      args: {
+        channel: "feishu",
+        messageId: "om_123",
+      },
+    });
+    const listPins = normalizeMessageActionInput({
+      action: "list-pins",
+      args: {
+        channel: "feishu",
+        chatId: "oc_123",
+      },
+    });
+
+    expect(pin.messageId).toBe("om_123");
+    expect("target" in pin).toBe(false);
+    expect("to" in pin).toBe(false);
+    expect(listPins.chatId).toBe("oc_123");
+    expect("target" in listPins).toBe(false);
+    expect("to" in listPins).toBe(false);
+  });
+
+  it("still backfills target for non-Feishu read actions with messageId-only input", () => {
+    const normalized = normalizeMessageActionInput({
+      action: "read",
+      args: {
+        channel: "slack",
+        messageId: "123.456",
+      },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "slack",
+      },
+    });
+
+    expect(normalized.target).toBe("C12345678");
+    expect(normalized.messageId).toBe("123.456");
+  });
+
   it("maps legacy channelId inputs through canonical target for channel-id actions", () => {
     const normalized = normalizeMessageActionInput({
       action: "channel-info",

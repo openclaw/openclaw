@@ -1,4 +1,6 @@
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/msteams";
+import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";
+import type { ChannelOutboundAdapter } from "../runtime-api.js";
 import { createMSTeamsPollStoreFs } from "./polls.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";
@@ -9,45 +11,57 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   pollMaxOptions: 12,
-  sendText: async ({ cfg, to, text, deps }) => {
-    const send = deps?.sendMSTeams ?? ((to, text) => sendMessageMSTeams({ cfg, to, text }));
-    const result = await send(to, text);
-    return { channel: "msteams", ...result };
-  },
-  sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, deps }) => {
-    const send =
-      deps?.sendMSTeams ??
-      ((to, text, opts) =>
-        sendMessageMSTeams({
-          cfg,
-          to,
-          text,
-          mediaUrl: opts?.mediaUrl,
-          mediaLocalRoots: opts?.mediaLocalRoots,
-        }));
-    const result = await send(to, text, { mediaUrl, mediaLocalRoots });
-    return { channel: "msteams", ...result };
-  },
-  sendPoll: async ({ cfg, to, poll }) => {
-    const maxSelections = poll.maxSelections ?? 1;
-    const result = await sendPollMSTeams({
-      cfg,
-      to,
-      question: poll.question,
-      options: poll.options,
-      maxSelections,
-    });
-    const pollStore = createMSTeamsPollStoreFs();
-    await pollStore.createPoll({
-      id: result.pollId,
-      question: poll.question,
-      options: poll.options,
-      maxSelections,
-      createdAt: new Date().toISOString(),
-      conversationId: result.conversationId,
-      messageId: result.messageId,
-      votes: {},
-    });
-    return result;
-  },
+  ...createAttachedChannelResultAdapter({
+    channel: "msteams",
+    sendText: async ({ cfg, to, text, deps }) => {
+      type SendFn = (
+        to: string,
+        text: string,
+      ) => Promise<{ messageId: string; conversationId: string }>;
+      const send =
+        resolveOutboundSendDep<SendFn>(deps, "msteams") ??
+        ((to, text) => sendMessageMSTeams({ cfg, to, text }));
+      return await send(to, text);
+    },
+    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, deps }) => {
+      type SendFn = (
+        to: string,
+        text: string,
+        opts?: { mediaUrl?: string; mediaLocalRoots?: readonly string[] },
+      ) => Promise<{ messageId: string; conversationId: string }>;
+      const send =
+        resolveOutboundSendDep<SendFn>(deps, "msteams") ??
+        ((to, text, opts) =>
+          sendMessageMSTeams({
+            cfg,
+            to,
+            text,
+            mediaUrl: opts?.mediaUrl,
+            mediaLocalRoots: opts?.mediaLocalRoots,
+          }));
+      return await send(to, text, { mediaUrl, mediaLocalRoots });
+    },
+    sendPoll: async ({ cfg, to, poll }) => {
+      const maxSelections = poll.maxSelections ?? 1;
+      const result = await sendPollMSTeams({
+        cfg,
+        to,
+        question: poll.question,
+        options: poll.options,
+        maxSelections,
+      });
+      const pollStore = createMSTeamsPollStoreFs();
+      await pollStore.createPoll({
+        id: result.pollId,
+        question: poll.question,
+        options: poll.options,
+        maxSelections,
+        createdAt: new Date().toISOString(),
+        conversationId: result.conversationId,
+        messageId: result.messageId,
+        votes: {},
+      });
+      return result;
+    },
+  }),
 };

@@ -1,327 +1,51 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
 import { resolveProviderWizardOptions } from "../plugins/provider-wizard.js";
-import { AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI } from "./auth-choice-legacy.js";
-import { ONBOARD_PROVIDER_AUTH_FLAGS } from "./onboard-provider-auth-flags.js";
+import {
+  CORE_AUTH_CHOICE_OPTIONS,
+  type AuthChoiceGroup,
+  type AuthChoiceOption,
+  formatStaticAuthChoiceChoicesForCli,
+} from "./auth-choice-options.static.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
-export type { AuthChoiceGroupId };
-
-export type AuthChoiceOption = {
-  value: AuthChoice;
-  label: string;
-  hint?: string;
-};
-export type AuthChoiceGroup = {
-  value: AuthChoiceGroupId;
-  label: string;
-  hint?: string;
-  options: AuthChoiceOption[];
-};
-
-const AUTH_CHOICE_GROUP_DEFS: {
-  value: AuthChoiceGroupId;
-  label: string;
-  hint?: string;
-  choices: AuthChoice[];
-}[] = [
-  {
-    value: "openai",
-    label: "OpenAI",
-    hint: "Codex OAuth + API key",
-    choices: ["openai-codex", "openai-api-key"],
-  },
-  {
-    value: "anthropic",
-    label: "Anthropic",
-    hint: "setup-token + API key",
-    choices: ["token", "apiKey"],
-  },
-  {
-    value: "chutes",
-    label: "Chutes",
-    hint: "OAuth",
-    choices: ["chutes"],
-  },
-  {
-    value: "minimax",
-    label: "MiniMax",
-    hint: "M2.5 (recommended)",
-    choices: ["minimax-global-oauth", "minimax-global-api", "minimax-cn-oauth", "minimax-cn-api"],
-  },
-  {
-    value: "moonshot",
-    label: "Moonshot AI (Kimi K2.5)",
-    hint: "Kimi K2.5 + Kimi Coding",
-    choices: ["moonshot-api-key", "moonshot-api-key-cn", "kimi-code-api-key"],
-  },
-  {
-    value: "google",
-    label: "Google",
-    hint: "Gemini API key + OAuth",
-    choices: ["gemini-api-key", "google-gemini-cli"],
-  },
-  {
-    value: "xai",
-    label: "xAI (Grok)",
-    hint: "API key",
-    choices: ["xai-api-key"],
-  },
-  {
-    value: "mistral",
-    label: "Mistral AI",
-    hint: "API key",
-    choices: ["mistral-api-key"],
-  },
-  {
-    value: "volcengine",
-    label: "Volcano Engine",
-    hint: "API key",
-    choices: ["volcengine-api-key"],
-  },
-  {
-    value: "byteplus",
-    label: "BytePlus",
-    hint: "API key",
-    choices: ["byteplus-api-key"],
-  },
-  {
-    value: "openrouter",
-    label: "OpenRouter",
-    hint: "API key",
-    choices: ["openrouter-api-key"],
-  },
-  {
-    value: "kilocode",
-    label: "Kilo Gateway",
-    hint: "API key (OpenRouter-compatible)",
-    choices: ["kilocode-api-key"],
-  },
-  {
-    value: "qwen",
-    label: "Qwen",
-    hint: "OAuth",
-    choices: ["qwen-portal"],
-  },
-  {
-    value: "zai",
-    label: "Z.AI",
-    hint: "GLM Coding Plan / Global / CN",
-    choices: ["zai-coding-global", "zai-coding-cn", "zai-global", "zai-cn"],
-  },
-  {
-    value: "qianfan",
-    label: "Qianfan",
-    hint: "API key",
-    choices: ["qianfan-api-key"],
-  },
-  {
-    value: "modelstudio",
-    label: "Alibaba Cloud Model Studio",
-    hint: "Coding Plan API key (CN / Global)",
-    choices: ["modelstudio-api-key-cn", "modelstudio-api-key"],
-  },
-  {
-    value: "copilot",
-    label: "Copilot",
-    hint: "GitHub + local proxy",
-    choices: ["github-copilot", "copilot-proxy"],
-  },
-  {
-    value: "ai-gateway",
-    label: "Vercel AI Gateway",
-    hint: "API key",
-    choices: ["ai-gateway-api-key"],
-  },
-  {
-    value: "opencode",
-    label: "OpenCode",
-    hint: "Shared API key for Zen + Go catalogs",
-    choices: ["opencode-zen", "opencode-go"],
-  },
-  {
-    value: "xiaomi",
-    label: "Xiaomi",
-    hint: "API key",
-    choices: ["xiaomi-api-key"],
-  },
-  {
-    value: "synthetic",
-    label: "Synthetic",
-    hint: "Anthropic-compatible (multi-model)",
-    choices: ["synthetic-api-key"],
-  },
-  {
-    value: "together",
-    label: "Together AI",
-    hint: "API key",
-    choices: ["together-api-key"],
-  },
-  {
-    value: "huggingface",
-    label: "Hugging Face",
-    hint: "Inference API (HF token)",
-    choices: ["huggingface-api-key"],
-  },
-  {
-    value: "venice",
-    label: "Venice AI",
-    hint: "Privacy-focused (uncensored models)",
-    choices: ["venice-api-key"],
-  },
-  {
-    value: "litellm",
-    label: "LiteLLM",
-    hint: "Unified LLM gateway (100+ providers)",
-    choices: ["litellm-api-key"],
-  },
-  {
-    value: "cloudflare-ai-gateway",
-    label: "Cloudflare AI Gateway",
-    hint: "Account ID + Gateway ID + API key",
-    choices: ["cloudflare-ai-gateway-api-key"],
-  },
-  {
-    value: "custom",
-    label: "Custom Provider",
-    hint: "Any OpenAI or Anthropic compatible endpoint",
-    choices: ["custom-api-key"],
-  },
-];
-
-const PROVIDER_AUTH_CHOICE_OPTION_HINTS: Partial<Record<AuthChoice, string>> = {
-  "litellm-api-key": "Unified gateway for 100+ LLM providers",
-  "cloudflare-ai-gateway-api-key": "Account ID + Gateway ID + API key",
-  "venice-api-key": "Privacy-focused inference (uncensored models)",
-  "together-api-key": "Access to Llama, DeepSeek, Qwen, and more open models",
-  "huggingface-api-key": "Inference Providers — OpenAI-compatible chat",
-  "opencode-zen": "Shared OpenCode key; curated Zen catalog",
-  "opencode-go": "Shared OpenCode key; Kimi/GLM/MiniMax Go catalog",
-};
-
-const PROVIDER_AUTH_CHOICE_OPTION_LABELS: Partial<Record<AuthChoice, string>> = {
-  "moonshot-api-key": "Kimi API key (.ai)",
-  "moonshot-api-key-cn": "Kimi API key (.cn)",
-  "kimi-code-api-key": "Kimi Code API key (subscription)",
-  "cloudflare-ai-gateway-api-key": "Cloudflare AI Gateway",
-  "opencode-zen": "OpenCode Zen catalog",
-  "opencode-go": "OpenCode Go catalog",
-};
-
-function buildProviderAuthChoiceOptions(): AuthChoiceOption[] {
-  return ONBOARD_PROVIDER_AUTH_FLAGS.map((flag) => ({
-    value: flag.authChoice,
-    label: PROVIDER_AUTH_CHOICE_OPTION_LABELS[flag.authChoice] ?? flag.description,
-    ...(PROVIDER_AUTH_CHOICE_OPTION_HINTS[flag.authChoice]
-      ? { hint: PROVIDER_AUTH_CHOICE_OPTION_HINTS[flag.authChoice] }
-      : {}),
-  }));
+function compareOptionLabels(a: AuthChoiceOption, b: AuthChoiceOption): number {
+  return a.label.localeCompare(b.label);
 }
 
-const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
-  {
-    value: "token",
-    label: "Anthropic token (paste setup-token)",
-    hint: "run `claude setup-token` elsewhere, then paste the token here",
-  },
-  {
-    value: "openai-codex",
-    label: "OpenAI Codex (ChatGPT OAuth)",
-  },
-  { value: "chutes", label: "Chutes (OAuth)" },
-  ...buildProviderAuthChoiceOptions(),
-  {
-    value: "moonshot-api-key-cn",
-    label: "Kimi API key (.cn)",
-  },
-  {
-    value: "github-copilot",
-    label: "GitHub Copilot (GitHub device login)",
-    hint: "Uses GitHub device flow",
-  },
-  { value: "gemini-api-key", label: "Google Gemini API key" },
-  {
-    value: "google-gemini-cli",
-    label: "Google Gemini CLI OAuth",
-    hint: "Unofficial flow; review account-risk warning before use",
-  },
-  { value: "zai-api-key", label: "Z.AI API key" },
-  {
-    value: "zai-coding-global",
-    label: "Coding-Plan-Global",
-    hint: "GLM Coding Plan Global (api.z.ai)",
-  },
-  {
-    value: "zai-coding-cn",
-    label: "Coding-Plan-CN",
-    hint: "GLM Coding Plan CN (open.bigmodel.cn)",
-  },
-  {
-    value: "zai-global",
-    label: "Global",
-    hint: "Z.AI Global (api.z.ai)",
-  },
-  {
-    value: "zai-cn",
-    label: "CN",
-    hint: "Z.AI CN (open.bigmodel.cn)",
-  },
-  {
-    value: "xiaomi-api-key",
-    label: "Xiaomi API key",
-  },
-  {
-    value: "minimax-global-oauth",
-    label: "MiniMax Global — OAuth (minimax.io)",
-    hint: "Only supports OAuth for the coding plan",
-  },
-  {
-    value: "minimax-global-api",
-    label: "MiniMax Global — API Key (minimax.io)",
-    hint: "sk-api- or sk-cp- keys supported",
-  },
-  {
-    value: "minimax-cn-oauth",
-    label: "MiniMax CN — OAuth (minimaxi.com)",
-    hint: "Only supports OAuth for the coding plan",
-  },
-  {
-    value: "minimax-cn-api",
-    label: "MiniMax CN — API Key (minimaxi.com)",
-    hint: "sk-api- or sk-cp- keys supported",
-  },
-  { value: "qwen-portal", label: "Qwen OAuth" },
-  {
-    value: "copilot-proxy",
-    label: "Copilot Proxy (local)",
-    hint: "Local proxy for VS Code Copilot models",
-  },
-  { value: "apiKey", label: "Anthropic API key" },
-  {
-    value: "opencode-zen",
-    label: "OpenCode Zen catalog",
-    hint: "Claude, GPT, Gemini via opencode.ai/zen",
-  },
-  { value: "qianfan-api-key", label: "Qianfan API key" },
-  {
-    value: "modelstudio-api-key-cn",
-    label: "Coding Plan API Key for China (subscription)",
-    hint: "Endpoint: coding.dashscope.aliyuncs.com",
-  },
-  {
-    value: "modelstudio-api-key",
-    label: "Coding Plan API Key for Global/Intl (subscription)",
-    hint: "Endpoint: coding-intl.dashscope.aliyuncs.com",
-  },
-  { value: "custom-api-key", label: "Custom Provider" },
-];
+function compareGroupLabels(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
+  return a.label.localeCompare(b.label);
+}
 
-function resolveDynamicProviderCliChoices(params?: {
+function resolveManifestProviderChoiceOptions(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): string[] {
-  return [...new Set(resolveProviderWizardOptions(params ?? {}).map((option) => option.value))];
+}): AuthChoiceOption[] {
+  return resolveManifestProviderAuthChoices(params ?? {}).map((choice) => ({
+    value: choice.choiceId as AuthChoice,
+    label: choice.choiceLabel,
+    ...(choice.choiceHint ? { hint: choice.choiceHint } : {}),
+    ...(choice.groupId ? { groupId: choice.groupId as AuthChoiceGroupId } : {}),
+    ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
+    ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
+  }));
+}
+
+function resolveRuntimeFallbackProviderChoiceOptions(params?: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): AuthChoiceOption[] {
+  return resolveProviderWizardOptions(params ?? {}).map((option) => ({
+    value: option.value as AuthChoice,
+    label: option.label,
+    ...(option.hint ? { hint: option.hint } : {}),
+    groupId: option.groupId as AuthChoiceGroupId,
+    groupLabel: option.groupLabel,
+    ...(option.groupHint ? { groupHint: option.groupHint } : {}),
+  }));
 }
 
 export function formatAuthChoiceChoicesForCli(params?: {
@@ -331,21 +55,12 @@ export function formatAuthChoiceChoicesForCli(params?: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string {
-  const includeSkip = params?.includeSkip ?? true;
-  const includeLegacyAliases = params?.includeLegacyAliases ?? false;
   const values = [
-    ...BASE_AUTH_CHOICE_OPTIONS.map((opt) => opt.value),
-    ...resolveDynamicProviderCliChoices(params),
+    ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
+    ...resolveManifestProviderChoiceOptions(params).map((option) => option.value),
   ];
 
-  if (includeSkip) {
-    values.push("skip");
-  }
-  if (includeLegacyAliases) {
-    values.push(...AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI);
-  }
-
-  return values.join("|");
+  return [...new Set(values)].join("|");
 }
 
 export function buildAuthChoiceOptions(params: {
@@ -356,24 +71,30 @@ export function buildAuthChoiceOptions(params: {
   env?: NodeJS.ProcessEnv;
 }): AuthChoiceOption[] {
   void params.store;
-  const options: AuthChoiceOption[] = [...BASE_AUTH_CHOICE_OPTIONS];
-  const seen = new Set(options.map((option) => option.value));
-
-  for (const option of resolveProviderWizardOptions({
+  const optionByValue = new Map<AuthChoice, AuthChoiceOption>();
+  for (const option of CORE_AUTH_CHOICE_OPTIONS) {
+    optionByValue.set(option.value, option);
+  }
+  for (const option of resolveManifestProviderChoiceOptions({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   })) {
-    if (seen.has(option.value as AuthChoice)) {
-      continue;
-    }
-    options.push({
-      value: option.value as AuthChoice,
-      label: option.label,
-      hint: option.hint,
-    });
-    seen.add(option.value as AuthChoice);
+    optionByValue.set(option.value, option);
   }
+  for (const option of resolveRuntimeFallbackProviderChoiceOptions({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  })) {
+    if (!optionByValue.has(option.value)) {
+      optionByValue.set(option.value, option);
+    }
+  }
+
+  const options: AuthChoiceOption[] = Array.from(optionByValue.values()).toSorted(
+    compareOptionLabels,
+  );
 
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
@@ -396,46 +117,30 @@ export function buildAuthChoiceGroups(params: {
     ...params,
     includeSkip: false,
   });
-  const optionByValue = new Map<AuthChoice, AuthChoiceOption>(
-    options.map((opt) => [opt.value, opt]),
-  );
+  const groupsById = new Map<AuthChoiceGroupId, AuthChoiceGroup>();
 
-  const groups: AuthChoiceGroup[] = AUTH_CHOICE_GROUP_DEFS.map((group) => ({
-    ...group,
-    options: group.choices
-      .map((choice) => optionByValue.get(choice))
-      .filter((opt): opt is AuthChoiceOption => Boolean(opt)),
-  }));
-  const staticGroupIds = new Set(groups.map((group) => group.value));
-
-  for (const option of resolveProviderWizardOptions({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })) {
-    const existing = groups.find((group) => group.value === option.groupId);
-    const nextOption = optionByValue.get(option.value as AuthChoice) ?? {
-      value: option.value as AuthChoice,
-      label: option.label,
-      hint: option.hint,
-    };
+  for (const option of options) {
+    if (!option.groupId || !option.groupLabel) {
+      continue;
+    }
+    const existing = groupsById.get(option.groupId);
     if (existing) {
-      if (!existing.options.some((candidate) => candidate.value === nextOption.value)) {
-        existing.options.push(nextOption);
-      }
+      existing.options.push(option);
       continue;
     }
-    if (staticGroupIds.has(option.groupId as AuthChoiceGroupId)) {
-      continue;
-    }
-    groups.push({
-      value: option.groupId as AuthChoiceGroupId,
+    groupsById.set(option.groupId, {
+      value: option.groupId,
       label: option.groupLabel,
-      hint: option.groupHint,
-      options: [nextOption],
+      ...(option.groupHint ? { hint: option.groupHint } : {}),
+      options: [option],
     });
-    staticGroupIds.add(option.groupId as AuthChoiceGroupId);
   }
+  const groups = Array.from(groupsById.values())
+    .map((group) => ({
+      ...group,
+      options: [...group.options].toSorted(compareOptionLabels),
+    }))
+    .toSorted(compareGroupLabels);
 
   const skipOption = params.includeSkip
     ? ({ value: "skip", label: "Skip for now" } satisfies AuthChoiceOption)

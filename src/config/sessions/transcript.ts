@@ -10,7 +10,7 @@ import {
   resolveSessionTranscriptPath,
 } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import { loadSessionStore } from "./store.js";
+import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 function stripQuery(value: string): string {
@@ -138,7 +138,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   idempotencyKey?: string;
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
-}): Promise<{ ok: true; sessionFile: string } | { ok: false; reason: string }> {
+}): Promise<{ ok: true; sessionFile: string; messageId: string } | { ok: false; reason: string }> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return { ok: false, reason: "missing sessionKey" };
@@ -154,7 +154,8 @@ export async function appendAssistantMessageToSessionTranscript(params: {
 
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
   const store = loadSessionStore(storePath, { skipCache: true });
-  const entry = store[sessionKey] as SessionEntry | undefined;
+  const normalizedKey = normalizeStoreSessionKey(sessionKey);
+  const entry = (store[normalizedKey] ?? store[sessionKey]) as SessionEntry | undefined;
   if (!entry?.sessionId) {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
   }
@@ -180,16 +181,15 @@ export async function appendAssistantMessageToSessionTranscript(params: {
 
   await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
 
-  if (
-    params.idempotencyKey &&
-    (await transcriptHasIdempotencyKey(sessionFile, params.idempotencyKey))
-  ) {
-    return { ok: true, sessionFile };
+  const existingMessageId = params.idempotencyKey
+    ? await transcriptHasIdempotencyKey(sessionFile, params.idempotencyKey)
+    : undefined;
+  if (existingMessageId) {
+    return { ok: true, sessionFile, messageId: existingMessageId };
   }
 
-  const sessionManager = SessionManager.open(sessionFile);
-  sessionManager.appendMessage({
-    role: "assistant",
+  const message = {
+    role: "assistant" as const,
     content: [{ type: "text", text: mirrorText }],
     api: "openai-responses",
     provider: "openclaw",
@@ -208,19 +208,21 @@ export async function appendAssistantMessageToSessionTranscript(params: {
         total: 0,
       },
     },
-    stopReason: "stop",
+    stopReason: "stop" as const,
     timestamp: Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-  });
+  } as Parameters<SessionManager["appendMessage"]>[0];
+  const sessionManager = SessionManager.open(sessionFile);
+  const messageId = sessionManager.appendMessage(message);
 
-  emitSessionTranscriptUpdate(sessionFile);
-  return { ok: true, sessionFile };
+  emitSessionTranscriptUpdate({ sessionFile, sessionKey, message, messageId });
+  return { ok: true, sessionFile, messageId };
 }
 
 async function transcriptHasIdempotencyKey(
   transcriptPath: string,
   idempotencyKey: string,
-): Promise<boolean> {
+): Promise<string | undefined> {
   try {
     const raw = await fs.promises.readFile(transcriptPath, "utf-8");
     for (const line of raw.split(/\r?\n/)) {
@@ -228,16 +230,23 @@ async function transcriptHasIdempotencyKey(
         continue;
       }
       try {
-        const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
-        if (parsed.message?.idempotencyKey === idempotencyKey) {
-          return true;
+        const parsed = JSON.parse(line) as {
+          id?: unknown;
+          message?: { idempotencyKey?: unknown };
+        };
+        if (
+          parsed.message?.idempotencyKey === idempotencyKey &&
+          typeof parsed.id === "string" &&
+          parsed.id
+        ) {
+          return parsed.id;
         }
       } catch {
         continue;
       }
     }
   } catch {
-    return false;
+    return undefined;
   }
-  return false;
+  return undefined;
 }

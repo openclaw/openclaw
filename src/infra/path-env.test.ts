@@ -33,6 +33,10 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...wrapped, default: wrapped };
 });
 
+vi.mock("./env.js", () => ({
+  isTruthyEnvValue: (value?: string) => value === "1" || value === "true",
+}));
+
 let ensureOpenClawCliOnPath: typeof import("./path-env.js").ensureOpenClawCliOnPath;
 
 describe("ensureOpenClawCliOnPath", () => {

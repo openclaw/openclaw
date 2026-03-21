@@ -112,7 +112,8 @@ describe("model-selection", () => {
       expect(normalizeProviderId("z-ai")).toBe("zai");
       expect(normalizeProviderId("OpenCode-Zen")).toBe("opencode");
       expect(normalizeProviderId("qwen")).toBe("qwen-portal");
-      expect(normalizeProviderId("kimi-code")).toBe("kimi-coding");
+      expect(normalizeProviderId("kimi-code")).toBe("kimi");
+      expect(normalizeProviderId("kimi-coding")).toBe("kimi");
       expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("amazon-bedrock")).toBe("amazon-bedrock");
@@ -194,6 +195,15 @@ describe("model-selection", () => {
         expected: { provider: "google", model: "gemini-3.1-flash-lite-preview" },
       },
       {
+        name: "normalizes deprecated xai grok 4.20 beta ids",
+        variants: [
+          "xai/grok-4.20-experimental-beta-0304-reasoning",
+          "grok-4.20-experimental-beta-0304-reasoning",
+        ],
+        defaultProvider: "xai",
+        expected: { provider: "xai", model: "grok-4.20-reasoning" },
+      },
+      {
         name: "keeps OpenAI codex refs on the openai provider",
         variants: ["openai/gpt-5.3-codex", "gpt-5.3-codex"],
         defaultProvider: "openai",
@@ -241,6 +251,12 @@ describe("model-selection", () => {
         defaultProvider: "anthropic",
         expected: { provider: "openai", model: "gpt-5.3-codex-codex" },
       },
+      {
+        name: "normalizes gemini 3.1 flash-lite ids for google-vertex",
+        variants: ["google-vertex/gemini-3.1-flash-lite", "gemini-3.1-flash-lite"],
+        defaultProvider: "google-vertex",
+        expected: { provider: "google-vertex", model: "gemini-3.1-flash-lite-preview" },
+      },
     ])("$name", ({ variants, defaultProvider, expected }) => {
       expectParsedModelVariants(variants, defaultProvider, expected);
     });
@@ -252,7 +268,6 @@ describe("model-selection", () => {
         "anthropic/claude-opus-4-6",
       );
     });
-
     it.each(["", "  ", "/", "anthropic/", "/model"])("returns null for invalid ref %j", (raw) => {
       expect(parseModelRef(raw, "anthropic")).toBeNull();
     });

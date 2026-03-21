@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { WebSocket } from "ws";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
+import { sessionsHandlers } from "./server-methods/sessions.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
@@ -17,6 +18,7 @@ import {
   trackConnectChallengeNonce,
   writeSessionStore,
 } from "./test-helpers.js";
+import { getReplyFromConfig } from "./test-helpers.mocks.js";
 
 const sessionCleanupMocks = vi.hoisted(() => ({
   clearSessionQueues: vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] })),
@@ -102,12 +104,21 @@ vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../discord/monitor/thread-bindings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../discord/monitor/thread-bindings.js")>();
+vi.mock("../plugins/runtime/runtime-discord.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/runtime/runtime-discord.js")>();
   return {
     ...actual,
-    unbindThreadBindingsBySessionKey: (params: unknown) =>
-      threadBindingMocks.unbindThreadBindingsBySessionKey(params),
+    createRuntimeDiscord: () => {
+      const runtime = actual.createRuntimeDiscord();
+      return {
+        ...runtime,
+        threadBindings: {
+          ...runtime.threadBindings,
+          unbindBySessionKey: (params: unknown) =>
+            threadBindingMocks.unbindThreadBindingsBySessionKey(params),
+        },
+      };
+    },
   };
 });
 
@@ -231,6 +242,324 @@ describe("gateway server sessions", () => {
     );
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
+  });
+
+  test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
+    const { dir, storePath } = await createSessionStoreDir();
+    piSdkMock.enabled = true;
+    piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-parent",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    const { ws } = await openClient();
+
+    const created = await rpcReq<{
+      key?: string;
+      sessionId?: string;
+      entry?: {
+        label?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        parentSessionKey?: string;
+      };
+    }>(ws, "sessions.create", {
+      agentId: "ops",
+      label: "Dashboard Chat",
+      model: "openai/gpt-test-a",
+      parentSessionKey: "main",
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
+    expect(created.payload?.entry?.label).toBe("Dashboard Chat");
+    expect(created.payload?.entry?.providerOverride).toBe("openai");
+    expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
+    expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+    expect(created.payload?.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+
+    const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        sessionId?: string;
+        label?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        parentSessionKey?: string;
+      }
+    >;
+    const key = created.payload?.key as string;
+    expect(rawStore[key]).toMatchObject({
+      sessionId: created.payload?.sessionId,
+      label: "Dashboard Chat",
+      providerOverride: "openai",
+      modelOverride: "gpt-test-a",
+      parentSessionKey: "agent:main:main",
+    });
+
+    const transcriptPath = path.join(dir, `${created.payload?.sessionId}.jsonl`);
+    const transcript = await fs.readFile(transcriptPath, "utf-8");
+    const [headerLine] = transcript.trim().split(/\r?\n/, 1);
+    expect(JSON.parse(headerLine) as { type?: string; id?: string }).toMatchObject({
+      type: "session",
+      id: created.payload?.sessionId,
+    });
+
+    ws.close();
+  });
+
+  test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {
+    await createSessionStoreDir();
+    const { ws } = await openClient();
+
+    const key = "agent:ops-agent:dashboard:direct:subagent-orchestrator";
+    const created = await rpcReq<{
+      key?: string;
+      sessionId?: string;
+      entry?: {
+        label?: string;
+      };
+    }>(ws, "sessions.create", {
+      key,
+      label: "Dashboard Orchestrator",
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toBe(key);
+    expect(created.payload?.entry?.label).toBe("Dashboard Orchestrator");
+    expect(created.payload?.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+
+    ws.close();
+  });
+
+  test("sessions.create rejects unknown parentSessionKey", async () => {
+    await createSessionStoreDir();
+    const { ws } = await openClient();
+
+    const created = await rpcReq(ws, "sessions.create", {
+      agentId: "ops",
+      parentSessionKey: "agent:main:missing",
+    });
+
+    expect(created.ok).toBe(false);
+    expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
+      "unknown parent session",
+    );
+
+    ws.close();
+  });
+
+  test("sessions.create can start the first agent turn from an initial task", async () => {
+    const { ws } = await openClient();
+    const replySpy = vi.mocked(getReplyFromConfig);
+    const callsBefore = replySpy.mock.calls.length;
+
+    const created = await rpcReq<{
+      key?: string;
+      sessionId?: string;
+      runStarted?: boolean;
+      runId?: string;
+      messageSeq?: number;
+    }>(ws, "sessions.create", {
+      agentId: "ops",
+      label: "Dashboard Chat",
+      task: "hello from create",
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
+    expect(created.payload?.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(created.payload?.runStarted).toBe(true);
+    expect(created.payload?.runId).toBeTruthy();
+    expect(created.payload?.messageSeq).toBe(1);
+
+    await vi.waitFor(() => replySpy.mock.calls.length > callsBefore);
+    const ctx = replySpy.mock.calls.at(-1)?.[0] as
+      | { Body?: string; SessionKey?: string }
+      | undefined;
+    expect(ctx?.Body).toContain("hello from create");
+    expect(ctx?.SessionKey).toBe(created.payload?.key);
+
+    ws.close();
+  });
+
+  test("sessions.list surfaces transcript usage fallbacks and parent child relationships", async () => {
+    const { dir } = await createSessionStoreDir();
+    testState.agentConfig = {
+      models: {
+        "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
+      },
+    };
+    await fs.writeFile(
+      path.join(dir, "sess-parent.jsonl"),
+      `${JSON.stringify({ type: "session", version: 1, id: "sess-parent" })}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(dir, "sess-child.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-child" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 2_000,
+              output: 500,
+              cacheRead: 1_000,
+              cost: { total: 0.0042 },
+            },
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "openclaw",
+            model: "delivery-mirror",
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-parent",
+          updatedAt: Date.now(),
+        },
+        "dashboard:child": {
+          sessionId: "sess-child",
+          updatedAt: Date.now() - 1_000,
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4-6",
+          parentSessionKey: "agent:main:main",
+          totalTokens: 0,
+          totalTokensFresh: false,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const listed = await rpcReq<{
+      sessions: Array<{
+        key: string;
+        parentSessionKey?: string;
+        childSessions?: string[];
+        totalTokens?: number;
+        totalTokensFresh?: boolean;
+        contextTokens?: number;
+        estimatedCostUsd?: number;
+      }>;
+    }>(ws, "sessions.list", {});
+
+    expect(listed.ok).toBe(true);
+    const parent = listed.payload?.sessions.find((session) => session.key === "agent:main:main");
+    const child = listed.payload?.sessions.find(
+      (session) => session.key === "agent:main:dashboard:child",
+    );
+    expect(parent?.childSessions).toEqual(["agent:main:dashboard:child"]);
+    expect(child?.parentSessionKey).toBe("agent:main:main");
+    expect(child?.totalTokens).toBe(3_000);
+    expect(child?.totalTokensFresh).toBe(true);
+    expect(child?.contextTokens).toBe(1_048_576);
+    expect(child?.estimatedCostUsd).toBe(0.0042);
+
+    ws.close();
+  });
+
+  test("sessions.changed mutation events include live usage metadata", async () => {
+    const { dir } = await createSessionStoreDir();
+    await fs.writeFile(
+      path.join(dir, "sess-main.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          id: "msg-usage-zero",
+          message: {
+            role: "assistant",
+            provider: "openai-codex",
+            model: "gpt-5.3-codex-spark",
+            usage: {
+              input: 5_107,
+              output: 1_827,
+              cacheRead: 1_536,
+              cacheWrite: 0,
+              cost: { total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "openai-codex",
+          model: "gpt-5.3-codex-spark",
+          contextTokens: 123_456,
+          totalTokens: 0,
+          totalTokensFresh: false,
+        },
+      },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    const respond = vi.fn();
+    await sessionsHandlers["sessions.patch"]({
+      req: {} as never,
+      params: {
+        key: "main",
+        label: "Renamed",
+      },
+      respond,
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        loadGatewayModelCatalog: async () => ({ providers: [] }),
+      } as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, key: "agent:main:main" }),
+      undefined,
+    );
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        reason: "patch",
+        totalTokens: 6_643,
+        totalTokensFresh: true,
+        contextTokens: 123_456,
+        estimatedCostUsd: 0,
+        modelProvider: "openai-codex",
+        model: "gpt-5.3-codex-spark",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
   });
 
   test("lists and patches session store via sessions.* RPC", async () => {

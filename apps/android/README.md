@@ -27,9 +27,33 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 
 ```bash
 cd apps/android
-./gradlew :app:assembleDebug
-./gradlew :app:installDebug
-./gradlew :app:testDebugUnitTest
+./gradlew :app:assemblePlayDebug
+./gradlew :app:installPlayDebug
+./gradlew :app:testPlayDebugUnitTest
+cd ../..
+bun run android:bundle:release
+```
+
+Third-party debug flavor:
+
+```bash
+cd apps/android
+./gradlew :app:assembleThirdPartyDebug
+./gradlew :app:installThirdPartyDebug
+./gradlew :app:testThirdPartyDebugUnitTest
+```
+
+`bun run android:bundle:release` auto-bumps Android `versionName`/`versionCode` in `apps/android/app/build.gradle.kts`, then builds two signed release bundles:
+
+- Play build: `apps/android/build/release-bundles/openclaw-<version>-play-release.aab`
+- Third-party build: `apps/android/build/release-bundles/openclaw-<version>-third-party-release.aab`
+
+Flavor-specific direct Gradle tasks:
+
+```bash
+cd apps/android
+./gradlew :app:bundlePlayRelease
+./gradlew :app:bundleThirdPartyRelease
 ```
 
 ## Kotlin Lint + Format
@@ -171,6 +195,48 @@ More details: `docs/platforms/android.md`.
 - Camera:
   - `CAMERA` for `camera.snap` and `camera.clip`
   - `RECORD_AUDIO` for `camera.clip` when `includeAudio=true`
+
+## Google Play Restricted Permissions
+
+As of March 19, 2026, these manifest permissions are the main Google Play policy risk for this app:
+
+- `READ_SMS`
+- `SEND_SMS`
+- `READ_CALL_LOG`
+
+Why these matter:
+
+- Google Play treats SMS and Call Log access as highly restricted. In most cases, Play only allows them for the default SMS app, default Phone app, default Assistant, or a narrow policy exception.
+- Review usually involves a `Permissions Declaration Form`, policy justification, and demo video evidence in Play Console.
+- If we want a Play-safe build, these should be the first permissions removed behind a dedicated product flavor / variant.
+
+Current OpenClaw Android implication:
+
+- APK / sideload build can keep SMS and Call Log features.
+- Google Play build should exclude SMS send/search and Call Log search unless the product is intentionally positioned and approved as a default-handler exception case.
+- The repo now ships this split as Android product flavors:
+  - `play`: removes `READ_SMS`, `SEND_SMS`, and `READ_CALL_LOG`, and hides SMS / Call Log surfaces in onboarding, settings, and advertised node capabilities.
+  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log functionality.
+
+Policy links:
+
+- [Google Play SMS and Call Log policy](https://support.google.com/googleplay/android-developer/answer/10208820?hl=en)
+- [Google Play sensitive permissions policy hub](https://support.google.com/googleplay/android-developer/answer/16558241)
+- [Android default handlers guide](https://developer.android.com/guide/topics/permissions/default-handlers)
+
+Other Play-restricted surfaces to watch if added later:
+
+- `ACCESS_BACKGROUND_LOCATION`
+- `MANAGE_EXTERNAL_STORAGE`
+- `QUERY_ALL_PACKAGES`
+- `REQUEST_INSTALL_PACKAGES`
+- `AccessibilityService`
+
+Reference links:
+
+- [Background location policy](https://support.google.com/googleplay/android-developer/answer/9799150)
+- [AccessibilityService policy](https://support.google.com/googleplay/android-developer/answer/10964491?hl=en-GB)
+- [Photo and Video Permissions policy](https://support.google.com/googleplay/android-developer/answer/14594990)
 
 ## Integration Capability Test (Preconditioned)
 
