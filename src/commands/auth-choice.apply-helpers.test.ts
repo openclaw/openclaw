@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles.js";
+import { authProfilePathForAgent, setupAuthTestEnv } from "../../test/helpers/auth-wizard.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   ensureApiKeyFromOptionEnvOrPrompt,
@@ -8,7 +8,6 @@ import {
   maybeApplyApiKeyFromOption,
   normalizeTokenProviderInput,
 } from "./auth-choice.apply-helpers.js";
-import { authProfilePathForAgent, setupAuthTestEnv } from "../../test/helpers/auth-wizard.js";
 
 const ORIGINAL_MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
 const ORIGINAL_MINIMAX_OAUTH_TOKEN = process.env.MINIMAX_OAUTH_TOKEN;
@@ -563,11 +562,11 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
   });
 
   it("does not reuse the main agent store for a secondary agent prompt", async () => {
-    const { stateDir, agentDir } = await setupAuthTestEnv("openclaw-auth-scope-", {
-      agentSubdir: "agents/minimax",
-    });
+    const { stateDir, agentDir: mainAgentDir } = await setupAuthTestEnv("openclaw-auth-scope-");
+    const agentDir = `${stateDir}/agents/minimax`;
+    await fs.mkdir(agentDir, { recursive: true });
     await fs.writeFile(
-      resolveAuthStorePathForDisplay(undefined),
+      authProfilePathForAgent(mainAgentDir),
       JSON.stringify(
         {
           version: 1,

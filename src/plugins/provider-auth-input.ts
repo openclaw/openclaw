@@ -1,15 +1,13 @@
 import fs from "node:fs/promises";
 import {
-  getCustomProviderApiKey,
-  resolveEnvApiKey,
-} from "../agents/model-auth.js";
-import {
+  ensureAuthProfileStore,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
   type AuthProfileCredential,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
+import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   isValidEnvSecretRefId,
@@ -162,7 +160,7 @@ async function loadScopedAuthProfileStore(agentDir?: string): Promise<AuthProfil
         ...(parsed.usageStats ? { usageStats: parsed.usageStats } : {}),
       };
     } catch {
-      return { version: 1, profiles: {} };
+      return ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
     }
   }
 
@@ -187,7 +185,9 @@ async function loadScopedAuthProfileStore(agentDir?: string): Promise<AuthProfil
     return {
       version: Number(parsed?.version ?? 1),
       profiles,
-      ...(parsed?.order && typeof parsed.order === "object" ? { order: parsed.order as Record<string, string[]> } : {}),
+      ...(parsed?.order && typeof parsed.order === "object"
+        ? { order: parsed.order as Record<string, string[]> }
+        : {}),
       ...(parsed?.lastGood && typeof parsed.lastGood === "object"
         ? { lastGood: parsed.lastGood as Record<string, string> }
         : {}),
@@ -631,8 +631,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
 
   if (existingApiKey && selectedMode === "plaintext") {
     const existingCredentialLabel =
-      existingApiKey.source.startsWith("env:") ||
-      existingApiKey.source.startsWith("shell env:")
+      existingApiKey.source.startsWith("env:") || existingApiKey.source.startsWith("shell env:")
         ? params.envLabel
         : `${params.provider} credentials`;
     const useExisting = await params.prompter.confirm({
