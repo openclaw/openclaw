@@ -188,6 +188,7 @@ Verify recovery: `openclaw gateway status --deep` and `openclaw channels status 
   - restart the runtime from that checkout
   - print proof lines for branch, runtime checkout path, command path, pid, and RPC/listener health
 - Reason: remote `main`, local `main`, and the actual running checkout are three different things. A PR can be merged correctly while the live bot still runs stale code from another branch or worktree.
+- For branch/worktree hygiene and anti-footgun checks, see `docs/debug/worktree-branch-survival.md`.
 - Fork maintenance update policy: keep auto-updates disabled (`openclaw config set update.auto.enabled false`).
 - Fork maintenance update policy: disable startup update checks (`openclaw config set update.checkOnStart false`).
 - Fork maintenance update policy: do not use `openclaw update` for fork maintenance; use explicit git sync commands (`git fetch upstream --prune`, `git rebase upstream/main`).
