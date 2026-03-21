@@ -1,132 +1,18 @@
-import { createServer, type RequestListener } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
-import type { ResolvedZaloAccount } from "./accounts.js";
-import { clearZaloWebhookSecurityStateForTest, monitorZaloProvider } from "./monitor.js";
-
-const setWebhookMock = vi.hoisted(() => vi.fn(async () => ({ ok: true, result: { url: "" } })));
-const deleteWebhookMock = vi.hoisted(() => vi.fn(async () => ({ ok: true, result: { url: "" } })));
-const getWebhookInfoMock = vi.hoisted(() => vi.fn(async () => ({ ok: true, result: { url: "" } })));
-const getUpdatesMock = vi.hoisted(() => vi.fn(() => new Promise(() => {})));
-const sendChatActionMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
-const sendMessageMock = vi.hoisted(() =>
-  vi.fn(async () => ({ ok: true, result: { message_id: "reply-zalo-1" } })),
-);
-const sendPhotoMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
-const getZaloRuntimeMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./api.js")>();
-  return {
-    ...actual,
-    deleteWebhook: deleteWebhookMock,
-    getUpdates: getUpdatesMock,
-    getWebhookInfo: getWebhookInfoMock,
-    sendChatAction: sendChatActionMock,
-    sendMessage: sendMessageMock,
-    sendPhoto: sendPhotoMock,
-    setWebhook: setWebhookMock,
-  };
-});
-
-vi.mock("./runtime.js", () => ({
-  getZaloRuntime: getZaloRuntimeMock,
-}));
-
-async function withServer(handler: RequestListener, fn: (baseUrl: string) => Promise<void>) {
-  const server = createServer(handler);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const address = server.address() as AddressInfo | null;
-  if (!address) {
-    throw new Error("missing server address");
-  }
-  try {
-    await fn(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-}
-
-function createLifecycleConfig(): OpenClawConfig {
-  return {
-    channels: {
-      zalo: {
-        enabled: true,
-        accounts: {
-          "acct-zalo-lifecycle": {
-            enabled: true,
-            webhookUrl: "https://example.com/hooks/zalo",
-            webhookSecret: "supersecret", // pragma: allowlist secret
-            dmPolicy: "open",
-          },
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
-
-function createLifecycleAccount(): ResolvedZaloAccount {
-  return {
-    accountId: "acct-zalo-lifecycle",
-    enabled: true,
-    token: "zalo-token",
-    tokenSource: "config",
-    config: {
-      webhookUrl: "https://example.com/hooks/zalo",
-      webhookSecret: "supersecret", // pragma: allowlist secret
-      dmPolicy: "open",
-    },
-  } as ResolvedZaloAccount;
-}
-
-function createRuntimeEnv() {
-  return {
-    log: vi.fn<(message: string) => void>(),
-    error: vi.fn<(message: string) => void>(),
-  };
-}
-
-function createTextUpdate(messageId: string) {
-  return {
-    event_name: "message.text.received",
-    message: {
-      from: { id: "user-1", name: "User One" },
-      chat: { id: "dm-chat-1", chat_type: "PRIVATE" as const },
-      message_id: messageId,
-      date: Math.floor(Date.now() / 1000),
-      text: "hello from zalo",
-    },
-  };
-}
-
-async function settleAsyncWork(): Promise<void> {
-  for (let i = 0; i < 6; i += 1) {
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-}
-
-async function postWebhookUpdate(params: {
-  baseUrl: string;
-  path: string;
-  secret: string;
-  payload: Record<string, unknown>;
-}) {
-  return await fetch(`${params.baseUrl}${params.path}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-bot-api-secret-token": params.secret,
-    },
-    body: JSON.stringify(params.payload),
-  });
-}
+import {
+  createLifecycleAccount,
+  createLifecycleConfig,
+  createTextUpdate,
+  getZaloRuntimeMock,
+  postWebhookUpdate,
+  resetLifecycleTestState,
+  sendMessageMock,
+  settleAsyncWork,
+  startWebhookLifecycleMonitor,
+} from "../../../test/helpers/extensions/zalo-lifecycle.js";
+import { withServer } from "../../../test/helpers/http-test-server.js";
+import type { PluginRuntime } from "../runtime-api.js";
 
 describe("Zalo reply-once lifecycle", () => {
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
@@ -142,8 +28,7 @@ describe("Zalo reply-once lifecycle", () => {
   const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn();
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    clearZaloWebhookSecurityStateForTest();
+    resetLifecycleTestState();
 
     getZaloRuntimeMock.mockReturnValue(
       createPluginRuntimeMock({
@@ -168,7 +53,7 @@ describe("Zalo reply-once lifecycle", () => {
   });
 
   afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resetLifecycleTestState();
   });
 
   it("routes one accepted webhook event to one visible reply across duplicate replay", async () => {
@@ -178,32 +63,26 @@ describe("Zalo reply-once lifecycle", () => {
       },
     );
 
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry);
-    const abort = new AbortController();
-    const runtime = createRuntimeEnv();
-    const run = monitorZaloProvider({
-      token: "zalo-token",
-      account: createLifecycleAccount(),
-      config: createLifecycleConfig(),
-      runtime,
-      abortSignal: abort.signal,
-      useWebhook: true,
-      webhookUrl: "https://example.com/hooks/zalo",
-      webhookSecret: "supersecret",
+    const { abort, route, run } = await startWebhookLifecycleMonitor({
+      account: createLifecycleAccount({
+        accountId: "acct-zalo-lifecycle",
+        dmPolicy: "open",
+      }),
+      config: createLifecycleConfig({
+        accountId: "acct-zalo-lifecycle",
+        dmPolicy: "open",
+      }),
     });
-
-    await vi.waitFor(() => expect(setWebhookMock).toHaveBeenCalledTimes(1));
-    expect(registry.httpRoutes).toHaveLength(1);
-    const route = registry.httpRoutes[0];
-    if (!route) {
-      throw new Error("missing plugin HTTP route");
-    }
 
     await withServer(
       (req, res) => route.handler(req, res),
       async (baseUrl) => {
-        const payload = createTextUpdate(`zalo-replay-${Date.now()}`);
+        const payload = createTextUpdate({
+          messageId: `zalo-replay-${Date.now()}`,
+          userId: "user-1",
+          userName: "User One",
+          chatId: "dm-chat-1",
+        });
         const first = await postWebhookUpdate({
           baseUrl,
           path: "/hooks/zalo",
@@ -265,31 +144,26 @@ describe("Zalo reply-once lifecycle", () => {
       },
     );
 
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry);
-    const abort = new AbortController();
-    const runtime = createRuntimeEnv();
-    const run = monitorZaloProvider({
-      token: "zalo-token",
-      account: createLifecycleAccount(),
-      config: createLifecycleConfig(),
-      runtime,
-      abortSignal: abort.signal,
-      useWebhook: true,
-      webhookUrl: "https://example.com/hooks/zalo",
-      webhookSecret: "supersecret",
+    const { abort, route, run, runtime } = await startWebhookLifecycleMonitor({
+      account: createLifecycleAccount({
+        accountId: "acct-zalo-lifecycle",
+        dmPolicy: "open",
+      }),
+      config: createLifecycleConfig({
+        accountId: "acct-zalo-lifecycle",
+        dmPolicy: "open",
+      }),
     });
-
-    await vi.waitFor(() => expect(setWebhookMock).toHaveBeenCalledTimes(1));
-    const route = registry.httpRoutes[0];
-    if (!route) {
-      throw new Error("missing plugin HTTP route");
-    }
 
     await withServer(
       (req, res) => route.handler(req, res),
       async (baseUrl) => {
-        const payload = createTextUpdate(`zalo-retry-${Date.now()}`);
+        const payload = createTextUpdate({
+          messageId: `zalo-retry-${Date.now()}`,
+          userId: "user-1",
+          userName: "User One",
+          chatId: "dm-chat-1",
+        });
         const first = await postWebhookUpdate({
           baseUrl,
           path: "/hooks/zalo",
