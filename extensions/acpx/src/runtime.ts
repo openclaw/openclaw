@@ -24,6 +24,7 @@ import {
   resolveAcpxAgentCommand,
 } from "./runtime-internals/mcp-agent-command.js";
 import {
+  killProcessTree,
   resolveSpawnFailure,
   type SpawnCommandCache,
   type SpawnCommandOptions,
@@ -565,6 +566,7 @@ export class AcpxRuntime implements AcpRuntime {
         args,
         cwd: state.cwd,
         stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
+        detached: process.platform !== "win32",
       },
       this.spawnCommandOptions,
     );
@@ -650,6 +652,17 @@ export class AcpxRuntime implements AcpRuntime {
       }
     } finally {
       lines.close();
+      const childStillRunning = child.exitCode === null && child.signalCode === null;
+      if (input.signal?.aborted || childStillRunning) {
+        if (childStillRunning && !input.signal?.aborted) {
+          this.logger?.warn?.(
+            "acpx child process still running after runTurn iteration; forcing cleanup",
+          );
+        }
+        await killProcessTree(child).catch((err) => {
+          this.logger?.warn?.(`acpx runtime child cleanup failed: ${String(err)}`);
+        });
+      }
       if (input.signal) {
         input.signal.removeEventListener("abort", onAbort);
       }
