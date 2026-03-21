@@ -1299,7 +1299,7 @@ export function renderChat(props: ChatProps) {
             </button>
 
             ${
-              canAbort && (isBusy || props.sending)
+              canAbort
                 ? html`
                   <button class="chat-send-btn chat-send-btn--stop" @click=${props.onAbort} title="Stop">
                     ${icons.stop}
