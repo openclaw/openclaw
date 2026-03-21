@@ -37,6 +37,6 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   vllm: ["VLLM_API_KEY"],
   volcengine: ["VOLCANO_ENGINE_API_KEY"],
   xai: ["XAI_API_KEY"],
-  xiaomi: ["XIAOMI_API_KEY"],
+  xiaomi: ["MIMO_API_KEY", "XIAOMI_API_KEY"],
   zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
 } as const satisfies Record<string, readonly string[]>;

@@ -21,6 +21,7 @@ describe("resolveProviderAuths key normalization", () => {
     Z_AI_API_KEY: undefined,
     MINIMAX_API_KEY: undefined,
     MINIMAX_CODE_PLAN_KEY: undefined,
+    MIMO_API_KEY: undefined,
     XIAOMI_API_KEY: undefined,
   } satisfies Record<string, string | undefined>;
 
@@ -234,6 +235,18 @@ describe("resolveProviderAuths key normalization", () => {
         MINIMAX_API_KEY: "api-key",
       },
       expected: [{ provider: "minimax", token: "code-plan-key" }],
+    },
+    {
+      name: "accepts MIMO_API_KEY for xiaomi usage auth",
+      providers: ["xiaomi"] as const,
+      env: { MIMO_API_KEY: "mimo-\r\nkey" },
+      expected: [{ provider: "xiaomi", token: "mimo-key" }],
+    },
+    {
+      name: "prefers MIMO_API_KEY over XIAOMI_API_KEY for xiaomi usage auth",
+      providers: ["xiaomi"] as const,
+      env: { MIMO_API_KEY: "mimo-key", XIAOMI_API_KEY: "xiao-key" },
+      expected: [{ provider: "xiaomi", token: "mimo-key" }],
     },
   ] satisfies Array<{
     name: string;

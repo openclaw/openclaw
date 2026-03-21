@@ -266,7 +266,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - NVIDIA: `nvidia` (`NVIDIA_API_KEY`)
 - Together: `together` (`TOGETHER_API_KEY`)
 - Venice: `venice` (`VENICE_API_KEY`)
-- Xiaomi: `xiaomi` (`XIAOMI_API_KEY`)
+- Xiaomi: `xiaomi` (`MIMO_API_KEY` or `XIAOMI_API_KEY`)
 - Vercel AI Gateway: `vercel-ai-gateway` (`AI_GATEWAY_API_KEY`)
 - Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`)
 - Cloudflare AI Gateway: `cloudflare-ai-gateway` (`CLOUDFLARE_AI_GATEWAY_API_KEY`)

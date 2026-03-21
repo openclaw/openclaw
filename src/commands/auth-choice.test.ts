@@ -126,6 +126,7 @@ describe("applyAuthChoice", () => {
     "MISTRAL_API_KEY",
     "KIMI_API_KEY",
     "GEMINI_API_KEY",
+    "MIMO_API_KEY",
     "XIAOMI_API_KEY",
     "VENICE_API_KEY",
     "OPENCODE_API_KEY",
