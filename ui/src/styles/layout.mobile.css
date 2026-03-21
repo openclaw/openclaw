@@ -17,11 +17,6 @@
     grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
   }
 
-  /* Hide chat content-header on mobile - controls are in topbar gear menu */
-  .content-header--chat {
-    display: none;
-  }
-
   .shell-nav,
   .shell--nav-collapsed .shell-nav {
     position: fixed;
@@ -237,6 +232,11 @@
 
 /* Mobile-specific styles */
 @media (max-width: 768px) {
+  /* Hide chat content-header on mobile - controls are in topbar gear menu */
+  .content-header--chat {
+    display: none;
+  }
+
   .shell {
     --shell-pad: 8px;
     --shell-gap: 8px;
