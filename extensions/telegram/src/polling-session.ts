@@ -75,6 +75,8 @@ export class TelegramPollingSession {
   #webhookCleared = false;
   #forceRestarted = false;
   #outboundRestartSignaled = false;
+  #pollCycleCounter = 0;
+  #activePollCycleId = 0;
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
 
@@ -92,8 +94,14 @@ export class TelegramPollingSession {
     this.#activeFetchAbort?.abort();
   }
 
-  signalRecoverableOutboundNetworkError(err: unknown) {
+  signalRecoverableOutboundNetworkError(err: unknown, pollCycleId?: number) {
     if (this.opts.abortSignal?.aborted || this.#outboundRestartSignaled) {
+      return;
+    }
+    if (
+      typeof pollCycleId === "number" &&
+      (pollCycleId === 0 || this.#activePollCycleId !== pollCycleId)
+    ) {
       return;
     }
     const activeRunner = this.#activeRunner;
@@ -162,6 +170,7 @@ export class TelegramPollingSession {
   async #createPollingBot(): Promise<TelegramBot | undefined> {
     const fetchAbortController = new AbortController();
     this.#activeFetchAbort = fetchAbortController;
+    const pollCycleId = this.#pollCycleCounter + 1;
     try {
       return createTelegramBot({
         token: this.opts.token,
@@ -176,7 +185,7 @@ export class TelegramPollingSession {
         },
         telegramTransport: this.opts.telegramTransport,
         onRecoverableSendChatActionNetworkFailure: ({ error }) => {
-          this.signalRecoverableOutboundNetworkError(error);
+          this.signalRecoverableOutboundNetworkError(error, pollCycleId);
         },
       });
     } catch (err) {
@@ -224,6 +233,8 @@ export class TelegramPollingSession {
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
     await this.#confirmPersistedOffset(bot);
     this.#outboundRestartSignaled = false;
+    const pollCycleId = ++this.#pollCycleCounter;
+    this.#activePollCycleId = pollCycleId;
     const pollStallThresholdMs = resolvePollStallThresholdMs(this.opts.pollStallThresholdMs);
     const pollWatchdogIntervalMs = resolvePollWatchdogIntervalMs(pollStallThresholdMs);
 
@@ -339,6 +350,9 @@ export class TelegramPollingSession {
       await waitForGracefulStop(stopRunner);
       await waitForGracefulStop(stopBot);
       this.#activeRunner = undefined;
+      if (this.#activePollCycleId === pollCycleId) {
+        this.#activePollCycleId = 0;
+      }
       if (this.#activeFetchAbort === fetchAbortController) {
         this.#activeFetchAbort = undefined;
       }

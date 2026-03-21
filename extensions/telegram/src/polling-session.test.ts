@@ -33,6 +33,16 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
 
 import { TelegramPollingSession } from "./polling-session.js";
 
+const createDeferred = () => {
+  let resolve!: () => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};
+
 describe("TelegramPollingSession", () => {
   beforeEach(() => {
     runMock.mockReset();
@@ -97,5 +107,98 @@ describe("TelegramPollingSession", () => {
     expect(runMock).toHaveBeenCalledTimes(2);
     expect(computeBackoffMock).toHaveBeenCalledTimes(1);
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores recoverable outbound restart signals from stale poll cycles", async () => {
+    const abort = new AbortController();
+    const cycleCallbacks: Array<(params: { error: unknown; consecutiveFailures: number }) => void> =
+      [];
+    const makeBot = () => ({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        getUpdates: vi.fn(async () => []),
+        config: { use: vi.fn() },
+      },
+      stop: vi.fn(async () => undefined),
+    });
+    createTelegramBotMock
+      .mockImplementationOnce((opts) => {
+        cycleCallbacks.push(opts.onRecoverableSendChatActionNetworkFailure);
+        return makeBot();
+      })
+      .mockImplementationOnce((opts) => {
+        cycleCallbacks.push(opts.onRecoverableSendChatActionNetworkFailure);
+        return makeBot();
+      });
+
+    const firstCycle = createDeferred();
+    const secondCycle = createDeferred();
+    let firstRunning = true;
+    let secondRunning = true;
+    const firstRunnerStop = vi.fn(async () => {
+      firstRunning = false;
+      firstCycle.resolve();
+    });
+    const secondRunnerStop = vi.fn(async () => {
+      secondRunning = false;
+      secondCycle.resolve();
+    });
+
+    runMock
+      .mockImplementationOnce(() => ({
+        task: () => firstCycle.promise,
+        stop: firstRunnerStop,
+        isRunning: () => firstRunning,
+      }))
+      .mockImplementationOnce(() => ({
+        task: () => secondCycle.promise,
+        stop: secondRunnerStop,
+        isRunning: () => secondRunning,
+      }));
+
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => null,
+      persistUpdateId: async () => undefined,
+      log: () => undefined,
+      telegramTransport: undefined,
+    });
+
+    const runPromise = session.runUntilAbort();
+
+    await vi.waitFor(() => {
+      expect(cycleCallbacks).toHaveLength(1);
+      expect(runMock).toHaveBeenCalledTimes(1);
+    });
+
+    cycleCallbacks[0]?.({
+      error: new Error("first cycle network error"),
+      consecutiveFailures: 2,
+    });
+
+    await vi.waitFor(() => {
+      expect(firstRunnerStop).toHaveBeenCalled();
+      expect(cycleCallbacks).toHaveLength(2);
+      expect(runMock).toHaveBeenCalledTimes(2);
+    });
+
+    cycleCallbacks[0]?.({
+      error: new Error("stale cycle should not restart active runner"),
+      consecutiveFailures: 3,
+    });
+
+    expect(secondRunnerStop).not.toHaveBeenCalled();
+
+    abort.abort();
+    await vi.waitFor(() => {
+      expect(secondRunnerStop).toHaveBeenCalled();
+    });
+    await runPromise;
   });
 });
