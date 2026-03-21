@@ -1,10 +1,15 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import {
+  listBundledWebSearchPluginIds,
+  resolveBundledWebSearchPluginId,
+} from "../plugins/bundled-web-search.js";
 import type {
   PluginWebSearchProviderEntry,
   WebSearchCredentialResolutionSource,
 } from "../plugins/types.js";
-import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.js";
+import { resolveBundledPluginWebSearchProviders } from "../plugins/web-search-providers.js";
+import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
 import { resolveSecretRefValues } from "./resolve.js";
@@ -63,6 +68,33 @@ function normalizeProvider(
     return normalized;
   }
   return undefined;
+}
+
+function hasCustomWebSearchPluginRisk(config: OpenClawConfig): boolean {
+  const plugins = config.plugins;
+  if (!plugins) {
+    return false;
+  }
+  if (Array.isArray(plugins.load?.paths) && plugins.load.paths.length > 0) {
+    return true;
+  }
+  if (plugins.installs && Object.keys(plugins.installs).length > 0) {
+    return true;
+  }
+
+  const bundledPluginIds = new Set<string>(listBundledWebSearchPluginIds());
+  const hasNonBundledPluginId = (pluginId: string) => !bundledPluginIds.has(pluginId.trim());
+  if (Array.isArray(plugins.allow) && plugins.allow.some(hasNonBundledPluginId)) {
+    return true;
+  }
+  if (Array.isArray(plugins.deny) && plugins.deny.some(hasNonBundledPluginId)) {
+    return true;
+  }
+  if (plugins.entries && Object.keys(plugins.entries).some(hasNonBundledPluginId)) {
+    return true;
+  }
+
+  return false;
 }
 
 function readNonEmptyEnvValue(
@@ -208,23 +240,16 @@ function ensureObject(target: Record<string, unknown>, key: string): Record<stri
 
 function setResolvedWebSearchApiKey(params: {
   resolvedConfig: OpenClawConfig;
-  provider: WebSearchProvider;
+  provider: PluginWebSearchProviderEntry;
   value: string;
-  sourceConfig: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
 }): void {
   const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
   const web = ensureObject(tools, "web");
   const search = ensureObject(web, "search");
-  const provider = resolvePluginWebSearchProviders({
-    config: params.sourceConfig,
-    env: { ...process.env, ...params.env },
-    bundledAllowlistCompat: true,
-  }).find((entry) => entry.id === params.provider);
-  if (provider?.setConfiguredCredentialValue) {
-    provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
+  if (params.provider.setConfiguredCredentialValue) {
+    params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
   }
-  provider?.setCredentialValue(search, params.value);
+  params.provider.setCredentialValue(search, params.value);
 }
 
 function setResolvedFirecrawlApiKey(params: {
@@ -268,12 +293,28 @@ export async function resolveRuntimeWebTools(params: {
   const tools = isRecord(params.sourceConfig.tools) ? params.sourceConfig.tools : undefined;
   const web = isRecord(tools?.web) ? tools.web : undefined;
   const search = isRecord(web?.search) ? web.search : undefined;
+  const rawProvider =
+    typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+  const configuredBundledPluginId = resolveBundledWebSearchPluginId(rawProvider);
   const providers = search
-    ? resolvePluginWebSearchProviders({
-        config: params.sourceConfig,
-        env: { ...process.env, ...params.context.env },
-        bundledAllowlistCompat: true,
-      })
+    ? configuredBundledPluginId
+      ? resolveBundledPluginWebSearchProviders({
+          config: params.sourceConfig,
+          env: { ...process.env, ...params.context.env },
+          bundledAllowlistCompat: true,
+          onlyPluginIds: [configuredBundledPluginId],
+        })
+      : !hasCustomWebSearchPluginRisk(params.sourceConfig)
+        ? resolveBundledPluginWebSearchProviders({
+            config: params.sourceConfig,
+            env: { ...process.env, ...params.context.env },
+            bundledAllowlistCompat: true,
+          })
+        : resolvePluginWebSearchProviders({
+            config: params.sourceConfig,
+            env: { ...process.env, ...params.context.env },
+            bundledAllowlistCompat: true,
+          })
     : [];
 
   const searchMetadata: RuntimeWebSearchMetadata = {
@@ -282,8 +323,6 @@ export async function resolveRuntimeWebTools(params: {
   };
 
   const searchEnabled = search?.enabled !== false;
-  const rawProvider =
-    typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
   const configuredProvider = normalizeProvider(rawProvider, providers);
 
   if (rawProvider && !configuredProvider) {
@@ -364,10 +403,8 @@ export async function resolveRuntimeWebTools(params: {
         if (resolution.value) {
           setResolvedWebSearchApiKey({
             resolvedConfig: params.resolvedConfig,
-            provider: provider.id,
+            provider,
             value: resolution.value,
-            sourceConfig: params.sourceConfig,
-            env: params.context.env,
           });
         }
         break;
@@ -378,10 +415,8 @@ export async function resolveRuntimeWebTools(params: {
         selectedResolution = resolution;
         setResolvedWebSearchApiKey({
           resolvedConfig: params.resolvedConfig,
-          provider: provider.id,
+          provider,
           value: resolution.value,
-          sourceConfig: params.sourceConfig,
-          env: params.context.env,
         });
         break;
       }

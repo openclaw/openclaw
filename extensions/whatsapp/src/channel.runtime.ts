@@ -6,8 +6,8 @@ import {
   readWebSelfId as readWebSelfIdImpl,
   webAuthExists as webAuthExistsImpl,
 } from "./auth-store.js";
+import { monitorWebChannel as monitorWebChannelImpl } from "./auto-reply/monitor.js";
 import { loginWeb as loginWebImpl } from "./login.js";
-import { monitorWebChannel as monitorWebChannelImpl } from "./runtime-api.js";
 import { whatsappSetupWizard as whatsappSetupWizardImpl } from "./setup-surface.js";
 
 type GetActiveWebListener = typeof import("./active-listener.js").getActiveWebListener;
@@ -20,7 +20,7 @@ type LoginWeb = typeof import("./login.js").loginWeb;
 type StartWebLoginWithQr = typeof import("./login-qr.js").startWebLoginWithQr;
 type WaitForWebLogin = typeof import("./login-qr.js").waitForWebLogin;
 type WhatsAppSetupWizard = typeof import("./setup-surface.js").whatsappSetupWizard;
-type MonitorWebChannel = typeof import("./runtime-api.js").monitorWebChannel;
+type MonitorWebChannel = typeof import("./auto-reply/monitor.js").monitorWebChannel;
 
 let loginQrPromise: Promise<typeof import("./login-qr.js")> | null = null;
 
@@ -75,8 +75,8 @@ export async function waitForWebLogin(
 
 export const whatsappSetupWizard: WhatsAppSetupWizard = { ...whatsappSetupWizardImpl };
 
-export async function monitorWebChannel(
+export function monitorWebChannel(
   ...args: Parameters<MonitorWebChannel>
 ): ReturnType<MonitorWebChannel> {
-  return await monitorWebChannelImpl(...args);
+  return monitorWebChannelImpl(...args);
 }

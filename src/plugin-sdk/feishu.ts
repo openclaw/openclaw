@@ -1,4 +1,4 @@
-// Narrow plugin-sdk surface for the bundled feishu plugin.
+// Private helper surface for the bundled feishu plugin.
 // Keep this list additive and scoped to symbols used under extensions/feishu.
 
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
@@ -38,7 +38,7 @@ export type {
 } from "../channels/plugins/types.adapters.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixContext } from "../channels/reply-prefix.js";
-export { createChannelReplyPipeline, createTypingCallbacks } from "./channel-reply-pipeline.js";
+export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig as ClawdbotConfig, OpenClawConfig } from "../config/config.js";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -70,7 +70,7 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export { feishuSetupWizard, feishuSetupAdapter } from "../../extensions/feishu/setup-api.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { readJsonFileWithFallback } from "./json-store.js";
-export { createChannelPairingController, createScopedPairingAccess } from "./channel-pairing.js";
+export { createChannelPairingController } from "./channel-pairing.js";
 export { createPersistentDedupe } from "./persistent-dedupe.js";
 export {
   buildBaseChannelStatusSummary,
@@ -82,7 +82,7 @@ export { withTempDownloadPath } from "./temp-path.js";
 export {
   buildFeishuConversationId,
   parseFeishuConversationId,
-} from "../../extensions/feishu/src/conversation-id.js";
+} from "../../extensions/feishu/api.js";
 export {
   createWebhookAnomalyTracker,
   createFixedWindowRateLimiter,

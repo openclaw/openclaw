@@ -1,20 +1,22 @@
 import { resolveIdentityNamePrefix } from "openclaw/plugin-sdk/agent-runtime";
-import { toLocationContext } from "openclaw/plugin-sdk/channel-runtime";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveInboundSessionEnvelopeContext } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  resolveInboundSessionEnvelopeContext,
+  toLocationContext,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-auth";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { recordSessionMetaFromInbound } from "openclaw/plugin-sdk/config-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
-import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/reply-runtime";
-import { formatInboundEnvelope } from "openclaw/plugin-sdk/reply-runtime";
-import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildHistoryContextFromEntries,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/reply-history";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -270,7 +272,7 @@ export async function processMessage(params: {
     ? await resolveWhatsAppCommandAuthorized({ cfg: params.cfg, msg: params.msg })
     : undefined;
   const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: params.route.agentId,
     channel: "whatsapp",
@@ -281,7 +283,7 @@ export async function processMessage(params: {
     Boolean(params.msg.selfE164) &&
     normalizeE164(params.msg.from) === normalizeE164(params.msg.selfE164 ?? "");
   const responsePrefix =
-    prefixOptions.responsePrefix ??
+    replyPipeline.responsePrefix ??
     (configuredResponsePrefix === undefined && isSelfChat
       ? resolveIdentityNamePrefix(params.cfg, params.route.agentId)
       : undefined);
@@ -394,7 +396,7 @@ export async function processMessage(params: {
     cfg: params.cfg,
     replyResolver: params.replyResolver,
     dispatcherOptions: {
-      ...prefixOptions,
+      ...replyPipeline,
       responsePrefix,
       onHeartbeatStrip: () => {
         if (!didLogHeartbeatStrip) {

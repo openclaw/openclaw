@@ -1,4 +1,4 @@
-import { resolveLoggerBackedRuntime } from "../../shared/runtime.js";
+import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";

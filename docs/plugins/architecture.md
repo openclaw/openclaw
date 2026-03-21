@@ -1,17 +1,23 @@
 ---
-summary: "Plugin architecture internals: capability model, ownership, contracts, load pipeline, runtime helpers"
+summary: "Plugin internals: capability model, ownership, contracts, load pipeline, and runtime helpers"
 read_when:
   - Building or debugging native OpenClaw plugins
   - Understanding the plugin capability model or ownership boundaries
   - Working on the plugin load pipeline or registry
   - Implementing provider runtime hooks or channel plugins
-title: "Plugin Architecture"
+title: "Plugin Internals"
+sidebarTitle: "Internals"
 ---
 
-# Plugin Architecture
+# Plugin Internals
 
-This page covers the internal architecture of the OpenClaw plugin system. For
-user-facing setup, discovery, and configuration, see [Plugins](/tools/plugin).
+<Info>
+  This page is for **plugin developers and contributors**. If you just want to
+  install and use plugins, see [Plugins](/tools/plugin). If you want to build
+  a plugin, see [Building Plugins](/plugins/building-plugins).
+</Info>
+
+This page covers the internal architecture of the OpenClaw plugin system.
 
 ## Public capability model
 
@@ -927,25 +933,31 @@ authoring plugins:
 - `openclaw/plugin-sdk/core` for the generic shared plugin-facing contract.
 - Stable channel primitives such as `openclaw/plugin-sdk/channel-setup`,
   `openclaw/plugin-sdk/channel-pairing`,
+  `openclaw/plugin-sdk/channel-contract`,
+  `openclaw/plugin-sdk/channel-feedback`,
+  `openclaw/plugin-sdk/channel-inbound`,
+  `openclaw/plugin-sdk/channel-lifecycle`,
   `openclaw/plugin-sdk/channel-reply-pipeline`,
+  `openclaw/plugin-sdk/command-auth`,
   `openclaw/plugin-sdk/secret-input`, and
   `openclaw/plugin-sdk/webhook-ingress` for shared setup/auth/reply/webhook
-  wiring.
+  wiring. `channel-inbound` is the shared home for debounce, mention matching,
+  envelope formatting, and inbound envelope context helpers.
 - Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
+  `openclaw/plugin-sdk/allow-from`,
   `openclaw/plugin-sdk/channel-config-schema`,
   `openclaw/plugin-sdk/channel-policy`,
-  `openclaw/plugin-sdk/channel-runtime`,
   `openclaw/plugin-sdk/config-runtime`,
+  `openclaw/plugin-sdk/infra-runtime`,
   `openclaw/plugin-sdk/agent-runtime`,
   `openclaw/plugin-sdk/lazy-runtime`,
   `openclaw/plugin-sdk/reply-history`,
   `openclaw/plugin-sdk/routing`,
+  `openclaw/plugin-sdk/status-helpers`,
   `openclaw/plugin-sdk/runtime-store`, and
   `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
-- Narrow channel-core subpaths such as `openclaw/plugin-sdk/discord-core`,
-  `openclaw/plugin-sdk/telegram-core`, and `openclaw/plugin-sdk/whatsapp-core`
-  for channel-specific primitives that should stay smaller than the full
-  channel helper barrels.
+- `openclaw/plugin-sdk/channel-runtime` remains only as a compatibility shim.
+  New code should import the narrower primitives instead.
 - Bundled extension internals remain private. External plugins should use only
   `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
   public entry points under `extensions/<id>/index.js`, `api.js`, `runtime-api.js`,
@@ -956,28 +968,44 @@ authoring plugins:
   `extensions/<id>/runtime-api.js` is the runtime-only barrel,
   `extensions/<id>/index.js` is the bundled plugin entry,
   and `extensions/<id>/setup-entry.js` is the setup plugin entry.
-- `openclaw/plugin-sdk/telegram` for Telegram channel plugin types and shared channel-facing helpers. Built-in Telegram implementation internals stay private to the bundled extension.
-- `openclaw/plugin-sdk/discord` for Discord channel plugin types and shared channel-facing helpers. Built-in Discord implementation internals stay private to the bundled extension.
-- `openclaw/plugin-sdk/slack` for Slack channel plugin types and shared channel-facing helpers. Built-in Slack implementation internals stay private to the bundled extension.
-- `openclaw/plugin-sdk/imessage` for iMessage channel plugin types and shared channel-facing helpers. Built-in iMessage implementation internals stay private to the bundled extension.
-- `openclaw/plugin-sdk/whatsapp` for WhatsApp channel plugin types and shared channel-facing helpers. Built-in WhatsApp implementation internals stay private to the bundled extension.
-- `openclaw/plugin-sdk/bluebubbles` remains public because it carries a small
-  focused helper surface that is shared intentionally.
+- No bundled channel-branded public subpaths remain. Channel-specific helper and
+  runtime seams live under `extensions/<id>/api.js` and `extensions/<id>/runtime-api.js`;
+  the public SDK contract is the generic shared primitives instead.
 
 Compatibility note:
 
 - Avoid the root `openclaw/plugin-sdk` barrel for new code.
 - Prefer the narrow stable primitives first. The newer setup/pairing/reply/
-  secret-input/webhook subpaths are the intended contract for new bundled and
-  external plugin work.
+  feedback/contract/inbound/threading/command/secret-input/webhook/infra/
+  allowlist/status/message-tool subpaths are the intended contract for new
+  bundled and external plugin work.
+  Target parsing/matching belongs on `openclaw/plugin-sdk/channel-targets`.
+  Message action gates and reaction message-id helpers belong on
+  `openclaw/plugin-sdk/channel-actions`.
 - Bundled extension-specific helper barrels are not stable by default. If a
   helper is only needed by a bundled extension, keep it behind the extension's
   local `api.js` or `runtime-api.js` seam instead of promoting it into
   `openclaw/plugin-sdk/<extension>`.
+- Channel-branded bundled bars stay private unless they are explicitly added
+  back to the public contract.
 - Capability-specific subpaths such as `image-generation`,
   `media-understanding`, and `speech` exist because bundled/native plugins use
   them today. Their presence does not by itself mean every exported helper is a
   long-term frozen external contract.
+
+## Message tool schemas
+
+Plugins should own channel-specific `describeMessageTool(...)` schema
+contributions. Keep provider-specific fields in the plugin, not in shared core.
+
+For shared portable schema fragments, reuse the generic helpers exported through
+`openclaw/plugin-sdk/channel-actions`:
+
+- `createMessageToolButtonsSchema()` for button-grid style payloads
+- `createMessageToolCardSchema()` for structured card payloads
+
+If a schema shape only makes sense for one provider, define it in that plugin's
+own source instead of promoting it into the shared SDK.
 
 ## Channel target resolution
 

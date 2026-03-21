@@ -1,5 +1,5 @@
+import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { installCommonResolveTargetErrorCases } from "../../shared/resolve-target-test-helpers.js";
 
 const runtimeMocks = vi.hoisted(() => ({
   chunkMarkdownText: vi.fn((text: string) => [text]),

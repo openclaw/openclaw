@@ -1,13 +1,15 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import {
-  createEmptyChannelResult,
   createPairingPrefixStripper,
-  createRawChannelSendResultAdapter,
-  createStaticReplyToModeResolver,
   createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
+} from "openclaw/plugin-sdk/channel-pairing";
+import {
+  createEmptyChannelResult,
+  createRawChannelSendResultAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
+import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import type {
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
@@ -39,7 +41,12 @@ import { probeZalouser } from "./probe.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
 import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
-import { resolveZalouserOutboundSessionRoute } from "./session-route.js";
+import {
+  normalizeZalouserTarget,
+  parseZalouserDirectoryGroupId,
+  parseZalouserOutboundTarget,
+  resolveZalouserOutboundSessionRoute,
+} from "./session-route.js";
 import { zalouserSetupAdapter } from "./setup-core.js";
 import { zalouserSetupWizard } from "./setup-surface.js";
 import { createZalouserPluginBase } from "./shared.js";
@@ -55,97 +62,6 @@ import {
 } from "./zalo-js.js";
 
 const ZALOUSER_TEXT_CHUNK_LIMIT = 2000;
-
-function stripZalouserTargetPrefix(raw: string): string {
-  return raw
-    .trim()
-    .replace(/^(zalouser|zlu):/i, "")
-    .trim();
-}
-
-function normalizePrefixedTarget(raw: string): string | undefined {
-  const trimmed = stripZalouserTargetPrefix(raw);
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const lower = trimmed.toLowerCase();
-  if (lower.startsWith("group:")) {
-    const id = trimmed.slice("group:".length).trim();
-    return id ? `group:${id}` : undefined;
-  }
-  if (lower.startsWith("g:")) {
-    const id = trimmed.slice("g:".length).trim();
-    return id ? `group:${id}` : undefined;
-  }
-  if (lower.startsWith("user:")) {
-    const id = trimmed.slice("user:".length).trim();
-    return id ? `user:${id}` : undefined;
-  }
-  if (lower.startsWith("dm:")) {
-    const id = trimmed.slice("dm:".length).trim();
-    return id ? `user:${id}` : undefined;
-  }
-  if (lower.startsWith("u:")) {
-    const id = trimmed.slice("u:".length).trim();
-    return id ? `user:${id}` : undefined;
-  }
-  if (/^g-\S+$/i.test(trimmed)) {
-    return `group:${trimmed}`;
-  }
-  if (/^u-\S+$/i.test(trimmed)) {
-    return `user:${trimmed}`;
-  }
-
-  return trimmed;
-}
-
-function parseZalouserOutboundTarget(raw: string): {
-  threadId: string;
-  isGroup: boolean;
-} {
-  const normalized = normalizePrefixedTarget(raw);
-  if (!normalized) {
-    throw new Error("Zalouser target is required");
-  }
-  const lowered = normalized.toLowerCase();
-  if (lowered.startsWith("group:")) {
-    const threadId = normalized.slice("group:".length).trim();
-    if (!threadId) {
-      throw new Error("Zalouser group target is missing group id");
-    }
-    return { threadId, isGroup: true };
-  }
-  if (lowered.startsWith("user:")) {
-    const threadId = normalized.slice("user:".length).trim();
-    if (!threadId) {
-      throw new Error("Zalouser user target is missing user id");
-    }
-    return { threadId, isGroup: false };
-  }
-  // Backward-compatible fallback for bare IDs.
-  // Group sends should use explicit `group:<id>` targets.
-  return { threadId: normalized, isGroup: false };
-}
-
-function parseZalouserDirectoryGroupId(raw: string): string {
-  const normalized = normalizePrefixedTarget(raw);
-  if (!normalized) {
-    throw new Error("Zalouser group target is required");
-  }
-  const lowered = normalized.toLowerCase();
-  if (lowered.startsWith("group:")) {
-    const groupId = normalized.slice("group:".length).trim();
-    if (!groupId) {
-      throw new Error("Zalouser group target is missing group id");
-    }
-    return groupId;
-  }
-  if (lowered.startsWith("user:")) {
-    throw new Error("Zalouser group members lookup requires a group target (group:<id>)");
-  }
-  return normalized;
-}
 
 function resolveZalouserQrProfile(accountId?: string | null): string {
   const normalized = normalizeAccountId(accountId);
@@ -318,11 +234,11 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
   },
   actions: zalouserMessageActions,
   messaging: {
-    normalizeTarget: (raw) => normalizePrefixedTarget(raw),
+    normalizeTarget: (raw) => normalizeZalouserTarget(raw),
     resolveOutboundSessionRoute: (params) => resolveZalouserOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: (raw) => {
-        const normalized = normalizePrefixedTarget(raw);
+        const normalized = normalizeZalouserTarget(raw);
         if (!normalized) {
           return false;
         }

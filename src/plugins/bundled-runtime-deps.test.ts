@@ -26,14 +26,8 @@ describe("bundled plugin runtime dependencies", () => {
     expectPluginOwnsRuntimeDep("extensions/feishu/package.json", "@larksuiteoapi/node-sdk");
   });
 
-  it("keeps bundled memory-lancedb runtime deps available from the root package while its native runtime stays bundled", () => {
-    const rootManifest = readJson<PackageManifest>("package.json");
-    const memoryManifest = readJson<PackageManifest>("extensions/memory-lancedb/package.json");
-    const memorySpec = memoryManifest.dependencies?.["@lancedb/lancedb"];
-    const rootSpec = rootManifest.dependencies?.["@lancedb/lancedb"];
-
-    expect(memorySpec).toBeTruthy();
-    expect(rootSpec).toBe(memorySpec);
+  it("keeps memory-lancedb runtime deps plugin-local so packaged installs fetch them on demand", () => {
+    expectPluginOwnsRuntimeDep("extensions/memory-lancedb/package.json", "@lancedb/lancedb");
   });
 
   it("keeps bundled Discord runtime deps plugin-local instead of mirroring them into the root package", () => {
@@ -46,6 +40,10 @@ describe("bundled plugin runtime dependencies", () => {
 
   it("keeps bundled Telegram runtime deps plugin-local instead of mirroring them into the root package", () => {
     expectPluginOwnsRuntimeDep("extensions/telegram/package.json", "grammy");
+  });
+
+  it("keeps WhatsApp runtime deps plugin-local so packaged installs fetch them on demand", () => {
+    expectPluginOwnsRuntimeDep("extensions/whatsapp/package.json", "@whiskeysockets/baileys");
   });
 
   it("keeps bundled proxy-agent deps plugin-local instead of mirroring them into the root package", () => {

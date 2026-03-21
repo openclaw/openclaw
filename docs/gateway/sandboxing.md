@@ -399,7 +399,7 @@ Security defaults:
 Docker installs and the containerized gateway live here:
 [Docker](/install/docker)
 
-For Docker gateway deployments, `docker-setup.sh` can bootstrap sandbox config.
+For Docker gateway deployments, `scripts/docker/setup.sh` can bootstrap sandbox config.
 Set `OPENCLAW_SANDBOX=1` (or `true`/`yes`/`on`) to enable that path. You can
 override socket location with `OPENCLAW_DOCKER_SOCKET`. Full setup and env
 reference: [Docker](/install/docker#enable-agent-sandbox-for-docker-gateway-opt-in).
@@ -463,7 +463,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 ## Related docs
 
 - [OpenShell](/gateway/openshell) -- managed sandbox backend setup, workspace modes, and config reference
-- [Sandbox Configuration](/gateway/configuration#agentsdefaults-sandbox)
+- [Sandbox Configuration](/gateway/configuration-reference#agents-defaults-sandbox)
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging "why is this blocked?"
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
 - [Security](/gateway/security)

@@ -1,118 +1,102 @@
 ---
-summary: "OpenClaw plugins/extensions: discovery, config, and safety"
+summary: "Install, configure, and manage OpenClaw plugins"
 read_when:
-  - Adding or modifying plugins/extensions
-  - Documenting plugin install or load rules
+  - Installing or configuring plugins
+  - Understanding plugin discovery and load rules
   - Working with Codex/Claude-compatible plugin bundles
 title: "Plugins"
+sidebarTitle: "Install and Configure"
 ---
 
-# Plugins (Extensions)
+# Plugins
+
+Plugins extend OpenClaw with new capabilities: channels, model providers, tools,
+skills, speech, image generation, and more. Some plugins are **core** (shipped
+with OpenClaw), others are **external** (published on npm by the community).
 
 ## Quick start
 
-A plugin is either:
+<Steps>
+  <Step title="See what is loaded">
+    ```bash
+    openclaw plugins list
+    ```
+  </Step>
 
-- a native **OpenClaw plugin** (`openclaw.plugin.json` + runtime module), or
-- a compatible **bundle** (`.codex-plugin/plugin.json` or `.claude-plugin/plugin.json`)
+  <Step title="Install a plugin">
+    ```bash
+    # From npm
+    openclaw plugins install @openclaw/voice-call
 
-Both show up under `openclaw plugins`, but only native OpenClaw plugins execute
-runtime code in-process.
+    # From a local directory or archive
+    openclaw plugins install ./my-plugin
+    openclaw plugins install ./my-plugin.tgz
+    ```
 
-1. See what is already loaded:
+  </Step>
 
-```bash
-openclaw plugins list
-```
+  <Step title="Restart the Gateway">
+    ```bash
+    openclaw gateway restart
+    ```
 
-2. Install an official plugin (example: Voice Call):
+    Then configure under `plugins.entries.\<id\>.config` in your config file.
 
-```bash
-openclaw plugins install @openclaw/voice-call
-```
+  </Step>
+</Steps>
 
-Npm specs are registry-only. See [install rules](/cli/plugins#install) for
-details on pinning, prerelease gating, and supported spec formats.
+## Plugin types
 
-3. Restart the Gateway, then configure under `plugins.entries.<id>.config`.
+OpenClaw recognizes two plugin formats:
 
-See [Voice Call](/plugins/voice-call) for a concrete example plugin.
-Looking for third-party listings? See [Community plugins](/plugins/community).
-Need the bundle compatibility details? See [Plugin bundles](/plugins/bundles).
+| Format     | How it works                                                       | Examples                                               |
+| ---------- | ------------------------------------------------------------------ | ------------------------------------------------------ |
+| **Native** | `openclaw.plugin.json` + runtime module; executes in-process       | Official plugins, community npm packages               |
+| **Bundle** | Codex/Claude/Cursor-compatible layout; mapped to OpenClaw features | `.codex-plugin/`, `.claude-plugin/`, `.cursor-plugin/` |
 
-For compatible bundles, install from a local directory or archive:
+Both show up under `openclaw plugins list`. See [Plugin Bundles](/plugins/bundles) for bundle details.
 
-```bash
-openclaw plugins install ./my-bundle
-openclaw plugins install ./my-bundle.tgz
-```
+## Official plugins
 
-For Claude marketplace installs, list the marketplace first, then install by
-marketplace entry name:
+### Installable (npm)
 
-```bash
-openclaw plugins marketplace list <marketplace-name>
-openclaw plugins install <plugin-name>@<marketplace-name>
-```
+| Plugin          | Package                | Docs                                 |
+| --------------- | ---------------------- | ------------------------------------ |
+| Matrix          | `@openclaw/matrix`     | [Matrix](/channels/matrix)           |
+| Microsoft Teams | `@openclaw/msteams`    | [Microsoft Teams](/channels/msteams) |
+| Nostr           | `@openclaw/nostr`      | [Nostr](/channels/nostr)             |
+| Voice Call      | `@openclaw/voice-call` | [Voice Call](/plugins/voice-call)    |
+| Zalo            | `@openclaw/zalo`       | [Zalo](/channels/zalo)               |
+| Zalo Personal   | `@openclaw/zalouser`   | [Zalo Personal](/plugins/zalouser)   |
 
-OpenClaw resolves known Claude marketplace names from
-`~/.claude/plugins/known_marketplaces.json`. You can also pass an explicit
-marketplace source with `--marketplace`.
+### Core (shipped with OpenClaw)
 
-## Available plugins (official)
+<AccordionGroup>
+  <Accordion title="Model providers (enabled by default)">
+    `anthropic`, `byteplus`, `cloudflare-ai-gateway`, `github-copilot`, `google`,
+    `huggingface`, `kilocode`, `kimi-coding`, `minimax`, `mistral`, `modelstudio`,
+    `moonshot`, `nvidia`, `openai`, `opencode`, `opencode-go`, `openrouter`,
+    `qianfan`, `qwen-portal-auth`, `synthetic`, `together`, `venice`,
+    `vercel-ai-gateway`, `volcengine`, `xiaomi`, `zai`
+  </Accordion>
 
-### Installable plugins
+  <Accordion title="Memory plugins">
+    - `memory-core` — bundled memory search (default via `plugins.slots.memory`)
+    - `memory-lancedb` — install-on-demand long-term memory with auto-recall/capture (set `plugins.slots.memory = "memory-lancedb"`)
+  </Accordion>
 
-These are published to npm and installed with `openclaw plugins install`:
+  <Accordion title="Speech providers (enabled by default)">
+    `elevenlabs`, `microsoft`
+  </Accordion>
 
-| Plugin          | Package                | Docs                               |
-| --------------- | ---------------------- | ---------------------------------- |
-| Matrix          | `@openclaw/matrix`     | [Matrix](/channels/matrix)         |
-| Microsoft Teams | `@openclaw/msteams`    | [MS Teams](/channels/msteams)      |
-| Nostr           | `@openclaw/nostr`      | [Nostr](/channels/nostr)           |
-| Voice Call      | `@openclaw/voice-call` | [Voice Call](/plugins/voice-call)  |
-| Zalo            | `@openclaw/zalo`       | [Zalo](/channels/zalo)             |
-| Zalo Personal   | `@openclaw/zalouser`   | [Zalo Personal](/plugins/zalouser) |
+  <Accordion title="Other">
+    - `copilot-proxy` — VS Code Copilot Proxy bridge (disabled by default)
+  </Accordion>
+</AccordionGroup>
 
-Microsoft Teams is plugin-only as of 2026.1.15.
+Looking for third-party plugins? See [Community Plugins](/plugins/community).
 
-### Bundled plugins
-
-These ship with OpenClaw and are enabled by default unless noted.
-
-**Memory:**
-
-- `memory-core` -- bundled memory search (default via `plugins.slots.memory`)
-- `memory-lancedb` -- long-term memory with auto-recall/capture (set `plugins.slots.memory = "memory-lancedb"`)
-
-**Model providers** (all enabled by default):
-
-`anthropic`, `byteplus`, `cloudflare-ai-gateway`, `github-copilot`, `google`, `huggingface`, `kilocode`, `kimi-coding`, `minimax`, `mistral`, `modelstudio`, `moonshot`, `nvidia`, `openai`, `opencode`, `opencode-go`, `openrouter`, `qianfan`, `qwen-portal-auth`, `synthetic`, `together`, `venice`, `vercel-ai-gateway`, `volcengine`, `xiaomi`, `zai`
-
-**Speech providers** (enabled by default):
-
-`elevenlabs`, `microsoft`
-
-**Other bundled:**
-
-- `copilot-proxy` -- VS Code Copilot Proxy bridge (disabled by default)
-
-## Compatible bundles
-
-OpenClaw also recognizes compatible external bundle layouts:
-
-- Codex-style bundles: `.codex-plugin/plugin.json`
-- Claude-style bundles: `.claude-plugin/plugin.json` or the default Claude
-  component layout without a manifest
-- Cursor-style bundles: `.cursor-plugin/plugin.json`
-
-They are shown in the plugin list as `format=bundle`, with a subtype of
-`codex`, `claude`, or `cursor` in verbose/inspect output.
-
-See [Plugin bundles](/plugins/bundles) for the exact detection rules, mapping
-behavior, and current support matrix.
-
-## Config
+## Configuration
 
 ```json5
 {
@@ -128,202 +112,140 @@ behavior, and current support matrix.
 }
 ```
 
-Fields:
+| Field            | Description                                               |
+| ---------------- | --------------------------------------------------------- |
+| `enabled`        | Master toggle (default: `true`)                           |
+| `allow`          | Plugin allowlist (optional)                               |
+| `deny`           | Plugin denylist (optional; deny wins)                     |
+| `load.paths`     | Extra plugin files/directories                            |
+| `slots`          | Exclusive slot selectors (e.g. `memory`, `contextEngine`) |
+| `entries.\<id\>` | Per-plugin toggles + config                               |
 
-- `enabled`: master toggle (default: true)
-- `allow`: allowlist (optional)
-- `deny`: denylist (optional; deny wins)
-- `load.paths`: extra plugin files/dirs
-- `slots`: exclusive slot selectors such as `memory` and `contextEngine`
-- `entries.<id>`: per-plugin toggles + config
+Config changes **require a gateway restart**.
 
-Config changes **require a gateway restart**. See
-[Configuration reference](/configuration) for the full config schema.
-
-Validation rules (strict):
-
-- Unknown plugin ids in `entries`, `allow`, `deny`, or `slots` are **errors**.
-- Unknown `channels.<id>` keys are **errors** unless a plugin manifest declares
-  the channel id.
-- Native plugin config is validated using the JSON Schema embedded in
-  `openclaw.plugin.json` (`configSchema`).
-- Compatible bundles currently do not expose native OpenClaw config schemas.
-- If a plugin is disabled, its config is preserved and a **warning** is emitted.
-
-### Disabled vs missing vs invalid
-
-These states are intentionally different:
-
-- **disabled**: plugin exists, but enablement rules turned it off
-- **missing**: config references a plugin id that discovery did not find
-- **invalid**: plugin exists, but its config does not match the declared schema
-
-OpenClaw preserves config for disabled plugins so toggling them back on is not
-destructive.
+<Accordion title="Plugin states: disabled vs missing vs invalid">
+  - **Disabled**: plugin exists but enablement rules turned it off. Config is preserved.
+  - **Missing**: config references a plugin id that discovery did not find.
+  - **Invalid**: plugin exists but its config does not match the declared schema.
+</Accordion>
 
 ## Discovery and precedence
 
-OpenClaw scans, in order:
+OpenClaw scans for plugins in this order (first match wins):
 
-1. Config paths
+<Steps>
+  <Step title="Config paths">
+    `plugins.load.paths` — explicit file or directory paths.
+  </Step>
 
-- `plugins.load.paths` (file or directory)
+  <Step title="Workspace extensions">
+    `\<workspace\>/.openclaw/extensions/*.ts` and `\<workspace\>/.openclaw/extensions/*/index.ts`.
+  </Step>
 
-2. Workspace extensions
+  <Step title="Global extensions">
+    `~/.openclaw/extensions/*.ts` and `~/.openclaw/extensions/*/index.ts`.
+  </Step>
 
-- `<workspace>/.openclaw/extensions/*.ts`
-- `<workspace>/.openclaw/extensions/*/index.ts`
-
-3. Global extensions
-
-- `~/.openclaw/extensions/*.ts`
-- `~/.openclaw/extensions/*/index.ts`
-
-4. Bundled extensions (shipped with OpenClaw; mixed default-on/default-off)
-
-- `<openclaw>/dist/extensions/*` in packaged installs
-- `<workspace>/dist-runtime/extensions/*` in local built checkouts
-- `<workspace>/extensions/*` in source/Vitest workflows
-
-Many bundled provider plugins are enabled by default so model catalogs/runtime
-hooks stay available without extra setup. Others still require explicit
-enablement via `plugins.entries.<id>.enabled` or
-`openclaw plugins enable <id>`.
-
-Bundled plugin runtime dependencies are owned by each plugin package. Packaged
-builds stage opted-in bundled dependencies under
-`dist/extensions/<id>/node_modules` instead of requiring mirrored copies in the
-root package. npm artifacts ship the built `dist/extensions/*` tree; source
-`extensions/*` directories stay in source checkouts only.
-
-Installed plugins are enabled by default, but can be disabled the same way.
-
-Workspace plugins are **disabled by default** unless you explicitly enable them
-or allowlist them. This is intentional: a checked-out repo should not silently
-become production gateway code.
-
-If multiple plugins resolve to the same id, the first match in the order above
-wins and lower-precedence copies are ignored.
+  <Step title="Bundled plugins">
+    Shipped with OpenClaw. Many are enabled by default (model providers, speech).
+    Others require explicit enablement.
+  </Step>
+</Steps>
 
 ### Enablement rules
 
-Enablement is resolved after discovery:
-
 - `plugins.enabled: false` disables all plugins
-- `plugins.deny` always wins
-- `plugins.entries.<id>.enabled: false` disables that plugin
-- workspace-origin plugins are disabled by default
-- allowlists restrict the active set when `plugins.allow` is non-empty
-- allowlists are **id-based**, not source-based
-- bundled plugins are disabled by default unless:
-  - the bundled id is in the built-in default-on set, or
-  - you explicitly enable it, or
-  - channel config implicitly enables the bundled channel plugin
-- exclusive slots can force-enable the selected plugin for that slot
+- `plugins.deny` always wins over allow
+- `plugins.entries.\<id\>.enabled: false` disables that plugin
+- Workspace-origin plugins are **disabled by default** (must be explicitly enabled)
+- Bundled plugins follow the built-in default-on set unless overridden
+- Exclusive slots can force-enable the selected plugin for that slot
 
 ## Plugin slots (exclusive categories)
 
-Some plugin categories are **exclusive** (only one active at a time). Use
-`plugins.slots` to select which plugin owns the slot:
+Some categories are exclusive (only one active at a time):
 
 ```json5
 {
   plugins: {
     slots: {
-      memory: "memory-core", // or "none" to disable memory plugins
-      contextEngine: "legacy", // or a plugin id such as "lossless-claw"
+      memory: "memory-core", // or "none" to disable
+      contextEngine: "legacy", // or a plugin id
     },
   },
 }
 ```
 
-Supported exclusive slots:
+| Slot            | What it controls      | Default             |
+| --------------- | --------------------- | ------------------- |
+| `memory`        | Active memory plugin  | `memory-core`       |
+| `contextEngine` | Active context engine | `legacy` (built-in) |
 
-- `memory`: active memory plugin (`"none"` disables memory plugins)
-- `contextEngine`: active context engine plugin (`"legacy"` is the built-in default)
-
-If multiple plugins declare `kind: "memory"` or `kind: "context-engine"`, only
-the selected plugin loads for that slot. Others are disabled with diagnostics.
-Declare `kind` in your [plugin manifest](/plugins/manifest).
-
-## Plugin IDs
-
-Default plugin ids:
-
-- Package packs: `package.json` `name`
-- Standalone file: file base name (`~/.../voice-call.ts` -> `voice-call`)
-
-If a plugin exports `id`, OpenClaw uses it but warns when it does not match the
-configured id.
-
-## Inspection
+## CLI reference
 
 ```bash
-openclaw plugins inspect openai        # deep detail on one plugin
-openclaw plugins inspect openai --json # machine-readable
-openclaw plugins list                  # compact inventory
-openclaw plugins status                # operational summary
-openclaw plugins doctor                # issue-focused diagnostics
-```
+openclaw plugins list                    # compact inventory
+openclaw plugins inspect <id>            # deep detail
+openclaw plugins inspect <id> --json     # machine-readable
+openclaw plugins status                  # operational summary
+openclaw plugins doctor                  # diagnostics
 
-## CLI
+openclaw plugins install <npm-spec>      # install from npm
+openclaw plugins install <path>          # install from local path
+openclaw plugins install -l <path>       # link (no copy) for dev
+openclaw plugins update <id>             # update one plugin
+openclaw plugins update --all            # update all
 
-```bash
-openclaw plugins list
-openclaw plugins inspect <id>
-openclaw plugins install <path>                 # copy a local file/dir into ~/.openclaw/extensions/<id>
-openclaw plugins install ./extensions/voice-call # relative path ok
-openclaw plugins install ./plugin.tgz           # install from a local tarball
-openclaw plugins install ./plugin.zip           # install from a local zip
-openclaw plugins install -l ./extensions/voice-call # link (no copy) for dev
-openclaw plugins install @openclaw/voice-call   # install from npm
-openclaw plugins install @openclaw/voice-call --pin # store exact resolved name@version
-openclaw plugins update <id>
-openclaw plugins update --all
 openclaw plugins enable <id>
 openclaw plugins disable <id>
-openclaw plugins doctor
 ```
 
-See [`openclaw plugins` CLI reference](/cli/plugins) for full details on each
-command (install rules, inspect output, marketplace installs, uninstall).
+See [`openclaw plugins` CLI reference](/cli/plugins) for full details.
 
-Plugins may also register their own top-level commands (example:
-`openclaw voicecall`).
+## Plugin API overview
 
-## Plugin API (overview)
+Plugins export either a function or an object with `register(api)`:
 
-Plugins export either:
+```typescript
+export default definePluginEntry({
+  id: "my-plugin",
+  name: "My Plugin",
+  register(api) {
+    api.registerProvider({
+      /* ... */
+    });
+    api.registerTool({
+      /* ... */
+    });
+    api.registerChannel({
+      /* ... */
+    });
+  },
+});
+```
 
-- A function: `(api) => { ... }`
-- An object: `{ id, name, configSchema, register(api) { ... } }`
+Common registration methods:
 
-`register(api)` is where plugins attach behavior. Common registrations include:
+| Method                               | What it registers    |
+| ------------------------------------ | -------------------- |
+| `registerProvider`                   | Model provider (LLM) |
+| `registerChannel`                    | Chat channel         |
+| `registerTool`                       | Agent tool           |
+| `registerHook` / `on(...)`           | Lifecycle hooks      |
+| `registerSpeechProvider`             | Text-to-speech / STT |
+| `registerMediaUnderstandingProvider` | Image/audio analysis |
+| `registerImageGenerationProvider`    | Image generation     |
+| `registerWebSearchProvider`          | Web search           |
+| `registerHttpRoute`                  | HTTP endpoint        |
+| `registerCommand` / `registerCli`    | CLI commands         |
+| `registerContextEngine`              | Context engine       |
+| `registerService`                    | Background service   |
 
-- `registerTool`
-- `registerHook`
-- `on(...)` for typed lifecycle hooks
-- `registerChannel`
-- `registerProvider`
-- `registerSpeechProvider`
-- `registerMediaUnderstandingProvider`
-- `registerWebSearchProvider`
-- `registerHttpRoute`
-- `registerCommand`
-- `registerCli`
-- `registerContextEngine`
-- `registerService`
+## Related
 
-See [Plugin manifest](/plugins/manifest) for the manifest file format.
-
-## Further reading
-
-- [Plugin architecture and internals](/plugins/architecture) -- capability model,
-  ownership model, contracts, load pipeline, runtime helpers, and developer API
-  reference
-- [Building extensions](/plugins/building-extensions)
-- [Plugin bundles](/plugins/bundles)
-- [Plugin manifest](/plugins/manifest)
-- [Plugin agent tools](/plugins/agent-tools)
-- [Capability Cookbook](/tools/capability-cookbook)
-- [Community plugins](/plugins/community)
+- [Building Plugins](/plugins/building-plugins) — create your own plugin
+- [Plugin Bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
+- [Plugin Manifest](/plugins/manifest) — manifest schema
+- [Registering Tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
+- [Plugin Internals](/plugins/architecture) — capability model and load pipeline
+- [Community Plugins](/plugins/community) — third-party listings

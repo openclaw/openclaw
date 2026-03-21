@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/slack";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import { slackOutbound } from "./outbound-adapter.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 
 const handleSlackActionMock = vi.fn();
 
@@ -305,6 +305,84 @@ describe("slackPlugin agentPrompt", () => {
     expect(hints).toContain(
       "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
     );
+  });
+});
+
+describe("slackPlugin outbound new targets", () => {
+  const cfg = {
+    channels: {
+      slack: {
+        botToken: "xoxb-test",
+        appToken: "xapp-test",
+      },
+    },
+  };
+
+  it("sends to a new user target via DM without erroring", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-new-user", channelId: "D999" });
+    const sendText = slackPlugin.outbound?.sendText;
+    expect(sendText).toBeDefined();
+
+    const result = await sendText!({
+      cfg,
+      to: "user:U99NEW",
+      text: "hello new user",
+      accountId: "default",
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "user:U99NEW",
+      "hello new user",
+      expect.objectContaining({ cfg }),
+    );
+    expect(result).toEqual({ channel: "slack", messageId: "m-new-user", channelId: "D999" });
+  });
+
+  it("sends to a new channel target without erroring", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-new-chan", channelId: "C555" });
+    const sendText = slackPlugin.outbound?.sendText;
+    expect(sendText).toBeDefined();
+
+    const result = await sendText!({
+      cfg,
+      to: "channel:C555NEW",
+      text: "hello channel",
+      accountId: "default",
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "channel:C555NEW",
+      "hello channel",
+      expect.objectContaining({ cfg }),
+    );
+    expect(result).toEqual({ channel: "slack", messageId: "m-new-chan", channelId: "C555" });
+  });
+
+  it("sends media to a new user target without erroring", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-new-media", channelId: "D888" });
+    const sendMedia = slackPlugin.outbound?.sendMedia;
+    expect(sendMedia).toBeDefined();
+
+    const result = await sendMedia!({
+      cfg,
+      to: "user:U88NEW",
+      text: "here is a file",
+      mediaUrl: "https://example.com/file.png",
+      accountId: "default",
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "user:U88NEW",
+      "here is a file",
+      expect.objectContaining({
+        cfg,
+        mediaUrl: "https://example.com/file.png",
+      }),
+    );
+    expect(result).toEqual({ channel: "slack", messageId: "m-new-media", channelId: "D888" });
   });
 });
 
