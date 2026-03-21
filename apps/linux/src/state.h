@@ -16,6 +16,7 @@
 
 typedef enum {
     STATE_NOT_INSTALLED,
+    STATE_USER_SYSTEMD_UNAVAILABLE,
     STATE_SYSTEM_UNSUPPORTED,
     STATE_STOPPED,
     STATE_STARTING,
@@ -27,6 +28,7 @@ typedef enum {
 } AppState;
 
 typedef struct {
+    gboolean systemd_unavailable;
     gboolean installed;
     gboolean system_installed_unsupported;
     gboolean active;

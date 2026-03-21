@@ -333,7 +333,7 @@ static void internal_health_probe_gateway(gboolean is_eager) {
     // Gate periodic probes on an installed supported user service.
     // Stopped services should not keep spawning periodic CLI probes because they are already known offline.
     AppState st = state_get_current();
-    if (st == STATE_NOT_INSTALLED || st == STATE_SYSTEM_UNSUPPORTED || st == STATE_STOPPED) {
+    if (st == STATE_NOT_INSTALLED || st == STATE_SYSTEM_UNSUPPORTED || st == STATE_USER_SYSTEMD_UNAVAILABLE || st == STATE_STOPPED) {
         return;
     }
     
@@ -455,7 +455,7 @@ static void internal_health_run_deep_probe(gboolean is_eager) {
     // Gate periodic probes on an installed supported user service.
     // Stopped services should not keep spawning periodic CLI probes because they are already known offline.
     AppState st = state_get_current();
-    if (st == STATE_NOT_INSTALLED || st == STATE_SYSTEM_UNSUPPORTED || st == STATE_STOPPED) {
+    if (st == STATE_NOT_INSTALLED || st == STATE_SYSTEM_UNSUPPORTED || st == STATE_USER_SYSTEMD_UNAVAILABLE || st == STATE_STOPPED) {
         return;
     }
 

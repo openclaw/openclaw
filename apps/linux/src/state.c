@@ -31,6 +31,9 @@ static AppState compute_state(void) {
     // 2. `gateway status --json` output (health lane)
     // The deep probe lane is intentionally excluded from the main tray truth
     // to avoid false negatives from network timeouts.
+    if (current_sys_state.systemd_unavailable) {
+        return STATE_USER_SYSTEMD_UNAVAILABLE;
+    }
     if (!current_sys_state.installed) {
         if (current_sys_state.system_installed_unsupported) {
             return STATE_SYSTEM_UNSUPPORTED;
@@ -108,6 +111,7 @@ void state_update_systemd(SystemdState *sys_state) {
     g_strfreev(current_sys_state.environment);
     
     current_sys_state = *sys_state;
+    current_sys_state.systemd_unavailable = sys_state->systemd_unavailable;
     current_sys_state.active_state = g_strdup(sys_state->active_state);
     current_sys_state.sub_state = g_strdup(sys_state->sub_state);
     current_sys_state.unit_name = g_strdup(sys_state->unit_name);
@@ -132,7 +136,7 @@ void state_update_systemd(SystemdState *sys_state) {
     
     AppState new_state = compute_state();
     
-    gboolean is_supported = (new_state != STATE_NOT_INSTALLED && new_state != STATE_SYSTEM_UNSUPPORTED);
+    gboolean is_supported = (new_state != STATE_NOT_INSTALLED && new_state != STATE_SYSTEM_UNSUPPORTED && new_state != STATE_USER_SYSTEMD_UNAVAILABLE);
     gboolean should_trigger_probes = is_supported && (!initial_probe_fired || became_active || unit_changed);
 
     if (should_trigger_probes) {
@@ -202,6 +206,7 @@ AppState state_get_current(void) {
 const char* state_get_current_string(void) {
     switch (current_state) {
         case STATE_NOT_INSTALLED: return "Not Installed";
+        case STATE_USER_SYSTEMD_UNAVAILABLE: return "User Systemd Unavailable";
         case STATE_SYSTEM_UNSUPPORTED: return "System Service (Unsupported)";
         case STATE_STOPPED: return "Stopped";
         case STATE_STARTING: return "Starting";

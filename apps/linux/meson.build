@@ -51,3 +51,6 @@ executable('openclaw-tray-helper',
   dependencies : [gtk3_dep, appindicator_dep, gio_dep, gio_unix_dep],
   install : true,
   install_dir : get_option('libexecdir') / meson.project_name())
+
+install_data('ai.openclaw.Companion.desktop',
+  install_dir : get_option('datadir') / 'applications')

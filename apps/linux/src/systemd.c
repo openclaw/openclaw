@@ -527,6 +527,9 @@ void systemd_init(void) {
     g_autoptr(GDBusConnection) session_bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
     if (!session_bus) {
         g_warning("Failed to connect to session bus: %s", error->message);
+        SystemdState sys_state = {0};
+        sys_state.systemd_unavailable = TRUE;
+        state_update_systemd(&sys_state);
         return;
     }
 
@@ -539,6 +542,9 @@ void systemd_init(void) {
 
     if (!manager_proxy) {
         g_warning("Failed to create systemd Manager proxy: %s", error->message);
+        SystemdState sys_state = {0};
+        sys_state.systemd_unavailable = TRUE;
+        state_update_systemd(&sys_state);
         return;
     }
     
