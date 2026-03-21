@@ -5,11 +5,15 @@ export function resolveEmbeddedRunSkillEntries(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
+  preferWorkspaceEntries?: boolean;
 }): {
   shouldLoadSkillEntries: boolean;
   skillEntries: SkillEntry[];
 } {
-  const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
+  const shouldLoadSkillEntries =
+    params.preferWorkspaceEntries ||
+    !params.skillsSnapshot ||
+    !params.skillsSnapshot.resolvedSkills;
   return {
     shouldLoadSkillEntries,
     skillEntries: shouldLoadSkillEntries
