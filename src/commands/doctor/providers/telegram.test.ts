@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { collectTelegramGroupPolicyWarnings } from "./telegram.js";
+import {
+  collectTelegramGroupPolicyWarnings,
+  scanTelegramAllowFromUsernameEntries,
+} from "./telegram.js";
 
 describe("doctor telegram provider warnings", () => {
   it("shows first-run guidance when groups are not configured yet", () => {
@@ -52,5 +55,41 @@ describe("doctor telegram provider warnings", () => {
     });
 
     expect(warnings).toEqual([]);
+  });
+
+  it("finds non-numeric telegram allowFrom username entries across account scopes", () => {
+    const hits = scanTelegramAllowFromUsernameEntries({
+      channels: {
+        telegram: {
+          allowFrom: ["@top"],
+          groupAllowFrom: ["12345"],
+          accounts: {
+            work: {
+              allowFrom: ["tg:@work"],
+              groups: {
+                "-100123": {
+                  allowFrom: ["topic-user"],
+                  topics: {
+                    "99": {
+                      allowFrom: ["777", "@topic-user"],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(hits).toEqual([
+      { path: "channels.telegram.allowFrom", entry: "@top" },
+      { path: "channels.telegram.accounts.work.allowFrom", entry: "tg:@work" },
+      { path: "channels.telegram.accounts.work.groups.-100123.allowFrom", entry: "topic-user" },
+      {
+        path: "channels.telegram.accounts.work.groups.-100123.topics.99.allowFrom",
+        entry: "@topic-user",
+      },
+    ]);
   });
 });
