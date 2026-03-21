@@ -75,7 +75,9 @@ export function formatErrorMessage(err: unknown): string {
     while (cause && !seen.has(cause)) {
       seen.add(cause);
       if (cause instanceof Error) {
-        if (cause.message) formatted += ` | ${cause.message}`;
+        if (cause.message) {
+          formatted += ` | ${cause.message}`;
+        }
         cause = cause.cause;
       } else if (typeof cause === "string") {
         formatted += ` | ${cause}`;
