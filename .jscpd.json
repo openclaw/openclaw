@@ -1,0 +1,16 @@
+{
+  "gitignore": true,
+  "noSymlinks": true,
+  "ignore": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "dist/**",
+    "**/.git/**",
+    "**/coverage/**",
+    "**/build/**",
+    "**/.build/**",
+    "**/.artifacts/**",
+    "docs/zh-CN/**",
+    "**/CHANGELOG.md"
+  ]
+}

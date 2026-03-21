@@ -1,11 +1,15 @@
+import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
+import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../../gateway/credentials.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { pickGatewaySelfPresence } from "../gateway-presence.js";
+
+const MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
 type TargetKind = "explicit" | "configRemote" | "localLoopback" | "sshTunnel";
 
@@ -63,20 +67,7 @@ function parseIntOrNull(value: unknown): number | null {
 }
 
 export function parseTimeoutMs(raw: unknown, fallbackMs: number): number {
-  const value =
-    typeof raw === "string"
-      ? raw.trim()
-      : typeof raw === "number" || typeof raw === "bigint"
-        ? String(raw)
-        : "";
-  if (!value) {
-    return fallbackMs;
-  }
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`invalid --timeout: ${value}`);
-  }
-  return parsed;
+  return parseTimeoutMsWithFallback(raw, fallbackMs);
 }
 
 function normalizeWsUrl(value: string): string | null {
@@ -125,14 +116,21 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
   return targets;
 }
 
-export function resolveProbeBudgetMs(overallMs: number, kind: TargetKind): number {
-  if (kind === "localLoopback") {
-    return Math.min(800, overallMs);
+export function resolveProbeBudgetMs(
+  overallMs: number,
+  target: Pick<GatewayStatusTarget, "kind" | "active">,
+): number {
+  switch (target.kind) {
+    case "localLoopback":
+      // Active loopback probes should honor the caller budget because local shells/containers
+      // can legitimately take longer to connect. Inactive loopback probes stay bounded so
+      // remote-mode status checks do not stall on an expected local miss.
+      return target.active ? overallMs : Math.min(800, overallMs);
+    case "sshTunnel":
+      return Math.min(2_000, overallMs);
+    default:
+      return Math.min(1_500, overallMs);
   }
-  if (kind === "sshTunnel") {
-    return Math.min(2000, overallMs);
-  }
-  return Math.min(1500, overallMs);
 }
 
 export function sanitizeSshTarget(value: unknown): string | null {
@@ -144,16 +142,6 @@ export function sanitizeSshTarget(value: unknown): string | null {
     return null;
   }
   return trimmed.replace(/^ssh\\s+/, "");
-}
-
-function readGatewayTokenEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const token = env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim();
-  return token || undefined;
-}
-
-function readGatewayPasswordEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const password = env.OPENCLAW_GATEWAY_PASSWORD?.trim() || env.CLAWDBOT_GATEWAY_PASSWORD?.trim();
-  return password || undefined;
 }
 
 export async function resolveAuthForTarget(
@@ -198,6 +186,8 @@ export async function resolveAuthForTarget(
     }
     return passwordResolution.value;
   };
+  const withDiagnostics = <T extends { token?: string; password?: string }>(result: T) =>
+    diagnostics.length > 0 ? { ...result, diagnostics } : result;
 
   if (target.kind === "configRemote" || target.kind === "sshTunnel") {
     const remoteTokenValue = cfg.gateway?.remote?.token;
@@ -207,11 +197,7 @@ export async function resolveAuthForTarget(
     const password = token
       ? undefined
       : await resolvePassword(remotePasswordValue, "gateway.remote.password");
-    return {
-      token,
-      password,
-      ...(diagnostics.length > 0 ? { diagnostics } : {}),
-    };
+    return withDiagnostics({ token, password });
   }
 
   const authDisabled = authMode === "none" || authMode === "trusted-proxy";
@@ -222,49 +208,39 @@ export async function resolveAuthForTarget(
   const envToken = readGatewayTokenEnv();
   const envPassword = readGatewayPasswordEnv();
   if (tokenOnly) {
+    const token = await resolveToken(cfg.gateway?.auth?.token, "gateway.auth.token");
+    if (token) {
+      return withDiagnostics({ token });
+    }
     if (envToken) {
       return { token: envToken };
     }
-    const token = await resolveToken(cfg.gateway?.auth?.token, "gateway.auth.token");
-    return {
-      token,
-      ...(diagnostics.length > 0 ? { diagnostics } : {}),
-    };
+    return withDiagnostics({});
   }
   if (passwordOnly) {
+    const password = await resolvePassword(cfg.gateway?.auth?.password, "gateway.auth.password");
+    if (password) {
+      return withDiagnostics({ password });
+    }
     if (envPassword) {
       return { password: envPassword };
     }
-    const password = await resolvePassword(cfg.gateway?.auth?.password, "gateway.auth.password");
-    return {
-      password,
-      ...(diagnostics.length > 0 ? { diagnostics } : {}),
-    };
+    return withDiagnostics({});
   }
 
+  const token = await resolveToken(cfg.gateway?.auth?.token, "gateway.auth.token");
+  if (token) {
+    return withDiagnostics({ token });
+  }
   if (envToken) {
     return { token: envToken };
   }
-  const token = await resolveToken(cfg.gateway?.auth?.token, "gateway.auth.token");
-  if (token) {
-    return {
-      token,
-      ...(diagnostics.length > 0 ? { diagnostics } : {}),
-    };
-  }
   if (envPassword) {
-    return {
-      password: envPassword,
-      ...(diagnostics.length > 0 ? { diagnostics } : {}),
-    };
+    return withDiagnostics({ password: envPassword });
   }
   const password = await resolvePassword(cfg.gateway?.auth?.password, "gateway.auth.password");
 
-  return {
-    token,
-    password,
-    ...(diagnostics.length > 0 ? { diagnostics } : {}),
-  };
+  return withDiagnostics({ token, password });
 }
 
 export { pickGatewaySelfPresence };
@@ -357,6 +333,17 @@ export function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
   return `${colorize(rich, theme.heading, kindLabel)} ${colorize(rich, theme.muted, target.url)}`;
 }
 
+export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
+  if (probe.ok || probe.connectLatencyMs == null) {
+    return false;
+  }
+  return MISSING_SCOPE_PATTERN.test(probe.error ?? "");
+}
+
+export function isProbeReachable(probe: GatewayProbeResult): boolean {
+  return probe.ok || isScopeLimitedProbeFailure(probe);
+}
+
 export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
   if (probe.ok) {
     const latency =
@@ -368,7 +355,10 @@ export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean)
   if (probe.connectLatencyMs != null) {
     const latency =
       typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
-    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${colorize(rich, theme.error, "RPC: failed")}${detail}`;
+    const rpcStatus = isScopeLimitedProbeFailure(probe)
+      ? colorize(rich, theme.warn, "RPC: limited")
+      : colorize(rich, theme.error, "RPC: failed");
+    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${rpcStatus}${detail}`;
   }
 
   return `${colorize(rich, theme.error, "Connect: failed")}${detail}`;

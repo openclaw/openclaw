@@ -52,16 +52,31 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI
   - No real keys required
   - Should be fast and stable
+- Scheduler note:
+  - `pnpm test` now keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
+  - Shared unit coverage stays on, but the wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
+  - Refresh the timing snapshot with `pnpm test:perf:update-timings` after major suite shape changes.
+- Embedded runner note:
+  - When you change message-tool discovery inputs or compaction runtime context,
+    keep both levels of coverage.
+  - Add focused helper regressions for pure routing/normalization boundaries.
+  - Also keep the embedded runner integration suites healthy:
+    `src/agents/pi-embedded-runner/compact.hooks.test.ts`,
+    `src/agents/pi-embedded-runner/run.overflow-compaction.test.ts`, and
+    `src/agents/pi-embedded-runner/run.overflow-compaction.loop.test.ts`.
+  - Those suites verify that scoped ids and compaction behavior still flow
+    through the real `run.ts` / `compact.ts` paths; helper-only tests are not a
+    sufficient substitute for those integration paths.
 - Pool note:
-  - OpenClaw uses Vitest `vmForks` on Node 22/23 for faster unit shards.
-  - On Node 24+, OpenClaw automatically falls back to regular `forks` to avoid Node VM linking errors (`ERR_VM_MODULE_LINK_FAILURE` / `module is already linked`).
+  - OpenClaw uses Vitest `vmForks` on Node 22, 23, and 24 for faster unit shards.
+  - On Node 25+, OpenClaw automatically falls back to regular `forks` until the repo is re-validated there.
   - Override manually with `OPENCLAW_TEST_VM_FORKS=0` (force `forks`) or `OPENCLAW_TEST_VM_FORKS=1` (force `vmForks`).
 
 ### E2E (gateway smoke)
 
 - Command: `pnpm test:e2e`
 - Config: `vitest.e2e.config.ts`
-- Files: `src/**/*.e2e.test.ts`
+- Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`
 - Runtime defaults:
   - Uses Vitest `vmForks` for faster file startup.
   - Uses adaptive workers (CI: 2-4, local: 4-8).
@@ -76,6 +91,23 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI (when enabled in the pipeline)
   - No real keys required
   - More moving parts than unit tests (can be slower)
+
+### E2E: OpenShell backend smoke
+
+- Command: `pnpm test:e2e:openshell`
+- File: `test/openshell-sandbox.e2e.test.ts`
+- Scope:
+  - Starts an isolated OpenShell gateway on the host via Docker
+  - Creates a sandbox from a temporary local Dockerfile
+  - Exercises OpenClaw's OpenShell backend over real `sandbox ssh-config` + SSH exec
+  - Verifies remote-canonical filesystem behavior through the sandbox fs bridge
+- Expectations:
+  - Opt-in only; not part of the default `pnpm test:e2e` run
+  - Requires a local `openshell` CLI plus a working Docker daemon
+  - Uses isolated `HOME` / `XDG_CONFIG_HOME`, then destroys the test gateway and sandbox
+- Useful overrides:
+  - `OPENCLAW_E2E_OPENSHELL=1` to enable the test when running the broader e2e suite manually
+  - `OPENCLAW_E2E_OPENSHELL_COMMAND=/path/to/openshell` to point at a non-default CLI binary or wrapper script
 
 ### Live (real providers + real models)
 
@@ -148,7 +180,7 @@ Live tests are split into two layers so we can isolate failures:
   - Separates “provider API is broken / key is invalid” from “gateway agent pipeline is broken”
   - Contains small, isolated regressions (example: OpenAI Responses/Codex Responses reasoning replay + tool-call flows)
 
-### Layer 2: Gateway + dev agent smoke (what “@openclaw” actually does)
+### Layer 2: Gateway + dev agent smoke (what "@openclaw" actually does)
 
 - Test: `src/gateway/gateway-models.profiles.live.test.ts`
 - Goal:
@@ -222,7 +254,7 @@ OPENCLAW_LIVE_SETUP_TOKEN=1 OPENCLAW_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-to
   - Args: `["-p","--output-format","json","--permission-mode","bypassPermissions"]`
 - Overrides (optional):
   - `OPENCLAW_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-opus-4-6"`
-  - `OPENCLAW_LIVE_CLI_BACKEND_MODEL="codex-cli/gpt-5.3-codex"`
+  - `OPENCLAW_LIVE_CLI_BACKEND_MODEL="codex-cli/gpt-5.4"`
   - `OPENCLAW_LIVE_CLI_BACKEND_COMMAND="/full/path/to/claude"`
   - `OPENCLAW_LIVE_CLI_BACKEND_ARGS='["-p","--output-format","json","--permission-mode","bypassPermissions"]'`
   - `OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV='["ANTHROPIC_API_KEY","ANTHROPIC_API_KEY_OLD"]'`
@@ -275,23 +307,23 @@ There is no fixed “CI model list” (live is opt-in), but these are the **reco
 This is the “common models” run we expect to keep working:
 
 - OpenAI (non-Codex): `openai/gpt-5.2` (optional: `openai/gpt-5.1`)
-- OpenAI Codex: `openai-codex/gpt-5.3-codex` (optional: `openai-codex/gpt-5.3-codex-codex`)
-- Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-5`)
-- Google (Gemini API): `google/gemini-3-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
+- OpenAI Codex: `openai-codex/gpt-5.4`
+- Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
+- Google (Gemini API): `google/gemini-3.1-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
 - Google (Antigravity): `google-antigravity/claude-opus-4-6-thinking` and `google-antigravity/gemini-3-flash`
 - Z.AI (GLM): `zai/glm-4.7`
 - MiniMax: `minimax/minimax-m2.5`
 
 Run gateway smoke with tools + image:
-`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.3-codex,anthropic/claude-opus-4-6,google/gemini-3-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.5" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.4,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.5" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 ### Baseline: tool calling (Read + optional Exec)
 
 Pick at least one per provider family:
 
 - OpenAI: `openai/gpt-5.2` (or `openai/gpt-5-mini`)
-- Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-5`)
-- Google: `google/gemini-3-flash-preview` (or `google/gemini-3-pro-preview`)
+- Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
+- Google: `google/gemini-3-flash-preview` (or `google/gemini-3.1-pro-preview`)
 - Z.AI (GLM): `zai/glm-4.7`
 - MiniMax: `minimax/minimax-m2.5`
 
@@ -311,11 +343,11 @@ Include at least one image-capable model in `OPENCLAW_LIVE_GATEWAY_MODELS` (Clau
 If you have keys enabled, we also support testing via:
 
 - OpenRouter: `openrouter/...` (hundreds of models; use `openclaw models scan` to find tool+image capable candidates)
-- OpenCode Zen: `opencode/...` (auth via `OPENCODE_API_KEY` / `OPENCODE_ZEN_API_KEY`)
+- OpenCode: `opencode/...` for Zen and `opencode-go/...` for Go (auth via `OPENCODE_API_KEY` / `OPENCODE_ZEN_API_KEY`)
 
 More providers you can include in the live matrix (if you have creds/config):
 
-- Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
+- Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - Via `models.providers` (custom endpoints): `minimax` (cloud/API), plus any OpenAI/Anthropic-compatible proxy (LM Studio, vLLM, LiteLLM, etc.)
 
 Tip: don’t try to hardcode “all models” in docs. The authoritative list is whatever `discoverModels(...)` returns on your machine + whatever keys are available.
@@ -343,15 +375,46 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Enable: `BYTEPLUS_API_KEY=... BYTEPLUS_LIVE_TEST=1 pnpm test:live src/agents/byteplus.live.test.ts`
 - Optional model override: `BYTEPLUS_CODING_MODEL=ark-code-latest`
 
-## Docker runners (optional “works in Linux” checks)
+## Image generation live
 
-These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted):
+- Test: `src/image-generation/runtime.live.test.ts`
+- Command: `pnpm test:live src/image-generation/runtime.live.test.ts`
+- Scope:
+  - Enumerates every registered image-generation provider plugin
+  - Loads missing provider env vars from your login shell (`~/.profile`) before probing
+  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
+  - Skips providers with no usable auth/profile/model
+  - Runs the stock image-generation variants through the shared runtime capability:
+    - `google:flash-generate`
+    - `google:pro-generate`
+    - `google:pro-edit`
+    - `openai:default-generate`
+- Current bundled providers covered:
+  - `openai`
+  - `google`
+- Optional narrowing:
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS="openai,google"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-1,google/gemini-3.1-flash-image-preview"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit"`
+- Optional auth behavior:
+  - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
+
+## Docker runners (optional "works in Linux" checks)
+
+These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). They also bind-mount CLI auth homes like `~/.codex`, `~/.claude`, `~/.qwen`, and `~/.minimax` when present, then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 
 - Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
 - Gateway networking (two containers, WS auth + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
 - Plugins (custom extension load + registry smoke): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
+
+The live-model Docker runners also bind-mount the current checkout read-only and
+stage it into a temporary workdir inside the container. This keeps the runtime
+image slim while still running Vitest against your exact local source/config.
+`test:docker:live-models` still runs `pnpm test:live`, so pass through
+`OPENCLAW_LIVE_GATEWAY_*` as well when you need to narrow or exclude gateway
+live coverage from that Docker lane.
 
 Manual ACP plain-language thread smoke (not CI):
 
@@ -363,7 +426,9 @@ Useful env vars:
 - `OPENCLAW_CONFIG_DIR=...` (default: `~/.openclaw`) mounted to `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (default: `~/.openclaw/workspace`) mounted to `/home/node/.openclaw/workspace`
 - `OPENCLAW_PROFILE_FILE=...` (default: `~/.profile`) mounted to `/home/node/.profile` and sourced before running tests
+- External CLI auth dirs under `$HOME` (`.codex`, `.claude`, `.qwen`, `.minimax`) are mounted read-only under `/host-auth/...`, then copied into `/home/node/...` before tests start
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` to narrow the run
+- `OPENCLAW_LIVE_GATEWAY_PROVIDERS=...` / `OPENCLAW_LIVE_PROVIDERS=...` to filter providers in-container
 - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to ensure creds come from the profile store (not env)
 
 ## Docs sanity
@@ -396,6 +461,55 @@ Future evals should stay deterministic first:
 - A small suite of skill-focused scenarios (use vs avoid, gating, prompt injection).
 - Optional live evals (opt-in, env-gated) only after the CI-safe suite is in place.
 
+## Contract tests (plugin and channel shape)
+
+Contract tests verify that every registered plugin and channel conforms to its
+interface contract. They iterate over all discovered plugins and run a suite of
+shape and behavior assertions.
+
+### Commands
+
+- All contracts: `pnpm test:contracts`
+- Channel contracts only: `pnpm test:contracts:channels`
+- Provider contracts only: `pnpm test:contracts:plugins`
+
+### Channel contracts
+
+Located in `src/channels/plugins/contracts/*.contract.test.ts`:
+
+- **plugin** - Basic plugin shape (id, name, capabilities)
+- **setup** - Setup wizard contract
+- **session-binding** - Session binding behavior
+- **outbound-payload** - Message payload structure
+- **inbound** - Inbound message handling
+- **actions** - Channel action handlers
+- **threading** - Thread ID handling
+- **directory** - Directory/roster API
+- **group-policy** - Group policy enforcement
+- **status** - Channel status probes
+- **registry** - Plugin registry shape
+
+### Provider contracts
+
+Located in `src/plugins/contracts/*.contract.test.ts`:
+
+- **auth** - Auth flow contract
+- **auth-choice** - Auth choice/selection
+- **catalog** - Model catalog API
+- **discovery** - Plugin discovery
+- **loader** - Plugin loading
+- **runtime** - Provider runtime
+- **shape** - Plugin shape/interface
+- **wizard** - Setup wizard
+
+### When to run
+
+- After changing plugin-sdk exports or subpaths
+- After adding or modifying a channel or provider plugin
+- After refactoring plugin registration or discovery
+
+Contract tests run in CI and do not require real API keys.
+
 ## Adding regressions (guidance)
 
 When you fix a provider/model issue discovered in live:
@@ -405,3 +519,6 @@ When you fix a provider/model issue discovered in live:
 - Prefer targeting the smallest layer that catches the bug:
   - provider request conversion/replay bug → direct models test
   - gateway session/history/tool pipeline bug → gateway live smoke or CI-safe gateway mock test
+- SecretRef traversal guardrail:
+  - `src/secrets/exec-secret-ref-id-parity.test.ts` derives one sampled target per SecretRef class from registry metadata (`listSecretTargetRegistryEntries()`), then asserts traversal-segment exec ids are rejected.
+  - If you add a new `includeInPlan` SecretRef target family in `src/secrets/target-registry-data.ts`, update `classifyTargetClass` in that test. The test intentionally fails on unclassified target ids so new classes cannot be skipped silently.

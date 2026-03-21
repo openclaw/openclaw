@@ -3,7 +3,11 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { withProgress } from "../cli/progress.js";
-import { loadConfig, readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import {
+  readBestEffortConfig,
+  readConfigFileSnapshot,
+  resolveGatewayPort,
+} from "../config/config.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import { resolveNodeService } from "../daemon/node-service.js";
 import type { GatewayService } from "../daemon/service.js";
@@ -21,6 +25,7 @@ import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { readTailscaleStatusJson } from "../infra/tailscale.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import { checkUpdateStatus, formatGitInstallLabel } from "../infra/update-check.js";
+import { buildPluginCompatibilityNotices } from "../plugins/status.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { VERSION } from "../version.js";
@@ -30,6 +35,7 @@ import { buildChannelsTable } from "./status-all/channels.js";
 import { formatDurationPrecise, formatGatewayAuthUsed } from "./status-all/format.js";
 import { pickGatewaySelfPresence } from "./status-all/gateway.js";
 import { buildStatusAllReportLines } from "./status-all/report-lines.js";
+import { readServiceStatusSummary } from "./status.service-summary.js";
 import { formatUpdateOneLiner } from "./status.update.js";
 
 export async function statusAllCommand(
@@ -38,12 +44,14 @@ export async function statusAllCommand(
 ): Promise<void> {
   await withProgress({ label: "Scanning status --all…", total: 11 }, async (progress) => {
     progress.setLabel("Loading config…");
-    const loadedRaw = loadConfig();
-    const { resolvedConfig: cfg } = await resolveCommandSecretRefsViaGateway({
-      config: loadedRaw,
-      commandName: "status --all",
-      targetIds: getStatusCommandSecretTargetIds(),
-    });
+    const loadedRaw = await readBestEffortConfig();
+    const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
+      await resolveCommandSecretRefsViaGateway({
+        config: loadedRaw,
+        commandName: "status --all",
+        targetIds: getStatusCommandSecretTargetIds(),
+        mode: "read_only_status",
+      });
     const osSummary = resolveOsSummary();
     const snap = await readConfigFileSnapshot().catch(() => null);
     progress.tick();
@@ -134,18 +142,14 @@ export async function statusAllCommand(
     progress.setLabel("Checking services…");
     const readServiceSummary = async (service: GatewayService) => {
       try {
-        const [loaded, runtimeInfo, command] = await Promise.all([
-          service.isLoaded({ env: process.env }).catch(() => false),
-          service.readRuntime(process.env).catch(() => undefined),
-          service.readCommand(process.env).catch(() => null),
-        ]);
-        const installed = command != null;
+        const summary = await readServiceStatusSummary(service, service.label);
         return {
-          label: service.label,
-          installed,
-          loaded,
-          loadedText: loaded ? service.loadedText : service.notLoadedText,
-          runtime: runtimeInfo,
+          label: summary.label,
+          installed: summary.installed,
+          managedByOpenClaw: summary.managedByOpenClaw,
+          loaded: summary.loaded,
+          loadedText: summary.loadedText,
+          runtime: summary.runtime,
         };
       } catch {
         return null;
@@ -159,7 +163,10 @@ export async function statusAllCommand(
     const agentStatus = await getAgentLocalStatuses(cfg);
     progress.tick();
     progress.setLabel("Summarizing channels…");
-    const channels = await buildChannelsTable(cfg, { showSecrets: false });
+    const channels = await buildChannelsTable(cfg, {
+      showSecrets: false,
+      sourceConfig: loadedRaw,
+    });
     progress.tick();
 
     const connectionDetailsForReport = (() => {
@@ -189,6 +196,7 @@ export async function statusAllCommand(
     progress.setLabel("Querying gateway…");
     const health = gatewayReachable
       ? await callGateway({
+          config: cfg,
           method: "health",
           timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
           ...callOverrides,
@@ -197,6 +205,7 @@ export async function statusAllCommand(
 
     const channelsStatus = gatewayReachable
       ? await callGateway({
+          config: cfg,
           method: "channels.status",
           params: { probe: false, timeoutMs: opts?.timeoutMs ?? 10_000 },
           timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
@@ -230,6 +239,7 @@ export async function statusAllCommand(
             }
           })()
         : null;
+    const pluginCompatibility = buildPluginCompatibilityNotices({ config: cfg });
 
     const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
     const dashboard = controlUiEnabled
@@ -306,7 +316,7 @@ export async function statusAllCommand(
             Item: "Gateway service",
             Value: !daemon.installed
               ? `${daemon.label} not installed`
-              : `${daemon.label} ${daemon.installed ? "installed · " : ""}${daemon.loadedText}${daemon.runtime?.status ? ` · ${daemon.runtime.status}` : ""}${daemon.runtime?.pid ? ` (pid ${daemon.runtime.pid})` : ""}`,
+              : `${daemon.label} ${daemon.managedByOpenClaw ? "installed · " : ""}${daemon.loadedText}${daemon.runtime?.status ? ` · ${daemon.runtime.status}` : ""}${daemon.runtime?.pid ? ` (pid ${daemon.runtime.pid})` : ""}`,
           }
         : { Item: "Gateway service", Value: "unknown" },
       nodeService
@@ -314,12 +324,19 @@ export async function statusAllCommand(
             Item: "Node service",
             Value: !nodeService.installed
               ? `${nodeService.label} not installed`
-              : `${nodeService.label} ${nodeService.installed ? "installed · " : ""}${nodeService.loadedText}${nodeService.runtime?.status ? ` · ${nodeService.runtime.status}` : ""}${nodeService.runtime?.pid ? ` (pid ${nodeService.runtime.pid})` : ""}`,
+              : `${nodeService.label} ${nodeService.managedByOpenClaw ? "installed · " : ""}${nodeService.loadedText}${nodeService.runtime?.status ? ` · ${nodeService.runtime.status}` : ""}${nodeService.runtime?.pid ? ` (pid ${nodeService.runtime.pid})` : ""}`,
           }
         : { Item: "Node service", Value: "unknown" },
       {
         Item: "Agents",
         Value: `${agentStatus.agents.length} total · ${agentStatus.bootstrapPendingCount} bootstrapping · ${aliveAgents} active · ${agentStatus.totalSessions} sessions`,
+      },
+      {
+        Item: "Secrets",
+        Value:
+          secretDiagnostics.length > 0
+            ? `${secretDiagnostics.length} diagnostic${secretDiagnostics.length === 1 ? "" : "s"}`
+            : "none",
       },
     ];
 
@@ -336,6 +353,7 @@ export async function statusAllCommand(
       diagnosis: {
         snap,
         remoteUrlMissing,
+        secretDiagnostics,
         sentinel,
         lastErr,
         port,
@@ -344,6 +362,7 @@ export async function statusAllCommand(
         tailscale,
         tailscaleHttpsUrl,
         skillStatus,
+        pluginCompatibility,
         channelsStatus,
         channelIssues,
         gatewayReachable,

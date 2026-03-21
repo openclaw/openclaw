@@ -39,5 +39,23 @@ export default defineConfig(() => {
       port: 5173,
       strictPort: true,
     },
+    plugins: [
+      {
+        name: "control-ui-dev-stubs",
+        configureServer(server) {
+          server.middlewares.use("/__openclaw/control-ui-config.json", (_req, res) => {
+            res.setHeader("Content-Type", "application/json");
+            res.end(
+              JSON.stringify({
+                basePath: "/",
+                assistantName: "",
+                assistantAvatar: "",
+                assistantAgentId: "",
+              }),
+            );
+          });
+        },
+      },
+    ],
   };
 });

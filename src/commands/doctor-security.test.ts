@@ -135,4 +135,92 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("exec-approvals.json");
     expect(message).toContain("openclaw approvals get --gateway");
   });
+
+  it("warns when heartbeat delivery relies on implicit directPolicy defaults", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          heartbeat: {
+            target: "last",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("Heartbeat defaults");
+    expect(message).toContain("agents.defaults.heartbeat.directPolicy");
+    expect(message).toContain("direct/DM targets by default");
+  });
+
+  it("warns when a per-agent heartbeat relies on implicit directPolicy", async () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "ops",
+            heartbeat: {
+              target: "last",
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain('Heartbeat agent "ops"');
+    expect(message).toContain('heartbeat.directPolicy for agent "ops"');
+    expect(message).toContain("direct/DM targets by default");
+  });
+
+  it("degrades safely when channel account resolution fails in read-only security checks", async () => {
+    pluginRegistry.list = [
+      {
+        id: "whatsapp",
+        meta: { label: "WhatsApp" },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => {
+            throw new Error("missing secret");
+          },
+          isEnabled: () => true,
+          isConfigured: () => true,
+        },
+        security: {
+          resolveDmPolicy: () => null,
+        },
+      },
+    ];
+
+    await noteSecurityWarnings({} as OpenClawConfig);
+    const message = lastMessage();
+    expect(message).toContain("[secrets]");
+    expect(message).toContain("failed to resolve account");
+    expect(message).toContain("Run: openclaw security audit --deep");
+  });
+
+  it("skips heartbeat directPolicy warning when delivery is internal-only or explicit", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          heartbeat: {
+            target: "none",
+          },
+        },
+        list: [
+          {
+            id: "ops",
+            heartbeat: {
+              target: "last",
+              directPolicy: "block",
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("Heartbeat defaults");
+    expect(message).not.toContain('Heartbeat agent "ops"');
+  });
 });

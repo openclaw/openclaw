@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { CONFIG_DIR } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import type { CronStoreFile } from "./types.js";
 
 export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
@@ -26,7 +26,7 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
     const raw = await fs.promises.readFile(storePath, "utf-8");
     let parsed: unknown;
     try {
-      parsed = JSON5.parse(raw);
+      parsed = parseJsonWithJson5Fallback(raw);
     } catch (err) {
       throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
         cause: err,
@@ -56,12 +56,18 @@ type SaveCronStoreOptions = {
   skipBackup?: boolean;
 };
 
+async function setSecureFileMode(filePath: string): Promise<void> {
+  await fs.promises.chmod(filePath, 0o600).catch(() => undefined);
+}
+
 export async function saveCronStore(
   storePath: string,
   store: CronStoreFile,
   opts?: SaveCronStoreOptions,
 ) {
-  await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+  const storeDir = path.dirname(storePath);
+  await fs.promises.mkdir(storeDir, { recursive: true, mode: 0o700 });
+  await fs.promises.chmod(storeDir, 0o700).catch(() => undefined);
   const json = JSON.stringify(store, null, 2);
   const cached = serializedStoreCache.get(storePath);
   if (cached === json) {
@@ -83,15 +89,19 @@ export async function saveCronStore(
     return;
   }
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await fs.promises.writeFile(tmp, json, "utf-8");
+  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
+  await setSecureFileMode(tmp);
   if (previous !== null && !opts?.skipBackup) {
     try {
-      await fs.promises.copyFile(storePath, `${storePath}.bak`);
+      const backupPath = `${storePath}.bak`;
+      await fs.promises.copyFile(storePath, backupPath);
+      await setSecureFileMode(backupPath);
     } catch {
       // best-effort
     }
   }
   await renameWithRetry(tmp, storePath);
+  await setSecureFileMode(storePath);
   serializedStoreCache.set(storePath, json);
 }
 

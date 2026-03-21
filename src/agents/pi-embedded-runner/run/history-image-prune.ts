@@ -21,7 +21,11 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): boolean {
   let didMutate = false;
   for (let i = 0; i < lastAssistantIndex; i++) {
     const message = messages[i];
-    if (!message || message.role !== "user" || !Array.isArray(message.content)) {
+    if (
+      !message ||
+      (message.role !== "user" && message.role !== "toolResult") ||
+      !Array.isArray(message.content)
+    ) {
       continue;
     }
     for (let j = 0; j < message.content.length; j++) {

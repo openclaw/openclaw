@@ -131,8 +131,8 @@ describe("config identity defaults", () => {
               api: "anthropic-messages",
               models: [
                 {
-                  id: "MiniMax-M2.5",
-                  name: "MiniMax M2.5",
+                  id: "MiniMax-M2.7",
+                  name: "MiniMax M2.7",
                   reasoning: false,
                   input: ["text"],
                   cost: {
@@ -151,6 +151,35 @@ describe("config identity defaults", () => {
       });
 
       expect(cfg.models?.providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
+    });
+  });
+
+  it("accepts SecretRef values in model provider headers", async () => {
+    await withTempHome("openclaw-config-identity-", async (home) => {
+      const cfg = await writeAndLoadConfig(home, {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-completions",
+              headers: {
+                Authorization: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENAI_HEADER_TOKEN",
+                },
+              },
+              models: [],
+            },
+          },
+        },
+      });
+
+      expect(cfg.models?.providers?.openai?.headers?.Authorization).toEqual({
+        source: "env",
+        provider: "default",
+        id: "OPENAI_HEADER_TOKEN",
+      });
     });
   });
 

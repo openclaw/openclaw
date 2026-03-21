@@ -1,12 +1,16 @@
-import { readFileSync } from "node:fs";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { BaseTokenResolution } from "openclaw/plugin-sdk/zalo";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
+import type { BaseTokenResolution } from "./runtime-api.js";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type { ZaloConfig } from "./types.js";
 
 export type ZaloTokenResolution = BaseTokenResolution & {
   source: "env" | "config" | "configFile" | "none";
 };
+
+function readTokenFromFile(tokenFile: string | undefined): string {
+  return tryReadSecretFileSync(tokenFile, "Zalo token file", { rejectSymlink: true }) ?? "";
+}
 
 export function resolveZaloToken(
   config: ZaloConfig | undefined,
@@ -44,28 +48,16 @@ export function resolveZaloToken(
     if (token) {
       return { token, source: "config" };
     }
-    const tokenFile = accountConfig.tokenFile?.trim();
-    if (tokenFile) {
-      try {
-        const fileToken = readFileSync(tokenFile, "utf8").trim();
-        if (fileToken) {
-          return { token: fileToken, source: "configFile" };
-        }
-      } catch {
-        // ignore read failures
-      }
+    const fileToken = readTokenFromFile(accountConfig.tokenFile);
+    if (fileToken) {
+      return { token: fileToken, source: "configFile" };
     }
   }
 
-  const accountTokenFile = accountConfig?.tokenFile?.trim();
-  if (!accountHasBotToken && accountTokenFile) {
-    try {
-      const fileToken = readFileSync(accountTokenFile, "utf8").trim();
-      if (fileToken) {
-        return { token: fileToken, source: "configFile" };
-      }
-    } catch {
-      // ignore read failures
+  if (!accountHasBotToken) {
+    const fileToken = readTokenFromFile(accountConfig?.tokenFile);
+    if (fileToken) {
+      return { token: fileToken, source: "configFile" };
     }
   }
 
@@ -79,16 +71,9 @@ export function resolveZaloToken(
     if (token) {
       return { token, source: "config" };
     }
-    const tokenFile = baseConfig?.tokenFile?.trim();
-    if (tokenFile) {
-      try {
-        const fileToken = readFileSync(tokenFile, "utf8").trim();
-        if (fileToken) {
-          return { token: fileToken, source: "configFile" };
-        }
-      } catch {
-        // ignore read failures
-      }
+    const fileToken = readTokenFromFile(baseConfig?.tokenFile);
+    if (fileToken) {
+      return { token: fileToken, source: "configFile" };
     }
   }
 

@@ -13,7 +13,7 @@ Manage agent hooks (event-driven automations for commands like `/new`, `/reset`,
 Related:
 
 - Hooks: [Hooks](/automation/hooks)
-- Plugin hooks: [Plugins](/tools/plugin#plugin-hooks)
+- Plugin hooks: [Plugin hooks](/plugins/architecture#provider-runtime-hooks)
 
 ## List All Hooks
 
@@ -193,8 +193,13 @@ openclaw hooks install <npm-spec> --pin
 
 Install a hook pack from a local folder/archive or npm.
 
-Npm specs are **registry-only** (package name + optional version/tag). Git/URL/file
-specs are rejected. Dependency installs run with `--ignore-scripts` for safety.
+Npm specs are **registry-only** (package name + optional **exact version** or
+**dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
+installs run with `--ignore-scripts` for safety.
+
+Bare specs and `@latest` stay on the stable track. If npm resolves either of
+those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
+prerelease tag such as `@beta`/`@rc` or an exact prerelease version.
 
 **What it does:**
 

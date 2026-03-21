@@ -34,6 +34,9 @@ export function resolveHeartbeatReasonKind(reason?: string): HeartbeatReasonKind
   if (trimmed === "wake") {
     return "wake";
   }
+  if (trimmed.startsWith("acp:spawn:")) {
+    return "wake";
+  }
   if (trimmed.startsWith("cron:")) {
     return "cron";
   }
