@@ -137,6 +137,21 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
     expect(logs.some((l) => /non-image/i.test(l))).toBe(true);
   });
+
+  it("normalizes image/apng to image/png", async () => {
+    // Minimal APNG (PNG with acTL chunk) that file-type detects as image/apng.
+    // Our normalization should map it to image/png for Claude API compatibility.
+    const APNG_1x1 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACGFjVEwAAAABAAAAALQVc9o" +
+      "AAAAMSURBVAjXY2BgYAAAAAQAAQb2F4+uAAAAAElFTkSuQmCC";
+
+    const { parsed } = await parseWithWarnings("apng test", [
+      { type: "image", mimeType: "image/jpeg", fileName: "anim.png", content: APNG_1x1 },
+    ]);
+
+    expect(parsed.images).toHaveLength(1);
+    expect(parsed.images[0]?.mimeType).toBe("image/png");
+  });
 });
 
 describe("shared attachment validation", () => {

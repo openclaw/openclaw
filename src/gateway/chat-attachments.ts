@@ -134,10 +134,15 @@ export async function parseMessageWithAttachments(
       );
     }
 
+    // Normalize image/apng to image/png: APNG is a valid PNG superset,
+    // but Claude API rejects image/apng (only accepts jpeg/png/gif/webp).
+    const effectiveMime =
+      (sniffedMime === "image/apng" ? "image/png" : sniffedMime) ?? providedMime ?? mime;
+
     images.push({
       type: "image",
       data: b64,
-      mimeType: sniffedMime ?? providedMime ?? mime,
+      mimeType: effectiveMime,
     });
   }
 
