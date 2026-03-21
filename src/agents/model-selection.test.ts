@@ -426,6 +426,54 @@ describe("model-selection", () => {
       expect(result.allowAny).toBe(false);
     });
 
+    it("deduplicates catalog entries with the same model key", () => {
+      const duplicateCatalog = [
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6 (dup)" },
+        { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
+        { provider: "openai", id: "gpt-4o", name: "GPT-4o (dup)" },
+      ];
+
+      const result = buildAllowedModelSet({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-sonnet-4-6": {},
+                "openai/gpt-4o": {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+        catalog: duplicateCatalog,
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedCatalog).toHaveLength(2);
+      expect(result.allowedCatalog.map((e) => modelKey(e.provider, e.id))).toEqual([
+        "anthropic/claude-sonnet-4-6",
+        "openai/gpt-4o",
+      ]);
+    });
+
+    it("deduplicates catalog entries when allowAny is true", () => {
+      const duplicateCatalog = [
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6 (dup)" },
+        { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
+      ];
+
+      const result = buildAllowedModelSet({
+        cfg: {} as OpenClawConfig,
+        catalog: duplicateCatalog,
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowAny).toBe(true);
+      expect(result.allowedCatalog).toHaveLength(2);
+    });
+
     it("prefers per-agent fallback overrides when agentId is provided", () => {
       const cfg = createAgentFallbackConfig({
         fallbacks: ["google/gemini-3-pro"],
