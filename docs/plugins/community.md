@@ -18,19 +18,6 @@ openclaw plugins install <npm-spec>
 
 ## Listed plugins
 
-### Codex App Server Bridge
-
-Independent OpenClaw bridge for Codex App Server conversations. Bind a chat to
-a Codex thread, talk to it with plain text, and control it with chat-native
-commands for resume, planning, review, model selection, compaction, and more.
-
-- **npm:** `openclaw-codex-app-server`
-- **repo:** [github.com/pwrdrvr/openclaw-codex-app-server](https://github.com/pwrdrvr/openclaw-codex-app-server)
-
-```bash
-openclaw plugins install openclaw-codex-app-server
-```
-
 ### cc-soul
 
 Give your AI a soul: persistent memory (10K+), 5 auto-switching personality
@@ -42,6 +29,19 @@ features, auto-detects AI backend.
 
 ```bash
 openclaw plugins install @cc-soul/openclaw
+```
+
+### Codex App Server Bridge
+
+Independent OpenClaw bridge for Codex App Server conversations. Bind a chat to
+a Codex thread, talk to it with plain text, and control it with chat-native
+commands for resume, planning, review, model selection, compaction, and more.
+
+- **npm:** `openclaw-codex-app-server`
+- **repo:** [github.com/pwrdrvr/openclaw-codex-app-server](https://github.com/pwrdrvr/openclaw-codex-app-server)
+
+```bash
+openclaw plugins install openclaw-codex-app-server
 ```
 
 ### DingTalk
