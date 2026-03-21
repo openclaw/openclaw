@@ -15,11 +15,11 @@ import {
   DEFAULT_CONTEXT_TOKENS,
   normalizeModelCompat,
   normalizeProviderId,
+  OPENAI_CODEX_DEFAULT_MODEL,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-models";
 import { createOpenAIAttributionHeadersWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "../../src/providers/openai-defaults.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 import {
   cloneFirstTemplateModel,
