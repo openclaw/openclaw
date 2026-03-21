@@ -16,6 +16,7 @@ if [[ ! -f "$FILTER_FILES" ]]; then
   exit 1
 fi
 
+# ── Phase 1: Gather staged files ─────────────────────────────────────────────
 # Security: avoid option-injection from malicious file names (e.g. "--all", "--force").
 # Robustness: NUL-delimited file list handles spaces/newlines safely.
 # Compatibility: use read loops instead of `mapfile` so this runs on macOS Bash 3.x.
@@ -28,6 +29,7 @@ if [ "${#files[@]}" -eq 0 ]; then
   exit 0
 fi
 
+# ── Phase 2: Filter staged files into tool-specific sets ─────────────────────
 lint_files=()
 while IFS= read -r -d '' file; do
   lint_files+=("$file")
@@ -38,19 +40,40 @@ while IFS= read -r -d '' file; do
   format_files+=("$file")
 done < <(node "$FILTER_FILES" format -- "${files[@]}")
 
+# ── Phase 3: Run per-file tools and re-stage ─────────────────────────────────
+ran_tools=0
+
 if [ "${#lint_files[@]}" -gt 0 ]; then
   "$RUN_NODE_TOOL" oxlint --type-aware --fix -- "${lint_files[@]}"
+  ran_tools=1
 fi
 
 if [ "${#format_files[@]}" -gt 0 ]; then
   "$RUN_NODE_TOOL" oxfmt --write --no-error-on-unmatched-pattern "${format_files[@]}"
+  ran_tools=1
 fi
 
-git add -- "${files[@]}"
+# Only re-stage when a tool ran and may have modified files on disk.
+if [ "$ran_tools" -eq 1 ]; then
+  git add -- "${files[@]}"
+fi
 
-# This hook is also exercised from lightweight temp repos in tests, where the
-# staged-file safety behavior matters but the full OpenClaw workspace does not
-# exist. Only run the repo-wide gate inside a real checkout.
+# ── Phase 4: Repo-wide quality gate ──────────────────────────────────────────
+# The gate runs only when all three conditions are met:
+#   1. This is a real OpenClaw checkout (package.json + pnpm-lock.yaml exist).
+#   2. Staged files include code the tools care about (lint or format targets).
+#   3. OPENCLAW_SKIP_CHECK is not set (escape hatch for known-safe commits).
+# Non-code-only commits (e.g. .gitignore, images) skip via condition 2.
+# Lightweight temp repos used by tests skip via condition 1.
+# Use `OPENCLAW_SKIP_CHECK=1 git commit` to bypass only the gate, not per-file tools.
+if [[ -n "${OPENCLAW_SKIP_CHECK:-}" ]]; then
+  exit 0
+fi
+
+if [ "${#lint_files[@]}" -eq 0 ] && [ "${#format_files[@]}" -eq 0 ]; then
+  exit 0
+fi
+
 if [[ -f "$ROOT_DIR/package.json" ]] && [[ -f "$ROOT_DIR/pnpm-lock.yaml" ]]; then
   cd "$ROOT_DIR"
   pnpm check
