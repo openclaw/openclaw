@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
 import { formatDurationPrecise } from "openclaw/plugin-sdk/infra-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
+import { markTelegramNetworkHealthyFromBot } from "./bot.js";
 import { type TelegramTransport } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
@@ -245,11 +246,16 @@ export class TelegramPollingSession {
     const pollWatchdogIntervalMs = resolvePollWatchdogIntervalMs(pollStallThresholdMs);
 
     let lastGetUpdatesAt = Date.now();
-    bot.api.config.use((prev, method, payload, signal) => {
-      if (method === "getUpdates") {
-        lastGetUpdatesAt = Date.now();
+    bot.api.config.use(async (prev, method, payload, signal) => {
+      if (method !== "getUpdates") {
+        return prev(method, payload, signal);
       }
-      return prev(method, payload, signal);
+      const result = await prev(method, payload, signal);
+      // Refresh stall timing only after a successful long-poll response.
+      // Fast failing attempts should not mask prolonged "no successful polls" windows.
+      lastGetUpdatesAt = Date.now();
+      markTelegramNetworkHealthyFromBot(bot);
+      return result;
     });
 
     const runner = run(bot, this.opts.runnerOptions);

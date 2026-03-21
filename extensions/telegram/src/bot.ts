@@ -97,6 +97,7 @@ type TelegramFetchInput = Parameters<NonNullable<ApiClientOptions["fetch"]>>[0];
 type TelegramFetchInit = Parameters<NonNullable<ApiClientOptions["fetch"]>>[1];
 type GlobalFetchInput = Parameters<typeof globalThis.fetch>[0];
 type GlobalFetchInit = Parameters<typeof globalThis.fetch>[1];
+const TELEGRAM_NOTE_NETWORK_HEALTHY = Symbol.for("openclaw.telegram.note-network-healthy");
 
 function readRequestUrl(input: TelegramFetchInput): string | null {
   if (typeof input === "string") {
@@ -218,6 +219,16 @@ async function shouldMarkTelegramNetworkHealthy(
     );
   } catch {
     return false;
+  }
+}
+
+export function markTelegramNetworkHealthyFromBot(bot: unknown): void {
+  if (!bot || typeof bot !== "object") {
+    return;
+  }
+  const maybeNote = (bot as Record<PropertyKey, unknown>)[TELEGRAM_NOTE_NETWORK_HEALTHY];
+  if (typeof maybeNote === "function") {
+    (maybeNote as () => void)();
   }
 }
 
@@ -362,6 +373,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       : undefined;
 
   const bot = new botRuntime.Bot(opts.token, client ? { client } : undefined);
+  if (noteTelegramNetworkHealthy) {
+    Object.defineProperty(bot, TELEGRAM_NOTE_NETWORK_HEALTHY, {
+      value: noteTelegramNetworkHealthy,
+      configurable: true,
+    });
+  }
   bot.api.config.use(botRuntime.apiThrottler());
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {

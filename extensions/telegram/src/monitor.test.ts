@@ -71,6 +71,9 @@ const { createTelegramBotCalls } = vi.hoisted(() => ({
 const { createdBotStops } = vi.hoisted(() => ({
   createdBotStops: [] as Array<ReturnType<typeof vi.fn<() => void>>>,
 }));
+const { markTelegramNetworkHealthyFromBotSpy } = vi.hoisted(() => ({
+  markTelegramNetworkHealthyFromBotSpy: vi.fn(),
+}));
 
 const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
   computeBackoff: vi.fn(() => 0),
@@ -284,6 +287,7 @@ vi.mock("./bot.js", () => ({
       start: vi.fn(),
     };
   },
+  markTelegramNetworkHealthyFromBot: markTelegramNetworkHealthyFromBotSpy,
 }));
 
 // Mock the grammyjs/runner to resolve immediately
@@ -365,6 +369,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     resetUnhandledRejection();
     createTelegramBotErrors.length = 0;
     createdBotStops.length = 0;
+    markTelegramNetworkHealthyFromBotSpy.mockClear();
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -706,6 +711,37 @@ describe("monitorTelegramProvider (grammY)", () => {
     vi.useRealTimers();
   });
 
+  it("treats repeated failed getUpdates attempts as stalled polling", async () => {
+    const { monitorTelegramProvider } = await import("./monitor.js");
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const { stop, waitForTaskStart } = mockRunOnceWithStalledPollingRunner();
+    mockRunOnceAndAbort(abort);
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+    await waitForTaskStart();
+    const middleware = api.config.use.mock.calls.at(-1)?.[0] as
+      | ((prev: (...args: unknown[]) => Promise<unknown>, method: string) => Promise<unknown>)
+      | undefined;
+    expect(typeof middleware).toBe("function");
+
+    const failingGetUpdates = vi.fn(async () => {
+      throw makeRecoverableFetchError();
+    });
+    await expect(middleware?.(failingGetUpdates, "getUpdates")).rejects.toBeDefined();
+    vi.advanceTimersByTime(20_000);
+    await expect(middleware?.(failingGetUpdates, "getUpdates")).rejects.toBeDefined();
+    vi.advanceTimersByTime(20_000);
+    await expect(middleware?.(failingGetUpdates, "getUpdates")).rejects.toBeDefined();
+    vi.advanceTimersByTime(60_000);
+    await monitor;
+
+    expect(stop).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   it("clamps configured poll stall thresholds below the long-poll safety floor", async () => {
     const { monitorTelegramProvider } = await import("./monitor.js");
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -867,6 +903,34 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     expect(api.getUpdates).toHaveBeenCalledWith({ offset: 549076204, limit: 1, timeout: 0 });
     expect(order).toEqual(["deleteWebhook", "getUpdates", "run"]);
+  });
+
+  it("marks Telegram network healthy only after successful getUpdates completion", async () => {
+    const { monitorTelegramProvider } = await import("./monitor.js");
+    const abort = new AbortController();
+    const { waitForTaskStart } = mockRunOnceWithStalledPollingRunner();
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+    await waitForTaskStart();
+
+    const middleware = api.config.use.mock.calls.at(-1)?.[0] as
+      | ((prev: (...args: unknown[]) => Promise<unknown>, method: string) => Promise<unknown>)
+      | undefined;
+    expect(typeof middleware).toBe("function");
+
+    const successGetUpdates = vi.fn(async () => []);
+    await middleware?.(successGetUpdates, "getUpdates");
+    expect(markTelegramNetworkHealthyFromBotSpy).toHaveBeenCalledTimes(1);
+
+    const failedGetUpdates = vi.fn(async () => {
+      throw new Error("failed");
+    });
+    await expect(middleware?.(failedGetUpdates, "getUpdates")).rejects.toThrow("failed");
+    expect(markTelegramNetworkHealthyFromBotSpy).toHaveBeenCalledTimes(1);
+
+    abort.abort();
+    await monitor;
   });
 
   it("skips offset confirmation when no persisted offset exists", async () => {
