@@ -531,6 +531,68 @@ export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
+/**
+ * Applies smart memory search defaults for new installations.
+ *
+ * Enables three features that work together to solve the multi-session
+ * continuity problem (e.g. webchat and Telegram feeling like "two twins
+ * who don't share memory") without requiring any agent-level instructions:
+ *
+ * 1. **Session memory indexing** – every conversation across all channels is
+ *    automatically indexed so `memory_search` can find context from any session.
+ *
+ * 2. **Temporal decay** – recent memories rank higher automatically; a note
+ *    from yesterday beats one from 6 months ago on the same topic.
+ *
+ * 3. **MMR re-ranking** – avoids returning near-duplicate memory snippets;
+ *    the agent gets diverse, complementary results instead of repetition.
+ *
+ * All three are off by default today. This function enables them for users
+ * who haven't explicitly configured `memorySearch`, so new installations
+ * get the best out-of-the-box experience. Existing explicit config is
+ * never overwritten (opt-out by setting any memorySearch field).
+ */
+export function applyMemorySearchDefaults(cfg: OpenClawConfig): OpenClawConfig {
+  const defaults = cfg.agents?.defaults;
+  if (!defaults) {
+    return cfg;
+  }
+
+  // Don't touch anything if the user has explicitly configured memorySearch
+  if (defaults.memorySearch !== undefined) {
+    return cfg;
+  }
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...defaults,
+        memorySearch: {
+          experimental: { sessionMemory: true },
+          sources: ["memory", "sessions"],
+          query: {
+            hybrid: {
+              enabled: true,
+              vectorWeight: 0.7,
+              textWeight: 0.3,
+              temporalDecay: {
+                enabled: true,
+                halfLifeDays: 30,
+              },
+              mmr: {
+                enabled: true,
+                lambda: 0.7,
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
 export function resetSessionDefaultsWarningForTests() {
   defaultWarnState = { warned: false };
 }
