@@ -9,18 +9,18 @@ import {
 import {
   loadRunOverflowCompactionHarness,
   mockedCoerceToFailoverError,
+  mockedCompactDirect,
+  mockedContextEngine,
   mockedDescribeFailoverError,
   mockedGlobalHookRunner,
   mockedPickFallbackThinkingLevel,
   mockedResolveFailoverStatus,
-  mockedContextEngine,
-  mockedCompactDirect,
-  mockedRunEmbeddedAttempt,
   mockedRunContextEngineMaintenance,
-  resetRunOverflowCompactionHarnessMocks,
+  mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
   overflowBaseRunParams,
+  resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
@@ -302,7 +302,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     mockedPickFallbackThinkingLevel.mockReset();
     mockedPickFallbackThinkingLevel.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({ promptError: new Error("unsupported reasoning mode") }),
+      makeAttemptResult({
+        promptError: new Error("unsupported reasoning mode"),
+      }),
     );
     mockedPickFallbackThinkingLevel.mockReturnValue("low");
 

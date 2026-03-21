@@ -3,20 +3,20 @@ import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compact
 import {
   loadRunOverflowCompactionHarness,
   mockedCoerceToFailoverError,
-  mockedDescribeFailoverError,
-  mockedGlobalHookRunner,
-  mockedResolveFailoverStatus,
   mockedCompactDirect,
   mockedContextEngine,
-  mockedRunEmbeddedAttempt,
+  mockedDescribeFailoverError,
   mockedGetApiKeyForModel,
+  mockedGlobalHookRunner,
   mockedPickFallbackThinkingLevel,
   mockedResolveAuthProfileOrder,
-  resetRunOverflowCompactionHarnessMocks,
+  mockedResolveFailoverStatus,
+  mockedRunEmbeddedAttempt,
+  mockedRunPostCompactionSideEffects,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
-  mockedRunPostCompactionSideEffects,
   overflowBaseRunParams,
+  resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;

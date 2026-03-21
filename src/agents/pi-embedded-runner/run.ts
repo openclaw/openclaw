@@ -5,7 +5,7 @@ import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
 } from "../../context-engine/index.js";
-import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
+import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
@@ -15,8 +15,8 @@ import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js"
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
-  isProfileInCooldown,
   type AuthProfileFailureReason,
+  isProfileInCooldown,
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
@@ -40,28 +40,28 @@ import {
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
   getApiKeyForModel,
-  resolveAuthProfileOrder,
   type ResolvedProviderAuth,
+  resolveAuthProfileOrder,
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
-  formatBillingErrorMessage,
   classifyFailoverReason,
   extractObservedOverflowTokenCount,
+  type FailoverReason,
   formatAssistantErrorText,
+  formatBillingErrorMessage,
   isAuthAssistantError,
   isBillingAssistantError,
   isCompactionFailureError,
-  isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
-  parseImageSizeError,
-  parseImageDimensionError,
+  isLikelyContextOverflowError,
   isRateLimitAssistantError,
   isTimeoutErrorMessage,
+  parseImageDimensionError,
+  parseImageSizeError,
   pickFallbackThinkingLevel,
-  type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { isLikelyMutatingToolName } from "../tool-mutation.js";
@@ -78,8 +78,8 @@ import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
-  truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
+  truncateOversizedToolResultsInSession,
 } from "./tool-result-truncation.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import {
@@ -366,7 +366,9 @@ export async function runEmbeddedPiAgent(
         );
       }
 
-      const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+      const authStore = ensureAuthProfileStore(agentDir, {
+        allowKeychainPrompt: false,
+      });
       const preferredProfileId = params.authProfileId?.trim();
       let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
       if (lockedProfileId) {
@@ -459,7 +461,10 @@ export async function runEmbeddedPiAgent(
           authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
           if (preparedAuth.baseUrl) {
             runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
-            effectiveModel = { ...effectiveModel, baseUrl: preparedAuth.baseUrl };
+            effectiveModel = {
+              ...effectiveModel,
+              baseUrl: preparedAuth.baseUrl,
+            };
           }
           runtimeAuthState = {
             ...runtimeAuthState,
@@ -1113,7 +1118,11 @@ export async function runEmbeddedPiAgent(
                 log.warn(
                   `[timeout-compaction] contextEngine.compact() threw during timeout recovery for ${provider}/${modelId}: ${String(compactErr)}`,
                 );
-                timeoutCompactResult = { ok: false, compacted: false, reason: String(compactErr) };
+                timeoutCompactResult = {
+                  ok: false,
+                  compacted: false,
+                  reason: String(compactErr),
+                };
               }
               await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
               if (timeoutCompactResult.compacted) {
@@ -1149,7 +1158,10 @@ export async function runEmbeddedPiAgent(
                   return null;
                 }
                 if (assistantErrorText && isLikelyContextOverflowError(assistantErrorText)) {
-                  return { text: assistantErrorText, source: "assistantError" as const };
+                  return {
+                    text: assistantErrorText,
+                    source: "assistantError" as const,
+                  };
                 }
                 return null;
               })()
@@ -1263,7 +1275,11 @@ export async function runEmbeddedPiAgent(
                 log.warn(
                   `contextEngine.compact() threw during overflow recovery for ${provider}/${modelId}: ${String(compactErr)}`,
                 );
-                compactResult = { ok: false, compacted: false, reason: String(compactErr) };
+                compactResult = {
+                  ok: false,
+                  compacted: false,
+                  reason: String(compactErr),
+                };
               }
               await runOwnsCompactionAfterHook("overflow recovery", compactResult);
               if (compactResult.compacted) {
