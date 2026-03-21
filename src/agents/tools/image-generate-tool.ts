@@ -498,7 +498,7 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Generate new images or edit reference images with the configured or inferred image-generation model. Use action="list" to inspect available providers/models. Generated images are delivered automatically from the tool result reply payload.',
+      'Generate new images or edit reference images with the configured or inferred image-generation model. Use action="list" to inspect available providers/models. Generated images are delivered automatically alongside the assistant reply.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -615,7 +615,7 @@ export function createImageGenerateTool(options?: {
       return {
         content: [{ type: "text", text: lines.join("\n") }],
         details: {
-          reply: {
+          media: {
             mediaUrls: savedImages.map((image) => image.path),
           },
           provider: result.provider,

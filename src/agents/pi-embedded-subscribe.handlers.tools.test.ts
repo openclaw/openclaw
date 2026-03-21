@@ -46,6 +46,7 @@ function createTestContext(): {
       messagingToolSentTargets: [],
       successfulCronAdds: 0,
       deterministicApprovalPromptSent: false,
+      pendingMediaArtifacts: [],
     },
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
@@ -375,7 +376,7 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m2")).toBe(false);
   });
 
-  it("does not treat explicit tool result reply payload media as messaging-tool sends", async () => {
+  it("stashes media artifacts instead of tracking them as messaging-tool sends", async () => {
     const { ctx } = createTestContext();
 
     const startEvt: ToolExecutionStartEvent = {
@@ -394,7 +395,7 @@ describe("messaging tool media URL tracking", () => {
       result: {
         content: [{ type: "text", text: "sent" }],
         details: {
-          reply: {
+          media: {
             mediaUrls: ["file:///img-a.jpg", "file:///img-b.jpg"],
           },
         },
@@ -402,7 +403,14 @@ describe("messaging tool media URL tracking", () => {
     };
     await handleToolExecutionEnd(ctx, endEvt);
 
+    // Media artifacts are stashed, not tracked as messaging sends
     expect(ctx.state.messagingToolSentMediaUrls).toEqual([]);
+    expect(ctx.state.pendingMediaArtifacts).toEqual([
+      {
+        toolName: "message",
+        artifact: { mediaUrls: ["file:///img-a.jpg", "file:///img-b.jpg"] },
+      },
+    ]);
   });
 
   it("trims messagingToolSentMediaUrls to 200 on commit (FIFO)", async () => {

@@ -15,7 +15,7 @@ import type {
 import {
   extractMessagingToolSend,
   extractToolErrorMessage,
-  extractToolResultReplyPayload,
+  extractToolMediaArtifact,
   extractToolResultText,
   isToolResultError,
   sanitizeToolResult,
@@ -225,6 +225,16 @@ async function emitToolResultOutput(params: {
   sanitizedResult: unknown;
 }) {
   const { ctx, toolName, meta, isToolError, result, sanitizedResult } = params;
+
+  // Stash media artifacts for the block reply pipeline regardless of whether
+  // onToolResult is wired — artifacts are consumed by block replies, not onToolResult.
+  if (!isToolError) {
+    const artifact = extractToolMediaArtifact(toolName, result);
+    if (artifact) {
+      ctx.state.pendingMediaArtifacts.push({ toolName, artifact });
+    }
+  }
+
   if (!ctx.params.onToolResult) {
     return;
   }
@@ -269,32 +279,11 @@ async function emitToolResultOutput(params: {
     return;
   }
 
-  const explicitReplyPayload = !isToolError
-    ? extractToolResultReplyPayload(toolName, result)
-    : undefined;
-
   if (ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
       ctx.emitToolOutput(toolName, meta, outputText);
     }
-    if (!explicitReplyPayload) {
-      return;
-    }
-  }
-
-  if (isToolError) {
-    return;
-  }
-
-  if (!explicitReplyPayload) {
-    return;
-  }
-
-  try {
-    await ctx.params.onToolResult?.(explicitReplyPayload);
-  } catch {
-    // ignore delivery failures
   }
 }
 

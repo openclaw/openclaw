@@ -21,7 +21,7 @@ export function createTtsTool(opts?: {
   return {
     label: "TTS",
     name: "tts",
-    description: `Convert text to speech. Audio is delivered automatically from the tool result reply payload — reply with ${SILENT_REPLY_TOKEN} after a successful call to avoid duplicate messages.`,
+    description: `Convert text to speech. Audio is delivered automatically alongside the assistant reply — reply with ${SILENT_REPLY_TOKEN} after a successful call to avoid duplicate messages.`,
     parameters: TtsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -40,7 +40,7 @@ export function createTtsTool(opts?: {
           details: {
             audioPath: result.audioPath,
             provider: result.provider,
-            reply: {
+            media: {
               mediaUrl: result.audioPath,
               audioAsVoice: result.voiceCompatible === true,
             },

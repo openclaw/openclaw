@@ -5,6 +5,7 @@ import type { InlineCodeState } from "../markdown/code-spans.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
+import type { ToolMediaArtifact } from "./pi-embedded-subscribe.tools.js";
 import type {
   BlockReplyChunking,
   SubscribeEmbeddedPiSessionParams,
@@ -78,6 +79,8 @@ export type EmbeddedPiSubscribeState = {
   pendingMessagingMediaUrls: Map<string, string[]>;
   deterministicApprovalPromptSent: boolean;
   lastAssistant?: AgentMessage;
+  /** Media artifacts collected from tool results, to be attached to the next block reply. */
+  pendingMediaArtifacts: Array<{ toolName: string; artifact: ToolMediaArtifact }>;
 };
 
 export type EmbeddedPiSubscribeContext = {
@@ -157,6 +160,7 @@ export type ToolHandlerState = Pick<
   | "messagingToolSentTargets"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
+  | "pendingMediaArtifacts"
 >;
 
 export type ToolHandlerContext = {

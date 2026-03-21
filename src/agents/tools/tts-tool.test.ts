@@ -15,7 +15,7 @@ describe("createTtsTool", () => {
     expect(tool.description).not.toContain("NO_REPLY");
   });
 
-  it("returns an explicit reply payload for generated audio", async () => {
+  it("returns a media artifact for generated audio", async () => {
     vi.spyOn(ttsModule, "textToSpeech").mockResolvedValue({
       success: true,
       audioPath: "/tmp/voice.opus",
@@ -31,7 +31,7 @@ describe("createTtsTool", () => {
       details: {
         audioPath: "/tmp/voice.opus",
         provider: "openai",
-        reply: {
+        media: {
           mediaUrl: "/tmp/voice.opus",
           audioAsVoice: true,
         },

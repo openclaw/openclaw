@@ -4,7 +4,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   extractMessagingToolSend,
-  extractToolResultReplyPayload,
+  extractToolMediaArtifact,
 } from "./pi-embedded-subscribe.tools.js";
 
 describe("extractMessagingToolSend", () => {
@@ -61,12 +61,12 @@ describe("extractMessagingToolSend", () => {
   });
 });
 
-describe("extractToolResultReplyPayload", () => {
+describe("extractToolMediaArtifact", () => {
   it("keeps local media paths for trusted core tools", () => {
     expect(
-      extractToolResultReplyPayload("image_generate", {
+      extractToolMediaArtifact("image_generate", {
         details: {
-          reply: {
+          media: {
             mediaUrls: ["/tmp/generated.png"],
           },
         },
@@ -78,9 +78,9 @@ describe("extractToolResultReplyPayload", () => {
 
   it("drops local media paths for untrusted tools", () => {
     expect(
-      extractToolResultReplyPayload("third_party_plugin", {
+      extractToolMediaArtifact("third_party_plugin", {
         details: {
-          reply: {
+          media: {
             mediaUrls: ["/tmp/secret.png"],
           },
         },
@@ -90,9 +90,9 @@ describe("extractToolResultReplyPayload", () => {
 
   it("keeps remote media urls for untrusted tools", () => {
     expect(
-      extractToolResultReplyPayload("third_party_plugin", {
+      extractToolMediaArtifact("third_party_plugin", {
         details: {
-          reply: {
+          media: {
             mediaUrls: ["https://example.com/generated.png"],
           },
         },
@@ -100,5 +100,30 @@ describe("extractToolResultReplyPayload", () => {
     ).toEqual({
       mediaUrls: ["https://example.com/generated.png"],
     });
+  });
+
+  it("extracts audioAsVoice from media artifact", () => {
+    expect(
+      extractToolMediaArtifact("tts", {
+        details: {
+          media: {
+            mediaUrl: "/tmp/voice.opus",
+            audioAsVoice: true,
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrl: "/tmp/voice.opus",
+      audioAsVoice: true,
+    });
+  });
+
+  it("returns undefined when no media field exists", () => {
+    expect(
+      extractToolMediaArtifact("bash", {
+        content: [{ type: "text", text: "done" }],
+        details: { status: "ok" },
+      }),
+    ).toBeUndefined();
   });
 });

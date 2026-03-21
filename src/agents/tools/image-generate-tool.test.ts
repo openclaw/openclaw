@@ -212,7 +212,7 @@ describe("createImageGenerateTool", () => {
         },
       ],
       details: {
-        reply: {
+        media: {
           mediaUrls: ["/tmp/generated-1.png", "/tmp/generated-2.png"],
         },
         provider: "openai",

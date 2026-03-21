@@ -15,6 +15,7 @@ import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { resolveMediaArtifactUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
@@ -77,6 +78,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     successfulCronAdds: 0,
     pendingMessagingMediaUrls: new Map(),
     deterministicApprovalPromptSent: false,
+    pendingMediaArtifacts: [],
   };
   const usageTotals = {
     input: 0,
@@ -515,14 +517,31 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       replyToTag,
       replyToCurrent,
     } = splitResult;
+
+    // Drain pending media artifacts from tool results and attach to this block reply.
+    const artifactMediaUrls: string[] = [];
+    let artifactAudioAsVoice = false;
+    if (state.pendingMediaArtifacts.length > 0) {
+      for (const { artifact } of state.pendingMediaArtifacts) {
+        artifactMediaUrls.push(...resolveMediaArtifactUrls(artifact));
+        if (artifact.audioAsVoice) {
+          artifactAudioAsVoice = true;
+        }
+      }
+      state.pendingMediaArtifacts.length = 0;
+    }
+
+    const mergedMediaUrls = [...(mediaUrls ?? []), ...artifactMediaUrls];
+    const mergedAudioAsVoice = audioAsVoice || artifactAudioAsVoice;
+
     // Skip empty payloads, but always emit if audioAsVoice is set (to propagate the flag)
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
+    if (!cleanedText && mergedMediaUrls.length === 0 && !mergedAudioAsVoice) {
       return;
     }
     emitBlockReplySafely({
       text: cleanedText,
-      mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-      audioAsVoice,
+      mediaUrls: mergedMediaUrls.length > 0 ? mergedMediaUrls : undefined,
+      audioAsVoice: mergedAudioAsVoice,
       replyToId,
       replyToTag,
       replyToCurrent,
@@ -541,11 +560,30 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (blockChunker?.hasBuffered()) {
       blockChunker.drain({ force: true, emit: emitBlockChunk });
       blockChunker.reset();
-      return;
-    }
-    if (state.blockBuffer.length > 0) {
+    } else if (state.blockBuffer.length > 0) {
       emitBlockChunk(state.blockBuffer);
       state.blockBuffer = "";
+    }
+
+    // If media artifacts are still pending after flushing text (e.g., the assistant
+    // replied with SILENT_REPLY_TOKEN and produced no block text), emit them as a
+    // standalone media-only block reply so they still reach the user.
+    if (state.pendingMediaArtifacts.length > 0) {
+      const artifactMediaUrls: string[] = [];
+      let artifactAudioAsVoice = false;
+      for (const { artifact } of state.pendingMediaArtifacts) {
+        artifactMediaUrls.push(...resolveMediaArtifactUrls(artifact));
+        if (artifact.audioAsVoice) {
+          artifactAudioAsVoice = true;
+        }
+      }
+      state.pendingMediaArtifacts.length = 0;
+      if (artifactMediaUrls.length > 0 || artifactAudioAsVoice) {
+        emitBlockReplySafely({
+          mediaUrls: artifactMediaUrls.length > 0 ? artifactMediaUrls : undefined,
+          audioAsVoice: artifactAudioAsVoice,
+        });
+      }
     }
   };
 
@@ -596,6 +634,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.successfulCronAdds = 0;
     state.pendingMessagingMediaUrls.clear();
     state.deterministicApprovalPromptSent = false;
+    state.pendingMediaArtifacts.length = 0;
     resetAssistantMessageState(0);
   };
 
