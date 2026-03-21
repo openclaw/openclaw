@@ -31,6 +31,19 @@ commands for resume, planning, review, model selection, compaction, and more.
 openclaw plugins install openclaw-codex-app-server
 ```
 
+### cc-soul
+
+Give your AI a soul: persistent memory (10K+), 5 auto-switching personality
+faces, emotional awareness, self-evolution, knowledge network. 22 toggleable
+features, auto-detects AI backend.
+
+- **npm:** `@cc-soul/openclaw`
+- **repo:** [github.com/wenroudeyu-collab/cc-soul](https://github.com/wenroudeyu-collab/cc-soul)
+
+```bash
+openclaw plugins install @cc-soul/openclaw
+```
+
 ### DingTalk
 
 Enterprise robot integration using Stream mode. Supports text, images, and
