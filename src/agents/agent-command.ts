@@ -103,7 +103,7 @@ type PersistSessionEntryParams = {
   entry: SessionEntry;
 };
 
-type OverrideFieldClearedByDelete =
+type SessionFieldClearedByDelete =
   | "providerOverride"
   | "modelOverride"
   | "authProfileOverride"
@@ -113,10 +113,11 @@ type OverrideFieldClearedByDelete =
   | "fallbackNoticeActiveModel"
   | "fallbackNoticeReason"
   | "systemPromptReport"
+  | "skillsSnapshot"
   | "cliSessionIds"
   | "claudeCliSessionId";
 
-const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
+const SESSION_FIELDS_CLEARED_BY_DELETE: SessionFieldClearedByDelete[] = [
   "providerOverride",
   "modelOverride",
   "authProfileOverride",
@@ -126,6 +127,7 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "fallbackNoticeActiveModel",
   "fallbackNoticeReason",
   "systemPromptReport",
+  "skillsSnapshot",
   "cliSessionIds",
   "claudeCliSessionId",
 ];
@@ -163,8 +165,8 @@ function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model")
 async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
   const persisted = await updateSessionStore(params.storePath, (store) => {
     const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
-    // Preserve explicit `delete` clears done by session override helpers.
-    for (const field of OVERRIDE_FIELDS_CLEARED_BY_DELETE) {
+    // Preserve explicit `delete` clears done by session rollover/override helpers.
+    for (const field of SESSION_FIELDS_CLEARED_BY_DELETE) {
       if (!Object.hasOwn(params.entry, field)) {
         Reflect.deleteProperty(merged, field);
       }
@@ -752,10 +754,14 @@ async function agentCommandInternal(
       const next = { ...sessionEntry };
       const clearedCliState = clearAllCliSessionIds(next);
       const hadSystemPromptReport = Object.hasOwn(next, "systemPromptReport");
+      const hadSkillsSnapshot = Object.hasOwn(next, "skillsSnapshot");
       if (hadSystemPromptReport) {
         delete next.systemPromptReport;
       }
-      if (clearedCliState || hadSystemPromptReport) {
+      if (hadSkillsSnapshot) {
+        delete next.skillsSnapshot;
+      }
+      if (clearedCliState || hadSystemPromptReport || hadSkillsSnapshot) {
         next.sessionId = sessionId;
         next.updatedAt = Date.now();
         await persistSessionEntry({
