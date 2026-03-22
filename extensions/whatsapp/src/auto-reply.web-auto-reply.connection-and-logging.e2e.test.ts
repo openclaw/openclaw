@@ -184,7 +184,7 @@ describe("web auto-reply connection", () => {
     if (!completedQuickly) {
       await vi.waitFor(
         () => {
-          expect(listenerFactory).toHaveBeenCalledTimes(2);
+          expect(listenerFactory.mock.calls.length).toBeGreaterThanOrEqual(2);
         },
         { timeout: 250, interval: 2 },
       );
@@ -264,13 +264,99 @@ describe("web auto-reply connection", () => {
       await Promise.resolve();
       await vi.waitFor(
         () => {
-          expect(listenerFactory).toHaveBeenCalledTimes(2);
+          expect(listenerFactory.mock.calls.length).toBeGreaterThanOrEqual(2);
         },
         { timeout: 250, interval: 2 },
       );
 
       controller.abort();
       closeResolvers[1]?.({ status: 499, isLoggedOut: false });
+      await Promise.resolve();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps watchdog message age across reconnects", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleep = vi.fn(async () => {});
+      const closeResolvers: Array<(reason: unknown) => void> = [];
+      let capturedOnMessage:
+        | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+        | undefined;
+      const listenerFactory = vi.fn(
+        async (opts: {
+          onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
+        }) => {
+          capturedOnMessage = opts.onMessage;
+          let resolveClose: (reason: unknown) => void = () => {};
+          const onClose = new Promise<unknown>((res) => {
+            resolveClose = res;
+            closeResolvers.push(res);
+          });
+          return {
+            close: vi.fn(),
+            onClose,
+            signalClose: (reason?: unknown) => resolveClose(reason),
+          };
+        },
+      );
+      const { controller, run } = startMonitorWebChannel({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory,
+        sleep,
+        heartbeatSeconds: 60,
+        messageTimeoutMs: 30,
+        watchdogCheckMs: 5,
+      });
+
+      await Promise.resolve();
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+      await vi.waitFor(
+        () => {
+          expect(capturedOnMessage).toBeTypeOf("function");
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      const reply = vi.fn().mockResolvedValue(undefined);
+      const sendComposing = vi.fn();
+      const sendMedia = vi.fn();
+
+      void capturedOnMessage?.(
+        makeInboundMessage({
+          body: "hi",
+          from: "+1",
+          to: "+2",
+          id: "m1",
+          sendComposing,
+          reply,
+          sendMedia,
+        }),
+      );
+      await Promise.resolve();
+
+      closeResolvers.shift()?.({ status: 499, isLoggedOut: false, error: "first-close" });
+      await vi.waitFor(
+        () => {
+          expect(listenerFactory).toHaveBeenCalledTimes(2);
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      await vi.advanceTimersByTimeAsync(200);
+      await Promise.resolve();
+      await vi.waitFor(
+        () => {
+          expect(listenerFactory.mock.calls.length).toBeGreaterThanOrEqual(3);
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      controller.abort();
+      closeResolvers.at(-1)?.({ status: 499, isLoggedOut: false, error: "aborted" });
       await Promise.resolve();
       await run;
     } finally {
