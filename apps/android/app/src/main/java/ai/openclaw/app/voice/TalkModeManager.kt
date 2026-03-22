@@ -23,7 +23,6 @@ import ai.openclaw.app.isCanonicalMainSessionKey
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -105,7 +104,8 @@ class TalkModeManager(
   private val playbackGeneration = AtomicLong(0L)
 
   private var ttsJob: Job? = null
-  private val player = AtomicReference<MediaPlayer?>(null)
+  private val playerLock = Any()
+  private var player: MediaPlayer? = null
   @Volatile private var finalizeInFlight = false
   private var listenWatchdogJob: Job? = null
 
@@ -764,7 +764,9 @@ class TalkModeManager(
     try {
       withContext(Dispatchers.IO) { tempFile.writeBytes(audioBytes) }
       val player = MediaPlayer()
-      this.player.set(player)
+      synchronized(playerLock) {
+        this.player = player
+      }
       val finished = CompletableDeferred<Unit>()
       player.setAudioAttributes(
         AudioAttributes.Builder()
@@ -785,7 +787,7 @@ class TalkModeManager(
       ensurePlaybackActive(playbackToken)
     } finally {
       try {
-        cleanupPlayer()
+        cleanupPlayer(player)
       } catch (_: Throwable) {}
       tempFile.delete()
     }
@@ -822,9 +824,11 @@ class TalkModeManager(
       return
     }
     if (resetInterrupt) {
-      val currentMs = try {
-        player.get()?.currentPosition?.toDouble() ?: 0.0
-      } catch (_: IllegalStateException) { 0.0 }
+      val currentMs = synchronized(playerLock) {
+        try {
+          player?.currentPosition?.toDouble() ?: 0.0
+        } catch (_: IllegalStateException) { 0.0 }
+      }
       lastInterruptedAtSeconds = currentMs / 1000.0
     }
     cleanupPlayer()
@@ -867,13 +871,16 @@ class TalkModeManager(
     audioFocusRequest = null
   }
 
-  private fun cleanupPlayer() {
-    // Atomically take ownership so concurrent callers don't double-release
-    val p = player.getAndSet(null) ?: return
-    try {
-      p.stop()
-    } catch (_: IllegalStateException) {}
-    p.release()
+  private fun cleanupPlayer(expectedPlayer: MediaPlayer? = null) {
+    synchronized(playerLock) {
+      val p = player ?: return
+      if (expectedPlayer != null && p !== expectedPlayer) return
+      player = null
+      try {
+        p.stop()
+      } catch (_: IllegalStateException) {}
+      p.release()
+    }
   }
 
   private fun shouldInterrupt(transcript: String): Boolean {
