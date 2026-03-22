@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
@@ -139,15 +140,16 @@ export function createWhatsAppPluginBase(params: {
       disabledReason: () => "disabled",
       isConfigured: params.isConfigured,
       unconfiguredReason: () => "not linked",
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: Boolean(account.authDir),
-        linked: Boolean(account.authDir),
-        dmPolicy: account.dmPolicy,
-        allowFrom: account.allowFrom,
-      }),
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: Boolean(account.authDir),
+          extra: {
+            linked: Boolean(account.authDir),
+            dmPolicy: account.dmPolicy,
+            allowFrom: account.allowFrom,
+          },
+        }),
     },
     security: {
       resolveDmPolicy: whatsappResolveDmPolicy,

@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -132,14 +133,15 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
   config: {
     ...nextcloudTalkConfigAdapter,
     isConfigured: (account) => Boolean(account.secret?.trim() && account.baseUrl?.trim()),
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: Boolean(account.secret?.trim() && account.baseUrl?.trim()),
-      secretSource: account.secretSource,
-      baseUrl: account.baseUrl ? "[set]" : "[missing]",
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: Boolean(account.secret?.trim() && account.baseUrl?.trim()),
+        extra: {
+          secretSource: account.secretSource,
+          baseUrl: account.baseUrl ? "[set]" : "[missing]",
+        },
+      }),
   },
   security: {
     resolveDmPolicy: resolveNextcloudTalkDmPolicy,
