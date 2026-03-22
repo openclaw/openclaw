@@ -402,7 +402,7 @@ Docker installs and the containerized gateway live here:
 For Docker gateway deployments, `scripts/docker/setup.sh` can bootstrap sandbox config.
 Set `OPENCLAW_SANDBOX=1` (or `true`/`yes`/`on`) to enable that path. You can
 override socket location with `OPENCLAW_DOCKER_SOCKET`. Full setup and env
-reference: [Docker](/install/docker#enable-agent-sandbox-for-docker-gateway-opt-in).
+reference: [Docker](/install/docker#enable-agent-sandbox-for-docker-gateway).
 
 ## setupCommand (one-time container setup)
 
