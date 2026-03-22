@@ -12,6 +12,7 @@
  */
 
 #include <glib.h>
+#include "log.h"
 #include "state.h"
 
 static AppState current_state = STATE_NOT_INSTALLED;
@@ -77,18 +78,44 @@ void state_init(void) {
     initial_probe_fired = FALSE;
 }
 
+static const char* state_enum_to_string(AppState s) {
+    switch (s) {
+        case STATE_NOT_INSTALLED: return "NOT_INSTALLED";
+        case STATE_USER_SYSTEMD_UNAVAILABLE: return "USER_SYSTEMD_UNAVAILABLE";
+        case STATE_SYSTEM_UNSUPPORTED: return "SYSTEM_UNSUPPORTED";
+        case STATE_STOPPED: return "STOPPED";
+        case STATE_STARTING: return "STARTING";
+        case STATE_STOPPING: return "STOPPING";
+        case STATE_RUNNING: return "RUNNING";
+        case STATE_RUNNING_WITH_WARNING: return "RUNNING_WITH_WARNING";
+        case STATE_DEGRADED: return "DEGRADED";
+        case STATE_ERROR: return "ERROR";
+        default: return "UNKNOWN";
+    }
+}
+
 static void trigger_updates(AppState new_state) {
+    OC_LOG_INFO(OPENCLAW_LOG_CAT_STATE, "trigger_updates entry old=%s new=%s changed=%d hydrated=%d",
+              state_enum_to_string(current_state), state_enum_to_string(new_state),
+              new_state != current_state, initial_hydration_done);
+
     if (new_state != current_state) {
         AppState old_state = current_state;
         current_state = new_state;
         if (initial_hydration_done) {
+            OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "trigger_updates pre-notify old=%s new=%s",
+                      state_enum_to_string(old_state), state_enum_to_string(new_state));
             notify_on_transition(old_state, new_state);
+            OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "trigger_updates post-notify");
         }
     }
     // Note: Tray/UI updates may still occur even when the normalized state enum
     // does not change. This is intentional because detailed lane data (like
     // in_flight flags, timestamps, probe summary) can still change and needs rendering.
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "trigger_updates pre-tray state=%s",
+              state_enum_to_string(current_state));
     tray_update_from_state(current_state);
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "trigger_updates post-tray");
 }
 
 static gboolean idle_request_probe_refresh(gpointer user_data) {

@@ -15,6 +15,8 @@
 #include <adwaita.h>
 #include <glib.h>
 
+#include "log.h"
+
 extern void tray_init(void);
 extern void systemd_init(void);
 extern void systemd_refresh(void);
@@ -83,6 +85,8 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
 }
 
 int main(int argc, char **argv) {
+    openclaw_log_init();
+    
     g_autoptr(AdwApplication) app = adw_application_new("ai.openclaw.Companion", G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(app, "activate", G_CALLBACK(on_activate), NULL);
 

@@ -30,10 +30,13 @@ sources = [
   'src/main.c',
   'src/tray.c',
   'src/systemd.c',
+  'src/systemd_helpers.c',
   'src/health.c',
+  'src/health_helpers.c',
   'src/state.c',
   'src/notify.c',
-  'src/diagnostics.c'
+  'src/diagnostics.c',
+  'src/log.c'
 ]
 
 executable('openclaw-linux',
@@ -58,16 +61,16 @@ install_data('ai.openclaw.Companion.desktop',
 
 # Local Tests
 test_state_exe = executable('test_state',
-  ['tests/test_state.c', 'src/state.c'],
+  ['tests/test_state.c', 'src/state.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep])
 test('state', test_state_exe)
 
 test_systemd_exe = executable('test_systemd_helpers',
-  ['tests/test_systemd_helpers.c', 'src/systemd.c'],
+  ['tests/test_systemd_helpers.c', 'src/systemd_helpers.c'],
   dependencies : [glib_dep, gio_dep, gio_unix_dep])
 test('systemd_helpers', test_systemd_exe)
 
 test_health_exe = executable('test_health_parse',
-  ['tests/test_health_parse.c', 'src/health.c'],
+  ['tests/test_health_parse.c', 'src/health_helpers.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('health_parse', test_health_exe)
