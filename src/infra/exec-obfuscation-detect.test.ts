@@ -44,6 +44,13 @@ describe("detectCommandObfuscation", () => {
       expect(result.detected).toBe(false);
     });
 
+    it("does NOT treat logical OR (||) before a shell as pipe-to-shell", () => {
+      const cmd =
+        "python3 bin/garmin_health.py 2>/dev/null || bash bin/garmin-health.sh 2>/dev/null";
+      const result = detectCommandObfuscation(cmd);
+      expect(result.matchedPatterns).not.toContain("pipe-to-shell");
+    });
+
     it("detects shell piped execution with flags", () => {
       const result = detectCommandObfuscation("cat script.sh | bash -x");
       expect(result.detected).toBe(true);
