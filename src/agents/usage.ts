@@ -25,15 +25,15 @@ export type UsageLike = {
   cache_read?: number;
   cache_write?: number;
   // Google Gemini native usageMetadata field names.
+  // NOTE: promptTokenCount INCLUDES cached content (unlike Anthropic/OpenAI where
+  // input tokens exclude the cached portion). cachedContentTokenCount is therefore
+  // NOT mapped to cacheRead to avoid double-counting in derivePromptTokens().
   promptTokenCount?: number;
   candidatesTokenCount?: number;
   totalTokenCount?: number;
-  cachedContentTokenCount?: number;
   // TODO: thoughtsTokenCount is intentionally not mapped to a normalized field.
   // For Gemini thinking models, totalTokenCount = promptTokenCount + candidatesTokenCount + thoughtsTokenCount.
   // The thinking tokens are captured implicitly via totalTokenCount → total.
-  // A dedicated `thinkingTokens` field on NormalizedUsage could be added in the future
-  // if downstream consumers need to distinguish thinking tokens from output tokens.
   thoughtsTokenCount?: number;
 };
 
@@ -121,13 +121,16 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.completion_tokens ??
       raw.candidatesTokenCount,
   );
+  // NOTE: Google Gemini's cachedContentTokenCount is intentionally NOT mapped
+  // to cacheRead here. Unlike Anthropic/OpenAI where input excludes cached tokens,
+  // Gemini's promptTokenCount INCLUDES cached content. Mapping both would cause
+  // derivePromptTokens() (input + cacheRead + cacheWrite) to double-count.
   const cacheRead = asFiniteNumber(
     raw.cacheRead ??
       raw.cache_read ??
       raw.cache_read_input_tokens ??
       raw.cached_tokens ??
-      raw.prompt_tokens_details?.cached_tokens ??
-      raw.cachedContentTokenCount,
+      raw.prompt_tokens_details?.cached_tokens,
   );
   const cacheWrite = asFiniteNumber(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,

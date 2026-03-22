@@ -4,6 +4,7 @@ import {
   hasNonzeroUsage,
   derivePromptTokens,
   deriveSessionTotalTokens,
+  type UsageLike,
 } from "./usage.js";
 
 describe("normalizeUsage", () => {
@@ -134,17 +135,19 @@ describe("normalizeUsage", () => {
     });
   });
 
-  it("handles Google Gemini usageMetadata with cached content", () => {
+  it("does not double-count Google Gemini cached content tokens", () => {
+    // Google's promptTokenCount already includes cachedContentTokenCount,
+    // so cachedContentTokenCount is intentionally NOT mapped to cacheRead
+    // to avoid double-counting in derivePromptTokens().
     const usage = normalizeUsage({
       promptTokenCount: 200,
       candidatesTokenCount: 80,
       totalTokenCount: 280,
-      cachedContentTokenCount: 150,
-    });
+    } as UsageLike);
     expect(usage).toEqual({
       input: 200,
       output: 80,
-      cacheRead: 150,
+      cacheRead: undefined,
       cacheWrite: undefined,
       total: 280,
     });
