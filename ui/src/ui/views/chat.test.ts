@@ -899,6 +899,7 @@ describe("chat view", () => {
       await flushTasks();
 
       expect(state.lastError).toBe("Session was created but no session key was returned.");
+      expect(state.newChatSessionPending).toBe(false);
       expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
     } finally {
       vi.unstubAllGlobals();
