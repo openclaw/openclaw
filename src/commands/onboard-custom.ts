@@ -762,6 +762,11 @@ export async function promptCustomApiConfig(params: {
           baseUrl,
           apiKey: resolvedApiKey,
           modelId,
+          authHeader: resolveAnthropicVerificationAuthHeader({
+            baseUrl,
+            modelId,
+            providers: config.models?.providers ?? {},
+          }),
         });
         if (anthropicProbe.ok) {
           probeSpinner.stop("Detected Anthropic-compatible endpoint.");

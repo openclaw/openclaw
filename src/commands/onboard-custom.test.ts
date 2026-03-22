@@ -262,6 +262,48 @@ describe("promptCustomApiConfig", () => {
     expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
   });
 
+  it("uses authHeader during unknown anthropic detection for an existing equivalent endpoint", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com/v1/", "test-key", "new-model", "custom", "alias"],
+      select: ["plaintext", "unknown"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: false, status: 404 }, { ok: true }]);
+
+    await runPromptCustomApi(prompter, {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.com",
+            api: "anthropic-messages",
+            authHeader: true,
+            models: [
+              {
+                id: "existing-model",
+                name: "Existing",
+                contextWindow: 131072,
+                maxTokens: 4096,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                reasoning: false,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const secondCall = fetchMock.mock.calls[1]?.[1] as
+      | { headers?: Record<string, string>; body?: string }
+      | undefined;
+    expect(secondCall?.headers).toEqual({
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      Authorization: "Bearer test-key",
+    });
+    expect(JSON.parse(secondCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
+  });
+
   it("re-prompts base url when unknown detection fails", async () => {
     const prompter = createTestPrompter({
       text: [

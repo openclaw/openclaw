@@ -327,6 +327,8 @@ function deleteHeaderCaseInsensitive(headers: Record<string, string>, headerName
   }
 }
 
+const IMPLICIT_ANTHROPIC_AUTH_HEADER_PROVIDERS = new Set(["minimax", "minimax-portal"]);
+
 function shouldUseAnthropicAuthorizationHeader(
   cfg: OpenClawConfig | undefined,
   provider: unknown,
@@ -334,7 +336,10 @@ function shouldUseAnthropicAuthorizationHeader(
   if (typeof provider !== "string" || !provider.trim()) {
     return false;
   }
-  return cfg?.models?.providers?.[provider]?.authHeader === true;
+  if (cfg?.models?.providers?.[provider]?.authHeader === true) {
+    return true;
+  }
+  return IMPLICIT_ANTHROPIC_AUTH_HEADER_PROVIDERS.has(provider);
 }
 
 export function createAnthropicAuthHeaderWrapper(
