@@ -690,8 +690,12 @@ export async function runReplyAgent(params: {
       });
 
       // Inject post-compaction workspace context for the next agent turn.
-      // Skip if the overflow retry already injected it via extraSystemPrompt.
-      if (sessionKey && !runResult.meta?.agentMeta?.postCompactionContextInjected) {
+      // Skip only if the overflow retry already injected it via extraSystemPrompt
+      // AND the run succeeded. If the run failed (timeout/error), the transient
+      // injection was lost and the next turn needs the refresh.
+      const injectedAndSucceeded =
+        runResult.meta?.agentMeta?.postCompactionContextInjected && !runResult.meta?.error;
+      if (sessionKey && !injectedAndSucceeded) {
         const workspaceDir = process.cwd();
         readPostCompactionContext(workspaceDir, cfg)
           .then((contextContent) => {
