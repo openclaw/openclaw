@@ -1,17 +1,16 @@
-import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   createPairingPrefixStripper,
   createTextPairingAdapter,
 } from "openclaw/plugin-sdk/channel-pairing";
-import { createAllowlistProviderRestrictSendersWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
+import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import {
-  buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
@@ -29,25 +28,20 @@ import { getLineRuntime } from "./runtime.js";
 import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 
-const resolveLineDmPolicy = createScopedDmSecurityResolver<ResolvedLineAccount>({
+const lineSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedLineAccount>({
   channelKey: "line",
-  resolvePolicy: (account) => account.config.dmPolicy,
-  resolveAllowFrom: (account) => account.config.allowFrom,
+  resolveDmPolicy: (account) => account.config.dmPolicy,
+  resolveDmAllowFrom: (account) => account.config.allowFrom,
+  resolveGroupPolicy: (account) => account.config.groupPolicy,
+  surface: "LINE groups",
+  openScope: "any member in groups",
+  groupPolicyPath: "channels.line.groupPolicy",
+  groupAllowFromPath: "channels.line.groupAllowFrom",
+  mentionGated: false,
   policyPathSuffix: "dmPolicy",
   approveHint: "openclaw pairing approve line <code>",
-  normalizeEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),
+  normalizeDmEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),
 });
-
-const collectLineSecurityWarnings =
-  createAllowlistProviderRestrictSendersWarningCollector<ResolvedLineAccount>({
-    providerConfigPresent: (cfg) => cfg.channels?.line !== undefined,
-    resolveGroupPolicy: (account) => account.config.groupPolicy,
-    surface: "LINE groups",
-    openScope: "any member in groups",
-    groupPolicyPath: "channels.line.groupPolicy",
-    groupAllowFromPath: "channels.line.groupAllowFrom",
-    mentionGated: false,
-  });
 
 export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
   id: "line",
@@ -69,10 +63,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     },
   }),
   setupWizard: lineSetupWizard,
-  security: {
-    resolveDmPolicy: resolveLineDmPolicy,
-    collectWarnings: collectLineSecurityWarnings,
-  },
+  security: lineSecurityAdapter,
   groups: {
     resolveRequireMention: resolveLineGroupRequireMention,
   },
@@ -323,7 +314,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         }),
     }),
   },
-  status: {
+  status: createComputedAccountStatusAdapter<ResolvedLineAccount>({
     defaultRuntime: {
       accountId: DEFAULT_ACCOUNT_ID,
       running: false,
@@ -357,26 +348,22 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
       getLineRuntime().channel.line.probeLineBot(account.channelAccessToken, timeoutMs),
-    buildAccountSnapshot: ({ account, runtime, probe }) => {
+    resolveAccountSnapshot: ({ account }) => {
       const configured = Boolean(
         account.channelAccessToken?.trim() && account.channelSecret?.trim(),
       );
-      return buildComputedAccountStatusSnapshot(
-        {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured,
-          runtime,
-          probe,
-        },
-        {
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured,
+        extra: {
           tokenSource: account.tokenSource,
           mode: "webhook",
         },
-      );
+      };
     },
-  },
+  }),
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;

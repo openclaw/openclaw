@@ -28,6 +28,7 @@ import {
   resolveThreadSessionKeys,
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
+import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import {
   listDiscordAccountIds,
   resolveDiscordAccount,
@@ -54,7 +55,6 @@ import {
 import { probeDiscord, type DiscordProbe } from "./probe.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import {
-  buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
@@ -499,7 +499,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         parentConversationId,
       }),
   },
-  status: {
+  status: createComputedAccountStatusAdapter<ResolvedDiscordAccount, DiscordProbe, unknown>({
     defaultRuntime: {
       accountId: DEFAULT_ACCOUNT_ID,
       running: false,
@@ -630,21 +630,17 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       });
       return { ...audit, unresolvedChannels };
     },
-    buildAccountSnapshot: ({ account, runtime, probe, audit }) => {
+    resolveAccountSnapshot: ({ account, runtime, probe, audit }) => {
       const configured =
         resolveConfiguredFromCredentialStatuses(account) ?? Boolean(account.token?.trim());
       const app = runtime?.application ?? (probe as { application?: unknown })?.application;
       const bot = runtime?.bot ?? (probe as { bot?: unknown })?.bot;
-      return buildComputedAccountStatusSnapshot(
-        {
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured,
-          runtime,
-          probe,
-        },
-        {
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured,
+        extra: {
           ...projectCredentialSnapshotFields(account),
           connected: runtime?.connected ?? false,
           reconnectAttempts: runtime?.reconnectAttempts,
@@ -655,9 +651,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
           bot: bot ?? undefined,
           audit,
         },
-      );
+      };
     },
-  },
+  }),
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;

@@ -92,7 +92,7 @@ You will need to create a new application with a bot, add the bot to your server
 
   </Step>
 
-  <Step title="Step 0: Set your bot token securely (do not send it in chat)">
+  <Step title="Set your bot token securely (do not send it in chat)">
     Your Discord bot token is a secret (like a password). Set it on the machine running OpenClaw before messaging your agent.
 
 ```bash

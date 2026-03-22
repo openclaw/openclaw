@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import { clearCommandLane, setCommandLaneConcurrency } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -39,6 +39,15 @@ const FAST_TIMEOUT_SECONDS = 0.0025;
 describe("Cron issue regressions", () => {
   const { makeStorePath } = setupCronIssueRegressionFixtures();
 
+  afterEach(() => {
+    // Shared-state runs can begin collecting the next file before runner-level
+    // cleanup unwinds this suite's fake timers or command-lane mutations.
+    vi.clearAllTimers();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    clearCommandLane(CommandLane.Cron);
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+  });
   it("covers schedule updates and payload patching", async () => {
     const store = makeStorePath();
     const cron = await startCronForStore({
@@ -125,6 +134,35 @@ describe("Cron issue regressions", () => {
     expect(typeof persistedIsolated?.state?.nextRunAtMs).toBe("number");
     expect(Number.isFinite(persistedIsolated?.state?.nextRunAtMs)).toBe(true);
 
+    cron.stop();
+  });
+
+  it("does not rewrite unchanged stores during startup", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T11:00:00.000Z");
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "startup-stable",
+        name: "startup stable",
+        createdAtMs: scheduledAt - 60_000,
+        updatedAtMs: scheduledAt - 60_000,
+        enabled: true,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "stable" },
+        state: { nextRunAtMs: scheduledAt },
+      },
+    ]);
+    const before = await fs.readFile(store.storePath, "utf8");
+
+    const cron = await startCronForStore({
+      storePath: store.storePath,
+      cronEnabled: true,
+    });
+    const after = await fs.readFile(store.storePath, "utf8");
+
+    expect(after).toBe(before);
     cron.stop();
   });
 
@@ -1150,6 +1188,10 @@ describe("Cron issue regressions", () => {
       requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob: vi.fn(async (params) => {
         const abortSignal = params.abortSignal;
+        if (abortSignal?.aborted) {
+          now += 100;
+          throw new Error("aborted");
+        }
         await new Promise<void>((resolve, reject) => {
           const onAbort = () => {
             abortSignal?.removeEventListener("abort", onAbort);
