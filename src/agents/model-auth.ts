@@ -239,11 +239,15 @@ export function resolveBedrockBearerToken(
  * Only true when:
  * 1. Provider normalizes to amazon-bedrock
  * 2. AWS_BEARER_TOKEN_BEDROCK env var is set
- * 3. Auth override is either undefined (implicit) or "aws-sdk" — if the user
- *    explicitly configured api-key/oauth/token, that credential path takes
- *    precedence and the bearer wrapper must not overwrite it.
+ * 3. Auth override is either undefined (implicit) or "aws-sdk"
+ * 4. No auth profiles exist for this provider (profiles take precedence
+ *    over the bearer env fallback in resolveApiKeyForProvider)
  */
-export function shouldInjectBedrockBearerWrapper(provider: string, cfg?: OpenClawConfig): boolean {
+export function shouldInjectBedrockBearerWrapper(
+  provider: string,
+  cfg?: OpenClawConfig,
+  store?: AuthProfileStore,
+): boolean {
   if (normalizeProviderId(provider) !== "amazon-bedrock") {
     return false;
   }
@@ -251,7 +255,16 @@ export function shouldInjectBedrockBearerWrapper(provider: string, cfg?: OpenCla
     return false;
   }
   const authOverride = resolveProviderAuthOverride(cfg, provider);
-  return authOverride === undefined || authOverride === "aws-sdk";
+  if (authOverride !== undefined && authOverride !== "aws-sdk") {
+    return false;
+  }
+  // If profiles exist for this provider, resolveApiKeyForProvider uses them
+  // before the bearer env fallback — don't overwrite with the bearer wrapper.
+  const authStore = store ?? ensureAuthProfileStore();
+  if (listProfilesForProvider(authStore, provider).length > 0) {
+    return false;
+  }
+  return true;
 }
 
 export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
