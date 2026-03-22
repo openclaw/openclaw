@@ -108,6 +108,9 @@ export type GatewayClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
+const DEFAULT_CONNECT_CHALLENGE_TIMEOUT_MS = 2_000;
+const LOOPBACK_CONNECT_CHALLENGE_TIMEOUT_MS = 10_000;
+
 export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
   1000: "normal closure",
   1006: "abnormal closure (no close frame)",
@@ -594,6 +597,22 @@ export class GatewayClient {
     }
   }
 
+  private resolveConnectChallengeTimeoutMs(): number {
+    const rawConnectDelayMs = this.opts.connectDelayMs;
+    if (typeof rawConnectDelayMs === "number" && Number.isFinite(rawConnectDelayMs)) {
+      return Math.max(250, Math.min(10_000, rawConnectDelayMs));
+    }
+    const rawUrl = this.opts.url ?? "ws://127.0.0.1:18789";
+    try {
+      if (isLoopbackHost(new URL(rawUrl).hostname)) {
+        return LOOPBACK_CONNECT_CHALLENGE_TIMEOUT_MS;
+      }
+    } catch {
+      // Fall back to the default timeout if the URL cannot be parsed.
+    }
+    return DEFAULT_CONNECT_CHALLENGE_TIMEOUT_MS;
+  }
+
   private selectConnectAuth(role: string): SelectedConnectAuth {
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const explicitBootstrapToken = this.opts.bootstrapToken?.trim() || undefined;
@@ -695,11 +714,7 @@ export class GatewayClient {
   private queueConnect() {
     this.connectNonce = null;
     this.connectSent = false;
-    const rawConnectDelayMs = this.opts.connectDelayMs;
-    const connectChallengeTimeoutMs =
-      typeof rawConnectDelayMs === "number" && Number.isFinite(rawConnectDelayMs)
-        ? Math.max(250, Math.min(10_000, rawConnectDelayMs))
-        : 2_000;
+    const connectChallengeTimeoutMs = this.resolveConnectChallengeTimeoutMs();
     if (this.connectTimer) {
       clearTimeout(this.connectTimer);
     }

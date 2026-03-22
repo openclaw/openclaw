@@ -363,6 +363,56 @@ describe("GatewayClient close handling", () => {
     }
   });
 
+  it("uses a longer default connect challenge timeout for loopback urls", async () => {
+    vi.useFakeTimers();
+    try {
+      const onConnectError = vi.fn();
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        onConnectError,
+      });
+
+      client.start();
+      const ws = getLatestWs();
+      ws.emitOpen();
+
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(onConnectError).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onConnectError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "gateway connect challenge timeout" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the shorter default connect challenge timeout for non-loopback urls", async () => {
+    vi.useFakeTimers();
+    try {
+      const onConnectError = vi.fn();
+      const client = new GatewayClient({
+        url: "wss://gateway.example/ws",
+        onConnectError,
+      });
+
+      client.start();
+      const ws = getLatestWs();
+      ws.emitOpen();
+
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(onConnectError).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onConnectError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "gateway connect challenge timeout" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not clear persisted device auth when explicit shared token is provided", () => {
     const onClose = vi.fn();
     const identity: DeviceIdentity = {
