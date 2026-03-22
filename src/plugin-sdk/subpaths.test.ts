@@ -70,6 +70,41 @@ function resolvePluginSdkSourceModulePath(specifier: string): string | null {
   }
   return resolve(PLUGIN_SDK_DIR, `${subpath}.ts`);
 }
+
+function resolvePluginSdkDistModulePath(specifier: string): string | null {
+  if (specifier === "openclaw/plugin-sdk") {
+    return resolve(ROOT_DIR, "dist", "plugin-sdk", "index.js");
+  }
+  const prefix = "openclaw/plugin-sdk/";
+  if (!specifier.startsWith(prefix)) {
+    return null;
+  }
+  const subpath = specifier.slice(prefix.length).trim();
+  if (!subpath) {
+    return null;
+  }
+  return resolve(ROOT_DIR, "dist", "plugin-sdk", `${subpath}.js`);
+}
+
+function normalizeModuleNotFoundPath(value: string): string {
+  return value
+    .replace(/^\\\\\?\\/, "")
+    .replace(/\\/g, "/")
+    .toLowerCase();
+}
+
+function isPackageSelfResolutionFailure(specifier: string, message: string): boolean {
+  return /package\.json/i.test(message) && message.includes(`imported from ${specifier}`);
+}
+
+function isRequestedDistSubpathMissing(specifier: string, message: string): boolean {
+  const distPath = resolvePluginSdkDistModulePath(specifier);
+  if (!distPath) {
+    return false;
+  }
+  return normalizeModuleNotFoundPath(message).includes(normalizeModuleNotFoundPath(distPath));
+}
+
 function shouldFallbackToPluginSdkSource(specifier: string, err: unknown): boolean {
   const message =
     typeof err === "object" && err !== null && "message" in err
@@ -93,7 +128,10 @@ function shouldFallbackToPluginSdkSource(specifier: string, err: unknown): boole
   if (!sourcePath) {
     return false;
   }
-  return true;
+  return (
+    isPackageSelfResolutionFailure(specifier, message) ||
+    isRequestedDistSubpathMissing(specifier, message)
+  );
 }
 const importPluginSdkSubpath = async (specifier: string) => {
   try {
@@ -200,6 +238,15 @@ describe("plugin-sdk subpath exports", () => {
       { code: "MODULE_NOT_FOUND" },
     );
     expect(shouldFallbackToPluginSdkSource("openclaw/plugin-sdk/core", err)).toBe(true);
+  });
+  it("does not fall back when a dist subpath is present but one of its transitive deps is missing", () => {
+    const err = Object.assign(
+      new Error(
+        "Cannot find module '/home/runner/_work/openclaw/openclaw/dist/plugin-sdk/internal-shared.js' imported from /home/runner/_work/openclaw/openclaw/dist/plugin-sdk/core.js'",
+      ),
+      { code: "MODULE_NOT_FOUND" },
+    );
+    expect(shouldFallbackToPluginSdkSource("openclaw/plugin-sdk/core", err)).toBe(false);
   });
   it("exports routing helpers from the dedicated subpath", () => {
     expectSourceMentions("routing", ["buildAgentSessionKey", "resolveThreadSessionKeys"]);
