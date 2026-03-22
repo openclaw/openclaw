@@ -140,6 +140,7 @@ export const SessionSchema = z
         }
       })
       .optional(),
+    mirrorWebchatToLastExternalChannel: z.boolean().optional(),
   })
   .strict()
   .optional();

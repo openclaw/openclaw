@@ -128,6 +128,31 @@ export function createFollowupRunner(params: {
         }
       } else if (opts?.onBlockReply) {
         await opts.onBlockReply(payload);
+
+        // Mirror webchat reply to last external channel if configured.
+        if (
+          queued.run.config?.session?.mirrorWebchatToLastExternalChannel === true &&
+          isInternalMessageChannel(queued.originatingChannel ?? queued.run.messageProvider) &&
+          sessionEntry?.lastChannel &&
+          isRoutableChannel(sessionEntry.lastChannel) &&
+          sessionEntry.lastTo
+        ) {
+          try {
+            await routeReply({
+              payload,
+              channel: sessionEntry.lastChannel,
+              to: sessionEntry.lastTo,
+              sessionKey: queued.run.sessionKey,
+              accountId: sessionEntry.lastAccountId ?? undefined,
+              threadId: sessionEntry.lastThreadId ?? undefined,
+              cfg: queued.run.config,
+            });
+          } catch (err: unknown) {
+            logVerbose(
+              `followup queue: webchat mirror to ${sessionEntry.lastChannel} failed: ${String(err)}`,
+            );
+          }
+        }
       }
     }
   };

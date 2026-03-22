@@ -790,3 +790,190 @@ describe("createFollowupRunner agentDir forwarding", () => {
     expect(call?.agentDir).toBe(agentDir);
   });
 });
+
+describe("createFollowupRunner webchat mirror to last external channel", () => {
+  function createMirrorRunner(params: {
+    sessionEntry?: SessionEntry;
+    onBlockReply: (payload: unknown) => Promise<void>;
+    config?: Record<string, unknown>;
+  }) {
+    const sessionEntry: SessionEntry = params.sessionEntry ?? {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    return createFollowupRunner({
+      opts: { onBlockReply: params.onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+  }
+
+  function createWebchatMirrorRun(overrides?: {
+    config?: Record<string, unknown>;
+    messageProvider?: string;
+    originatingChannel?: string;
+  }): FollowupRun {
+    return createMockFollowupRun({
+      run: {
+        messageProvider: overrides?.messageProvider ?? "webchat",
+        config: overrides?.config ?? {
+          session: { mirrorWebchatToLastExternalChannel: true },
+        },
+      },
+      originatingChannel: overrides?.originatingChannel,
+    });
+  }
+
+  it("mirrors webchat reply to last external channel when enabled", async () => {
+    const onBlockReply = createAsyncReplySpy();
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      lastChannel: "telegram",
+      lastTo: "chat_123",
+      lastAccountId: "work",
+      lastThreadId: "topic_456",
+    };
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello from webchat" }],
+      meta: {},
+    });
+
+    const runner = createMirrorRunner({ sessionEntry, onBlockReply });
+    await runner(createWebchatMirrorRun());
+
+    // onBlockReply should be called for the webchat delivery.
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello from webchat" }),
+    );
+
+    // routeReply should be called once for the mirror to the external channel.
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "chat_123",
+        accountId: "work",
+        threadId: "topic_456",
+      }),
+    );
+  });
+
+  it("does not mirror when mirrorWebchatToLastExternalChannel is not set (default)", async () => {
+    const onBlockReply = createAsyncReplySpy();
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      lastChannel: "telegram",
+      lastTo: "chat_123",
+    };
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello" }],
+      meta: {},
+    });
+
+    const runner = createMirrorRunner({ sessionEntry, onBlockReply });
+    // Config has no mirror flag.
+    await runner(
+      createWebchatMirrorRun({
+        config: {},
+      }),
+    );
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    // No mirror routing should happen.
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not mirror when session has no external channel", async () => {
+    const onBlockReply = createAsyncReplySpy();
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      // No lastChannel or lastTo set.
+    };
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello" }],
+      meta: {},
+    });
+
+    const runner = createMirrorRunner({ sessionEntry, onBlockReply });
+    await runner(createWebchatMirrorRun());
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not mirror when originating channel is external (not webchat)", async () => {
+    const onBlockReply = createAsyncReplySpy();
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      lastChannel: "telegram",
+      lastTo: "chat_123",
+    };
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello" }],
+      meta: {},
+    });
+
+    const runner = createMirrorRunner({ sessionEntry, onBlockReply });
+    // Originating channel is telegram (external), not webchat.
+    await runner(
+      createWebchatMirrorRun({
+        messageProvider: "telegram",
+        originatingChannel: "telegram",
+      }),
+    );
+
+    // When originatingChannel is an external routable channel, the reply
+    // goes through the route-to-originating path, not the onBlockReply
+    // + mirror path. Mirror routeReply should not be called with
+    // the session's lastChannel/lastTo — only with the originating channel.
+    const mirrorCalls = routeReplyMock.mock.calls.filter(
+      (call: Array<{ channel?: string }>) =>
+        call[0]?.channel === "telegram" && call[0] !== undefined,
+    );
+    // The route call is for the originating channel routing, not a mirror.
+    for (const call of mirrorCalls) {
+      expect((call as Array<{ to?: string }>)[0]?.to).not.toBe("chat_123");
+    }
+  });
+
+  it("mirror failure does not block webchat delivery", async () => {
+    const onBlockReply = createAsyncReplySpy();
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      lastChannel: "telegram",
+      lastTo: "chat_123",
+    };
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello from webchat" }],
+      meta: {},
+    });
+
+    // Make the mirror routeReply call throw an error.
+    routeReplyMock.mockRejectedValueOnce(new Error("mirror delivery failed"));
+
+    const runner = createMirrorRunner({ sessionEntry, onBlockReply });
+    await runner(createWebchatMirrorRun());
+
+    // onBlockReply should still have been called successfully.
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello from webchat" }),
+    );
+
+    // routeReply was called (and threw), but the webchat delivery succeeded.
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+  });
+});
