@@ -435,8 +435,28 @@ export function unescapeXmlEntities(text: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)));
+    .replace(/&#(\d+);/g, (match, dec) => {
+      const code = parseInt(dec, 10);
+      if (code >= 0 && code <= 0x10ffff) {
+        try {
+          return String.fromCodePoint(code);
+        } catch {
+          /* Fallback */
+        }
+      }
+      return match;
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (match, hex) => {
+      const code = parseInt(hex, 16);
+      if (code >= 0 && code <= 0x10ffff) {
+        try {
+          return String.fromCodePoint(code);
+        } catch {
+          /* Fallback */
+        }
+      }
+      return match;
+    });
 }
 
 /**

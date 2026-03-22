@@ -310,6 +310,25 @@ All done.`;
     });
   });
 
+  it("handles invalid numeric XML entities gracefully without throwing", () => {
+    const text = `<minimax:tool_call><invoke name="Test"><parameter name="p1">&#x110000;</parameter><parameter name="p2">&#99999999;</parameter></invoke></minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
+    expect(toolCall).toMatchObject({
+      arguments: {
+        p1: "&#x110000;",
+        p2: "&#99999999;",
+      },
+    });
+  });
+
   it("parses scalar values correctly (bool)", () => {
     const text = `<minimax:tool_call>
   <invoke name="Test">
