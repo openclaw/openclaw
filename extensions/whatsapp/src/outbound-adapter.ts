@@ -3,7 +3,7 @@ import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   resolveSendableOutboundReplyParts,
   sendTextMediaPayload,

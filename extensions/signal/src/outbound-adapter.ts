@@ -5,8 +5,11 @@ import {
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { resolveOutboundSendDep, type OutboundSendDeps } from "openclaw/plugin-sdk/infra-runtime";
 import { createScopedChannelMediaMaxBytesResolver } from "openclaw/plugin-sdk/media-runtime";
+import {
+  resolveOutboundSendDep,
+  type OutboundSendDeps,
+} from "openclaw/plugin-sdk/outbound-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { markdownToSignalTextChunks } from "./format.js";
 import { sendMessageSignal } from "./send.js";
