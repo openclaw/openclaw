@@ -154,21 +154,22 @@ describe("normalizeUsage", () => {
     });
   });
 
-  it("adds Google Gemini thoughtsTokenCount to total", () => {
-    // totalTokenCount excludes thoughtsTokenCount per Gemini SDK docs.
-    // We add it back so the normalized total covers all billed tokens.
+  it("does not double-count Google Gemini thoughtsTokenCount", () => {
+    // Per the Gemini SDK, totalTokenCount already includes thoughtsTokenCount
+    // (totalTokenCount = prompt + candidates + tool-use + thoughts).
+    // Verify we do NOT add thoughtsTokenCount again.
     const usage = normalizeUsage({
       promptTokenCount: 100,
       candidatesTokenCount: 50,
       thoughtsTokenCount: 300,
-      totalTokenCount: 150,
+      totalTokenCount: 450,
     } as UsageLike);
     expect(usage).toEqual({
       input: 100,
       output: 50,
       cacheRead: undefined,
       cacheWrite: undefined,
-      total: 450, // 150 + 300 (totalTokenCount + thoughtsTokenCount)
+      total: 450, // totalTokenCount already includes thoughts
     });
   });
 

@@ -33,12 +33,13 @@ export type UsageLike = {
   candidatesTokenCount?: number;
   // Newer Gemini SDK uses responseTokenCount instead of candidatesTokenCount.
   responseTokenCount?: number;
-  // totalTokenCount covers "prompt + response candidates + tool-use prompts"
-  // per the Gemini SDK — it does NOT include thoughtsTokenCount.
+  // Per the Gemini SDK (UsageMetadata), totalTokenCount is the sum of
+  // promptTokenCount + candidatesTokenCount + toolUsePromptTokenCount +
+  // thoughtsTokenCount.  All four components are already rolled into
+  // totalTokenCount, so they do NOT need to be added again.
   totalTokenCount?: number;
-  // thoughtsTokenCount is billed separately and excluded from totalTokenCount.
-  // We add it to the normalized total so cost/usage reporting is complete.
   thoughtsTokenCount?: number;
+  toolUsePromptTokenCount?: number;
 };
 
 export type NormalizedUsage = {
@@ -149,14 +150,11 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
 
-  // Gemini's totalTokenCount excludes thoughtsTokenCount (per SDK docs).
-  // Add thoughts back so the normalized total covers all billed tokens.
-  const geminiThoughts = asFiniteNumber(raw.thoughtsTokenCount);
-  const rawTotal = asFiniteNumber(
+  // Gemini's totalTokenCount already includes all components (prompt +
+  // candidates + tool-use + thoughts), so no manual addition is needed.
+  const total = asFiniteNumber(
     raw.total ?? raw.totalTokens ?? raw.total_tokens ?? raw.totalTokenCount,
   );
-  const total =
-    rawTotal !== undefined && geminiThoughts !== undefined ? rawTotal + geminiThoughts : rawTotal;
 
   if (
     input === undefined &&
