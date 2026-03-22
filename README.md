@@ -404,6 +404,7 @@ Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker 
   ```bash
   npx -y @tencent-weixin/openclaw-weixin-cli@latest install
   ```
+
 - This sets up the `@tencent-weixin/openclaw-weixin` plugin, which connects OpenClaw to the WeChat PC client.
 - Supports private chats and group chats. Configure allowed senders via `channels.wechat.allowFrom`.
 - Requires WeChat PC (desktop) to be running on the same machine.
