@@ -54,6 +54,15 @@ export function createNewMessagePayloadForTest(dataOverrides: Record<string, unk
   };
 }
 
+export function createTimestampedNewMessagePayloadForTest(
+  dataOverrides: Record<string, unknown> = {},
+) {
+  return createNewMessagePayloadForTest({
+    ...dataOverrides,
+    date: Date.now(),
+  });
+}
+
 export function createMessageReactionPayloadForTest(dataOverrides: Record<string, unknown> = {}) {
   return {
     type: "message-reaction",
@@ -66,6 +75,15 @@ export function createMessageReactionPayloadForTest(dataOverrides: Record<string
       ...dataOverrides,
     },
   };
+}
+
+export function createTimestampedMessageReactionPayloadForTest(
+  dataOverrides: Record<string, unknown> = {},
+) {
+  return createMessageReactionPayloadForTest({
+    ...dataOverrides,
+    date: Date.now(),
+  });
 }
 
 export function createMockRequest(
@@ -123,7 +141,7 @@ export function createRemoteWebhookRequestParamsForTest(
   } = {},
 ): WebhookRequestParams {
   return {
-    body: params.body ?? {},
+    body: params.body ?? createNewMessagePayloadForTest(),
     remoteAddress: params.remoteAddress ?? "192.168.1.100",
     ...params.overrides,
   };
@@ -155,7 +173,7 @@ export function createLoopbackWebhookRequestParamsForTest(
   } = {},
 ): WebhookRequestParams {
   return {
-    body: params.body ?? {},
+    body: params.body ?? createNewMessagePayloadForTest(),
     remoteAddress,
     ...params.overrides,
   };
@@ -193,12 +211,27 @@ export async function flushAsync() {
   }
 }
 
+export function createWebhookDispatchForTest(req: IncomingMessage) {
+  const res = createMockResponse();
+  const handledPromise = handleBlueBubblesWebhookRequest(req, res);
+  return { res, handledPromise };
+}
+
+export async function dispatchWebhookRequestForTest(
+  req: IncomingMessage,
+  options: { flushAsyncAfter?: boolean } = {},
+) {
+  const { res, handledPromise } = createWebhookDispatchForTest(req);
+  const handled = await handledPromise;
+  if (options.flushAsyncAfter) {
+    await flushAsync();
+  }
+  return { handled, res };
+}
+
 export async function dispatchWebhookPayloadForTest(params: WebhookRequestParams = {}) {
   const req = createMockRequestForTest(params);
-  const res = createMockResponse();
-  const handled = await handleBlueBubblesWebhookRequest(req, res);
-  await flushAsync();
-  return { handled, res };
+  return dispatchWebhookRequestForTest(req, { flushAsyncAfter: true });
 }
 
 export async function expectWebhookStatusForTest(
@@ -206,8 +239,7 @@ export async function expectWebhookStatusForTest(
   expectedStatus: number,
   expectedBody?: string,
 ) {
-  const res = createMockResponse();
-  const handled = await handleBlueBubblesWebhookRequest(req, res);
+  const { res, handled } = await dispatchWebhookRequestForTest(req);
   expect(handled).toBe(true);
   expect(res.statusCode).toBe(expectedStatus);
   if (expectedBody !== undefined) {
@@ -222,6 +254,14 @@ export async function expectWebhookRequestStatusForTest(
   expectedBody?: string,
 ) {
   return expectWebhookStatusForTest(createMockRequestForTest(params), expectedStatus, expectedBody);
+}
+
+export function trackWebhookRegistrationForTest<T extends { unregister: () => void }>(
+  registration: T,
+  setUnregister: (unregister: () => void) => void,
+) {
+  setUnregister(registration.unregister);
+  return registration;
 }
 
 export function registerWebhookTargetForTest(params: {
