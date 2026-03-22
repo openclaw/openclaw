@@ -400,6 +400,7 @@ Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker 
 ### [WeChat](https://docs.openclaw.ai/channels/wechat)
 
 - Install the official WeChat plugin via the Tencent-provided CLI:
+
   ```bash
   npx -y @tencent-weixin/openclaw-weixin-cli@latest install
   ```
