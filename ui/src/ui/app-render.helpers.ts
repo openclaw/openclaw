@@ -168,7 +168,7 @@ export function renderChatSessionSelect(state: AppViewState) {
         </select>
       </label>
       <button
-        class="btn-ghost chat-controls__new-chat"
+        class="chat-controls__new-chat"
         title="New chat session"
         aria-label="New chat session"
         ?disabled=${!state.connected}
@@ -526,17 +526,27 @@ async function createNewChatSession(state: AppViewState) {
   if (!client || !state.connected) {
     return;
   }
-  const label = window.prompt("Session name (optional):")?.trim() || undefined;
+  // window.prompt returns null when cancelled — treat as explicit cancel, not an error
+  const raw = window.prompt("Session name (optional):");
+  if (raw === null) {
+    return;
+  }
+  const label = raw.trim() || undefined;
   // Resolve the current agent ID from the active session key
   const parsed = parseAgentSessionKey(state.sessionKey);
   const agentId = parsed?.agentId ?? state.agentsList?.defaultId ?? "main";
+  // Carry over the current model override so the new session starts on the same model
+  const currentModel = resolveModelOverrideValue(state) || undefined;
   try {
     const result = await client.request<{ ok: boolean; key: string }>("sessions.create", {
       agentId,
       ...(label ? { label } : {}),
+      ...(currentModel ? { model: currentModel } : {}),
     });
     if (result?.key) {
       switchChatSession(state, result.key);
+    } else {
+      state.lastError = "Session was created but no session key was returned.";
     }
   } catch (err) {
     state.lastError = String(err);

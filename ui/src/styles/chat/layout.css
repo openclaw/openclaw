@@ -728,6 +728,24 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius, 6px);
+  cursor: pointer;
+  color: var(--text-secondary, #888);
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+
+.chat-controls__new-chat:hover {
+  color: var(--text, #fff);
+  background: var(--hover-bg, rgba(255, 255, 255, 0.08));
+}
+
+.chat-controls__new-chat:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .chat-controls__model {
