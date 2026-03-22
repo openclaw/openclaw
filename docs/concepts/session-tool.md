@@ -240,3 +240,21 @@ Notes:
 - `agent`: any session belonging to the current agent id.
 - `all`: any session (cross-agent access still requires `tools.agentToAgent`).
 - When a session is sandboxed and `sessionToolsVisibility="spawned"`, OpenClaw clamps visibility to `tree` even if you set `tools.sessions.visibility="all"`.
+
+### Important distinction: persistent target vs live session vs visibility
+
+These concepts are related, but they are not the same thing:
+
+| Concept                         | What it means                                                                        | Example                                           | Important caveat                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Persistent named session target | A durable context identifier that can be reused across runs                          | `session:project-alpha`                           | It can exist even when no interactive live session is attached on the current surface            |
+| Live session                    | An actual running conversation/session entry                                         | `agent:main:subagent:<id>`                        | A live session may or may not be directly reachable from your current requester context          |
+| Thread-bound session            | A live session attached to a channel thread                                          | `sessions_spawn(... thread=true, mode:"session")` | Requires thread support on the current surface/channel                                           |
+| Session visibility              | Which sessions the current requester is allowed to inspect/message via session tools | `tools.sessions.visibility=tree`                  | Visibility errors do not mean the target does not exist; they mean it is not reachable from here |
+
+Practical example:
+
+- A cron job can successfully run against `session:project-alpha` and keep context there across runs.
+- That does **not** automatically mean the current requester can inspect or message that target via `sessions_history`/`sessions_send`.
+- If your current context only has `tools.sessions.visibility="tree"`, you can only access the current session and sessions it spawned.
+- If `mode:"session"` fails during `sessions_spawn`, that usually means thread-bound interactive session mode is unavailable on the current surface, not that the persistent target concept is invalid.

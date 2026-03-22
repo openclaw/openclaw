@@ -298,7 +298,10 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
         threadBindingReady: false,
       },
     });
-    expectThreadBindFailureCleanup(details, /unable to create or bind a thread/i);
+    expectThreadBindFailureCleanup(
+      details,
+      /cannot create or bind a thread-bound persistent session here/i,
+    );
   });
 
   it("rejects mode=session when thread=true is not requested", async () => {

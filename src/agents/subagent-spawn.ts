@@ -279,7 +279,7 @@ async function ensureThreadBindingForSubagentSpawn(params: {
       return {
         status: "error",
         error:
-          "Unable to create or bind a thread for this subagent session. Session mode is unavailable for this target.",
+          "This surface cannot create or bind a thread-bound persistent session here. A persistent target can still exist, but interactive session mode requires thread support on the current surface.",
       };
     }
     return { status: "ok" };

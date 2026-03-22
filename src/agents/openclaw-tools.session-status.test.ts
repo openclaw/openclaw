@@ -417,7 +417,8 @@ describe("session_status tool", () => {
     const tool = getSessionStatusTool("agent:main:subagent:child", {
       sandboxed: true,
     });
-    const expectedError = "Session status visibility is restricted to the current session tree";
+    const expectedError =
+      "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree). This session can access itself and its spawned child sessions from here, but the target may still exist outside that tree.";
 
     await expect(
       tool.execute("call6", {

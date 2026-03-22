@@ -91,6 +91,11 @@ Think of a cron job as: **when** to run + **what** to do.
    - `sessionTarget: "current"` → bind to the current session (resolved at creation time to `session:<sessionKey>`).
    - `sessionTarget: "session:custom-id"` → run in a persistent named session that maintains context across runs.
 
+   Important distinction:
+   - A persistent named session target such as `session:project-alpha` is a durable context id.
+   - It is **not** the same thing as a thread-bound interactive session created with `sessions_spawn(... thread=true, mode:"session")`.
+   - It is also **not** a guarantee that the current requester can inspect or message that target via session tools; access still depends on session visibility policy.
+
    Default behavior (unchanged):
    - `systemEvent` payloads default to `main`
    - `agentTurn` payloads default to `isolated`

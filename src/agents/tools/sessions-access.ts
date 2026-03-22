@@ -180,7 +180,7 @@ function selfVisibilityMessage(action: SessionAccessAction): string {
 }
 
 function treeVisibilityMessage(action: SessionAccessAction): string {
-  return `${actionPrefix(action)} visibility is restricted to the current session tree (tools.sessions.visibility=tree).`;
+  return `${actionPrefix(action)} visibility is restricted to the current session tree (tools.sessions.visibility=tree). This session can access itself and its spawned child sessions from here, but the target may still exist outside that tree.`;
 }
 
 export async function createSessionVisibilityGuard(params: {
