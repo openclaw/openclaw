@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
@@ -216,13 +217,14 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   config: {
     ...matrixConfigAdapter,
     isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      baseUrl: account.homeserver,
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: account.configured,
+        extra: {
+          baseUrl: account.homeserver,
+        },
+      }),
   },
   security: {
     resolveDmPolicy: resolveMatrixDmPolicy,

@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -67,13 +68,14 @@ export const bluebubblesSetupPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> =
   config: {
     ...bluebubblesConfigAdapter,
     isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      baseUrl: account.baseUrl,
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: account.configured,
+        extra: {
+          baseUrl: account.baseUrl,
+        },
+      }),
   },
   setup: blueBubblesSetupAdapter,
 };
