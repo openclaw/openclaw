@@ -88,35 +88,30 @@ function resolveKimiBaseUrl(kimi?: KimiConfig): string {
   return baseUrl || DEFAULT_KIMI_BASE_URL;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function resolveMoonshotProviderBaseUrlFromConfig(
   config: Record<string, unknown> | undefined,
 ): string {
-  const baseUrl =
-    config &&
-    typeof config === "object" &&
-    !Array.isArray(config) &&
-    typeof (config as { models?: unknown }).models === "object" &&
-    (config as { models?: unknown }).models !== null &&
-    !Array.isArray((config as { models?: unknown }).models) &&
-    typeof (config as { models?: unknown } & { models: { providers?: unknown } }).models
-      .providers === "object" &&
-    (config as { models?: unknown } & { models: { providers?: unknown } }).models.providers !==
-      null &&
-    !Array.isArray(
-      (config as { models?: unknown } & { models: { providers?: unknown } }).models.providers,
-    ) &&
-    typeof (
-      (config as { models?: unknown } & { models: { providers: Record<string, unknown> } }).models
-        .providers.moonshot as { baseUrl?: unknown } | undefined
-    )?.baseUrl === "string"
-      ? String(
-          (
-            (config as { models?: unknown } & { models: { providers: Record<string, unknown> } })
-              .models.providers.moonshot as { baseUrl?: unknown } | undefined
-          )?.baseUrl,
-        ).trim()
-      : "";
-  return baseUrl;
+  if (!isRecord(config)) {
+    return "";
+  }
+  const models = config.models;
+  if (!isRecord(models)) {
+    return "";
+  }
+  const providers = models.providers;
+  if (!isRecord(providers)) {
+    return "";
+  }
+  const moonshot = providers.moonshot;
+  if (!isRecord(moonshot)) {
+    return "";
+  }
+  const baseUrl = moonshot.baseUrl;
+  return typeof baseUrl === "string" ? baseUrl.trim() : "";
 }
 
 function resolveKimiWebSearchBaseUrl(params: {

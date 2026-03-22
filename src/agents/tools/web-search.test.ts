@@ -311,6 +311,26 @@ describe("web_search kimi config resolution", () => {
     ).toBe("https://api.moonshot.cn/v1");
   });
 
+  it("prefers explicit kimi baseUrl over inferred moonshot baseUrl", () => {
+    expect(
+      resolveKimiWebSearchBaseUrl({
+        kimiConfig: { baseUrl: "https://override.example/v1" },
+        config: {
+          models: { providers: { moonshot: { baseUrl: "https://api.moonshot.cn/v1" } } },
+        },
+      }),
+    ).toBe("https://override.example/v1");
+  });
+
+  it("falls back to default Kimi baseUrl when missing", () => {
+    expect(
+      resolveKimiWebSearchBaseUrl({
+        kimiConfig: {},
+        config: undefined,
+      }),
+    ).toBe("https://api.moonshot.ai/v1");
+  });
+
   it("extracts citations from search_results", () => {
     expect(
       extractKimiCitations({
