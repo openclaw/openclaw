@@ -112,6 +112,27 @@ if start is not None:
     print("\n".join(out.splitlines()[start:]))
 ```
 
+> **Warning: `--json` always exits 0.** `operon-guard test --json` exits 0 even when
+> the report contains `passed: false`. The non-zero exit code only fires in the non-JSON
+> branch. **Do not gate CI or permission workflows on the exit code when using `--json`**
+> — a failing agent will silently pass the gate.
+>
+> For CI, either:
+>
+> **Option A — parse `passed` from the JSON output (bash):**
+> ```bash
+> result=$(operon-guard test path/to/agent.py --json | grep -A9999 '^{')
+> passed=$(echo "$result" | python3 -c \
+>   "import sys,json; d=json.load(sys.stdin); \
+>    print(d.get('passed', d.get('trust_score',{}).get('passed',False)))")
+> [ "$passed" = "True" ] || { echo "Agent failed trust check"; exit 1; }
+> ```
+>
+> **Option B — run without `--json` and rely on the exit code:**
+> ```bash
+> operon-guard test path/to/agent.py   # exits 1 on failure, 0 on pass
+> ```
+
 ## Specifying the Entry Point
 
 When your module exports **more than one callable** (helpers, utilities, classes, and
