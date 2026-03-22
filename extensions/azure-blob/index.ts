@@ -1,4 +1,4 @@
-import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/core";
+import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createAzureBlobListBlobsTool,
   createAzureBlobListContainersTool,
