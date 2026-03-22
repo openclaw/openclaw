@@ -1,7 +1,4 @@
 commit	score	delegation	memory	conciseness	silent_reply	error_rate	neo_exec	morpheus_exec	trinity_exec	op1_wb	neo_wb	morpheus_wb	trinity_wb	op1_rich	neo_rich	morpheus_rich	trinity_rich	status	description
 memory-baseline	0.614	0.352	0.190	0.800	1.000	1.000	0.995	1.000	0.960	0.000	0.333	0.000	0.000	1.000	0.525	0.135	0.510	baseline	memory metrics baseline — op1 retrieval=0.190 and wb=0.000 are primary targets
-476ded2	pending	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	pending	op1: explicit memory_search trigger words list + write-back at session end
-b772cbb	pending	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	pending	morpheus: mandatory write-back checklist (wb=0.000, richness=0.135)
-61f89da	pending	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	pending	trinity: mandatory write-back + mid-session retrieval triggers (wb=0.000, retrieval=0.000)
-bc8edcf	pending	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	pending	neo: mandatory write-back checklist (wb=0.333, targeting improvement)
-e985a32	pending	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	pending	op1: MANDATORY write-back before final reply in session notes
+476ded2	0.622	0.386	0.182	0.800	1.000	1.000	1.000	1.000	1.000	0.000	0.400	0.333	0.250	1.000	0.575	0.185	0.600	keep	op1 retrieval triggers + write-back rule; subagent wb improved (morpheus 0→0.333, trinity 0→0.250, neo 0.333→0.400)
+8a3c7dd	pending	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	-	pending	neo: mid-session retrieval trigger words (retrieval=0.000 → target improvement)
