@@ -21,6 +21,9 @@ const installPluginFromNpmSpec = vi.fn();
 const installPluginFromPath = vi.fn();
 const installPluginFromClawHub = vi.fn();
 const parseClawHubPluginSpec = vi.fn();
+const installHooksFromNpmSpec = vi.fn();
+const installHooksFromPath = vi.fn();
+const recordHookInstall = vi.fn();
 
 const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
   createCliRuntimeCapture();
@@ -83,8 +86,21 @@ vi.mock("./prompt.js", () => ({
 }));
 
 vi.mock("../plugins/install.js", () => ({
+  PLUGIN_INSTALL_ERROR_CODE: {
+    NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
+  },
   installPluginFromNpmSpec: (...args: unknown[]) => installPluginFromNpmSpec(...args),
   installPluginFromPath: (...args: unknown[]) => installPluginFromPath(...args),
+}));
+
+vi.mock("../hooks/install.js", () => ({
+  installHooksFromNpmSpec: (...args: unknown[]) => installHooksFromNpmSpec(...args),
+  installHooksFromPath: (...args: unknown[]) => installHooksFromPath(...args),
+  resolveHookInstallDir: (hookId: string) => `/tmp/hooks/${hookId}`,
+}));
+
+vi.mock("../hooks/installs.js", () => ({
+  recordHookInstall: (...args: unknown[]) => recordHookInstall(...args),
 }));
 
 vi.mock("../plugins/clawhub.js", () => ({
@@ -129,6 +145,9 @@ describe("plugins cli", () => {
     installPluginFromPath.mockReset();
     installPluginFromClawHub.mockReset();
     parseClawHubPluginSpec.mockReset();
+    installHooksFromNpmSpec.mockReset();
+    installHooksFromPath.mockReset();
+    recordHookInstall.mockReset();
 
     loadConfig.mockReturnValue({} as OpenClawConfig);
     writeConfigFile.mockResolvedValue(undefined);
@@ -177,6 +196,15 @@ describe("plugins cli", () => {
       error: "clawhub install disabled in test",
     });
     parseClawHubPluginSpec.mockReturnValue(null);
+    installHooksFromPath.mockResolvedValue({
+      ok: false,
+      error: "hook path install disabled in test",
+    });
+    installHooksFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "hook npm install disabled in test",
+    });
+    recordHookInstall.mockImplementation((cfg: OpenClawConfig) => cfg);
   });
 
   it("exits when --marketplace is combined with --link", async () => {
@@ -470,7 +498,132 @@ describe("plugins cli", () => {
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain('Use "openclaw skills install demo" instead.');
   });
+  it("falls back to installing hook packs from npm specs", async () => {
+    const cfg = {} as OpenClawConfig;
+    const installedCfg = {
+      hooks: {
+        internal: {
+          installs: {
+            "demo-hooks": {
+              source: "npm",
+              spec: "@acme/demo-hooks@1.2.3",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
 
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromClawHub.mockResolvedValue({
+      ok: false,
+      error: "ClawHub /api/v1/packages/@acme/demo-hooks failed (404): Package not found",
+    });
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "package.json missing openclaw.plugin.json",
+    });
+    installHooksFromNpmSpec.mockResolvedValue({
+      ok: true,
+      hookPackId: "demo-hooks",
+      hooks: ["command-audit"],
+      targetDir: "/tmp/hooks/demo-hooks",
+      version: "1.2.3",
+      npmResolution: {
+        name: "@acme/demo-hooks",
+        spec: "@acme/demo-hooks@1.2.3",
+        integrity: "sha256-demo",
+      },
+    });
+    recordHookInstall.mockReturnValue(installedCfg);
+
+    await runCommand(["plugins", "install", "@acme/demo-hooks"]);
+
+    expect(installHooksFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@acme/demo-hooks",
+      }),
+    );
+    expect(recordHookInstall).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        hookId: "demo-hooks",
+        hooks: ["command-audit"],
+      }),
+    );
+    expect(writeConfigFile).toHaveBeenCalledWith(installedCfg);
+    expect(runtimeLogs.some((line) => line.includes("Installed hook pack: demo-hooks"))).toBe(true);
+  });
+
+  it("updates tracked hook packs through plugins update", async () => {
+    const cfg = {
+      hooks: {
+        internal: {
+          installs: {
+            "demo-hooks": {
+              source: "npm",
+              spec: "@acme/demo-hooks@1.0.0",
+              installPath: "/tmp/hooks/demo-hooks",
+              resolvedName: "@acme/demo-hooks",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const nextConfig = {
+      hooks: {
+        internal: {
+          installs: {
+            "demo-hooks": {
+              source: "npm",
+              spec: "@acme/demo-hooks@1.1.0",
+              installPath: "/tmp/hooks/demo-hooks",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(cfg);
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config: cfg,
+      changed: false,
+      outcomes: [],
+    });
+    installHooksFromNpmSpec.mockResolvedValue({
+      ok: true,
+      hookPackId: "demo-hooks",
+      hooks: ["command-audit"],
+      targetDir: "/tmp/hooks/demo-hooks",
+      version: "1.1.0",
+      npmResolution: {
+        name: "@acme/demo-hooks",
+        spec: "@acme/demo-hooks@1.1.0",
+        integrity: "sha256-demo-2",
+      },
+    });
+    recordHookInstall.mockReturnValue(nextConfig);
+
+    await runCommand(["plugins", "update", "demo-hooks"]);
+
+    expect(installHooksFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@acme/demo-hooks@1.0.0",
+        mode: "update",
+        expectedHookPackId: "demo-hooks",
+      }),
+    );
+    expect(recordHookInstall).toHaveBeenCalledWith(
+      cfg,
+      expect.objectContaining({
+        hookId: "demo-hooks",
+        hooks: ["command-audit"],
+      }),
+    );
+    expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(
+      runtimeLogs.some((line) => line.includes("Restart the gateway to load plugins and hooks.")),
+    ).toBe(true);
+  });
   it("shows uninstall dry-run preview without mutating config", async () => {
     loadConfig.mockReturnValue({
       plugins: {
@@ -582,11 +735,11 @@ describe("plugins cli", () => {
 
     await expect(runCommand(["plugins", "update"])).rejects.toThrow("__exit__:1");
 
-    expect(runtimeErrors.at(-1)).toContain("Provide a plugin id or use --all.");
+    expect(runtimeErrors.at(-1)).toContain("Provide a plugin or hook-pack id, or use --all.");
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
   });
 
-  it("reports no tracked plugins when update --all has empty install records", async () => {
+  it("reports no tracked plugins or hook packs when update --all has empty install records", async () => {
     loadConfig.mockReturnValue({
       plugins: {
         installs: {},
@@ -596,7 +749,7 @@ describe("plugins cli", () => {
     await runCommand(["plugins", "update", "--all"]);
 
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
-    expect(runtimeLogs.at(-1)).toBe("No tracked plugins to update.");
+    expect(runtimeLogs.at(-1)).toBe("No tracked plugins or hook packs to update.");
   });
 
   it("maps an explicit unscoped npm dist-tag update to the tracked plugin id", async () => {
@@ -771,8 +924,8 @@ describe("plugins cli", () => {
       }),
     );
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
-    expect(runtimeLogs.some((line) => line.includes("Restart the gateway to load plugins."))).toBe(
-      true,
-    );
+    expect(
+      runtimeLogs.some((line) => line.includes("Restart the gateway to load plugins and hooks.")),
+    ).toBe(true);
   });
 });
