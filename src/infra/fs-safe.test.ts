@@ -437,7 +437,7 @@ describe("fs-safe", () => {
 });
 
 describe("tilde expansion in file tools", () => {
-  it("expandHomePrefix respects process.env.HOME changes", async () => {
+  it("keeps tilde expansion behavior aligned", async () => {
     const { expandHomePrefix } = await import("./home-dir.js");
     const originalHome = process.env.HOME;
     const fakeHome = path.resolve(path.sep, "tmp", "fake-home-test");
@@ -448,11 +448,8 @@ describe("tilde expansion in file tools", () => {
     } finally {
       process.env.HOME = originalHome;
     }
-  });
 
-  it("reads a file via ~/path after HOME override", async () => {
     const root = await tempDirs.make("openclaw-tilde-test-");
-    const originalHome = process.env.HOME;
     process.env.HOME = root;
     try {
       await fs.writeFile(path.join(root, "hello.txt"), "tilde-works");
@@ -464,16 +461,7 @@ describe("tilde expansion in file tools", () => {
       await result.handle.read(buf, 0, buf.length, 0);
       await result.handle.close();
       expect(buf.toString("utf8")).toBe("tilde-works");
-    } finally {
-      process.env.HOME = originalHome;
-    }
-  });
 
-  it("writes a file via ~/path after HOME override", async () => {
-    const root = await tempDirs.make("openclaw-tilde-test-");
-    const originalHome = process.env.HOME;
-    process.env.HOME = root;
-    try {
       await writeFileWithinRoot({
         rootDir: root,
         relativePath: "~/output.txt",
@@ -484,14 +472,11 @@ describe("tilde expansion in file tools", () => {
     } finally {
       process.env.HOME = originalHome;
     }
-  });
 
-  it("rejects ~/path that resolves outside root", async () => {
-    const root = await tempDirs.make("openclaw-tilde-outside-");
-    // HOME points to real home, ~/file goes to /home/dev/file which is outside root
+    const outsideRoot = await tempDirs.make("openclaw-tilde-outside-");
     await expect(
       openFileWithinRoot({
-        rootDir: root,
+        rootDir: outsideRoot,
         relativePath: "~/escape.txt",
       }),
     ).rejects.toMatchObject({
