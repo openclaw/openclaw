@@ -367,5 +367,5 @@ providers:
 - [Provider Plugin Interface](/plugins/sdk-provider-interface) — public `ProviderPlugin` field reference
 - [Channel Plugins](/plugins/sdk-channel-plugins) — if your plugin also provides a channel
 - [SDK Runtime](/plugins/sdk-runtime) — `api.runtime` helpers (TTS, search, subagent)
-- [SDK Overview](/plugins/sdk-overview) — import guidance and registration API
+- [SDK Overview](/plugins/sdk-overview) — subpath guidance and registration API
 - [Plugin Internals](/plugins/architecture#provider-runtime-hooks) — hook details and bundled examples

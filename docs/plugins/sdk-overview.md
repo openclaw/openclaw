@@ -1,7 +1,7 @@
 ---
 title: "Plugin SDK Overview"
 sidebarTitle: "SDK Overview"
-summary: "Registration API reference, import guidance, and SDK architecture"
+summary: "Registration API reference, subpath guidance, and SDK architecture"
 read_when:
   - You need to know which SDK subpath to import from
   - You want a reference for all registration methods on OpenClawPluginApi
@@ -36,7 +36,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk";
 Each subpath is a small, self-contained module. This keeps startup fast and
 prevents circular dependency issues.
 
-For a short public import-path index, see [SDK Subpaths](/plugins/sdk-subpaths).
+For a short public subpath index, see [SDK Subpaths](/plugins/sdk-subpaths).
 
 ## Where imports usually start
 
@@ -131,7 +131,7 @@ my-plugin/
 
 ## Related
 
-- [SDK Subpaths](/plugins/sdk-subpaths) — supported public import paths
+- [SDK Subpaths](/plugins/sdk-subpaths) — supported public subpaths
 - [Entry Points](/plugins/sdk-entrypoints) — `definePluginEntry` and `defineChannelPluginEntry` options
 - [Channel Plugin Interface](/plugins/sdk-channel-interface) — public `ChannelPlugin` shape
 - [Provider Plugin Interface](/plugins/sdk-provider-interface) — public `ProviderPlugin` shape

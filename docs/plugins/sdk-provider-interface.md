@@ -184,5 +184,5 @@ Practical rules:
 - [Provider Plugins](/plugins/sdk-provider-plugins) — step-by-step provider walkthrough
 - [Plugin Entry Points](/plugins/sdk-entrypoints) — `definePluginEntry(...)`
 - [Plugin Runtime Helpers](/plugins/sdk-runtime) — `api.runtime` and subagent/runtime helpers
-- [SDK Subpaths](/plugins/sdk-subpaths) — public import paths
+- [SDK Subpaths](/plugins/sdk-subpaths) — public subpaths
 - [Plugin Internals](/plugins/architecture#provider-runtime-hooks) — provider runtime ownership and deeper architecture

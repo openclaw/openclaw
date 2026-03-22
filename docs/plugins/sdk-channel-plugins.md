@@ -366,6 +366,6 @@ extensions/acme-chat/
 
 - [Channel Plugin Interface](/plugins/sdk-channel-interface) — public `ChannelPlugin` field reference
 - [Provider Plugins](/plugins/sdk-provider-plugins) — if your plugin also provides models
-- [SDK Overview](/plugins/sdk-overview) — import guidance and registration API
+- [SDK Overview](/plugins/sdk-overview) — subpath guidance and registration API
 - [SDK Testing](/plugins/sdk-testing) — test utilities and contract tests
 - [Plugin Manifest](/plugins/manifest) — full manifest schema

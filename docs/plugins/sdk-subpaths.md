@@ -1,16 +1,16 @@
 ---
 title: "Plugin SDK Subpaths"
 sidebarTitle: "SDK Subpaths"
-summary: "Starting points and supporting public `openclaw/plugin-sdk/*` imports for plugin authors"
+summary: "Starting points and supporting public `openclaw/plugin-sdk/*` subpaths for plugin authors"
 read_when:
   - You want to know where to start in the SDK
   - You are replacing old `openclaw/plugin-sdk` root-barrel imports
-  - You need a short public import-path reference instead of internal repo files
+  - You need a short public subpath reference instead of internal repo files
 ---
 
 # Plugin SDK Subpaths
 
-This page lists the public `openclaw/plugin-sdk/*` imports plugin authors
+This page lists the public `openclaw/plugin-sdk/*` subpaths plugin authors
 should start from.
 
 It is intentionally short. Use the task-specific guides for the detailed
@@ -30,13 +30,13 @@ Use these documented subpaths instead of:
 
 ## Start here
 
-| Import path                        | Use it for                                                                                       |
+| Subpath                            | Use it for                                                                                       |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `openclaw/plugin-sdk/plugin-entry` | `definePluginEntry(...)` for provider, tool, and hook plugins                                    |
 | `openclaw/plugin-sdk/core`         | `defineChannelPluginEntry(...)`, `defineSetupPluginEntry(...)`, and shared plugin contract types |
 | `openclaw/plugin-sdk/testing`      | Public test helpers and fixtures                                                                 |
 
-## Choose imports by task
+## Choose subpaths by task
 
 - Tool, hook, and command plugins usually start with
   `openclaw/plugin-sdk/plugin-entry`. See [Tool Plugins](/plugins/sdk-tool-plugins).
@@ -53,7 +53,7 @@ Use these documented subpaths instead of:
 
 ## Common supporting imports
 
-| Import path                            | Use it for                                |
+| Subpath                                | Use it for                                |
 | -------------------------------------- | ----------------------------------------- |
 | `openclaw/plugin-sdk/channel-setup`    | Setup surfaces and setup helpers          |
 | `openclaw/plugin-sdk/channel-contract` | Shared channel contract types             |

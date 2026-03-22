@@ -214,4 +214,4 @@ Practical rules:
 - [Plugin Entry Points](/plugins/sdk-entrypoints) — `defineChannelPluginEntry(...)`
 - [Plugin Setup and Config](/plugins/sdk-setup) — manifests, setup entries, config schemas
 - [Plugin Runtime Helpers](/plugins/sdk-runtime) — `api.runtime` and runtime storage
-- [SDK Subpaths](/plugins/sdk-subpaths) — public import paths
+- [SDK Subpaths](/plugins/sdk-subpaths) — public subpaths
