@@ -311,6 +311,17 @@ describe("web_search kimi config resolution", () => {
     ).toBe("https://api.moonshot.cn/v1");
   });
 
+  it("does not inherit non-moonshot model provider baseUrl", () => {
+    expect(
+      resolveKimiWebSearchBaseUrl({
+        kimiConfig: {},
+        config: {
+          models: { providers: { moonshot: { baseUrl: "https://proxy.example.com/v1" } } },
+        },
+      }),
+    ).toBe("https://api.moonshot.ai/v1");
+  });
+
   it("prefers explicit kimi baseUrl over inferred moonshot baseUrl", () => {
     expect(
       resolveKimiWebSearchBaseUrl({

@@ -124,7 +124,22 @@ function resolveKimiWebSearchBaseUrl(params: {
     return explicitBaseUrl;
   }
   const inferred = resolveMoonshotProviderBaseUrlFromConfig(params.config);
-  return inferred || DEFAULT_KIMI_BASE_URL;
+  if (inferred && isMoonshotNativeWebSearchBaseUrl(inferred)) {
+    return inferred;
+  }
+  return DEFAULT_KIMI_BASE_URL;
+}
+
+function isMoonshotNativeWebSearchBaseUrl(baseUrl: string): boolean {
+  try {
+    const parsed = new URL(baseUrl);
+    if (parsed.protocol !== "https:") {
+      return false;
+    }
+    return parsed.hostname === "api.moonshot.ai" || parsed.hostname === "api.moonshot.cn";
+  } catch {
+    return false;
+  }
 }
 
 function extractKimiMessageText(message: KimiMessage | undefined): string | undefined {
