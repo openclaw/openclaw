@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -136,16 +134,6 @@ export function formatPluginInstallWithHookFallbackError(
 
 export function logHookPackRestartHint() {
   defaultRuntime.log("Restart the gateway to load hooks.");
-}
-
-export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
-  try {
-    const raw = fs.readFileSync(path.join(dir, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === "string" ? parsed.version : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 export function logSlotWarnings(warnings: string[]) {
