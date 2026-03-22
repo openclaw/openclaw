@@ -29,6 +29,11 @@ export type UsageLike = {
   candidatesTokenCount?: number;
   totalTokenCount?: number;
   cachedContentTokenCount?: number;
+  // TODO: thoughtsTokenCount is intentionally not mapped to a normalized field.
+  // For Gemini thinking models, totalTokenCount = promptTokenCount + candidatesTokenCount + thoughtsTokenCount.
+  // The thinking tokens are captured implicitly via totalTokenCount → total.
+  // A dedicated `thinkingTokens` field on NormalizedUsage could be added in the future
+  // if downstream consumers need to distinguish thinking tokens from output tokens.
   thoughtsTokenCount?: number;
 };
 
