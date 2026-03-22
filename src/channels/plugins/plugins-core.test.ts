@@ -267,6 +267,49 @@ describe("channel plugin catalog", () => {
     });
   });
 
+  it("keeps external catalog entries ahead of the built-in community catalog", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-override-"));
+    const catalogPath = path.join(dir, "catalog.json");
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@vendor/dingtalk-external",
+            openclaw: {
+              channel: {
+                id: "dingtalk",
+                label: "DingTalk External",
+                selectionLabel: "DingTalk External",
+                docsPath: "https://example.com/dingtalk",
+                blurb: "External catalog override",
+              },
+              install: {
+                npmSpec: "@vendor/dingtalk-external",
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    const entry = getChannelPluginCatalogEntry("dingtalk", {
+      catalogPaths: [catalogPath],
+    });
+
+    expect(entry).toMatchObject({
+      id: "dingtalk",
+      meta: {
+        label: "DingTalk External",
+        selectionLabel: "DingTalk External",
+        docsPath: "https://example.com/dingtalk",
+      },
+      install: {
+        npmSpec: "@vendor/dingtalk-external",
+      },
+    });
+  });
+
   it("uses the provided env for external catalog path resolution", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-home-"));
     const catalogPath = path.join(home, "catalog.json");

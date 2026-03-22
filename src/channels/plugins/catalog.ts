@@ -373,19 +373,19 @@ export function listChannelPluginCatalogEntries(
     }
   }
 
-  // The official built-in community catalog powers first-run onboarding
-  // discovery without overriding installed, workspace, config, or bundled
-  // plugin metadata when those higher-priority sources already exist.
-  for (const entry of loadBuiltInCommunityCatalogEntries()) {
+  const externalEntries = loadExternalCatalogEntries(options)
+    .map((entry) => buildExternalCatalogEntry(entry))
+    .filter((entry): entry is ChannelPluginCatalogEntry => Boolean(entry));
+  for (const entry of externalEntries) {
     if (!resolved.has(entry.id)) {
       resolved.set(entry.id, { entry, priority: 99 });
     }
   }
 
-  const externalEntries = loadExternalCatalogEntries(options)
-    .map((entry) => buildExternalCatalogEntry(entry))
-    .filter((entry): entry is ChannelPluginCatalogEntry => Boolean(entry));
-  for (const entry of externalEntries) {
+  // The official built-in community catalog powers first-run onboarding
+  // discovery without overriding installed, workspace, config, bundled,
+  // or user-configured external catalog entries.
+  for (const entry of loadBuiltInCommunityCatalogEntries()) {
     if (!resolved.has(entry.id)) {
       resolved.set(entry.id, { entry, priority: 99 });
     }
