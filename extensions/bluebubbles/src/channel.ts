@@ -104,8 +104,8 @@ const meta = {
   preferOver: ["imessage"],
 };
 
-export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = createChatChannelPlugin(
-  {
+export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBubblesProbe> =
+  createChatChannelPlugin<ResolvedBlueBubblesAccount, BlueBubblesProbe>({
     base: {
       id: "bluebubbles",
       meta,
@@ -365,5 +365,4 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = crea
         },
       },
     },
-  },
-);
+  });

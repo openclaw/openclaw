@@ -166,16 +166,14 @@ export function createComputedAccountStatusAdapter<
       params: ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit>,
     ) => ComputedAccountStatusBase & { extra?: TExtra };
   },
-): ChannelStatusAdapter<ResolvedAccount> {
+): ChannelStatusAdapter<ResolvedAccount, Probe, Audit> {
   return {
     defaultRuntime: options.defaultRuntime,
     buildChannelSummary: options.buildChannelSummary,
     probeAccount: options.probeAccount,
-    formatCapabilitiesProbe:
-      options.formatCapabilitiesProbe as ChannelStatusAdapter<ResolvedAccount>["formatCapabilitiesProbe"],
-    auditAccount: options.auditAccount as ChannelStatusAdapter<ResolvedAccount>["auditAccount"],
-    buildCapabilitiesDiagnostics:
-      options.buildCapabilitiesDiagnostics as ChannelStatusAdapter<ResolvedAccount>["buildCapabilitiesDiagnostics"],
+    formatCapabilitiesProbe: options.formatCapabilitiesProbe,
+    auditAccount: options.auditAccount,
+    buildCapabilitiesDiagnostics: options.buildCapabilitiesDiagnostics,
     logSelfId: options.logSelfId,
     resolveAccountState: options.resolveAccountState,
     collectStatusIssues: options.collectStatusIssues,

@@ -10,8 +10,8 @@ import {
   buildPassiveChannelStatusSummary,
   buildTrafficStatusSummary,
 } from "openclaw/plugin-sdk/extension-shared";
+import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import {
-  buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
   createPreCryptoDirectDmAuthorizer,
@@ -196,27 +196,25 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
       resolveOutboundSessionRoute: (params) => resolveNostrOutboundSessionRoute(params),
     },
     status: {
-      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-      collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("nostr", accounts),
-      buildChannelSummary: ({ snapshot }) =>
-        buildPassiveChannelStatusSummary(snapshot, {
-          publicKey: snapshot.publicKey ?? null,
-        }),
-      buildAccountSnapshot: ({ account, runtime }) =>
-        buildComputedAccountStatusSnapshot(
-          {
-            accountId: account.accountId,
-            name: account.name,
-            enabled: account.enabled,
-            configured: account.configured,
-            runtime,
-          },
-          {
+      ...createComputedAccountStatusAdapter<ResolvedNostrAccount>({
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+        collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("nostr", accounts),
+        buildChannelSummary: ({ snapshot }) =>
+          buildPassiveChannelStatusSummary(snapshot, {
+            publicKey: snapshot.publicKey ?? null,
+          }),
+        resolveAccountSnapshot: ({ account, runtime }) => ({
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: account.configured,
+          extra: {
             publicKey: account.publicKey,
             profile: account.profile,
             ...buildTrafficStatusSummary(runtime),
           },
-        ),
+        }),
+      }),
     },
     gateway: {
       startAccount: async (ctx) => {
