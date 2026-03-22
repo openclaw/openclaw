@@ -137,6 +137,9 @@ function resolveBraveEndpoint(baseUrl: string, mode: "web" | "llm-context"): str
   if (!trimmed) {
     return new URL(pathname, BRAVE_BASE_URL).toString();
   }
+  if (/\$\{[^}]+\}/.test(trimmed)) {
+    return undefined;
+  }
 
   try {
     const url = new URL(trimmed);
@@ -145,6 +148,15 @@ function resolveBraveEndpoint(baseUrl: string, mode: "web" | "llm-context"): str
     }
     const currentPath = url.pathname.replace(/\/$/, "");
     const suffix = pathname.replace(/^\/res\/v1/, "");
+    const fullEndpointPattern =
+      mode === "llm-context"
+        ? /\/(?:res|resolver)\/v\d+\/llm\/context$/u
+        : /\/(?:res|resolver)\/v\d+\/web\/search$/u;
+
+    if (fullEndpointPattern.test(currentPath)) {
+      url.pathname = currentPath;
+      return url.toString();
+    }
 
     if (/\/(?:res|resolver)\/v\d+$/.test(currentPath)) {
       url.pathname = `${currentPath}${suffix}`;

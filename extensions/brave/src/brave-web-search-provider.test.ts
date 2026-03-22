@@ -83,6 +83,15 @@ describe("brave web search provider", () => {
     );
   });
 
+  it("reuses full Brave endpoint URLs without appending the path twice", () => {
+    expect(resolveBraveEndpoint("https://proxy.example.com/res/v1/web/search", "web")).toBe(
+      "https://proxy.example.com/res/v1/web/search",
+    );
+    expect(
+      resolveBraveEndpoint("https://proxy.example.com/resolver/v1/llm/context", "llm-context"),
+    ).toBe("https://proxy.example.com/resolver/v1/llm/context");
+  });
+
   it("does not treat generic versioned proxy prefixes as Brave API roots", () => {
     expect(resolveBraveEndpoint("https://proxy.example.com/api/v1", "web")).toBe(
       "https://proxy.example.com/api/v1/res/v1/web/search",
@@ -92,5 +101,6 @@ describe("brave web search provider", () => {
   it("rejects invalid Brave base URLs instead of silently falling back", () => {
     expect(resolveBraveEndpoint("proxy.example.com", "web")).toBeUndefined();
     expect(resolveBraveEndpoint("ftp://proxy.example.com/resolver/v1/", "web")).toBeUndefined();
+    expect(resolveBraveEndpoint("https://${BRAVE_PROXY_HOST}/resolver/v1/", "web")).toBeUndefined();
   });
 });
