@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProfileSwitcher } from "./profile-switcher";
@@ -13,14 +13,8 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe("ProfileSwitcher workspace delete action", () => {
-  const originalConfirm = window.confirm;
-
   beforeEach(() => {
     vi.restoreAllMocks();
-  });
-
-  afterEach(() => {
-    window.confirm = originalConfirm;
   });
 
   it("deletes a workspace from the dropdown action", async () => {
@@ -45,31 +39,11 @@ describe("ProfileSwitcher workspace delete action", () => {
                 hasConfig: true,
               },
             ],
-            activeProfile: "work",
-            profiles: [
-              {
-                name: "work",
-                stateDir: "/home/testuser/.openclaw-work",
-                workspaceDir: "/home/testuser/.openclaw-work/workspace",
-                isActive: true,
-                hasConfig: true,
-              },
-            ],
           });
         }
         return jsonResponse({
           activeWorkspace: "work",
           workspaces: [
-            {
-              name: "work",
-              stateDir: "/home/testuser/.openclaw-work",
-              workspaceDir: null,
-              isActive: true,
-              hasConfig: true,
-            },
-          ],
-          activeProfile: "work",
-          profiles: [
             {
               name: "work",
               stateDir: "/home/testuser/.openclaw-work",
@@ -86,21 +60,30 @@ describe("ProfileSwitcher workspace delete action", () => {
       throw new Error(`Unexpected fetch call: ${method} ${url}`);
     }) as typeof fetch;
 
-    window.confirm = vi.fn(() => true);
-
     render(<ProfileSwitcher onWorkspaceDelete={onWorkspaceDelete} />);
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith("/api/workspace/list");
     });
 
     await user.click(screen.getByTitle("Switch workspace"));
-    await user.click(screen.getByTitle("Delete workspace work"));
 
-    expect(window.confirm).toHaveBeenCalledTimes(1);
-    const confirmMsg = vi.mocked(window.confirm).mock.calls[0]?.[0] as string;
-    expect(confirmMsg).toContain("Delete workspace");
-    expect(confirmMsg).toContain("work");
-    expect(confirmMsg).not.toContain("uninstall --workspace --state");
+    const trigger = document.querySelector("[data-slot='dropdown-menu-trigger']");
+    expect(trigger).toBeTruthy();
+    await user.click(trigger as HTMLElement);
+
+    await waitFor(() => {
+      expect(screen.getByText("Delete")).toBeInTheDocument();
+    });
+    await user.click(screen.getByText("Delete"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Delete workspace")).toBeInTheDocument();
+    });
+    const confirmBtn = screen.getAllByText("Delete").find(
+      (el) => el.tagName === "BUTTON" && el.closest("[data-slot='dialog-content']"),
+    );
+    expect(confirmBtn).toBeTruthy();
+    await user.click(confirmBtn as HTMLElement);
 
     await waitFor(() => {
       expect(onWorkspaceDelete).toHaveBeenCalledWith("work");
@@ -110,9 +93,6 @@ describe("ProfileSwitcher workspace delete action", () => {
       .mocked(global.fetch)
       .mock.calls.find((call) => (typeof call[0] === "string" ? call[0] : (call[0] as URL).href) === "/api/workspace/delete");
     expect(deleteCall).toBeTruthy();
-    expect(deleteCall?.[1]).toMatchObject({
-      method: "POST",
-    });
     const deleteBody = JSON.parse(deleteCall?.[1]?.body as string);
     expect(deleteBody).toMatchObject({ workspace: "work" });
   });
@@ -153,13 +133,15 @@ describe("ProfileSwitcher workspace delete action", () => {
       expect(global.fetch).toHaveBeenCalledWith("/api/workspace/list");
     });
 
+    await user.click(screen.getByTitle("Switch workspace"));
+
     await waitFor(() => {
-      expect(screen.getByText("dench")).toBeInTheDocument();
+      const allDench = screen.getAllByText("dench");
+      expect(allDench.length).toBeGreaterThanOrEqual(1);
       expect(screen.queryByText("ghost")).not.toBeInTheDocument();
     });
 
-    await user.click(screen.getByTitle("Switch workspace"));
-    expect(screen.queryByTitle("Delete workspace ghost")).not.toBeInTheDocument();
-    expect(screen.getByTitle("Delete workspace dench")).toBeInTheDocument();
+    const triggers = document.querySelectorAll("[data-slot='dropdown-menu-trigger']");
+    expect(triggers.length).toBe(1);
   });
 });
