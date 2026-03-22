@@ -8,6 +8,7 @@ import {
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import { createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/status-helpers";
 import type {
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
@@ -409,13 +410,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
         },
       },
       status: {
-        defaultRuntime: {
-          accountId: DEFAULT_ACCOUNT_ID,
-          running: false,
-          lastStartAt: null,
-          lastStopAt: null,
-          lastError: null,
-        },
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         collectStatusIssues: collectZalouserStatusIssues,
         buildChannelSummary: ({ snapshot }) => buildPassiveProbedChannelStatusSummary(snapshot),
         probeAccount: async ({ account, timeoutMs }) => probeZalouser(account.profile, timeoutMs),

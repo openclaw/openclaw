@@ -19,6 +19,7 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { listResolvedDirectoryUserEntriesFromAllowFrom } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/status-helpers";
 import {
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
@@ -200,13 +201,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
         listGroups: async () => [],
       }),
       status: {
-        defaultRuntime: {
-          accountId: DEFAULT_ACCOUNT_ID,
-          running: false,
-          lastStartAt: null,
-          lastStopAt: null,
-          lastError: null,
-        },
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         collectStatusIssues: collectZaloStatusIssues,
         buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
         probeAccount: async ({ account, timeoutMs }) =>

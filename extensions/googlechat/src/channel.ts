@@ -18,7 +18,10 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
@@ -208,13 +211,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     },
     actions: googlechatActions,
     status: createComputedAccountStatusAdapter<ResolvedGoogleChatAccount>({
-      defaultRuntime: {
-        accountId: DEFAULT_ACCOUNT_ID,
-        running: false,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-      },
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       collectStatusIssues: (accounts): ChannelStatusIssue[] =>
         accounts.flatMap((entry) => {
           const accountId = String(entry.accountId ?? DEFAULT_ACCOUNT_ID);

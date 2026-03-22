@@ -22,6 +22,7 @@ import {
 import { buildTrafficStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
+import { createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/status-helpers";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import {
@@ -319,13 +320,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           }),
       },
       status: {
-        defaultRuntime: {
-          accountId: DEFAULT_ACCOUNT_ID,
-          running: false,
-          lastStartAt: null,
-          lastStopAt: null,
-          lastError: null,
-        },
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("matrix", accounts),
         buildChannelSummary: ({ snapshot }) =>
           buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),

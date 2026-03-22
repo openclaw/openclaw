@@ -20,6 +20,7 @@ import {
   resolveThreadSessionKeys,
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
+import { createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/status-helpers";
 import { parseTelegramTopicConversation } from "../runtime-api.js";
 import {
   buildTokenChannelStatusSummary,
@@ -449,13 +450,7 @@ export const telegramPlugin = createChatChannelPlugin({
     }),
     actions: telegramMessageActions,
     status: {
-      defaultRuntime: {
-        accountId: DEFAULT_ACCOUNT_ID,
-        running: false,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-      },
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       collectStatusIssues: collectTelegramStatusIssues,
       buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
       probeAccount: async ({ account, timeoutMs }) =>
