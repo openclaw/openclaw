@@ -1,20 +1,13 @@
 import type { WebhookRequestBody } from "@line/bot-sdk";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { chunkMarkdownText } from "../auto-reply/chunk.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import { filterThoughtLeakPayload } from "../auto-reply/reply/thought-leak-filter.js";
-import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { danger, logVerbose } from "../globals.js";
-import {
-  isRequestBodyLimitError,
-  readRequestBodyWithLimit,
-  requestBodyErrorToText,
-} from "../infra/http-body.js";
+import { waitForAbortSignal } from "../infra/abort-signal.js";
+import { createChannelReplyPipeline } from "../plugin-sdk/channel-reply-pipeline.js";
 import { normalizePluginHttpPath } from "../plugins/http-path.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
@@ -32,8 +25,9 @@ import {
   createImageMessage,
   createLocationMessage,
 } from "./send.js";
-import { validateLineSignature } from "./signature.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import type { LineChannelData, ResolvedLineAccount } from "./types.js";
+import { createLineNodeWebhookHandler } from "./webhook-node.js";
 
 export interface MonitorLineProviderOptions {
   channelAccessToken: string;
@@ -51,9 +45,6 @@ export interface LineProviderMonitor {
   handleWebhook: (body: WebhookRequestBody) => Promise<void>;
   stop: () => void;
 }
-
-const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
-const LINE_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 
 // Track runtime state in memory (simplified version)
 const runtimeState = new Map<
@@ -92,16 +83,6 @@ function recordChannelRuntimeState(params: {
 
 export function getLineRuntimeState(accountId: string) {
   return runtimeState.get(`line:${accountId}`);
-}
-
-export async function readLineWebhookRequestBody(
-  req: IncomingMessage,
-  maxBytes = LINE_WEBHOOK_MAX_BODY_BYTES,
-): Promise<string> {
-  return await readRequestBodyWithLimit(req, {
-    maxBytes,
-    timeoutMs: LINE_WEBHOOK_BODY_TIMEOUT_MS,
-  });
 }
 
 function startLineLoadingKeepalive(params: {
@@ -149,6 +130,15 @@ export async function monitorLineProvider(
     webhookPath,
   } = opts;
   const resolvedAccountId = accountId ?? "default";
+  const token = channelAccessToken.trim();
+  const secret = channelSecret.trim();
+
+  if (!token) {
+    throw new Error("LINE webhook mode requires a non-empty channel access token.");
+  }
+  if (!secret) {
+    throw new Error("LINE webhook mode requires a non-empty channel secret.");
+  }
 
   // Record starting state
   recordChannelRuntimeState({
@@ -162,8 +152,8 @@ export async function monitorLineProvider(
 
   // Create the bot
   const bot = createLineBot({
-    channelAccessToken,
-    channelSecret,
+    channelAccessToken: token,
+    channelSecret: secret,
     accountId,
     runtime,
     config,
@@ -202,7 +192,7 @@ export async function monitorLineProvider(
       try {
         const textLimit = 5000; // LINE max message length
         let replyTokenUsed = false; // Track if we've used the one-time reply token
-        const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+        const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
           cfg: config,
           agentId: route.agentId,
           channel: "line",
@@ -213,18 +203,9 @@ export async function monitorLineProvider(
           ctx: ctxPayload,
           cfg: config,
           dispatcherOptions: {
-            ...prefixOptions,
+            ...replyPipeline,
             deliver: async (payload, _info) => {
-              const filtered = filterThoughtLeakPayload(payload);
-              if (
-                !filtered.text &&
-                !filtered.mediaUrl &&
-                !filtered.mediaUrls?.length &&
-                !filtered.channelData
-              ) {
-                return; // entirely thought-leak content, skip delivery
-              }
-              const lineData = (filtered.channelData?.line as LineChannelData | undefined) ?? {};
+              const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
 
               // Show loading animation before each delivery (non-blocking)
               if (ctx.userId && !ctx.isGroup) {
@@ -232,7 +213,7 @@ export async function monitorLineProvider(
               }
 
               const { replyTokenUsed: nextReplyTokenUsed } = await deliverLineAutoReply({
-                payload: filtered,
+                payload,
                 lineData,
                 to: ctxPayload.From,
                 replyToken,
@@ -307,90 +288,23 @@ export async function monitorLineProvider(
   const normalizedPath = normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook";
   const unregisterHttp = registerPluginHttpRoute({
     path: normalizedPath,
+    auth: "plugin",
+    replaceExisting: true,
     pluginId: "line",
     accountId: resolvedAccountId,
     log: (msg) => logVerbose(msg),
-    handler: async (req: IncomingMessage, res: ServerResponse) => {
-      // Handle GET requests for webhook verification
-      if (req.method === "GET") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "text/plain");
-        res.end("OK");
-        return;
-      }
-
-      // Only accept POST requests
-      if (req.method !== "POST") {
-        res.statusCode = 405;
-        res.setHeader("Allow", "GET, POST");
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Method Not Allowed" }));
-        return;
-      }
-
-      try {
-        const rawBody = await readLineWebhookRequestBody(req, LINE_WEBHOOK_MAX_BODY_BYTES);
-        const signature = req.headers["x-line-signature"];
-
-        // Validate signature
-        if (!signature || typeof signature !== "string") {
-          logVerbose("line: webhook missing X-Line-Signature header");
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: "Missing X-Line-Signature header" }));
-          return;
-        }
-
-        if (!validateLineSignature(rawBody, signature, channelSecret)) {
-          logVerbose("line: webhook signature validation failed");
-          res.statusCode = 401;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: "Invalid signature" }));
-          return;
-        }
-
-        // Parse and process the webhook body
-        const body = JSON.parse(rawBody) as WebhookRequestBody;
-
-        // Respond immediately with 200 to avoid LINE timeout
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ status: "ok" }));
-
-        // Process events asynchronously
-        if (body.events && body.events.length > 0) {
-          logVerbose(`line: received ${body.events.length} webhook events`);
-          await bot.handleWebhook(body).catch((err) => {
-            runtime.error?.(danger(`line webhook handler failed: ${String(err)}`));
-          });
-        }
-      } catch (err) {
-        if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-          res.statusCode = 413;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: "Payload too large" }));
-          return;
-        }
-        if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-          res.statusCode = 408;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
-          return;
-        }
-        runtime.error?.(danger(`line webhook error: ${String(err)}`));
-        if (!res.headersSent) {
-          res.statusCode = 500;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: "Internal server error" }));
-        }
-      }
-    },
+    handler: createLineNodeWebhookHandler({ channelSecret: secret, bot, runtime }),
   });
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
 
   // Handle abort signal
+  let stopped = false;
   const stopHandler = () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
     logVerbose(`line: stopping provider for account ${resolvedAccountId}`);
     unregisterHttp();
     recordChannelRuntimeState({
@@ -403,7 +317,12 @@ export async function monitorLineProvider(
     });
   };
 
-  abortSignal?.addEventListener("abort", stopHandler);
+  if (abortSignal?.aborted) {
+    stopHandler();
+  } else if (abortSignal) {
+    abortSignal.addEventListener("abort", stopHandler, { once: true });
+    await waitForAbortSignal(abortSignal);
+  }
 
   return {
     account: bot.account,

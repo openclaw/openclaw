@@ -1,6 +1,14 @@
+import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import os from "node:os";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import {
+  isCanonicalDottedDecimalIPv4,
+  isIpInCidr,
+  isLoopbackIpAddress,
+  isPrivateOrLoopbackIpAddress,
+  normalizeIpAddress,
+} from "../shared/net/ip.js";
 
 /**
  * Pick the primary non-internal IPv4 address (LAN IP).
@@ -25,23 +33,31 @@ export function pickPrimaryLanIPv4(): string | undefined {
   return undefined;
 }
 
+export function normalizeHostHeader(hostHeader?: string): string {
+  return (hostHeader ?? "").trim().toLowerCase();
+}
+
+export function resolveHostName(hostHeader?: string): string {
+  const host = normalizeHostHeader(hostHeader);
+  if (!host) {
+    return "";
+  }
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    if (end !== -1) {
+      return host.slice(1, end);
+    }
+  }
+  // Unbracketed IPv6 host (e.g. "::1") has no port and should be returned as-is.
+  if (net.isIP(host) === 6) {
+    return host;
+  }
+  const [name] = host.split(":");
+  return name ?? "";
+}
+
 export function isLoopbackAddress(ip: string | undefined): boolean {
-  if (!ip) {
-    return false;
-  }
-  if (ip === "127.0.0.1") {
-    return true;
-  }
-  if (ip.startsWith("127.")) {
-    return true;
-  }
-  if (ip === "::1") {
-    return true;
-  }
-  if (ip.startsWith("::ffff:127.")) {
-    return true;
-  }
-  return false;
+  return isLoopbackIpAddress(ip);
 }
 
 /**
@@ -49,58 +65,11 @@ export function isLoopbackAddress(ip: string | undefined): boolean {
  * Private ranges: RFC1918, link-local, ULA IPv6, and CGNAT (100.64/10), plus loopback.
  */
 export function isPrivateOrLoopbackAddress(ip: string | undefined): boolean {
-  if (!ip) {
-    return false;
-  }
-  if (isLoopbackAddress(ip)) {
-    return true;
-  }
-  const normalized = normalizeIPv4MappedAddress(ip.trim().toLowerCase());
-  const family = net.isIP(normalized);
-  if (!family) {
-    return false;
-  }
-
-  if (family === 4) {
-    const octets = normalized.split(".").map((value) => Number.parseInt(value, 10));
-    if (octets.length !== 4 || octets.some((value) => Number.isNaN(value))) {
-      return false;
-    }
-    const [o1, o2] = octets;
-    // RFC1918 IPv4 private ranges.
-    if (o1 === 10 || (o1 === 172 && o2 >= 16 && o2 <= 31) || (o1 === 192 && o2 === 168)) {
-      return true;
-    }
-    // IPv4 link-local and CGNAT (commonly used by Tailnet-like networks).
-    if ((o1 === 169 && o2 === 254) || (o1 === 100 && o2 >= 64 && o2 <= 127)) {
-      return true;
-    }
-    return false;
-  }
-
-  // IPv6 unique-local and link-local ranges.
-  if (normalized.startsWith("fc") || normalized.startsWith("fd")) {
-    return true;
-  }
-  if (/^fe[89ab]/.test(normalized)) {
-    return true;
-  }
-  return false;
-}
-
-function normalizeIPv4MappedAddress(ip: string): string {
-  if (ip.startsWith("::ffff:")) {
-    return ip.slice("::ffff:".length);
-  }
-  return ip;
+  return isPrivateOrLoopbackIpAddress(ip);
 }
 
 function normalizeIp(ip: string | undefined): string | undefined {
-  const trimmed = ip?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return normalizeIPv4MappedAddress(trimmed.toLowerCase());
+  return normalizeIpAddress(ip);
 }
 
 function stripOptionalPort(ip: string): string {
@@ -123,20 +92,54 @@ function stripOptionalPort(ip: string): string {
   return ip;
 }
 
-export function parseForwardedForClientIp(forwardedFor?: string): string | undefined {
-  const raw = forwardedFor?.split(",")[0]?.trim();
-  if (!raw) {
+function parseIpLiteral(raw: string | undefined): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
     return undefined;
   }
-  return normalizeIp(stripOptionalPort(raw));
+  const stripped = stripOptionalPort(trimmed);
+  const normalized = normalizeIp(stripped);
+  if (!normalized || net.isIP(normalized) === 0) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function parseRealIp(realIp?: string): string | undefined {
-  const raw = realIp?.trim();
-  if (!raw) {
+  return parseIpLiteral(realIp);
+}
+
+function resolveForwardedClientIp(params: {
+  forwardedFor?: string;
+  trustedProxies?: string[];
+}): string | undefined {
+  const { forwardedFor, trustedProxies } = params;
+  if (!trustedProxies?.length) {
     return undefined;
   }
-  return normalizeIp(stripOptionalPort(raw));
+
+  const forwardedChain: string[] = [];
+  for (const entry of forwardedFor?.split(",") ?? []) {
+    const normalized = parseIpLiteral(entry);
+    if (normalized) {
+      forwardedChain.push(normalized);
+    }
+  }
+  if (forwardedChain.length === 0) {
+    return undefined;
+  }
+
+  // Walk right-to-left and return the first untrusted hop.
+  for (let index = forwardedChain.length - 1; index >= 0; index -= 1) {
+    const hop = forwardedChain[index];
+    if (isLoopbackAddress(hop)) {
+      continue;
+    }
+    if (!isTrustedProxyAddress(hop, trustedProxies)) {
+      return hop;
+    }
+  }
+  return undefined;
 }
 
 export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: string[]): boolean {
@@ -144,14 +147,23 @@ export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: s
   if (!normalized || !trustedProxies || trustedProxies.length === 0) {
     return false;
   }
-  return trustedProxies.some((proxy) => normalizeIp(proxy) === normalized);
+
+  return trustedProxies.some((proxy) => {
+    const candidate = proxy.trim();
+    if (!candidate) {
+      return false;
+    }
+    return isIpInCidr(normalized, candidate);
+  });
 }
 
-export function resolveGatewayClientIp(params: {
+export function resolveClientIp(params: {
   remoteAddr?: string;
   forwardedFor?: string;
   realIp?: string;
   trustedProxies?: string[];
+  /** Default false: only trust X-Real-IP when explicitly enabled. */
+  allowRealIpFallback?: boolean;
 }): string | undefined {
   const remote = normalizeIp(params.remoteAddr);
   if (!remote) {
@@ -160,7 +172,41 @@ export function resolveGatewayClientIp(params: {
   if (!isTrustedProxyAddress(remote, params.trustedProxies)) {
     return remote;
   }
-  return parseForwardedForClientIp(params.forwardedFor) ?? parseRealIp(params.realIp) ?? remote;
+  // Fail closed when traffic comes from a trusted proxy but client-origin headers
+  // are missing or invalid. Falling back to the proxy's own IP can accidentally
+  // treat unrelated requests as local/trusted.
+  const forwardedIp = resolveForwardedClientIp({
+    forwardedFor: params.forwardedFor,
+    trustedProxies: params.trustedProxies,
+  });
+  if (forwardedIp) {
+    return forwardedIp;
+  }
+  if (params.allowRealIpFallback) {
+    return parseRealIp(params.realIp);
+  }
+  return undefined;
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+export function resolveRequestClientIp(
+  req?: IncomingMessage,
+  trustedProxies?: string[],
+  allowRealIpFallback = false,
+): string | undefined {
+  if (!req) {
+    return undefined;
+  }
+  return resolveClientIp({
+    remoteAddr: req.socket?.remoteAddress ?? "",
+    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
+    realIp: headerValue(req.headers?.["x-real-ip"]),
+    trustedProxies,
+    allowRealIpFallback,
+  });
 }
 
 export function isLocalGatewayAddress(ip: string | undefined): boolean {
@@ -170,7 +216,10 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
   if (!ip) {
     return false;
   }
-  const normalized = normalizeIPv4MappedAddress(ip.trim().toLowerCase());
+  const normalized = normalizeIp(ip);
+  if (!normalized) {
+    return false;
+  }
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
   if (tailnetIPv4 && normalized === tailnetIPv4.toLowerCase()) {
     return true;
@@ -289,14 +338,7 @@ export async function resolveGatewayListenHosts(
  * @returns True if valid IPv4 format
  */
 export function isValidIPv4(host: string): boolean {
-  const parts = host.split(".");
-  if (parts.length !== 4) {
-    return false;
-  }
-  return parts.every((part) => {
-    const n = parseInt(part, 10);
-    return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
-  });
+  return isCanonicalDottedDecimalIPv4(host);
 }
 
 /**
@@ -305,14 +347,135 @@ export function isValidIPv4(host: string): boolean {
  * Note: 0.0.0.0 and :: are NOT loopback - they bind to all interfaces.
  */
 export function isLoopbackHost(host: string): boolean {
+  const parsed = parseHostForAddressChecks(host);
+  if (!parsed) {
+    return false;
+  }
+  if (parsed.isLocalhost) {
+    return true;
+  }
+  return isLoopbackAddress(parsed.unbracketedHost);
+}
+
+/**
+ * Local-facing host check for inbound requests:
+ * - loopback hosts (localhost/127.x/::1 and mapped forms)
+ * - Tailscale Serve/Funnel hostnames (*.ts.net)
+ */
+export function isLocalishHost(hostHeader?: string): boolean {
+  const host = resolveHostName(hostHeader);
   if (!host) {
     return false;
   }
-  const h = host.trim().toLowerCase();
-  if (h === "localhost") {
+  return isLoopbackHost(host) || host.endsWith(".ts.net");
+}
+
+/**
+ * Check if a hostname or IP refers to a private or loopback address.
+ * Handles the same hostname formats as isLoopbackHost, but also accepts
+ * RFC 1918, link-local, CGNAT, and IPv6 ULA/link-local addresses.
+ */
+export function isPrivateOrLoopbackHost(host: string): boolean {
+  const parsed = parseHostForAddressChecks(host);
+  if (!parsed) {
+    return false;
+  }
+  if (parsed.isLocalhost) {
     return true;
   }
-  // Handle bracketed IPv6 addresses like [::1]
-  const unbracket = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
-  return isLoopbackAddress(unbracket);
+  const normalized = normalizeIp(parsed.unbracketedHost);
+  if (!normalized || !isPrivateOrLoopbackAddress(normalized)) {
+    return false;
+  }
+  // isPrivateOrLoopbackAddress reuses SSRF-blocking ranges for IPv6, which
+  // include unspecified (::) and multicast (ff00::/8). Exclude these —
+  // they are not private/loopback unicast endpoints. (Multicast is UDP-only
+  // so TCP/WebSocket connections would fail regardless.)
+  if (net.isIP(normalized) === 6) {
+    if (normalized.startsWith("ff")) {
+      return false;
+    }
+    if (normalized === "::") {
+      return false;
+    }
+  }
+  return true;
+}
+
+function parseHostForAddressChecks(
+  host: string,
+): { isLocalhost: boolean; unbracketedHost: string } | null {
+  if (!host) {
+    return null;
+  }
+  const normalizedHost = host.trim().toLowerCase();
+  if (normalizedHost === "localhost") {
+    return { isLocalhost: true, unbracketedHost: normalizedHost };
+  }
+  return {
+    isLocalhost: false,
+    // Handle bracketed IPv6 addresses like [::1]
+    unbracketedHost:
+      normalizedHost.startsWith("[") && normalizedHost.endsWith("]")
+        ? normalizedHost.slice(1, -1)
+        : normalizedHost,
+  };
+}
+
+/**
+ * Security check for WebSocket URLs (CWE-319: Cleartext Transmission of Sensitive Information).
+ *
+ * Returns true if the URL is secure for transmitting data:
+ * - wss:// (TLS) is always secure
+ * - ws:// is secure only for loopback addresses by default
+ * - optional break-glass: private ws:// can be enabled for trusted networks
+ *
+ * All other ws:// URLs are considered insecure because both credentials
+ * AND chat/conversation data would be exposed to network interception.
+ */
+export function isSecureWebSocketUrl(
+  url: string,
+  opts?: {
+    allowPrivateWs?: boolean;
+  },
+): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+
+  // Node's ws client accepts http(s) URLs and normalizes them to ws(s).
+  // Treat those aliases the same way here so loopback cron announce delivery
+  // and TLS-backed https endpoints follow the same security policy.
+  const protocol =
+    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+
+  if (protocol === "wss:") {
+    return true;
+  }
+
+  if (protocol !== "ws:") {
+    return false;
+  }
+
+  // Default policy stays strict: loopback-only plaintext ws://.
+  if (isLoopbackHost(parsed.hostname)) {
+    return true;
+  }
+  // Optional break-glass for trusted private-network overlays.
+  if (opts?.allowPrivateWs) {
+    if (isPrivateOrLoopbackHost(parsed.hostname)) {
+      return true;
+    }
+    // Hostnames may resolve to private networks (for example in VPN/Tailnet DNS),
+    // but resolution is not available in this synchronous validator.
+    const hostForIpCheck =
+      parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]")
+        ? parsed.hostname.slice(1, -1)
+        : parsed.hostname;
+    return net.isIP(hostForIpCheck) === 0;
+  }
+  return false;
 }

@@ -1,7 +1,6 @@
 {
   "name": "@openclaw/twitch",
-  "version": "2026.2.13",
-  "private": true,
+  "version": "2026.3.14",
   "description": "OpenClaw Twitch channel plugin",
   "type": "module",
   "dependencies": {
@@ -10,12 +9,19 @@
     "@twurple/chat": "^8.0.3",
     "zod": "^4.3.6"
   },
-  "devDependencies": {
-    "openclaw": "workspace:*"
-  },
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "channel": {
+      "id": "twitch",
+      "label": "Twitch",
+      "selectionLabel": "Twitch (Chat)",
+      "docsPath": "/channels/twitch",
+      "blurb": "Twitch chat integration",
+      "aliases": [
+        "twitch-chat"
+      ]
+    }
   }
 }

@@ -1,7 +1,7 @@
-import OpenClawKit
-import OpenClawProtocol
 import Darwin
 import Foundation
+import OpenClawKit
+import OpenClawProtocol
 
 struct WizardCliOptions {
     var url: String?
@@ -23,29 +23,23 @@ struct WizardCliOptions {
             case "--json":
                 opts.json = true
             case "--url":
-                opts.url = self.nextValue(args, index: &i)
+                opts.url = CLIArgParsingSupport.nextValue(args, index: &i)
             case "--token":
-                opts.token = self.nextValue(args, index: &i)
+                opts.token = CLIArgParsingSupport.nextValue(args, index: &i)
             case "--password":
-                opts.password = self.nextValue(args, index: &i)
+                opts.password = CLIArgParsingSupport.nextValue(args, index: &i)
             case "--mode":
-                if let value = nextValue(args, index: &i) {
+                if let value = CLIArgParsingSupport.nextValue(args, index: &i) {
                     opts.mode = value
                 }
             case "--workspace":
-                opts.workspace = self.nextValue(args, index: &i)
+                opts.workspace = CLIArgParsingSupport.nextValue(args, index: &i)
             default:
                 break
             }
             i += 1
         }
         return opts
-    }
-
-    private static func nextValue(_ args: [String], index: inout Int) -> String? {
-        guard index + 1 < args.count else { return nil }
-        index += 1
-        return args[index].trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -251,7 +245,7 @@ actor GatewayWizardClient {
         let clientMode = "ui"
         let role = "operator"
         // Explicit scopes; gateway no longer defaults empty scopes to admin.
-        let scopes: [String] = ["operator.admin", "operator.approvals", "operator.pairing"]
+        let scopes = defaultOperatorConnectScopes
         let client: [String: ProtoAnyCodable] = [
             "id": ProtoAnyCodable(clientId),
             "displayName": ProtoAnyCodable(Host.current().localizedName ?? "OpenClaw macOS Wizard CLI"),
@@ -280,33 +274,23 @@ actor GatewayWizardClient {
         let connectNonce = try await self.waitForConnectChallenge()
         let identity = DeviceIdentityStore.loadOrCreate()
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
-        let scopesValue = scopes.joined(separator: ",")
-        var payloadParts = [
-            connectNonce == nil ? "v1" : "v2",
-            identity.deviceId,
-            clientId,
-            clientMode,
-            role,
-            scopesValue,
-            String(signedAtMs),
-            self.token ?? "",
-        ]
-        if let connectNonce {
-            payloadParts.append(connectNonce)
-        }
-        let payload = payloadParts.joined(separator: "|")
-        if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
-           let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity)
+        let payload = GatewayDeviceAuthPayload.buildV3(
+            deviceId: identity.deviceId,
+            clientId: clientId,
+            clientMode: clientMode,
+            role: role,
+            scopes: scopes,
+            signedAtMs: signedAtMs,
+            token: self.token,
+            nonce: connectNonce,
+            platform: platform,
+            deviceFamily: "Mac")
+        if let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
+            payload: payload,
+            identity: identity,
+            signedAtMs: signedAtMs,
+            nonce: connectNonce)
         {
-            var device: [String: ProtoAnyCodable] = [
-                "id": ProtoAnyCodable(identity.deviceId),
-                "publicKey": ProtoAnyCodable(publicKey),
-                "signature": ProtoAnyCodable(signature),
-                "signedAt": ProtoAnyCodable(signedAtMs),
-            ]
-            if let connectNonce {
-                device["nonce"] = ProtoAnyCodable(connectNonce)
-            }
             params["device"] = ProtoAnyCodable(device)
         }
 
@@ -333,29 +317,23 @@ actor GatewayWizardClient {
         }
     }
 
-    private func waitForConnectChallenge() async throws -> String? {
-        guard let task = self.task else { return nil }
-        do {
-            return try await AsyncTimeout.withTimeout(
-                seconds: self.connectChallengeTimeoutSeconds,
-                onTimeout: { ConnectChallengeError.timeout },
-                operation: {
-                    while true {
-                        let message = try await task.receive()
-                        let frame = try await self.decodeFrame(message)
-                        if case let .event(evt) = frame, evt.event == "connect.challenge" {
-                            if let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                               let nonce = payload["nonce"]?.value as? String
-                            {
-                                return nonce
-                            }
-                        }
+    private func waitForConnectChallenge() async throws -> String {
+        guard let task = self.task else { throw ConnectChallengeError.timeout }
+        return try await AsyncTimeout.withTimeout(
+            seconds: self.connectChallengeTimeoutSeconds,
+            onTimeout: { ConnectChallengeError.timeout },
+            operation: {
+                while true {
+                    let message = try await task.receive()
+                    let frame = try await self.decodeFrame(message)
+                    if case let .event(evt) = frame, evt.event == "connect.challenge",
+                       let payload = evt.payload?.value as? [String: ProtoAnyCodable],
+                       let nonce = GatewayConnectChallengeSupport.nonce(from: payload)
+                    {
+                        return nonce
                     }
-                })
-        } catch {
-            if error is ConnectChallengeError { return nil }
-            throw error
-        }
+                }
+            })
     }
 }
 

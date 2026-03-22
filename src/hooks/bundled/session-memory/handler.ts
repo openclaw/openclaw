@@ -1,90 +1,82 @@
 /**
  * Session memory hook handler
  *
- * Saves session context to memory when /new command is triggered
+ * Saves session context to memory when /new or /reset command is triggered
  * Creates a new dated memory file with LLM-generated slug
  */
 
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  resolveAgentIdByWorkspacePath,
+  resolveAgentWorkspaceDir,
+} from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { HookHandler } from "../../hooks.js";
-import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
-import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
+import {
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
+} from "../../../routing/session-key.js";
 import { resolveHookConfig } from "../../config.js";
+import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
+import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
 
-/**
- * Read recent messages from session file for slug generation
- */
-async function getRecentSessionContent(
-  sessionFilePath: string,
-  messageCount: number = 15,
-): Promise<string | null> {
-  try {
-    const content = await fs.readFile(sessionFilePath, "utf-8");
-    const lines = content.trim().split("\n");
-
-    // Parse JSONL and extract user/assistant messages first
-    const allMessages: string[] = [];
-    for (const line of lines) {
-      try {
-        const entry = JSON.parse(line);
-        // Session files have entries with type="message" containing a nested message object
-        if (entry.type === "message" && entry.message) {
-          const msg = entry.message;
-          const role = msg.role;
-          if ((role === "user" || role === "assistant") && msg.content) {
-            if (role === "user" && hasInterSessionUserProvenance(msg)) {
-              continue;
-            }
-            // Extract text content
-            const text = Array.isArray(msg.content)
-              ? // oxlint-disable-next-line typescript/no-explicit-any
-                msg.content.find((c: any) => c.type === "text")?.text
-              : msg.content;
-            if (text && !text.startsWith("/")) {
-              allMessages.push(`${role}: ${text}`);
-            }
-          }
-        }
-      } catch {
-        // Skip invalid JSON lines
-      }
-    }
-
-    // Then slice to get exactly messageCount messages
-    const recentMessages = allMessages.slice(-messageCount);
-    return recentMessages.join("\n");
-  } catch {
-    return null;
+function resolveDisplaySessionKey(params: {
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  sessionKey: string;
+}): string {
+  if (!params.cfg || !params.workspaceDir) {
+    return params.sessionKey;
   }
+  const workspaceAgentId = resolveAgentIdByWorkspacePath(params.cfg, params.workspaceDir);
+  const parsed = parseAgentSessionKey(params.sessionKey);
+  if (!workspaceAgentId || !parsed || workspaceAgentId === parsed.agentId) {
+    return params.sessionKey;
+  }
+  return toAgentStoreSessionKey({
+    agentId: workspaceAgentId,
+    requestKey: parsed.rest,
+  });
 }
 
 /**
- * Save session context to memory when /new command is triggered
+ * Save session context to memory when /new or /reset command is triggered
  */
 const saveSessionToMemory: HookHandler = async (event) => {
-  // Only trigger on 'new' command
-  if (event.type !== "command" || event.action !== "new") {
+  // Only trigger on reset/new commands
+  const isResetCommand = event.action === "new" || event.action === "reset";
+  if (event.type !== "command" || !isResetCommand) {
     return;
   }
 
   try {
-    log.debug("Hook triggered for /new command");
+    log.debug("Hook triggered for reset/new command", { action: event.action });
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
+    const contextWorkspaceDir =
+      typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
+        ? context.workspaceDir
+        : undefined;
     const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
-    const workspaceDir = cfg
-      ? resolveAgentWorkspaceDir(cfg, agentId)
-      : path.join(resolveStateDir(process.env, os.homedir), "workspace");
+    const workspaceDir =
+      contextWorkspaceDir ||
+      (cfg
+        ? resolveAgentWorkspaceDir(cfg, agentId)
+        : path.join(resolveStateDir(process.env, os.homedir), "workspace"));
+    const displaySessionKey = resolveDisplaySessionKey({
+      cfg,
+      workspaceDir: contextWorkspaceDir,
+      sessionKey: event.sessionKey,
+    });
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
@@ -93,12 +85,36 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const dateStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
 
     // Generate descriptive slug from session using LLM
+    // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
     const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
       string,
       unknown
     >;
     const currentSessionId = sessionEntry.sessionId as string;
-    const currentSessionFile = sessionEntry.sessionFile as string;
+    let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
+
+    // If sessionFile is empty or looks like a new/reset file, try to find the previous session file.
+    if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
+      const sessionsDirs = new Set<string>();
+      if (currentSessionFile) {
+        sessionsDirs.add(path.dirname(currentSessionFile));
+      }
+      sessionsDirs.add(path.join(workspaceDir, "sessions"));
+
+      for (const sessionsDir of sessionsDirs) {
+        const recoveredSessionFile = await findPreviousSessionFile({
+          sessionsDir,
+          currentSessionFile,
+          sessionId: currentSessionId,
+        });
+        if (!recoveredSessionFile) {
+          continue;
+        }
+        currentSessionFile = recoveredSessionFile;
+        log.debug("Found previous session file", { file: currentSessionFile });
+        break;
+      }
+    }
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,
@@ -119,8 +135,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
     let sessionContent: string | null = null;
 
     if (sessionFile) {
-      // Get recent conversation content
-      sessionContent = await getRecentSessionContent(sessionFile, messageCount);
+      // Get recent conversation content, with fallback to rotated reset transcript.
+      sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,
@@ -168,7 +184,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const entryParts = [
       `# Session: ${dateStr} ${timeStr} UTC`,
       "",
-      `- **Session Key**: ${event.sessionKey}`,
+      `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
       `- **Source**: ${source}`,
       "",
@@ -181,8 +197,13 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     const entry = entryParts.join("\n");
 
-    // Write to new memory file
-    await fs.writeFile(memoryFilePath, entry, "utf-8");
+    // Write under memory root with alias-safe file validation.
+    await writeFileWithinRoot({
+      rootDir: memoryDir,
+      relativePath: filename,
+      data: entry,
+      encoding: "utf-8",
+    });
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)

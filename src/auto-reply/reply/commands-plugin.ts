@@ -5,8 +5,8 @@
  * This handler is called before built-in command handlers.
  */
 
-import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
+import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
 /**
  * Handle plugin-registered commands.
@@ -43,7 +43,10 @@ export const handlePluginCommand: CommandHandler = async (
     to: command.to,
     accountId: params.ctx.AccountId ?? undefined,
     messageThreadId:
-      typeof params.ctx.MessageThreadId === "number" ? params.ctx.MessageThreadId : undefined,
+      typeof params.ctx.MessageThreadId === "string" ||
+      typeof params.ctx.MessageThreadId === "number"
+        ? params.ctx.MessageThreadId
+        : undefined,
   });
 
   return {

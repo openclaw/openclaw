@@ -25,14 +25,25 @@ const normalizeHost = (value: HostSource, rejectLoopback: boolean) => {
   return trimmed;
 };
 
-const parseHostHeader = (value: HostSource) => {
+type ParsedHostHeader = {
+  host: string;
+  port?: number;
+};
+
+const parseHostHeader = (value: HostSource): ParsedHostHeader => {
   if (!value) {
-    return "";
+    return { host: "" };
   }
   try {
-    return new URL(`http://${String(value).trim()}`).hostname;
+    const parsed = new URL(`http://${String(value).trim()}`);
+    const portRaw = parsed.port.trim();
+    const port = portRaw ? Number.parseInt(portRaw, 10) : undefined;
+    return {
+      host: parsed.hostname,
+      port: Number.isFinite(port) ? port : undefined,
+    };
   } catch {
-    return "";
+    return { host: "" };
   }
 };
 
@@ -54,26 +65,29 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
     (parseForwardedProto(params.forwardedProto)?.trim() === "https" ? "https" : "http");
 
   const override = normalizeHost(params.hostOverride, true);
-  const requestHost = normalizeHost(parseHostHeader(params.requestHost), !!override);
+  const parsedRequestHost = parseHostHeader(params.requestHost);
+  const requestHost = normalizeHost(parsedRequestHost.host, !!override);
   const localAddress = normalizeHost(params.localAddress, Boolean(override || requestHost));
 
   const host = override || requestHost || localAddress;
   if (!host) {
     return undefined;
   }
+
+  // When the websocket is proxied over HTTPS (for example Tailscale Serve), the gateway's
+  // internal listener still runs on 18789. In that case, expose the public port instead of
+  // advertising the internal one back to clients.
+  let exposedPort = port;
+  if (!override && requestHost && port === 18789) {
+    if (parsedRequestHost.port && parsedRequestHost.port > 0) {
+      exposedPort = parsedRequestHost.port;
+    } else if (scheme === "https") {
+      exposedPort = 443;
+    } else if (scheme === "http") {
+      exposedPort = 80;
+    }
+  }
+
   const formatted = host.includes(":") ? `[${host}]` : host;
-
-  // When behind a TLS-terminating reverse proxy (e.g. Tailscale Serve),
-  // the forwarded proto is "https" but the backend port is plain HTTP.
-  // Use the default HTTPS port (443) instead of the backend port so the
-  // client connects to the proxy, not directly to the backend.
-  const resolvedPort =
-    scheme === "https" && parseForwardedProto(params.forwardedProto)?.trim() === "https"
-      ? 443
-      : port;
-
-  // Omit port when it matches the scheme default (443 for https, 80 for http).
-  const omitPort =
-    (scheme === "https" && resolvedPort === 443) || (scheme === "http" && resolvedPort === 80);
-  return omitPort ? `${scheme}://${formatted}` : `${scheme}://${formatted}:${resolvedPort}`;
+  return `${scheme}://${formatted}:${exposedPort}`;
 }

@@ -4,9 +4,9 @@
  * Handles tool-based actions for Twitch, such as sending messages.
  */
 
-import type { ChannelMessageActionAdapter, ChannelMessageActionContext } from "./types.js";
 import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
 import { twitchOutbound } from "./outbound.js";
+import type { ChannelMessageActionAdapter, ChannelMessageActionContext } from "./types.js";
 
 /**
  * Create a tool result with error content.
@@ -68,7 +68,7 @@ export const twitchMessageActions: ChannelMessageActionAdapter = {
   /**
    * List available actions for this channel.
    */
-  listActions: () => [...TWITCH_ACTIONS],
+  describeMessageTool: () => ({ actions: [...TWITCH_ACTIONS] }),
 
   /**
    * Check if an action is supported.

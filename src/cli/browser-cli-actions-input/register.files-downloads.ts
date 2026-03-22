@@ -1,18 +1,92 @@
 import type { Command } from "commander";
+import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "../../browser/paths.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
 import { resolveBrowserActionContext } from "./shared.js";
 
+async function normalizeUploadPaths(paths: string[]): Promise<string[]> {
+  const result = await resolveExistingPathsWithinRoot({
+    rootDir: DEFAULT_UPLOAD_DIR,
+    requestedPaths: paths,
+    scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
+  });
+  if (!result.ok) {
+    throw new Error(result.error);
+  }
+  return result.paths;
+}
+
+async function runBrowserPostAction<T>(params: {
+  parent: BrowserParentOpts;
+  profile: string | undefined;
+  path: string;
+  body: Record<string, unknown>;
+  timeoutMs: number;
+  describeSuccess: (result: T) => string;
+}): Promise<void> {
+  try {
+    const result = await callBrowserRequest<T>(
+      params.parent,
+      {
+        method: "POST",
+        path: params.path,
+        query: params.profile ? { profile: params.profile } : undefined,
+        body: params.body,
+      },
+      { timeoutMs: params.timeoutMs },
+    );
+    if (params.parent?.json) {
+      defaultRuntime.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    defaultRuntime.log(params.describeSuccess(result));
+  } catch (err) {
+    defaultRuntime.error(danger(String(err)));
+    defaultRuntime.exit(1);
+  }
+}
+
 export function registerBrowserFilesAndDownloadsCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
+  const resolveTimeoutAndTarget = (opts: { timeoutMs?: unknown; targetId?: unknown }) => {
+    const timeoutMs = Number.isFinite(opts.timeoutMs) ? Number(opts.timeoutMs) : undefined;
+    const targetId =
+      typeof opts.targetId === "string" ? opts.targetId.trim() || undefined : undefined;
+    return { timeoutMs, targetId };
+  };
+
+  const runDownloadCommand = async (
+    cmd: Command,
+    opts: { timeoutMs?: unknown; targetId?: unknown },
+    request: { path: string; body: Record<string, unknown> },
+  ) => {
+    const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+    const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
+    await runBrowserPostAction<{ download: { path: string } }>({
+      parent,
+      profile,
+      path: request.path,
+      body: {
+        ...request.body,
+        targetId,
+        timeoutMs,
+      },
+      timeoutMs: timeoutMs ?? 20000,
+      describeSuccess: (result) => `downloaded: ${shortenHomePath(result.download.path)}`,
+    });
+  };
+
   browser
     .command("upload")
     .description("Arm file upload for the next file chooser")
-    .argument("<paths...>", "File paths to upload")
+    .argument(
+      "<paths...>",
+      "File paths to upload (must be within OpenClaw temp uploads dir, e.g. /tmp/openclaw/uploads/file.pdf)",
+    )
     .option("--ref <ref>", "Ref id from snapshot to click after arming")
     .option("--input-ref <ref>", "Ref id for <input type=file> to set directly")
     .option("--element <selector>", "CSS selector for <input type=file>")
@@ -24,34 +98,23 @@ export function registerBrowserFilesAndDownloadsCommands(
     )
     .action(async (paths: string[], opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
-        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-        const result = await callBrowserRequest<{ download: { path: string } }>(
-          parent,
-          {
-            method: "POST",
-            path: "/hooks/file-chooser",
-            query: profile ? { profile } : undefined,
-            body: {
-              paths,
-              ref: opts.ref?.trim() || undefined,
-              inputRef: opts.inputRef?.trim() || undefined,
-              element: opts.element?.trim() || undefined,
-              targetId: opts.targetId?.trim() || undefined,
-              timeoutMs,
-            },
-          },
-          { timeoutMs: timeoutMs ?? 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(`upload armed for ${paths.length} file(s)`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      const normalizedPaths = await normalizeUploadPaths(paths);
+      const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
+      await runBrowserPostAction({
+        parent,
+        profile,
+        path: "/hooks/file-chooser",
+        body: {
+          paths: normalizedPaths,
+          ref: opts.ref?.trim() || undefined,
+          inputRef: opts.inputRef?.trim() || undefined,
+          element: opts.element?.trim() || undefined,
+          targetId,
+          timeoutMs,
+        },
+        timeoutMs: timeoutMs ?? 20000,
+        describeSuccess: () => `upload armed for ${paths.length} file(s)`,
+      });
     });
 
   browser
@@ -68,32 +131,12 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (outPath: string | undefined, opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
-        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-        const result = await callBrowserRequest<{ download: { path: string } }>(
-          parent,
-          {
-            method: "POST",
-            path: "/wait/download",
-            query: profile ? { profile } : undefined,
-            body: {
-              path: outPath?.trim() || undefined,
-              targetId: opts.targetId?.trim() || undefined,
-              timeoutMs,
-            },
-          },
-          { timeoutMs: timeoutMs ?? 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(`downloaded: ${shortenHomePath(result.download.path)}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      await runDownloadCommand(cmd, opts, {
+        path: "/wait/download",
+        body: {
+          path: outPath?.trim() || undefined,
+        },
+      });
     });
 
   browser
@@ -111,33 +154,13 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (ref: string, outPath: string, opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
-        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-        const result = await callBrowserRequest<{ download: { path: string } }>(
-          parent,
-          {
-            method: "POST",
-            path: "/download",
-            query: profile ? { profile } : undefined,
-            body: {
-              ref,
-              path: outPath,
-              targetId: opts.targetId?.trim() || undefined,
-              timeoutMs,
-            },
-          },
-          { timeoutMs: timeoutMs ?? 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(`downloaded: ${shortenHomePath(result.download.path)}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      await runDownloadCommand(cmd, opts, {
+        path: "/download",
+        body: {
+          ref,
+          path: outPath,
+        },
+      });
     });
 
   browser
@@ -160,31 +183,19 @@ export function registerBrowserFilesAndDownloadsCommands(
         defaultRuntime.exit(1);
         return;
       }
-      try {
-        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-        const result = await callBrowserRequest(
-          parent,
-          {
-            method: "POST",
-            path: "/hooks/dialog",
-            query: profile ? { profile } : undefined,
-            body: {
-              accept,
-              promptText: opts.prompt?.trim() || undefined,
-              targetId: opts.targetId?.trim() || undefined,
-              timeoutMs,
-            },
-          },
-          { timeoutMs: timeoutMs ?? 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log("dialog armed");
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
+      await runBrowserPostAction({
+        parent,
+        profile,
+        path: "/hooks/dialog",
+        body: {
+          accept,
+          promptText: opts.prompt?.trim() || undefined,
+          targetId,
+          timeoutMs,
+        },
+        timeoutMs: timeoutMs ?? 20000,
+        describeSuccess: () => "dialog armed",
+      });
     });
 }

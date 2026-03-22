@@ -3,14 +3,34 @@ export type BrowserProfileConfig = {
   cdpPort?: number;
   /** CDP URL for this profile (use for remote Chrome). */
   cdpUrl?: string;
+  /** Explicit user data directory for existing-session Chrome MCP attachment. */
+  userDataDir?: string;
   /** Profile driver (default: openclaw). */
-  driver?: "openclaw" | "extension";
+  driver?: "openclaw" | "clawd" | "existing-session";
+  /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
+  attachOnly?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
 };
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */
   mode?: "efficient";
+};
+export type BrowserSsrFPolicyConfig = {
+  /** Legacy alias for private-network access. Prefer dangerouslyAllowPrivateNetwork. */
+  allowPrivateNetwork?: boolean;
+  /** If true, permit browser navigation to private/internal networks. Default: true */
+  dangerouslyAllowPrivateNetwork?: boolean;
+  /**
+   * Explicitly allowed hostnames (exact-match), including blocked names like localhost.
+   * Example: ["localhost", "metadata.internal"]
+   */
+  allowedHostnames?: string[];
+  /**
+   * Hostname allowlist patterns for browser navigation.
+   * Supports exact hosts and "*.example.com" wildcard subdomains.
+   */
+  hostnameAllowlist?: string[];
 };
 export type BrowserConfig = {
   enabled?: boolean;
@@ -32,27 +52,20 @@ export type BrowserConfig = {
   noSandbox?: boolean;
   /** If true: never launch; only attach to an existing browser. Default: false */
   attachOnly?: boolean;
+  /** Starting local CDP port for auto-assigned browser profiles. Default derives from gateway port. */
+  cdpPortRangeStart?: number;
   /** Default profile to use when profile param is omitted. Default: "chrome" */
   defaultProfile?: string;
   /** Named browser profiles with explicit CDP ports or URLs. */
   profiles?: Record<string, BrowserProfileConfig>;
   /** Default snapshot options (applied by the browser tool/CLI when unset). */
   snapshotDefaults?: BrowserSnapshotDefaults;
-  /** Advanced stealth browser settings (browser_advanced tool). */
-  advanced?: BrowserAdvancedConfig;
-};
-
-export type BrowserAdvancedConfig = {
-  /** Enable the browser_advanced tool. Default: true */
-  enabled?: boolean;
-  /** Max concurrent stealth sessions. Default: 5 */
-  maxSessions?: number;
-  /** Session TTL in ms before auto-cleanup. Default: 300000 (5 min) */
-  sessionTtlMs?: number;
-  /** Stagehand AI integration settings. */
-  stagehand?: {
-    enabled?: boolean;
-    modelProvider?: string;
-    modelId?: string;
-  };
+  /** SSRF policy for browser navigation/open-tab operations. */
+  ssrfPolicy?: BrowserSsrFPolicyConfig;
+  /**
+   * Additional Chrome launch arguments.
+   * Useful for stealth flags, window size overrides, or custom user-agent strings.
+   * Example: ["--window-size=1920,1080", "--disable-infobars"]
+   */
+  extraArgs?: string[];
 };

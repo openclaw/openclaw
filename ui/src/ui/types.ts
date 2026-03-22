@@ -1,3 +1,13 @@
+export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+import type { CronJobBase } from "../../../src/cron/types-shared.js";
+import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
+import type {
+  GatewayAgentRow as SharedGatewayAgentRow,
+  SessionsListResultBase,
+  SessionsPatchResultBase,
+} from "../../../src/shared/session-types.js";
+export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
+
 export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];
@@ -281,19 +291,6 @@ export type ConfigSnapshot = {
   issues?: ConfigSnapshotIssue[] | null;
 };
 
-export type ConfigUiHint = {
-  label?: string;
-  help?: string;
-  group?: string;
-  order?: number;
-  advanced?: boolean;
-  sensitive?: boolean;
-  placeholder?: string;
-  itemTemplate?: unknown;
-};
-
-export type ConfigUiHints = Record<string, ConfigUiHint>;
-
 export type ConfigSchemaResponse = {
   schema: unknown;
   uiHints: ConfigUiHints;
@@ -319,21 +316,14 @@ export type PresenceEntry = {
 };
 
 export type GatewaySessionsDefaults = {
+  modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
 };
 
-export type GatewayAgentRow = {
-  id: string;
-  name?: string;
-  identity?: {
-    name?: string;
-    theme?: string;
-    emoji?: string;
-    avatar?: string;
-    avatarUrl?: string;
-  };
-};
+export type ChatModelOverride = import("./chat-model-ref.ts").ChatModelOverride;
+
+export type GatewayAgentRow = SharedGatewayAgentRow;
 
 export type AgentsListResult = {
   defaultId: string;
@@ -377,8 +367,11 @@ export type AgentsFilesSetResult = {
   file: AgentFileEntry;
 };
 
+export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+
 export type GatewaySessionRow = {
   key: string;
+  spawnedBy?: string;
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
@@ -391,262 +384,66 @@ export type GatewaySessionRow = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
+  fastMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  totalTokensFresh?: boolean;
+  status?: SessionRunStatus;
+  startedAt?: number;
+  endedAt?: number;
+  runtimeMs?: number;
+  childSessions?: string[];
   model?: string;
   modelProvider?: string;
   contextTokens?: number;
 };
 
-export type SessionsListResult = {
-  ts: number;
-  path: string;
-  count: number;
-  defaults: GatewaySessionsDefaults;
-  sessions: GatewaySessionRow[];
-};
+export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
 
-export type SessionsPatchResult = {
-  ok: true;
-  path: string;
-  key: string;
-  entry: {
-    sessionId: string;
-    updatedAt?: number;
-    thinkingLevel?: string;
-    verboseLevel?: string;
-    reasoningLevel?: string;
-    elevatedLevel?: string;
-  };
-};
-
-export type SessionsUsageEntry = {
-  key: string;
-  label?: string;
-  sessionId?: string;
+export type SessionsPatchResult = SessionsPatchResultBase<{
+  sessionId: string;
   updatedAt?: number;
-  agentId?: string;
-  channel?: string;
-  chatType?: string;
-  origin?: {
-    label?: string;
-    provider?: string;
-    surface?: string;
-    chatType?: string;
-    from?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  modelOverride?: string;
-  providerOverride?: string;
-  modelProvider?: string;
-  model?: string;
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    totalTokens: number;
-    totalCost: number;
-    inputCost?: number;
-    outputCost?: number;
-    cacheReadCost?: number;
-    cacheWriteCost?: number;
-    missingCostEntries: number;
-    firstActivity?: number;
-    lastActivity?: number;
-    durationMs?: number;
-    activityDates?: string[]; // YYYY-MM-DD dates when session had activity
-    dailyBreakdown?: Array<{ date: string; tokens: number; cost: number }>;
-    dailyMessageCounts?: Array<{
-      date: string;
-      total: number;
-      user: number;
-      assistant: number;
-      toolCalls: number;
-      toolResults: number;
-      errors: number;
-    }>;
-    dailyLatency?: Array<{
-      date: string;
-      count: number;
-      avgMs: number;
-      p95Ms: number;
-      minMs: number;
-      maxMs: number;
-    }>;
-    dailyModelUsage?: Array<{
-      date: string;
-      provider?: string;
-      model?: string;
-      tokens: number;
-      cost: number;
-      count: number;
-    }>;
-    messageCounts?: {
-      total: number;
-      user: number;
-      assistant: number;
-      toolCalls: number;
-      toolResults: number;
-      errors: number;
-    };
-    toolUsage?: {
-      totalCalls: number;
-      uniqueTools: number;
-      tools: Array<{ name: string; count: number }>;
-    };
-    modelUsage?: Array<{
-      provider?: string;
-      model?: string;
-      count: number;
-      totals: SessionsUsageTotals;
-    }>;
-    latency?: {
-      count: number;
-      avgMs: number;
-      p95Ms: number;
-      minMs: number;
-      maxMs: number;
-    };
-  } | null;
-  contextWeight?: {
-    systemPrompt: { chars: number; projectContextChars: number; nonProjectContextChars: number };
-    skills: { promptChars: number; entries: Array<{ name: string; blockChars: number }> };
-    tools: {
-      listChars: number;
-      schemaChars: number;
-      entries: Array<{ name: string; summaryChars: number; schemaChars: number }>;
-    };
-    injectedWorkspaceFiles: Array<{
-      name: string;
-      path: string;
-      rawChars: number;
-      injectedChars: number;
-      truncated: boolean;
-    }>;
-  } | null;
-};
-
-export type SessionsUsageTotals = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  totalCost: number;
-  inputCost: number;
-  outputCost: number;
-  cacheReadCost: number;
-  cacheWriteCost: number;
-  missingCostEntries: number;
-};
-
-export type SessionsUsageResult = {
-  updatedAt: number;
-  startDate: string;
-  endDate: string;
-  sessions: SessionsUsageEntry[];
-  totals: SessionsUsageTotals;
-  aggregates: {
-    messages: {
-      total: number;
-      user: number;
-      assistant: number;
-      toolCalls: number;
-      toolResults: number;
-      errors: number;
-    };
-    tools: {
-      totalCalls: number;
-      uniqueTools: number;
-      tools: Array<{ name: string; count: number }>;
-    };
-    byModel: Array<{
-      provider?: string;
-      model?: string;
-      count: number;
-      totals: SessionsUsageTotals;
-    }>;
-    byProvider: Array<{
-      provider?: string;
-      model?: string;
-      count: number;
-      totals: SessionsUsageTotals;
-    }>;
-    byAgent: Array<{ agentId: string; totals: SessionsUsageTotals }>;
-    byChannel: Array<{ channel: string; totals: SessionsUsageTotals }>;
-    latency?: {
-      count: number;
-      avgMs: number;
-      p95Ms: number;
-      minMs: number;
-      maxMs: number;
-    };
-    dailyLatency?: Array<{
-      date: string;
-      count: number;
-      avgMs: number;
-      p95Ms: number;
-      minMs: number;
-      maxMs: number;
-    }>;
-    modelDaily?: Array<{
-      date: string;
-      provider?: string;
-      model?: string;
-      tokens: number;
-      cost: number;
-      count: number;
-    }>;
-    daily: Array<{
-      date: string;
-      tokens: number;
-      cost: number;
-      messages: number;
-      toolCalls: number;
-      errors: number;
-    }>;
+  thinkingLevel?: string;
+  fastMode?: boolean;
+  verboseLevel?: string;
+  reasoningLevel?: string;
+  elevatedLevel?: string;
+}> & {
+  resolved?: {
+    modelProvider?: string;
+    model?: string;
   };
 };
 
-export type CostUsageDailyEntry = SessionsUsageTotals & { date: string };
+export type {
+  CostUsageDailyEntry,
+  CostUsageSummary,
+  SessionsUsageEntry,
+  SessionsUsageResult,
+  SessionsUsageTotals,
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
+} from "./usage-types.ts";
 
-export type CostUsageSummary = {
-  updatedAt: number;
-  days: number;
-  daily: CostUsageDailyEntry[];
-  totals: SessionsUsageTotals;
-};
-
-export type SessionUsageTimePoint = {
-  timestamp: number;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  cost: number;
-  cumulativeTokens: number;
-  cumulativeCost: number;
-};
-
-export type SessionUsageTimeSeries = {
-  sessionId?: string;
-  points: SessionUsageTimePoint[];
-};
+export type CronRunStatus = "ok" | "error" | "skipped";
+export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+export type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
+export type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
+export type CronRunScope = "job" | "all";
+export type CronRunsStatusValue = CronRunStatus;
+export type CronRunsStatusFilter = "all" | CronRunStatus;
+export type CronSortDir = "asc" | "desc";
 
 export type CronSchedule =
   | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
-  | { kind: "cron"; expr: string; tz?: string };
+  | { kind: "cron"; expr: string; tz?: string; staggerMs?: number };
 
-export type CronSessionTarget = "main" | "isolated";
+export type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 export type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronPayload =
@@ -654,40 +451,67 @@ export type CronPayload =
   | {
       kind: "agentTurn";
       message: string;
+      model?: string;
+      fallbacks?: string[];
       thinking?: string;
       timeoutSeconds?: number;
+      allowUnsafeExternalContent?: boolean;
+      lightContext?: boolean;
+      deliver?: boolean;
+      channel?: string;
+      to?: string;
+      bestEffortDeliver?: boolean;
     };
 
 export type CronDelivery = {
-  mode: "none" | "announce";
+  mode: "none" | "announce" | "webhook";
   channel?: string;
   to?: string;
+  accountId?: string;
   bestEffort?: boolean;
+  failureDestination?: CronFailureDestination;
+};
+
+export type CronFailureDestination = {
+  channel?: string;
+  to?: string;
+  mode?: "announce" | "webhook";
+  accountId?: string;
+};
+
+export type CronFailureAlert = {
+  after?: number;
+  channel?: string;
+  to?: string;
+  cooldownMs?: number;
+  mode?: "announce" | "webhook";
+  accountId?: string;
 };
 
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
   lastRunAtMs?: number;
-  lastStatus?: "ok" | "error" | "skipped";
+  lastRunStatus?: CronRunStatus;
+  lastStatus?: CronRunStatus;
   lastError?: string;
+  lastErrorReason?: string;
   lastDurationMs?: number;
+  consecutiveErrors?: number;
+  lastDelivered?: boolean;
+  lastDeliveryStatus?: CronDeliveryStatus;
+  lastDeliveryError?: string;
+  lastFailureAlertAtMs?: number;
 };
 
-export type CronJob = {
-  id: string;
-  agentId?: string;
-  name: string;
-  description?: string;
-  enabled: boolean;
-  deleteAfterRun?: boolean;
-  createdAtMs: number;
-  updatedAtMs: number;
-  schedule: CronSchedule;
-  sessionTarget: CronSessionTarget;
-  wakeMode: CronWakeMode;
-  payload: CronPayload;
-  delivery?: CronDelivery;
+export type CronJob = CronJobBase<
+  CronSchedule,
+  CronSessionTarget,
+  CronWakeMode,
+  CronPayload,
+  CronDelivery,
+  CronFailureAlert | false
+> & {
   state?: CronJobState;
 };
 
@@ -700,17 +524,50 @@ export type CronStatus = {
 export type CronRunLogEntry = {
   ts: number;
   jobId: string;
-  status: "ok" | "error" | "skipped";
+  action?: "finished";
+  status?: CronRunStatus;
   durationMs?: number;
   error?: string;
   summary?: string;
+  delivered?: boolean;
+  deliveryStatus?: CronDeliveryStatus;
+  deliveryError?: string;
   sessionId?: string;
   sessionKey?: string;
+  runAtMs?: number;
+  nextRunAtMs?: number;
+  model?: string;
+  provider?: string;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
+  };
+  jobName?: string;
+};
+
+export type CronJobsListResult = {
+  jobs: CronJob[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+  nextOffset?: number | null;
+  hasMore?: boolean;
+};
+
+export type CronRunsResult = {
+  entries: CronRunLogEntry[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+  nextOffset?: number | null;
+  hasMore?: boolean;
 };
 
 export type SkillsStatusConfigCheck = {
   path: string;
-  value: unknown;
   satisfied: boolean;
 };
 
@@ -762,6 +619,44 @@ export type StatusSummary = Record<string, unknown>;
 
 export type HealthSnapshot = Record<string, unknown>;
 
+/** Strongly-typed health response from the gateway (richer than HealthSnapshot). */
+export type HealthSummary = {
+  ok: boolean;
+  ts: number;
+  durationMs: number;
+  heartbeatSeconds: number;
+  defaultAgentId: string;
+  agents: Array<{ id: string; name?: string }>;
+  sessions: {
+    path: string;
+    count: number;
+    recent: Array<{
+      key: string;
+      updatedAt: number | null;
+      age: number | null;
+    }>;
+  };
+};
+
+/** A model entry returned by the gateway model-catalog endpoint. */
+export type ModelCatalogEntry = {
+  id: string;
+  name: string;
+  provider: string;
+  contextWindow?: number;
+  reasoning?: boolean;
+  input?: Array<"text" | "image">;
+};
+
+export type ToolCatalogProfile =
+  import("../../../src/gateway/protocol/schema/types.js").ToolCatalogProfile;
+export type ToolCatalogEntry =
+  import("../../../src/gateway/protocol/schema/types.js").ToolCatalogEntry;
+export type ToolCatalogGroup =
+  import("../../../src/gateway/protocol/schema/types.js").ToolCatalogGroup;
+export type ToolsCatalogResult =
+  import("../../../src/gateway/protocol/schema/types.js").ToolsCatalogResult;
+
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 
 export type LogEntry = {
@@ -771,4 +666,17 @@ export type LogEntry = {
   subsystem?: string | null;
   message?: string | null;
   meta?: Record<string, unknown> | null;
+};
+
+// ── Attention ───────────────────────────────────────
+
+export type AttentionSeverity = "error" | "warning" | "info";
+
+export type AttentionItem = {
+  severity: AttentionSeverity;
+  icon: string;
+  title: string;
+  description: string;
+  href?: string;
+  external?: boolean;
 };

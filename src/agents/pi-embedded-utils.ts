@@ -1,7 +1,13 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
+
+export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
+  return msg?.role === "assistant";
+}
 
 /**
  * Strip malformed Minimax tool invocations that leak into text content.
@@ -25,6 +31,32 @@ export function stripMinimaxToolCallXml(text: string): string {
   cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
 
   return cleaned;
+}
+
+/**
+ * Strip model control tokens leaked into assistant text output.
+ *
+ * Models like GLM-5 and DeepSeek sometimes emit internal delimiter tokens
+ * (e.g. `<|assistant|>`, `<|tool_call_result_begin|>`, `<｜begin▁of▁sentence｜>`)
+ * in their responses. These use the universal `<|...|>` convention (ASCII or
+ * full-width pipe variants) and should never reach end users.
+ *
+ * This is a provider bug — no upstream fix tracked yet.
+ * Remove this function when upstream providers stop leaking tokens.
+ * @see https://github.com/openclaw/openclaw/issues/40020
+ */
+// Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
+const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
+
+export function stripModelSpecialTokens(text: string): string {
+  if (!text) {
+    return text;
+  }
+  if (!MODEL_SPECIAL_TOKEN_RE.test(text)) {
+    return text;
+  }
+  MODEL_SPECIAL_TOKEN_RE.lastIndex = 0;
+  return text.replace(MODEL_SPECIAL_TOKEN_RE, " ").replace(/  +/g, " ").trim();
 }
 
 /**
@@ -202,28 +234,20 @@ export function stripThinkingTagsFromText(text: string): string {
 }
 
 export function extractAssistantText(msg: AssistantMessage): string {
-  const isTextBlock = (block: unknown): block is { type: "text"; text: string } => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const rec = block as Record<string, unknown>;
-    return rec.type === "text" && typeof rec.text === "string";
-  };
-
-  const blocks = Array.isArray(msg.content)
-    ? msg.content
-        .filter(isTextBlock)
-        .map((c) =>
-          stripThinkingTagsFromText(
-            stripDowngradedToolCallText(stripMinimaxToolCallXml(c.text)),
-          ).trim(),
-        )
-        .filter(Boolean)
-    : [];
-  const extracted = blocks.join("\n").trim();
+  const extracted =
+    extractTextFromChatContent(msg.content, {
+      sanitizeText: (text) =>
+        stripThinkingTagsFromText(
+          stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+        ).trim(),
+      joinWith: "\n",
+      normalizeText: (text) => text.trim(),
+    }) ?? "";
   // Only apply keyword-based error rewrites when the assistant message is actually an error.
   // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.
-  const errorContext = msg.stopReason === "error" || Boolean(msg.errorMessage?.trim());
+  // Gate on stopReason only — a non-error response with an errorMessage set (e.g. from a
+  // background tool failure) should not have its content rewritten (#13935).
+  const errorContext = msg.stopReason === "error";
   return sanitizeUserFacingText(extracted, { errorContext });
 }
 
@@ -337,7 +361,9 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (!Array.isArray(message.content)) {
     return;
   }
-  const hasThinkingBlock = message.content.some((block) => block.type === "thinking");
+  const hasThinkingBlock = message.content.some(
+    (block) => block && typeof block === "object" && block.type === "thinking",
+  );
   if (hasThinkingBlock) {
     return;
   }
@@ -346,6 +372,10 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   let changed = false;
 
   for (const block of message.content) {
+    if (!block || typeof block !== "object" || !("type" in block)) {
+      next.push(block);
+      continue;
+    }
     if (block.type !== "text") {
       next.push(block);
       continue;

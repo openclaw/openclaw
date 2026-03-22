@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+1999" })),
@@ -15,10 +15,16 @@ vi.mock("./targets.js", async () => {
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentDeliveryPlan, resolveAgentOutboundTarget } from "./agent-delivery.js";
 
+beforeEach(() => {
+  mocks.resolveOutboundTarget.mockClear();
+});
+
 describe("agent delivery helpers", () => {
   it("builds a delivery plan from session delivery context", () => {
     const plan = resolveAgentDeliveryPlan({
       sessionEntry: {
+        sessionId: "s1",
+        updatedAt: 1,
         deliveryContext: { channel: "whatsapp", to: "+1555", accountId: "work" },
       },
       requestedChannel: "last",
@@ -36,6 +42,8 @@ describe("agent delivery helpers", () => {
   it("resolves fallback targets when no explicit destination is provided", () => {
     const plan = resolveAgentDeliveryPlan({
       sessionEntry: {
+        sessionId: "s2",
+        updatedAt: 2,
         deliveryContext: { channel: "whatsapp" },
       },
       requestedChannel: "last",
@@ -55,9 +63,24 @@ describe("agent delivery helpers", () => {
     expect(resolved.resolvedTo).toBe("+1999");
   });
 
+  it("does not inject a default deliverable channel when session has none", () => {
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: undefined,
+      requestedChannel: "last",
+      explicitTo: undefined,
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedChannel).toBe("webchat");
+    expect(plan.deliveryTargetMode).toBeUndefined();
+  });
+
   it("skips outbound target resolution when explicit target validation is disabled", () => {
     const plan = resolveAgentDeliveryPlan({
       sessionEntry: {
+        sessionId: "s3",
+        updatedAt: 3,
         deliveryContext: { channel: "whatsapp", to: "+1555" },
       },
       requestedChannel: "last",
@@ -76,5 +99,42 @@ describe("agent delivery helpers", () => {
 
     expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
     expect(resolved.resolvedTo).toBe("+1555");
+  });
+
+  it("prefers turn-source delivery context over session last route", () => {
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: {
+        sessionId: "s4",
+        updatedAt: 4,
+        deliveryContext: { channel: "slack", to: "U_WRONG", accountId: "wrong" },
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "whatsapp",
+      turnSourceTo: "+17775550123",
+      turnSourceAccountId: "work",
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedChannel).toBe("whatsapp");
+    expect(plan.resolvedTo).toBe("+17775550123");
+    expect(plan.resolvedAccountId).toBe("work");
+  });
+
+  it("does not reuse mutable session to when only turnSourceChannel is provided", () => {
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: {
+        sessionId: "s5",
+        updatedAt: 5,
+        deliveryContext: { channel: "slack", to: "U_WRONG" },
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "whatsapp",
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedChannel).toBe("whatsapp");
+    expect(plan.resolvedTo).toBeUndefined();
   });
 });

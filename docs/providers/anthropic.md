@@ -35,6 +35,43 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 }
 ```
 
+## Thinking defaults (Claude 4.6)
+
+- Anthropic Claude 4.6 models default to `adaptive` thinking in OpenClaw when no explicit thinking level is set.
+- You can override per-message (`/think:<level>`) or in model params:
+  `agents.defaults.models["anthropic/<model>"].params.thinking`.
+- Related Anthropic docs:
+  - [Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)
+  - [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+
+## Fast mode (Anthropic API)
+
+OpenClaw's shared `/fast` toggle also supports direct Anthropic API-key traffic.
+
+- `/fast on` maps to `service_tier: "auto"`
+- `/fast off` maps to `service_tier: "standard_only"`
+- Config default:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "anthropic/claude-sonnet-4-6": {
+          params: { fastMode: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Important limits:
+
+- This is **API-key only**. Anthropic setup-token / OAuth auth does not honor OpenClaw fast-mode tier injection.
+- OpenClaw only injects Anthropic service tiers for direct `api.anthropic.com` requests. If you route `anthropic/*` through a proxy or gateway, `/fast` leaves `service_tier` untouched.
+- Anthropic reports the effective tier on the response under `usage.service_tier`. On accounts without Priority Tier capacity, `service_tier: "auto"` may still resolve to `standard`.
+
 ## Prompt caching (Anthropic API)
 
 OpenClaw supports Anthropic's prompt caching feature. This is **API-only**; subscription auth does not honor cache settings.
@@ -67,6 +104,42 @@ Use the `cacheRetention` parameter in your model config:
 
 When using Anthropic API Key authentication, OpenClaw automatically applies `cacheRetention: "short"` (5-minute cache) for all Anthropic models. You can override this by explicitly setting `cacheRetention` in your config.
 
+### Per-agent cacheRetention overrides
+
+Use model-level params as your baseline, then override specific agents via `agents.list[].params`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "anthropic/claude-opus-4-6" },
+      models: {
+        "anthropic/claude-opus-4-6": {
+          params: { cacheRetention: "long" }, // baseline for most agents
+        },
+      },
+    },
+    list: [
+      { id: "research", default: true },
+      { id: "alerts", params: { cacheRetention: "none" } }, // override for this agent only
+    ],
+  },
+}
+```
+
+Config merge order for cache-related params:
+
+1. `agents.defaults.models["provider/model"].params`
+2. `agents.list[].params` (matching `id`, overrides by key)
+
+This lets one agent keep a long-lived cache while another agent on the same model disables caching to avoid write costs on bursty/low-reuse traffic.
+
+### Bedrock Claude notes
+
+- Anthropic Claude models on Bedrock (`amazon-bedrock/*anthropic.claude*`) accept `cacheRetention` pass-through when configured.
+- Non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
+- Anthropic API-key smart defaults also seed `cacheRetention: "short"` for Claude-on-Bedrock model refs when no explicit value is set.
+
 ### Legacy parameter
 
 The older `cacheControlTtl` parameter is still supported for backwards compatibility:
@@ -78,6 +151,40 @@ We recommend migrating to the new `cacheRetention` parameter.
 
 OpenClaw includes the `extended-cache-ttl-2025-04-11` beta flag for Anthropic API
 requests; keep it if you override provider headers (see [/gateway/configuration](/gateway/configuration)).
+
+## 1M context window (Anthropic beta)
+
+Anthropic's 1M context window is beta-gated. In OpenClaw, enable it per model
+with `params.context1m: true` for supported Opus/Sonnet models.
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "anthropic/claude-opus-4-6": {
+          params: { context1m: true },
+        },
+      },
+    },
+  },
+}
+```
+
+OpenClaw maps this to `anthropic-beta: context-1m-2025-08-07` on Anthropic
+requests.
+
+This only activates when `params.context1m` is explicitly set to `true` for
+that model.
+
+Requirement: Anthropic must allow long-context usage on that credential
+(typically API key billing, or a subscription account with Extra Usage
+enabled). Otherwise Anthropic returns:
+`HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
+
+Note: Anthropic currently rejects `context-1m-*` beta requests when using
+OAuth/subscription tokens (`sk-ant-oat-*`). OpenClaw automatically skips the
+context1m beta header for OAuth auth and keeps the required OAuth betas.
 
 ## Option B: Claude setup-token
 
@@ -106,7 +213,7 @@ openclaw models auth paste-token --provider anthropic
 ### CLI setup (setup-token)
 
 ```bash
-# Paste a setup-token during onboarding
+# Paste a setup-token during setup
 openclaw onboard --auth-choice setup-token
 ```
 
@@ -121,7 +228,7 @@ openclaw onboard --auth-choice setup-token
 ## Notes
 
 - Generate the setup-token with `claude setup-token` and paste it, or run `openclaw models auth setup-token` on the gateway host.
-- If you see “OAuth token refresh failed …” on a Claude subscription, re-auth with a setup-token. See [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription).
+- If you see “OAuth token refresh failed …” on a Claude subscription, re-auth with a setup-token. See [/gateway/troubleshooting](/gateway/troubleshooting).
 - Auth details + reuse rules are in [/concepts/oauth](/concepts/oauth).
 
 ## Troubleshooting

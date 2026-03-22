@@ -1,6 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import type WebSocket from "ws";
-import { Buffer } from "node:buffer";
+import {
+  formatInboundFromLabel as formatInboundFromLabelShared,
+  resolveThreadSessionKeys as resolveThreadSessionKeysShared,
+  type OpenClawConfig,
+} from "../runtime-api.js";
+export { createDedupeCache, rawDataToString } from "../runtime-api.js";
 
 export type ResponsePrefixContext = {
   model?: string;
@@ -16,99 +19,7 @@ export function extractShortModelName(fullModel: string): string {
   return modelPart.replace(/-\d{8}$/, "").replace(/-latest$/, "");
 }
 
-export function formatInboundFromLabel(params: {
-  isGroup: boolean;
-  groupLabel?: string;
-  groupId?: string;
-  directLabel: string;
-  directId?: string;
-  groupFallback?: string;
-}): string {
-  if (params.isGroup) {
-    const label = params.groupLabel?.trim() || params.groupFallback || "Group";
-    const id = params.groupId?.trim();
-    return id ? `${label} id:${id}` : label;
-  }
-
-  const directLabel = params.directLabel.trim();
-  const directId = params.directId?.trim();
-  if (!directId || directId === directLabel) {
-    return directLabel;
-  }
-  return `${directLabel} id:${directId}`;
-}
-
-type DedupeCache = {
-  check: (key: string | undefined | null, now?: number) => boolean;
-};
-
-export function createDedupeCache(options: { ttlMs: number; maxSize: number }): DedupeCache {
-  const ttlMs = Math.max(0, options.ttlMs);
-  const maxSize = Math.max(0, Math.floor(options.maxSize));
-  const cache = new Map<string, number>();
-
-  const touch = (key: string, now: number) => {
-    cache.delete(key);
-    cache.set(key, now);
-  };
-
-  const prune = (now: number) => {
-    const cutoff = ttlMs > 0 ? now - ttlMs : undefined;
-    if (cutoff !== undefined) {
-      for (const [entryKey, entryTs] of cache) {
-        if (entryTs < cutoff) {
-          cache.delete(entryKey);
-        }
-      }
-    }
-    if (maxSize <= 0) {
-      cache.clear();
-      return;
-    }
-    while (cache.size > maxSize) {
-      const oldestKey = cache.keys().next().value as string | undefined;
-      if (!oldestKey) {
-        break;
-      }
-      cache.delete(oldestKey);
-    }
-  };
-
-  return {
-    check: (key, now = Date.now()) => {
-      if (!key) {
-        return false;
-      }
-      const existing = cache.get(key);
-      if (existing !== undefined && (ttlMs <= 0 || now - existing < ttlMs)) {
-        touch(key, now);
-        return true;
-      }
-      touch(key, now);
-      prune(now);
-      return false;
-    },
-  };
-}
-
-export function rawDataToString(
-  data: WebSocket.RawData,
-  encoding: BufferEncoding = "utf8",
-): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString(encoding);
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString(encoding);
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString(encoding);
-  }
-  return Buffer.from(String(data)).toString(encoding);
-}
+export const formatInboundFromLabel = formatInboundFromLabelShared;
 
 function normalizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
@@ -130,12 +41,12 @@ function normalizeAgentId(value: string | undefined | null): string {
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
+function isAgentEntry(entry: unknown): entry is AgentEntry {
+  return Boolean(entry && typeof entry === "object");
+}
+
 function listAgents(cfg: OpenClawConfig): AgentEntry[] {
-  const list = cfg.agents?.list;
-  if (!Array.isArray(list)) {
-    return [];
-  }
-  return list.filter((entry): entry is AgentEntry => Boolean(entry && typeof entry === "object"));
+  return Array.isArray(cfg.agents?.list) ? cfg.agents.list.filter(isAgentEntry) : [];
 }
 
 function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
@@ -154,13 +65,43 @@ export function resolveThreadSessionKeys(params: {
   parentSessionKey?: string;
   useSuffix?: boolean;
 }): { sessionKey: string; parentSessionKey?: string } {
-  const threadId = (params.threadId ?? "").trim();
-  if (!threadId) {
-    return { sessionKey: params.baseSessionKey, parentSessionKey: undefined };
+  return resolveThreadSessionKeysShared({
+    ...params,
+    normalizeThreadId: (threadId) => threadId,
+  });
+}
+
+/**
+ * Strip bot mention from message text while preserving newlines and
+ * block-level Markdown formatting (headings, lists, blockquotes).
+ */
+export function normalizeMention(text: string, mention: string | undefined): string {
+  if (!mention) {
+    return text.trim();
   }
-  const useSuffix = params.useSuffix ?? true;
-  const sessionKey = useSuffix
-    ? `${params.baseSessionKey}:thread:${threadId}`
-    : params.baseSessionKey;
-  return { sessionKey, parentSessionKey: params.parentSessionKey };
+  const escaped = mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const hasMentionRe = new RegExp(`@${escaped}\\b`, "i");
+  const leadingMentionRe = new RegExp(`^([\\t ]*)@${escaped}\\b[\\t ]*`, "i");
+  const trailingMentionRe = new RegExp(`[\\t ]*@${escaped}\\b[\\t ]*$`, "i");
+  const normalizedLines = text.split("\n").map((line) => {
+    const hadMention = hasMentionRe.test(line);
+    const normalizedLine = line
+      .replace(leadingMentionRe, "$1")
+      .replace(trailingMentionRe, "")
+      .replace(new RegExp(`@${escaped}\\b`, "gi"), "")
+      .replace(/(\S)[ \t]{2,}/g, "$1 ");
+    return {
+      text: normalizedLine,
+      mentionOnlyBlank: hadMention && normalizedLine.trim() === "",
+    };
+  });
+
+  while (normalizedLines[0]?.mentionOnlyBlank) {
+    normalizedLines.shift();
+  }
+  while (normalizedLines.at(-1)?.text.trim() === "") {
+    normalizedLines.pop();
+  }
+
+  return normalizedLines.map((line) => line.text).join("\n");
 }

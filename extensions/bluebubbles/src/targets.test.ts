@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  inferBlueBubblesTargetChatType,
+  looksLikeBlueBubblesExplicitTargetId,
+  isAllowedBlueBubblesSender,
   looksLikeBlueBubblesTargetId,
   normalizeBlueBubblesMessagingTarget,
   parseBlueBubblesTarget,
@@ -100,6 +103,30 @@ describe("looksLikeBlueBubblesTargetId", () => {
   });
 });
 
+describe("looksLikeBlueBubblesExplicitTargetId", () => {
+  it("treats explicit chat targets as immediate ids", () => {
+    expect(looksLikeBlueBubblesExplicitTargetId("chat_guid:ABC-123")).toBe(true);
+    expect(looksLikeBlueBubblesExplicitTargetId("imessage:+15551234567")).toBe(true);
+  });
+
+  it("prefers directory fallback for bare handles and phone numbers", () => {
+    expect(looksLikeBlueBubblesExplicitTargetId("+1 (555) 123-4567")).toBe(false);
+    expect(looksLikeBlueBubblesExplicitTargetId("user@example.com")).toBe(false);
+  });
+});
+
+describe("inferBlueBubblesTargetChatType", () => {
+  it("infers direct chat for handles and dm chat_guids", () => {
+    expect(inferBlueBubblesTargetChatType("+15551234567")).toBe("direct");
+    expect(inferBlueBubblesTargetChatType("chat_guid:iMessage;-;+15551234567")).toBe("direct");
+  });
+
+  it("infers group chat for explicit group targets", () => {
+    expect(inferBlueBubblesTargetChatType("chat_id:123")).toBe("group");
+    expect(inferBlueBubblesTargetChatType("chat_guid:iMessage;+;chat123")).toBe("group");
+  });
+});
+
 describe("parseBlueBubblesTarget", () => {
   it("parses chat<digits> pattern as chat_identifier", () => {
     expect(parseBlueBubblesTarget("chat660250192681427962")).toEqual({
@@ -179,5 +206,23 @@ describe("parseBlueBubblesAllowTarget", () => {
       kind: "handle",
       handle: "+19257864429",
     });
+  });
+});
+
+describe("isAllowedBlueBubblesSender", () => {
+  it("denies when allowFrom is empty", () => {
+    const allowed = isAllowedBlueBubblesSender({
+      allowFrom: [],
+      sender: "+15551234567",
+    });
+    expect(allowed).toBe(false);
+  });
+
+  it("allows wildcard entries", () => {
+    const allowed = isAllowedBlueBubblesSender({
+      allowFrom: ["*"],
+      sender: "+15551234567",
+    });
+    expect(allowed).toBe(true);
   });
 });

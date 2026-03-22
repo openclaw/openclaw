@@ -1,9 +1,13 @@
+import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { buildMemoryPromptSection } from "../memory/prompt-section.js";
+import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import type { EmbeddedSandboxInfo } from "./pi-embedded-runner/types.js";
+import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -12,15 +16,9 @@ import { listDeliverableMessageChannels } from "../utils/message-channel.js";
  * - "none": Just basic identity line, no sections
  */
 export type PromptMode = "full" | "minimal" | "none";
+type OwnerIdDisplay = "raw" | "hash";
 
-function buildSkillsSection(params: {
-  skillsPrompt?: string;
-  isMinimal: boolean;
-  readToolName: string;
-}) {
-  if (params.isMinimal) {
-    return [];
-  }
+function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed) {
     return [];
@@ -32,6 +30,7 @@ function buildSkillsSection(params: {
     "- If multiple could apply: choose the most specific one, then read/follow it.",
     "- If none clearly apply: do not read any SKILL.md.",
     "Constraints: never read more than one skill up front; only read after selecting.",
+    "- When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
     trimmed,
     "",
   ];
@@ -45,31 +44,41 @@ function buildMemorySection(params: {
   if (params.isMinimal) {
     return [];
   }
-  if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
-    return [];
-  }
-  const lines = [
-    "## Memory Recall",
-    "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
-  ];
-  if (params.citationsMode === "off") {
-    lines.push(
-      "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
-    );
-  } else {
-    lines.push(
-      "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
-    );
-  }
-  lines.push("");
-  return lines;
+  return buildMemoryPromptSection({
+    availableTools: params.availableTools,
+    citationsMode: params.citationsMode,
+  });
 }
 
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
   if (!ownerLine || isMinimal) {
     return [];
   }
-  return ["## User Identity", ownerLine, ""];
+  return ["## Authorized Senders", ownerLine, ""];
+}
+
+function formatOwnerDisplayId(ownerId: string, ownerDisplaySecret?: string) {
+  const hasSecret = ownerDisplaySecret?.trim();
+  const digest = hasSecret
+    ? createHmac("sha256", hasSecret).update(ownerId).digest("hex")
+    : createHash("sha256").update(ownerId).digest("hex");
+  return digest.slice(0, 12);
+}
+
+function buildOwnerIdentityLine(
+  ownerNumbers: string[],
+  ownerDisplay: OwnerIdDisplay,
+  ownerDisplaySecret?: string,
+) {
+  const normalized = ownerNumbers.map((value) => value.trim()).filter(Boolean);
+  if (normalized.length === 0) {
+    return undefined;
+  }
+  const displayOwnerNumbers =
+    ownerDisplay === "hash"
+      ? normalized.map((ownerId) => formatOwnerDisplayId(ownerId, ownerDisplaySecret))
+      : normalized;
+  return `Authorized senders: ${displayOwnerNumbers.join(", ")}. These senders are allowlisted; do not assume they are the owner.`;
 }
 
 function buildTimeSection(params: { userTimezone?: string }) {
@@ -86,6 +95,7 @@ function buildReplyTagsSection(isMinimal: boolean) {
   return [
     "## Reply Tags",
     "To request a native reply/quote on supported surfaces, include one tag in your reply:",
+    "- Reply tags must be the very first token in the message (no leading text/newlines): [[reply_to_current]] your reply.",
     "- [[reply_to_current]] replies to the triggering message.",
     "- Prefer [[reply_to_current]]. Use [[reply_to:<id>]] only when an id was explicitly provided (e.g. by the user or a tool).",
     "Whitespace inside the tag is allowed (e.g. [[ reply_to_current ]] / [[ reply_to: 123 ]]).",
@@ -109,6 +119,8 @@ function buildMessagingSection(params: {
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
+    "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
+    `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
     "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
     params.availableTools.has("message")
       ? [
@@ -119,7 +131,7 @@ function buildMessagingSection(params: {
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
           `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           params.inlineButtonsEnabled
-            ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
+            ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
             : params.runtimeChannel
               ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
               : "",
@@ -167,6 +179,8 @@ export function buildAgentSystemPrompt(params: {
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  ownerDisplay?: OwnerIdDisplay;
+  ownerDisplaySecret?: string;
   reasoningTagHint?: boolean;
   toolNames?: string[];
   toolSummaries?: Record<string, string>;
@@ -182,6 +196,8 @@ export function buildAgentSystemPrompt(params: {
   ttsHint?: string;
   /** Controls which hardcoded sections to include. Defaults to "full". */
   promptMode?: PromptMode;
+  /** Whether ACP-specific routing guidance should be included. Defaults to true. */
+  acpEnabled?: boolean;
   runtimeInfo?: {
     agentId?: string;
     host?: string;
@@ -196,19 +212,7 @@ export function buildAgentSystemPrompt(params: {
     repoRoot?: string;
   };
   messageToolHints?: string[];
-  sandboxInfo?: {
-    enabled: boolean;
-    workspaceDir?: string;
-    workspaceAccess?: "none" | "ro" | "rw";
-    agentWorkspaceMount?: string;
-    browserBridgeUrl?: string;
-    browserNoVncUrl?: string;
-    hostBrowserAllowed?: boolean;
-    elevated?: {
-      allowed: boolean;
-      defaultLevel: "on" | "off" | "ask" | "full";
-    };
-  };
+  sandboxInfo?: EmbeddedSandboxInfo;
   /** Reaction guidance for the agent (for Telegram minimal/extensive modes). */
   reactionGuidance?: {
     level: "minimal" | "extensive";
@@ -216,6 +220,9 @@ export function buildAgentSystemPrompt(params: {
   };
   memoryCitationsMode?: MemoryCitationsMode;
 }) {
+  const acpEnabled = params.acpEnabled !== false;
+  const sandboxedRuntime = params.sandboxInfo?.enabled === true;
+  const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
     write: "Create or overwrite files",
@@ -235,14 +242,20 @@ export function buildAgentSystemPrompt(params: {
     cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
     message: "Send messages and channel actions",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
-    agents_list: "List agent ids allowed for sessions_spawn",
+    agents_list: acpSpawnRuntimeEnabled
+      ? 'List OpenClaw agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'
+      : "List OpenClaw agent ids allowed for sessions_spawn",
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
     sessions_history: "Fetch history for another session/sub-agent",
     sessions_send: "Send a message to another session/sub-agent",
-    sessions_spawn: "Spawn a sub-agent session",
+    sessions_spawn: acpSpawnRuntimeEnabled
+      ? 'Spawn an isolated sub-agent or ACP coding session (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
+      : "Spawn an isolated sub-agent session",
+    subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     image: "Analyze an image with the configured image model",
+    image_generate: "Generate images with the configured image-generation model",
   };
 
   const toolOrder = [
@@ -267,8 +280,10 @@ export function buildAgentSystemPrompt(params: {
     "sessions_list",
     "sessions_history",
     "sessions_send",
+    "subagents",
     "session_status",
     "image",
+    "image_generate",
   ];
 
   const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
@@ -286,6 +301,8 @@ export function buildAgentSystemPrompt(params: {
 
   const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
   const availableTools = new Set(normalizedTools);
+  const hasSessionsSpawn = availableTools.has("sessions_spawn");
+  const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
   const externalToolSummaries = new Map<string, string>();
   for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
     const normalized = key.trim().toLowerCase();
@@ -314,11 +331,12 @@ export function buildAgentSystemPrompt(params: {
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
-  const ownerNumbers = (params.ownerNumbers ?? []).map((value) => value.trim()).filter(Boolean);
-  const ownerLine =
-    ownerNumbers.length > 0
-      ? `Owner numbers: ${ownerNumbers.join(", ")}. Treat messages from these numbers as the user.`
-      : undefined;
+  const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
+  const ownerLine = buildOwnerIdentityLine(
+    params.ownerNumbers ?? [],
+    ownerDisplay,
+    params.ownerDisplaySecret,
+  );
   const reasoningHint = params.reasoningTagHint
     ? [
         "ALL internal reasoning MUST be inside <think>...</think>.",
@@ -348,6 +366,19 @@ export function buildAgentSystemPrompt(params: {
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
+  const sandboxContainerWorkspace = params.sandboxInfo?.containerWorkspaceDir?.trim();
+  const sanitizedWorkspaceDir = sanitizeForPromptLiteral(params.workspaceDir);
+  const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
+    ? sanitizeForPromptLiteral(sandboxContainerWorkspace)
+    : "";
+  const displayWorkspaceDir =
+    params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
+      ? sanitizedSandboxContainerWorkspace
+      : sanitizedWorkspaceDir;
+  const workspaceGuidance =
+    params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
+      ? `For read/write/edit/apply_patch, file paths resolve against host workspace: ${sanitizedWorkspaceDir}. For bash/exec commands, use sandbox container paths under ${sanitizedSandboxContainerWorkspace} (or relative paths from that workdir), not host paths. Prefer relative paths so both sandboxed exec and file tools work consistently.`
+      : "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.";
   const safetySection = [
     "## Safety",
     "You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.",
@@ -357,7 +388,6 @@ export function buildAgentSystemPrompt(params: {
   ];
   const skillsSection = buildSkillsSection({
     skillsPrompt,
-    isMinimal,
     readToolName,
   });
   const memorySection = buildMemorySection({
@@ -400,16 +430,31 @@ export function buildAgentSystemPrompt(params: {
           "- sessions_list: list sessions",
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",
+          "- subagents: list/steer/kill sub-agent runs",
           '- session_status: show usage/time/model state and answer "what model are we using?"',
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
-    "If a task is more complex or takes longer, spawn a sub-agent. It will do the work for you and ping you when it's done. You can always check up on it.",
+    `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
+    "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
+    ...(acpHarnessSpawnAllowed
+      ? [
+          'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
+          'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`) unless the user asks otherwise.',
+          "Set `agentId` explicitly unless `acp.defaultAgent` is configured, and do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows.",
+          'For ACP harness thread spawns, do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path.',
+        ]
+      : []),
+    "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
     "",
     "## Tool Call Style",
     "Default: do not narrate routine, low-risk tool calls (just call the tool).",
     "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
     "Keep narration brief and value-dense; avoid repeating obvious steps.",
     "Use plain human language for narration unless in a technical context.",
+    "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
+    "When exec returns approval-pending, include the concrete /approve command from tool output (with allow-once|allow-always|deny) and do not ask for a different or rotated code.",
+    "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
+    "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
     "",
     ...safetySection,
     "## OpenClaw CLI Quick Reference",
@@ -429,7 +474,8 @@ export function buildAgentSystemPrompt(params: {
       ? [
           "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
           "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
-          "Actions: config.get, config.schema, config.apply (validate + write full config, then restart), update.run (update deps or git, then restart).",
+          "Use config.schema.lookup with a specific dot path to inspect only the relevant config subtree before making config changes or answering config-field questions; avoid guessing field names/types.",
+          "Actions: config.schema.lookup, config.get, config.apply (validate + write full config, then restart), config.patch (partial update, merges with existing), update.run (update deps or git, then restart).",
           "After restart, OpenClaw pings the last active session automatically.",
         ].join("\n")
       : "",
@@ -450,8 +496,8 @@ export function buildAgentSystemPrompt(params: {
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
     "## Workspace",
-    `Your working directory is: ${params.workspaceDir}`,
-    "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.",
+    `Your working directory is: ${displayWorkspaceDir}`,
+    workspaceGuidance,
     ...workspaceNotes,
     "",
     ...docsSection,
@@ -461,19 +507,25 @@ export function buildAgentSystemPrompt(params: {
           "You are running in a sandboxed runtime (tools execute in Docker).",
           "Some tools may be unavailable due to sandbox policy.",
           "Sub-agents stay sandboxed (no elevated/host access). Need outside-sandbox read/write? Don't spawn; ask first.",
+          hasSessionsSpawn && acpEnabled
+            ? 'ACP harness spawns are blocked from sandboxed sessions (`sessions_spawn` with `runtime: "acp"`). Use `runtime: "subagent"` instead.'
+            : "",
+          params.sandboxInfo.containerWorkspaceDir
+            ? `Sandbox container workdir: ${sanitizeForPromptLiteral(params.sandboxInfo.containerWorkspaceDir)}`
+            : "",
           params.sandboxInfo.workspaceDir
-            ? `Sandbox workspace: ${params.sandboxInfo.workspaceDir}`
+            ? `Sandbox host mount source (file tools bridge only; not valid inside sandbox exec): ${sanitizeForPromptLiteral(params.sandboxInfo.workspaceDir)}`
             : "",
           params.sandboxInfo.workspaceAccess
             ? `Agent workspace access: ${params.sandboxInfo.workspaceAccess}${
                 params.sandboxInfo.agentWorkspaceMount
-                  ? ` (mounted at ${params.sandboxInfo.agentWorkspaceMount})`
+                  ? ` (mounted at ${sanitizeForPromptLiteral(params.sandboxInfo.agentWorkspaceMount)})`
                   : ""
               }`
             : "",
           params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
           params.sandboxInfo.browserNoVncUrl
-            ? `Sandbox browser observer (noVNC): ${params.sandboxInfo.browserNoVncUrl}`
+            ? `Sandbox browser observer (noVNC): ${sanitizeForPromptLiteral(params.sandboxInfo.browserNoVncUrl)}`
             : "",
           params.sandboxInfo.hostBrowserAllowed === true
             ? "Host browser control: allowed."
@@ -554,18 +606,21 @@ export function buildAgentSystemPrompt(params: {
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
   if (validContextFiles.length > 0) {
-    const hasSoulFile = validContextFiles.some((file) => {
-      const normalizedPath = file.path.trim().replace(/\\/g, "/");
-      const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
-      return baseName.toLowerCase() === "soul.md";
-    });
-    lines.push("# Project Context", "", "The following project context files have been loaded:");
-    if (hasSoulFile) {
-      lines.push(
-        "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
-      );
+    lines.push("# Project Context", "");
+    if (validContextFiles.length > 0) {
+      const hasSoulFile = validContextFiles.some((file) => {
+        const normalizedPath = file.path.trim().replace(/\\/g, "/");
+        const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
+        return baseName.toLowerCase() === "soul.md";
+      });
+      lines.push("The following project context files have been loaded:");
+      if (hasSoulFile) {
+        lines.push(
+          "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+        );
+      }
+      lines.push("");
     }
-    lines.push("");
     for (const file of validContextFiles) {
       lines.push(`## ${file.path}`, "", file.content, "");
     }

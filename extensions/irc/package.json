@@ -1,14 +1,25 @@
 {
   "name": "@openclaw/irc",
-  "version": "2026.2.13",
+  "version": "2026.3.14",
   "description": "OpenClaw IRC channel plugin",
   "type": "module",
-  "devDependencies": {
-    "openclaw": "workspace:*"
+  "dependencies": {
+    "zod": "^4.3.6"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "irc",
+      "label": "IRC",
+      "selectionLabel": "IRC (Server + Nick)",
+      "detailLabel": "IRC",
+      "docsPath": "/channels/irc",
+      "docsLabel": "irc",
+      "blurb": "classic IRC networks with DM/channel routing and pairing controls.",
+      "systemImage": "network"
+    }
   }
 }

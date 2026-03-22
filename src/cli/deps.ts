@@ -1,59 +1,73 @@
-import type { sendMessageWhatsApp } from "../channels/web/index.js";
-import type { sendMessageDiscord } from "../discord/send.js";
-import type { sendMessageIMessage } from "../imessage/send.js";
-import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
-import type { sendMessageSignal } from "../signal/send.js";
-import type { sendMessageSlack } from "../slack/send.js";
-import type { sendMessageTelegram } from "../telegram/send.js";
+import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { createOutboundSendDepsFromCliSource } from "./outbound-send-mapping.js";
 
-export type CliDeps = {
-  sendMessageWhatsApp: typeof sendMessageWhatsApp;
-  sendMessageTelegram: typeof sendMessageTelegram;
-  sendMessageDiscord: typeof sendMessageDiscord;
-  sendMessageSlack: typeof sendMessageSlack;
-  sendMessageSignal: typeof sendMessageSignal;
-  sendMessageIMessage: typeof sendMessageIMessage;
+/**
+ * Lazy-loaded per-channel send functions, keyed by channel ID.
+ * Values are proxy functions that dynamically import the real module on first use.
+ */
+export type CliDeps = { [channelId: string]: unknown };
+type RuntimeSend = {
+  sendMessage: (...args: unknown[]) => Promise<unknown>;
 };
+type RuntimeSendModule = {
+  runtimeSend: RuntimeSend;
+};
+
+// Per-channel module caches for lazy loading.
+const senderCache = new Map<string, Promise<RuntimeSend>>();
+
+/**
+ * Create a lazy-loading send function proxy for a channel.
+ * The channel's module is loaded on first call and cached for reuse.
+ */
+function createLazySender(
+  channelId: string,
+  loader: () => Promise<RuntimeSendModule>,
+): (...args: unknown[]) => Promise<unknown> {
+  const loadRuntimeSend = createLazyRuntimeSurface(loader, ({ runtimeSend }) => runtimeSend);
+  return async (...args: unknown[]) => {
+    let cached = senderCache.get(channelId);
+    if (!cached) {
+      cached = loadRuntimeSend();
+      senderCache.set(channelId, cached);
+    }
+    const runtimeSend = await cached;
+    return await runtimeSend.sendMessage(...args);
+  };
+}
 
 export function createDefaultDeps(): CliDeps {
   return {
-    sendMessageWhatsApp: async (...args) => {
-      const { sendMessageWhatsApp } = await import("../channels/web/index.js");
-      return await sendMessageWhatsApp(...args);
-    },
-    sendMessageTelegram: async (...args) => {
-      const { sendMessageTelegram } = await import("../telegram/send.js");
-      return await sendMessageTelegram(...args);
-    },
-    sendMessageDiscord: async (...args) => {
-      const { sendMessageDiscord } = await import("../discord/send.js");
-      return await sendMessageDiscord(...args);
-    },
-    sendMessageSlack: async (...args) => {
-      const { sendMessageSlack } = await import("../slack/send.js");
-      return await sendMessageSlack(...args);
-    },
-    sendMessageSignal: async (...args) => {
-      const { sendMessageSignal } = await import("../signal/send.js");
-      return await sendMessageSignal(...args);
-    },
-    sendMessageIMessage: async (...args) => {
-      const { sendMessageIMessage } = await import("../imessage/send.js");
-      return await sendMessageIMessage(...args);
-    },
+    whatsapp: createLazySender(
+      "whatsapp",
+      () => import("./send-runtime/whatsapp.js") as Promise<RuntimeSendModule>,
+    ),
+    telegram: createLazySender(
+      "telegram",
+      () => import("./send-runtime/telegram.js") as Promise<RuntimeSendModule>,
+    ),
+    discord: createLazySender(
+      "discord",
+      () => import("./send-runtime/discord.js") as Promise<RuntimeSendModule>,
+    ),
+    slack: createLazySender(
+      "slack",
+      () => import("./send-runtime/slack.js") as Promise<RuntimeSendModule>,
+    ),
+    signal: createLazySender(
+      "signal",
+      () => import("./send-runtime/signal.js") as Promise<RuntimeSendModule>,
+    ),
+    imessage: createLazySender(
+      "imessage",
+      () => import("./send-runtime/imessage.js") as Promise<RuntimeSendModule>,
+    ),
   };
 }
 
-// Provider docking: extend this mapping when adding new outbound send deps.
 export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
-  return {
-    sendWhatsApp: deps.sendMessageWhatsApp,
-    sendTelegram: deps.sendMessageTelegram,
-    sendDiscord: deps.sendMessageDiscord,
-    sendSlack: deps.sendMessageSlack,
-    sendSignal: deps.sendMessageSignal,
-    sendIMessage: deps.sendMessageIMessage,
-  };
+  return createOutboundSendDepsFromCliSource(deps);
 }
 
-export { logWebSelfId } from "../web/auth-store.js";
+export { logWebSelfId } from "../plugins/runtime/runtime-whatsapp-boundary.js";

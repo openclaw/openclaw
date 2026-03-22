@@ -1,3 +1,12 @@
+import { isAllowedParsedChatSender } from "openclaw/plugin-sdk/allow-from";
+import {
+  parseChatAllowTargetPrefixes,
+  parseChatTargetPrefixesOrThrow,
+  type ParsedChatTarget,
+  resolveServicePrefixedAllowTarget,
+  resolveServicePrefixedTarget,
+} from "openclaw/plugin-sdk/imessage-core";
+
 export type BlueBubblesService = "imessage" | "sms" | "auto";
 
 export type BlueBubblesTarget =
@@ -6,11 +15,7 @@ export type BlueBubblesTarget =
   | { kind: "chat_identifier"; chatIdentifier: string }
   | { kind: "handle"; to: string; service: BlueBubblesService };
 
-export type BlueBubblesAllowTarget =
-  | { kind: "chat_id"; chatId: number }
-  | { kind: "chat_guid"; chatGuid: string }
-  | { kind: "chat_identifier"; chatIdentifier: string }
-  | { kind: "handle"; handle: string };
+export type BlueBubblesAllowTarget = ParsedChatTarget | { kind: "handle"; handle: string };
 
 const CHAT_ID_PREFIXES = ["chat_id:", "chatid:", "chat:"];
 const CHAT_GUID_PREFIXES = ["chat_guid:", "chatguid:", "guid:"];
@@ -68,6 +73,40 @@ function looksLikeRawChatIdentifier(value: string): boolean {
     return true;
   }
   return CHAT_IDENTIFIER_UUID_RE.test(trimmed) || CHAT_IDENTIFIER_HEX_RE.test(trimmed);
+}
+
+function parseGroupTarget(params: {
+  trimmed: string;
+  lower: string;
+  requireValue: boolean;
+}): { kind: "chat_id"; chatId: number } | { kind: "chat_guid"; chatGuid: string } | null {
+  if (!params.lower.startsWith("group:")) {
+    return null;
+  }
+  const value = stripPrefix(params.trimmed, "group:");
+  const chatId = Number.parseInt(value, 10);
+  if (Number.isFinite(chatId)) {
+    return { kind: "chat_id", chatId };
+  }
+  if (value) {
+    return { kind: "chat_guid", chatGuid: value };
+  }
+  if (params.requireValue) {
+    throw new Error("group target is required");
+  }
+  return null;
+}
+
+function parseRawChatIdentifierTarget(
+  trimmed: string,
+): { kind: "chat_identifier"; chatIdentifier: string } | null {
+  if (/^chat\d+$/i.test(trimmed)) {
+    return { kind: "chat_identifier", chatIdentifier: trimmed };
+  }
+  if (looksLikeRawChatIdentifier(trimmed)) {
+    return { kind: "chat_identifier", chatIdentifier: trimmed };
+  }
+  return null;
 }
 
 export function normalizeBlueBubblesHandle(raw: string): string {
@@ -198,6 +237,63 @@ export function looksLikeBlueBubblesTargetId(raw: string, normalized?: string): 
   return false;
 }
 
+export function looksLikeBlueBubblesExplicitTargetId(raw: string, normalized?: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const candidate = stripBlueBubblesPrefix(trimmed);
+  if (!candidate) {
+    return false;
+  }
+  const lowered = candidate.toLowerCase();
+  if (/^(imessage|sms|auto):/.test(lowered)) {
+    return true;
+  }
+  if (
+    /^(chat_id|chatid|chat|chat_guid|chatguid|guid|chat_identifier|chatidentifier|chatident|group):/.test(
+      lowered,
+    )
+  ) {
+    return true;
+  }
+  if (parseRawChatGuid(candidate) || looksLikeRawChatIdentifier(candidate)) {
+    return true;
+  }
+  if (normalized) {
+    const normalizedTrimmed = normalized.trim();
+    if (!normalizedTrimmed) {
+      return false;
+    }
+    const normalizedLower = normalizedTrimmed.toLowerCase();
+    if (
+      /^(imessage|sms|auto):/.test(normalizedLower) ||
+      /^(chat_id|chat_guid|chat_identifier):/.test(normalizedLower)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function inferBlueBubblesTargetChatType(raw: string): "direct" | "group" | undefined {
+  try {
+    const parsed = parseBlueBubblesTarget(raw);
+    if (parsed.kind === "handle") {
+      return "direct";
+    }
+    if (parsed.kind === "chat_guid") {
+      return parsed.chatGuid.includes(";+;") ? "group" : "direct";
+    }
+    if (parsed.kind === "chat_id" || parsed.kind === "chat_identifier") {
+      return "group";
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 export function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
   const trimmed = stripBlueBubblesPrefix(raw);
   if (!trimmed) {
@@ -205,66 +301,35 @@ export function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
   }
   const lower = trimmed.toLowerCase();
 
-  for (const { prefix, service } of SERVICE_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const remainder = stripPrefix(trimmed, prefix);
-      if (!remainder) {
-        throw new Error(`${prefix} target is required`);
-      }
-      const remainderLower = remainder.toLowerCase();
-      const isChatTarget =
-        CHAT_ID_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
-        CHAT_GUID_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
-        CHAT_IDENTIFIER_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
-        remainderLower.startsWith("group:");
-      if (isChatTarget) {
-        return parseBlueBubblesTarget(remainder);
-      }
-      return { kind: "handle", to: remainder, service };
-    }
+  const servicePrefixed = resolveServicePrefixedTarget({
+    trimmed,
+    lower,
+    servicePrefixes: SERVICE_PREFIXES,
+    isChatTarget: (remainderLower) =>
+      CHAT_ID_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
+      CHAT_GUID_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
+      CHAT_IDENTIFIER_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
+      remainderLower.startsWith("group:"),
+    parseTarget: parseBlueBubblesTarget,
+  });
+  if (servicePrefixed) {
+    return servicePrefixed;
   }
 
-  for (const prefix of CHAT_ID_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const value = stripPrefix(trimmed, prefix);
-      const chatId = Number.parseInt(value, 10);
-      if (!Number.isFinite(chatId)) {
-        throw new Error(`Invalid chat_id: ${value}`);
-      }
-      return { kind: "chat_id", chatId };
-    }
+  const chatTarget = parseChatTargetPrefixesOrThrow({
+    trimmed,
+    lower,
+    chatIdPrefixes: CHAT_ID_PREFIXES,
+    chatGuidPrefixes: CHAT_GUID_PREFIXES,
+    chatIdentifierPrefixes: CHAT_IDENTIFIER_PREFIXES,
+  });
+  if (chatTarget) {
+    return chatTarget;
   }
 
-  for (const prefix of CHAT_GUID_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const value = stripPrefix(trimmed, prefix);
-      if (!value) {
-        throw new Error("chat_guid is required");
-      }
-      return { kind: "chat_guid", chatGuid: value };
-    }
-  }
-
-  for (const prefix of CHAT_IDENTIFIER_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const value = stripPrefix(trimmed, prefix);
-      if (!value) {
-        throw new Error("chat_identifier is required");
-      }
-      return { kind: "chat_identifier", chatIdentifier: value };
-    }
-  }
-
-  if (lower.startsWith("group:")) {
-    const value = stripPrefix(trimmed, "group:");
-    const chatId = Number.parseInt(value, 10);
-    if (Number.isFinite(chatId)) {
-      return { kind: "chat_id", chatId };
-    }
-    if (!value) {
-      throw new Error("group target is required");
-    }
-    return { kind: "chat_guid", chatGuid: value };
+  const groupTarget = parseGroupTarget({ trimmed, lower, requireValue: true });
+  if (groupTarget) {
+    return groupTarget;
   }
 
   const rawChatGuid = parseRawChatGuid(trimmed);
@@ -272,15 +337,9 @@ export function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
     return { kind: "chat_guid", chatGuid: rawChatGuid };
   }
 
-  // Handle chat<digits> pattern (e.g., "chat660250192681427962") as chat_identifier
-  // These are BlueBubbles chat identifiers (the third part of a chat GUID), not numeric IDs
-  if (/^chat\d+$/i.test(trimmed)) {
-    return { kind: "chat_identifier", chatIdentifier: trimmed };
-  }
-
-  // Handle UUID/hex chat identifiers (e.g., "8b9c1a10536d4d86a336ea03ab7151cc")
-  if (looksLikeRawChatIdentifier(trimmed)) {
-    return { kind: "chat_identifier", chatIdentifier: trimmed };
+  const rawChatIdentifierTarget = parseRawChatIdentifierTarget(trimmed);
+  if (rawChatIdentifierTarget) {
+    return rawChatIdentifierTarget;
   }
 
   return { kind: "handle", to: trimmed, service: "auto" };
@@ -293,64 +352,35 @@ export function parseBlueBubblesAllowTarget(raw: string): BlueBubblesAllowTarget
   }
   const lower = trimmed.toLowerCase();
 
-  for (const { prefix } of SERVICE_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const remainder = stripPrefix(trimmed, prefix);
-      if (!remainder) {
-        return { kind: "handle", handle: "" };
-      }
-      return parseBlueBubblesAllowTarget(remainder);
-    }
+  const servicePrefixed = resolveServicePrefixedAllowTarget({
+    trimmed,
+    lower,
+    servicePrefixes: SERVICE_PREFIXES,
+    parseAllowTarget: parseBlueBubblesAllowTarget,
+  });
+  if (servicePrefixed) {
+    return servicePrefixed;
   }
 
-  for (const prefix of CHAT_ID_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const value = stripPrefix(trimmed, prefix);
-      const chatId = Number.parseInt(value, 10);
-      if (Number.isFinite(chatId)) {
-        return { kind: "chat_id", chatId };
-      }
-    }
+  const chatTarget = parseChatAllowTargetPrefixes({
+    trimmed,
+    lower,
+    chatIdPrefixes: CHAT_ID_PREFIXES,
+    chatGuidPrefixes: CHAT_GUID_PREFIXES,
+    chatIdentifierPrefixes: CHAT_IDENTIFIER_PREFIXES,
+  });
+  if (chatTarget) {
+    return chatTarget;
   }
 
-  for (const prefix of CHAT_GUID_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const value = stripPrefix(trimmed, prefix);
-      if (value) {
-        return { kind: "chat_guid", chatGuid: value };
-      }
-    }
+  const groupTarget = parseGroupTarget({ trimmed, lower, requireValue: false });
+  if (groupTarget) {
+    return groupTarget;
   }
 
-  for (const prefix of CHAT_IDENTIFIER_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const value = stripPrefix(trimmed, prefix);
-      if (value) {
-        return { kind: "chat_identifier", chatIdentifier: value };
-      }
-    }
-  }
-
-  if (lower.startsWith("group:")) {
-    const value = stripPrefix(trimmed, "group:");
-    const chatId = Number.parseInt(value, 10);
-    if (Number.isFinite(chatId)) {
-      return { kind: "chat_id", chatId };
-    }
-    if (value) {
-      return { kind: "chat_guid", chatGuid: value };
-    }
-  }
-
-  // Handle chat<digits> pattern (e.g., "chat660250192681427962") as chat_identifier
-  // These are BlueBubbles chat identifiers (the third part of a chat GUID), not numeric IDs
-  if (/^chat\d+$/i.test(trimmed)) {
-    return { kind: "chat_identifier", chatIdentifier: trimmed };
-  }
-
-  // Handle UUID/hex chat identifiers (e.g., "8b9c1a10536d4d86a336ea03ab7151cc")
-  if (looksLikeRawChatIdentifier(trimmed)) {
-    return { kind: "chat_identifier", chatIdentifier: trimmed };
+  const rawChatIdentifierTarget = parseRawChatIdentifierTarget(trimmed);
+  if (rawChatIdentifierTarget) {
+    return rawChatIdentifierTarget;
   }
 
   return { kind: "handle", handle: normalizeBlueBubblesHandle(trimmed) };
@@ -363,43 +393,15 @@ export function isAllowedBlueBubblesSender(params: {
   chatGuid?: string | null;
   chatIdentifier?: string | null;
 }): boolean {
-  const allowFrom = params.allowFrom.map((entry) => String(entry).trim());
-  if (allowFrom.length === 0) {
-    return true;
-  }
-  if (allowFrom.includes("*")) {
-    return true;
-  }
-
-  const senderNormalized = normalizeBlueBubblesHandle(params.sender);
-  const chatId = params.chatId ?? undefined;
-  const chatGuid = params.chatGuid?.trim();
-  const chatIdentifier = params.chatIdentifier?.trim();
-
-  for (const entry of allowFrom) {
-    if (!entry) {
-      continue;
-    }
-    const parsed = parseBlueBubblesAllowTarget(entry);
-    if (parsed.kind === "chat_id" && chatId !== undefined) {
-      if (parsed.chatId === chatId) {
-        return true;
-      }
-    } else if (parsed.kind === "chat_guid" && chatGuid) {
-      if (parsed.chatGuid === chatGuid) {
-        return true;
-      }
-    } else if (parsed.kind === "chat_identifier" && chatIdentifier) {
-      if (parsed.chatIdentifier === chatIdentifier) {
-        return true;
-      }
-    } else if (parsed.kind === "handle" && senderNormalized) {
-      if (parsed.handle === senderNormalized) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return isAllowedParsedChatSender({
+    allowFrom: params.allowFrom,
+    sender: params.sender,
+    chatId: params.chatId,
+    chatGuid: params.chatGuid,
+    chatIdentifier: params.chatIdentifier,
+    normalizeSender: normalizeBlueBubblesHandle,
+    parseAllowTarget: parseBlueBubblesAllowTarget,
+  });
 }
 
 export function formatBlueBubblesChatTarget(params: {

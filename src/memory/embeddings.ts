@@ -1,25 +1,30 @@
-import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import fsSync from "node:fs";
+import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SecretInput } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
-import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
+import type { EmbeddingInput } from "./embedding-inputs.js";
+import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
+import {
+  createGeminiEmbeddingProvider,
+  type GeminiEmbeddingClient,
+  type GeminiTaskType,
+} from "./embeddings-gemini.js";
+import {
+  createMistralEmbeddingProvider,
+  type MistralEmbeddingClient,
+} from "./embeddings-mistral.js";
+import { createOllamaEmbeddingProvider, type OllamaEmbeddingClient } from "./embeddings-ollama.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
 
-function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
-  const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
-  const magnitude = Math.sqrt(sanitized.reduce((sum, value) => sum + value * value, 0));
-  if (magnitude < 1e-10) {
-    return sanitized;
-  }
-  return sanitized.map((value) => value / magnitude);
-}
-
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
+export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
+export type { OllamaEmbeddingClient } from "./embeddings-ollama.js";
 
 export type EmbeddingProvider = {
   id: string;
@@ -27,22 +32,29 @@ export type EmbeddingProvider = {
   maxInputTokens?: number;
   embedQuery: (text: string) => Promise<number[]>;
   embedBatch: (texts: string[]) => Promise<number[][]>;
+  embedBatchInputs?: (inputs: EmbeddingInput[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage";
+export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage"] as const;
+// Remote providers considered for auto-selection when provider === "auto".
+// Ollama is intentionally excluded here so that "auto" mode does not
+// implicitly assume a local Ollama instance is available.
+const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
 
 export type EmbeddingProviderResult = {
-  provider: EmbeddingProvider;
+  provider: EmbeddingProvider | null;
   requestedProvider: EmbeddingProviderRequest;
   fallbackFrom?: EmbeddingProviderId;
   fallbackReason?: string;
+  providerUnavailableReason?: string;
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
+  mistral?: MistralEmbeddingClient;
+  ollama?: OllamaEmbeddingClient;
 };
 
 export type EmbeddingProviderOptions = {
@@ -51,7 +63,7 @@ export type EmbeddingProviderOptions = {
   provider: EmbeddingProviderRequest;
   remote?: {
     baseUrl?: string;
-    apiKey?: string;
+    apiKey?: SecretInput;
     headers?: Record<string, string>;
   };
   model: string;
@@ -60,6 +72,10 @@ export type EmbeddingProviderOptions = {
     modelPath?: string;
     modelCacheDir?: string;
   };
+  /** Gemini embedding-2: output vector dimensions (768, 1536, or 3072). */
+  outputDimensionality?: number;
+  /** Gemini: override the default task type sent with embedding requests. */
+  taskType?: GeminiTaskType;
 };
 
 export const DEFAULT_LOCAL_MODEL =
@@ -98,19 +114,34 @@ async function createLocalEmbeddingProvider(
   let llama: Llama | null = null;
   let embeddingModel: LlamaModel | null = null;
   let embeddingContext: LlamaEmbeddingContext | null = null;
+  let initPromise: Promise<LlamaEmbeddingContext> | null = null;
 
-  const ensureContext = async () => {
-    if (!llama) {
-      llama = await getLlama({ logLevel: LlamaLogLevel.error });
+  const ensureContext = async (): Promise<LlamaEmbeddingContext> => {
+    if (embeddingContext) {
+      return embeddingContext;
     }
-    if (!embeddingModel) {
-      const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
-      embeddingModel = await llama.loadModel({ modelPath: resolved });
+    if (initPromise) {
+      return initPromise;
     }
-    if (!embeddingContext) {
-      embeddingContext = await embeddingModel.createEmbeddingContext();
-    }
-    return embeddingContext;
+    initPromise = (async () => {
+      try {
+        if (!llama) {
+          llama = await getLlama({ logLevel: LlamaLogLevel.error });
+        }
+        if (!embeddingModel) {
+          const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
+          embeddingModel = await llama.loadModel({ modelPath: resolved });
+        }
+        if (!embeddingContext) {
+          embeddingContext = await embeddingModel.createEmbeddingContext();
+        }
+        return embeddingContext;
+      } catch (err) {
+        initPromise = null;
+        throw err;
+      }
+    })();
+    return initPromise;
   };
 
   return {
@@ -145,6 +176,10 @@ export async function createEmbeddingProvider(
       const provider = await createLocalEmbeddingProvider(options);
       return { provider };
     }
+    if (id === "ollama") {
+      const { provider, client } = await createOllamaEmbeddingProvider(options);
+      return { provider, ollama: client };
+    }
     if (id === "gemini") {
       const { provider, client } = await createGeminiEmbeddingProvider(options);
       return { provider, gemini: client };
@@ -152,6 +187,10 @@ export async function createEmbeddingProvider(
     if (id === "voyage") {
       const { provider, client } = await createVoyageEmbeddingProvider(options);
       return { provider, voyage: client };
+    }
+    if (id === "mistral") {
+      const { provider, client } = await createMistralEmbeddingProvider(options);
+      return { provider, mistral: client };
     }
     const { provider, client } = await createOpenAiEmbeddingProvider(options);
     return { provider, openAi: client };
@@ -183,15 +222,21 @@ export async function createEmbeddingProvider(
           missingKeyErrors.push(message);
           continue;
         }
-        throw new Error(message, { cause: err });
+        // Non-auth errors (e.g., network) are still fatal
+        const wrapped = new Error(message) as Error & { cause?: unknown };
+        wrapped.cause = err;
+        throw wrapped;
       }
     }
 
+    // All providers failed due to missing API keys - return null provider for FTS-only mode
     const details = [...missingKeyErrors, localError].filter(Boolean) as string[];
-    if (details.length > 0) {
-      throw new Error(details.join("\n\n"));
-    }
-    throw new Error("No embeddings provider available.");
+    const reason = details.length > 0 ? details.join("\n\n") : "No embeddings provider available.";
+    return {
+      provider: null,
+      requestedProvider,
+      providerUnavailableReason: reason,
+    };
   }
 
   try {
@@ -209,14 +254,36 @@ export async function createEmbeddingProvider(
           fallbackReason: reason,
         };
       } catch (fallbackErr) {
-        // oxlint-disable-next-line preserve-caught-error
-        throw new Error(
-          `${reason}\n\nFallback to ${fallback} failed: ${formatErrorMessage(fallbackErr)}`,
-          { cause: fallbackErr },
-        );
+        // Both primary and fallback failed - check if it's auth-related
+        const fallbackReason = formatErrorMessage(fallbackErr);
+        const combinedReason = `${reason}\n\nFallback to ${fallback} failed: ${fallbackReason}`;
+        if (isMissingApiKeyError(primaryErr) && isMissingApiKeyError(fallbackErr)) {
+          // Both failed due to missing API keys - return null for FTS-only mode
+          return {
+            provider: null,
+            requestedProvider,
+            fallbackFrom: requestedProvider,
+            fallbackReason: reason,
+            providerUnavailableReason: combinedReason,
+          };
+        }
+        // Non-auth errors are still fatal
+        const wrapped = new Error(combinedReason) as Error & { cause?: unknown };
+        wrapped.cause = fallbackErr;
+        throw wrapped;
       }
     }
-    throw new Error(reason, { cause: primaryErr });
+    // No fallback configured - check if we should degrade to FTS-only
+    if (isMissingApiKeyError(primaryErr)) {
+      return {
+        provider: null,
+        requestedProvider,
+        providerUnavailableReason: reason,
+      };
+    }
+    const wrapped = new Error(reason) as Error & { cause?: unknown };
+    wrapped.cause = primaryErr;
+    throw wrapped;
   }
 }
 
@@ -243,7 +310,7 @@ function formatLocalSetupError(err: unknown): string {
         : undefined,
     missing && detail ? `Detail: ${detail}` : null,
     "To enable local embeddings:",
-    "1) Use Node 22 LTS (recommended for installs/updates)",
+    "1) Use Node 24 (recommended for installs/updates; Node 22 LTS, currently 22.16+, remains supported)",
     missing
       ? "2) Reinstall OpenClaw (this should install node-llama-cpp): npm i -g openclaw@latest"
       : null,

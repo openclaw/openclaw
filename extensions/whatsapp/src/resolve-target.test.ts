@@ -1,40 +1,58 @@
+import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("openclaw/plugin-sdk", () => ({
-  getChatChannelMeta: () => ({ id: "whatsapp", label: "WhatsApp" }),
-  normalizeWhatsAppTarget: (value: string) => {
+vi.mock("./runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
+  const normalizeWhatsAppTarget = (value: string) => {
     if (value === "invalid-target") return null;
-    // Simulate E.164 normalization: strip leading + and whatsapp: prefix
+    // Simulate E.164 normalization: strip leading + and whatsapp: prefix.
     const stripped = value.replace(/^whatsapp:/i, "").replace(/^\+/, "");
     return stripped.includes("@g.us") ? stripped : `${stripped}@s.whatsapp.net`;
-  },
-  isWhatsAppGroupJid: (value: string) => value.endsWith("@g.us"),
-  missingTargetError: (provider: string, hint: string) =>
-    new Error(`Delivering to ${provider} requires target ${hint}`),
-  WhatsAppConfigSchema: {},
-  whatsappOnboardingAdapter: {},
-  resolveWhatsAppHeartbeatRecipients: vi.fn(),
-  buildChannelConfigSchema: vi.fn(),
-  collectWhatsAppStatusIssues: vi.fn(),
-  createActionGate: vi.fn(),
-  DEFAULT_ACCOUNT_ID: "default",
-  escapeRegExp: vi.fn(),
-  formatPairingApproveHint: vi.fn(),
-  listWhatsAppAccountIds: vi.fn(),
-  listWhatsAppDirectoryGroupsFromConfig: vi.fn(),
-  listWhatsAppDirectoryPeersFromConfig: vi.fn(),
-  looksLikeWhatsAppTargetId: vi.fn(),
-  migrateBaseNameToDefaultAccount: vi.fn(),
-  normalizeAccountId: vi.fn(),
-  normalizeE164: vi.fn(),
-  normalizeWhatsAppMessagingTarget: vi.fn(),
-  readStringParam: vi.fn(),
-  resolveDefaultWhatsAppAccountId: vi.fn(),
-  resolveWhatsAppAccount: vi.fn(),
-  resolveWhatsAppGroupRequireMention: vi.fn(),
-  resolveWhatsAppGroupToolPolicy: vi.fn(),
-  applyAccountNameToChannelSection: vi.fn(),
-}));
+  };
+
+  return {
+    ...actual,
+    getChatChannelMeta: () => ({ id: "whatsapp", label: "WhatsApp" }),
+    normalizeWhatsAppTarget,
+    isWhatsAppGroupJid: (value: string) => value.endsWith("@g.us"),
+    resolveWhatsAppOutboundTarget: ({
+      to,
+      allowFrom,
+      mode,
+    }: {
+      to?: string;
+      allowFrom: string[];
+      mode: "explicit" | "implicit";
+    }) => {
+      const raw = typeof to === "string" ? to.trim() : "";
+      if (!raw) {
+        return { ok: false, error: new Error("missing target") };
+      }
+      const normalized = normalizeWhatsAppTarget(raw);
+      if (!normalized) {
+        return { ok: false, error: new Error("invalid target") };
+      }
+
+      if (mode === "implicit" && !normalized.endsWith("@g.us")) {
+        const allowAll = allowFrom.includes("*");
+        const allowExact = allowFrom.some((entry) => {
+          if (!entry) {
+            return false;
+          }
+          const normalizedEntry = normalizeWhatsAppTarget(entry.trim());
+          return normalizedEntry?.toLowerCase() === normalized.toLowerCase();
+        });
+        if (!allowAll && !allowExact) {
+          return { ok: false, error: new Error("target not allowlisted") };
+        }
+      }
+
+      return { ok: true, to: normalized };
+    },
+    missingTargetError: (provider: string, hint: string) =>
+      new Error(`Delivering to ${provider} requires target ${hint}`),
+  };
+});
 
 vi.mock("./runtime.js", () => ({
   getWhatsAppRuntime: vi.fn(() => ({
@@ -61,6 +79,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
@@ -72,6 +93,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
@@ -83,6 +107,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
@@ -94,6 +121,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("120363123456789@g.us");
   });
 
@@ -105,50 +135,14 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected resolution to fail");
+    }
     expect(result.error).toBeDefined();
   });
 
-  it("should error on normalization failure with allowlist (implicit mode)", () => {
-    const result = resolveTarget({
-      to: "invalid-target",
-      mode: "implicit",
-      allowFrom: ["5511999999999"],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-
-  it("should error when no target provided with allowlist", () => {
-    const result = resolveTarget({
-      to: undefined,
-      mode: "implicit",
-      allowFrom: ["5511999999999"],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-
-  it("should error when no target and no allowlist", () => {
-    const result = resolveTarget({
-      to: undefined,
-      mode: "explicit",
-      allowFrom: [],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-
-  it("should handle whitespace-only target", () => {
-    const result = resolveTarget({
-      to: "   ",
-      mode: "explicit",
-      allowFrom: [],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
+  installCommonResolveTargetErrorCases({
+    resolveTarget,
+    implicitAllowFrom: ["5511999999999"],
   });
 });

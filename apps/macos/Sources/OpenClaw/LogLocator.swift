@@ -7,8 +7,7 @@ enum LogLocator {
         {
             return URL(fileURLWithPath: override)
         }
-        let preferred = URL(fileURLWithPath: "/tmp/openclaw")
-        return preferred
+        return URL(fileURLWithPath: "/tmp/openclaw")
     }
 
     private static var stdoutLog: URL {

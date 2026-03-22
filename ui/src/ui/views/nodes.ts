@@ -8,6 +8,7 @@ import type {
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../controllers/exec-approvals.ts";
 import { formatRelativeTimestamp, formatList } from "../format.ts";
 import { renderExecApprovals, resolveExecApprovalsState } from "./nodes-exec-approvals.ts";
+import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./nodes-shared.ts";
 export type NodesProps = {
   loading: boolean;
   nodes: Array<Record<string, unknown>>;
@@ -127,7 +128,8 @@ function renderDevices(props: NodesProps) {
 function renderPendingDevice(req: PendingDevice, props: NodesProps) {
   const name = req.displayName?.trim() || req.deviceId;
   const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : "n/a";
-  const role = req.role?.trim() ? `role: ${req.role}` : "role: -";
+  const roleValue = req.role?.trim() || formatList(req.roles);
+  const scopesValue = formatList(req.scopes);
   const repair = req.isRepair ? " · repair" : "";
   const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
   return html`
@@ -136,7 +138,7 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps) {
         <div class="list-title">${name}</div>
         <div class="list-sub">${req.deviceId}${ip}</div>
         <div class="muted" style="margin-top: 6px;">
-          ${role} · requested ${age}${repair}
+          role: ${roleValue} · scopes: ${scopesValue} · requested ${age}${repair}
         </div>
       </div>
       <div class="list-meta">
@@ -217,16 +219,13 @@ function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: Node
 
 type BindingAgent = {
   id: string;
-  name?: string;
+  name: string | undefined;
   index: number;
   isDefault: boolean;
-  binding?: string | null;
+  binding: string | null;
 };
 
-type BindingNode = {
-  id: string;
-  label: string;
-};
+type BindingNode = NodeTargetOption;
 
 type BindingState = {
   ready: boolean;
@@ -408,28 +407,7 @@ function renderAgentBinding(agent: BindingAgent, state: BindingState) {
 }
 
 function resolveExecNodes(nodes: Array<Record<string, unknown>>): BindingNode[] {
-  const list: BindingNode[] = [];
-  for (const node of nodes) {
-    const commands = Array.isArray(node.commands) ? node.commands : [];
-    const supports = commands.some((cmd) => String(cmd) === "system.run");
-    if (!supports) {
-      continue;
-    }
-    const nodeId = typeof node.nodeId === "string" ? node.nodeId.trim() : "";
-    if (!nodeId) {
-      continue;
-    }
-    const displayName =
-      typeof node.displayName === "string" && node.displayName.trim()
-        ? node.displayName.trim()
-        : nodeId;
-    list.push({
-      id: nodeId,
-      label: displayName === nodeId ? nodeId : `${displayName} · ${nodeId}`,
-    });
-  }
-  list.sort((a, b) => a.label.localeCompare(b.label));
-  return list;
+  return resolveNodeTargets(nodes, ["system.run"]);
 }
 
 function resolveAgentBindings(config: Record<string, unknown> | null): {
@@ -452,34 +430,22 @@ function resolveAgentBindings(config: Record<string, unknown> | null): {
     typeof exec.node === "string" && exec.node.trim() ? exec.node.trim() : null;
 
   const agentsNode = (config.agents ?? {}) as Record<string, unknown>;
-  const list = Array.isArray(agentsNode.list) ? agentsNode.list : [];
-  if (list.length === 0) {
+  if (!Array.isArray(agentsNode.list) || agentsNode.list.length === 0) {
     return { defaultBinding, agents: [fallbackAgent] };
   }
 
-  const agents: BindingAgent[] = [];
-  list.forEach((entry, index) => {
-    if (!entry || typeof entry !== "object") {
-      return;
-    }
-    const record = entry as Record<string, unknown>;
-    const id = typeof record.id === "string" ? record.id.trim() : "";
-    if (!id) {
-      return;
-    }
-    const name = typeof record.name === "string" ? record.name.trim() : undefined;
-    const isDefault = record.default === true;
-    const toolsEntry = (record.tools ?? {}) as Record<string, unknown>;
+  const agents = resolveConfigAgents(config).map((entry) => {
+    const toolsEntry = (entry.record.tools ?? {}) as Record<string, unknown>;
     const execEntry = (toolsEntry.exec ?? {}) as Record<string, unknown>;
     const binding =
       typeof execEntry.node === "string" && execEntry.node.trim() ? execEntry.node.trim() : null;
-    agents.push({
-      id,
-      name: name || undefined,
-      index,
-      isDefault,
+    return {
+      id: entry.id,
+      name: entry.name,
+      index: entry.index,
+      isDefault: entry.isDefault,
       binding,
-    });
+    };
   });
 
   if (agents.length === 0) {

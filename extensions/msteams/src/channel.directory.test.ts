@@ -1,8 +1,37 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { describe, expect, it } from "vitest";
+import {
+  createDirectoryTestRuntime,
+  expectDirectorySurface,
+} from "../../../test/helpers/extensions/directory.js";
+import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { msteamsPlugin } from "./channel.js";
 
 describe("msteams directory", () => {
+  const runtimeEnv = createDirectoryTestRuntime() as RuntimeEnv;
+
+  describe("self()", () => {
+    it("returns bot identity when credentials are configured", async () => {
+      const cfg = {
+        channels: {
+          msteams: {
+            appId: "test-app-id-1234",
+            appPassword: "secret",
+            tenantId: "tenant-id-5678",
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = await msteamsPlugin.directory?.self?.({ cfg, runtime: runtimeEnv });
+      expect(result).toEqual({ kind: "user", id: "test-app-id-1234", name: "test-app-id-1234" });
+    });
+
+    it("returns null when credentials are not configured", async () => {
+      const cfg = { channels: {} } as unknown as OpenClawConfig;
+      const result = await msteamsPlugin.directory?.self?.({ cfg, runtime: runtimeEnv });
+      expect(result).toBeNull();
+    });
+  });
+
   it("lists peers and groups from config", async () => {
     const cfg = {
       channels: {
@@ -21,12 +50,15 @@ describe("msteams directory", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(msteamsPlugin.directory).toBeTruthy();
-    expect(msteamsPlugin.directory?.listPeers).toBeTruthy();
-    expect(msteamsPlugin.directory?.listGroups).toBeTruthy();
+    const directory = expectDirectorySurface(msteamsPlugin.directory);
 
     await expect(
-      msteamsPlugin.directory!.listPeers({ cfg, query: undefined, limit: undefined }),
+      directory.listPeers({
+        cfg,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      }),
     ).resolves.toEqual(
       expect.arrayContaining([
         { kind: "user", id: "user:alice" },
@@ -37,7 +69,12 @@ describe("msteams directory", () => {
     );
 
     await expect(
-      msteamsPlugin.directory!.listGroups({ cfg, query: undefined, limit: undefined }),
+      directory.listGroups({
+        cfg,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      }),
     ).resolves.toEqual(
       expect.arrayContaining([
         { kind: "group", id: "conversation:chan1" },

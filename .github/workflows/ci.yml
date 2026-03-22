@@ -4,46 +4,67 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   # Detect docs-only changes to skip heavy jobs (test, build, Windows, macOS, Android).
   # Lint and format always run. Fail-safe: if detection fails, run everything.
   docs-scope:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
       docs_only: ${{ steps.check.outputs.docs_only }}
       docs_changed: ${{ steps.check.outputs.docs_changed }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          fetch-tags: false
           submodules: false
+
+      - name: Ensure docs-scope base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect docs-only changes
         id: check
         uses: ./.github/actions/detect-docs-changes
 
-  # Detect which heavy areas are touched so PRs can skip unrelated expensive jobs.
-  # Push to main keeps broad coverage.
+  # Detect which heavy areas are touched so CI can skip unrelated expensive jobs.
+  # Fail-safe: if detection fails, downstream jobs run.
   changed-scope:
     needs: [docs-scope]
     if: needs.docs-scope.outputs.docs_only != 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
       run_node: ${{ steps.scope.outputs.run_node }}
       run_macos: ${{ steps.scope.outputs.run_macos }}
       run_android: ${{ steps.scope.outputs.run_android }}
+      run_skills_python: ${{ steps.scope.outputs.run_skills_python }}
+      run_windows: ${{ steps.scope.outputs.run_windows }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          fetch-tags: false
           submodules: false
+
+      - name: Ensure changed-scope base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect changed scopes
         id: scope
@@ -57,93 +78,81 @@ jobs:
             BASE="${{ github.event.pull_request.base.sha }}"
           fi
 
-          CHANGED="$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")"
-          if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then
-            # Fail-safe: run broad checks if detection fails.
-            echo "run_node=true" >> "$GITHUB_OUTPUT"
-            echo "run_macos=true" >> "$GITHUB_OUTPUT"
-            echo "run_android=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
 
-          run_node=false
-          run_macos=false
-          run_android=false
-          has_non_docs=false
-          has_non_native_non_docs=false
-
-          while IFS= read -r path; do
-            [ -z "$path" ] && continue
-            case "$path" in
-              docs/*|*.md|*.mdx)
-                continue
-                ;;
-              *)
-                has_non_docs=true
-                ;;
-            esac
-
-            case "$path" in
-              # Generated protocol models are already covered by protocol:check and
-              # should not force the full native macOS lane.
-              apps/macos/Sources/OpenClawProtocol/*|apps/shared/OpenClawKit/Sources/OpenClawProtocol/*)
-                ;;
-              apps/macos/*|apps/ios/*|apps/shared/*|Swabble/*)
-                run_macos=true
-                ;;
-            esac
-
-            case "$path" in
-              apps/android/*|apps/shared/*)
-                run_android=true
-                ;;
-            esac
-
-            case "$path" in
-              src/*|test/*|extensions/*|packages/*|scripts/*|ui/*|.github/*|openclaw.mjs|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tsconfig*.json|vitest*.ts|tsdown.config.ts|.oxlintrc.json|.oxfmtrc.jsonc)
-                run_node=true
-                ;;
-            esac
-
-            case "$path" in
-              apps/android/*|apps/ios/*|apps/macos/*|apps/shared/*|Swabble/*|appcast.xml)
-                ;;
-              *)
-                has_non_native_non_docs=true
-                ;;
-            esac
-          done <<< "$CHANGED"
-
-          # If there are non-doc files outside native app trees, keep Node checks enabled.
-          if [ "$run_node" = false ] && [ "$has_non_docs" = true ] && [ "$has_non_native_non_docs" = true ]; then
-            run_node=true
-          fi
-
-          echo "run_node=${run_node}" >> "$GITHUB_OUTPUT"
-          echo "run_macos=${run_macos}" >> "$GITHUB_OUTPUT"
-          echo "run_android=${run_android}" >> "$GITHUB_OUTPUT"
-
-  # Build dist once for Node-relevant changes and share it with downstream jobs.
-  build-artifacts:
-    needs: [docs-scope, changed-scope, check]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+  changed-extensions:
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    outputs:
+      has_changed_extensions: ${{ steps.changed.outputs.has_changed_extensions }}
+      changed_extensions_matrix: ${{ steps.changed.outputs.changed_extensions_matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
+          fetch-depth: 1
+          fetch-tags: false
           submodules: false
+
+      - name: Ensure changed-extensions base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          install-deps: "false"
+          use-sticky-disk: "false"
+
+      - name: Detect changed extensions
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { appendFileSync } from "node:fs";
+          import { listChangedExtensionIds } from "./scripts/test-extension.mjs";
+
+          const extensionIds = listChangedExtensionIds({ base: process.env.BASE_SHA, head: "HEAD" });
+          const matrix = JSON.stringify({ include: extensionIds.map((extension) => ({ extension })) });
+
+          appendFileSync(process.env.GITHUB_OUTPUT, `has_changed_extensions=${extensionIds.length > 0}\n`, "utf8");
+          appendFileSync(process.env.GITHUB_OUTPUT, `changed_extensions_matrix=${matrix}\n`, "utf8");
+          EOF
+
+  # Build dist once for Node-relevant changes and share it with downstream jobs.
+  build-artifacts:
+    needs: [docs-scope, changed-scope]
+    if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Ensure secrets base commit (PR fast path)
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
 
       - name: Build dist
         run: pnpm build
 
       - name: Upload dist artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-build
           path: dist/
@@ -153,10 +162,10 @@ jobs:
   release-check:
     needs: [docs-scope, build-artifacts]
     if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -164,9 +173,10 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-sticky-disk: "false"
 
       - name: Download dist artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dist-build
           path: dist/
@@ -175,122 +185,400 @@ jobs:
         run: pnpm release:check
 
   checks:
-    needs: [docs-scope, changed-scope, check]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
         include:
           - runtime: node
             task: test
+            shard_index: 1
+            shard_count: 2
             command: pnpm canvas:a2ui:bundle && pnpm test
+          - runtime: node
+            task: test
+            shard_index: 2
+            shard_count: 2
+            command: pnpm canvas:a2ui:bundle && pnpm test
+          - runtime: node
+            task: extensions
+            command: pnpm test:extensions
+          - runtime: node
+            task: channels
+            command: pnpm test:channels
+          - runtime: node
+            task: contracts
+            command: pnpm test:contracts
           - runtime: node
             task: protocol
             command: pnpm protocol:check
           - runtime: bun
             task: test
             command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
+          - runtime: node
+            task: compat-node22
+            node_version: "22.x"
+            cache_key_suffix: "node22"
+            command: |
+              pnpm build
+              node openclaw.mjs --help
+              node openclaw.mjs status --json --timeout 1
+              pnpm test:build:singleton
+              node scripts/stage-bundled-plugin-runtime-deps.mjs
+              node --import tsx scripts/release-check.ts
+    steps:
+      - name: Skip compatibility lanes on pull requests
+        if: github.event_name == 'pull_request' && (matrix.runtime == 'bun' || matrix.task == 'compat-node22')
+        run: echo "Skipping push-only lane on pull requests."
+
+      - name: Checkout
+        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "${{ matrix.node_version || '24.x' }}"
+          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
+          install-bun: "${{ matrix.runtime == 'bun' }}"
+          use-sticky-disk: "false"
+
+      - name: Configure Node test resources
+        if: (github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')) && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'compat-node22')
+        env:
+          SHARD_COUNT: ${{ matrix.shard_count || '' }}
+          SHARD_INDEX: ${{ matrix.shard_index || '' }}
+        run: |
+          # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
+          # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
+          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+          if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
+            echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
+            echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
+        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
+        run: ${{ matrix.command }}
+
+  extension-fast:
+    name: "extension-fast"
+    needs: [docs-scope, changed-scope, changed-extensions]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true' && needs.changed-extensions.outputs.has_changed_extensions == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.changed-extensions.outputs.changed_extensions_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
-
-      - name: Configure vitest JSON reports
-        if: matrix.task == 'test' && matrix.runtime == 'node'
-        run: echo "OPENCLAW_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
-
-      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        run: ${{ matrix.command }}
-
-      - name: Summarize slowest tests
-        if: matrix.task == 'test' && matrix.runtime == 'node'
-        run: |
-          node scripts/vitest-slowest.mjs --dir "$OPENCLAW_VITEST_REPORT_DIR" --top 50 --out "$RUNNER_TEMP/vitest-slowest.md" > /dev/null
-          echo "Slowest test summary written to $RUNNER_TEMP/vitest-slowest.md"
-
-      - name: Upload vitest reports
-        if: matrix.task == 'test' && matrix.runtime == 'node'
-        uses: actions/upload-artifact@v4
         with:
-          name: vitest-reports-${{ runner.os }}-${{ matrix.runtime }}
-          path: |
-            ${{ env.OPENCLAW_VITEST_REPORT_DIR }}
-            ${{ runner.temp }}/vitest-slowest.md
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run changed extension tests
+        env:
+          OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
+        run: pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
 
   # Types, lint, and format check.
   check:
     name: "check"
-    needs: [docs-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
 
       - name: Check types and lint and oxfmt
         run: pnpm check
+
+      - name: Strict TS build smoke
+        run: pnpm build:strict-smoke
+
+  check-additional:
+    name: "check-additional"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run plugin extension boundary guard
+        id: plugin_extension_boundary
+        continue-on-error: true
+        run: pnpm run lint:plugins:no-extension-imports
+
+      - name: Run web search provider boundary guard
+        id: web_search_provider_boundary
+        continue-on-error: true
+        run: pnpm run lint:web-search-provider-boundaries
+
+      - name: Run extension src boundary guard
+        id: extension_src_outside_plugin_sdk_boundary
+        continue-on-error: true
+        run: pnpm run lint:extensions:no-src-outside-plugin-sdk
+
+      - name: Run extension plugin-sdk-internal guard
+        id: extension_plugin_sdk_internal_boundary
+        continue-on-error: true
+        run: pnpm run lint:extensions:no-plugin-sdk-internal
+
+      - name: Enforce safe external URL opening policy
+        id: no_raw_window_open
+        continue-on-error: true
+        run: pnpm lint:ui:no-raw-window-open
+
+      - name: Run gateway watch regression harness
+        id: gateway_watch_regression
+        continue-on-error: true
+        run: pnpm test:gateway:watch-regression
+
+      - name: Check config docs drift statefile
+        id: config_docs_drift
+        continue-on-error: true
+        run: pnpm config:docs:check
+
+      - name: Upload gateway watch regression artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gateway-watch-regression
+          path: .local/gateway-watch-regression/
+          retention-days: 7
+
+      - name: Fail if any additional check failed
+        if: always()
+        env:
+          PLUGIN_EXTENSION_BOUNDARY_OUTCOME: ${{ steps.plugin_extension_boundary.outcome }}
+          WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME: ${{ steps.web_search_provider_boundary.outcome }}
+          EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME: ${{ steps.extension_src_outside_plugin_sdk_boundary.outcome }}
+          EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME: ${{ steps.extension_plugin_sdk_internal_boundary.outcome }}
+          NO_RAW_WINDOW_OPEN_OUTCOME: ${{ steps.no_raw_window_open.outcome }}
+          GATEWAY_WATCH_REGRESSION_OUTCOME: ${{ steps.gateway_watch_regression.outcome }}
+          CONFIG_DOCS_DRIFT_OUTCOME: ${{ steps.config_docs_drift.outcome }}
+        run: |
+          failures=0
+          for result in \
+            "plugin-extension-boundary|$PLUGIN_EXTENSION_BOUNDARY_OUTCOME" \
+            "web-search-provider-boundary|$WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME" \
+            "extension-src-outside-plugin-sdk-boundary|$EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME" \
+            "extension-plugin-sdk-internal-boundary|$EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME" \
+            "lint:ui:no-raw-window-open|$NO_RAW_WINDOW_OPEN_OUTCOME" \
+            "gateway-watch-regression|$GATEWAY_WATCH_REGRESSION_OUTCOME" \
+            "config-docs-drift|$CONFIG_DOCS_DRIFT_OUTCOME"; do
+            name="${result%%|*}"
+            outcome="${result#*|}"
+            if [ "$outcome" != "success" ]; then
+              echo "::error title=${name} failed::${name} outcome: ${outcome}"
+              failures=1
+            fi
+          done
+
+          exit "$failures"
+
+  build-smoke:
+    name: "build-smoke"
+    needs: [docs-scope, changed-scope, build-artifacts]
+    if: always() && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Download dist artifact
+        if: github.event_name == 'push'
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Build dist
+        if: github.event_name != 'push'
+        run: pnpm build
+
+      - name: Smoke test CLI launcher help
+        run: node openclaw.mjs --help
+
+      - name: Smoke test CLI launcher status json
+        run: node openclaw.mjs status --json --timeout 1
+
+      - name: Smoke test built bundled plugin singleton
+        run: pnpm test:build:singleton
+
+      - name: Check CLI startup memory
+        run: pnpm test:startup:memory
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
     needs: [docs-scope]
     if: needs.docs-scope.outputs.docs_changed == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
 
       - name: Check docs
         run: pnpm check:docs
 
-  secrets:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+  skills-python:
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_skills_python == 'true')
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Install detect-secrets
+      - name: Install Python tooling
         run: |
           python -m pip install --upgrade pip
-          python -m pip install detect-secrets==1.5.0
+          python -m pip install pytest ruff pyyaml
 
-      - name: Detect secrets
+      - name: Lint Python skill scripts
+        run: python -m ruff check skills
+
+      - name: Test skill Python scripts
+        run: python -m pytest -q skills
+
+  secrets:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Ensure secrets base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+          install-deps: "false"
+
+      - name: Setup Python
+        id: setup-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            .pre-commit-config.yaml
+            .github/workflows/ci.yml
+
+      - name: Restore pre-commit cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Install pre-commit
         run: |
-          if ! detect-secrets scan --baseline .secrets.baseline; then
-            echo "::error::Secret scanning failed. See docs/gateway/security.md#secret-scanning-detect-secrets"
-            exit 1
+          python -m pip install --upgrade pip
+          python -m pip install pre-commit
+
+      - name: Detect committed private keys
+        run: pre-commit run --all-files detect-private-key
+
+      - name: Audit changed GitHub workflows with zizmor
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${BASE_SHA:-}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            echo "No usable base SHA detected; skipping zizmor."
+            exit 0
           fi
 
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "Base SHA ${BASE_SHA} is unavailable; skipping zizmor."
+            exit 0
+          fi
+
+          mapfile -t workflow_files < <(
+            git diff --name-only "${BASE_SHA}" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
+          )
+          if [ "${#workflow_files[@]}" -eq 0 ]; then
+            echo "No workflow changes detected; skipping zizmor."
+            exit 0
+          fi
+
+          printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
+          pre-commit run zizmor --files "${workflow_files[@]}"
+
+      - name: Audit production dependencies
+        run: pre-commit run --all-files pnpm-audit-prod
+
   checks-windows:
-    needs: [docs-scope, changed-scope, build-artifacts, check]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
-    runs-on: blacksmith-4vcpu-windows-2025
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_windows == 'true'
+    runs-on: blacksmith-32vcpu-windows-2025
+    timeout-minutes: 45
     env:
-      NODE_OPTIONS: --max-old-space-size=4096
-      # Keep total concurrency predictable on the 4 vCPU runner:
-      # `scripts/test-parallel.mjs` runs some vitest suites in parallel processes.
-      OPENCLAW_TEST_WORKERS: 2
+      NODE_OPTIONS: --max-old-space-size=6144
+      # Keep total concurrency predictable on the 32 vCPU runner.
+      # Windows shard 2 has shown intermittent instability at 2 workers.
+      OPENCLAW_TEST_WORKERS: 1
     defaults:
       run:
         shell: bash
@@ -299,17 +587,38 @@ jobs:
       matrix:
         include:
           - runtime: node
-            task: lint
-            command: pnpm lint
+            task: test
+            shard_index: 1
+            shard_count: 6
+            command: pnpm test
           - runtime: node
             task: test
-            command: pnpm canvas:a2ui:bundle && pnpm test
+            shard_index: 2
+            shard_count: 6
+            command: pnpm test
           - runtime: node
-            task: protocol
-            command: pnpm protocol:check
+            task: test
+            shard_index: 3
+            shard_count: 6
+            command: pnpm test
+          - runtime: node
+            task: test
+            shard_index: 4
+            shard_count: 6
+            command: pnpm test
+          - runtime: node
+            task: test
+            shard_index: 5
+            shard_count: 6
+            command: pnpm test
+          - runtime: node
+            task: test
+            shard_index: 6
+            shard_count: 6
+            command: pnpm test
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -332,42 +641,29 @@ jobs:
             Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
           }
 
-      - name: Download dist artifact (lint lane)
-        if: matrix.task == 'lint'
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-build
-          path: dist/
-
-      - name: Verify dist artifact (lint lane)
-        if: matrix.task == 'lint'
-        run: |
-          set -euo pipefail
-          test -s dist/index.js
-          test -s dist/plugin-sdk/index.js
-
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 22.x
-          check-latest: true
+          node-version: 24.x
+          check-latest: false
 
       - name: Setup pnpm + cache store
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           pnpm-version: "10.23.0"
-          cache-key-suffix: "node22"
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
+          cache-key-suffix: "node24"
+          # Sticky disk mount currently retries/fails on every shard and adds ~50s
+          # before install while still yielding zero pnpm store reuse.
+          # Try exact-key actions/cache restores instead to recover store reuse
+          # without the sticky-disk mount penalty.
+          use-sticky-disk: "false"
+          use-restore-keys: "false"
+          use-actions-cache: "true"
 
       - name: Runtime versions
         run: |
           node -v
           npm -v
-          bun -v
           pnpm -v
 
       - name: Capture node path
@@ -381,29 +677,22 @@ jobs:
           which node
           node -v
           pnpm -v
-          pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
+          # Persist Windows-native postinstall outputs in the pnpm store so restored
+          # caches can skip repeated rebuild/download work on later shards/runs.
+          pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
-      - name: Configure vitest JSON reports
+      - name: Configure test shard (Windows)
         if: matrix.task == 'test'
-        run: echo "OPENCLAW_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
+
+      - name: Build A2UI bundle (Windows)
+        if: matrix.task == 'test'
+        run: pnpm canvas:a2ui:bundle
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
-
-      - name: Summarize slowest tests
-        if: matrix.task == 'test'
-        run: |
-          node scripts/vitest-slowest.mjs --dir "$OPENCLAW_VITEST_REPORT_DIR" --top 50 --out "$RUNNER_TEMP/vitest-slowest.md" > /dev/null
-          echo "Slowest test summary written to $RUNNER_TEMP/vitest-slowest.md"
-
-      - name: Upload vitest reports
-        if: matrix.task == 'test'
-        uses: actions/upload-artifact@v4
-        with:
-          name: vitest-reports-${{ runner.os }}-${{ matrix.runtime }}
-          path: |
-            ${{ env.OPENCLAW_VITEST_REPORT_DIR }}
-            ${{ runner.temp }}/vitest-slowest.md
 
   # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
   # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;
@@ -415,7 +704,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -451,7 +740,7 @@ jobs:
           swiftformat --lint apps/macos/Sources --config .swiftformat
 
       - name: Cache SwiftPM
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
@@ -487,7 +776,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -643,43 +932,62 @@ jobs:
           PY
 
   android:
-    needs: [docs-scope, changed-scope, check]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_android == 'true')
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_android == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
         include:
-          - task: test
-            command: ./gradlew --no-daemon :app:testDebugUnitTest
-          - task: build
-            command: ./gradlew --no-daemon :app:assembleDebug
+          - task: test-play
+            command: ./gradlew --no-daemon :app:testPlayDebugUnitTest
+          - task: test-third-party
+            command: ./gradlew --no-daemon :app:testThirdPartyDebugUnitTest
+          - task: build-play
+            command: ./gradlew --no-daemon :app:assemblePlayDebug
+          - task: build-third-party
+            command: ./gradlew --no-daemon :app:assembleThirdPartyDebug
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 21
+          # Keep sdkmanager on the stable JDK path for Linux CI runners.
+          java-version: 17
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          accept-android-sdk-licenses: false
+      - name: Setup Android SDK cmdline-tools
+        run: |
+          set -euo pipefail
+          ANDROID_SDK_ROOT="$HOME/.android-sdk"
+          CMDLINE_TOOLS_VERSION="12266719"
+          ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
+          URL="https://dl.google.com/android/repository/${ARCHIVE}"
+
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
+          rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
+          mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: 8.11.1
 
       - name: Install Android SDK packages
         run: |
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager --install \
+          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
+          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
             "platform-tools" \
             "platforms;android-36" \
             "build-tools;36.0.0"

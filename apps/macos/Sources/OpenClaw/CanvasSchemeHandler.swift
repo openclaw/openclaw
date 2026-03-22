@@ -1,5 +1,5 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 import OSLog
 import WebKit
 
@@ -81,22 +81,23 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
             return self.html("Not Found", title: "Canvas: 404")
         }
 
-        // Directory traversal guard: served files must live under the session root.
-        let standardizedRoot = sessionRoot.standardizedFileURL
-        let standardizedFile = fileURL.standardizedFileURL
-        guard standardizedFile.path.hasPrefix(standardizedRoot.path) else {
+        // Resolve symlinks before enforcing the session-root boundary so links inside
+        // the canvas tree cannot escape to arbitrary host files.
+        let resolvedRoot = sessionRoot.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedFile = fileURL.resolvingSymlinksInPath().standardizedFileURL
+        guard self.isFileURL(resolvedFile, withinDirectory: resolvedRoot) else {
             return self.html("Forbidden", title: "Canvas: 403")
         }
 
         do {
-            let data = try Data(contentsOf: standardizedFile)
-            let mime = CanvasScheme.mimeType(forExtension: standardizedFile.pathExtension)
-            let servedPath = standardizedFile.path
+            let data = try Data(contentsOf: resolvedFile)
+            let mime = CanvasScheme.mimeType(forExtension: resolvedFile.pathExtension)
+            let servedPath = resolvedFile.path
             canvasLogger.debug(
                 "served \(session, privacy: .public)/\(path, privacy: .public) -> \(servedPath, privacy: .public)")
             return CanvasResponse(mime: mime, data: data)
         } catch {
-            let failedPath = standardizedFile.path
+            let failedPath = resolvedFile.path
             let errorText = error.localizedDescription
             canvasLogger
                 .error(
@@ -143,6 +144,11 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         let b = dir.appendingPathComponent("index.htm", isDirectory: false)
         if fm.fileExists(atPath: b.path) { return b }
         return nil
+    }
+
+    private func isFileURL(_ fileURL: URL, withinDirectory rootURL: URL) -> Bool {
+        let rootPath = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
+        return fileURL.path == rootURL.path || fileURL.path.hasPrefix(rootPath)
     }
 
     private func html(_ body: String, title: String = "Canvas") -> CanvasResponse {

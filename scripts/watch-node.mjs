@@ -1,65 +1,151 @@
 #!/usr/bin/env node
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
+import chokidar from "chokidar";
+import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node.mjs";
 
-const args = process.argv.slice(2);
-const env = { ...process.env };
-const cwd = process.cwd();
-const compiler = "tsdown";
-const watchSession = `${Date.now()}-${process.pid}`;
-env.OPENCLAW_WATCH_MODE = "1";
-env.OPENCLAW_WATCH_SESSION = watchSession;
-if (args.length > 0) {
-  env.OPENCLAW_WATCH_COMMAND = args.join(" ");
+const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
+const WATCH_RESTART_SIGNAL = "SIGTERM";
+
+const buildRunnerArgs = (args) => [WATCH_NODE_RUNNER, ...args];
+
+const normalizePath = (filePath) =>
+  String(filePath ?? "")
+    .replaceAll("\\", "/")
+    .replace(/^\.\/+/, "");
+
+const resolveRepoPath = (filePath, cwd) => {
+  const rawPath = String(filePath ?? "");
+  if (path.isAbsolute(rawPath)) {
+    return normalizePath(path.relative(cwd, rawPath));
+  }
+  return normalizePath(rawPath);
+};
+
+const isIgnoredWatchPath = (filePath, cwd) =>
+  !isRestartRelevantRunNodePath(resolveRepoPath(filePath, cwd));
+
+export async function runWatchMain(params = {}) {
+  const deps = {
+    spawn: params.spawn ?? spawn,
+    process: params.process ?? process,
+    cwd: params.cwd ?? process.cwd(),
+    args: params.args ?? process.argv.slice(2),
+    env: params.env ? { ...params.env } : { ...process.env },
+    now: params.now ?? Date.now,
+    createWatcher:
+      params.createWatcher ?? ((watchPaths, options) => chokidar.watch(watchPaths, options)),
+    watchPaths: params.watchPaths ?? runNodeWatchedPaths,
+  };
+
+  const childEnv = { ...deps.env };
+  const watchSession = `${deps.now()}-${deps.process.pid}`;
+  childEnv.OPENCLAW_WATCH_MODE = "1";
+  childEnv.OPENCLAW_WATCH_SESSION = watchSession;
+  if (deps.args.length > 0) {
+    childEnv.OPENCLAW_WATCH_COMMAND = deps.args.join(" ");
+  }
+
+  return await new Promise((resolve) => {
+    let settled = false;
+    let shuttingDown = false;
+    let restartRequested = false;
+    let watchProcess = null;
+    let onSigInt;
+    let onSigTerm;
+
+    const watcher = deps.createWatcher(deps.watchPaths, {
+      ignoreInitial: true,
+      ignored: (watchPath) => isIgnoredWatchPath(watchPath, deps.cwd),
+    });
+
+    const settle = (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (onSigInt) {
+        deps.process.off("SIGINT", onSigInt);
+      }
+      if (onSigTerm) {
+        deps.process.off("SIGTERM", onSigTerm);
+      }
+      watcher.close?.().catch?.(() => {});
+      resolve(code);
+    };
+
+    const startRunner = () => {
+      watchProcess = deps.spawn(deps.process.execPath, buildRunnerArgs(deps.args), {
+        cwd: deps.cwd,
+        env: childEnv,
+        stdio: "inherit",
+      });
+      watchProcess.on("exit", () => {
+        watchProcess = null;
+        if (shuttingDown) {
+          return;
+        }
+        if (restartRequested) {
+          restartRequested = false;
+          startRunner();
+        }
+      });
+    };
+
+    const requestRestart = (changedPath) => {
+      if (shuttingDown || isIgnoredWatchPath(changedPath, deps.cwd)) {
+        return;
+      }
+      if (!watchProcess) {
+        startRunner();
+        return;
+      }
+      restartRequested = true;
+      if (typeof watchProcess.kill === "function") {
+        watchProcess.kill(WATCH_RESTART_SIGNAL);
+      }
+    };
+
+    watcher.on("add", requestRestart);
+    watcher.on("change", requestRestart);
+    watcher.on("unlink", requestRestart);
+    watcher.on("error", () => {
+      shuttingDown = true;
+      if (watchProcess && typeof watchProcess.kill === "function") {
+        watchProcess.kill(WATCH_RESTART_SIGNAL);
+      }
+      settle(1);
+    });
+
+    startRunner();
+
+    onSigInt = () => {
+      shuttingDown = true;
+      if (watchProcess && typeof watchProcess.kill === "function") {
+        watchProcess.kill(WATCH_RESTART_SIGNAL);
+      }
+      settle(130);
+    };
+    onSigTerm = () => {
+      shuttingDown = true;
+      if (watchProcess && typeof watchProcess.kill === "function") {
+        watchProcess.kill(WATCH_RESTART_SIGNAL);
+      }
+      settle(143);
+    };
+
+    deps.process.on("SIGINT", onSigInt);
+    deps.process.on("SIGTERM", onSigTerm);
+  });
 }
 
-const initialBuild = spawnSync("pnpm", ["exec", compiler], {
-  cwd,
-  env,
-  stdio: "inherit",
-});
-
-if (initialBuild.status !== 0) {
-  process.exit(initialBuild.status ?? 1);
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  void runWatchMain()
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
 }
-
-const compilerProcess = spawn("pnpm", ["exec", compiler, "--watch"], {
-  cwd,
-  env,
-  stdio: "inherit",
-});
-
-const nodeProcess = spawn(process.execPath, ["--watch", "openclaw.mjs", ...args], {
-  cwd,
-  env,
-  stdio: "inherit",
-});
-
-let exiting = false;
-
-function cleanup(code = 0) {
-  if (exiting) {
-    return;
-  }
-  exiting = true;
-  nodeProcess.kill("SIGTERM");
-  compilerProcess.kill("SIGTERM");
-  process.exit(code);
-}
-
-process.on("SIGINT", () => cleanup(130));
-process.on("SIGTERM", () => cleanup(143));
-
-compilerProcess.on("exit", (code) => {
-  if (exiting) {
-    return;
-  }
-  cleanup(code ?? 1);
-});
-
-nodeProcess.on("exit", (code, signal) => {
-  if (signal || exiting) {
-    return;
-  }
-  cleanup(code ?? 1);
-});

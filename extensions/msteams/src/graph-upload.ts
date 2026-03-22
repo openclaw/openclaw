@@ -21,25 +21,34 @@ export interface OneDriveUploadResult {
   name: string;
 }
 
-/**
- * Upload a file to the user's OneDrive root folder.
- * For larger files, this uses the simple upload endpoint (up to 4MB).
- * TODO: For files >4MB, implement resumable upload session.
- */
-export async function uploadToOneDrive(params: {
+function parseUploadedDriveItem(
+  data: { id?: string; webUrl?: string; name?: string },
+  label: "OneDrive" | "SharePoint",
+): OneDriveUploadResult {
+  if (!data.id || !data.webUrl || !data.name) {
+    throw new Error(`${label} upload response missing required fields`);
+  }
+
+  return {
+    id: data.id,
+    webUrl: data.webUrl,
+    name: data.name,
+  };
+}
+
+async function uploadDriveItem(params: {
   buffer: Buffer;
   filename: string;
   contentType?: string;
   tokenProvider: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
+  url: string;
+  label: "OneDrive" | "SharePoint";
 }): Promise<OneDriveUploadResult> {
   const fetchFn = params.fetchFn ?? fetch;
   const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
 
-  // Use "OpenClawShared" folder to organize bot-uploaded files
-  const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
-
-  const res = await fetchFn(`${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`, {
+  const res = await fetchFn(params.url, {
     method: "PUT",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -50,24 +59,33 @@ export async function uploadToOneDrive(params: {
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`OneDrive upload failed: ${res.status} ${res.statusText} - ${body}`);
+    throw new Error(`${params.label} upload failed: ${res.status} ${res.statusText} - ${body}`);
   }
 
-  const data = (await res.json()) as {
-    id?: string;
-    webUrl?: string;
-    name?: string;
-  };
+  return parseUploadedDriveItem(
+    (await res.json()) as { id?: string; webUrl?: string; name?: string },
+    params.label,
+  );
+}
 
-  if (!data.id || !data.webUrl || !data.name) {
-    throw new Error("OneDrive upload response missing required fields");
-  }
-
-  return {
-    id: data.id,
-    webUrl: data.webUrl,
-    name: data.name,
-  };
+/**
+ * Upload a file to the user's OneDrive root folder.
+ * For larger files, this uses the simple upload endpoint (up to 4MB).
+ */
+export async function uploadToOneDrive(params: {
+  buffer: Buffer;
+  filename: string;
+  contentType?: string;
+  tokenProvider: MSTeamsAccessTokenProvider;
+  fetchFn?: typeof fetch;
+}): Promise<OneDriveUploadResult> {
+  // Use "OpenClawShared" folder to organize bot-uploaded files
+  const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
+  return await uploadDriveItem({
+    ...params,
+    url: `${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`,
+    label: "OneDrive",
+  });
 }
 
 export interface OneDriveSharingLink {
@@ -176,44 +194,13 @@ export async function uploadToSharePoint(params: {
   siteId: string;
   fetchFn?: typeof fetch;
 }): Promise<OneDriveUploadResult> {
-  const fetchFn = params.fetchFn ?? fetch;
-  const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
-
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
-
-  const res = await fetchFn(
-    `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": params.contentType ?? "application/octet-stream",
-      },
-      body: new Uint8Array(params.buffer),
-    },
-  );
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`SharePoint upload failed: ${res.status} ${res.statusText} - ${body}`);
-  }
-
-  const data = (await res.json()) as {
-    id?: string;
-    webUrl?: string;
-    name?: string;
-  };
-
-  if (!data.id || !data.webUrl || !data.name) {
-    throw new Error("SharePoint upload response missing required fields");
-  }
-
-  return {
-    id: data.id,
-    webUrl: data.webUrl,
-    name: data.name,
-  };
+  return await uploadDriveItem({
+    ...params,
+    url: `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
+    label: "SharePoint",
+  });
 }
 
 export interface ChatMember {
@@ -275,6 +262,82 @@ export async function getDriveItemProperties(params: {
     webDavUrl: data.webDavUrl,
     name: data.name,
   };
+}
+
+/**
+ * Resolve the Graph API-native chat ID from a Bot Framework conversation ID.
+ *
+ * Bot Framework personal DM conversation IDs use formats like `a:1xxx@unq.gbl.spaces`
+ * or `8:orgid:xxx` that the Graph API does not accept. Graph API requires the
+ * `19:xxx@thread.tacv2` or `19:xxx@unq.gbl.spaces` format.
+ *
+ * This function looks up the matching Graph chat by querying the bot's chats filtered
+ * by the target user's AAD object ID.
+ *
+ * Returns the Graph chat ID if found, or null if resolution fails.
+ */
+export async function resolveGraphChatId(params: {
+  /** Bot Framework conversation ID (may be in non-Graph format for personal DMs) */
+  botFrameworkConversationId: string;
+  /** AAD object ID of the user in the conversation (used for filtering chats) */
+  userAadObjectId?: string;
+  tokenProvider: MSTeamsAccessTokenProvider;
+  fetchFn?: typeof fetch;
+}): Promise<string | null> {
+  const { botFrameworkConversationId, userAadObjectId, tokenProvider } = params;
+  const fetchFn = params.fetchFn ?? fetch;
+
+  // If the conversation ID already looks like a valid Graph chat ID, return it directly.
+  // Graph chat IDs start with "19:" — Bot Framework group chat IDs already use this format.
+  if (botFrameworkConversationId.startsWith("19:")) {
+    return botFrameworkConversationId;
+  }
+
+  // For personal DMs with non-Graph conversation IDs (e.g. `a:1xxx` or `8:orgid:xxx`),
+  // query the bot's chats to find the matching one.
+  const token = await tokenProvider.getAccessToken(GRAPH_SCOPE);
+
+  // Build filter: if we have the user's AAD object ID, narrow the search to 1:1 chats
+  // with that member. Otherwise, fall back to listing all 1:1 chats.
+  let path: string;
+  if (userAadObjectId) {
+    const encoded = encodeURIComponent(
+      `chatType eq 'oneOnOne' and members/any(m:m/microsoft.graph.aadUserConversationMember/userId eq '${userAadObjectId}')`,
+    );
+    path = `/me/chats?$filter=${encoded}&$select=id`;
+  } else {
+    // Fallback: list all 1:1 chats when no user ID is available.
+    // Only safe when the bot has exactly one 1:1 chat; returns null otherwise to
+    // avoid sending to the wrong person's chat.
+    path = `/me/chats?$filter=${encodeURIComponent("chatType eq 'oneOnOne'")}&$select=id`;
+  }
+
+  const res = await fetchFn(`${GRAPH_ROOT}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const data = (await res.json()) as {
+    value?: Array<{ id?: string }>;
+  };
+
+  const chats = data.value ?? [];
+
+  // When filtered by userAadObjectId, any non-empty result is the right 1:1 chat.
+  if (userAadObjectId && chats.length > 0 && chats[0]?.id) {
+    return chats[0].id;
+  }
+
+  // Without a user ID we can only be certain when exactly one chat is returned;
+  // multiple results would be ambiguous and could route to the wrong person.
+  if (!userAadObjectId && chats.length === 1 && chats[0]?.id) {
+    return chats[0].id;
+  }
+
+  return null;
 }
 
 /**

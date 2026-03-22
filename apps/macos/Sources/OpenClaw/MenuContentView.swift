@@ -170,7 +170,11 @@ struct MenuContent: View {
             await self.loadBrowserControlEnabled()
         }
         .onAppear {
-            self.startMicObserver()
+            MicRefreshSupport.startObserver(self.micObserver) {
+                MicRefreshSupport.schedule(refreshTask: &self.micRefreshTask) {
+                    await self.loadMicrophones(force: true)
+                }
+            }
         }
         .onDisappear {
             self.micRefreshTask?.cancel()
@@ -400,7 +404,6 @@ struct MenuContent: View {
         }
     }
 
-    @ViewBuilder
     private func statusLine(label: String, color: Color) -> some View {
         HStack(spacing: 6) {
             Circle()
@@ -426,11 +429,7 @@ struct MenuContent: View {
     }
 
     private var voiceWakeBinding: Binding<Bool> {
-        Binding(
-            get: { self.state.swabbleEnabled },
-            set: { newValue in
-                Task { await self.state.setVoiceWakeEnabled(newValue) }
-            })
+        MicRefreshSupport.voiceWakeBinding(for: self.state)
     }
 
     private var showVoiceWakeMicPicker: Bool {
@@ -547,26 +546,12 @@ struct MenuContent: View {
             }
             .map { AudioInputDevice(uid: $0.uniqueID, name: $0.localizedName) }
         self.availableMics = self.filterAliveInputs(self.availableMics)
-        self.updateSelectedMicName()
+        self.state.voiceWakeMicName = MicRefreshSupport.selectedMicName(
+            selectedID: self.state.voiceWakeMicID,
+            in: self.availableMics,
+            uid: \.uid,
+            name: \.name)
         self.loadingMics = false
-    }
-
-    private func startMicObserver() {
-        self.micObserver.start {
-            Task { @MainActor in
-                self.scheduleMicRefresh()
-            }
-        }
-    }
-
-    @MainActor
-    private func scheduleMicRefresh() {
-        self.micRefreshTask?.cancel()
-        self.micRefreshTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard !Task.isCancelled else { return }
-            await self.loadMicrophones(force: true)
-        }
     }
 
     private func filterAliveInputs(_ inputs: [AudioInputDevice]) -> [AudioInputDevice] {
@@ -575,21 +560,11 @@ struct MenuContent: View {
         return inputs.filter { aliveUIDs.contains($0.uid) }
     }
 
-    @MainActor
-    private func updateSelectedMicName() {
-        let selected = self.state.voiceWakeMicID
-        if selected.isEmpty {
-            self.state.voiceWakeMicName = ""
-            return
-        }
-        if let match = self.availableMics.first(where: { $0.uid == selected }) {
-            self.state.voiceWakeMicName = match.name
-        }
-    }
-
     private struct AudioInputDevice: Identifiable, Equatable {
         let uid: String
         let name: String
-        var id: String { self.uid }
+        var id: String {
+            self.uid
+        }
     }
 }

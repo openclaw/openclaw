@@ -1,9 +1,14 @@
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  type AuthCredentialReasonCode,
   type AuthProfileCredential,
   type AuthProfileStore,
   resolveAuthProfileDisplayLabel,
 } from "./auth-profiles.js";
+import {
+  evaluateStoredCredentialEligibility,
+  resolveTokenExpiryState,
+} from "./auth-profiles/credential-state.js";
 
 export type AuthProfileSource = "store";
 
@@ -14,6 +19,7 @@ export type AuthProfileHealth = {
   provider: string;
   type: "oauth" | "token" | "api_key";
   status: AuthProfileHealthStatus;
+  reasonCode?: AuthCredentialReasonCode;
   expiresAt?: number;
   remainingMs?: number;
   source: AuthProfileSource;
@@ -43,14 +49,23 @@ export function resolveAuthProfileSource(_profileId: string): AuthProfileSource 
   return "store";
 }
 
-export function formatRemainingShort(remainingMs?: number): string {
+export function formatRemainingShort(
+  remainingMs?: number,
+  opts?: {
+    underMinuteLabel?: string;
+  },
+): string {
   if (remainingMs === undefined || Number.isNaN(remainingMs)) {
     return "unknown";
   }
   if (remainingMs <= 0) {
     return "0m";
   }
-  const minutes = Math.max(1, Math.round(remainingMs / 60_000));
+  const roundedMinutes = Math.round(remainingMs / 60_000);
+  if (roundedMinutes < 1) {
+    return opts?.underMinuteLabel ?? "1m";
+  }
+  const minutes = roundedMinutes;
   if (minutes < 60) {
     return `${minutes}m`;
   }
@@ -104,11 +119,26 @@ function buildProfileHealth(params: {
   }
 
   if (credential.type === "token") {
-    const expiresAt =
-      typeof credential.expires === "number" && Number.isFinite(credential.expires)
-        ? credential.expires
-        : undefined;
-    if (!expiresAt || expiresAt <= 0) {
+    const eligibility = evaluateStoredCredentialEligibility({
+      credential,
+      now,
+    });
+    if (!eligibility.eligible) {
+      const status: AuthProfileHealthStatus =
+        eligibility.reasonCode === "expired" ? "expired" : "missing";
+      return {
+        profileId,
+        provider: credential.provider,
+        type: "token",
+        status,
+        reasonCode: eligibility.reasonCode,
+        source,
+        label,
+      };
+    }
+    const expiryState = resolveTokenExpiryState(credential.expires, now);
+    const expiresAt = expiryState === "valid" ? credential.expires : undefined;
+    if (!expiresAt) {
       return {
         profileId,
         provider: credential.provider,
@@ -124,6 +154,7 @@ function buildProfileHealth(params: {
       provider: credential.provider,
       type: "token",
       status,
+      reasonCode: status === "expired" ? "expired" : undefined,
       expiresAt,
       remainingMs,
       source,

@@ -1,31 +1,24 @@
-import type { ChannelGroupContext, GroupToolPolicyConfig } from "openclaw/plugin-sdk";
-import type { CoreConfig } from "./types.js";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { resolveMatrixRoomConfig } from "./matrix/monitor/rooms.js";
+import { normalizeMatrixResolvableTarget } from "./matrix/target-ids.js";
+import type { ChannelGroupContext, GroupToolPolicyConfig } from "./runtime-api.js";
+import type { CoreConfig } from "./types.js";
 
-export function resolveMatrixGroupRequireMention(params: ChannelGroupContext): boolean {
-  const rawGroupId = params.groupId?.trim() ?? "";
-  let roomId = rawGroupId;
-  const lower = roomId.toLowerCase();
-  if (lower.startsWith("matrix:")) {
-    roomId = roomId.slice("matrix:".length).trim();
-  }
-  if (roomId.toLowerCase().startsWith("channel:")) {
-    roomId = roomId.slice("channel:".length).trim();
-  }
-  if (roomId.toLowerCase().startsWith("room:")) {
-    roomId = roomId.slice("room:".length).trim();
-  }
+function resolveMatrixRoomConfigForGroup(params: ChannelGroupContext) {
+  const roomId = normalizeMatrixResolvableTarget(params.groupId?.trim() ?? "");
   const groupChannel = params.groupChannel?.trim() ?? "";
-  const aliases = groupChannel ? [groupChannel] : [];
+  const aliases = groupChannel ? [normalizeMatrixResolvableTarget(groupChannel)] : [];
   const cfg = params.cfg as CoreConfig;
   const matrixConfig = resolveMatrixAccountConfig({ cfg, accountId: params.accountId });
-  const resolved = resolveMatrixRoomConfig({
+  return resolveMatrixRoomConfig({
     rooms: matrixConfig.groups ?? matrixConfig.rooms,
     roomId,
     aliases,
-    name: groupChannel || undefined,
   }).config;
+}
+
+export function resolveMatrixGroupRequireMention(params: ChannelGroupContext): boolean {
+  const resolved = resolveMatrixRoomConfigForGroup(params);
   if (resolved) {
     if (resolved.autoReply === true) {
       return false;
@@ -43,27 +36,6 @@ export function resolveMatrixGroupRequireMention(params: ChannelGroupContext): b
 export function resolveMatrixGroupToolPolicy(
   params: ChannelGroupContext,
 ): GroupToolPolicyConfig | undefined {
-  const rawGroupId = params.groupId?.trim() ?? "";
-  let roomId = rawGroupId;
-  const lower = roomId.toLowerCase();
-  if (lower.startsWith("matrix:")) {
-    roomId = roomId.slice("matrix:".length).trim();
-  }
-  if (roomId.toLowerCase().startsWith("channel:")) {
-    roomId = roomId.slice("channel:".length).trim();
-  }
-  if (roomId.toLowerCase().startsWith("room:")) {
-    roomId = roomId.slice("room:".length).trim();
-  }
-  const groupChannel = params.groupChannel?.trim() ?? "";
-  const aliases = groupChannel ? [groupChannel] : [];
-  const cfg = params.cfg as CoreConfig;
-  const matrixConfig = resolveMatrixAccountConfig({ cfg, accountId: params.accountId });
-  const resolved = resolveMatrixRoomConfig({
-    rooms: matrixConfig.groups ?? matrixConfig.rooms,
-    roomId,
-    aliases,
-    name: groupChannel || undefined,
-  }).config;
+  const resolved = resolveMatrixRoomConfigForGroup(params);
   return resolved?.tools;
 }

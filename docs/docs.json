@@ -43,10 +43,51 @@
         "label": "Releases",
         "href": "https://github.com/openclaw/openclaw/releases",
         "icon": "package"
+      },
+      {
+        "label": "Discord",
+        "href": "https://discord.com/invite/clawd",
+        "icon": "discord"
       }
     ]
   },
   "redirects": [
+    {
+      "source": "/platforms/oracle",
+      "destination": "/install/oracle"
+    },
+    {
+      "source": "/platforms/digitalocean",
+      "destination": "/install/digitalocean"
+    },
+    {
+      "source": "/platforms/raspberry-pi",
+      "destination": "/install/raspberry-pi"
+    },
+    {
+      "source": "/plugins/building-extensions",
+      "destination": "/plugins/building-plugins"
+    },
+    {
+      "source": "/plugins/agent-tools",
+      "destination": "/plugins/building-plugins#registering-agent-tools"
+    },
+    {
+      "source": "/tools/capability-cookbook",
+      "destination": "/plugins/architecture"
+    },
+    {
+      "source": "/brave-search",
+      "destination": "/tools/brave-search"
+    },
+    {
+      "source": "/perplexity",
+      "destination": "/tools/perplexity-search"
+    },
+    {
+      "source": "/tts",
+      "destination": "/tools/tts"
+    },
     {
       "source": "/messages",
       "destination": "/concepts/messages"
@@ -60,8 +101,12 @@
       "destination": "/concepts/compaction"
     },
     {
+      "source": "/context-engine",
+      "destination": "/concepts/context-engine"
+    },
+    {
       "source": "/cron",
-      "destination": "/cron-jobs"
+      "destination": "/automation/cron-jobs"
     },
     {
       "source": "/minimax",
@@ -92,12 +137,20 @@
       "destination": "/providers/moonshot"
     },
     {
+      "source": "/mistral",
+      "destination": "/providers/mistral"
+    },
+    {
       "source": "/openrouter",
       "destination": "/providers/openrouter"
     },
     {
       "source": "/opencode",
       "destination": "/providers/opencode"
+    },
+    {
+      "source": "/opencode-go",
+      "destination": "/providers/opencode-go"
     },
     {
       "source": "/qianfan",
@@ -133,7 +186,7 @@
     },
     {
       "source": "/providers/grammy",
-      "destination": "/channels/grammy"
+      "destination": "/channels/telegram"
     },
     {
       "source": "/providers/imessage",
@@ -272,6 +325,10 @@
       "destination": "/start/openclaw"
     },
     {
+      "source": "/start/pairing",
+      "destination": "/channels/pairing"
+    },
+    {
       "source": "/clawhub",
       "destination": "/tools/clawhub"
     },
@@ -320,6 +377,10 @@
       "destination": "/install/docker"
     },
     {
+      "source": "/podman",
+      "destination": "/install/podman"
+    },
+    {
       "source": "/doctor",
       "destination": "/gateway/doctor"
     },
@@ -353,7 +414,11 @@
     },
     {
       "source": "/grammy",
-      "destination": "/channels/grammy"
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/channels/grammy",
+      "destination": "/channels/telegram"
     },
     {
       "source": "/group-messages",
@@ -449,7 +514,7 @@
     },
     {
       "source": "/mac/release",
-      "destination": "/platforms/mac/release"
+      "destination": "/reference/RELEASING"
     },
     {
       "source": "/mac/remote",
@@ -489,11 +554,11 @@
     },
     {
       "source": "/model",
-      "destination": "/models"
+      "destination": "/concepts/models"
     },
     {
       "source": "/model/",
-      "destination": "/models"
+      "destination": "/concepts/models"
     },
     {
       "source": "/models",
@@ -512,20 +577,16 @@
       "destination": "/start/onboarding"
     },
     {
-      "source": "/onboarding-config-protocol",
-      "destination": "/experiments/onboarding-config-protocol"
-    },
-    {
       "source": "/pairing",
       "destination": "/channels/pairing"
     },
     {
-      "source": "/plans/cron-add-hardening",
-      "destination": "/experiments/plans/cron-add-hardening"
+      "source": "/experiments/plans/cron-add-hardening",
+      "destination": "/automation/cron-jobs"
     },
     {
-      "source": "/plans/group-policy-hardening",
-      "destination": "/experiments/plans/group-policy-hardening"
+      "source": "/experiments/plans/group-policy-hardening",
+      "destination": "/channels/groups"
     },
     {
       "source": "/poll",
@@ -534,10 +595,6 @@
     {
       "source": "/presence",
       "destination": "/concepts/presence"
-    },
-    {
-      "source": "/proposals/model-config",
-      "destination": "/experiments/proposals/model-config"
     },
     {
       "source": "/provider-routing",
@@ -560,10 +617,6 @@
       "destination": "/gateway/remote-gateway-readme"
     },
     {
-      "source": "/research/memory",
-      "destination": "/experiments/research/memory"
-    },
-    {
       "source": "/rpc",
       "destination": "/reference/rpc"
     },
@@ -581,7 +634,7 @@
     },
     {
       "source": "/sessions",
-      "destination": "/concepts/sessions"
+      "destination": "/concepts/session"
     },
     {
       "source": "/setup",
@@ -756,6 +809,10 @@
       "destination": "/install/gcp"
     },
     {
+      "source": "/azure",
+      "destination": "/install/azure"
+    },
+    {
       "source": "/platforms/fly",
       "destination": "/install/fly"
     },
@@ -766,6 +823,10 @@
     {
       "source": "/platforms/gcp",
       "destination": "/install/gcp"
+    },
+    {
+      "source": "/platforms/azure",
+      "destination": "/install/azure"
     },
     {
       "source": "/platforms/macos-vm",
@@ -786,6 +847,10 @@
     {
       "source": "/platforms/northflank",
       "destination": "/install/northflank"
+    },
+    {
+      "source": "/gateway/trusted-proxy",
+      "destination": "/gateway/trusted-proxy-auth"
     }
   ],
   "navigation": {
@@ -797,16 +862,8 @@
             "tab": "Get started",
             "groups": [
               {
-                "group": "Home",
-                "pages": ["index"]
-              },
-              {
                 "group": "Overview",
-                "pages": ["start/showcase"]
-              },
-              {
-                "group": "Core concepts",
-                "pages": ["concepts/features"]
+                "pages": ["index", "start/showcase", "concepts/features"]
               },
               {
                 "group": "First steps",
@@ -819,7 +876,11 @@
               },
               {
                 "group": "Guides",
-                "pages": ["start/openclaw"]
+                "pages": [
+                  "start/openclaw",
+                  "start/wizard-cli-reference",
+                  "start/wizard-cli-automation"
+                ]
               }
             ]
           },
@@ -828,32 +889,46 @@
             "groups": [
               {
                 "group": "Install overview",
-                "pages": ["install/index", "install/installer"]
+                "pages": ["install/index", "install/installer", "install/node"]
               },
               {
-                "group": "Other install methods",
-                "pages": ["install/docker", "install/nix", "install/ansible", "install/bun"]
-              },
-              {
-                "group": "Maintenance",
-                "pages": ["install/updating", "install/migrating", "install/uninstall"]
-              },
-              {
-                "group": "Hosting and deployment",
+                "group": "Containers",
                 "pages": [
-                  "install/fly",
-                  "install/hetzner",
-                  "install/gcp",
-                  "install/macos-vm",
-                  "install/exe-dev",
-                  "install/railway",
-                  "install/render",
-                  "install/northflank"
+                  "install/ansible",
+                  "install/bun",
+                  "install/docker",
+                  "install/nix",
+                  "install/podman"
                 ]
               },
               {
-                "group": "Advanced",
-                "pages": ["install/development-channels"]
+                "group": "Hosting",
+                "pages": [
+                  "install/azure",
+                  "install/digitalocean",
+                  "install/docker-vm-runtime",
+                  "install/exe-dev",
+                  "install/fly",
+                  "install/gcp",
+                  "install/hetzner",
+                  "install/kubernetes",
+                  "vps",
+                  "install/macos-vm",
+                  "install/northflank",
+                  "install/oracle",
+                  "install/railway",
+                  "install/raspberry-pi",
+                  "install/render"
+                ]
+              },
+              {
+                "group": "Maintenance",
+                "pages": [
+                  "install/updating",
+                  "install/migrating",
+                  "install/uninstall",
+                  "install/development-channels"
+                ]
               }
             ]
           },
@@ -867,19 +942,26 @@
               {
                 "group": "Messaging platforms",
                 "pages": [
-                  "channels/whatsapp",
-                  "channels/telegram",
+                  "channels/bluebubbles",
                   "channels/discord",
-                  "channels/irc",
-                  "channels/slack",
                   "channels/feishu",
                   "channels/googlechat",
-                  "channels/mattermost",
-                  "channels/signal",
                   "channels/imessage",
-                  "channels/msteams",
+                  "channels/irc",
                   "channels/line",
                   "channels/matrix",
+                  "channels/mattermost",
+                  "channels/msteams",
+                  "channels/nextcloud-talk",
+                  "channels/nostr",
+                  "channels/signal",
+                  "channels/synology-chat",
+                  "channels/slack",
+                  "channels/telegram",
+                  "channels/tlon",
+                  "channels/twitch",
+                  "plugins/voice-call",
+                  "channels/whatsapp",
                   "channels/zalo",
                   "channels/zalouser"
                 ]
@@ -909,19 +991,16 @@
                   "concepts/agent-loop",
                   "concepts/system-prompt",
                   "concepts/context",
+                  "concepts/context-engine",
                   "concepts/agent-workspace",
-                  "concepts/oauth"
+                  "concepts/oauth",
+                  "start/bootstrapping"
                 ]
-              },
-              {
-                "group": "Bootstrapping",
-                "pages": ["start/bootstrapping"]
               },
               {
                 "group": "Sessions and memory",
                 "pages": [
                   "concepts/session",
-                  "concepts/sessions",
                   "concepts/session-pruning",
                   "concepts/session-tool",
                   "concepts/memory",
@@ -930,7 +1009,11 @@
               },
               {
                 "group": "Multi-agent",
-                "pages": ["concepts/multi-agent", "concepts/presence"]
+                "pages": [
+                  "concepts/multi-agent",
+                  "concepts/presence",
+                  "concepts/delegate-architecture"
+                ]
               },
               {
                 "group": "Messages and delivery",
@@ -944,56 +1027,40 @@
             ]
           },
           {
-            "tab": "Tools",
+            "tab": "Tools & Plugins",
             "groups": [
               {
                 "group": "Overview",
                 "pages": ["tools/index"]
               },
               {
-                "group": "Built-in tools",
+                "group": "Plugins",
                 "pages": [
-                  "tools/lobster",
-                  "tools/llm-task",
-                  "tools/exec",
-                  "tools/web",
-                  "tools/apply-patch",
-                  "tools/elevated",
-                  "tools/thinking",
-                  "tools/reactions"
+                  "tools/plugin",
+                  "plugins/building-plugins",
+                  "plugins/community",
+                  "plugins/bundles",
+                  "plugins/manifest",
+                  "plugins/sdk-migration",
+                  "plugins/architecture"
                 ]
-              },
-              {
-                "group": "Browser",
-                "pages": [
-                  "tools/browser",
-                  "tools/browser-login",
-                  "tools/chrome-extension",
-                  "tools/browser-linux-troubleshooting"
-                ]
-              },
-              {
-                "group": "Agent coordination",
-                "pages": ["tools/agent-send", "tools/subagents", "tools/multi-agent-sandbox-tools"]
               },
               {
                 "group": "Skills",
                 "pages": [
-                  "tools/slash-commands",
                   "tools/skills",
+                  "tools/creating-skills",
                   "tools/skills-config",
+                  "tools/slash-commands",
                   "tools/clawhub",
-                  "tools/plugin"
+                  "prose"
                 ]
-              },
-              {
-                "group": "Extensions",
-                "pages": ["plugins/voice-call", "plugins/zalouser"]
               },
               {
                 "group": "Automation",
                 "pages": [
                   "automation/hooks",
+                  "automation/standing-orders",
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
                   "automation/troubleshooting",
@@ -1004,16 +1071,48 @@
                 ]
               },
               {
-                "group": "Media and devices",
+                "group": "Tools",
                 "pages": [
-                  "nodes/index",
-                  "nodes/troubleshooting",
-                  "nodes/images",
-                  "nodes/audio",
-                  "nodes/camera",
-                  "nodes/talk",
-                  "nodes/voicewake",
-                  "nodes/location-command"
+                  "tools/apply-patch",
+                  {
+                    "group": "Browser",
+                    "pages": [
+                      "tools/browser",
+                      "tools/browser-login",
+                      "tools/browser-linux-troubleshooting",
+                      "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
+                    ]
+                  },
+                  "tools/btw",
+                  "tools/diffs",
+                  "tools/elevated",
+                  "tools/exec",
+                  "tools/exec-approvals",
+                  "tools/llm-task",
+                  "tools/lobster",
+                  "tools/loop-detection",
+                  "tools/pdf",
+                  "tools/reactions",
+                  "tools/thinking",
+                  {
+                    "group": "Web and search",
+                    "pages": [
+                      "tools/web",
+                      "tools/brave-search",
+                      "tools/firecrawl",
+                      "tools/perplexity-search",
+                      "tools/tavily"
+                    ]
+                  }
+                ]
+              },
+              {
+                "group": "Agent coordination",
+                "pages": [
+                  "tools/agent-send",
+                  "tools/subagents",
+                  "tools/acp-agents",
+                  "tools/multi-agent-sandbox-tools"
                 ]
               }
             ]
@@ -1026,29 +1125,47 @@
                 "pages": ["providers/index", "providers/models"]
               },
               {
-                "group": "Model concepts",
-                "pages": ["concepts/models"]
-              },
-              {
-                "group": "Configuration",
-                "pages": ["concepts/model-providers", "concepts/model-failover"]
+                "group": "Concepts and configuration",
+                "pages": ["concepts/models", "concepts/model-providers", "concepts/model-failover"]
               },
               {
                 "group": "Providers",
                 "pages": [
                   "providers/anthropic",
-                  "providers/openai",
-                  "providers/openrouter",
-                  "providers/litellm",
                   "providers/bedrock",
-                  "providers/vercel-ai-gateway",
-                  "providers/moonshot",
-                  "providers/minimax",
-                  "providers/opencode",
+                  "providers/cloudflare-ai-gateway",
+                  "providers/claude-max-api-proxy",
+                  "providers/deepgram",
+                  "providers/github-copilot",
+                  "providers/google",
+                  "providers/groq",
+                  "providers/huggingface",
+                  "providers/kilocode",
+                  "providers/litellm",
                   "providers/glm",
-                  "providers/zai",
+                  "providers/minimax",
+                  "providers/modelstudio",
+                  "providers/moonshot",
+                  "providers/mistral",
+                  "providers/nvidia",
+                  "providers/ollama",
+                  "providers/openai",
+                  "providers/opencode-go",
+                  "providers/opencode",
+                  "providers/openrouter",
+                  "providers/perplexity-provider",
+                  "providers/qianfan",
+                  "providers/qwen",
+                  "providers/sglang",
                   "providers/synthetic",
-                  "providers/qianfan"
+                  "providers/together",
+                  "providers/vercel-ai-gateway",
+                  "providers/venice",
+                  "providers/vllm",
+                  "providers/volcengine",
+                  "providers/xai",
+                  "providers/xiaomi",
+                  "providers/zai"
                 ]
               }
             ]
@@ -1083,7 +1200,6 @@
                   "platforms/mac/permissions",
                   "platforms/mac/remote",
                   "platforms/mac/signing",
-                  "platforms/mac/release",
                   "platforms/mac/bundled-gateway",
                   "platforms/mac/xpc",
                   "platforms/mac/skills",
@@ -1106,10 +1222,15 @@
                       "gateway/configuration-reference",
                       "gateway/configuration-examples",
                       "gateway/authentication",
+                      "auth-credential-semantics",
+                      "gateway/secrets",
+                      "gateway/secrets-plan-contract",
+                      "gateway/trusted-proxy-auth",
                       "gateway/health",
                       "gateway/heartbeat",
                       "gateway/doctor",
                       "gateway/logging",
+                      "logging",
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/multiple-gateways",
@@ -1121,6 +1242,7 @@
                     "pages": [
                       "gateway/security/index",
                       "gateway/sandboxing",
+                      "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated"
                     ]
                   },
@@ -1130,6 +1252,7 @@
                       "gateway/protocol",
                       "gateway/bridge-protocol",
                       "gateway/openai-http-api",
+                      "gateway/openresponses-http-api",
                       "gateway/tools-invoke-http-api",
                       "gateway/cli-backends",
                       "gateway/local-models"
@@ -1138,6 +1261,7 @@
                   {
                     "group": "Networking and discovery",
                     "pages": [
+                      "network",
                       "gateway/network-model",
                       "gateway/pairing",
                       "gateway/discovery",
@@ -1152,7 +1276,26 @@
               },
               {
                 "group": "Security",
-                "pages": ["security/formal-verification"]
+                "pages": [
+                  "security/formal-verification",
+                  "security/THREAT-MODEL-ATLAS",
+                  "security/CONTRIBUTING-THREAT-MODEL"
+                ]
+              },
+              {
+                "group": "Nodes and devices",
+                "pages": [
+                  "nodes/index",
+                  "nodes/troubleshooting",
+                  "nodes/media-understanding",
+                  "nodes/images",
+                  "nodes/audio",
+                  "nodes/camera",
+                  "nodes/talk",
+                  "nodes/voicewake",
+                  "nodes/location-command",
+                  "tools/tts"
+                ]
               },
               {
                 "group": "Web interfaces",
@@ -1167,41 +1310,76 @@
                 "group": "CLI commands",
                 "pages": [
                   "cli/index",
-                  "cli/agent",
-                  "cli/agents",
-                  "cli/approvals",
-                  "cli/browser",
-                  "cli/channels",
-                  "cli/configure",
-                  "cli/cron",
-                  "cli/dashboard",
-                  "cli/directory",
-                  "cli/dns",
-                  "cli/docs",
-                  "cli/doctor",
-                  "cli/gateway",
-                  "cli/health",
-                  "cli/hooks",
-                  "cli/logs",
-                  "cli/memory",
-                  "cli/message",
-                  "cli/models",
-                  "cli/nodes",
-                  "cli/onboard",
-                  "cli/pairing",
-                  "cli/plugins",
-                  "cli/reset",
-                  "cli/sandbox",
-                  "cli/security",
-                  "cli/sessions",
-                  "cli/setup",
-                  "cli/skills",
-                  "cli/status",
-                  "cli/system",
-                  "cli/tui",
-                  "cli/uninstall",
-                  "cli/update",
-                  "cli/voicecall"
+                  {
+                    "group": "Gateway and service",
+                    "pages": [
+                      "cli/backup",
+                      "cli/daemon",
+                      "cli/doctor",
+                      "cli/gateway",
+                      "cli/health",
+                      "cli/logs",
+                      "cli/onboard",
+                      "cli/reset",
+                      "cli/secrets",
+                      "cli/security",
+                      "cli/setup",
+                      "cli/status",
+                      "cli/uninstall",
+                      "cli/update"
+                    ]
+                  },
+                  {
+                    "group": "Agents and sessions",
+                    "pages": [
+                      "cli/agent",
+                      "cli/agents",
+                      "cli/hooks",
+                      "cli/memory",
+                      "cli/message",
+                      "cli/models",
+                      "cli/sessions",
+                      "cli/system"
+                    ]
+                  },
+                  {
+                    "group": "Channels and messaging",
+                    "pages": [
+                      "cli/channels",
+                      "cli/devices",
+                      "cli/directory",
+                      "cli/pairing",
+                      "cli/qr",
+                      "cli/voicecall"
+                    ]
+                  },
+                  {
+                    "group": "Tools and execution",
+                    "pages": [
+                      "cli/approvals",
+                      "cli/browser",
+                      "cli/cron",
+                      "cli/node",
+                      "cli/nodes",
+                      "cli/sandbox"
+                    ]
+                  },
+                  {
+                    "group": "Configuration",
+                    "pages": ["cli/config", "cli/configure", "cli/webhooks"]
+                  },
+                  {
+                    "group": "Plugins and skills",
+                    "pages": ["cli/plugins", "cli/skills"]
+                  },
+                  {
+                    "group": "Interfaces",
+                    "pages": ["cli/dashboard", "cli/tui"]
+                  },
+                  {
+                    "group": "Utility",
+                    "pages": ["cli/acp", "cli/clawbot", "cli/completion", "cli/dns", "cli/docs"]
+                  }
                 ]
               },
               {
@@ -1224,7 +1402,17 @@
               },
               {
                 "group": "Technical reference",
-                "pages": ["reference/wizard", "reference/token-use", "channels/grammy"]
+                "pages": [
+                  "pi",
+                  "reference/wizard",
+                  "reference/token-use",
+                  "reference/secretref-credential-surface",
+                  "reference/prompt-caching",
+                  "reference/api-usage-costs",
+                  "reference/transcript-hygiene",
+                  "reference/memory-config",
+                  "date-time"
+                ]
               },
               {
                 "group": "Concept internals",
@@ -1241,18 +1429,8 @@
                 "pages": ["reference/credits"]
               },
               {
-                "group": "Release notes",
+                "group": "Release policy",
                 "pages": ["reference/RELEASING", "reference/test"]
-              },
-              {
-                "group": "Experiments",
-                "pages": [
-                  "experiments/onboarding-config-protocol",
-                  "experiments/plans/cron-add-hardening",
-                  "experiments/plans/group-policy-hardening",
-                  "experiments/research/memory",
-                  "experiments/proposals/model-config"
-                ]
               }
             ]
           },
@@ -1269,11 +1447,14 @@
               },
               {
                 "group": "Environment and debugging",
-                "pages": ["help/environment", "help/debugging", "help/testing", "help/scripts"]
-              },
-              {
-                "group": "Node runtime",
-                "pages": ["install/node"]
+                "pages": [
+                  "help/environment",
+                  "help/debugging",
+                  "help/testing",
+                  "help/scripts",
+                  "debug/node-issue",
+                  "diagnostics/flags"
+                ]
               },
               {
                 "group": "Compaction internals",
@@ -1281,11 +1462,11 @@
               },
               {
                 "group": "Developer setup",
-                "pages": ["start/setup"]
+                "pages": ["start/setup", "pi-dev"]
               },
               {
                 "group": "Contributing",
-                "pages": ["help/submitting-a-pr", "help/submitting-an-issue", "ci"]
+                "pages": ["ci"]
               },
               {
                 "group": "Docs meta",
@@ -1354,6 +1535,7 @@
               {
                 "group": "托管与部署",
                 "pages": [
+                  "zh-CN/vps",
                   "zh-CN/install/fly",
                   "zh-CN/install/hetzner",
                   "zh-CN/install/gcp",
@@ -1380,18 +1562,24 @@
               {
                 "group": "消息平台",
                 "pages": [
-                  "zh-CN/channels/whatsapp",
-                  "zh-CN/channels/telegram",
+                  "zh-CN/channels/bluebubbles",
                   "zh-CN/channels/discord",
-                  "zh-CN/channels/slack",
                   "zh-CN/channels/feishu",
+                  "zh-CN/channels/grammy",
                   "zh-CN/channels/googlechat",
-                  "zh-CN/channels/mattermost",
-                  "zh-CN/channels/signal",
                   "zh-CN/channels/imessage",
-                  "zh-CN/channels/msteams",
                   "zh-CN/channels/line",
                   "zh-CN/channels/matrix",
+                  "zh-CN/channels/mattermost",
+                  "zh-CN/channels/msteams",
+                  "zh-CN/channels/nextcloud-talk",
+                  "zh-CN/channels/nostr",
+                  "zh-CN/channels/signal",
+                  "zh-CN/channels/slack",
+                  "zh-CN/channels/telegram",
+                  "zh-CN/channels/tlon",
+                  "zh-CN/channels/twitch",
+                  "zh-CN/channels/whatsapp",
                   "zh-CN/channels/zalo",
                   "zh-CN/channels/zalouser"
                 ]
@@ -1416,6 +1604,7 @@
               {
                 "group": "基础",
                 "pages": [
+                  "zh-CN/pi",
                   "zh-CN/concepts/architecture",
                   "zh-CN/concepts/agent",
                   "zh-CN/concepts/agent-loop",
@@ -1433,7 +1622,6 @@
                 "group": "会话与记忆",
                 "pages": [
                   "zh-CN/concepts/session",
-                  "zh-CN/concepts/sessions",
                   "zh-CN/concepts/session-pruning",
                   "zh-CN/concepts/session-tool",
                   "zh-CN/concepts/memory",
@@ -1465,14 +1653,18 @@
               {
                 "group": "内置工具",
                 "pages": [
-                  "zh-CN/tools/lobster",
-                  "zh-CN/tools/llm-task",
-                  "zh-CN/tools/exec",
-                  "zh-CN/tools/web",
                   "zh-CN/tools/apply-patch",
+                  "zh-CN/brave-search",
                   "zh-CN/tools/elevated",
+                  "zh-CN/tools/exec",
+                  "zh-CN/tools/exec-approvals",
+                  "zh-CN/tools/firecrawl",
+                  "zh-CN/tools/llm-task",
+                  "zh-CN/tools/lobster",
+                  "zh-CN/perplexity",
+                  "zh-CN/tools/reactions",
                   "zh-CN/tools/thinking",
-                  "zh-CN/tools/reactions"
+                  "zh-CN/tools/web"
                 ]
               },
               {
@@ -1480,7 +1672,6 @@
                 "pages": [
                   "zh-CN/tools/browser",
                   "zh-CN/tools/browser-login",
-                  "zh-CN/tools/chrome-extension",
                   "zh-CN/tools/browser-linux-troubleshooting"
                 ]
               },
@@ -1495,6 +1686,7 @@
               {
                 "group": "技能",
                 "pages": [
+                  "zh-CN/tools/creating-skills",
                   "zh-CN/tools/slash-commands",
                   "zh-CN/tools/skills",
                   "zh-CN/tools/skills-config",
@@ -1504,7 +1696,14 @@
               },
               {
                 "group": "扩展",
-                "pages": ["zh-CN/plugins/voice-call", "zh-CN/plugins/zalouser"]
+                "pages": [
+                  "zh-CN/plugins/architecture",
+                  "zh-CN/plugins/voice-call",
+                  "zh-CN/plugins/zalouser",
+                  "zh-CN/plugins/manifest",
+                  "zh-CN/plugins/agent-tools",
+                  "zh-CN/prose"
+                ]
               },
               {
                 "group": "自动化",
@@ -1524,12 +1723,14 @@
                 "pages": [
                   "zh-CN/nodes/index",
                   "zh-CN/nodes/troubleshooting",
+                  "zh-CN/nodes/media-understanding",
                   "zh-CN/nodes/images",
                   "zh-CN/nodes/audio",
                   "zh-CN/nodes/camera",
                   "zh-CN/nodes/talk",
                   "zh-CN/nodes/voicewake",
-                  "zh-CN/nodes/location-command"
+                  "zh-CN/nodes/location-command",
+                  "zh-CN/tts"
                 ]
               }
             ]
@@ -1553,17 +1754,24 @@
                 "group": "提供商",
                 "pages": [
                   "zh-CN/providers/anthropic",
-                  "zh-CN/providers/openai",
-                  "zh-CN/providers/openrouter",
                   "zh-CN/providers/bedrock",
-                  "zh-CN/providers/vercel-ai-gateway",
+                  "zh-CN/providers/claude-max-api-proxy",
+                  "zh-CN/providers/deepgram",
+                  "zh-CN/providers/github-copilot",
+                  "zh-CN/providers/glm",
                   "zh-CN/providers/moonshot",
                   "zh-CN/providers/minimax",
                   "zh-CN/providers/opencode",
-                  "zh-CN/providers/glm",
-                  "zh-CN/providers/zai",
+                  "zh-CN/providers/ollama",
+                  "zh-CN/providers/openai",
+                  "zh-CN/providers/openrouter",
+                  "zh-CN/providers/qianfan",
+                  "zh-CN/providers/qwen",
                   "zh-CN/providers/synthetic",
-                  "zh-CN/providers/qianfan"
+                  "zh-CN/providers/venice",
+                  "zh-CN/providers/vercel-ai-gateway",
+                  "zh-CN/providers/xiaomi",
+                  "zh-CN/providers/zai"
                 ]
               }
             ]
@@ -1579,7 +1787,10 @@
                   "zh-CN/platforms/linux",
                   "zh-CN/platforms/windows",
                   "zh-CN/platforms/android",
-                  "zh-CN/platforms/ios"
+                  "zh-CN/platforms/ios",
+                  "zh-CN/platforms/digitalocean",
+                  "zh-CN/platforms/oracle",
+                  "zh-CN/platforms/raspberry-pi"
                 ]
               },
               {
@@ -1598,7 +1809,6 @@
                   "zh-CN/platforms/mac/permissions",
                   "zh-CN/platforms/mac/remote",
                   "zh-CN/platforms/mac/signing",
-                  "zh-CN/platforms/mac/release",
                   "zh-CN/platforms/mac/bundled-gateway",
                   "zh-CN/platforms/mac/xpc",
                   "zh-CN/platforms/mac/skills",
@@ -1644,6 +1854,7 @@
                       "zh-CN/gateway/protocol",
                       "zh-CN/gateway/bridge-protocol",
                       "zh-CN/gateway/openai-http-api",
+                      "zh-CN/gateway/openresponses-http-api",
                       "zh-CN/gateway/tools-invoke-http-api",
                       "zh-CN/gateway/cli-backends",
                       "zh-CN/gateway/local-models"
@@ -1669,6 +1880,10 @@
                 ]
               },
               {
+                "group": "运维专题",
+                "pages": ["zh-CN/network", "zh-CN/logging"]
+              },
+              {
                 "group": "安全",
                 "pages": ["zh-CN/security/formal-verification"]
               },
@@ -1691,14 +1906,17 @@
                 "group": "CLI 命令",
                 "pages": [
                   "zh-CN/cli/index",
+                  "zh-CN/cli/acp",
                   "zh-CN/cli/agent",
                   "zh-CN/cli/agents",
                   "zh-CN/cli/approvals",
                   "zh-CN/cli/browser",
                   "zh-CN/cli/channels",
+                  "zh-CN/cli/config",
                   "zh-CN/cli/configure",
                   "zh-CN/cli/cron",
                   "zh-CN/cli/dashboard",
+                  "zh-CN/cli/devices",
                   "zh-CN/cli/directory",
                   "zh-CN/cli/dns",
                   "zh-CN/cli/docs",
@@ -1710,6 +1928,7 @@
                   "zh-CN/cli/memory",
                   "zh-CN/cli/message",
                   "zh-CN/cli/models",
+                  "zh-CN/cli/node",
                   "zh-CN/cli/nodes",
                   "zh-CN/cli/onboard",
                   "zh-CN/cli/pairing",
@@ -1725,7 +1944,8 @@
                   "zh-CN/cli/tui",
                   "zh-CN/cli/uninstall",
                   "zh-CN/cli/update",
-                  "zh-CN/cli/voicecall"
+                  "zh-CN/cli/voicecall",
+                  "zh-CN/cli/webhooks"
                 ]
               },
               {
@@ -1748,7 +1968,13 @@
               },
               {
                 "group": "技术参考",
-                "pages": ["zh-CN/reference/wizard", "zh-CN/reference/token-use"]
+                "pages": [
+                  "zh-CN/reference/wizard",
+                  "zh-CN/reference/token-use",
+                  "zh-CN/reference/api-usage-costs",
+                  "zh-CN/reference/transcript-hygiene",
+                  "zh-CN/date-time"
+                ]
               },
               {
                 "group": "概念内部机制",
@@ -1765,18 +1991,8 @@
                 "pages": ["zh-CN/reference/credits"]
               },
               {
-                "group": "发布说明",
+                "group": "发布策略",
                 "pages": ["zh-CN/reference/RELEASING", "zh-CN/reference/test"]
-              },
-              {
-                "group": "实验性功能",
-                "pages": [
-                  "zh-CN/experiments/onboarding-config-protocol",
-                  "zh-CN/experiments/plans/cron-add-hardening",
-                  "zh-CN/experiments/plans/group-policy-hardening",
-                  "zh-CN/experiments/research/memory",
-                  "zh-CN/experiments/proposals/model-config"
-                ]
               }
             ]
           },
@@ -1797,7 +2013,9 @@
                   "zh-CN/help/environment",
                   "zh-CN/help/debugging",
                   "zh-CN/help/testing",
-                  "zh-CN/help/scripts"
+                  "zh-CN/help/scripts",
+                  "zh-CN/debug/node-issue",
+                  "zh-CN/diagnostics/flags"
                 ]
               },
               {
@@ -1810,15 +2028,11 @@
               },
               {
                 "group": "开发者设置",
-                "pages": ["zh-CN/start/setup"]
-              },
-              {
-                "group": "贡献",
-                "pages": ["zh-CN/help/submitting-a-pr", "zh-CN/help/submitting-an-issue"]
+                "pages": ["zh-CN/start/setup", "zh-CN/pi-dev"]
               },
               {
                 "group": "文档元信息",
-                "pages": ["zh-CN/start/hubs", "zh-CN/start/docs-directory"]
+                "pages": ["zh-CN/start/hubs", "zh-CN/start/docs-directory", "zh-CN/AGENTS"]
               }
             ]
           }

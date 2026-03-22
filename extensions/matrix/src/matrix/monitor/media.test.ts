@@ -1,5 +1,5 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginRuntime } from "../../../runtime-api.js";
 import { setMatrixRuntime } from "../../runtime.js";
 import { downloadMatrixMedia } from "./media.js";
 
@@ -28,7 +28,7 @@ describe("downloadMatrixMedia", () => {
     const client = {
       crypto: { decryptMedia },
       mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
-    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+    } as unknown as import("../sdk.js").MatrixClient;
 
     const file = {
       url: "mxc://example/file",
@@ -52,8 +52,10 @@ describe("downloadMatrixMedia", () => {
       file,
     });
 
-    // decryptMedia should be called with just the file object (it handles download internally)
-    expect(decryptMedia).toHaveBeenCalledWith(file);
+    expect(decryptMedia).toHaveBeenCalledWith(file, {
+      maxBytes: 1024,
+      readIdleTimeoutMs: 30_000,
+    });
     expect(saveMediaBuffer).toHaveBeenCalledWith(
       Buffer.from("decrypted"),
       "image/png",
@@ -69,7 +71,7 @@ describe("downloadMatrixMedia", () => {
     const client = {
       crypto: { decryptMedia },
       mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
-    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+    } as unknown as import("../sdk.js").MatrixClient;
 
     const file = {
       url: "mxc://example/file",
@@ -98,5 +100,25 @@ describe("downloadMatrixMedia", () => {
 
     expect(decryptMedia).not.toHaveBeenCalled();
     expect(saveMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it("passes byte limits through plain media downloads", async () => {
+    const downloadContent = vi.fn().mockResolvedValue(Buffer.from("plain"));
+
+    const client = {
+      downloadContent,
+    } as unknown as import("../sdk.js").MatrixClient;
+
+    await downloadMatrixMedia({
+      client,
+      mxcUrl: "mxc://example/file",
+      contentType: "image/png",
+      maxBytes: 4096,
+    });
+
+    expect(downloadContent).toHaveBeenCalledWith("mxc://example/file", {
+      maxBytes: 4096,
+      readIdleTimeoutMs: 30_000,
+    });
   });
 });

@@ -1,13 +1,14 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
-import type { MemorySearchResult } from "../../memory/types.js";
-import type { AnyAgentTool } from "./common.js";
 import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
+import { readAgentMemoryFile } from "../../memory/read-file.js";
+import type { MemorySearchResult } from "../../memory/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
+import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
 const MemorySearchSchema = Type.Object({
@@ -22,20 +23,7 @@ const MemoryGetSchema = Type.Object({
   lines: Type.Optional(Type.Number()),
 });
 
-const MemorySaveSchema = Type.Object({
-  category: Type.Union([Type.Literal("fact"), Type.Literal("episode"), Type.Literal("procedure")], {
-    description:
-      "Where to save: 'fact' for reference data (names, rules, preferences), 'episode' for session learnings (what happened, lessons), 'procedure' for SOPs and proven workflows",
-  }),
-  content: Type.String({
-    description: "The memory content to save. Be concise and specific.",
-  }),
-});
-
-export function createMemorySearchTool(options: {
-  config?: OpenClawConfig;
-  agentSessionKey?: string;
-}): AnyAgentTool | null {
+function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
   const cfg = options.config;
   if (!cfg) {
     return null;
@@ -47,167 +35,174 @@ export function createMemorySearchTool(options: {
   if (!resolveMemorySearchConfig(cfg, agentId)) {
     return null;
   }
+  return { cfg, agentId };
+}
+
+async function getMemoryManagerContext(params: { cfg: OpenClawConfig; agentId: string }): Promise<
+  | {
+      manager: NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
+    }
+  | {
+      error: string | undefined;
+    }
+> {
+  return await getMemoryManagerContextWithPurpose({ ...params, purpose: undefined });
+}
+
+async function getMemoryManagerContextWithPurpose(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  purpose?: "default" | "status";
+}): Promise<
+  | {
+      manager: NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
+    }
+  | {
+      error: string | undefined;
+    }
+> {
+  const { manager, error } = await getMemorySearchManager({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    purpose: params.purpose,
+  });
+  return manager ? { manager } : { error };
+}
+
+function createMemoryTool(params: {
+  options: {
+    config?: OpenClawConfig;
+    agentSessionKey?: string;
+  };
+  label: string;
+  name: string;
+  description: string;
+  parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
+  execute: (ctx: { cfg: OpenClawConfig; agentId: string }) => AnyAgentTool["execute"];
+}): AnyAgentTool | null {
+  const ctx = resolveMemoryToolContext(params.options);
+  if (!ctx) {
+    return null;
+  }
   return {
+    label: params.label,
+    name: params.name,
+    description: params.description,
+    parameters: params.parameters,
+    execute: params.execute(ctx),
+  };
+}
+
+export function createMemorySearchTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  return createMemoryTool({
+    options,
     label: "Memory Search",
     name: "memory_search",
     description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines.",
+      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines. If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
     parameters: MemorySearchSchema,
-    execute: async (_toolCallId, params) => {
-      const query = readStringParam(params, "query", { required: true });
-      const maxResults = readNumberParam(params, "maxResults");
-      const minScore = readNumberParam(params, "minScore");
-      const { manager, error } = await getMemorySearchManager({
-        cfg,
-        agentId,
-      });
-      if (!manager) {
-        return jsonResult({ results: [], disabled: true, error });
-      }
-      try {
-        const citationsMode = resolveMemoryCitationsMode(cfg);
-        const includeCitations = shouldIncludeCitations({
-          mode: citationsMode,
-          sessionKey: options.agentSessionKey,
-        });
-        const rawResults = await manager.search(query, {
-          maxResults,
-          minScore,
-          sessionKey: options.agentSessionKey,
-        });
-        const status = manager.status();
-        const decorated = decorateCitations(rawResults, includeCitations);
-        const resolved = resolveMemoryBackendConfig({ cfg, agentId });
-        const results =
-          status.backend === "qmd"
-            ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
-            : decorated;
-        return jsonResult({
-          results,
-          provider: status.provider,
-          model: status.model,
-          fallback: status.fallback,
-          citations: citationsMode,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return jsonResult({ results: [], disabled: true, error: message });
-      }
-    },
-  };
+    execute:
+      ({ cfg, agentId }) =>
+      async (_toolCallId, params) => {
+        const query = readStringParam(params, "query", { required: true });
+        const maxResults = readNumberParam(params, "maxResults");
+        const minScore = readNumberParam(params, "minScore");
+        const memory = await getMemoryManagerContext({ cfg, agentId });
+        if ("error" in memory) {
+          return jsonResult(buildMemorySearchUnavailableResult(memory.error));
+        }
+        try {
+          const citationsMode = resolveMemoryCitationsMode(cfg);
+          const includeCitations = shouldIncludeCitations({
+            mode: citationsMode,
+            sessionKey: options.agentSessionKey,
+          });
+          const rawResults = await memory.manager.search(query, {
+            maxResults,
+            minScore,
+            sessionKey: options.agentSessionKey,
+          });
+          const status = memory.manager.status();
+          const decorated = decorateCitations(rawResults, includeCitations);
+          const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+          const results =
+            status.backend === "qmd"
+              ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
+              : decorated;
+          const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
+          return jsonResult({
+            results,
+            provider: status.provider,
+            model: status.model,
+            fallback: status.fallback,
+            citations: citationsMode,
+            mode: searchMode,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return jsonResult(buildMemorySearchUnavailableResult(message));
+        }
+      },
+  });
 }
 
 export function createMemoryGetTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
 }): AnyAgentTool | null {
-  const cfg = options.config;
-  if (!cfg) {
-    return null;
-  }
-  const agentId = resolveSessionAgentId({
-    sessionKey: options.agentSessionKey,
-    config: cfg,
-  });
-  if (!resolveMemorySearchConfig(cfg, agentId)) {
-    return null;
-  }
-  return {
+  return createMemoryTool({
+    options,
     label: "Memory Get",
     name: "memory_get",
     description:
       "Safe snippet read from MEMORY.md or memory/*.md with optional from/lines; use after memory_search to pull only the needed lines and keep context small.",
     parameters: MemoryGetSchema,
-    execute: async (_toolCallId, params) => {
-      const relPath = readStringParam(params, "path", { required: true });
-      const from = readNumberParam(params, "from", { integer: true });
-      const lines = readNumberParam(params, "lines", { integer: true });
-      const { manager, error } = await getMemorySearchManager({
-        cfg,
-        agentId,
-      });
-      if (!manager) {
-        return jsonResult({ path: relPath, text: "", disabled: true, error });
-      }
-      try {
-        const result = await manager.readFile({
-          relPath,
-          from: from ?? undefined,
-          lines: lines ?? undefined,
-        });
-        return jsonResult(result);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return jsonResult({ path: relPath, text: "", disabled: true, error: message });
-      }
-    },
-  };
-}
-
-export function createMemorySaveTool(options: {
-  config?: OpenClawConfig;
-  agentSessionKey?: string;
-  agentDir?: string;
-}): AnyAgentTool | null {
-  const cfg = options.config;
-  if (!cfg || !options.agentDir) {
-    return null;
-  }
-  const agentId = resolveSessionAgentId({
-    sessionKey: options.agentSessionKey,
-    config: cfg,
-  });
-  if (!agentId) {
-    return null;
-  }
-  return {
-    label: "Memory Save",
-    name: "memory_save",
-    description:
-      "Save a fact, episode, or procedure to your persistent memory. Facts are reference data (names, rules, preferences). Episodes are session learnings (what happened, lessons learned). Procedures are proven workflows and SOPs. Use this proactively when you learn something worth remembering.",
-    parameters: MemorySaveSchema,
-    execute: async (_toolCallId, params) => {
-      const category = readStringParam(params, "category", { required: true });
-      const content = readStringParam(params, "content", { required: true });
-
-      if (!["fact", "episode", "procedure"].includes(category)) {
-        return jsonResult({ saved: false, error: "category must be fact, episode, or procedure" });
-      }
-
-      try {
-        const fs = await import("node:fs");
-        const path = await import("node:path");
-
-        const memoryDir = path.join(options.agentDir!, "memory");
-        if (!fs.existsSync(memoryDir)) {
-          fs.mkdirSync(memoryDir, { recursive: true });
+    execute:
+      ({ cfg, agentId }) =>
+      async (_toolCallId, params) => {
+        const relPath = readStringParam(params, "path", { required: true });
+        const from = readNumberParam(params, "from", { integer: true });
+        const lines = readNumberParam(params, "lines", { integer: true });
+        const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+        if (resolved.backend === "builtin") {
+          try {
+            const result = await readAgentMemoryFile({
+              cfg,
+              agentId,
+              relPath,
+              from: from ?? undefined,
+              lines: lines ?? undefined,
+            });
+            return jsonResult(result);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return jsonResult({ path: relPath, text: "", disabled: true, error: message });
+          }
         }
-
-        const fileMap: Record<string, string> = {
-          fact: "facts.md",
-          episode: "episodes.md",
-          procedure: "procedures.md",
-        };
-        const filePath = path.join(memoryDir, fileMap[category]);
-
-        const now = new Date();
-        const timestamp = now.toISOString().slice(0, 16).replace("T", " ");
-        const entry = `\n- [${timestamp}] ${content}\n`;
-
-        fs.appendFileSync(filePath, entry, "utf-8");
-
-        return jsonResult({
-          saved: true,
-          category,
-          file: fileMap[category],
-          timestamp,
+        const memory = await getMemoryManagerContextWithPurpose({
+          cfg,
+          agentId,
+          purpose: "status",
         });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return jsonResult({ saved: false, error: message });
-      }
-    },
-  };
+        if ("error" in memory) {
+          return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
+        }
+        try {
+          const result = await memory.manager.readFile({
+            relPath,
+            from: from ?? undefined,
+            lines: lines ?? undefined,
+          });
+          return jsonResult(result);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return jsonResult({ path: relPath, text: "", disabled: true, error: message });
+        }
+      },
+  });
 }
 
 function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {
@@ -261,6 +256,25 @@ function clampResultsByInjectedChars(
     }
   }
   return clamped;
+}
+
+function buildMemorySearchUnavailableResult(error: string | undefined) {
+  const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
+  const isQuotaError = /insufficient_quota|quota|429/.test(reason.toLowerCase());
+  const warning = isQuotaError
+    ? "Memory search is unavailable because the embedding provider quota is exhausted."
+    : "Memory search is unavailable due to an embedding/provider error.";
+  const action = isQuotaError
+    ? "Top up or switch embedding provider, then retry memory_search."
+    : "Check embedding provider configuration and retry memory_search.";
+  return {
+    results: [],
+    disabled: true,
+    unavailable: true,
+    error: reason,
+    warning,
+    action,
+  };
 }
 
 function shouldIncludeCitations(params: {

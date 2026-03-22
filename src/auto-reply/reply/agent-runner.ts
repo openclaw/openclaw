@@ -1,9 +1,4 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
-import type { TypingMode } from "../../config/types.js";
-import type { OriginatingChannelType, TemplateContext } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { TypingController } from "./typing.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -11,17 +6,28 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
-  resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
-  type SessionEntry,
-  updateSessionStore,
-  updateSessionStoreEntry,
-} from "../../config/sessions.js";
+} from "../../config/sessions/paths.js";
+import { updateSessionStore, updateSessionStoreEntry } from "../../config/sessions/store.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { TypingMode } from "../../config/types.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { generateSecureUuid } from "../../infra/secure-random.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import {
+  buildFallbackClearedNotice,
+  buildFallbackNotice,
+  resolveFallbackTransition,
+} from "../fallback-state.js";
+import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   createShouldEmitToolOutput,
@@ -32,14 +38,24 @@ import {
 } from "./agent-runner-helpers.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
+import {
+  appendUnscheduledReminderNote,
+  hasSessionRelatedCronJobs,
+  hasUnbackedReminderCommitment,
+} from "./agent-runner-reminder-guard.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
-import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
+import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
+import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import { readPostCompactionContext } from "./post-compaction-context.js";
+import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
+import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
+import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
@@ -126,11 +142,10 @@ export async function runReplyAgent(params: {
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
 
-  const replyToChannel =
-    sessionCtx.OriginatingChannel ??
-    ((sessionCtx.Surface ?? sessionCtx.Provider)?.toLowerCase() as
-      | OriginatingChannelType
-      | undefined);
+  const replyToChannel = resolveOriginMessageProvider({
+    originatingChannel: sessionCtx.OriginatingChannel,
+    provider: sessionCtx.Surface ?? sessionCtx.Provider,
+  }) as OriginatingChannelType | undefined;
   const replyToMode = resolveReplyToMode(
     followupRun.run.config,
     replyToChannel,
@@ -139,14 +154,19 @@ export async function runReplyAgent(params: {
   );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
+  const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
+    cfg,
+    sessionKey,
+    workspaceDir: followupRun.run.workspaceDir,
+  });
   const blockReplyCoalescing =
     blockStreamingEnabled && opts?.onBlockReply
-      ? resolveBlockStreamingCoalescing(
+      ? resolveEffectiveBlockStreamingConfig({
           cfg,
-          sessionCtx.Provider,
-          sessionCtx.AccountId,
-          blockReplyChunking,
-        )
+          provider: sessionCtx.Provider,
+          accountId: sessionCtx.AccountId,
+          chunking: blockReplyChunking,
+        }).coalescing
       : undefined;
   const blockReplyPipeline =
     blockStreamingEnabled && opts?.onBlockReply
@@ -157,41 +177,46 @@ export async function runReplyAgent(params: {
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
         })
       : null;
+  const touchActiveSessionEntry = async () => {
+    if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
+      return;
+    }
+    const updatedAt = Date.now();
+    activeSessionEntry.updatedAt = updatedAt;
+    activeSessionStore[sessionKey] = activeSessionEntry;
+    if (storePath) {
+      await updateSessionStoreEntry({
+        storePath,
+        sessionKey,
+        update: async () => ({ updatedAt }),
+      });
+    }
+  };
 
   if (shouldSteer && isStreaming) {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
-      if (activeSessionEntry && activeSessionStore && sessionKey) {
-        const updatedAt = Date.now();
-        activeSessionEntry.updatedAt = updatedAt;
-        activeSessionStore[sessionKey] = activeSessionEntry;
-        if (storePath) {
-          await updateSessionStoreEntry({
-            storePath,
-            sessionKey,
-            update: async () => ({ updatedAt }),
-          });
-        }
-      }
+      await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
     }
   }
 
-  if (isActive && (shouldFollowup || resolvedQueue.mode === "steer")) {
+  const activeRunQueueAction = resolveActiveRunQueueAction({
+    isActive,
+    isHeartbeat,
+    shouldFollowup,
+    queueMode: resolvedQueue.mode,
+  });
+
+  if (activeRunQueueAction === "drop") {
+    typing.cleanup();
+    return undefined;
+  }
+
+  if (activeRunQueueAction === "enqueue-followup") {
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
-    if (activeSessionEntry && activeSessionStore && sessionKey) {
-      const updatedAt = Date.now();
-      activeSessionEntry.updatedAt = updatedAt;
-      activeSessionStore[sessionKey] = activeSessionEntry;
-      if (storePath) {
-        await updateSessionStoreEntry({
-          storePath,
-          sessionKey,
-          update: async () => ({ updatedAt }),
-        });
-      }
-    }
+    await touchActiveSessionEntry();
     typing.cleanup();
     return undefined;
   }
@@ -201,6 +226,7 @@ export async function runReplyAgent(params: {
   activeSessionEntry = await runMemoryFlushIfNeeded({
     cfg,
     followupRun,
+    promptForEstimate: followupRun.prompt,
     sessionCtx,
     opts,
     defaultModel,
@@ -244,13 +270,28 @@ export async function runReplyAgent(params: {
       return false;
     }
     const prevSessionId = cleanupTranscripts ? prevEntry.sessionId : undefined;
-    const nextSessionId = crypto.randomUUID();
+    const nextSessionId = generateSecureUuid();
     const nextEntry: SessionEntry = {
       ...prevEntry,
       sessionId: nextSessionId,
       updatedAt: Date.now(),
       systemSent: false,
       abortedLastRun: false,
+      modelProvider: undefined,
+      model: undefined,
+      inputTokens: undefined,
+      outputTokens: undefined,
+      totalTokens: undefined,
+      totalTokensFresh: false,
+      estimatedCostUsd: undefined,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      contextTokens: undefined,
+      systemPromptReport: undefined,
+      fallbackNoticeSelectedModel: undefined,
+      fallbackNoticeActiveModel: undefined,
+      fallbackNoticeReason: undefined,
+      memoryFlushContextHash: undefined,
     };
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
     const nextSessionFile = resolveSessionTranscriptPath(
@@ -276,7 +317,11 @@ export async function runReplyAgent(params: {
     defaultRuntime.error(buildLogMessage(nextSessionId));
     if (cleanupTranscripts && prevSessionId) {
       const transcriptCandidates = new Set<string>();
-      const resolved = resolveSessionFilePath(prevSessionId, prevEntry, { agentId });
+      const resolved = resolveSessionFilePath(
+        prevSessionId,
+        prevEntry,
+        resolveSessionFilePathOptions({ agentId, storePath }),
+      );
       if (resolved) {
         transcriptCandidates.add(resolved);
       }
@@ -334,8 +379,15 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
-    const { runResult, fallbackProvider, fallbackModel, directlySentBlockKeys } = runOutcome;
-    let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
+    const {
+      runId,
+      runResult,
+      fallbackProvider,
+      fallbackModel,
+      fallbackAttempts,
+      directlySentBlockKeys,
+    } = runOutcome;
+    let { didLogHeartbeatStrip, autoCompactionCount } = runOutcome;
 
     if (
       shouldInjectGroupIntro &&
@@ -366,17 +418,58 @@ export async function runReplyAgent(params: {
       await blockReplyPipeline.flush({ force: true });
       blockReplyPipeline.stop();
     }
+
+    // NOTE: The compaction completion notice for block-streaming mode is sent
+    // further below — after incrementRunCompactionCount — so it can include
+    // the `(count N)` suffix.  Sending it here (before the count is known)
+    // would omit that information.
     if (pendingToolTasks.size > 0) {
       await Promise.allSettled(pendingToolTasks);
     }
 
-    const usage = runResult.meta.agentMeta?.usage;
-    const promptTokens = runResult.meta.agentMeta?.promptTokens;
-    const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
+    const usage = runResult.meta?.agentMeta?.usage;
+    const promptTokens = runResult.meta?.agentMeta?.promptTokens;
+    const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
-      runResult.meta.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+      runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+    const verboseEnabled = resolvedVerboseLevel !== "off";
+    const selectedProvider = followupRun.run.provider;
+    const selectedModel = followupRun.run.model;
+    const fallbackStateEntry =
+      activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
+    const fallbackTransition = resolveFallbackTransition({
+      selectedProvider,
+      selectedModel,
+      activeProvider: providerUsed,
+      activeModel: modelUsed,
+      attempts: fallbackAttempts,
+      state: fallbackStateEntry,
+    });
+    if (fallbackTransition.stateChanged) {
+      if (fallbackStateEntry) {
+        fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
+        fallbackStateEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;
+        fallbackStateEntry.fallbackNoticeReason = fallbackTransition.nextState.reason;
+        fallbackStateEntry.updatedAt = Date.now();
+        activeSessionEntry = fallbackStateEntry;
+      }
+      if (sessionKey && fallbackStateEntry && activeSessionStore) {
+        activeSessionStore[sessionKey] = fallbackStateEntry;
+      }
+      if (sessionKey && storePath) {
+        await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => ({
+            fallbackNoticeSelectedModel: fallbackTransition.nextState.selectedModel,
+            fallbackNoticeActiveModel: fallbackTransition.nextState.activeModel,
+            fallbackNoticeReason: fallbackTransition.nextState.reason,
+          }),
+        });
+      }
+    }
     const cliSessionId = isCliProvider(providerUsed, cfg)
-      ? runResult.meta.agentMeta?.sessionId?.trim()
+      ? runResult.meta?.agentMeta?.sessionId?.trim()
       : undefined;
     const contextTokensUsed =
       agentCfgContextTokens ??
@@ -387,13 +480,14 @@ export async function runReplyAgent(params: {
     await persistRunSessionUsage({
       storePath,
       sessionKey,
+      cfg,
       usage,
-      lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       promptTokens,
       modelUsed,
       providerUsed,
       contextTokensUsed,
-      systemPromptReport: runResult.meta.systemPromptReport,
+      systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
     });
 
@@ -404,7 +498,7 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
-    const payloadResult = buildReplyPayloads({
+    const payloadResult = await buildReplyPayloads({
       payloads: payloadArray,
       isHeartbeat,
       didLogHeartbeatStrip,
@@ -416,9 +510,15 @@ export async function runReplyAgent(params: {
       currentMessageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
       messageProvider: followupRun.run.messageProvider,
       messagingToolSentTexts: runResult.messagingToolSentTexts,
+      messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
-      originatingTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
+      originatingChannel: sessionCtx.OriginatingChannel,
+      originatingTo: resolveOriginMessageTo({
+        originatingTo: sessionCtx.OriginatingTo,
+        to: sessionCtx.To,
+      }),
       accountId: sessionCtx.AccountId,
+      normalizeMediaPaths: normalizeReplyMediaPaths,
     });
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
@@ -427,7 +527,28 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
-    await signalTypingIfNeeded(replyPayloads, typingSignals);
+    const successfulCronAdds = runResult.successfulCronAdds ?? 0;
+    const hasReminderCommitment = replyPayloads.some(
+      (payload) =>
+        !payload.isError &&
+        typeof payload.text === "string" &&
+        hasUnbackedReminderCommitment(payload.text),
+    );
+    // Suppress the guard note when an existing cron job (created in a prior
+    // turn) already covers the commitment — avoids false positives (#32228).
+    const coveredByExistingCron =
+      hasReminderCommitment && successfulCronAdds === 0
+        ? await hasSessionRelatedCronJobs({
+            cronStorePath: cfg.cron?.store,
+            sessionKey,
+          })
+        : false;
+    const guardedReplyPayloads =
+      hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
+        ? appendUnscheduledReminderNote(replyPayloads)
+        : replyPayloads;
+
+    await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
     if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
@@ -457,6 +578,7 @@ export async function runReplyAgent(params: {
           promptTokens,
           total: totalTokens,
         },
+        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         context: {
           limit: contextTokensUsed,
           used: totalTokens,
@@ -486,32 +608,146 @@ export async function runReplyAgent(params: {
         costConfig,
       });
       if (formatted && responseUsageMode === "full" && sessionKey) {
-        formatted = `${formatted} · session ${sessionKey}`;
+        formatted = `${formatted} · session \`${sessionKey}\``;
       }
       if (formatted) {
         responseUsageLine = formatted;
       }
     }
 
-    // If verbose is enabled and this is a new session, prepend a session hint.
-    let finalPayloads = replyPayloads;
-    const verboseEnabled = resolvedVerboseLevel !== "off";
-    if (autoCompactionCompleted) {
+    // If verbose is enabled, prepend operational run notices.
+    let finalPayloads = guardedReplyPayloads;
+    const verboseNotices: ReplyPayload[] = [];
+
+    if (verboseEnabled && activeIsNewSession) {
+      verboseNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
+    }
+
+    if (fallbackTransition.fallbackTransitioned) {
+      emitAgentEvent({
+        runId,
+        sessionKey,
+        stream: "lifecycle",
+        data: {
+          phase: "fallback",
+          selectedProvider,
+          selectedModel,
+          activeProvider: providerUsed,
+          activeModel: modelUsed,
+          reasonSummary: fallbackTransition.reasonSummary,
+          attemptSummaries: fallbackTransition.attemptSummaries,
+          attempts: fallbackAttempts,
+        },
+      });
+      if (verboseEnabled) {
+        const fallbackNotice = buildFallbackNotice({
+          selectedProvider,
+          selectedModel,
+          activeProvider: providerUsed,
+          activeModel: modelUsed,
+          attempts: fallbackAttempts,
+        });
+        if (fallbackNotice) {
+          verboseNotices.push({ text: fallbackNotice });
+        }
+      }
+    }
+    if (fallbackTransition.fallbackCleared) {
+      emitAgentEvent({
+        runId,
+        sessionKey,
+        stream: "lifecycle",
+        data: {
+          phase: "fallback_cleared",
+          selectedProvider,
+          selectedModel,
+          activeProvider: providerUsed,
+          activeModel: modelUsed,
+          previousActiveModel: fallbackTransition.previousState.activeModel,
+        },
+      });
+      if (verboseEnabled) {
+        verboseNotices.push({
+          text: buildFallbackClearedNotice({
+            selectedProvider,
+            selectedModel,
+            previousActiveModel: fallbackTransition.previousState.activeModel,
+          }),
+        });
+      }
+    }
+
+    if (autoCompactionCount > 0) {
       const count = await incrementRunCompactionCount({
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey,
         storePath,
-        lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+        amount: autoCompactionCount,
+        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         contextTokensUsed,
       });
-      if (verboseEnabled) {
-        const suffix = typeof count === "number" ? ` (count ${count})` : "";
-        finalPayloads = [{ text: `🧹 Auto-compaction complete${suffix}.` }, ...finalPayloads];
+
+      // Inject post-compaction workspace context for the next agent turn
+      if (sessionKey) {
+        const workspaceDir = process.cwd();
+        readPostCompactionContext(workspaceDir, cfg)
+          .then((contextContent) => {
+            if (contextContent) {
+              enqueueSystemEvent(contextContent, { sessionKey });
+            }
+          })
+          .catch(() => {
+            // Silent failure — post-compaction context is best-effort
+          });
+      }
+
+      // Always notify the user when compaction completes — not just in verbose
+      // mode. The "🧹 Compacting context..." notice was already sent at start,
+      // so the completion message closes the loop for every user regardless of
+      // their verbose setting.
+      const suffix = typeof count === "number" ? ` (count ${count})` : "";
+      const completionText = verboseEnabled
+        ? `🧹 Auto-compaction complete${suffix}.`
+        : `✅ Context compacted${suffix}.`;
+
+      if (blockReplyPipeline && opts?.onBlockReply) {
+        // In block-streaming mode, send the completion notice via
+        // fire-and-forget *after* the pipeline has flushed (so it does not set
+        // didStream()=true and cause buildReplyPayloads to discard the real
+        // assistant reply).  Now that the count is known we can include it.
+        const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+        const noticePayload = applyReplyToMode({
+          text: completionText,
+          replyToId: currentMessageId,
+          replyToCurrent: true,
+          isCompactionNotice: true,
+        });
+        void Promise.race([
+          opts.onBlockReply(noticePayload),
+          new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error("compaction notice timeout")), blockReplyTimeoutMs),
+          ),
+        ]).catch(() => {
+          // Intentionally swallowed — the notice is informational only.
+        });
+      } else {
+        // Non-streaming: push into verboseNotices with full compaction metadata
+        // so threading exemptions apply and replyToMode=first does not thread
+        // the notice instead of the real assistant reply.
+        const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+        verboseNotices.push(
+          applyReplyToMode({
+            text: completionText,
+            replyToId: currentMessageId,
+            replyToCurrent: true,
+            isCompactionNotice: true,
+          }),
+        );
       }
     }
-    if (verboseEnabled && activeIsNewSession) {
-      finalPayloads = [{ text: `🧭 New session: ${followupRun.run.sessionId}` }, ...finalPayloads];
+    if (verboseNotices.length > 0) {
+      finalPayloads = [...verboseNotices, ...finalPayloads];
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
@@ -522,8 +758,20 @@ export async function runReplyAgent(params: {
       queueKey,
       runFollowupTurn,
     );
+  } catch (error) {
+    // Keep the followup queue moving even when an unexpected exception escapes
+    // the run path; the caller still receives the original error.
+    finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    throw error;
   } finally {
     blockReplyPipeline?.stop();
     typing.markRunComplete();
+    // Safety net: the dispatcher's onIdle callback normally fires
+    // markDispatchIdle(), but if the dispatcher exits early, errors,
+    // or the reply path doesn't go through it cleanly, the second
+    // signal never fires and the typing keepalive loop runs forever.
+    // Calling this twice is harmless — cleanup() is guarded by the
+    // `active` flag.  Same pattern as the followup runner fix (#26881).
+    typing.markDispatchIdle();
   }
 }

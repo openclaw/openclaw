@@ -4,12 +4,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Mock, vi } from "vitest";
+import type { MsgContext } from "../auto-reply/templating.js";
+import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { HooksConfig } from "../config/types.hooks.js";
 import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
@@ -18,6 +21,12 @@ type StubChannelOptions = {
   label: string;
   summary?: Record<string, unknown>;
 };
+
+type GetReplyFromConfigFn = (
+  ctx: MsgContext,
+  opts?: GetReplyOptions,
+  configOverride?: OpenClawConfig,
+) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
 
 const createStubOutboundAdapter = (channelId: ChannelPlugin["id"]): ChannelOutboundAdapter => ({
   deliveryMode: "direct",
@@ -135,13 +144,18 @@ const createStubPluginRegistry = (): PluginRegistry => ({
       plugin: createStubChannelPlugin({ id: "bluebubbles", label: "BlueBubbles" }),
     },
   ],
+  channelSetups: [],
   providers: [],
+  speechProviders: [],
+  mediaUnderstandingProviders: [],
+  imageGenerationProviders: [],
+  webSearchProviders: [],
   gatewayHandlers: {},
-  httpHandlers: [],
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
   commands: [],
+  conversationBindingResolvedHandlers: [],
   diagnostics: [],
 });
 
@@ -169,7 +183,7 @@ const hoisted = vi.hoisted(() => ({
     waitResults: new Map<string, boolean>(),
   },
   testTailscaleWhois: { value: null as TailscaleWhoisIdentity | null },
-  getReplyFromConfig: vi.fn().mockResolvedValue(undefined),
+  getReplyFromConfig: vi.fn<GetReplyFromConfigFn>().mockResolvedValue(undefined),
   sendWhatsAppMock: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
 }));
 
@@ -202,7 +216,7 @@ export const testTailscaleWhois = hoisted.testTailscaleWhois;
 export const piSdkMock = hoisted.piSdkMock;
 export const cronIsolatedRun = hoisted.cronIsolatedRun;
 export const agentCommand: Mock<() => void> = hoisted.agentCommand;
-export const getReplyFromConfig: Mock<() => void> = hoisted.getReplyFromConfig;
+export const getReplyFromConfig: Mock<GetReplyFromConfigFn> = hoisted.getReplyFromConfig;
 
 export const testState = {
   agentConfig: undefined as Record<string, unknown> | undefined,
@@ -357,6 +371,130 @@ vi.mock("../config/config.js", async () => {
     }
   };
 
+  const composeTestConfig = (baseConfig: Record<string, unknown>) => {
+    const fileAgents =
+      baseConfig.agents &&
+      typeof baseConfig.agents === "object" &&
+      !Array.isArray(baseConfig.agents)
+        ? (baseConfig.agents as Record<string, unknown>)
+        : {};
+    const fileDefaults =
+      fileAgents.defaults &&
+      typeof fileAgents.defaults === "object" &&
+      !Array.isArray(fileAgents.defaults)
+        ? (fileAgents.defaults as Record<string, unknown>)
+        : {};
+    const defaults = {
+      model: { primary: "anthropic/claude-opus-4-6" },
+      workspace: path.join(os.tmpdir(), "openclaw-gateway-test"),
+      ...fileDefaults,
+      ...testState.agentConfig,
+    };
+    const agents = testState.agentsConfig
+      ? { ...fileAgents, ...testState.agentsConfig, defaults }
+      : { ...fileAgents, defaults };
+
+    const fileBindings = Array.isArray(baseConfig.bindings)
+      ? (baseConfig.bindings as AgentBinding[])
+      : undefined;
+
+    const fileChannels =
+      baseConfig.channels &&
+      typeof baseConfig.channels === "object" &&
+      !Array.isArray(baseConfig.channels)
+        ? ({ ...(baseConfig.channels as Record<string, unknown>) } as Record<string, unknown>)
+        : {};
+    const overrideChannels =
+      testState.channelsConfig && typeof testState.channelsConfig === "object"
+        ? { ...testState.channelsConfig }
+        : {};
+    const mergedChannels = { ...fileChannels, ...overrideChannels };
+    if (testState.allowFrom !== undefined) {
+      const existing =
+        mergedChannels.whatsapp &&
+        typeof mergedChannels.whatsapp === "object" &&
+        !Array.isArray(mergedChannels.whatsapp)
+          ? (mergedChannels.whatsapp as Record<string, unknown>)
+          : {};
+      mergedChannels.whatsapp = {
+        ...existing,
+        allowFrom: testState.allowFrom,
+      };
+    }
+    const channels = Object.keys(mergedChannels).length > 0 ? mergedChannels : undefined;
+
+    const fileSession =
+      baseConfig.session &&
+      typeof baseConfig.session === "object" &&
+      !Array.isArray(baseConfig.session)
+        ? (baseConfig.session as Record<string, unknown>)
+        : {};
+    const session: Record<string, unknown> = {
+      ...fileSession,
+      mainKey: fileSession.mainKey ?? "main",
+    };
+    if (typeof testState.sessionStorePath === "string") {
+      session.store = testState.sessionStorePath;
+    }
+    if (testState.sessionConfig) {
+      Object.assign(session, testState.sessionConfig);
+    }
+
+    const fileGateway =
+      baseConfig.gateway &&
+      typeof baseConfig.gateway === "object" &&
+      !Array.isArray(baseConfig.gateway)
+        ? ({ ...(baseConfig.gateway as Record<string, unknown>) } as Record<string, unknown>)
+        : {};
+    if (testState.gatewayBind) {
+      fileGateway.bind = testState.gatewayBind;
+    }
+    if (testState.gatewayAuth) {
+      fileGateway.auth = testState.gatewayAuth;
+    }
+    if (testState.gatewayControlUi) {
+      fileGateway.controlUi = testState.gatewayControlUi;
+    }
+    const gateway = Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
+
+    const fileCanvasHost =
+      baseConfig.canvasHost &&
+      typeof baseConfig.canvasHost === "object" &&
+      !Array.isArray(baseConfig.canvasHost)
+        ? ({ ...(baseConfig.canvasHost as Record<string, unknown>) } as Record<string, unknown>)
+        : {};
+    if (typeof testState.canvasHostPort === "number") {
+      fileCanvasHost.port = testState.canvasHostPort;
+    }
+    const canvasHost = Object.keys(fileCanvasHost).length > 0 ? fileCanvasHost : undefined;
+
+    const hooks = testState.hooksConfig ?? (baseConfig.hooks as HooksConfig | undefined);
+
+    const fileCron =
+      baseConfig.cron && typeof baseConfig.cron === "object" && !Array.isArray(baseConfig.cron)
+        ? ({ ...(baseConfig.cron as Record<string, unknown>) } as Record<string, unknown>)
+        : {};
+    if (typeof testState.cronEnabled === "boolean") {
+      fileCron.enabled = testState.cronEnabled;
+    }
+    if (typeof testState.cronStorePath === "string") {
+      fileCron.store = testState.cronStorePath;
+    }
+    const cron = Object.keys(fileCron).length > 0 ? fileCron : undefined;
+
+    return {
+      ...baseConfig,
+      agents,
+      bindings: testState.bindingsConfig ?? fileBindings,
+      channels,
+      session,
+      gateway,
+      canvasHost,
+      hooks,
+      cron,
+    } as OpenClawConfig;
+  };
+
   const writeConfigFile = vi.fn(async (cfg: Record<string, unknown>) => {
     const configPath = resolveConfigPath();
     await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -379,6 +517,8 @@ vi.mock("../config/config.js", async () => {
       config: testState.migrationConfig ?? (raw as Record<string, unknown>),
       changes: testState.migrationChanges,
     }),
+    applyConfigOverrides: (cfg: OpenClawConfig) =>
+      composeTestConfig(cfg as Record<string, unknown>),
     loadConfig: () => {
       const configPath = resolveConfigPath();
       let fileConfig: Record<string, unknown> = {};
@@ -390,129 +530,8 @@ vi.mock("../config/config.js", async () => {
       } catch {
         fileConfig = {};
       }
-
-      const fileAgents =
-        fileConfig.agents &&
-        typeof fileConfig.agents === "object" &&
-        !Array.isArray(fileConfig.agents)
-          ? (fileConfig.agents as Record<string, unknown>)
-          : {};
-      const fileDefaults =
-        fileAgents.defaults &&
-        typeof fileAgents.defaults === "object" &&
-        !Array.isArray(fileAgents.defaults)
-          ? (fileAgents.defaults as Record<string, unknown>)
-          : {};
-      const defaults = {
-        model: { primary: "anthropic/claude-opus-4-6" },
-        workspace: path.join(os.tmpdir(), "openclaw-gateway-test"),
-        ...fileDefaults,
-        ...testState.agentConfig,
-      };
-      const agents = testState.agentsConfig
-        ? { ...fileAgents, ...testState.agentsConfig, defaults }
-        : { ...fileAgents, defaults };
-
-      const fileBindings = Array.isArray(fileConfig.bindings)
-        ? (fileConfig.bindings as AgentBinding[])
-        : undefined;
-
-      const fileChannels =
-        fileConfig.channels &&
-        typeof fileConfig.channels === "object" &&
-        !Array.isArray(fileConfig.channels)
-          ? ({ ...(fileConfig.channels as Record<string, unknown>) } as Record<string, unknown>)
-          : {};
-      const overrideChannels =
-        testState.channelsConfig && typeof testState.channelsConfig === "object"
-          ? { ...testState.channelsConfig }
-          : {};
-      const mergedChannels = { ...fileChannels, ...overrideChannels };
-      if (testState.allowFrom !== undefined) {
-        const existing =
-          mergedChannels.whatsapp &&
-          typeof mergedChannels.whatsapp === "object" &&
-          !Array.isArray(mergedChannels.whatsapp)
-            ? (mergedChannels.whatsapp as Record<string, unknown>)
-            : {};
-        mergedChannels.whatsapp = {
-          ...existing,
-          allowFrom: testState.allowFrom,
-        };
-      }
-      const channels = Object.keys(mergedChannels).length > 0 ? mergedChannels : undefined;
-
-      const fileSession =
-        fileConfig.session &&
-        typeof fileConfig.session === "object" &&
-        !Array.isArray(fileConfig.session)
-          ? (fileConfig.session as Record<string, unknown>)
-          : {};
-      const session: Record<string, unknown> = {
-        ...fileSession,
-        mainKey: fileSession.mainKey ?? "main",
-      };
-      if (typeof testState.sessionStorePath === "string") {
-        session.store = testState.sessionStorePath;
-      }
-      if (testState.sessionConfig) {
-        Object.assign(session, testState.sessionConfig);
-      }
-
-      const fileGateway =
-        fileConfig.gateway &&
-        typeof fileConfig.gateway === "object" &&
-        !Array.isArray(fileConfig.gateway)
-          ? ({ ...(fileConfig.gateway as Record<string, unknown>) } as Record<string, unknown>)
-          : {};
-      if (testState.gatewayBind) {
-        fileGateway.bind = testState.gatewayBind;
-      }
-      if (testState.gatewayAuth) {
-        fileGateway.auth = testState.gatewayAuth;
-      }
-      if (testState.gatewayControlUi) {
-        fileGateway.controlUi = testState.gatewayControlUi;
-      }
-      const gateway = Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
-
-      const fileCanvasHost =
-        fileConfig.canvasHost &&
-        typeof fileConfig.canvasHost === "object" &&
-        !Array.isArray(fileConfig.canvasHost)
-          ? ({ ...(fileConfig.canvasHost as Record<string, unknown>) } as Record<string, unknown>)
-          : {};
-      if (typeof testState.canvasHostPort === "number") {
-        fileCanvasHost.port = testState.canvasHostPort;
-      }
-      const canvasHost = Object.keys(fileCanvasHost).length > 0 ? fileCanvasHost : undefined;
-
-      const hooks = testState.hooksConfig ?? (fileConfig.hooks as HooksConfig | undefined);
-
-      const fileCron =
-        fileConfig.cron && typeof fileConfig.cron === "object" && !Array.isArray(fileConfig.cron)
-          ? ({ ...(fileConfig.cron as Record<string, unknown>) } as Record<string, unknown>)
-          : {};
-      if (typeof testState.cronEnabled === "boolean") {
-        fileCron.enabled = testState.cronEnabled;
-      }
-      if (typeof testState.cronStorePath === "string") {
-        fileCron.store = testState.cronStorePath;
-      }
-      const cron = Object.keys(fileCron).length > 0 ? fileCron : undefined;
-
-      const config = {
-        ...fileConfig,
-        agents,
-        bindings: testState.bindingsConfig ?? fileBindings,
-        channels,
-        session,
-        gateway,
-        canvasHost,
-        hooks,
-        cron,
-      };
-      return applyPluginAutoEnable({ config, env: process.env }).config;
+      return applyPluginAutoEnable({ config: composeTestConfig(fileConfig), env: process.env })
+        .config;
     },
     parseConfigJson5: (raw: string) => {
       try {
@@ -555,7 +574,7 @@ vi.mock("../commands/health.js", () => ({
 vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
-vi.mock("../web/outbound.js", () => ({
+vi.mock("../../extensions/whatsapp/runtime-api.js", () => ({
   sendMessageWhatsApp: (...args: unknown[]) =>
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
   sendPollWhatsApp: (...args: unknown[]) =>
@@ -573,9 +592,11 @@ vi.mock("../channels/web/index.js", async () => {
 });
 vi.mock("../commands/agent.js", () => ({
   agentCommand,
+  agentCommandFromIngress: agentCommand,
 }));
 vi.mock("../auto-reply/reply.js", () => ({
-  getReplyFromConfig,
+  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
+    hoisted.getReplyFromConfig(...args),
 }));
 vi.mock("../cli/deps.js", async () => {
   const actual = await vi.importActual<typeof import("../cli/deps.js")>("../cli/deps.js");

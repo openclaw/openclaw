@@ -1,12 +1,15 @@
 node_modules
 **/node_modules/
 .env
+docker-compose.override.yml
 docker-compose.extra.yml
 dist
+dist-runtime
 pnpm-lock.yaml
 bun.lock
 bun.lockb
 coverage
+__openclaw_vitest__/
 __pycache__/
 *.pyc
 .tsbuildinfo
@@ -14,21 +17,28 @@ __pycache__/
 .worktrees/
 .DS_Store
 **/.DS_Store
-Icon?
-**/Icon?
 ui/src/ui/__screenshots__/
 ui/playwright-report/
 ui/test-results/
+packages/dashboard-next/.next/
+packages/dashboard-next/out/
+
+# Mise configuration files
+mise.toml
 
 # Android build artifacts
 apps/android/.gradle/
 apps/android/app/build/
 apps/android/.cxx/
+apps/android/.kotlin/
+apps/android/benchmark/results/
 
 # Bun build artifacts
 *.bun-build
 apps/macos/.build/
 apps/shared/MoltbotKit/.build/
+apps/shared/OpenClawKit/.build/
+apps/shared/OpenClawKit/Package.resolved
 **/ModuleCache/
 bin/
 bin/clawdbot-mac
@@ -36,10 +46,13 @@ bin/docs-list
 apps/macos/.build-local/
 apps/macos/.swiftpm/
 apps/shared/MoltbotKit/.swiftpm/
+apps/shared/OpenClawKit/.swiftpm/
 Core/
 apps/ios/*.xcodeproj/
 apps/ios/*.xcworkspace/
 apps/ios/.swiftpm/
+apps/ios/.derivedData/
+apps/ios/.local-signing.xcconfig
 vendor/
 apps/ios/Clawdbot.xcodeproj/
 apps/ios/Clawdbot.xcodeproj/**
@@ -72,6 +85,7 @@ apps/ios/*.mobileprovision
 # Local untracked files
 .local/
 docs/.local/
+tmp/
 IDENTITY.md
 USER.md
 .tgz
@@ -84,70 +98,42 @@ USER.md
 /memory/
 .agent/*.json
 !.agent/workflows/
-local/
+/local/
+package-lock.json
+.claude/
+.agent/
+skills-lock.json
 
-# Workspace — runtime data (never commit)
-workspace/.*.lock
-workspace/.*_state.json
-workspace/.env.bak*
-workspace/.openclaw/
-workspace/.learnings/
+# Local iOS signing overrides
+apps/ios/LocalSigning.xcconfig
 
-# Workspace — media & exports
-workspace/*.mp3
-workspace/*.opus
-workspace/*.png
-workspace/*.jpg
-workspace/*.csv
-workspace/*.pdf
-workspace/*.html
-workspace/line-rich-image.png
-workspace/rich-menu.png
-workspace/rich_menu_*.jpg
+# Xcode build directories (xcodebuild output)
+apps/ios/build/
+apps/shared/OpenClawKit/build/
+Swabble/build/
 
-# Workspace — generated output & temp
-workspace/exports/
-workspace/output/
-workspace/reports/
-workspace/tmp/
-workspace/logs/
-workspace/diagnostics/
-workspace/drafts/
-workspace/video-edit/
-workspace/podcast/
-workspace/inbox/
+# Generated protocol schema (produced via pnpm protocol:gen)
+dist/protocol.schema.json
+.ant-colony/
 
-# Workspace — project venvs & data
-workspace/projects/
-workspace/line-news-proxy/
-workspace/experience-memory/data/
+# Eclipse
+**/.project
+**/.classpath
+**/.settings/
+**/.gradle/
 
-# Workspace — n8n exports
-workspace/n8n-*.json
+# Synthing
+**/.stfolder/
+.dev-state
+docs/superpowers/plans/2026-03-10-collapsed-side-nav.md
+docs/superpowers/specs/2026-03-10-collapsed-side-nav-design.md
+.gitignore
+test/config-form.analyze.telegram.test.ts
+ui/src/ui/theme-variants.browser.test.ts
+ui/src/ui/__screenshots__
+ui/src/ui/views/__screenshots__
+ui/.vitest-attachments
+docs/superpowers
 
-# Workspace — one-off docs (not tracked)
-workspace/ARCHITECTURE.md
-workspace/AUTO_SKILL_INTEGRATION.md
-workspace/BRIEFING.md
-workspace/BUILD_LOG.md
-workspace/CRON_INSTRUCTIONS.md
-workspace/DAEMONS.md
-workspace/GENESIS.md
-workspace/REFLECTION_LAYERS.md
-workspace/WORKFLOW_AUTOMATION.md
-workspace/thinker-news-refactor-prompt.md
-
-# Workspace — p0 & wool puller data
-workspace/p0_*/
-workspace/p0_master_new.csv
-workspace/r12_win/
-workspace/wool_puller*
-
-# Other local files
-.env.soul
-apply-feedback-integration.sh
-media/
-skills/channel-growth/
-skills/local-places/
-skills/tw-traffic/
-workspace/24bet
+# Deprecated changelog fragment workflow
+changelog/fragments/

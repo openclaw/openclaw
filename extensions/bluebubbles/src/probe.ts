@@ -1,9 +1,9 @@
+import type { BaseProbeResult } from "./runtime-api.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { buildBlueBubblesApiUrl, blueBubblesFetchWithTimeout } from "./types.js";
 
-export type BlueBubblesProbe = {
-  ok: boolean;
+export type BlueBubblesProbe = BaseProbeResult & {
   status?: number | null;
-  error?: string | null;
 };
 
 export type BlueBubblesServerInfo = {
@@ -36,8 +36,8 @@ export async function fetchBlueBubblesServerInfo(params: {
   accountId?: string;
   timeoutMs?: number;
 }): Promise<BlueBubblesServerInfo | null> {
-  const baseUrl = params.baseUrl?.trim();
-  const password = params.password?.trim();
+  const baseUrl = normalizeSecretInputString(params.baseUrl);
+  const password = normalizeSecretInputString(params.password);
   if (!baseUrl || !password) {
     return null;
   }
@@ -73,7 +73,7 @@ export async function fetchBlueBubblesServerInfo(params: {
 }
 
 /**
- * Get cached server info synchronously (for use in listActions).
+ * Get cached server info synchronously (for use in describeMessageTool).
  * Returns null if not cached or expired.
  */
 export function getCachedBlueBubblesServerInfo(accountId?: string): BlueBubblesServerInfo | null {
@@ -83,6 +83,26 @@ export function getCachedBlueBubblesServerInfo(accountId?: string): BlueBubblesS
     return cached.info;
   }
   return null;
+}
+
+/**
+ * Read cached private API capability for a BlueBubbles account.
+ * Returns null when capability is unknown (for example, before first probe).
+ */
+export function getCachedBlueBubblesPrivateApiStatus(accountId?: string): boolean | null {
+  const info = getCachedBlueBubblesServerInfo(accountId);
+  if (!info || typeof info.private_api !== "boolean") {
+    return null;
+  }
+  return info.private_api;
+}
+
+export function isBlueBubblesPrivateApiStatusEnabled(status: boolean | null): boolean {
+  return status === true;
+}
+
+export function isBlueBubblesPrivateApiEnabled(accountId?: string): boolean {
+  return isBlueBubblesPrivateApiStatusEnabled(getCachedBlueBubblesPrivateApiStatus(accountId));
 }
 
 /**
@@ -119,8 +139,8 @@ export async function probeBlueBubbles(params: {
   password?: string | null;
   timeoutMs?: number;
 }): Promise<BlueBubblesProbe> {
-  const baseUrl = params.baseUrl?.trim();
-  const password = params.password?.trim();
+  const baseUrl = normalizeSecretInputString(params.baseUrl);
+  const password = normalizeSecretInputString(params.password);
   if (!baseUrl) {
     return { ok: false, error: "serverUrl not configured" };
   }

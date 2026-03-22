@@ -1,25 +1,22 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { FollowupRun } from "./queue.js";
-import type { TypingSignaler } from "./typing-mode.js";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
+  BILLING_ERROR_USER_MESSAGE,
   isCompactionFailureError,
   isContextOverflowError,
+  isBillingErrorMessage,
   isLikelyContextOverflowError,
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
-  resolveAgentIdFromSessionKey,
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
   type SessionEntry,
@@ -32,21 +29,46 @@ import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
-import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
-import { createBlockReplyPayloadKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
-import { parseReplyDirectives } from "./reply-directives.js";
-import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
+import type { TemplateContext } from "../templating.js";
+import type { VerboseLevel } from "../thinking.js";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../tokens.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import {
+  buildEmbeddedRunExecutionParams,
+  resolveModelFallbackOptions,
+} from "./agent-runner-utils.js";
+import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { FollowupRun } from "./queue.js";
+import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
+import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
+import type { TypingSignaler } from "./typing-mode.js";
+
+export type RuntimeFallbackAttempt = {
+  provider: string;
+  model: string;
+  error: string;
+  reason?: string;
+  status?: number;
+  code?: string;
+};
 
 export type AgentRunLoopResult =
   | {
       kind: "success";
+      runId: string;
       runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       fallbackProvider?: string;
       fallbackModel?: string;
+      fallbackAttempts: RuntimeFallbackAttempt[];
       didLogHeartbeatStrip: boolean;
-      autoCompactionCompleted: boolean;
+      autoCompactionCount: number;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
       directlySentBlockKeys?: Set<string>;
     }
@@ -82,35 +104,52 @@ export async function runAgentTurnWithFallback(params: {
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
-  let autoCompactionCompleted = false;
+  let autoCompactionCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
-  params.opts?.onAgentRunStart?.(runId);
+  const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
+    cfg: params.followupRun.run.config,
+    sessionKey: params.sessionKey,
+    workspaceDir: params.followupRun.run.workspaceDir,
+  });
+  let didNotifyAgentRunStart = false;
+  const notifyAgentRunStart = () => {
+    if (didNotifyAgentRunStart) {
+      return;
+    }
+    didNotifyAgentRunStart = true;
+    params.opts?.onAgentRunStart?.(runId);
+  };
+  const shouldSurfaceToControlUi = isInternalMessageChannel(
+    params.followupRun.run.messageProvider ??
+      params.sessionCtx.Surface ??
+      params.sessionCtx.Provider,
+  );
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
+      isControlUiVisible: shouldSurfaceToControlUi,
     });
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
+  let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
+  let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+    params.getActiveSessionEntry()?.systemPromptReport,
+  );
 
   while (true) {
     try {
-      const allowPartialStream = !(
-        params.followupRun.run.reasoningLevel === "stream" && params.opts?.onReasoningStream
-      );
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
-        if (!allowPartialStream) {
-          return { skip: true };
-        }
         let text = payload.text;
+        const reply = resolveSendableOutboundReplyParts(payload);
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
             mode: "message",
@@ -119,7 +158,7 @@ export async function runAgentTurnWithFallback(params: {
             didLogHeartbeatStrip = true;
             logVerbose("Stripped stray HEARTBEAT_OK token from reply");
           }
-          if (stripped.shouldSkip && (payload.mediaUrls?.length ?? 0) === 0) {
+          if (stripped.shouldSkip && !reply.hasMedia) {
             return { skip: true };
           }
           text = stripped.text;
@@ -127,7 +166,17 @@ export async function runAgentTurnWithFallback(params: {
         if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
           return { skip: true };
         }
+        if (
+          isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
+          isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
+        ) {
+          return { skip: true };
+        }
         if (!text) {
+          // Allow media-only payloads (e.g. tool result screenshots) through.
+          if (reply.hasMedia) {
+            return { text: undefined, skip: false };
+          }
           return { skip: true };
         }
         const sanitized = sanitizeUserFacingText(text, {
@@ -139,6 +188,9 @@ export async function runAgentTurnWithFallback(params: {
         return { text: sanitized, skip: false };
       };
       const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
+        if (isSilentReplyPrefixText(payload.text, SILENT_REPLY_TOKEN)) {
+          return undefined;
+        }
         const { text, skip } = normalizeStreamingText(payload);
         if (skip || !text) {
           return undefined;
@@ -147,17 +199,28 @@ export async function runAgentTurnWithFallback(params: {
         return text;
       };
       const blockReplyPipeline = params.blockReplyPipeline;
+      // Build the delivery handler once so both onAgentEvent (compaction start
+      // notice) and the onBlockReply field share the same instance.  This
+      // ensures replyToId threading (replyToMode=all|first) is applied to
+      // compaction notices just like every other block reply.
+      const blockReplyHandler = params.opts?.onBlockReply
+        ? createBlockReplyDeliveryHandler({
+            onBlockReply: params.opts.onBlockReply,
+            currentMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+            normalizeStreamingText,
+            applyReplyToMode: params.applyReplyToMode,
+            normalizeMediaPaths: normalizeReplyMediaPaths,
+            typingSignals: params.typingSignals,
+            blockStreamingEnabled: params.blockStreamingEnabled,
+            blockReplyPipeline,
+            directlySentBlockKeys,
+          })
+        : undefined;
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
-        cfg: params.followupRun.run.config,
-        provider: params.followupRun.run.provider,
-        model: params.followupRun.run.model,
-        agentDir: params.followupRun.run.agentDir,
-        fallbacksOverride: resolveAgentModelFallbacksOverride(
-          params.followupRun.run.config,
-          resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
-        ),
-        run: (provider, model) => {
+        ...resolveModelFallbackOptions(params.followupRun.run),
+        runId,
+        run: (provider, model, runOptions) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
           params.opts?.onModelSelected?.({
@@ -168,6 +231,7 @@ export async function runAgentTurnWithFallback(params: {
 
           if (isCliProvider(provider, params.followupRun.run.config)) {
             const startedAt = Date.now();
+            notifyAgentRunStart();
             emitAgentEvent({
               runId,
               stream: "lifecycle",
@@ -196,8 +260,16 @@ export async function runAgentTurnWithFallback(params: {
                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                   ownerNumbers: params.followupRun.run.ownerNumbers,
                   cliSessionId,
+                  bootstrapPromptWarningSignaturesSeen,
+                  bootstrapPromptWarningSignature:
+                    bootstrapPromptWarningSignaturesSeen[
+                      bootstrapPromptWarningSignaturesSeen.length - 1
+                    ],
                   images: params.opts?.images,
                 });
+                bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                  result.meta?.systemPromptReport,
+                );
 
                 // CLI backends don't emit streaming assistant events, so we need to
                 // emit one with the final text so server-chat can populate its buffer
@@ -254,70 +326,50 @@ export async function runAgentTurnWithFallback(params: {
               }
             })();
           }
-          const authProfileId =
-            provider === params.followupRun.run.provider
-              ? params.followupRun.run.authProfileId
-              : undefined;
-          return runEmbeddedPiAgent({
-            sessionId: params.followupRun.run.sessionId,
-            sessionKey: params.sessionKey,
-            agentId: params.followupRun.run.agentId,
-            messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
-            agentAccountId: params.sessionCtx.AccountId,
-            messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
-            messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
-            groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
-            groupChannel:
-              params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
-            groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
-            senderId: params.sessionCtx.SenderId?.trim() || undefined,
-            senderName: params.sessionCtx.SenderName?.trim() || undefined,
-            senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
-            senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
-            // Provider threading context for tool auto-injection
-            ...buildThreadingToolContext({
+          const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams(
+            {
+              run: params.followupRun.run,
               sessionCtx: params.sessionCtx,
-              config: params.followupRun.run.config,
               hasRepliedRef: params.opts?.hasRepliedRef,
-            }),
-            sessionFile: params.followupRun.run.sessionFile,
-            workspaceDir: params.followupRun.run.workspaceDir,
-            agentDir: params.followupRun.run.agentDir,
-            config: params.followupRun.run.config,
-            skillsSnapshot: params.followupRun.run.skillsSnapshot,
-            prompt: params.commandBody,
-            extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-            ownerNumbers: params.followupRun.run.ownerNumbers,
-            enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
-            provider,
-            model,
-            authProfileId,
-            authProfileIdSource: authProfileId
-              ? params.followupRun.run.authProfileIdSource
-              : undefined,
-            thinkLevel: params.followupRun.run.thinkLevel,
-            verboseLevel: params.followupRun.run.verboseLevel,
-            reasoningLevel: params.followupRun.run.reasoningLevel,
-            execOverrides: params.followupRun.run.execOverrides,
-            toolResultFormat: (() => {
-              const channel = resolveMessageChannel(
-                params.sessionCtx.Surface,
-                params.sessionCtx.Provider,
-              );
-              if (!channel) {
-                return "markdown";
-              }
-              return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
-            })(),
-            bashElevated: params.followupRun.run.bashElevated,
-            timeoutMs: params.followupRun.run.timeoutMs,
-            runId,
-            images: params.opts?.images,
-            abortSignal: params.opts?.abortSignal,
-            blockReplyBreak: params.resolvedBlockStreamingBreak,
-            blockReplyChunking: params.blockReplyChunking,
-            onPartialReply: allowPartialStream
-              ? async (payload) => {
+              provider,
+              runId,
+              allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+              model,
+            },
+          );
+          return (async () => {
+            let attemptCompactionCount = 0;
+            try {
+              const result = await runEmbeddedPiAgent({
+                ...embeddedContext,
+                allowGatewaySubagentBinding: true,
+                trigger: params.isHeartbeat ? "heartbeat" : "user",
+                groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
+                groupChannel:
+                  params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
+                groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
+                ...senderContext,
+                ...runBaseParams,
+                prompt: params.commandBody,
+                extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                toolResultFormat: (() => {
+                  const channel = resolveMessageChannel(
+                    params.sessionCtx.Surface,
+                    params.sessionCtx.Provider,
+                  );
+                  if (!channel) {
+                    return "markdown";
+                  }
+                  return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
+                })(),
+                suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
+                bootstrapContextMode: params.opts?.bootstrapContextMode,
+                bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
+                images: params.opts?.images,
+                abortSignal: params.opts?.abortSignal,
+                blockReplyBreak: params.resolvedBlockStreamingBreak,
+                blockReplyChunking: params.blockReplyChunking,
+                onPartialReply: async (payload) => {
                   const textForTyping = await handlePartialForTyping(payload);
                   if (!params.opts?.onPartialReply || textForTyping === undefined) {
                     return;
@@ -326,154 +378,152 @@ export async function runAgentTurnWithFallback(params: {
                     text: textForTyping,
                     mediaUrls: payload.mediaUrls,
                   });
-                }
-              : undefined,
-            onAssistantMessageStart: async () => {
-              await params.typingSignals.signalMessageStart();
-            },
-            onReasoningStream:
-              params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
-                ? async (payload) => {
-                    await params.typingSignals.signalReasoningDelta();
-                    await params.opts?.onReasoningStream?.({
-                      text: payload.text,
-                      mediaUrls: payload.mediaUrls,
-                    });
+                },
+                onAssistantMessageStart: async () => {
+                  await params.typingSignals.signalMessageStart();
+                  await params.opts?.onAssistantMessageStart?.();
+                },
+                onReasoningStream:
+                  params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
+                    ? async (payload) => {
+                        await params.typingSignals.signalReasoningDelta();
+                        await params.opts?.onReasoningStream?.({
+                          text: payload.text,
+                          mediaUrls: payload.mediaUrls,
+                        });
+                      }
+                    : undefined,
+                onReasoningEnd: params.opts?.onReasoningEnd,
+                onAgentEvent: async (evt) => {
+                  // Signal run start only after the embedded agent emits real activity.
+                  const hasLifecyclePhase =
+                    evt.stream === "lifecycle" && typeof evt.data.phase === "string";
+                  if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
+                    notifyAgentRunStart();
                   }
-                : undefined,
-            onAgentEvent: async (evt) => {
-              // Trigger typing when tools start executing.
-              // Must await to ensure typing indicator starts before tool summaries are emitted.
-              if (evt.stream === "tool") {
-                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                if (phase === "start" || phase === "update") {
-                  await params.typingSignals.signalToolStart();
-                }
-              }
-              // Track auto-compaction completion
-              if (evt.stream === "compaction") {
-                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                const willRetry = Boolean(evt.data.willRetry);
-                if (phase === "end" && !willRetry) {
-                  autoCompactionCompleted = true;
-                }
-              }
-            },
-            // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
-            // even when regular block streaming is disabled. The handler sends directly
-            // via opts.onBlockReply when the pipeline isn't available.
-            onBlockReply: params.opts?.onBlockReply
-              ? async (payload) => {
-                  const { text, skip } = normalizeStreamingText(payload);
-                  const hasPayloadMedia = (payload.mediaUrls?.length ?? 0) > 0;
-                  if (skip && !hasPayloadMedia) {
-                    return;
-                  }
-                  const currentMessageId =
-                    params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
-                  const taggedPayload = applyReplyTagsToPayload(
-                    {
-                      text,
-                      mediaUrls: payload.mediaUrls,
-                      mediaUrl: payload.mediaUrls?.[0],
-                      replyToId:
-                        payload.replyToId ??
-                        (payload.replyToCurrent === false ? undefined : currentMessageId),
-                      replyToTag: payload.replyToTag,
-                      replyToCurrent: payload.replyToCurrent,
-                    },
-                    currentMessageId,
-                  );
-                  // Let through payloads with audioAsVoice flag even if empty (need to track it)
-                  if (!isRenderablePayload(taggedPayload) && !payload.audioAsVoice) {
-                    return;
-                  }
-                  const parsed = parseReplyDirectives(taggedPayload.text ?? "", {
-                    currentMessageId,
-                    silentToken: SILENT_REPLY_TOKEN,
-                  });
-                  const cleaned = parsed.text || undefined;
-                  const hasRenderableMedia =
-                    Boolean(taggedPayload.mediaUrl) || (taggedPayload.mediaUrls?.length ?? 0) > 0;
-                  // Skip empty payloads unless they have audioAsVoice flag (need to track it)
-                  if (
-                    !cleaned &&
-                    !hasRenderableMedia &&
-                    !payload.audioAsVoice &&
-                    !parsed.audioAsVoice
-                  ) {
-                    return;
-                  }
-                  if (parsed.isSilent && !hasRenderableMedia) {
-                    return;
-                  }
-
-                  const blockPayload: ReplyPayload = params.applyReplyToMode({
-                    ...taggedPayload,
-                    text: cleaned,
-                    audioAsVoice: Boolean(parsed.audioAsVoice || payload.audioAsVoice),
-                    replyToId: taggedPayload.replyToId ?? parsed.replyToId,
-                    replyToTag: taggedPayload.replyToTag || parsed.replyToTag,
-                    replyToCurrent: taggedPayload.replyToCurrent || parsed.replyToCurrent,
-                  });
-
-                  void params.typingSignals
-                    .signalTextDelta(cleaned ?? taggedPayload.text)
-                    .catch((err) => {
-                      logVerbose(`block reply typing signal failed: ${String(err)}`);
-                    });
-
-                  // Use pipeline if available (block streaming enabled), otherwise send directly
-                  if (params.blockStreamingEnabled && params.blockReplyPipeline) {
-                    params.blockReplyPipeline.enqueue(blockPayload);
-                  } else if (params.blockStreamingEnabled) {
-                    // Send directly when flushing before tool execution (no pipeline but streaming enabled).
-                    // Track sent key to avoid duplicate in final payloads.
-                    directlySentBlockKeys.add(createBlockReplyPayloadKey(blockPayload));
-                    await params.opts?.onBlockReply?.(blockPayload);
-                  }
-                  // When streaming is disabled entirely, blocks are accumulated in final text instead.
-                }
-              : undefined,
-            onBlockReplyFlush:
-              params.blockStreamingEnabled && blockReplyPipeline
-                ? async () => {
-                    await blockReplyPipeline.flush({ force: true });
-                  }
-                : undefined,
-            shouldEmitToolResult: params.shouldEmitToolResult,
-            shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onToolResult: onToolResult
-              ? (payload) => {
-                  // `subscribeEmbeddedPiSession` may invoke tool callbacks without awaiting them.
-                  // If a tool callback starts typing after the run finalized, we can end up with
-                  // a typing loop that never sees a matching markRunComplete(). Track and drain.
-                  const task = (async () => {
-                    const { text, skip } = normalizeStreamingText(payload);
-                    if (skip) {
-                      return;
+                  // Trigger typing when tools start executing.
+                  // Must await to ensure typing indicator starts before tool summaries are emitted.
+                  if (evt.stream === "tool") {
+                    const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                    const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
+                    if (phase === "start" || phase === "update") {
+                      await params.typingSignals.signalToolStart();
+                      await params.opts?.onToolStart?.({ name, phase });
                     }
-                    await params.typingSignals.signalTextDelta(text);
-                    await onToolResult({
-                      text,
-                      mediaUrls: payload.mediaUrls,
-                    });
-                  })()
-                    .catch((err) => {
-                      logVerbose(`tool result delivery failed: ${String(err)}`);
-                    })
-                    .finally(() => {
-                      params.pendingToolTasks.delete(task);
-                    });
-                  params.pendingToolTasks.add(task);
-                }
-              : undefined,
-          });
+                  }
+                  // Track auto-compaction and notify higher layers.
+                  if (evt.stream === "compaction") {
+                    const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                    if (phase === "start") {
+                      if (params.opts?.onCompactionStart) {
+                        await params.opts.onCompactionStart();
+                      } else if (params.opts?.onBlockReply) {
+                        // Send directly via opts.onBlockReply (bypassing the
+                        // pipeline) so the notice does not cause final payloads
+                        // to be discarded on non-streaming model paths.
+                        const currentMessageId =
+                          params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
+                        const noticePayload = params.applyReplyToMode({
+                          text: "🧹 Compacting context...",
+                          replyToId: currentMessageId,
+                          replyToCurrent: true,
+                          isCompactionNotice: true,
+                        });
+                        try {
+                          await params.opts.onBlockReply(noticePayload);
+                        } catch (err) {
+                          // Non-critical notice delivery failure should not
+                          // bubble out of the fire-and-forget event handler.
+                          logVerbose(
+                            `compaction start notice delivery failed (non-fatal): ${String(err)}`,
+                          );
+                        }
+                      }
+                    }
+                    const completed = evt.data?.completed === true;
+                    if (phase === "end" && completed) {
+                      attemptCompactionCount += 1;
+                      await params.opts?.onCompactionEnd?.();
+                    }
+                  }
+                },
+                // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
+                // even when regular block streaming is disabled. The handler sends directly
+                // via opts.onBlockReply when the pipeline isn't available.
+                onBlockReply: blockReplyHandler,
+                onBlockReplyFlush:
+                  params.blockStreamingEnabled && blockReplyPipeline
+                    ? async () => {
+                        await blockReplyPipeline.flush({ force: true });
+                      }
+                    : undefined,
+                shouldEmitToolResult: params.shouldEmitToolResult,
+                shouldEmitToolOutput: params.shouldEmitToolOutput,
+                bootstrapPromptWarningSignaturesSeen,
+                bootstrapPromptWarningSignature:
+                  bootstrapPromptWarningSignaturesSeen[
+                    bootstrapPromptWarningSignaturesSeen.length - 1
+                  ],
+                onToolResult: onToolResult
+                  ? (() => {
+                      // Serialize tool result delivery to preserve message ordering.
+                      // Without this, concurrent tool callbacks race through typing signals
+                      // and message sends, causing out-of-order delivery to the user.
+                      // See: https://github.com/openclaw/openclaw/issues/11044
+                      let toolResultChain: Promise<void> = Promise.resolve();
+                      return (payload: ReplyPayload) => {
+                        toolResultChain = toolResultChain
+                          .then(async () => {
+                            const { text, skip } = normalizeStreamingText(payload);
+                            if (skip) {
+                              return;
+                            }
+                            await params.typingSignals.signalTextDelta(text);
+                            await onToolResult({
+                              ...payload,
+                              text,
+                            });
+                          })
+                          .catch((err) => {
+                            // Keep chain healthy after an error so later tool results still deliver.
+                            logVerbose(`tool result delivery failed: ${String(err)}`);
+                          });
+                        const task = toolResultChain.finally(() => {
+                          params.pendingToolTasks.delete(task);
+                        });
+                        params.pendingToolTasks.add(task);
+                      };
+                    })()
+                  : undefined,
+              });
+              bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                result.meta?.systemPromptReport,
+              );
+              const resultCompactionCount = Math.max(
+                0,
+                result.meta?.agentMeta?.compactionCount ?? 0,
+              );
+              attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
+              return result;
+            } finally {
+              autoCompactionCount += attemptCompactionCount;
+            }
+          })();
         },
       });
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      fallbackAttempts = Array.isArray(fallbackResult.attempts)
+        ? fallbackResult.attempts.map((attempt) => ({
+            provider: String(attempt.provider ?? ""),
+            model: String(attempt.model ?? ""),
+            error: String(attempt.error ?? ""),
+            reason: attempt.reason ? String(attempt.reason) : undefined,
+            status: typeof attempt.status === "number" ? attempt.status : undefined,
+            code: attempt.code ? String(attempt.code) : undefined,
+          }))
+        : [];
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
@@ -488,7 +538,7 @@ export async function runAgentTurnWithFallback(params: {
         return {
           kind: "final",
           payload: {
-            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 4000 or higher in your config.",
+            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
           },
         };
       }
@@ -507,8 +557,9 @@ export async function runAgentTurnWithFallback(params: {
       break;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const isContextOverflow = isLikelyContextOverflowError(message);
-      const isCompactionFailure = isCompactionFailureError(message);
+      const isBilling = isBillingErrorMessage(message);
+      const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
+      const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
@@ -522,7 +573,7 @@ export async function runAgentTurnWithFallback(params: {
         return {
           kind: "final",
           payload: {
-            text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 4000 or higher in your config.",
+            text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
           },
         };
       }
@@ -603,13 +654,13 @@ export async function runAgentTurnWithFallback(params: {
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
-      const fallbackText = isContextOverflow
-        ? "⚠️ 對話太長了，請用 /new 開啟新對話。"
-        : isRoleOrderingError
-          ? "⚠️ 訊息順序衝突，請再試一次。如持續發生請用 /new 重新開始。"
-          : isTransientHttp
-            ? "⚠️ AI 服務暫時繁忙，請稍後再試。"
-            : `⚠️ 處理失敗: ${trimmedMessage}`;
+      const fallbackText = isBilling
+        ? BILLING_ERROR_USER_MESSAGE
+        : isContextOverflow
+          ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+          : isRoleOrderingError
+            ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
+            : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",
@@ -620,13 +671,31 @@ export async function runAgentTurnWithFallback(params: {
     }
   }
 
+  // If the run completed but with an embedded context overflow error that
+  // wasn't recovered from (e.g. compaction reset already attempted), surface
+  // the error to the user instead of silently returning an empty response.
+  // See #26905: Slack DM sessions silently swallowed messages when context
+  // overflow errors were returned as embedded error payloads.
+  const finalEmbeddedError = runResult?.meta?.error;
+  const hasPayloadText = runResult?.payloads?.some((p) => p.text?.trim());
+  if (finalEmbeddedError && isContextOverflowError(finalEmbeddedError.message) && !hasPayloadText) {
+    return {
+      kind: "final",
+      payload: {
+        text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
+      },
+    };
+  }
+
   return {
     kind: "success",
+    runId,
     runResult,
     fallbackProvider,
     fallbackModel,
+    fallbackAttempts,
     didLogHeartbeatStrip,
-    autoCompactionCompleted,
+    autoCompactionCount,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
   };
 }

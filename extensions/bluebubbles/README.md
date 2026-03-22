@@ -10,10 +10,10 @@ If you’re looking for **how to use BlueBubbles as an agent/tool user**, see:
 
 - Extension package: `extensions/bluebubbles/` (entry: `index.ts`).
 - Channel implementation: `extensions/bluebubbles/src/channel.ts`.
-- Webhook handling: `extensions/bluebubbles/src/monitor.ts` (register via `api.registerHttpHandler`).
+- Webhook handling: `extensions/bluebubbles/src/monitor.ts` (register per-account route via `registerPluginHttpRoute`).
 - REST helpers: `extensions/bluebubbles/src/send.ts` + `extensions/bluebubbles/src/probe.ts`.
 - Runtime bridge: `extensions/bluebubbles/src/runtime.ts` (set via `api.runtime`).
-- Catalog entry for onboarding: `src/channels/plugins/catalog.ts`.
+- Catalog entry for setup selection: `src/channels/plugins/catalog.ts`.
 
 ## Internal helpers (use these, not raw API calls)
 
