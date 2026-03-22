@@ -183,22 +183,20 @@ export function createFollowupRunner(params: {
         });
       };
       const sendCompactionNotice = async (text: string) => {
-        const noticePayloads = await applyFollowupReplyThreading([
-          {
-            text,
-            replyToCurrent: true,
-            isCompactionNotice: true,
-          },
-        ]);
-        if (noticePayloads.length === 0) {
-          return;
-        }
         try {
+          const noticePayloads = await applyFollowupReplyThreading([
+            {
+              text,
+              replyToCurrent: true,
+              isCompactionNotice: true,
+            },
+          ]);
+          if (noticePayloads.length === 0) {
+            return;
+          }
           await sendFollowupPayloads(noticePayloads, queued);
         } catch (err) {
-          logVerbose(
-            `followup queue: compaction notice delivery failed (non-fatal): ${String(err)}`,
-          );
+          logVerbose(`followup queue: compaction notice failed (non-fatal): ${String(err)}`);
         }
       };
       let autoCompactionCount = 0;
