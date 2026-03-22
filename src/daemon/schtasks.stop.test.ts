@@ -530,7 +530,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
     await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
       const upgradedHome = path.join(tmpDir, "openclaw-home");
       const legacyStateDir = path.join(tmpDir, ".openclaw");
-      const upgradedEnv = { ...env, OPENCLAW_HOME: upgradedHome };
+      const upgradedEnv: Record<string, string> = { ...env, OPENCLAW_HOME: upgradedHome };
       const stdout = new PassThrough();
       delete upgradedEnv.OPENCLAW_GATEWAY_PORT;
 

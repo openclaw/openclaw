@@ -56,6 +56,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
     loadConfig: (...args: unknown[]) => loadConfigMock(...args),
     readSessionUpdatedAt: vi.fn(() => undefined),
     resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
+    readSessionUpdatedAt: vi.fn(() => undefined),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
     resolveSessionKey: vi.fn(),
   };
