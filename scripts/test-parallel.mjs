@@ -395,10 +395,10 @@ const defaultForkBatchLaneCount =
             : lowMemLocalHost
               ? Math.ceil(unitForkBatchFiles.length / 12)
               : Math.ceil(unitForkBatchFiles.length / 10);
-const configuredForkBatchLaneCount =
-  parseEnvNumber("OPENCLAW_TEST_UNIT_FORK_BATCH_LANES", null) ??
-  // Backward-compatible alias for the old manifest terminology.
-  parseEnvNumber("OPENCLAW_TEST_SINGLETON_ISOLATED_LANES", defaultForkBatchLaneCount);
+const configuredForkBatchLaneCount = parseEnvNumber(
+  "OPENCLAW_TEST_UNIT_FORK_BATCH_LANES",
+  defaultForkBatchLaneCount,
+);
 const forkBatchLaneCount =
   unitForkBatchFiles.length === 0
     ? 0
