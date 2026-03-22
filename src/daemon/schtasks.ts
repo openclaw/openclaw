@@ -234,11 +234,7 @@ export async function readScheduledTaskCommand(
 
 async function resolveInstalledTaskScriptPath(env: GatewayServiceEnv): Promise<string> {
   const command = await readScheduledTaskCommand(env).catch(() => null);
-  if (command?.sourcePath) {
-    return command.sourcePath;
-  }
-  const [candidate] = await resolveTaskScriptCandidates(env).catch(() => []);
-  return candidate ?? resolveTaskScriptPath(env);
+  return command?.sourcePath ?? resolveTaskScriptPath(env);
 }
 
 export type ScheduledTaskInfo = {

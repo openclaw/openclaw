@@ -255,7 +255,6 @@ export async function probeTelegram(
       getMeMs,
       getWebhookInfoMs,
       totalMs: result.elapsedMs,
-      failedStep: result.timings?.failedStep,
     };
     return result;
   } catch (err) {

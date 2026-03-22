@@ -173,6 +173,20 @@ describe("probeTelegram retry logic", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1); // Should not retry
   });
 
+  it("keeps webhook probe degradation from surfacing as a failedStep on ok results", async () => {
+    const fetchMock = installFetchMock();
+    mockGetMeSuccess(fetchMock);
+    fetchMock.mockRejectedValueOnce(new Error("webhook unavailable"));
+
+    const result = await probeTelegram(token, timeoutMs);
+
+    expect(result.ok).toBe(true);
+    expect(result.timings?.getMeMs).toEqual(expect.any(Number));
+    expect(result.timings?.getWebhookInfoMs).toEqual(expect.any(Number));
+    expect(result.timings?.totalMs).toEqual(expect.any(Number));
+    expect(result.timings?.failedStep).toBeUndefined();
+  });
+
   it("uses resolver-scoped Telegram fetch with probe network options", async () => {
     const fetchMock = installFetchMock();
     mockGetMeSuccess(fetchMock);
