@@ -259,7 +259,7 @@ export function resolveDefaultConfigCandidates(
       // Only add flat-home candidates when no nested state dir takes priority.
       // If resolveStateDir returns a nested dir (e.g. ~/.clawdbot/.openclaw),
       // config should follow the nested tree — not a stale flat file at OPENCLAW_HOME.
-      const resolvedState = resolveStateDir(env);
+      const resolvedState = resolveStateDir(env, homedir);
       if (resolvedState === path.resolve(home)) {
         candidates.push(path.join(home, CONFIG_FILENAME));
         candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(home, name)));
