@@ -9,12 +9,12 @@ import {
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
-import { createTextPairingAdapter } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createConditionalWarningCollector,
   projectWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
+import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { z } from "zod";
@@ -82,53 +82,184 @@ const collectSynologyChatSecurityWarnings =
       '- Synology Chat: dmPolicy="allowlist" with empty allowedUserIds blocks all senders. Add users or set dmPolicy="open".',
   );
 
-export function createSynologyChatPlugin() {
-  return {
-    id: CHANNEL_ID,
+type SynologyChatOutboundResult = {
+  channel: typeof CHANNEL_ID;
+  messageId: string;
+  chatId: string;
+};
 
-    meta: {
+type SynologyChatPlugin = Omit<
+  ChannelPlugin<ResolvedSynologyChatAccount>,
+  "pairing" | "security" | "messaging" | "directory" | "outbound" | "gateway" | "agentPrompt"
+> & {
+  pairing: {
+    idLabel: string;
+    normalizeAllowEntry?: (entry: string) => string;
+    notifyApproval: (params: { cfg: Record<string, unknown>; id: string }) => Promise<void>;
+  };
+  security: {
+    resolveDmPolicy: (params: {
+      cfg: Record<string, unknown>;
+      account: ResolvedSynologyChatAccount;
+    }) => {
+      policy: string | null | undefined;
+      allowFrom?: Array<string | number>;
+      normalizeEntry?: (raw: string) => string;
+    } | null;
+    collectWarnings: (params: { account: ResolvedSynologyChatAccount }) => string[];
+  };
+  messaging: {
+    normalizeTarget: (target: string) => string | undefined;
+    targetResolver: {
+      looksLikeId: (id: string) => boolean;
+      hint: string;
+    };
+  };
+  directory: {
+    self?: NonNullable<ChannelPlugin<ResolvedSynologyChatAccount>["directory"]>["self"];
+    listPeers?: NonNullable<ChannelPlugin<ResolvedSynologyChatAccount>["directory"]>["listPeers"];
+    listGroups?: NonNullable<ChannelPlugin<ResolvedSynologyChatAccount>["directory"]>["listGroups"];
+  };
+  outbound: {
+    deliveryMode: "gateway";
+    textChunkLimit: number;
+    sendText: (ctx: {
+      cfg: Record<string, unknown>;
+      text: string;
+      to: string;
+      accountId?: string | null;
+    }) => Promise<SynologyChatOutboundResult>;
+    sendMedia: (ctx: {
+      cfg: Record<string, unknown>;
+      mediaUrl: string;
+      to: string;
+      accountId?: string | null;
+    }) => Promise<SynologyChatOutboundResult>;
+  };
+  gateway: {
+    startAccount: (ctx: any) => Promise<unknown>;
+    stopAccount: (ctx: any) => Promise<void>;
+  };
+  agentPrompt: {
+    messageToolHints: () => string[];
+  };
+};
+
+export function createSynologyChatPlugin(): SynologyChatPlugin {
+  return createChatChannelPlugin({
+    base: {
       id: CHANNEL_ID,
-      label: "Synology Chat",
-      selectionLabel: "Synology Chat (Webhook)",
-      detailLabel: "Synology Chat (Webhook)",
-      docsPath: "/channels/synology-chat",
-      blurb: "Connect your Synology NAS Chat to OpenClaw",
-      order: 90,
-    },
-
-    capabilities: {
-      chatTypes: ["direct" as const],
-      media: true,
-      threads: false,
-      reactions: false,
-      edit: false,
-      unsend: false,
-      reply: false,
-      effects: false,
-      blockStreaming: false,
-    },
-
-    reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
-
-    configSchema: SynologyChatConfigSchema,
-    setup: synologyChatSetupAdapter,
-    setupWizard: synologyChatSetupWizard,
-
-    config: {
-      ...synologyChatConfigAdapter,
-    },
-
-    pairing: createTextPairingAdapter({
-      idLabel: "synologyChatUserId",
-      message: "OpenClaw: your access has been approved.",
-      normalizeAllowEntry: (entry: string) => entry.toLowerCase().trim(),
-      notify: async ({ cfg, id, message }) => {
-        const account = resolveAccount(cfg);
-        if (!account.incomingUrl) return;
-        await sendMessage(account.incomingUrl, message, id, account.allowInsecureSsl);
+      meta: {
+        id: CHANNEL_ID,
+        label: "Synology Chat",
+        selectionLabel: "Synology Chat (Webhook)",
+        detailLabel: "Synology Chat (Webhook)",
+        docsPath: "/channels/synology-chat",
+        blurb: "Connect your Synology NAS Chat to OpenClaw",
+        order: 90,
       },
-    }),
+      capabilities: {
+        chatTypes: ["direct" as const],
+        media: true,
+        threads: false,
+        reactions: false,
+        edit: false,
+        unsend: false,
+        reply: false,
+        effects: false,
+        blockStreaming: false,
+      },
+      reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
+      configSchema: SynologyChatConfigSchema,
+      setup: synologyChatSetupAdapter,
+      setupWizard: synologyChatSetupWizard,
+      config: {
+        ...synologyChatConfigAdapter,
+      },
+      messaging: {
+        normalizeTarget: (target: string) => {
+          const trimmed = target.trim();
+          if (!trimmed) return undefined;
+          // Strip common prefixes
+          return trimmed.replace(/^synology[-_]?chat:/i, "").trim();
+        },
+        targetResolver: {
+          looksLikeId: (id: string) => {
+            const trimmed = id?.trim();
+            if (!trimmed) return false;
+            // Synology Chat user IDs are numeric
+            return /^\d+$/.test(trimmed) || /^synology[-_]?chat:/i.test(trimmed);
+          },
+          hint: "<userId>",
+        },
+      },
+      directory: createEmptyChannelDirectoryAdapter(),
+      gateway: {
+        startAccount: async (ctx: any) => {
+          const { cfg, accountId, log } = ctx;
+          const account = resolveAccount(cfg, accountId);
+          if (!validateSynologyGatewayAccountStartup({ account, accountId, log }).ok) {
+            return waitUntilAbort(ctx.abortSignal);
+          }
 
+          log?.info?.(
+            `Starting Synology Chat channel (account: ${accountId}, path: ${account.webhookPath})`,
+          );
+          const unregister = registerSynologyWebhookRoute({ account, accountId, log });
+
+          log?.info?.(`Registered HTTP route: ${account.webhookPath} for Synology Chat`);
+
+          // Keep alive until abort signal fires.
+          // The gateway expects a Promise that stays pending while the channel is running.
+          // Resolving immediately triggers a restart loop.
+          return waitUntilAbort(ctx.abortSignal, () => {
+            log?.info?.(`Stopping Synology Chat channel (account: ${accountId})`);
+            unregister();
+          });
+        },
+
+        stopAccount: async (ctx: any) => {
+          ctx.log?.info?.(`Synology Chat account ${ctx.accountId} stopped`);
+        },
+      },
+      agentPrompt: {
+        messageToolHints: () => [
+          "",
+          "### Synology Chat Formatting",
+          "Synology Chat supports limited formatting. Use these patterns:",
+          "",
+          "**Links**: Use `<URL|display text>` to create clickable links.",
+          "  Example: `<https://example.com|Click here>` renders as a clickable link.",
+          "",
+          "**File sharing**: Include a publicly accessible URL to share files or images.",
+          "  The NAS will download and attach the file (max 32 MB).",
+          "",
+          "**Limitations**:",
+          "- No markdown, bold, italic, or code blocks",
+          "- No buttons, cards, or interactive elements",
+          "- No message editing after send",
+          "- Keep messages under 2000 characters for best readability",
+          "",
+          "**Best practices**:",
+          "- Use short, clear responses (Synology Chat has a minimal UI)",
+          "- Use line breaks to separate sections",
+          "- Use numbered or bulleted lists for clarity",
+          "- Wrap URLs with `<URL|label>` for user-friendly links",
+        ],
+      },
+    },
+    pairing: {
+      text: {
+        idLabel: "synologyChatUserId",
+        message: "OpenClaw: your access has been approved.",
+        normalizeAllowEntry: (entry: string) => entry.toLowerCase().trim(),
+        notify: async ({ cfg, id, message }) => {
+          const account = resolveAccount(cfg);
+          if (!account.incomingUrl) return;
+          await sendMessage(account.incomingUrl, message, id, account.allowInsecureSsl);
+        },
+      },
+    },
     security: {
       resolveDmPolicy: resolveSynologyChatDmPolicy,
       collectWarnings: projectWarningCollector(
@@ -136,27 +267,6 @@ export function createSynologyChatPlugin() {
         collectSynologyChatSecurityWarnings,
       ),
     },
-
-    messaging: {
-      normalizeTarget: (target: string) => {
-        const trimmed = target.trim();
-        if (!trimmed) return undefined;
-        // Strip common prefixes
-        return trimmed.replace(/^synology[-_]?chat:/i, "").trim();
-      },
-      targetResolver: {
-        looksLikeId: (id: string) => {
-          const trimmed = id?.trim();
-          if (!trimmed) return false;
-          // Synology Chat user IDs are numeric
-          return /^\d+$/.test(trimmed) || /^synology[-_]?chat:/i.test(trimmed);
-        },
-        hint: "<userId>",
-      },
-    },
-
-    directory: createEmptyChannelDirectoryAdapter(),
-
     outbound: {
       deliveryMode: "gateway" as const,
       textChunkLimit: 2000,
@@ -192,62 +302,7 @@ export function createSynologyChatPlugin() {
         return attachChannelToResult(CHANNEL_ID, { messageId: `sc-${Date.now()}`, chatId: to });
       },
     },
-
-    gateway: {
-      startAccount: async (ctx: any) => {
-        const { cfg, accountId, log } = ctx;
-        const account = resolveAccount(cfg, accountId);
-        if (!validateSynologyGatewayAccountStartup({ account, accountId, log }).ok) {
-          return waitUntilAbort(ctx.abortSignal);
-        }
-
-        log?.info?.(
-          `Starting Synology Chat channel (account: ${accountId}, path: ${account.webhookPath})`,
-        );
-        const unregister = registerSynologyWebhookRoute({ account, accountId, log });
-
-        log?.info?.(`Registered HTTP route: ${account.webhookPath} for Synology Chat`);
-
-        // Keep alive until abort signal fires.
-        // The gateway expects a Promise that stays pending while the channel is running.
-        // Resolving immediately triggers a restart loop.
-        return waitUntilAbort(ctx.abortSignal, () => {
-          log?.info?.(`Stopping Synology Chat channel (account: ${accountId})`);
-          unregister();
-        });
-      },
-
-      stopAccount: async (ctx: any) => {
-        ctx.log?.info?.(`Synology Chat account ${ctx.accountId} stopped`);
-      },
-    },
-
-    agentPrompt: {
-      messageToolHints: () => [
-        "",
-        "### Synology Chat Formatting",
-        "Synology Chat supports limited formatting. Use these patterns:",
-        "",
-        "**Links**: Use `<URL|display text>` to create clickable links.",
-        "  Example: `<https://example.com|Click here>` renders as a clickable link.",
-        "",
-        "**File sharing**: Include a publicly accessible URL to share files or images.",
-        "  The NAS will download and attach the file (max 32 MB).",
-        "",
-        "**Limitations**:",
-        "- No markdown, bold, italic, or code blocks",
-        "- No buttons, cards, or interactive elements",
-        "- No message editing after send",
-        "- Keep messages under 2000 characters for best readability",
-        "",
-        "**Best practices**:",
-        "- Use short, clear responses (Synology Chat has a minimal UI)",
-        "- Use line breaks to separate sections",
-        "- Use numbered or bulleted lists for clarity",
-        "- Wrap URLs with `<URL|label>` for user-friendly links",
-      ],
-    },
-  };
+  }) as unknown as SynologyChatPlugin;
 }
 
 export const synologyChatPlugin = createSynologyChatPlugin();
