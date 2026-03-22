@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
@@ -8,6 +9,8 @@ const GENERATED_BY = "scripts/generate-bundled-plugin-metadata.mjs";
 const DEFAULT_OUTPUT_PATH = "src/plugins/bundled-plugin-metadata.generated.ts";
 const MANIFEST_KEY = "openclaw";
 const FORMATTER_CWD = path.resolve(import.meta.dirname, "..");
+const require = createRequire(import.meta.url);
+const OXFMT_BIN_PATH = require.resolve("oxfmt/bin/oxfmt");
 const CANONICAL_PACKAGE_ID_ALIASES = {
   "elevenlabs-speech": "elevenlabs",
   "microsoft-speech": "microsoft",
@@ -129,14 +132,12 @@ function normalizePluginManifest(raw) {
 function formatTypeScriptModule(source, { outputPath }) {
   const formatterPath = path.relative(FORMATTER_CWD, outputPath) || outputPath;
   const formatter = spawnSync(
-    process.platform === "win32" ? "pnpm" : "pnpm",
-    ["exec", "oxfmt", "--stdin-filepath", formatterPath],
+    process.execPath,
+    [OXFMT_BIN_PATH, "--stdin-filepath", formatterPath],
     {
       cwd: FORMATTER_CWD,
       input: source,
       encoding: "utf8",
-      // Windows requires a shell to launch package-manager shim scripts reliably.
-      ...(process.platform === "win32" ? { shell: true } : {}),
     },
   );
   if (formatter.status !== 0) {
