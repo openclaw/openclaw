@@ -435,6 +435,8 @@ export function applyExtraParamsToAgent(
       `applying MiniMax fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`,
     );
     agent.streamFn = createMinimaxFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
+    log.debug(`applying xAI fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`);
+    agent.streamFn = createXaiFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
   }
 
   const openAIFastMode = resolveOpenAIFastMode(effectiveExtraParams);
