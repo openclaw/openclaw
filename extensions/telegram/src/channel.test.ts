@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
 import * as auditModule from "./audit.js";
@@ -63,12 +62,20 @@ function createStartTelegramContext(cfg: OpenClawConfig, accountId: string) {
   return createStartAccountContext({
     account: resolveAccount(cfg, accountId),
     cfg,
-    runtime: createRuntimeEnv(),
   });
 }
 
 function startTelegramAccount(cfg: OpenClawConfig, accountId: string) {
   return telegramPlugin.gateway!.startAccount!(createStartTelegramContext(cfg, accountId));
+}
+
+function installTelegramRuntime(telegram?: Record<string, unknown>) {
+  setTelegramRuntime({
+    channel: telegram ? { telegram } : undefined,
+    logging: {
+      shouldLogVerbose: () => false,
+    },
+  } as unknown as PluginRuntime);
 }
 
 function installGatewayRuntime(params?: { probeOk?: boolean; botUsername?: string }) {
@@ -99,11 +106,7 @@ function installGatewayRuntime(params?: { probeOk?: boolean; botUsername?: strin
       groups: [],
       elapsedMs: 0,
     }));
-  setTelegramRuntime({
-    logging: {
-      shouldLogVerbose: () => false,
-    },
-  } as unknown as PluginRuntime);
+  installTelegramRuntime();
   return {
     monitorTelegramProvider,
     probeTelegram,
@@ -123,16 +126,21 @@ function configureOpsProxyNetwork(cfg: OpenClawConfig) {
   };
 }
 
+function createOpsProxyAccount() {
+  const cfg = createCfg();
+  configureOpsProxyNetwork(cfg);
+  return {
+    cfg,
+    account: resolveAccount(cfg, "ops"),
+  };
+}
+
 function installSendMessageRuntime(
   sendMessageTelegram: ReturnType<typeof vi.fn>,
 ): ReturnType<typeof vi.fn> {
-  setTelegramRuntime({
-    channel: {
-      telegram: {
-        sendMessageTelegram,
-      },
-    },
-  } as unknown as PluginRuntime);
+  installTelegramRuntime({
+    sendMessageTelegram,
+  });
   return sendMessageTelegram;
 }
 
@@ -262,25 +270,16 @@ describe("telegramPlugin duplicate token guard", () => {
     const runtimeProbeTelegram = vi.fn(async () => {
       throw new Error("runtime probe should not be used");
     });
-    setTelegramRuntime({
-      channel: {
-        telegram: {
-          probeTelegram: runtimeProbeTelegram,
-        },
-      },
-      logging: {
-        shouldLogVerbose: () => false,
-      },
-    } as unknown as PluginRuntime);
+    installTelegramRuntime({
+      probeTelegram: runtimeProbeTelegram,
+    });
     probeTelegramMock.mockResolvedValue({
       ok: true,
       bot: { username: "opsbot" },
       elapsedMs: 1,
     });
 
-    const cfg = createCfg();
-    configureOpsProxyNetwork(cfg);
-    const account = resolveAccount(cfg, "ops");
+    const { cfg, account } = createOpsProxyAccount();
 
     await telegramPlugin.status!.probeAccount!({
       account,
@@ -306,17 +305,10 @@ describe("telegramPlugin duplicate token guard", () => {
     const runtimeAuditGroupMembership = vi.fn(async () => {
       throw new Error("runtime audit helper should not be used");
     });
-    setTelegramRuntime({
-      channel: {
-        telegram: {
-          collectUnmentionedGroupIds: runtimeCollectUnmentionedGroupIds,
-          auditGroupMembership: runtimeAuditGroupMembership,
-        },
-      },
-      logging: {
-        shouldLogVerbose: () => false,
-      },
-    } as unknown as PluginRuntime);
+    installTelegramRuntime({
+      collectUnmentionedGroupIds: runtimeCollectUnmentionedGroupIds,
+      auditGroupMembership: runtimeAuditGroupMembership,
+    });
     collectTelegramUnmentionedGroupIdsMock.mockReturnValue({
       groupIds: ["-100123"],
       unresolvedGroups: 0,
@@ -331,15 +323,13 @@ describe("telegramPlugin duplicate token guard", () => {
       elapsedMs: 1,
     });
 
-    const cfg = createCfg();
-    configureOpsProxyNetwork(cfg);
+    const { cfg, account } = createOpsProxyAccount();
     cfg.channels!.telegram!.accounts!.ops = {
       ...cfg.channels!.telegram!.accounts!.ops,
       groups: {
         "-100123": { requireMention: false },
       },
     };
-    const account = resolveAccount(cfg, "ops");
 
     await telegramPlugin.status!.auditAccount!({
       account,
