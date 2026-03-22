@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import packageJson from "../../package.json" with { type: "json" };
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { buildMemoryPromptSection, registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { withEnv } from "../test-utils/env.js";
@@ -813,7 +814,7 @@ describe("loadOpenClawPlugins", () => {
     expect(memory?.status).toBe("loaded");
     expect(memory?.origin).toBe("bundled");
     expect(memory?.name).toBe("Memory (Core)");
-    expect(memory?.version).toBe("1.2.3");
+    expect(memory?.version).toBe(packageJson.version);
   });
   it("handles config-path and scoped plugin loads", () => {
     const scenarios = [
