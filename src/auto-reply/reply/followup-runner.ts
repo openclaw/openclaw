@@ -201,11 +201,15 @@ export function createFollowupRunner(params: {
           model: queued.run.model,
           runId,
           agentDir: queued.run.agentDir,
-          fallbacksOverride: resolveRunModelFallbacksOverride({
-            cfg: queued.run.config,
-            agentId: queued.run.agentId,
-            sessionKey: queued.run.sessionKey,
-          }),
+          // Use imageModelFallbacks when present (for Dashboard image model override),
+          // otherwise use the standard agent-level fallbacks override.
+          fallbacksOverride:
+            queued.run.imageModelFallbacks ??
+            resolveRunModelFallbacksOverride({
+              cfg: queued.run.config,
+              agentId: queued.run.agentId,
+              sessionKey: queued.run.sessionKey,
+            }),
           run: async (provider, model, runOptions) => {
             const authProfile = resolveRunAuthProfile(queued.run, provider);
             let attemptCompactionCount = 0;

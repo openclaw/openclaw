@@ -434,7 +434,15 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  if (sessionEntry && sessionStore && sessionKey && sessionEntry.authProfileOverride) {
+  // Skip auth profile override clear when image model is temporarily switched.
+  // The provider change is transient and should not clear saved credentials.
+  if (
+    sessionEntry &&
+    sessionStore &&
+    sessionKey &&
+    sessionEntry.authProfileOverride &&
+    !params.hasAppliedImageModelOverride
+  ) {
     const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.runtime.js");
     const store = ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,
