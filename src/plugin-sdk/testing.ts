@@ -9,7 +9,7 @@ export { removeAckReactionAfterReply, shouldAckReaction } from "../channels/ack-
 export type { ChannelAccountSnapshot, ChannelGatewayContext } from "../channels/plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
-export type { OutputRuntimeEnv, RuntimeEnv } from "../runtime.js";
+export type { RuntimeEnv } from "../runtime.js";
 export type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 /** Create a tiny Windows `.cmd` shim fixture for plugin tests that spawn CLIs. */
