@@ -2,7 +2,7 @@
   "id": "microsoft-foundry",
   "providers": ["microsoft-foundry"],
   "providerAuthEnvVars": {
-    "microsoft-foundry": ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"]
+    "microsoft-foundry": ["AZURE_OPENAI_API_KEY"]
   },
   "providerAuthChoices": [
     {
