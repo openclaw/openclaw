@@ -10,6 +10,53 @@ export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
 export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
 const serializedStoreCache = new Map<string, string>();
 
+function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
+  return {
+    version: store.version,
+    jobs: store.jobs.map((job) => {
+      const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
+      return rest;
+    }),
+  };
+}
+
+function parseCronStoreForBackupComparison(raw: string): CronStoreFile | null {
+  try {
+    const parsed = parseJsonWithJson5Fallback(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const version = (parsed as { version?: unknown }).version;
+    const jobs = (parsed as { jobs?: unknown }).jobs;
+    if (version !== 1 || !Array.isArray(jobs)) {
+      return null;
+    }
+    return {
+      version: 1,
+      jobs: jobs.filter(Boolean) as CronStoreFile["jobs"],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function shouldSkipCronBackupForRuntimeOnlyChanges(
+  previousRaw: string | null,
+  nextStore: CronStoreFile,
+): boolean {
+  if (previousRaw === null) {
+    return false;
+  }
+  const previous = parseCronStoreForBackupComparison(previousRaw);
+  if (!previous) {
+    return false;
+  }
+  return (
+    JSON.stringify(stripRuntimeOnlyCronFields(previous)) ===
+    JSON.stringify(stripRuntimeOnlyCronFields(nextStore))
+  );
+}
+
 export function resolveCronStorePath(storePath?: string) {
   if (storePath?.trim()) {
     const raw = storePath.trim();
@@ -88,10 +135,12 @@ export async function saveCronStore(
     serializedStoreCache.set(storePath, json);
     return;
   }
+  const skipBackup =
+    opts?.skipBackup === true || shouldSkipCronBackupForRuntimeOnlyChanges(previous, store);
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
   await setSecureFileMode(tmp);
-  if (previous !== null && !opts?.skipBackup) {
+  if (previous !== null && !skipBackup) {
     try {
       const backupPath = `${storePath}.bak`;
       await fs.promises.copyFile(storePath, backupPath);
