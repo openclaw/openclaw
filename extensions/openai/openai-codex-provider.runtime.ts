@@ -1,1 +1,1 @@
-export { refreshOpenAICodexOAuthToken } from "../../src/agents/openai-codex-oauth.js";
+export { refreshOpenAICodexOAuthToken } from "openclaw/plugin-sdk/provider-auth-login";

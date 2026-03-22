@@ -14,3 +14,6 @@ export const loginChutes = bindProviderAuthLoginRuntime((runtime) => runtime.log
 export const loginOpenAICodexOAuth = bindProviderAuthLoginRuntime(
   (runtime) => runtime.loginOpenAICodexOAuth,
 );
+export const refreshOpenAICodexOAuthToken = bindProviderAuthLoginRuntime(
+  (runtime) => runtime.refreshOpenAICodexOAuthToken,
+);

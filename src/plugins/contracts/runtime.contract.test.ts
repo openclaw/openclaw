@@ -14,6 +14,7 @@ const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
 const getOAuthApiKeyMock = vi.hoisted(() => vi.fn());
 const refreshQwenPortalCredentialsMock = vi.hoisted(() => vi.fn());
+const refreshOpenAICodexOAuthTokenMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@mariozechner/pi-ai/oauth", async () => {
   const actual = await vi.importActual<object>("@mariozechner/pi-ai/oauth");
@@ -28,6 +29,14 @@ vi.mock("../../../extensions/qwen-portal-auth/refresh.js", async () => {
   return {
     ...actual,
     refreshQwenPortalCredentials: refreshQwenPortalCredentialsMock,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/provider-auth-login", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-login")>();
+  return {
+    ...actual,
+    refreshOpenAICodexOAuthToken: refreshOpenAICodexOAuthTokenMock,
   };
 });
 
@@ -76,6 +85,7 @@ describe("provider runtime contract", () => {
   beforeEach(() => {
     getOAuthApiKeyMock.mockReset();
     refreshQwenPortalCredentialsMock.mockReset();
+    refreshOpenAICodexOAuthTokenMock.mockReset();
   }, CONTRACT_SETUP_TIMEOUT_MS);
 
   describe("anthropic", () => {
@@ -550,8 +560,9 @@ describe("provider runtime contract", () => {
         expires: Date.now() - 60_000,
       };
 
-      getOAuthApiKeyMock.mockReset();
-      getOAuthApiKeyMock.mockRejectedValueOnce(new Error("Failed to extract accountId from token"));
+      refreshOpenAICodexOAuthTokenMock.mockRejectedValueOnce(
+        new Error("Failed to extract accountId from token"),
+      );
 
       await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
     });
