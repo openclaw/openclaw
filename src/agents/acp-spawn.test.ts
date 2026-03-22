@@ -390,6 +390,7 @@ describe("spawnAcpDirect", () => {
         matrix: {
           threadBindings: {
             enabled: true,
+            spawnAcpSessions: true,
           },
         },
       },
@@ -460,7 +461,7 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.threadId).toBe("child-thread");
   });
 
-  it("does not inline delivery for fresh oneshot ACP runs", async () => {
+  it("inlines delivery for run-mode spawns from non-subagent requester sessions", async () => {
     const result = await spawnAcpDirect(
       {
         task: "Investigate flaky tests",
@@ -490,10 +491,36 @@ describe("spawnAcpDirect", () => {
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
+    expect(agentCall?.params?.deliver).toBe(true);
+    expect(agentCall?.params?.channel).toBe("telegram");
+    expect(agentCall?.params?.to).toBe("telegram:6098642967");
+  });
+
+  it("does not inline delivery for run-mode spawns from subagent requester sessions", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "run",
+      },
+      {
+        agentSessionKey: "agent:main:subagent:orchestrator",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:6098642967",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("run");
+    expect(result.streamLogPath).toBeUndefined();
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
     expect(agentCall?.params?.deliver).toBe(false);
     expect(agentCall?.params?.channel).toBeUndefined();
     expect(agentCall?.params?.to).toBeUndefined();
-    expect(agentCall?.params?.threadId).toBeUndefined();
   });
 
   it("keeps ACP spawn running when session-file persistence fails", async () => {
