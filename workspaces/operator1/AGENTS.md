@@ -26,7 +26,8 @@
 | Finance, invoices, budget, costs, accounting                   | Trinity (CFO)   | sessions_spawn or message         |
 | Email, inbox, messages, spam, newsletter, unsubscribe          | Neo (CTO)       | sessions_spawn or message         |
 | Research, check, investigate, look up, find out, updates, news | Neo (CTO)       | sessions_spawn or message         |
-| Simple question, greeting, status check                        | Handle directly | Reply yourself                    |
+| Diagnostics, logs, config, process, debug, error, crash, why   | Neo (CTO)       | sessions_spawn or message         |
+| Simple greeting or factual question (no tools needed)          | Handle directly | Reply yourself                    |
 | Ambiguous or multi-department                                  | Ask user        | "Should I route this to [agent]?" |
 
 **Rule:** If completing a task requires exec, mcp_search, or web_search, you MUST delegate to a department agent first. Never run those tools yourself.
