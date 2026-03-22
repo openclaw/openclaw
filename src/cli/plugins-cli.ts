@@ -7,8 +7,10 @@ import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveArchiveKind } from "../infra/archive.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
+import { formatClawHubSpecifier, installPluginFromClawHub } from "../plugins/clawhub.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
@@ -501,6 +503,45 @@ async function runPluginInstallCommand(params: {
       bundledSource: bundledPreNpmPlan.bundledSource,
       warning: bundledPreNpmPlan.warning,
     });
+    return;
+  }
+
+  const clawhubSpec = parseClawHubPluginSpec(raw);
+  if (clawhubSpec) {
+    const result = await installPluginFromClawHub({
+      spec: raw,
+      logger: createPluginInstallLogger(),
+    });
+    if (!result.ok) {
+      defaultRuntime.error(result.error);
+      return defaultRuntime.exit(1);
+    }
+
+    clearPluginManifestRegistryCache();
+
+    let next = enablePluginInConfig(cfg, result.pluginId).config;
+    next = recordPluginInstall(next, {
+      pluginId: result.pluginId,
+      source: "clawhub",
+      spec: formatClawHubSpecifier({
+        name: result.clawhub.clawhubPackage,
+        version: result.clawhub.version,
+      }),
+      installPath: result.targetDir,
+      version: result.version,
+      integrity: result.clawhub.integrity,
+      resolvedAt: result.clawhub.resolvedAt,
+      clawhubUrl: result.clawhub.clawhubUrl,
+      clawhubPackage: result.clawhub.clawhubPackage,
+      clawhubFamily: result.clawhub.clawhubFamily,
+      clawhubChannel: result.clawhub.clawhubChannel,
+    });
+    const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
+    next = slotResult.config;
+    await writeConfigFile(next);
+    logSlotWarnings(slotResult.warnings);
+    defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
+    defaultRuntime.log(`Restart the gateway to load plugins.`);
     return;
   }
 
@@ -1059,7 +1100,9 @@ export function registerPluginsCli(program: Command) {
 
   plugins
     .command("install")
-    .description("Install a plugin (path, archive, npm spec, or marketplace entry)")
+    .description(
+      "Install a plugin (path, archive, npm spec, clawhub:package, or marketplace entry)",
+    )
     .argument(
       "<path-or-spec-or-plugin>",
       "Path (.ts/.js/.zip/.tgz/.tar.gz), npm package spec, or marketplace plugin name",
@@ -1076,7 +1119,7 @@ export function registerPluginsCli(program: Command) {
 
   plugins
     .command("update")
-    .description("Update installed plugins (npm and marketplace installs)")
+    .description("Update installed plugins (npm, clawhub, and marketplace installs)")
     .argument("[id]", "Plugin id (omit with --all)")
     .option("--all", "Update all tracked plugins", false)
     .option("--dry-run", "Show what would change without writing", false)

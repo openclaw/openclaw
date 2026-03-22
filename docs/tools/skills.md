@@ -50,21 +50,24 @@ tool surface those skills teach.
 ## ClawHub (install + sync)
 
 ClawHub is the public skills registry for OpenClaw. Browse at
-[https://clawhub.com](https://clawhub.com). Use it to discover, install, update, and back up skills.
+[https://clawhub.com](https://clawhub.com). Use native `openclaw skills`
+commands to discover/install/update skills, or the separate `clawhub` CLI when
+you need publish/sync workflows.
 Full guide: [ClawHub](/tools/clawhub).
 
 Common flows:
 
 - Install a skill into your workspace:
-  - `clawhub install <skill-slug>`
+  - `openclaw skills install <skill-slug>`
 - Update all installed skills:
-  - `clawhub update --all`
+  - `openclaw skills update --all`
 - Sync (scan + publish updates):
   - `clawhub sync --all`
 
-By default, `clawhub` installs into `./skills` under your current working
-directory (or falls back to the configured OpenClaw workspace). OpenClaw picks
-that up as `<workspace>/skills` on the next session.
+Native `openclaw skills install` installs into the active workspace `skills/`
+directory. The separate `clawhub` CLI also installs into `./skills` under your
+current working directory (or falls back to the configured OpenClaw workspace).
+OpenClaw picks that up as `<workspace>/skills` on the next session.
 
 ## Security notes
 
