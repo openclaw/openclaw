@@ -43,9 +43,8 @@ const tlonSetupWizardProxy = createTlonSetupWizardBase({
 
 const tlonConfigAdapter = createHybridChannelConfigAdapter({
   sectionKey: TLON_CHANNEL_ID,
-  listAccountIds: (cfg: OpenClawConfig) => listTlonAccountIds(cfg),
-  resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
-    resolveTlonAccount(cfg, accountId ?? undefined),
+  listAccountIds: listTlonAccountIds,
+  resolveAccount: resolveTlonAccount,
   defaultAccountId: () => "default",
   clearBaseFields: ["ship", "code", "url", "name"],
   preserveSectionOnDefaultDelete: true,
