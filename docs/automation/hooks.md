@@ -301,11 +301,13 @@ Message events include rich context about the message:
     to?: string,
     provider?: string,
     surface?: string,
-    threadId?: string,
+    threadId?: string | number,
     senderId?: string,
     senderName?: string,
     senderUsername?: string,
     senderE164?: string,
+    guildId?: string,     // Discord guild / server ID
+    channelName?: string, // Channel name (e.g., Discord channel name)
   }
 }
 
@@ -325,22 +327,42 @@ Message events include rich context about the message:
 
 // message:transcribed context
 {
+  from?: string,          // Sender identifier
+  to?: string,            // Recipient identifier
   body?: string,          // Raw inbound body before enrichment
   bodyForAgent?: string,  // Enriched body visible to the agent
   transcript: string,     // Audio transcript text
+  timestamp?: number,     // Unix timestamp when received
   channelId: string,      // Channel (e.g., "telegram", "whatsapp")
   conversationId?: string,
   messageId?: string,
+  senderId?: string,      // Sender user ID
+  senderName?: string,    // Sender display name
+  senderUsername?: string,
+  provider?: string,      // Provider name
+  surface?: string,       // Surface name
+  mediaPath?: string,     // Path to the media file that was transcribed
+  mediaType?: string,     // MIME type of the media
 }
 
 // message:preprocessed context
 {
+  from?: string,          // Sender identifier
+  to?: string,            // Recipient identifier
   body?: string,          // Raw inbound body
   bodyForAgent?: string,  // Final enriched body after media/link understanding
   transcript?: string,    // Transcript when audio was present
+  timestamp?: number,     // Unix timestamp when received
   channelId: string,      // Channel (e.g., "telegram", "whatsapp")
   conversationId?: string,
   messageId?: string,
+  senderId?: string,      // Sender user ID
+  senderName?: string,    // Sender display name
+  senderUsername?: string,
+  provider?: string,      // Provider name
+  surface?: string,       // Surface name
+  mediaPath?: string,     // Path to the media file
+  mediaType?: string,     // MIME type of the media
   isGroup?: boolean,
   groupId?: string,
 }
@@ -601,6 +623,11 @@ Saves session context to memory when you issue `/new`.
 - **Session Key**: agent:main:main
 - **Session ID**: abc123def456
 - **Source**: telegram
+
+## Conversation Summary
+
+user: Can you help me design the API?
+assistant: Sure! Let's start with the endpoints...
 ```
 
 **Filename examples**:
