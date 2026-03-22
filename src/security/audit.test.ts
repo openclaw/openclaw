@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   collectInstalledSkillsCodeSafetyFindings,
@@ -1335,6 +1336,17 @@ description: test skill
             nodes: {
               allowCommands: ["camera.snap"],
               denyCommands: ["camera.snap"],
+            },
+          },
+        } satisfies OpenClawConfig,
+      },
+      {
+        kind: "absent",
+        name: "does not flag redundant denies for new-gateway wizard default dangerous deny baseline",
+        cfg: {
+          gateway: {
+            nodes: {
+              denyCommands: [...DEFAULT_DANGEROUS_NODE_COMMANDS],
             },
           },
         } satisfies OpenClawConfig,

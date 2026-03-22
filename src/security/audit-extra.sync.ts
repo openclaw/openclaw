@@ -237,6 +237,28 @@ function listRecognizedNodeCommandIds(allowUnionDenyCleared: Set<string>): Set<s
   return out;
 }
 
+/** Matches the new-gateway wizard baseline: denyCommands is exactly the default dangerous set. */
+function denyListMatchesDefaultDangerousDenyBaseline(denyList: readonly string[]): boolean {
+  const normalizedDeny = new Set(denyList);
+  const normalizedDangerous = new Set(
+    DEFAULT_DANGEROUS_NODE_COMMANDS.map((c) => normalizeNodeCommand(c)).filter(Boolean),
+  );
+  if (normalizedDeny.size !== normalizedDangerous.size) {
+    return false;
+  }
+  for (const cmd of normalizedDangerous) {
+    if (!normalizedDeny.has(cmd)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function hasNonemptyGatewayAllowCommands(cfg: OpenClawConfig): boolean {
+  const raw = cfg.gateway?.nodes?.allowCommands;
+  return Array.isArray(raw) && raw.some((x) => Boolean(normalizeNodeCommand(x)));
+}
+
 function looksLikeNodeCommandPattern(value: string): boolean {
   if (!value) {
     return false;
@@ -1019,7 +1041,11 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
       recognizedIds.has(entry) &&
       !allowUnionDenyCleared.has(entry),
   );
-  if (patternLike.length === 0 && unknownExact.length === 0 && redundantExact.length === 0) {
+  const redundantForFinding =
+    denyListMatchesDefaultDangerousDenyBaseline(denyList) && !hasNonemptyGatewayAllowCommands(cfg)
+      ? []
+      : redundantExact;
+  if (patternLike.length === 0 && unknownExact.length === 0 && redundantForFinding.length === 0) {
     return findings;
   }
 
@@ -1042,10 +1068,10 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
 
     detailParts.push(`Unknown command names (not in defaults/allowCommands): ${unknownDetails}`);
   }
-  if (redundantExact.length > 0) {
+  if (redundantForFinding.length > 0) {
     detailParts.push(
       "Redundant deny entries (real command IDs that are not on any platform default or configured allowlist, so deny has no effect unless you also enable them via allowCommands): " +
-        `${redundantExact.join(", ")}`,
+        `${redundantForFinding.join(", ")}`,
     );
   }
   const examples = Array.from(recognizedIds).slice(0, 8);
