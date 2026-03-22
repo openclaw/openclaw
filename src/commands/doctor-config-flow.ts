@@ -7,6 +7,7 @@ import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
+import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import { runMatrixDoctorSequence } from "./doctor/providers/matrix.js";
 import { runDoctorRepairSequence } from "./doctor/repair-sequencing.js";
 import {
@@ -35,7 +36,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let cfg: OpenClawConfig = baseCfg;
   let candidate = structuredClone(baseCfg);
   let pendingChanges = false;
-  let shouldWriteConfig = false;
   let fixHints: string[] = [];
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
 
@@ -134,29 +134,23 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
   }
 
-  if (!shouldRepair && pendingChanges) {
-    const shouldApply = await params.confirm({
-      message: "Apply recommended config repairs now?",
-      initialValue: true,
-    });
-    if (shouldApply) {
-      cfg = candidate;
-      shouldWriteConfig = true;
-    } else if (fixHints.length > 0) {
-      note(fixHints.join("\n"), "Doctor");
-    }
-  }
-
-  if (shouldRepair && pendingChanges) {
-    shouldWriteConfig = true;
-  }
+  const finalized = await finalizeDoctorConfigFlow({
+    cfg,
+    candidate,
+    pendingChanges,
+    shouldRepair,
+    fixHints,
+    confirm: params.confirm,
+    note,
+  });
+  cfg = finalized.cfg;
 
   noteOpencodeProviderOverrides(cfg);
 
   return {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
-    shouldWriteConfig,
+    shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
   };
 }
