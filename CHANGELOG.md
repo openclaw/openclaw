@@ -62,11 +62,15 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction: notify users when followup auto-compaction starts and finishes, keeping those notices out of TTS and preserving reply threading for the real assistant reply. (#38805) Thanks @zidongdesign.
 - Models/OpenAI: switch the default OpenAI setup model to `openai/gpt-5.4`, keep Codex on `openai-codex/gpt-5.4`, and centralize OpenAI chat, image, TTS, transcription, and embedding defaults in one shared module so future default-model updates stay low-churn. Thanks @vincentkoc.
 - Memory/plugins: let the active memory plugin register its own system-prompt section while preserving cache-clear and snapshot-load prompt isolation. (#40126) Thanks @jarimustonen.
+- Control UI/usage: improve usage overview styling, localization, and responsive chat/context-notice presentation, including safer theme color handling and unclipped usage-header menus. (#51951) Thanks @BunsDev.
+- Agents: add per-agent thinking/reasoning/fast defaults and auto-revert disallowed model overrides to the agent's default selection. Thanks @xuanmingguo and @vincentkoc.
+- Control UI/usage: drop the empty session-detail placeholder card so the usage view stays single-column until a real session detail panel is selected. (#52013) Thanks @BunsDev.
 
 ### Fixes
 
 - Agents/default timeout: raise the shared default agent timeout from `600s` to `48h` so long-running ACP and agent sessions do not fail unless you configure a shorter limit.
 - Gateway/Linux: auto-detect nvm-managed Node TLS CA bundle needs before CLI startup and refresh installed services that are missing `NODE_EXTRA_CA_CERTS`. (#51146) Thanks @GodsBoy.
+- Android/pairing: resolve portless secure setup URLs to `443` while preserving direct cleartext gateway defaults and explicit `:80` manual endpoints in onboarding. (#43540) Thanks @fmercurio.
 - CLI/config: make `config set --strict-json` enforce real JSON, prefer `JSON.parse` with JSON5 fallback for machine-written cron/subagent stores, and relabel raw config surfaces as `JSON/JSON5` to match actual compatibility. Related: #48415, #43127, #14529, #21332. Thanks @adhitShet and @vincentkoc.
 - CLI/Ollama onboarding: keep the interactive model picker for explicit `openclaw onboard --auth-choice ollama` runs so setup still selects a default model without reintroducing pre-picker auto-pulls. (#49249) Thanks @BruceMacD.
 - Plugins/bundler TDZ: fix `RESERVED_COMMANDS` temporal dead zone error that prevented device-pair, phone-control, and talk-voice plugins from registering when the bundler placed the commands module after call sites in the same output chunk. Thanks @BunsDev.
@@ -90,6 +94,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Telegram: avoid rebuilding the full model catalog on ordinary inbound replies so Telegram message handling no longer pays multi-second core startup latency before reply generation. Thanks @vincentkoc.
 - Agents/inbound: lazy-load media and link understanding for plain-text turns and cache synced auth stores by auth-file state so ordinary inbound replies avoid unnecessary startup churn. Thanks @vincentkoc.
 - Telegram/polling: hard-timeout stuck `getUpdates` requests so wedged network paths fail over sooner instead of waiting for the polling stall watchdog. Thanks @vincentkoc.
+- Agents/models: cache `models.json` readiness by config and auth-file state so embedded runner turns stop paying repeated model-catalog startup work before replies. Thanks @vincentkoc.
 - Security/device pairing: harden `device.token.rotate` deny handling by keeping public failures generic while logging internal deny reasons and preserving approved-baseline enforcement. (`GHSA-7jrw-x62h-64p8`)
 - Inbound policy hardening: tighten callback and webhook sender checks across Mattermost and Google Chat, match Nextcloud Talk rooms by stable room token, and treat explicit empty Twitch allowlists as deny-all. (#46787) Thanks @zpbrent, @ijxpwastaken and @vincentkoc.
 - Webhooks/runtime: move auth earlier and tighten pre-auth body limits and timeouts across bundled webhook handlers, including slow-body handling for Mattermost slash commands. (#46802) Thanks @vincentkoc.
@@ -116,8 +121,11 @@ Docs: https://docs.openclaw.ai
 - WhatsApp/reconnect: restore the append recency filter in the extension inbox monitor and handle protobuf `Long` timestamps correctly, so fresh post-reconnect append messages are processed while stale history sync stays suppressed. (#42588) Thanks @MonkeyLeeT.
 - WhatsApp/login: wait for pending creds writes before reopening after Baileys `515` pairing restarts in both QR login and `channels login` flows, and keep the restart coverage pinned to the real wrapped error shape plus per-account creds queues. (#27910) Thanks @asyncjason.
 - Telegram/message send: forward `--force-document` through the `sendPayload` path as well as `sendMedia`, so Telegram payload sends with `channelData` keep uploading images as documents instead of silently falling back to compressed photo sends. (#47119) Thanks @thepagent.
+- Android/canvas: serialize A2UI action-status event strings before evaluating WebView JS, so action ids and multiline errors do not break the callback dispatch. (#43784) Thanks @Kaneki-x.
+- Android/camera: recycle intermediate and final snap bitmaps in `camera.snap` so repeated captures do not leak native image memory. (#41902) Thanks @Kaneki-x.
 - Telegram/message chunking: preserve spaces, paragraph separators, and word boundaries when HTML overflow rechunking splits formatted replies. (#47274) Thanks @obviyus.
 - Z.AI/onboarding: detect a working default model even for explicit `zai-coding-*` endpoint choices, so Coding Plan setup can keep the selected endpoint while defaulting to `glm-5` when available or `glm-4.7` as fallback. (#45969) Thanks @obviyus.
+- CI/onboarding smoke: surface `ensure-base-commit` fetch failures as workflow warnings and fail the onboarding Docker smoke when expected setup prompts drift instead of continuing silently. Thanks @Takhoffman.
 - Z.AI/onboarding: add `glm-5-turbo` to the default Z.AI provider catalog so onboarding-generated configs expose the new model alongside the existing GLM defaults. (#46670) Thanks @tomsun28.
 - Zalo Personal/group gating: stop reapplying `dmPolicy.allowFrom` as a sender gate for already-allowlisted groups when `groupAllowFrom` is unset, so any member of an allowed group can trigger replies while DMs stay restricted. (#46663) Fixes #40146. Thanks @Takhoffman.
 - Zalo/plugin runtime: export `resolveClientIp` from `openclaw/plugin-sdk/zalo` so installed builds no longer crash on startup when the webhook monitor loads from the packaged extension instead of the monorepo source tree. (#46549) Thanks @No898.
@@ -137,6 +145,7 @@ Docs: https://docs.openclaw.ai
 - Browser/profiles: drop the auto-created `chrome-relay` browser profile; users who need the Chrome extension relay must now create their own profile via `openclaw browser create-profile`. (#46596) Fixes #45777. Thanks @odysseus0.
 - CI/channel test routing: move the built-in channel suites into `test:channels` and keep them out of `test:extensions`, so extension CI no longer fails after the channel migration while targeted test routing still sends Slack, Signal, and iMessage suites to the right lane. (#46066) Thanks @scoootscooob.
 - Docs/Mintlify: fix MDX marker syntax on Perplexity, Model Providers, Moonshot, and exec approvals pages so local docs preview no longer breaks rendering or leaves stale pages unpublished. (#46695) Thanks @velvet-shark.
+- Plugins/runtime barrels: route bundled extension runtime imports through public `openclaw/plugin-sdk/*` subpaths and block relative cross-package escapes so packaged extensions stop depending on monorepo-only relative paths. (#51939) Thanks @vincentkoc.
 - Gateway/config validation: stop treating the implicit default memory slot as a required explicit plugin config, so startup no longer fails with `plugins.slots.memory: plugin not found: memory-core` when `memory-core` was only inferred. (#47494) Thanks @ngutman.
 - Tlon: honor explicit empty allowlists and defer cite expansion. (#46788) Thanks @zpbrent and @vincentkoc.
 - Tlon/DM auth: defer cited-message expansion until after DM authorization and owner command handling, so unauthorized DMs and owner approval/admin commands no longer trigger cross-channel cite fetches before the deny or command path.
@@ -222,6 +231,8 @@ Docs: https://docs.openclaw.ai
 - Discord/pickers: keep `/codex_resume --browse-projects` picker callbacks alive in Discord by sharing component callback state across duplicate module graphs, preserving callback fallbacks, and acknowledging matched plugin interactions before dispatch. (#51260) Thanks @huntharo.
 - Agents/memory flush: keep transcript-hash dedup active across memory-flush fallback retries so a write-then-throw flush attempt cannot append duplicate `MEMORY.md` entries before the fallback cycle completes. (#34222) Thanks @lml2468.
 - make `openclaw update status` explicitly say `up to date` when the local version already matches npm latest, while keeping the availability logic unchanged. (#51409) Thanks @dongzhenye.
+- Android/canvas: recycle captured and scaled snapshot bitmaps so repeated canvas snapshots do not leak native image memory. (#41889) Thanks @Kaneki-x.
+- Android/theme: switch status bar icon contrast with the active system theme so Android light mode no longer leaves unreadable light icons over the app header. (#51098) Thanks @goweii.
 
 ### Breaking
 
@@ -236,6 +247,8 @@ Docs: https://docs.openclaw.ai
 - Plugins/Matrix: add a new Matrix plugin backed by the official `matrix-js-sdk`. If you are upgrading from the previous public Matrix plugin, follow the migration guide: https://docs.openclaw.ai/install/migrating-matrix Thanks @gumadeiras.
 - Discord/commands: switch native command deployment to Carbon reconcile by default so Discord restarts stop churning slash commands through OpenClaw’s local deploy path. (#46597) Thanks @huntharo and @thewilloftheshadow.
 - Plugins/Matrix: durably dedupe inbound room events across gateway restarts so previously handled Matrix messages are not replayed as new, while preserving clean-restart backlog delivery for unseen events. (#50922) thanks @gumadeiras
+- Agents/media replies: migrate the remaining browser, canvas, and nodes snapshot outputs onto `details.media` so generated media keeps attaching to assistant replies after the collect-then-attach refactor. (#51731) Thanks @christianklotz.
+- Android/contacts search: escape literal `%` and `_` in contact-name queries so searches like `100%` or `_id` no longer match unrelated contacts through SQL `LIKE` wildcards. (#41891) Thanks @Kaneki-x.
 
 ## 2026.3.13
 
@@ -552,6 +565,8 @@ Docs: https://docs.openclaw.ai
 - macOS/remote gateway: stop PortGuardian from killing Docker Desktop and other external listeners on the gateway port in remote mode, so containerized and tunneled gateway setups no longer lose their port-forward owner on app startup. (#6755) Thanks @teslamint.
 - Feishu/streaming recovery: clear stale `streamingStartPromise` when card creation fails (HTTP 400) so subsequent messages can retry streaming instead of silently dropping all future replies. Fixes #43322.
 - Exec/env sandbox: block JVM agent injection (`JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`), Python breakpoint hijack (`PYTHONBREAKPOINT`), and .NET startup hooks (`DOTNET_STARTUP_HOOKS`) from the host exec environment. (#49025)
+- Android/camera clip cleanup: delete temporary clip files even when `readBytes()` fails so failed clip captures do not leak cache storage. (#41890) Thanks @Kaneki-x.
+- Android/photos: recycle decoded and intermediate bitmaps in `photos.latest` so repeated photo fetches stop leaking native memory. (#41888) Thanks @Kaneki-x.
 
 ### Security
 
