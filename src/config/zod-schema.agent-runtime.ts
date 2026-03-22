@@ -399,6 +399,22 @@ const UrlAllowlistSchema = z
           message:
             'Wildcard patterns like "*.localhost", "*.local", or "*.internal" are always blocked by the SSRF guard and cannot be allowlisted.',
         },
+      )
+      .refine(
+        (val) => {
+          // Reject non-wildcard hostnames ending with SSRF-blocked suffixes (e.g.
+          // sub.localhost, server.local, api.internal). These pass the bare-hostname
+          // and wildcard guards above but are still unconditionally blocked at runtime.
+          if (val.startsWith("*.")) {
+            return true; // Already handled by the wildcard refine above.
+          }
+          const lower = val.toLowerCase();
+          return !SSRF_ALWAYS_BLOCKED_SUFFIXES.some((suffix) => lower.endsWith(suffix));
+        },
+        {
+          message:
+            'Hostnames ending in ".localhost", ".local", or ".internal" are always blocked by the SSRF guard and cannot be allowlisted.',
+        },
       ),
   )
   .optional();
