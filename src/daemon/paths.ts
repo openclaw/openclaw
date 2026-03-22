@@ -5,6 +5,10 @@ import { resolveGatewayProfileSuffix } from "./constants.js";
 const windowsAbsolutePath = /^[a-zA-Z]:[\\/]/;
 const windowsUncPath = /^\\\\/;
 
+function isWindowsStylePath(value: string): boolean {
+  return windowsAbsolutePath.test(value) || windowsUncPath.test(value);
+}
+
 export function resolveHomeDir(env: Record<string, string | undefined>): string {
   const explicitHome = env.OPENCLAW_HOME?.trim();
   const osHome = env.HOME?.trim() || env.USERPROFILE?.trim();
@@ -28,7 +32,7 @@ export function resolveUserPathWithHome(input: string, home?: string): string {
     const expanded = trimmed.replace(/^~(?=$|[\\/])/, home);
     return path.resolve(expanded);
   }
-  if (windowsAbsolutePath.test(trimmed) || windowsUncPath.test(trimmed)) {
+  if (isWindowsStylePath(trimmed)) {
     return trimmed;
   }
   return path.resolve(trimmed);
@@ -42,5 +46,8 @@ export function resolveGatewayStateDir(env: Record<string, string | undefined>):
   }
   const home = resolveHomeDir(env);
   const suffix = resolveGatewayProfileSuffix(env.OPENCLAW_PROFILE);
+  if (isWindowsStylePath(home)) {
+    return path.win32.join(home, `.openclaw${suffix}`);
+  }
   return path.join(home, `.openclaw${suffix}`);
 }

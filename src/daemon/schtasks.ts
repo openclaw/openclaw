@@ -50,7 +50,9 @@ export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
   }
   const scriptName = env.OPENCLAW_TASK_SCRIPT_NAME?.trim() || "gateway.cmd";
   const stateDir = resolveGatewayStateDir(env);
-  return path.join(stateDir, scriptName);
+  return /^[a-zA-Z]:[\\/]/.test(stateDir) || stateDir.startsWith("\\\\")
+    ? path.win32.join(stateDir, scriptName)
+    : path.join(stateDir, scriptName);
 }
 
 function resolveWindowsStartupDir(env: GatewayServiceEnv): string {
