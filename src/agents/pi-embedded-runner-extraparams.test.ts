@@ -225,6 +225,31 @@ describe("applyExtraParamsToAgent", () => {
     return payload;
   }
 
+  function runResolvedModelIdCase(params: {
+    applyProvider: string;
+    applyModelId: string;
+    model: Model<"anthropic-messages">;
+    cfg?: Record<string, unknown>;
+    extraParamsOverride?: Record<string, unknown>;
+  }): string {
+    let resolvedModelId = params.model.id;
+    const baseStreamFn: StreamFn = (model) => {
+      resolvedModelId = String(model.id ?? "");
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    applyExtraParamsToAgent(
+      agent,
+      params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
+      params.applyProvider,
+      params.applyModelId,
+      params.extraParamsOverride,
+    );
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(params.model, context, {});
+    return resolvedModelId;
+  }
+
   function runParallelToolCallsPayloadMutationCase(params: {
     applyProvider: string;
     applyModelId: string;
