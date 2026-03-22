@@ -497,59 +497,7 @@ beforeEach(() => {
 });
 
 describe("installPluginFromArchive", () => {
-  it("installs into ~/.openclaw/extensions and preserves scoped package ids", async () => {
-    const { stateDir, archivePath, extensionsDir } = await setupVoiceCallArchiveInstall({
-      outName: "plugin.tgz",
-      version: "0.0.1",
-    });
-
-    const result = await installPluginFromArchive({
-      archivePath,
-      extensionsDir,
-    });
-    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "@openclaw/voice-call" });
-  });
-
-  it("rejects installing when plugin already exists", async () => {
-    const { archivePath, extensionsDir } = await setupVoiceCallArchiveInstall({
-      outName: "plugin.tgz",
-      version: "0.0.1",
-    });
-
-    const first = await installPluginFromArchive({
-      archivePath,
-      extensionsDir,
-    });
-    const second = await installPluginFromArchive({
-      archivePath,
-      extensionsDir,
-    });
-
-    expect(first.ok).toBe(true);
-    expect(second.ok).toBe(false);
-    if (second.ok) {
-      return;
-    }
-    expect(second.error).toContain("already exists");
-  });
-
-  it("installs from a zip archive", async () => {
-    const stateDir = makeTempDir();
-    const archivePath = getArchiveFixturePath({
-      cacheKey: "zipper:0.0.1",
-      outName: "zipper-0.0.1.zip",
-      buffer: ZIPPER_ARCHIVE_BUFFER,
-    });
-
-    const extensionsDir = path.join(stateDir, "extensions");
-    const result = await installPluginFromArchive({
-      archivePath,
-      extensionsDir,
-    });
-    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "@openclaw/zipper" });
-  });
-
-  it("allows updates when mode is update", async () => {
+  it("installs scoped archives, rejects duplicate installs, and allows updates", async () => {
     const stateDir = makeTempDir();
     const archiveV1 = getArchiveFixturePath({
       cacheKey: "voice-call:0.0.1",
@@ -567,21 +515,46 @@ describe("installPluginFromArchive", () => {
       archivePath: archiveV1,
       extensionsDir,
     });
-    const second = await installPluginFromArchive({
+    expectSuccessfulArchiveInstall({ result: first, stateDir, pluginId: "@openclaw/voice-call" });
+
+    const duplicate = await installPluginFromArchive({
+      archivePath: archiveV1,
+      extensionsDir,
+    });
+    expect(duplicate.ok).toBe(false);
+    if (!duplicate.ok) {
+      expect(duplicate.error).toContain("already exists");
+    }
+
+    const updated = await installPluginFromArchive({
       archivePath: archiveV2,
       extensionsDir,
       mode: "update",
     });
-
-    expect(first.ok).toBe(true);
-    expect(second.ok).toBe(true);
-    if (!second.ok) {
+    expect(updated.ok).toBe(true);
+    if (!updated.ok) {
       return;
     }
     const manifest = JSON.parse(
-      fs.readFileSync(path.join(second.targetDir, "package.json"), "utf-8"),
+      fs.readFileSync(path.join(updated.targetDir, "package.json"), "utf-8"),
     ) as { version?: string };
     expect(manifest.version).toBe("0.0.2");
+  });
+
+  it("installs from a zip archive", async () => {
+    const stateDir = makeTempDir();
+    const archivePath = getArchiveFixturePath({
+      cacheKey: "zipper:0.0.1",
+      outName: "zipper-0.0.1.zip",
+      buffer: ZIPPER_ARCHIVE_BUFFER,
+    });
+
+    const extensionsDir = path.join(stateDir, "extensions");
+    const result = await installPluginFromArchive({
+      archivePath,
+      extensionsDir,
+    });
+    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "@openclaw/zipper" });
   });
 
   it("rejects reserved archive package ids", async () => {
