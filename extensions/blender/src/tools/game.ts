@@ -184,7 +184,10 @@ export function createGenerateLodTool(api: OpenClawPluginApi) {
                 `bpy.context.view_layer.objects.active = lod`,
                 `bpy.ops.object.select_all(action='DESELECT')`,
                 `lod.select_set(True)`,
-                `for mod in lod.modifiers: bpy.ops.object.modifier_apply(modifier=mod.name)`,
+                // Snapshot names before iterating — modifier_apply removes each element from
+                // the C-backed collection as it runs, shifting indices and silently skipping
+                // every other modifier when iterating the live collection.
+                `for mod_name in [m.name for m in lod.modifiers]: bpy.ops.object.modifier_apply(modifier=mod_name)`,
               ]
             : []),
           `dec = lod.modifiers.new(name='LOD_Decimate', type='DECIMATE')`,

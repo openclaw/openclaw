@@ -155,9 +155,11 @@ class BlenderBridgeHandler(BaseHTTPRequestHandler):
                 error_msg = traceback.format_exc()
 
         # Execute on the main thread via bpy.app.timers to avoid threading issues
-        _run_on_main_thread(_run)
+        completed = _run_on_main_thread(_run)
 
-        if error_msg:
+        if not completed:
+            self.send_json(200, {"ok": False, "error": "Timed out waiting for Blender main thread (300s)"})
+        elif error_msg:
             self.send_json(200, {"ok": False, "error": error_msg, "output": stdout_capture.getvalue()})
         else:
             self.send_json(200, {
@@ -202,9 +204,11 @@ class BlenderBridgeHandler(BaseHTTPRequestHandler):
             except Exception:
                 error_msg = traceback.format_exc()
 
-        _run_on_main_thread(_run)
+        completed = _run_on_main_thread(_run)
 
-        if error_msg:
+        if not completed:
+            self.send_json(200, {"ok": False, "error": "Timed out waiting for Blender main thread (300s)"})
+        elif error_msg:
             self.send_json(200, {"ok": False, "error": error_msg})
         else:
             self.send_json(200, {
@@ -250,9 +254,11 @@ class BlenderBridgeHandler(BaseHTTPRequestHandler):
             except Exception:
                 error_msg = traceback.format_exc()
 
-        _run_on_main_thread(_run)
+        completed = _run_on_main_thread(_run)
 
-        if error_msg:
+        if not completed:
+            self.send_json(200, {"ok": False, "error": "Timed out waiting for Blender main thread (300s)"})
+        elif error_msg:
             self.send_json(200, {"ok": False, "error": error_msg})
         else:
             self.send_json(200, {"ok": True})
@@ -305,28 +311,52 @@ class BlenderBridgeHandler(BaseHTTPRequestHandler):
             except Exception:
                 error_msg = traceback.format_exc()
 
-        _run_on_main_thread(_run)
+        completed = _run_on_main_thread(_run)
 
-        if error_msg:
+        if not completed:
+            self.send_json(200, {"ok": False, "error": "Timed out waiting for Blender main thread (300s)"})
+        elif error_msg:
             self.send_json(200, {"ok": False, "error": error_msg})
         else:
             self.send_json(200, {"ok": True})
 
     def handle_screenshot(self, body: dict):
-        output_path = body.get("outputPath", "/tmp/openclaw_screenshot.png")
+        import tempfile
+        default_path = os.path.join(tempfile.gettempdir(), "openclaw_screenshot.png")
+        output_path = body.get("outputPath") or default_path
+        width = body.get("width")
+        height = body.get("height")
         error_msg = None
 
         def _run():
             nonlocal error_msg
             try:
-                # Override render settings temporarily for screenshot
-                bpy.ops.screen.screenshot(filepath=output_path, full=False)
+                scene = bpy.context.scene
+                if width and height:
+                    # Temporarily override render resolution so the offscreen
+                    # screenshot honours the requested dimensions.
+                    orig_x = scene.render.resolution_x
+                    orig_y = scene.render.resolution_y
+                    orig_pct = scene.render.resolution_percentage
+                    scene.render.resolution_x = int(width)
+                    scene.render.resolution_y = int(height)
+                    scene.render.resolution_percentage = 100
+                    try:
+                        bpy.ops.screen.screenshot(filepath=output_path, full=False)
+                    finally:
+                        scene.render.resolution_x = orig_x
+                        scene.render.resolution_y = orig_y
+                        scene.render.resolution_percentage = orig_pct
+                else:
+                    bpy.ops.screen.screenshot(filepath=output_path, full=False)
             except Exception:
                 error_msg = traceback.format_exc()
 
-        _run_on_main_thread(_run)
+        completed = _run_on_main_thread(_run)
 
-        if error_msg:
+        if not completed:
+            self.send_json(200, {"ok": False, "error": "Timed out waiting for Blender main thread (300s)"})
+        elif error_msg:
             self.send_json(200, {"ok": False, "error": error_msg})
         else:
             self.send_json(200, {"ok": True, "outputPath": output_path})
@@ -340,13 +370,20 @@ _pending_fn = None
 _pending_done = threading.Event()
 
 
-def _run_on_main_thread(fn):
-    """Schedule fn to run on Blender's main thread and block until complete."""
+def _run_on_main_thread(fn) -> bool:
+    """Schedule fn to run on Blender's main thread and block until complete.
+
+    Returns True if fn completed within the timeout, False if it timed out.
+    """
     global _pending_fn, _pending_done
     _pending_fn = fn
     _pending_done.clear()
     bpy.app.timers.register(_execute_pending, first_interval=0.0)
-    _pending_done.wait(timeout=300)  # 5-minute timeout
+    completed = _pending_done.wait(timeout=300)  # 5-minute timeout
+    if not completed:
+        # Timed out — cancel any still-pending work so the slot is not left dirty.
+        _pending_fn = None
+    return completed
 
 
 def _execute_pending():
