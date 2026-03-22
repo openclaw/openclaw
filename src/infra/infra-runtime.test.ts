@@ -240,5 +240,13 @@ describe("infra runtime", () => {
       expect(out.ipv4).toEqual(["100.123.224.76"]);
       expect(out.ipv6).toEqual(["fd7a:115c:a1e0::8801:e04c"]);
     });
+
+    it("returns empty address lists when interface discovery throws", () => {
+      vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
+        throw new Error("uv_interface_addresses failed");
+      });
+
+      expect(listTailnetAddresses()).toEqual({ ipv4: [], ipv6: [] });
+    });
   });
 });
