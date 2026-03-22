@@ -1,5 +1,9 @@
+import { listAgentIds } from "../../agents/agent-scope.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { resolveDiscordAccount } from "../../discord/accounts.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveTelegramAccount } from "../../telegram/accounts.js";
 import { listObservedTelegramGroups } from "../../telegram/observed-groups.js";
@@ -52,6 +56,117 @@ function applyDirectoryQueryAndLimit(ids: string[], params: DirectoryConfigParam
 
 function toDirectoryEntries(kind: "user" | "group", ids: string[]): ChannelDirectoryEntry[] {
   return ids.map((id) => ({ kind, id }) as const);
+}
+
+function resolveTelegramGroupIdFromSession(params: { key: string; groupId?: string | null }) {
+  const fromEntry = params.groupId?.trim();
+  if (fromEntry && /^-\d+$/.test(fromEntry)) {
+    return fromEntry;
+  }
+
+  const rawKey = parseAgentSessionKey(params.key)?.rest ?? params.key.trim();
+  const match = rawKey.match(/^telegram:(group|channel):([^:]+)/i);
+  const groupId = match?.[2]?.trim() ?? "";
+  return /^-\d+$/.test(groupId) ? groupId : null;
+}
+
+function resolveTelegramSessionGroupName(entry: {
+  subject?: string;
+  origin?: { label?: string };
+  displayName?: string;
+}) {
+  const subject = entry.subject?.trim();
+  if (subject) {
+    return subject;
+  }
+
+  const label = entry.origin?.label?.trim();
+  if (label) {
+    return label.replace(/\s+id:-?\d+\s*$/i, "").trim() || label;
+  }
+
+  const displayName = entry.displayName?.trim();
+  return displayName || undefined;
+}
+
+async function listTelegramDirectoryGroupsFromSessions(
+  params: DirectoryConfigParams & { resolvedAccountId: string },
+): Promise<ChannelDirectoryEntry[]> {
+  const accountId = params.resolvedAccountId.trim().toLowerCase();
+  const byId = new Map<
+    string,
+    ChannelDirectoryEntry & {
+      updatedAt?: number;
+    }
+  >();
+
+  for (const agentId of listAgentIds(params.cfg)) {
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+    let store: Record<string, SessionEntry>;
+    try {
+      store = loadSessionStore(storePath);
+    } catch {
+      continue;
+    }
+
+    for (const [key, entry] of Object.entries(store)) {
+      const groupId = resolveTelegramGroupIdFromSession({
+        key,
+        groupId: typeof entry.groupId === "string" ? entry.groupId : null,
+      });
+      if (!groupId) {
+        continue;
+      }
+
+      const sessionAccountId =
+        typeof entry.lastAccountId === "string"
+          ? entry.lastAccountId.trim().toLowerCase()
+          : typeof entry.origin?.accountId === "string"
+            ? entry.origin.accountId.trim().toLowerCase()
+            : "";
+      if (sessionAccountId && sessionAccountId !== accountId) {
+        continue;
+      }
+
+      const next: ChannelDirectoryEntry & { updatedAt?: number } = {
+        kind: "group",
+        id: groupId,
+        name: resolveTelegramSessionGroupName({
+          subject: typeof entry.subject === "string" ? entry.subject : undefined,
+          origin: entry.origin?.label ? { label: entry.origin.label } : undefined,
+          displayName: typeof entry.displayName === "string" ? entry.displayName : undefined,
+        }),
+        raw: {
+          source: "session",
+          sessionKey: key,
+        },
+        updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
+      };
+
+      const existing = byId.get(groupId);
+      if (!existing) {
+        byId.set(groupId, next);
+        continue;
+      }
+
+      const existingUpdatedAt = existing.updatedAt ?? 0;
+      const nextUpdatedAt = next.updatedAt ?? 0;
+      if (nextUpdatedAt > existingUpdatedAt) {
+        byId.set(groupId, {
+          ...existing,
+          ...next,
+          name: next.name ?? existing.name,
+        });
+        continue;
+      }
+
+      if (!existing.name && next.name) {
+        existing.name = next.name;
+      }
+    }
+  }
+
+  return Array.from(byId.values()).toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
 
 export async function listSlackDirectoryPeersFromConfig(
@@ -214,19 +329,37 @@ export async function listTelegramDirectoryGroupsFromConfig(
     query: null,
     limit: null,
   });
+  const sessionGroups = await listTelegramDirectoryGroupsFromSessions({
+    ...params,
+    resolvedAccountId: account.accountId,
+  });
   const observedById = new Map(observed.map((entry) => [entry.id, entry]));
+  const sessionById = new Map(sessionGroups.map((entry) => [entry.id, entry]));
   const query = resolveDirectoryQuery(params.query);
   const limit = resolveDirectoryLimit(params.limit);
 
+  const enrich = (entry: ChannelDirectoryEntry): ChannelDirectoryEntry => {
+    const observedEntry = observedById.get(entry.id);
+    const sessionEntry = sessionById.get(entry.id);
+    return {
+      ...entry,
+      name: entry.name ?? observedEntry?.name ?? sessionEntry?.name,
+      handle: entry.handle ?? observedEntry?.handle,
+      raw: entry.raw ?? observedEntry?.raw ?? sessionEntry?.raw,
+    };
+  };
+
   const merged = [
-    ...configuredIds.map((id) => ({
-      kind: "group" as const,
-      id,
-      name: observedById.get(id)?.name,
-      handle: observedById.get(id)?.handle,
-      raw: observedById.get(id)?.raw,
-    })),
-    ...observed.filter((entry) => !configuredIds.includes(entry.id)),
+    ...configuredIds.map((id) =>
+      enrich({
+        kind: "group" as const,
+        id,
+      }),
+    ),
+    ...observed.filter((entry) => !configuredIds.includes(entry.id)).map((entry) => enrich(entry)),
+    ...sessionGroups
+      .filter((entry) => !configuredIds.includes(entry.id) && !observedById.has(entry.id))
+      .map((entry) => enrich(entry)),
   ].filter((entry) => {
     if (!query) {
       return true;

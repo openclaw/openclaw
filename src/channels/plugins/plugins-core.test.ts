@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import { resolveStorePath, saveSessionStore } from "../../config/sessions.js";
 import type { DiscordProbe } from "../../discord/probe.js";
 import type { DiscordTokenResolution } from "../../discord/token.js";
 import type { IMessageProbe } from "../../imessage/probe.js";
@@ -365,6 +366,61 @@ describe("directory (config-backed)", () => {
         expect.objectContaining({ id: "-1001" }),
         expect.objectContaining({ id: "-1002", name: "Panama KYC Agent" }),
       ]);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.promises.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lists Telegram groups from agent session stores when observed groups are empty", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-telegram-sessions-"),
+    );
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const cfg = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "jojo" }],
+      },
+      channels: {
+        telegram: {
+          botToken: "telegram-test",
+        },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+
+    try {
+      await saveSessionStore(resolveStorePath(undefined, { agentId: "jojo" }), {
+        "agent:jojo:telegram:group:-1003": {
+          sessionId: "session-jojo-telegram-group",
+          updatedAt: 1,
+          channel: "telegram",
+          groupId: "-1003",
+          subject: "Found via session store",
+          origin: {
+            provider: "telegram",
+            accountId: "default",
+          },
+        },
+      });
+
+      const groups = await listTelegramDirectoryGroupsFromConfig({
+        cfg,
+        accountId: "default",
+        query: null,
+        limit: null,
+      });
+      expect(groups).toContainEqual(
+        expect.objectContaining({
+          id: "-1003",
+          name: "Found via session store",
+        }),
+      );
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
