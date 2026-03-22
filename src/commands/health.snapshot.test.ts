@@ -11,6 +11,7 @@ import {
   listTelegramAccountIds,
   resolveTelegramAccount,
 } from "../../extensions/telegram/src/accounts.js";
+import { adaptScopedAccountAccessor } from "../plugin-sdk/channel-config-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { HealthSummary } from "./health.js";
@@ -124,7 +125,7 @@ const telegramHealthPlugin: Pick<
   ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
   config: {
     listAccountIds: (cfg) => listTelegramAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveTelegramAccount({ cfg, accountId }),
+    resolveAccount: adaptScopedAccountAccessor(resolveTelegramAccount),
     isConfigured: (account) => Boolean(account.token?.trim()),
   },
   status: {
