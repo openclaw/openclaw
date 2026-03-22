@@ -147,6 +147,7 @@ beforeEach(() => {
   primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
   handleGatewayRequest.mockReset();
   runtimeModule.clearGatewaySubagentRuntime();
+  runtimeModule.clearGatewayAgentAbort();
   handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
     switch (opts.req.method) {
       case "agent":
@@ -169,6 +170,7 @@ beforeEach(() => {
 
 afterEach(() => {
   runtimeModule.clearGatewaySubagentRuntime();
+  runtimeModule.clearGatewayAgentAbort();
 });
 
 describe("loadGatewayPlugins", () => {
@@ -615,5 +617,93 @@ describe("loadGatewayPlugins", () => {
       | (GatewayRequestContext & { marker: string })
       | undefined;
     expect(dispatched?.marker).toBe("after-mutation");
+  });
+
+  test("runtime.agent.abort dispatches to gateway and returns the result", async () => {
+    const serverPlugins = serverPluginsModule;
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
+      if (opts.req.method === "agent.abort") {
+        opts.respond(true, { aborted: true });
+        return;
+      }
+      opts.respond(true, { runId: "run-1" });
+    });
+
+    serverPlugins.loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+    serverPlugins.setFallbackGatewayContext(createTestContext("agent-abort"));
+
+    const runtime = runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true });
+    const result = await runtime.agent.abort({ runId: "run-42" });
+
+    expect(result).toEqual({ aborted: true });
+    const lastCall = handleGatewayRequest.mock.calls.at(-1)?.[0];
+    expect(lastCall?.req?.method).toBe("agent.abort");
+    expect(lastCall?.req?.params).toMatchObject({ runId: "run-42" });
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
+  });
+
+  test("runtime.agent.abort forwards sessionKey when provided", async () => {
+    const serverPlugins = serverPluginsModule;
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
+      if (opts.req.method === "agent.abort") {
+        opts.respond(true, { aborted: true });
+        return;
+      }
+      opts.respond(true, { runId: "run-1" });
+    });
+
+    serverPlugins.loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+    serverPlugins.setFallbackGatewayContext(createTestContext("agent-abort-session"));
+
+    const runtime = runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true });
+    await runtime.agent.abort({ runId: "run-42", sessionKey: "sess-1" });
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      runId: "run-42",
+      sessionKey: "sess-1",
+    });
+  });
+
+  test("runtime.agent.abort returns aborted=false when gateway reports it", async () => {
+    const serverPlugins = serverPluginsModule;
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
+      if (opts.req.method === "agent.abort") {
+        opts.respond(true, { aborted: false });
+        return;
+      }
+      opts.respond(true, { runId: "run-1" });
+    });
+
+    serverPlugins.loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+    serverPlugins.setFallbackGatewayContext(createTestContext("agent-abort-false"));
+
+    const runtime = runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true });
+    const result = await runtime.agent.abort({ runId: "run-gone" });
+
+    expect(result).toEqual({ aborted: false });
   });
 });

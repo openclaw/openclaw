@@ -6,7 +6,7 @@ import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import { setGatewayAgentAbort, setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
@@ -293,6 +293,22 @@ async function dispatchGatewayMethod<T>(
   return result.payload as T;
 }
 
+function createGatewayAgentAbort(): PluginRuntime["agent"]["abort"] {
+  return async (params) => {
+    const payload = await dispatchGatewayMethod<{ aborted?: boolean }>(
+      "agent.abort",
+      {
+        runId: params.runId,
+        ...(params.sessionKey && { sessionKey: params.sessionKey }),
+      },
+      {
+        syntheticScopes: [ADMIN_SCOPE],
+      },
+    );
+    return { aborted: payload?.aborted === true };
+  };
+}
+
 function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
     const payload = await dispatchGatewayMethod<{ messages?: unknown[] }>("sessions.get", {
@@ -399,12 +415,13 @@ export function loadGatewayPlugins(params: {
   logDiagnostics?: boolean;
 }) {
   setPluginSubagentOverridePolicies(params.cfg);
-  // Set the process-global gateway subagent runtime BEFORE loading plugins.
+  // Set the process-global gateway runtimes BEFORE loading plugins.
   // Gateway-owned registries may already exist from schema loads, so the
   // gateway path opts those runtimes into late binding rather than changing
   // the default subagent behavior for every plugin runtime in the process.
   const gatewaySubagent = createGatewaySubagentRuntime();
   setGatewaySubagentRuntime(gatewaySubagent);
+  setGatewayAgentAbort(createGatewayAgentAbort());
 
   const pluginRegistry = loadOpenClawPlugins({
     config: params.cfg,
