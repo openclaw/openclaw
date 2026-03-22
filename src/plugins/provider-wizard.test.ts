@@ -23,6 +23,7 @@ function makeProvider(overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, 
 describe("provider wizard boundaries", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   it("uses explicit setup choice ids and bound method ids", () => {
@@ -356,6 +357,49 @@ describe("provider wizard boundaries", () => {
       workspaceDir: "/tmp/workspace",
       env,
     });
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+
+    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+  });
+
+  it("expires provider-wizard memoization after the shortest plugin cache ttl", () => {
+    vi.useFakeTimers();
+    const provider = makeProvider({
+      id: "sglang",
+      label: "SGLang",
+      auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
+      wizard: {
+        setup: {
+          choiceLabel: "SGLang setup",
+          groupId: "sglang",
+          groupLabel: "SGLang",
+        },
+      },
+    });
+    const config = {};
+    const env = {
+      OPENCLAW_HOME: "/tmp/openclaw-home",
+      OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5",
+      OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "20",
+    } as NodeJS.ProcessEnv;
+    resolvePluginProviders.mockReturnValue([provider]);
+
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+    vi.advanceTimersByTime(4);
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+    vi.advanceTimersByTime(2);
     resolveProviderWizardOptions({
       config,
       workspaceDir: "/tmp/workspace",

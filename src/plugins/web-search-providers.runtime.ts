@@ -11,10 +11,17 @@ import {
 } from "./web-search-providers.shared.js";
 
 const log = createSubsystemLogger("plugins");
+type WebSearchProviderSnapshotCacheEntry = {
+  expiresAt: number;
+  providers: PluginWebSearchProviderEntry[];
+};
 const webSearchProviderSnapshotCache = new WeakMap<
   OpenClawConfig,
-  WeakMap<NodeJS.ProcessEnv, Map<string, PluginWebSearchProviderEntry[]>>
+  WeakMap<NodeJS.ProcessEnv, Map<string, WebSearchProviderSnapshotCacheEntry>>
 >();
+
+const DEFAULT_DISCOVERY_CACHE_MS = 1000;
+const DEFAULT_MANIFEST_CACHE_MS = 1000;
 
 function shouldUseWebSearchProviderSnapshotCache(env: NodeJS.ProcessEnv): boolean {
   if (env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE?.trim()) {
@@ -32,6 +39,33 @@ function shouldUseWebSearchProviderSnapshotCache(env: NodeJS.ProcessEnv): boolea
     return false;
   }
   return true;
+}
+
+function resolveWebSearchProviderSnapshotCacheTtlMs(env: NodeJS.ProcessEnv): number {
+  const discoveryCacheMs = resolveCacheMs(
+    env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS,
+    DEFAULT_DISCOVERY_CACHE_MS,
+  );
+  const manifestCacheMs = resolveCacheMs(
+    env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
+    DEFAULT_MANIFEST_CACHE_MS,
+  );
+  return Math.min(discoveryCacheMs, manifestCacheMs);
+}
+
+function resolveCacheMs(rawValue: string | undefined, defaultMs: number): number {
+  const raw = rawValue?.trim();
+  if (raw === "" || raw === "0") {
+    return 0;
+  }
+  if (!raw) {
+    return defaultMs;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return defaultMs;
+  }
+  return Math.max(0, parsed);
 }
 
 function buildWebSearchSnapshotCacheKey(params: {
@@ -82,8 +116,8 @@ export function resolvePluginWebSearchProviders(params: {
     const configCache = webSearchProviderSnapshotCache.get(cacheOwnerConfig);
     const envCache = configCache?.get(env);
     const cached = envCache?.get(cacheKey);
-    if (cached) {
-      return cached;
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.providers;
     }
   }
   const { config } = resolveBundledWebSearchResolutionConfig({
@@ -106,17 +140,24 @@ export function resolvePluginWebSearchProviders(params: {
     })),
   );
   if (cacheOwnerConfig && shouldMemoizeSnapshot) {
+    const ttlMs = resolveWebSearchProviderSnapshotCacheTtlMs(env);
     let configCache = webSearchProviderSnapshotCache.get(cacheOwnerConfig);
     if (!configCache) {
-      configCache = new WeakMap<NodeJS.ProcessEnv, Map<string, PluginWebSearchProviderEntry[]>>();
+      configCache = new WeakMap<
+        NodeJS.ProcessEnv,
+        Map<string, WebSearchProviderSnapshotCacheEntry>
+      >();
       webSearchProviderSnapshotCache.set(cacheOwnerConfig, configCache);
     }
     let envCache = configCache.get(env);
     if (!envCache) {
-      envCache = new Map<string, PluginWebSearchProviderEntry[]>();
+      envCache = new Map<string, WebSearchProviderSnapshotCacheEntry>();
       configCache.set(env, envCache);
     }
-    envCache.set(cacheKey, resolved);
+    envCache.set(cacheKey, {
+      expiresAt: Date.now() + ttlMs,
+      providers: resolved,
+    });
   }
   return resolved;
 }

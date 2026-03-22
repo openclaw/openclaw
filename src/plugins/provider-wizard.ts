@@ -12,10 +12,17 @@ import type {
 } from "./types.js";
 
 export const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
+type ProviderWizardCacheEntry = {
+  expiresAt: number;
+  providers: ProviderPlugin[];
+};
 const providerWizardCache = new WeakMap<
   OpenClawConfig,
-  WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>
+  WeakMap<NodeJS.ProcessEnv, Map<string, ProviderWizardCacheEntry>>
 >();
+
+const DEFAULT_DISCOVERY_CACHE_MS = 1000;
+const DEFAULT_MANIFEST_CACHE_MS = 1000;
 
 function shouldUseProviderWizardCache(env: NodeJS.ProcessEnv): boolean {
   if (env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE?.trim()) {
@@ -33,6 +40,33 @@ function shouldUseProviderWizardCache(env: NodeJS.ProcessEnv): boolean {
     return false;
   }
   return true;
+}
+
+function resolveProviderWizardCacheTtlMs(env: NodeJS.ProcessEnv): number {
+  const discoveryCacheMs = resolveCacheMs(
+    env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS,
+    DEFAULT_DISCOVERY_CACHE_MS,
+  );
+  const manifestCacheMs = resolveCacheMs(
+    env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
+    DEFAULT_MANIFEST_CACHE_MS,
+  );
+  return Math.min(discoveryCacheMs, manifestCacheMs);
+}
+
+function resolveCacheMs(rawValue: string | undefined, defaultMs: number): number {
+  const raw = rawValue?.trim();
+  if (raw === "" || raw === "0") {
+    return 0;
+  }
+  if (!raw) {
+    return defaultMs;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return defaultMs;
+  }
+  return Math.max(0, parsed);
 }
 
 function buildProviderWizardCacheKey(params: {
@@ -164,25 +198,29 @@ function resolveProviderWizardProviders(params: {
   const configCache = providerWizardCache.get(params.config);
   const envCache = configCache?.get(env);
   const cached = envCache?.get(cacheKey);
-  if (cached) {
-    return cached;
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.providers;
   }
   const providers = resolvePluginProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
   });
+  const ttlMs = resolveProviderWizardCacheTtlMs(env);
   let nextConfigCache = configCache;
   if (!nextConfigCache) {
-    nextConfigCache = new WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>();
+    nextConfigCache = new WeakMap<NodeJS.ProcessEnv, Map<string, ProviderWizardCacheEntry>>();
     providerWizardCache.set(params.config, nextConfigCache);
   }
   let nextEnvCache = nextConfigCache.get(env);
   if (!nextEnvCache) {
-    nextEnvCache = new Map<string, ProviderPlugin[]>();
+    nextEnvCache = new Map<string, ProviderWizardCacheEntry>();
     nextConfigCache.set(env, nextEnvCache);
   }
-  nextEnvCache.set(cacheKey, providers);
+  nextEnvCache.set(cacheKey, {
+    expiresAt: Date.now() + ttlMs,
+    providers,
+  });
   return providers;
 }
 

@@ -72,6 +72,7 @@ describe("resolvePluginWebSearchProviders", () => {
   beforeEach(() => {
     loadOpenClawPluginsMock.mockClear();
     setActivePluginRegistry(createEmptyPluginRegistry());
+    vi.useRealTimers();
   });
 
   afterEach(() => {
@@ -228,6 +229,43 @@ describe("resolvePluginWebSearchProviders", () => {
         process.env.VITEST = originalVitest;
       }
     }
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("expires web-search snapshot memoization after the shortest plugin cache ttl", () => {
+    vi.useFakeTimers();
+    const config = {
+      plugins: {
+        allow: ["brave"],
+      },
+    };
+    const env = {
+      OPENCLAW_HOME: "/tmp/openclaw-home",
+      OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5",
+      OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "20",
+    } as NodeJS.ProcessEnv;
+
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+    vi.advanceTimersByTime(4);
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+    vi.advanceTimersByTime(2);
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
 
     expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
   });
