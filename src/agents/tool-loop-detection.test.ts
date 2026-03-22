@@ -355,12 +355,7 @@ describe("tool-loop-detection", () => {
         3,
       );
 
-      const result = detectToolCallLoop(
-        state,
-        "exec",
-        { command: "date" },
-        execThresholdConfig,
-      );
+      const result = detectToolCallLoop(state, "exec", { command: "date" }, execThresholdConfig);
       expect(result.stuck).toBe(false);
     });
 
