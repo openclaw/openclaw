@@ -4,7 +4,7 @@ import {
   resolveProviderPluginChoice,
   runProviderModelSelectedHook,
 } from "../plugins/provider-wizard.js";
-import { resolvePluginProviders } from "../plugins/providers.js";
+import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 
 export const modelPickerRuntime = {
   resolveProviderModelPickerEntries,

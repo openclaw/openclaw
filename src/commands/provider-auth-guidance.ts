@@ -1,7 +1,7 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolvePluginProviders } from "../plugins/providers.js";
+import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 
 function matchesProviderId(
   candidate: { id: string; aliases?: string[] | readonly string[] },
