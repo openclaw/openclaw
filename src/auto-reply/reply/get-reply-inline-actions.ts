@@ -21,13 +21,12 @@ import {
   shouldSkipMessageByAbortCutoff,
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
+import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { isDirectiveOnly } from "./directive-handling.parse.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
-
-type CommandsRuntimeModule = typeof import("./commands.runtime.js");
 
 let builtinSlashCommands: Set<string> | null = null;
 
@@ -105,21 +104,21 @@ export async function handleInlineActions(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;
-  sessionScope: Parameters<CommandsRuntimeModule["buildStatusReply"]>[0]["sessionScope"];
+  sessionScope: Parameters<typeof buildStatusReply>[0]["sessionScope"];
   workspaceDir: string;
   isGroup: boolean;
   opts?: GetReplyOptions;
   typing: TypingController;
   allowTextCommands: boolean;
   inlineStatusRequested: boolean;
-  command: Parameters<CommandsRuntimeModule["handleCommands"]>[0]["command"];
+  command: Parameters<typeof handleCommands>[0]["command"];
   skillCommands?: SkillCommandSpec[];
   directives: InlineDirectives;
   cleanedBody: string;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
   elevatedFailures: Array<{ gate: string; key: string }>;
-  defaultActivation: Parameters<CommandsRuntimeModule["buildStatusReply"]>[0]["defaultGroupActivation"];
+  defaultActivation: Parameters<typeof buildStatusReply>[0]["defaultGroupActivation"];
   resolvedThinkLevel: ThinkLevel | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
