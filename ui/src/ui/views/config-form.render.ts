@@ -257,7 +257,10 @@ export const SECTION_META: Record<string, { label: string; description: string }
   hooks: { label: "Hooks", description: "Webhooks and event hooks" },
   skills: { label: "Skills", description: "Skill packs and capabilities" },
   tools: { label: "Tools", description: "Tool configurations (browser, search, etc.)" },
-  gateway: { label: "Gateway", description: "Gateway server settings (port, auth, binding)" },
+  gateway: {
+    label: "Gateway",
+    description: "Gateway server settings (port, auth, binding) and security hardening",
+  },
   wizard: { label: "Setup Wizard", description: "Setup wizard state and history" },
   // Additional sections
   meta: { label: "Metadata", description: "Gateway metadata and version information" },
