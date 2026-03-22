@@ -8,7 +8,6 @@ import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { normalizeProviderId } from "./model-selection.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
 
 type ModelEntry = { id: string; contextWindow?: number };
 type ModelRegistryLike = {
@@ -84,6 +83,12 @@ let loadPromise: Promise<void> | null = null;
 let configuredConfig: OpenClawConfig | undefined;
 let configLoadFailures = 0;
 let nextConfigLoadAttemptAtMs = 0;
+let modelsConfigRuntimePromise: Promise<typeof import("./models-config.runtime.js")> | undefined;
+
+function loadModelsConfigRuntime() {
+  modelsConfigRuntimePromise ??= import("./models-config.runtime.js");
+  return modelsConfigRuntimePromise;
+}
 
 function isLikelyOpenClawCliProcess(argv: string[] = process.argv): boolean {
   const entryBasename = path
@@ -192,7 +197,7 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
 
   loadPromise = (async () => {
     try {
-      await ensureOpenClawModelsJson(cfg);
+      await (await loadModelsConfigRuntime()).ensureOpenClawModelsJson(cfg);
     } catch {
       // Continue with best-effort discovery/overrides.
     }
