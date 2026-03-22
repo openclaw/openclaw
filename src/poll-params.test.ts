@@ -23,14 +23,23 @@ describe("poll params", () => {
     },
   );
 
-  it("treats finite numeric poll params as poll creation intent", () => {
-    expect(hasPollCreationParams({ pollDurationHours: 0 })).toBe(true);
+  it("treats positive numeric poll params as poll creation intent", () => {
     expect(hasPollCreationParams({ pollDurationSeconds: 60 })).toBe(true);
     expect(hasPollCreationParams({ pollDurationSeconds: "60" })).toBe(true);
     expect(hasPollCreationParams({ pollDurationSeconds: "1e3" })).toBe(true);
     expect(hasPollCreationParams({ pollDurationHours: Number.NaN })).toBe(false);
     expect(hasPollCreationParams({ pollDurationSeconds: Infinity })).toBe(false);
     expect(hasPollCreationParams({ pollDurationSeconds: "60abc" })).toBe(false);
+  });
+
+  it("does not treat zero-valued numeric poll params as poll creation intent", () => {
+    // Zero values are typically defaults/unset values from tool schemas,
+    // not intentional poll creation. Fixes #52118.
+    expect(hasPollCreationParams({ pollDurationHours: 0 })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationSeconds: 0 })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationHours: "0" })).toBe(false);
+    expect(hasPollCreationParams({ poll_duration_seconds: 0 })).toBe(false);
+    expect(hasPollCreationParams({ poll_duration_hours: "0" })).toBe(false);
   });
 
   it("treats string-encoded boolean poll params as poll creation intent when true", () => {

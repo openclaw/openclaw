@@ -69,12 +69,16 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       }
     }
     if (def.kind === "number") {
-      if (typeof value === "number" && Number.isFinite(value)) {
+      // Treat 0 as unset/default, not as poll creation intent.
+      // This prevents callers with zero-valued numeric defaults from
+      // accidentally triggering poll validation during normal sends.
+      if (typeof value === "number" && Number.isFinite(value) && value > 0) {
         return true;
       }
       if (typeof value === "string") {
         const trimmed = value.trim();
-        if (trimmed.length > 0 && Number.isFinite(Number(trimmed))) {
+        const parsed = Number(trimmed);
+        if (trimmed.length > 0 && Number.isFinite(parsed) && parsed > 0) {
           return true;
         }
       }
