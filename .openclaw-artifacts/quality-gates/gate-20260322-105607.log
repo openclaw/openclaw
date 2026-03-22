@@ -1,0 +1,239 @@
+quality gate started: 2026-03-22T15:56:07Z
+repo: /Users/newdldewdl/openclaw-contrib
+umask: 0022 (was 0077)
+[INFO] node_modules already present
+==== pnpm build ====
+
+> openclaw@2026.3.14 build /Users/newdldewdl/openclaw-contrib
+> pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts
+
+
+> openclaw@2026.3.14 canvas:a2ui:bundle /Users/newdldewdl/openclaw-contrib
+> bash scripts/bundle-a2ui.sh
+
+A2UI bundle up to date; skipping.
+
+> openclaw@2026.3.14 build:plugin-sdk:dts /Users/newdldewdl/openclaw-contrib
+> tsc -p tsconfig.plugin-sdk.dts.json
+
+[copy-hook-metadata] Copied 4 hook metadata files.
+[copy-export-html-templates] Copied 5 export-html assets.
+[PASS] pnpm build
+==== pnpm format:check (advisory) ====
+
+> openclaw@2026.3.14 format:check /Users/newdldewdl/openclaw-contrib
+> oxfmt --check
+
+Checking formatting...
+
+All matched files use the correct format.
+Finished in 4549ms on 8460 files using 8 threads.
+[PASS] pnpm format:check
+==== pnpm tsgo ====
+[PASS] pnpm tsgo
+==== pnpm lint ====
+
+> openclaw@2026.3.14 lint /Users/newdldewdl/openclaw-contrib
+> oxlint --type-aware
+
+Found 0 warnings and 0 errors.
+Finished in 5.7s on 5361 files with 136 rules using 8 threads.
+[PASS] pnpm lint
+==== pnpm test ====
+
+> openclaw@2026.3.14 test /Users/newdldewdl/openclaw-contrib
+> node scripts/test-parallel.mjs
+
+[test-parallel] start unit-fast workers=2 filters=all
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/infra/provider-usage.fetch.claude.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [31m❯[39m src/cron/isolated-agent.delivery-target-thread-session.test.ts [2m([22m[2m6 tests[22m[2m | [22m[33m6 skipped[39m[2m)[22m[33m 4469[2mms[22m[39m
+     [2m[90m↓[39m[22m uses thread session entry when sessionKey is provided and entry exists
+     [2m[90m↓[39m[22m falls back to main session when sessionKey entry does not exist
+     [2m[90m↓[39m[22m falls back to main session when no sessionKey is provided
+     [2m[90m↓[39m[22m preserves threadId from :topic: in delivery.to on first run (no session history)
+     [2m[90m↓[39m[22m explicit accountId overrides session lastAccountId
+     [2m[90m↓[39m[22m preserves threadId from :topic: when lastTo differs
+ [31m❯[39m src/infra/outbound/message-action-runner.threading.test.ts [2m([22m[2m7 tests[22m[2m | [22m[33m7 skipped[39m[2m)[22m[33m 4858[2mms[22m[39m
+     [2m[90m↓[39m[22m auto-threads slack using 'exact channel id'
+     [2m[90m↓[39m[22m auto-threads slack using 'case-insensitive channel id'
+     [2m[90m↓[39m[22m telegram auto-threading: 'injects threadId for matching target'
+     [2m[90m↓[39m[22m telegram auto-threading: 'injects threadId for prefixed group t…'
+     [2m[90m↓[39m[22m telegram auto-threading: 'skips threadId when target chat diffe…'
+     [2m[90m↓[39m[22m uses explicit telegram threadId when provided
+     [2m[90m↓[39m[22m threads explicit replyTo through executeSendAction
+ [31m❯[39m src/secrets/resolve.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m test/extension-plugin-sdk-boundary.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/config/schema.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m test/scripts/committer.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/hooks/install.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/secrets/audit.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/loader.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/hooks/bundled/session-memory/handler.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugin-sdk/channel-import-guardrails.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m test/scripts/ios-team-id.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/fs-safe.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/install-sh-version.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/memory/manager.atomic-reindex.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/gateway-cli/run.option-collisions.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/provider-usage.auth.plugin.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m test/architecture-smells.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/config/config.plugin-validation.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/security/audit.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m test/git-hooks-pre-commit.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/host-env-security.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m test/web-search-provider-boundary.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/hooks/loader.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m test/scripts/test-extension.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/program/preaction.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/memory/embeddings.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/daemon-cli/install.integration.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/fs-pinned-write-helper.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/archive-staging.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m test/plugin-extension-import-boundary.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/mcp-cli.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/archive.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/tui/gateway-chat.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/entry.version-fast-path.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/nodes-cli.coverage.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/acp/server.startup.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/sdk-alias.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/provider-usage.load.plugin.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/memory/batch-gemini.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cron/isolated-agent.delivers-response-has-heartbeat-ok-but-includes.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/media/store.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/run-node.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/gateway-cli.coverage.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/channels/channels-misc.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/hooks/plugin-hooks.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/media/store.outside-workspace.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cron/isolated-agent.subagent-model.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/media/read-response-with-limit.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/security/windows-acl.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/bundle-mcp.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/web-search-providers.runtime.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/gateway-lock.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/manifest-registry.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/config/config.nix-integration-u3-u5-u9.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/pairing/setup-code.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cron/isolated-agent.lane.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugin-sdk/channel-lifecycle.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/media/input-files.fetch-guard.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/marketplace.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/process/command-queue.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/memory-cli.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/copy-bundled-plugin-metadata.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/system-presence.version.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cron/isolated-agent.direct-delivery-forum-topics.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cron/isolated-agent/run.owner-auth.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/hook-runner-global.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/config/io.write-config.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/contracts/auth-choice.contract.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/update-check.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/wizard/setup.gateway-config.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/canvas-host/server.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/status.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/update-startup.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/scripts/ci-changed-scope.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/media-understanding/runner.skip-tiny-audio.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/jsonl-socket.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/daemon/schtasks.startup-fallback.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/program.smoke.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/pairing-cli.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/daemon-cli/lifecycle-core.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/node-host/invoke-system-run-plan.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/pairing/pairing-store.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/media-understanding/runner.auto-audio.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/memory/batch-voyage.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugin-sdk/keyed-async-queue.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/device-pairing.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/devices-cli.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/daemon-cli/lifecycle-core.config-guard.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/session-maintenance-warning.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/config/config.web-search-provider.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/outbound/outbound.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/media-understanding/runner.proxy.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/bundle-commands.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/hooks/hooks-install.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/tools.optional.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/routing/resolve-route.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/logging/log-file-size-cap.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/media-understanding/runner.vision-skip.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/channels/plugins/acp-bindings.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/media-understanding/runner.deepgram.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/control-ui-assets.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cron/isolated-agent.auth-profile-propagation.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/media-understanding/runtime.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/config/sessions/targets.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/config/sessions/sessions.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/providers.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/discovery.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/media/server.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/push-apns.store.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/outbound/outbound-send-service.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/config/config.legacy-config-detection.accepts-imessage-dmpolicy.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/memory/embeddings-voyage.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/config/sessions.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/program/register.backup.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/contracts/loader.contract.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/logger.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cron/service.restart-catchup.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/security/fix.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/matrix-legacy-crypto.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/process/supervisor/supervisor.pty-command.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/outbound/delivery-queue.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/ports.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/daemon-cli/lifecycle.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/contracts/registry.contract.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/config/includes.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/plugin-registry.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/config/io.runtime-snapshot-write.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/bundled-web-search.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/config/config.identity-defaults.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/program/config-guard.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cron/service.failure-alert.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cli/route.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/web-search-providers.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cron/service.persists-delivered-status.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/process/exec.windows.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/plugins/stage-bundled-plugin-runtime.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/config/sessions/store.pruning.integration.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/net/proxy-fetch.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/media/fetch.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/cron/service.store.migration.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/provider-usage.fetch.minimax.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/infra/device-bootstrap.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/media-understanding/providers/index.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m src/config/plugins-runtime-boundary.test.ts [2m([22m[2m0 test[22m[2m)[22m
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: ENOSPC: no space left on device, write
+    at writeSync (node:fs:911:3)
+    at SyncWriteStream._write (node:internal/fs/sync_write_stream:27:5)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Writable.write (node:internal/streams/writable:508:10)
+    at Socket.<anonymous> (file:///Users/newdldewdl/openclaw-contrib/scripts/test-parallel.mjs:1159:22)
+    at Socket.emit (node:events:508:20)
+    at addChunk (node:internal/streams/readable:564:12)
+    at readableAddChunkPushByteMode (node:internal/streams/readable:515:3)
+    at Readable.push (node:internal/streams/readable:395:5)
+Emitted 'error' event on SyncWriteStream instance at:
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  errno: -28,
+  syscall: 'write',
+  code: 'ENOSPC'
+}
+
+Node.js v25.6.0
+ ELIFECYCLE  Test failed. See above for more details.
+[FAIL] pnpm test
+[FAIL] Quality gate stopped at: pnpm test
+log: /Users/newdldewdl/openclaw-contrib/.openclaw-artifacts/quality-gates/gate-20260322-105607.log

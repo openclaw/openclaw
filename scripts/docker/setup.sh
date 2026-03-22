@@ -223,18 +223,26 @@ fi
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
 
-# Warn if OPENCLAW_CONFIG_DIR is /root (will fail in Docker for non-root users).
-# This catches the silent-failure bug: /root/.openclaw is owned by root with 700 permissions,
-# so the node user (uid 1000) in a Docker container cannot write to it.
-if [[ "$OPENCLAW_CONFIG_DIR" == "/root/.openclaw" || "$OPENCLAW_CONFIG_DIR" == "/root" ]]; then
-  echo "WARNING: OPENCLAW_CONFIG_DIR=$OPENCLAW_CONFIG_DIR is not writable by non-root Docker containers." >&2
-  echo "In Docker, the node user (uid 1000) cannot write to /root (owned by root, 700 permissions)." >&2
-  echo "This will cause silent write failures: Telegram/channel configs won't persist, etc." >&2
-  echo "Fix: Set OPENCLAW_CONFIG_DIR to a user-home path writable by non-root, e.g.:" >&2
-  echo "  export OPENCLAW_CONFIG_DIR=\$HOME/.openclaw" >&2
-  echo "  scripts/docker/setup.sh" >&2
-  fail "OPENCLAW_CONFIG_DIR must be writable by non-root Docker users. Use \$HOME/.openclaw or similar."
-fi
+# Validate that both CONFIG_DIR and WORKSPACE_DIR are writable by non-root Docker users.
+# This catches the silent-failure bug: /root paths are owned by root with 700 permissions,
+# so the node user (uid 1000) in a Docker container cannot write to them.
+_check_root_path() {
+  local path_var_name=$1
+  local path_var_value=$2
+  
+  if [[ "$path_var_value" == "/root"* ]]; then
+    echo "ERROR: $path_var_name=$path_var_value is not writable by non-root Docker containers." >&2
+    echo "In Docker, the node user (uid 1000) cannot write to /root (owned by root, 700 permissions)." >&2
+    echo "This will cause silent write failures: Telegram/channel configs won't persist, extensions fail, etc." >&2
+    echo "Fix: Set $path_var_name to a user-home path writable by non-root, e.g.:" >&2
+    echo "  export $path_var_name=/home/nodeuser/.openclaw" >&2
+    echo "  scripts/docker/setup.sh" >&2
+    fail "$path_var_name must be writable by non-root Docker users. Use /home/nodeuser/.openclaw or similar."
+  fi
+}
+
+_check_root_path "OPENCLAW_CONFIG_DIR" "$OPENCLAW_CONFIG_DIR"
+_check_root_path "OPENCLAW_WORKSPACE_DIR" "$OPENCLAW_WORKSPACE_DIR"
 
 # Seed directory tree eagerly so bind mounts work even on Docker Desktop/Windows
 # where the container (even as root) cannot create new host subdirectories.
