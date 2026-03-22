@@ -35,3 +35,16 @@ export function setCliSessionId(entry: SessionEntry, provider: string, sessionId
     entry.claudeCliSessionId = trimmed;
   }
 }
+
+export function clearAllCliSessionIds(entry: SessionEntry): boolean {
+  let changed = false;
+  if (Object.hasOwn(entry, "cliSessionIds")) {
+    delete entry.cliSessionIds;
+    changed = true;
+  }
+  if (Object.hasOwn(entry, "claudeCliSessionId")) {
+    delete entry.claudeCliSessionId;
+    changed = true;
+  }
+  return changed;
+}
