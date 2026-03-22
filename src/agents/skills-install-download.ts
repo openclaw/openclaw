@@ -74,9 +74,18 @@ async function downloadFile(params: {
     boundaryLabel: "skill tools directory",
   });
   const tempPath = path.join(stagingDir, `${randomUUID()}.tmp`);
+
+  // Use a single AbortController that covers the entire download lifecycle
+  // (fetch + stream piping). Previously the timeout from fetchWithSsrFGuard
+  // only aborted the initial fetch — if the server responded with headers but
+  // then stalled mid-stream, `pipeline()` would hang indefinitely.
+  const controller = new AbortController();
+  const timeoutMs = Math.max(1_000, params.timeoutMs);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
-    timeoutMs: Math.max(1_000, params.timeoutMs),
+    signal: controller.signal,
   });
   try {
     if (!response.ok || !response.body) {
@@ -87,7 +96,7 @@ async function downloadFile(params: {
     const readable = isNodeReadableStream(body)
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
-    await pipeline(readable, file);
+    await pipeline(readable, file, { signal: controller.signal });
     await writeFileFromPathWithinRoot({
       rootDir: params.rootDir,
       relativePath: params.relativePath,
@@ -96,6 +105,7 @@ async function downloadFile(params: {
     const stat = await fs.promises.stat(destPath);
     return { bytes: stat.size };
   } finally {
+    clearTimeout(timeoutId);
     await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
     await release();
   }
