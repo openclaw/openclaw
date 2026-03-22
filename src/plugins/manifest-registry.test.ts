@@ -822,4 +822,50 @@ describe("loadPluginManifestRegistry", () => {
       fs.realpathSync(second.plugins.find((plugin) => plugin.id === "demo")?.rootDir ?? ""),
     ).toBe(fs.realpathSync(demoB));
   });
+
+  it("does not reuse cached manifests across host version changes", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+    fs.writeFileSync(path.join(dir, "index.ts"), "export default {}", "utf-8");
+    const candidates = [
+      createPluginCandidate({
+        idHint: "synology-chat",
+        rootDir: dir,
+        packageDir: dir,
+        origin: "global",
+        packageManifest: {
+          install: {
+            npmSpec: "@openclaw/synology-chat",
+            minHostVersion: ">=2026.3.14",
+          },
+        },
+      }),
+    ];
+
+    const olderHost = loadPluginManifestRegistry({
+      cache: true,
+      candidates,
+      env: {
+        ...process.env,
+        OPENCLAW_VERSION: "2026.3.13",
+      },
+    });
+    const newerHost = loadPluginManifestRegistry({
+      cache: true,
+      candidates,
+      env: {
+        ...process.env,
+        OPENCLAW_VERSION: "2026.3.14",
+      },
+    });
+
+    expect(olderHost.plugins).toEqual([]);
+    expect(
+      olderHost.diagnostics.some((diag) => diag.message.includes("this host is 2026.3.13")),
+    ).toBe(true);
+    expect(newerHost.plugins.some((plugin) => plugin.id === "synology-chat")).toBe(true);
+    expect(
+      newerHost.diagnostics.some((diag) => diag.message.includes("this host is 2026.3.13")),
+    ).toBe(false);
+  });
 });
