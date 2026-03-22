@@ -145,7 +145,7 @@ const resolveZalouserDmPolicy = createScopedDmSecurityResolver<ResolvedZalouserA
   resolvePolicy: (account) => account.config.dmPolicy,
   resolveAllowFrom: (account) => account.config.allowFrom,
   policyPathSuffix: "dmPolicy",
-  normalizeEntry: (raw) => raw.replace(/^(zalouser|zlu):/i, ""),
+  normalizeEntry: (raw) => raw.trim().replace(/^(zalouser|zlu):/i, ""),
 });
 
 const zalouserMessageActions: ChannelMessageActionAdapter = {
