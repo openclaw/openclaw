@@ -735,6 +735,9 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Build dist (macOS)
+        run: pnpm build
+
       # --- Run all checks sequentially (fast gates first) ---
       - name: TS tests (macOS)
         env:
