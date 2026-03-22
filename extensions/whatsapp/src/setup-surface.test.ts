@@ -31,10 +31,20 @@ vi.mock("../../../src/utils.js", async () => {
   };
 });
 
+const resolveWhatsAppAccountMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    accountId: "default",
+    enabled: true,
+    sendReadReceipts: true,
+    authDir: "/tmp/openclaw-whatsapp-test",
+  })),
+);
+
 vi.mock("./accounts.js", () => ({
   listWhatsAppAccountIds: listWhatsAppAccountIdsMock,
   resolveDefaultWhatsAppAccountId: resolveDefaultWhatsAppAccountIdMock,
   resolveWhatsAppAuthDir: resolveWhatsAppAuthDirMock,
+  resolveWhatsAppAccount: resolveWhatsAppAccountMock,
 }));
 
 function createRuntime(): RuntimeEnv {
