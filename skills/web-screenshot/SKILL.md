@@ -15,7 +15,7 @@ This affects virtually every modern website framework (Astro, React, Next.js, Vu
 
 ## Solution
 
-Inject JavaScript to force all hidden elements visible, trigger lazy-loaded images, and fire IntersectionObservers before taking the screenshot.
+Inject JavaScript to force all hidden elements visible, trigger lazy-loaded images (both native and `data-src`), incrementally scroll through the page to fire IntersectionObservers, then take the screenshot.
 
 ## Usage: Browser Tool (Recommended)
 
@@ -26,53 +26,70 @@ Inject JavaScript to force all hidden elements visible, trigger lazy-loaded imag
 ```
 1. browser(action="navigate", url="https://example.com/page")
 
-2. browser(action="act", kind="evaluate", fn="(() => { document.querySelectorAll('[class*=reveal],[class*=fade],[class*=animate],[class*=scroll]').forEach(el => { el.style.opacity = '1'; el.style.transform = 'none'; el.style.visibility = 'visible'; el.style.transition = 'none' }); document.querySelectorAll('[style*=\"opacity: 0\"],[style*=\"opacity:0\"]').forEach(el => { el.style.opacity = '1'; el.style.transform = 'none' }); document.querySelectorAll('img[loading=lazy]').forEach(img => { img.loading = 'eager' }); window.scrollTo(0, document.body.scrollHeight); return 'done' })()")
+2. browser(action="act", kind="evaluate", fn="(() => { document.querySelectorAll('[class*=reveal],[class*=fade],[class*=animate],[class*=scroll]').forEach(el => { el.style.opacity = '1'; el.style.transform = 'none'; el.style.visibility = 'visible'; el.style.transition = 'none' }); document.querySelectorAll('[style*=\"opacity: 0\"],[style*=\"opacity:0\"]').forEach(el => { el.style.opacity = '1'; el.style.transform = 'none' }); document.querySelectorAll('img[loading=lazy]').forEach(img => { img.loading = 'eager'; if (img.dataset.src) img.src = img.dataset.src }); return 'done' })()")
 
-3. Wait 2 seconds (exec: sleep 2)
+3. Incremental scroll to trigger remaining observers:
+   browser(action="act", kind="evaluate", fn="(() => { const h = document.body.scrollHeight; const step = Math.ceil(h / 5); for (let i = step; i <= h; i += step) window.scrollTo(0, i); return 'scrolled' })()")
 
-4. browser(action="act", kind="evaluate", fn="(() => { window.scrollTo(0, 0); return 'top' })()")
+4. Wait 2 seconds (exec: sleep 2)
 
-5. Wait 1 second
+5. browser(action="act", kind="evaluate", fn="(() => { window.scrollTo(0, 0); return 'top' })()")
 
-6. browser(action="screenshot", fullPage=true)  ← Desktop
+6. Wait 1 second
 
-7. browser(action="act", kind="resize", width=375, height=812)
-8. browser(action="screenshot", fullPage=true)  ← Mobile
+7. browser(action="screenshot", fullPage=true)  ← Desktop
 
-9. browser(action="act", kind="resize", width=1280, height=800)  ← Reset viewport
+8. Repeat reveal injection for mobile (responsive breakpoints may re-hide elements):
+   browser(action="act", kind="resize", width=375, height=812)
+   browser(action="act", kind="evaluate", fn="<same reveal script as step 2>")
+   Wait 1 second
+
+9. browser(action="screenshot", fullPage=true)  ← Mobile
+
+10. browser(action="act", kind="resize", width=1280, height=800)  ← Reset viewport
 ```
 
 ### What the Script Does
 
 1. **Forces all reveal elements visible** — Selects elements with class names containing `reveal`, `fade`, `animate`, or `scroll` and overrides their opacity, transform, and visibility
 2. **Catches inline-styled hidden elements** — Finds elements with `opacity: 0` in their inline style
-3. **Triggers lazy images** — Changes `loading="lazy"` to `eager` so all images load immediately
-4. **Scrolls to bottom** — Triggers any remaining IntersectionObservers
+3. **Triggers lazy images** — Changes `loading="lazy"` to `eager` and copies `data-src` to `src` for custom lazy-loading implementations
+4. **Incrementally scrolls** — Steps through the page in chunks (not a single jump) to reliably fire all IntersectionObservers
 5. **Scrolls back to top** — Returns to page start for a clean full-page screenshot
+6. **Re-applies after mobile resize** — Responsive CSS may re-hide elements at different breakpoints
 
 ### Compact One-Liner (Copy-Paste Ready)
 
-For the reveal injection (step 2):
+For the reveal injection (steps 2/8):
 
 ```
-(() => { document.querySelectorAll('[class*=reveal],[class*=fade],[class*=animate],[class*=scroll]').forEach(el => { el.style.opacity = '1'; el.style.transform = 'none'; el.style.visibility = 'visible'; el.style.transition = 'none' }); document.querySelectorAll('[style*="opacity: 0"],[style*="opacity:0"]').forEach(el => { el.style.opacity = '1'; el.style.transform = 'none' }); document.querySelectorAll('img[loading=lazy]').forEach(img => { img.loading = 'eager' }); window.scrollTo(0, document.body.scrollHeight); return 'done' })()
+(() => { document.querySelectorAll('[class*=reveal],[class*=fade],[class*=animate],[class*=scroll]').forEach(el => { el.style.opacity = '1'; el.style.transform = 'none'; el.style.visibility = 'visible'; el.style.transition = 'none' }); document.querySelectorAll('[style*="opacity: 0"],[style*="opacity:0"]').forEach(el => { el.style.opacity = '1'; el.style.transform = 'none' }); document.querySelectorAll('img[loading=lazy]').forEach(img => { img.loading = 'eager'; if (img.dataset.src) img.src = img.dataset.src }); return 'done' })()
 ```
 
 ## Usage: Standalone Script
 
-For automation outside the browser tool, use `scripts/screenshot.sh`:
+For automation outside the browser tool, use the bundled script. Run from any directory — use the full path to the script:
 
 ```bash
+# From the skill directory:
 bash scripts/screenshot.sh <url> <output-dir> [slug]
 
+# From workspace root (typical usage):
+bash skills/web-screenshot/scripts/screenshot.sh <url> <output-dir> [slug]
+
 # Examples:
-bash scripts/screenshot.sh http://localhost:4321/my-page ./screenshots my-page
-bash scripts/screenshot.sh https://example.com/page ./screenshots example
+bash skills/web-screenshot/scripts/screenshot.sh http://localhost:4321/my-page ./screenshots my-page
+bash skills/web-screenshot/scripts/screenshot.sh https://example.com/page ./screenshots example
 ```
 
 Outputs `{slug}-desktop.png` (1280px) and `{slug}-mobile.png` (375px).
 
-Requires Node.js and Playwright (`npx playwright install chromium`).
+**Requirements**: Node.js and Playwright. Install with:
+
+```bash
+npm install playwright
+npx playwright install chromium
+```
 
 ## Known Limitations
 
