@@ -249,7 +249,7 @@ mkdir_user_dirs_as_openclaw
 IMAGE_TMP_BASE="$(resolve_image_tmp_dir)"
 echo "Using temp base for image export: $IMAGE_TMP_BASE"
 IMAGE_TAR_DIR="$(mktemp -d "${IMAGE_TMP_BASE%/}/openclaw-podman-image.XXXXXX")"
-chmod 700 "$IMAGE_TAR_DIR"
+chmod 755 "$IMAGE_TAR_DIR"
 IMAGE_TAR="$IMAGE_TAR_DIR/openclaw-image.tar"
 cleanup_image_tar() {
   rm -rf "$IMAGE_TAR_DIR"
