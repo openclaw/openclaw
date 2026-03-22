@@ -188,6 +188,17 @@ const CONTEXT_OVERFLOW_HINT_RE =
 const RATE_LIMIT_HINT_RE =
   /rate limit|too many requests|requests per (?:minute|hour|day)|quota|throttl|429\b|tokens per day/i;
 
+/**
+ * Detects Anthropic's 429 "Extra usage is required for long context requests." error.
+ *
+ * Anthropic returns HTTP 429 for this case, but it is semantically a context overflow
+ * (the session is too large for the standard usage tier), not a transient rate limit.
+ * It should be routed to the compact+retry path instead of the model fallback chain.
+ */
+export function isAnthropicLongContextUsageError(errorMessage: string): boolean {
+  return errorMessage.toLowerCase().includes("extra usage is required for long context");
+}
+
 export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -212,6 +223,14 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) {
     return false;
   }
+
+  // Anthropic returns HTTP 429 for "Extra usage is required for long context requests."
+  // This is semantically a context overflow (session too large), not a transient rate limit.
+  // Detect it before the isRateLimitErrorMessage exclusion so it routes to compact+retry.
+  if (isAnthropicLongContextUsageError(errorMessage)) {
+    return true;
+  }
+
   // Rate limit errors can match the broad CONTEXT_OVERFLOW_HINT_RE pattern
   // (e.g., "request reached organization TPD rate limit" matches request.*limit).
   // Exclude them before checking context overflow heuristics.

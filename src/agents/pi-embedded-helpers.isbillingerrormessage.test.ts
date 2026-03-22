@@ -3,6 +3,7 @@ import {
   classifyFailoverReason,
   classifyFailoverReasonFromHttpStatus,
   extractObservedOverflowTokenCount,
+  isAnthropicLongContextUsageError,
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
@@ -418,6 +419,28 @@ describe("error classifiers", () => {
   });
 });
 
+describe("isAnthropicLongContextUsageError", () => {
+  it("detects Anthropic long-context usage errors", () => {
+    expect(
+      isAnthropicLongContextUsageError("Extra usage is required for long context requests."),
+    ).toBe(true);
+    expect(
+      isAnthropicLongContextUsageError("extra usage is required for long context requests"),
+    ).toBe(true);
+    expect(
+      isAnthropicLongContextUsageError(
+        "429 Extra usage is required for long context requests. Please contact support.",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match unrelated rate limit messages", () => {
+    expect(isAnthropicLongContextUsageError("Rate limit exceeded")).toBe(false);
+    expect(isAnthropicLongContextUsageError("429 Too Many Requests")).toBe(false);
+    expect(isAnthropicLongContextUsageError("context length exceeded")).toBe(false);
+  });
+});
+
 describe("isLikelyContextOverflowError", () => {
   it("matches context overflow hints", () => {
     const samples = [
@@ -483,6 +506,20 @@ describe("isLikelyContextOverflowError", () => {
       expect(isBillingErrorMessage(sample)).toBe(true);
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
+  });
+
+  it("treats Anthropic long-context 429 as context overflow (not rate limit)", () => {
+    // Anthropic returns HTTP 429 for this message, but it is semantically a context
+    // overflow — the session is too large. It should route to compact+retry, not
+    // model fallback.
+    expect(isLikelyContextOverflowError("Extra usage is required for long context requests.")).toBe(
+      true,
+    );
+    expect(isLikelyContextOverflowError("extra usage is required for long context requests")).toBe(
+      true,
+    );
+    // Standard rate limit messages must still be excluded
+    expect(isLikelyContextOverflowError("Rate limit exceeded")).toBe(false);
   });
 });
 
