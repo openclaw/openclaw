@@ -3,15 +3,14 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const baseTestSuffixes = [".test.ts", ".test-utils.ts", ".test-harness.ts", ".e2e-harness.ts"];
 const require = createRequire(import.meta.url);
-let tsCache;
+let cachedTypeScript;
 
 function getTypeScript() {
-  tsCache ??= require("typescript");
-  return tsCache;
+  cachedTypeScript ??= require("typescript");
+  return cachedTypeScript;
 }
-
-const baseTestSuffixes = [".test.ts", ".test-utils.ts", ".test-harness.ts", ".e2e-harness.ts"];
 
 export function resolveRepoRoot(importMetaUrl) {
   return path.resolve(path.dirname(fileURLToPath(importMetaUrl)), "..", "..");
