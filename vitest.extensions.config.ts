@@ -23,6 +23,7 @@ export function loadIncludePatternsFromEnv(
 export default createScopedVitestConfig(
   loadIncludePatternsFromEnv() ?? ["extensions/**/*.test.ts"],
   {
+    pool: "threads",
     // Channel implementations live under extensions/ but are tested by
     // vitest.channels.config.ts (pnpm test:channels) which provides
     // the heavier mock scaffolding they need.
