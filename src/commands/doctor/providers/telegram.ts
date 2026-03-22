@@ -1,9 +1,11 @@
 import {
-  inspectTelegramAccount,
   isNumericTelegramUserId,
+  normalizeTelegramAllowFromEntry,
+} from "../../../../extensions/telegram/allow-from.js";
+import {
+  inspectTelegramAccount,
   listTelegramAccountIds,
   lookupTelegramChatId,
-  normalizeTelegramAllowFromEntry,
 } from "../../../../extensions/telegram/api.js";
 import { resolveCommandSecretRefsViaGateway } from "../../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../../cli/command-secret-targets.js";
