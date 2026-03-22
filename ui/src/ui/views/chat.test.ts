@@ -223,7 +223,6 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onDraftChange: () => undefined,
     onSend: () => undefined,
     onQueueRemove: () => undefined,
-    onNewSession: () => undefined,
     agentsList: null,
     currentAgentId: "",
     onAgentChange: () => undefined,
@@ -679,14 +678,12 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("New session");
   });
 
-  it("shows a new session button when aborting is unavailable", () => {
+  it("does not show a legacy toolbar new session button when aborting is unavailable", () => {
     const container = document.createElement("div");
-    const onNewSession = vi.fn();
     render(
       renderChat(
         createProps({
           canAbort: false,
-          onNewSession,
         }),
       ),
       container,
@@ -695,9 +692,7 @@ describe("chat view", () => {
     const newSessionButton = container.querySelector<HTMLButtonElement>(
       'button[title="New session"]',
     );
-    expect(newSessionButton).not.toBeUndefined();
-    newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onNewSession).toHaveBeenCalledTimes(1);
+    expect(newSessionButton).toBeNull();
     expect(container.textContent).not.toContain("Stop");
   });
 
@@ -1311,6 +1306,69 @@ describe("chat view", () => {
       expect(state.sessionKey).toBe("other");
       expect(state.settings.sessionKey).toBe("other");
       expect(state.settings.lastActiveSessionKey).toBe("other");
+      expect(state.newChatSessionPending).toBe(false);
+      expect(request).not.toHaveBeenCalledWith("chat.history", {
+        sessionKey: "new-session",
+        limit: 200,
+      });
+      expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
+    });
+  });
+
+  it("does not auto-switch after the user hops away and back before create resolves", async () => {
+    await withPromptStub(async () => {
+      let resolveCreate: ((value: { ok: boolean; key?: string }) => void) | undefined;
+      const createRequest = vi.fn(
+        async () =>
+          new Promise<{ ok: boolean; key?: string }>((resolve) => {
+            resolveCreate = resolve;
+          }),
+      );
+      const { state, request } = createChatHeaderState({
+        sessionsResult: {
+          ts: 0,
+          path: "",
+          count: 2,
+          defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+          sessions: [
+            { key: "main", kind: "direct", updatedAt: null },
+            { key: "other", kind: "direct", updatedAt: null },
+          ],
+        } satisfies SessionsListResult,
+        createRequest,
+      });
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
+
+      const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+      expect(newChatButton).not.toBeNull();
+
+      newChatButton!.click();
+      await flushTasks();
+      expect(state.newChatSessionPending).toBe(true);
+
+      const sessionSelect = container.querySelector<HTMLSelectElement>(
+        ".chat-controls__session select",
+      );
+      expect(sessionSelect).not.toBeNull();
+
+      sessionSelect!.value = "other";
+      sessionSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+      await flushTasks();
+
+      sessionSelect!.value = "main";
+      sessionSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+      await flushTasks();
+
+      expect(state.sessionKey).toBe("main");
+
+      resolveCreate?.({ ok: true, key: "new-session" });
+      await flushTasks();
+      await flushTasks();
+
+      expect(state.sessionKey).toBe("main");
+      expect(state.settings.sessionKey).toBe("main");
+      expect(state.settings.lastActiveSessionKey).toBe("main");
       expect(state.newChatSessionPending).toBe(false);
       expect(request).not.toHaveBeenCalledWith("chat.history", {
         sessionKey: "new-session",
