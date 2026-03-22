@@ -241,8 +241,8 @@ export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig
   return applyProviderConfigWithDefaultModel(cfg, {
     agentModels: models,
     providerId: "kimi-coding",
-    api: "anthropic-messages",
-    baseUrl: "https://api.kimi.com/coding/",
+    api: "openai-completions",
+    baseUrl: "https://api.kimi.moonshot.cn/v1",
     defaultModel,
     defaultModelId: KIMI_CODING_MODEL_ID,
   });
@@ -278,7 +278,7 @@ export function applySyntheticProviderConfig(cfg: OpenClawConfig): OpenClawConfi
   providers.synthetic = {
     ...existingProviderRest,
     baseUrl: SYNTHETIC_BASE_URL,
-    api: "anthropic-messages",
+    api: "openai-completions",
     ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
     models: mergedModels.length > 0 ? mergedModels : syntheticModels,
   };

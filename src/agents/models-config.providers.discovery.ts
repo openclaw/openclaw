@@ -136,3 +136,77 @@ export async function buildOllamaProvider(
     models,
   };
 }
+
+// Stub provider builders for backward compatibility - all use openai-completions
+export function buildKilocodeProvider(): ProviderConfig {
+  return {
+    baseUrl: "https://kilocode.ai",
+    api: "openai-completions",
+    models: [{
+      id: "kilo/claude-sonnet-4-5",
+      name: "Kilo Claude Sonnet 4.5",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    }],
+  };
+}
+
+export function buildKimiCodingProvider(): ProviderConfig {
+  return {
+    baseUrl: "https://kimi.moonshot.cn",
+    api: "openai-completions",
+    models: [{
+      id: "kimi-latest",
+      name: "Kimi Latest",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    }],
+  };
+}
+
+export function buildQianfanProvider(): ProviderConfig {
+  return {
+    baseUrl: "https://qianfan.baidubce.com",
+    api: "openai-completions",
+    models: [{
+      id: "ernie-bot-4",
+      name: "ERNIE Bot 4",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    }],
+  };
+}
+
+export function buildXiaomiProvider(): ProviderConfig {
+  return {
+    baseUrl: "https://api.xiaomi.ai",
+    api: "openai-completions",
+    models: [{
+      id: "mi-max",
+      name: "Mi Max",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    }],
+  };
+}
+
+export const QIANFAN_DEFAULT_MODEL_ID = "ernie-bot-4";
+export const XIAOMI_DEFAULT_MODEL_ID = "mi-max";
+export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com";
+
+export function normalizeGoogleModelId(modelId: string): string {
+  // Strip provider prefix if present (e.g., "google/" or "google-gemini-cli/")
+  return modelId.replace(/^(google|google-gemini-cli)\//i, "");
+}

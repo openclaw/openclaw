@@ -7,8 +7,10 @@ export {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
+  sanitizeGoogleTurnOrdering,
   stripThoughtSignatures,
 } from "./pi-embedded-helpers/bootstrap.js";
+export { isGoogleModelApi } from "./pi-embedded-helpers/google.js";
 export {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,

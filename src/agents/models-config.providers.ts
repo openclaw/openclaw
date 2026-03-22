@@ -167,3 +167,15 @@ export function normalizeModelsConfig(
 }
 
 export { resolveOllamaApiBase };
+
+// Re-export provider builders for backward compatibility
+export {
+  buildKilocodeProvider,
+  buildKimiCodingProvider,
+  buildQianfanProvider,
+  buildXiaomiProvider,
+  QIANFAN_BASE_URL,
+  QIANFAN_DEFAULT_MODEL_ID,
+  XIAOMI_DEFAULT_MODEL_ID,
+  normalizeGoogleModelId,
+} from "./models-config.providers.discovery.js";

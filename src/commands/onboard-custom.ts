@@ -473,8 +473,9 @@ async function applyCustomApiRetryChoice(params: {
 
 function resolveProviderApi(
   compatibility: CustomApiCompatibility,
-): "openai-completions" | "anthropic-messages" {
-  return compatibility === "anthropic" ? "anthropic-messages" : "openai-completions";
+): "openai-completions" {
+  // All providers now use openai-completions API format
+  return "openai-completions";
 }
 
 function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {

@@ -71,7 +71,7 @@ export function applyCloudflareAiGatewayProviderConfig(
   return applyProviderConfigWithDefaultModel(cfg, {
     agentModels: models,
     providerId: "cloudflare-ai-gateway",
-    api: "anthropic-messages",
+    api: "openai-completions",
     baseUrl,
     defaultModel,
   });

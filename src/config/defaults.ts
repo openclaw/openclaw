@@ -38,12 +38,20 @@ function isPositiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
+import { MODEL_APIS } from "./types.models.js";
+import type { ModelApi } from "./types.models.js";
+
+const VALID_MODEL_APIS = new Set<string>(MODEL_APIS);
+
 // Stub for removed function - defaults to openai-completions for all providers
 function resolveDefaultProviderApi(
   _providerId: string,
   existingApi?: string,
-): string | undefined {
-  return existingApi ?? "openai-completions";
+): ModelApi | undefined {
+  if (existingApi && VALID_MODEL_APIS.has(existingApi)) {
+    return existingApi as ModelApi;
+  }
+  return "openai-completions";
 }
 
 // Stub for removed function - no auth mode needed for simplified provider model

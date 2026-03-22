@@ -35,7 +35,7 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
   providers[params.providerId] = {
     ...existingProviderRest,
     baseUrl: params.baseUrl,
-    api: "anthropic-messages",
+    api: "openai-completions",
     authHeader: true,
     ...(normalizedApiKey?.trim() ? { apiKey: normalizedApiKey } : {}),
     models: mergedModels.length > 0 ? mergedModels : [apiModel],
