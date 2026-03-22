@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
+import { createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/status-helpers";
 import { buildComputedAccountStatusSnapshot } from "../api.js";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
@@ -109,13 +110,7 @@ export const tlonPlugin = createChatChannelPlugin({
       resolveOutboundSessionRoute: (params) => resolveTlonOutboundSessionRoute(params),
     },
     status: {
-      defaultRuntime: {
-        accountId: DEFAULT_ACCOUNT_ID,
-        running: false,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-      },
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       collectStatusIssues: (accounts) => {
         return accounts.flatMap((account) => {
           if (!account.configured) {
