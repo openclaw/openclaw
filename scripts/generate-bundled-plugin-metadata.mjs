@@ -127,9 +127,10 @@ function normalizePluginManifest(raw) {
 }
 
 function formatTypeScriptModule(source, { outputPath }) {
+  const formatterPath = path.relative(FORMATTER_CWD, outputPath) || outputPath;
   const formatter = spawnSync(
     process.platform === "win32" ? "pnpm.cmd" : "pnpm",
-    ["exec", "oxfmt", "--stdin-filepath", outputPath],
+    ["exec", "oxfmt", "--stdin-filepath", formatterPath],
     {
       cwd: FORMATTER_CWD,
       input: source,
@@ -138,7 +139,10 @@ function formatTypeScriptModule(source, { outputPath }) {
   );
   if (formatter.status !== 0) {
     const details =
-      formatter.stderr?.trim() || formatter.stdout?.trim() || "unknown formatter failure";
+      formatter.stderr?.trim() ||
+      formatter.stdout?.trim() ||
+      formatter.error?.message ||
+      "unknown formatter failure";
     throw new Error(`failed to format generated bundled plugin metadata: ${details}`);
   }
   return formatter.stdout;
