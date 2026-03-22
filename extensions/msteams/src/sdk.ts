@@ -257,11 +257,17 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
             const convType = (activity?.conversation as Record<string, unknown>)
               ?.conversationType as string | undefined;
 
+            // Preserve replyToId for threaded replies (replyStyle: "thread")
+            const inboundActivityId = (activity as Record<string, unknown>)?.id as
+              | string
+              | undefined;
+
             return await apiClient.conversations.activities(convId).create({
               type: "message",
               ...msg,
               from: botId ? { id: botId, name: botName ?? "", role: "bot" } : undefined,
               conversation: { id: convId, conversationType: convType ?? "personal" },
+              ...(inboundActivityId && !msg.replyToId ? { replyToId: inboundActivityId } : {}),
             } as Parameters<
               typeof apiClient.conversations.activities extends (id: string) => {
                 create: (a: infer T) => unknown;

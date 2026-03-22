@@ -126,6 +126,12 @@ export function createMSTeamsReplyDispatcher(params: {
 
   // Streaming for personal (1:1) chats using the Teams streaminfo protocol.
   let stream: TeamsHttpStream | undefined;
+  // Pick a thinking message now (before streaming starts) so it's ready
+  // to send on the first token.
+  const thinkingMsg =
+    THINKING_MESSAGES[Math.floor(Math.random() * THINKING_MESSAGES.length)] ?? "Thinking...";
+  let sentInformativeUpdate = false;
+
   if (isPersonal) {
     stream = new TeamsHttpStream({
       sendActivity: (activity) => params.context.sendActivity(activity),
@@ -133,13 +139,6 @@ export function createMSTeamsReplyDispatcher(params: {
       onError: (err) => {
         params.log.debug?.(`stream error: ${err instanceof Error ? err.message : String(err)}`);
       },
-    });
-    // Send an informative update immediately so the user sees a progress bar
-    // while the LLM is processing (before any tokens arrive).
-    const msg =
-      THINKING_MESSAGES[Math.floor(Math.random() * THINKING_MESSAGES.length)] ?? "Thinking...";
-    stream.sendInformativeUpdate(msg).catch(() => {
-      // Best effort — don't block the reply pipeline
     });
   }
 
@@ -211,10 +210,16 @@ export function createMSTeamsReplyDispatcher(params: {
     humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
     typingCallbacks,
     deliver: async (payload) => {
-      // When streaming is active and has sent content, skip delivery —
-      // the stream's finalize() handles the final message.
-      if (stream?.hasContent && !payload.mediaUrl && !payload.mediaUrls?.length) {
-        return;
+      // When streaming is active and has sent content, skip text delivery —
+      // the stream's finalize() handles the final text message.
+      // For payloads with media, strip the text (already streamed) and send media only.
+      if (stream?.hasContent) {
+        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+        if (!hasMedia) {
+          return;
+        }
+        // Send media without duplicating the streamed text
+        payload = { ...payload, text: undefined };
       }
 
       // Render the payload to messages and accumulate them. All messages from
@@ -271,11 +276,18 @@ export function createMSTeamsReplyDispatcher(params: {
       });
   };
 
-  // Build reply options with onPartialReply for streaming
+  // Build reply options with onPartialReply for streaming.
+  // Send the informative update on the first token (not eagerly at stream creation)
+  // so it only appears when the LLM is actually generating text — not when the
+  // agent uses a tool (e.g. sends an adaptive card) without streaming.
   const streamingReplyOptions = stream
     ? {
         onPartialReply: (payload: { text?: string }) => {
           if (payload.text) {
+            if (!sentInformativeUpdate) {
+              sentInformativeUpdate = true;
+              stream!.sendInformativeUpdate(thinkingMsg).catch(() => {});
+            }
             stream!.update(payload.text);
           }
         },
