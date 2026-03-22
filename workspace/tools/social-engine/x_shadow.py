@@ -233,8 +233,24 @@ def classify_tweet(tweet_text):
     return 'technical'  # Default: add experience layer
 
 
+def enrich_user_profile(account):
+    """Quick profile enrichment — grab bio + recent tweets to understand the person."""
+    try:
+        from adapters.x_twitter import XTwitterAdapter
+        adapter = XTwitterAdapter()
+        profile = adapter.get_profile(account)
+        return {
+            'handle': account,
+            'name': profile.get('name', ''),
+            'bio': profile.get('bio', ''),
+            'followers': profile.get('followers', 0),
+        }
+    except Exception:
+        return {'handle': account, 'bio': '', 'followers': 0}
+
+
 def generate_reply(tweet_text, account):
-    """Use LLM to generate a high-quality reply, matched to tweet type."""
+    """Use LLM to generate a high-quality reply, matched to tweet type + user profile."""
     tweet_type = classify_tweet(tweet_text)
 
     # Skip retweets and ads
@@ -252,7 +268,13 @@ def generate_reply(tweet_text, account):
 
     mode = mode_instructions.get(tweet_type, mode_instructions['technical'])
 
-    prompt = f"""You are @TangCruzZ replying to @{account} on X/Twitter.
+    # Enrich user profile
+    profile = enrich_user_profile(account)
+    bio_ctx = f"\nBio: {profile['bio']}" if profile.get('bio') else ""
+    followers_ctx = f" ({profile['followers']} followers)" if profile.get('followers') else ""
+
+    prompt = f"""You are @TangCruzZ replying to @{account}{followers_ctx} on X/Twitter.
+{f"ABOUT THEM:{bio_ctx}" if bio_ctx else ""}
 
 THEIR TWEET ({tweet_type} type):
 {tweet_text[:400]}
@@ -280,7 +302,7 @@ Reply (MAX 200 chars, start by referencing THEIR point):"""
     return reply
 
 
-def score_reply(reply_text, account):
+def score_reply(reply_text, account, tweet_text=""):
     """Score a reply using content_brain's resonance filter + LLM."""
     # Rule-based pre-check
     if not reply_text or len(reply_text) < 10:
@@ -298,7 +320,8 @@ def score_reply(reply_text, account):
     # LLM quality score
     score_prompt = f"""Score this reply on THREE dimensions. Final score = LOWEST of the three.
 
-Reply to @{account}: "{reply_text}"
+@{account}'s tweet: "{tweet_text[:200]}"
+Our reply: "{reply_text}"
 
 1. UNDERSTANDING (1-10): Does this reply show we get what @{account} specifically cares about?
    8+ = clearly responding to THEIR point. 5-6 = could be sent to anyone.
@@ -399,7 +422,7 @@ def cmd_run():
         return
 
     # 5. Score the reply
-    quality = score_reply(reply, tweet['account'])
+    quality = score_reply(reply, tweet['account'], tweet['text'])
     print(f"  Quality score: {quality:.1f}/10")
 
     if quality < 5.0:
