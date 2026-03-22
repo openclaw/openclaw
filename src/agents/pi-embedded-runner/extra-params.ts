@@ -74,7 +74,9 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   openaiWsWarmup?: boolean;
 };
 
-function resolveOpenAIBuiltInTools(extraParams: Record<string, unknown> | undefined): Array<Record<string, unknown>> {
+function resolveOpenAIBuiltInTools(
+  extraParams: Record<string, unknown> | undefined,
+): Array<Record<string, unknown>> {
   if (!extraParams) {
     return [];
   }
@@ -102,7 +104,22 @@ function resolveOpenAIBuiltInTools(extraParams: Record<string, unknown> | undefi
     }
   }
 
-  return configured;
+  const deduped: Array<Record<string, unknown>> = [];
+  const seenTypes = new Set<string>();
+  for (const entry of configured) {
+    const type = typeof entry.type === "string" ? entry.type : "";
+    if (!type) {
+      deduped.push(entry);
+      continue;
+    }
+    if (seenTypes.has(type)) {
+      continue;
+    }
+    seenTypes.add(type);
+    deduped.push(entry);
+  }
+
+  return deduped;
 }
 
 function createStreamFnWithExtraParams(
@@ -137,8 +154,10 @@ function createStreamFnWithExtraParams(
   }
   const openaiBuiltInTools = resolveOpenAIBuiltInTools(extraParams);
   const openaiWebSearchRequired =
-    extraParams.openaiWebSearchRequired === true ||
-    extraParams.openai_web_search_required === true;
+    extraParams.openaiWebSearchRequired === true || extraParams.openai_web_search_required === true;
+  if (openaiWebSearchRequired && openaiBuiltInTools.length === 0) {
+    log.warn("ignoring openaiWebSearchRequired because no OpenAI built-in tools were configured");
+  }
 
   if (Object.keys(streamParams).length === 0 && openaiBuiltInTools.length === 0) {
     return undefined;

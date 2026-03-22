@@ -2408,4 +2408,36 @@ describe("applyExtraParamsToAgent", () => {
     ]);
     expect(payload.tool_choice).toBe("required");
   });
+
+  it("deduplicates OpenAI built-in tools when multiple config paths resolve the same type", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "qaq",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "qaq/gpt-5.4": {
+                params: {
+                  openaiWebSearch: true,
+                  openaiWebSearchToolType: "web_search",
+                  openaiBuiltInTools: [{ type: "web_search" }],
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "qaq",
+        id: "gpt-5.4",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+      },
+    });
+
+    expect(payload.tools).toEqual([{ type: "web_search" }]);
+  });
 });
