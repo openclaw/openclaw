@@ -326,6 +326,24 @@ export async function waitForActiveTasks(timeoutMs: number): Promise<{ drained: 
         resolve({ drained: true });
         return;
       }
+
+      let hasPending = false;
+      for (const state of lanes.values()) {
+        for (const taskId of state.activeTaskIds) {
+          if (activeAtStart.has(taskId)) {
+            hasPending = true;
+            break;
+          }
+        }
+        if (hasPending) {
+          break;
+        }
+      }
+
+      if (!hasPending) {
+        resolve({ drained: true });
+        return;
+      }
       if (Date.now() >= deadline) {
         resolve({ drained: false });
         return;
