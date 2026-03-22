@@ -3,6 +3,7 @@ import { createStartAccountContext } from "../../../test/helpers/extensions/star
 import {
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
+  waitForStartedMocks,
 } from "../../../test/helpers/extensions/start-account-lifecycle.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 
@@ -49,10 +50,7 @@ describe("nextcloudTalkPlugin gateway.startAccount", () => {
       account: buildAccount(),
     });
     await expectStopPendingUntilAbort({
-      waitForStarted: () =>
-        vi.waitFor(() => {
-          expect(hoisted.monitorNextcloudTalkProvider).toHaveBeenCalledOnce();
-        }),
+      waitForStarted: waitForStartedMocks(hoisted.monitorNextcloudTalkProvider),
       isSettled,
       abort,
       task,
