@@ -196,15 +196,15 @@ export function createMSTeamsReplyDispatcher(params: {
     humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
     typingCallbacks,
     deliver: async (payload) => {
-      // When streaming received tokens (via onPartialReply), skip text delivery —
+      // When streaming received tokens AND hasn't failed, skip text delivery —
       // the stream's finalize() handles the final text message.
+      // If streaming failed (>4000 chars, POST errors), fall through to normal delivery.
       // For payloads with media, strip the text (already streamed) and send media only.
-      if (stream && streamReceivedTokens) {
+      if (stream && streamReceivedTokens && stream.hasContent) {
         const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
         if (!hasMedia) {
           return;
         }
-        // Send media without duplicating the streamed text
         payload = { ...payload, text: undefined };
       }
 
