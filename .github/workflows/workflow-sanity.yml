@@ -72,6 +72,9 @@ jobs:
       - name: Disallow direct inputs interpolation in composite run blocks
         run: python3 scripts/check-composite-action-input-interpolation.py
 
+      - name: Disallow tracked merge conflict markers
+        run: node scripts/check-no-conflict-markers.mjs
+
   generated-doc-baselines:
     if: github.event_name == 'workflow_dispatch'
     runs-on: blacksmith-16vcpu-ubuntu-2404
