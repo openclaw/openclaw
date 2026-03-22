@@ -24,6 +24,13 @@ vi.mock("./file-consent.js", async () => {
   };
 });
 
+function mockCalledWithObjectPredicate(
+  mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  predicate: (arg: unknown) => boolean,
+): boolean {
+  return mockFn.mock.calls.some((call) => predicate(call[0]));
+}
+
 const runtimeStub: PluginRuntime = {
   logging: {
     shouldLogVerbose: () => false,
@@ -151,8 +158,9 @@ describe("msteams file consent invoke authz", () => {
   beforeEach(() => {
     setMSTeamsRuntime(runtimeStub);
     clearPendingUploads();
-    fileConsentMockState.uploadToConsentUrl.mockReset();
-    fileConsentMockState.uploadToConsentUrl.mockResolvedValue(undefined);
+    const uploadMock = vi.mocked(fileConsentMockState.uploadToConsentUrl);
+    uploadMock.mockReset();
+    uploadMock.mockResolvedValue(undefined);
   });
 
   it("uploads when invoke conversation matches pending upload conversation", async () => {
@@ -163,20 +171,31 @@ describe("msteams file consent invoke authz", () => {
 
     await handler.run?.(context);
 
+    const send = vi.mocked(sendActivity);
+    const uploadMock = vi.mocked(fileConsentMockState.uploadToConsentUrl);
+
     // invokeResponse should be sent immediately
-    expect(sendActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "invokeResponse",
+    expect(
+      mockCalledWithObjectPredicate(send, (arg) => {
+        return (
+          typeof arg === "object" &&
+          arg !== null &&
+          (arg as { type?: string }).type === "invokeResponse"
+        );
       }),
-    );
+    ).toBe(true);
 
-    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
+    expect(uploadMock).toHaveBeenCalledTimes(1);
 
-    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://upload.example.com/put",
+    expect(
+      mockCalledWithObjectPredicate(uploadMock, (arg) => {
+        return (
+          typeof arg === "object" &&
+          arg !== null &&
+          (arg as { url?: string }).url === "https://upload.example.com/put"
+        );
       }),
-    );
+    ).toBe(true);
     expect(getPendingUpload(uploadId)).toBeUndefined();
   });
 
@@ -188,18 +207,25 @@ describe("msteams file consent invoke authz", () => {
 
     await handler.run?.(context);
 
-    // invokeResponse should be sent immediately
-    expect(sendActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "invokeResponse",
-      }),
-    );
+    const send = vi.mocked(sendActivity);
+    const uploadMock = vi.mocked(fileConsentMockState.uploadToConsentUrl);
 
-    expect(sendActivity).toHaveBeenCalledWith(
+    // invokeResponse should be sent immediately
+    expect(
+      mockCalledWithObjectPredicate(send, (arg) => {
+        return (
+          typeof arg === "object" &&
+          arg !== null &&
+          (arg as { type?: string }).type === "invokeResponse"
+        );
+      }),
+    ).toBe(true);
+
+    expect(send).toHaveBeenCalledWith(
       "The file upload request has expired. Please try sending the file again.",
     );
 
-    expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
+    expect(uploadMock).not.toHaveBeenCalled();
     expect(getPendingUpload(uploadId)).toBeDefined();
   });
 
@@ -211,15 +237,22 @@ describe("msteams file consent invoke authz", () => {
 
     await handler.run?.(context);
 
-    // invokeResponse should be sent immediately
-    expect(sendActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "invokeResponse",
-      }),
-    );
+    const send = vi.mocked(sendActivity);
+    const uploadMock = vi.mocked(fileConsentMockState.uploadToConsentUrl);
 
-    expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
+    // invokeResponse should be sent immediately
+    expect(
+      mockCalledWithObjectPredicate(send, (arg) => {
+        return (
+          typeof arg === "object" &&
+          arg !== null &&
+          (arg as { type?: string }).type === "invokeResponse"
+        );
+      }),
+    ).toBe(true);
+
+    expect(uploadMock).not.toHaveBeenCalled();
     expect(getPendingUpload(uploadId)).toBeDefined();
-    expect(sendActivity).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });
