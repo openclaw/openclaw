@@ -6,8 +6,8 @@ export const MISTRAL_DEFAULT_MODEL_REF = `mistral/${MISTRAL_DEFAULT_MODEL_ID}`;
 export const MISTRAL_DEFAULT_CONTEXT_WINDOW = 262144;
 export const MISTRAL_DEFAULT_MAX_TOKENS = 262144;
 export const MISTRAL_DEFAULT_COST = {
-  input: 0,
-  output: 0,
+  input: 0.5,
+  output: 1.5,
   cacheRead: 0,
   cacheWrite: 0,
 };
