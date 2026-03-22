@@ -1315,11 +1315,25 @@ description: test skill
         detailExcludes: ["did you mean"],
       },
       {
-        kind: "absent",
-        name: "does not flag denyCommands that name default dangerous node commands",
+        kind: "warn",
+        name: "flags redundant deny for default-off dangerous command IDs",
         cfg: {
           gateway: {
             nodes: {
+              denyCommands: ["camera.snap"],
+            },
+          },
+        } satisfies OpenClawConfig,
+        detailIncludes: ["Redundant deny", "camera.snap"],
+        detailExcludes: ["Unknown command names"],
+      },
+      {
+        kind: "absent",
+        name: "does not flag deny when allowCommands enables the command (deny is meaningful)",
+        cfg: {
+          gateway: {
+            nodes: {
+              allowCommands: ["camera.snap"],
               denyCommands: ["camera.snap"],
             },
           },

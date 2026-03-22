@@ -197,7 +197,11 @@ function normalizeNodeCommand(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
+/**
+ * Union of commands that appear on any platform allowlist when denyCommands is cleared.
+ * User allowCommands are included; this is the pre-deny effective allow surface.
+ */
+function listNodeAllowUnionDenyCleared(cfg: OpenClawConfig): Set<string> {
   const baseCfg: OpenClawConfig = {
     ...cfg,
     gateway: {
@@ -218,6 +222,12 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
       }
     }
   }
+  return out;
+}
+
+/** Valid node command identifiers for denyCommands spelling (includes opt-in dangerous IDs). */
+function listRecognizedNodeCommandIds(allowUnionDenyCleared: Set<string>): Set<string> {
+  const out = new Set(allowUnionDenyCleared);
   for (const cmd of DEFAULT_DANGEROUS_NODE_COMMANDS) {
     const normalized = normalizeNodeCommand(cmd);
     if (normalized) {
@@ -997,12 +1007,19 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
     return findings;
   }
 
-  const knownCommands = listKnownNodeCommands(cfg);
+  const allowUnionDenyCleared = listNodeAllowUnionDenyCleared(cfg);
+  const recognizedIds = listRecognizedNodeCommandIds(allowUnionDenyCleared);
   const patternLike = denyList.filter((entry) => looksLikeNodeCommandPattern(entry));
   const unknownExact = denyList.filter(
-    (entry) => !looksLikeNodeCommandPattern(entry) && !knownCommands.has(entry),
+    (entry) => !looksLikeNodeCommandPattern(entry) && !recognizedIds.has(entry),
   );
-  if (patternLike.length === 0 && unknownExact.length === 0) {
+  const redundantExact = denyList.filter(
+    (entry) =>
+      !looksLikeNodeCommandPattern(entry) &&
+      recognizedIds.has(entry) &&
+      !allowUnionDenyCleared.has(entry),
+  );
+  if (patternLike.length === 0 && unknownExact.length === 0 && redundantExact.length === 0) {
     return findings;
   }
 
@@ -1015,7 +1032,7 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
   if (unknownExact.length > 0) {
     const unknownDetails = unknownExact
       .map((entry) => {
-        const suggestions = suggestKnownNodeCommands(entry, knownCommands);
+        const suggestions = suggestKnownNodeCommands(entry, recognizedIds);
         if (suggestions.length === 0) {
           return entry;
         }
@@ -1025,7 +1042,13 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
 
     detailParts.push(`Unknown command names (not in defaults/allowCommands): ${unknownDetails}`);
   }
-  const examples = Array.from(knownCommands).slice(0, 8);
+  if (redundantExact.length > 0) {
+    detailParts.push(
+      "Redundant deny entries (real command IDs that are not on any platform default or configured allowlist, so deny has no effect unless you also enable them via allowCommands): " +
+        `${redundantExact.join(", ")}`,
+    );
+  }
+  const examples = Array.from(recognizedIds).slice(0, 8);
 
   findings.push({
     checkId: "gateway.nodes.deny_commands_ineffective",
