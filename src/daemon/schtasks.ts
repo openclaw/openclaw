@@ -371,13 +371,12 @@ function parsePortFromProgramArguments(programArguments?: string[]): number | nu
   return null;
 }
 
-const TASK_CONFIG_ENV_KEYS = [
+const TASK_CONFIG_ROOT_ENV_KEYS = [
   "OPENCLAW_CONFIG_PATH",
   "CLAWDBOT_CONFIG_PATH",
   "OPENCLAW_STATE_DIR",
   "CLAWDBOT_STATE_DIR",
   "OPENCLAW_HOME",
-  "OPENCLAW_PROFILE",
 ] as const;
 
 function resolveTaskConfigEnvironment(
@@ -387,12 +386,12 @@ function resolveTaskConfigEnvironment(
   if (!taskEnvironment) {
     return env;
   }
-  const hasTaskConfigContext = TASK_CONFIG_ENV_KEYS.some((key) => taskEnvironment[key]?.trim());
-  if (!hasTaskConfigContext) {
+  const hasTaskConfigRoot = TASK_CONFIG_ROOT_ENV_KEYS.some((key) => taskEnvironment[key]?.trim());
+  if (!hasTaskConfigRoot) {
     return { ...env, ...taskEnvironment };
   }
   const merged: GatewayServiceEnv = { ...env };
-  for (const key of TASK_CONFIG_ENV_KEYS) {
+  for (const key of TASK_CONFIG_ROOT_ENV_KEYS) {
     delete merged[key];
   }
   return { ...merged, ...taskEnvironment };
