@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config.js";
 import { detectConfigConflicts } from "./detect-conflicts.js";
 
