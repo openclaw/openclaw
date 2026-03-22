@@ -972,15 +972,18 @@ export class OpenClawApp extends LitElement {
 
   /** Re-register local push subscription with the gateway after connect. */
   async reconcileWebPushState() {
-    if (!this.webPushSubscribed || !this.client) {
+    if (!this.client) {
       return;
     }
     try {
+      // Always check PushManager directly — initWebPushState may not have finished
+      // yet if gateway connected quickly.
       const { getExistingSubscription } = await import("./push-subscription.ts");
       const existing = await getExistingSubscription();
       if (!existing) {
         return;
       }
+      this.webPushSubscribed = true;
       const subJson = existing.toJSON();
       if (subJson.endpoint && subJson.keys?.p256dh && subJson.keys?.auth) {
         await this.client.request("push.web.subscribe", {

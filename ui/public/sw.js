@@ -30,8 +30,12 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Skip API requests — they should never be cached.
-  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/rpc")) {
+  // Skip non-UI routes — API, RPC, and plugin routes should never be cached.
+  if (
+    url.pathname.startsWith("/api/") ||
+    url.pathname.startsWith("/rpc") ||
+    url.pathname.startsWith("/plugins/")
+  ) {
     return;
   }
 

@@ -110,7 +110,8 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
       return {
         publicKey: existing.publicKey,
         privateKey: existing.privateKey,
-        subject: existing.subject || resolveVapidSubjectFromEnv(),
+        // Env var always wins so operators can change subject without deleting vapid-keys.json.
+        subject: resolveVapidSubjectFromEnv(),
       };
     }
 
@@ -305,10 +306,10 @@ export async function broadcastWebPush(
         },
   );
 
-  // Clean up expired subscriptions (HTTP 410 Gone) per Web Push spec.
+  // Clean up expired subscriptions (HTTP 410 Gone or 404 Not Found) per Web Push spec.
   const expiredEndpoints = mapped
     .map((result, i) => ({ result, sub: subscriptions[i] }))
-    .filter(({ result }) => !result.ok && result.statusCode === 410)
+    .filter(({ result }) => !result.ok && (result.statusCode === 410 || result.statusCode === 404))
     .map(({ sub }) => sub.endpoint);
 
   if (expiredEndpoints.length > 0) {
