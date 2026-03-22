@@ -116,7 +116,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   },
   allowlist: buildDmGroupAccountAllowlistAdapter({
     channelId: "imessage",
-    resolveAccount: ({ cfg, accountId }) => resolveIMessageAccount({ cfg, accountId }),
+    resolveAccount: resolveIMessageAccount,
     normalize: ({ values }) => formatTrimmedAllowFromEntries(values),
     resolveDmAllowFrom: (account) => account.config.allowFrom,
     resolveGroupAllowFrom: (account) => account.config.groupAllowFrom,

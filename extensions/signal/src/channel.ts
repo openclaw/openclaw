@@ -287,7 +287,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   actions: signalMessageActions,
   allowlist: buildDmGroupAccountAllowlistAdapter({
     channelId: "signal",
-    resolveAccount: ({ cfg, accountId }) => resolveSignalAccount({ cfg, accountId }),
+    resolveAccount: resolveSignalAccount,
     normalize: ({ cfg, accountId, values }) =>
       signalConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
     resolveDmAllowFrom: (account) => account.config.allowFrom,
