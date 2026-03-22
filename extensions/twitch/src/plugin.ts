@@ -5,9 +5,9 @@
  * This is the primary entry point for the Twitch channel integration.
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk/twitch";
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/twitch";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import type { OpenClawConfig } from "../api.js";
+import { buildChannelConfigSchema } from "../api.js";
 import { twitchMessageActions } from "./actions.js";
 import { removeClientManager } from "./client-manager-registry.js";
 import { TwitchConfigSchema } from "./config-schema.js";
@@ -58,7 +58,7 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
   /** Pairing configuration */
   pairing: {
     idLabel: "twitchUserId",
-    normalizeAllowEntry: (entry) => entry.replace(/^(twitch:)?user:?/i, ""),
+    normalizeAllowEntry: (entry) => entry.trim().replace(/^(twitch:)?user:?/i, ""),
     notifyApproval: async ({ id }) => {
       // Note: Twitch doesn't support DMs from bots, so pairing approval is limited
       // We'll log the approval instead
@@ -136,7 +136,7 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
       accountId?: string | null;
       inputs: string[];
       kind: ChannelResolveKind;
-      runtime: import("../../../src/runtime.js").RuntimeEnv;
+      runtime: import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
     }): Promise<ChannelResolveResult[]> => {
       const account = getAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
 

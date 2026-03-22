@@ -1,6 +1,25 @@
 import { format } from "node:util";
 import type { RuntimeEnv } from "../runtime.js";
+export type { RuntimeEnv } from "../runtime.js";
+export { createNonExitingRuntime, defaultRuntime } from "../runtime.js";
+export {
+  danger,
+  info,
+  isVerbose,
+  isYes,
+  logVerbose,
+  logVerboseConsole,
+  setVerbose,
+  setYes,
+  shouldLogVerbose,
+  success,
+  warn,
+} from "../globals.js";
+export * from "../logging.js";
+export { waitForAbortSignal } from "../infra/abort-signal.js";
+export { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 
+/** Minimal logger contract accepted by runtime-adapter helpers. */
 type LoggerLike = {
   info: (message: string) => void;
   error: (message: string) => void;

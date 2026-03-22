@@ -39,6 +39,25 @@ describe("acpx plugin config parsing", () => {
     }
   });
 
+  it("prefers the workspace plugin root for dist/extensions/acpx bundles", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-root-workspace-"));
+    const workspacePluginRoot = path.join(repoRoot, "extensions", "acpx");
+    const bundledPluginRoot = path.join(repoRoot, "dist", "extensions", "acpx");
+    try {
+      fs.mkdirSync(workspacePluginRoot, { recursive: true });
+      fs.mkdirSync(bundledPluginRoot, { recursive: true });
+      fs.writeFileSync(path.join(workspacePluginRoot, "package.json"), "{}\n", "utf8");
+      fs.writeFileSync(path.join(workspacePluginRoot, "openclaw.plugin.json"), "{}\n", "utf8");
+      fs.writeFileSync(path.join(bundledPluginRoot, "package.json"), "{}\n", "utf8");
+      fs.writeFileSync(path.join(bundledPluginRoot, "openclaw.plugin.json"), "{}\n", "utf8");
+
+      const moduleUrl = pathToFileURL(path.join(bundledPluginRoot, "index.js")).href;
+      expect(resolveAcpxPluginRoot(moduleUrl)).toBe(workspacePluginRoot);
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("resolves bundled acpx with pinned version by default", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {

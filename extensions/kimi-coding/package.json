@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/kimi-coding-provider",
+  "name": "@openclaw/kimi-provider",
   "version": "2026.3.14",
   "private": true,
-  "description": "OpenClaw Kimi Coding provider plugin",
+  "description": "OpenClaw Kimi provider plugin",
   "type": "module",
   "openclaw": {
     "extensions": [

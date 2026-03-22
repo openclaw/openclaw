@@ -1,12 +1,18 @@
 import {
+  attachChannelToResult,
+  type ChannelOutboundAdapter,
+  createAttachedChannelResultAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  resolveOutboundSendDep,
+  type OutboundIdentity,
+} from "openclaw/plugin-sdk/outbound-runtime";
+import {
   resolvePayloadMediaUrls,
-  sendPayloadMediaSequence,
+  sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
-} from "../../../src/channels/plugins/outbound/direct-text-media.js";
-import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { OutboundIdentity } from "../../../src/infra/outbound/identity.js";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+} from "openclaw/plugin-sdk/reply-payload";
 import type { DiscordComponentMessageSpec } from "./components.js";
 import { getThreadBindingManager, type ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
@@ -123,18 +129,17 @@ export const discordOutbound: ChannelOutboundAdapter = {
       resolveOutboundSendDep<typeof sendMessageDiscord>(ctx.deps, "discord") ?? sendMessageDiscord;
     const target = resolveDiscordOutboundTarget({ to: ctx.to, threadId: ctx.threadId });
     const mediaUrls = resolvePayloadMediaUrls(payload);
-    if (mediaUrls.length === 0) {
-      const result = await sendDiscordComponentMessage(target, componentSpec, {
-        replyTo: ctx.replyToId ?? undefined,
-        accountId: ctx.accountId ?? undefined,
-        silent: ctx.silent ?? undefined,
-        cfg: ctx.cfg,
-      });
-      return { channel: "discord", ...result };
-    }
-    const lastResult = await sendPayloadMediaSequence({
+    const result = await sendPayloadMediaSequenceOrFallback({
       text: payload.text ?? "",
       mediaUrls,
+      fallbackResult: { messageId: "", channelId: target },
+      sendNoMedia: async () =>
+        await sendDiscordComponentMessage(target, componentSpec, {
+          replyTo: ctx.replyToId ?? undefined,
+          accountId: ctx.accountId ?? undefined,
+          silent: ctx.silent ?? undefined,
+          cfg: ctx.cfg,
+        }),
       send: async ({ text, mediaUrl, isFirst }) => {
         if (isFirst) {
           return await sendDiscordComponentMessage(target, componentSpec, {
@@ -157,68 +162,63 @@ export const discordOutbound: ChannelOutboundAdapter = {
         });
       },
     });
-    return lastResult
-      ? { channel: "discord", ...lastResult }
-      : { channel: "discord", messageId: "" };
+    return attachChannelToResult("discord", result);
   },
-  sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
-    if (!silent) {
-      const webhookResult = await maybeSendDiscordWebhookText({
-        cfg,
-        text,
-        threadId,
-        accountId,
-        identity,
-        replyToId,
-      }).catch(() => null);
-      if (webhookResult) {
-        return { channel: "discord", ...webhookResult };
+  ...createAttachedChannelResultAdapter({
+    channel: "discord",
+    sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
+      if (!silent) {
+        const webhookResult = await maybeSendDiscordWebhookText({
+          cfg,
+          text,
+          threadId,
+          accountId,
+          identity,
+          replyToId,
+        }).catch(() => null);
+        if (webhookResult) {
+          return webhookResult;
+        }
       }
-    }
-    const send =
-      resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
-    const target = resolveDiscordOutboundTarget({ to, threadId });
-    const result = await send(target, text, {
-      verbose: false,
-      replyTo: replyToId ?? undefined,
-      accountId: accountId ?? undefined,
-      silent: silent ?? undefined,
+      const send =
+        resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
+      return await send(resolveDiscordOutboundTarget({ to, threadId }), text, {
+        verbose: false,
+        replyTo: replyToId ?? undefined,
+        accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
+        cfg,
+      });
+    },
+    sendMedia: async ({
       cfg,
-    });
-    return { channel: "discord", ...result };
-  },
-  sendMedia: async ({
-    cfg,
-    to,
-    text,
-    mediaUrl,
-    mediaLocalRoots,
-    accountId,
-    deps,
-    replyToId,
-    threadId,
-    silent,
-  }) => {
-    const send =
-      resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
-    const target = resolveDiscordOutboundTarget({ to, threadId });
-    const result = await send(target, text, {
-      verbose: false,
+      to,
+      text,
       mediaUrl,
       mediaLocalRoots,
-      replyTo: replyToId ?? undefined,
-      accountId: accountId ?? undefined,
-      silent: silent ?? undefined,
-      cfg,
-    });
-    return { channel: "discord", ...result };
-  },
-  sendPoll: async ({ cfg, to, poll, accountId, threadId, silent }) => {
-    const target = resolveDiscordOutboundTarget({ to, threadId });
-    return await sendPollDiscord(target, poll, {
-      accountId: accountId ?? undefined,
-      silent: silent ?? undefined,
-      cfg,
-    });
-  },
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      silent,
+    }) => {
+      const send =
+        resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
+      return await send(resolveDiscordOutboundTarget({ to, threadId }), text, {
+        verbose: false,
+        mediaUrl,
+        mediaLocalRoots,
+        replyTo: replyToId ?? undefined,
+        accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
+        cfg,
+      });
+    },
+    sendPoll: async ({ cfg, to, poll, accountId, threadId, silent }) =>
+      await sendPollDiscord(resolveDiscordOutboundTarget({ to, threadId }), poll, {
+        accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
+        cfg,
+      }),
+  }),
 };

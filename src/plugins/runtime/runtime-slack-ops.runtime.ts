@@ -1,10 +1,34 @@
-export {
-  listSlackDirectoryGroupsLive,
-  listSlackDirectoryPeersLive,
-} from "../../../extensions/slack/src/directory-live.js";
-export { monitorSlackProvider } from "../../../extensions/slack/src/index.js";
-export { probeSlack } from "../../../extensions/slack/src/probe.js";
-export { resolveSlackChannelAllowlist } from "../../../extensions/slack/src/resolve-channels.js";
-export { resolveSlackUserAllowlist } from "../../../extensions/slack/src/resolve-users.js";
-export { sendMessageSlack } from "../../../extensions/slack/src/send.js";
-export { handleSlackAction } from "../../agents/tools/slack-actions.js";
+import {
+  listSlackDirectoryGroupsLive as listSlackDirectoryGroupsLiveImpl,
+  listSlackDirectoryPeersLive as listSlackDirectoryPeersLiveImpl,
+  monitorSlackProvider as monitorSlackProviderImpl,
+  probeSlack as probeSlackImpl,
+  resolveSlackChannelAllowlist as resolveSlackChannelAllowlistImpl,
+  resolveSlackUserAllowlist as resolveSlackUserAllowlistImpl,
+  sendMessageSlack as sendMessageSlackImpl,
+  handleSlackAction as handleSlackActionImpl,
+} from "../../plugin-sdk/slack.js";
+import type { PluginRuntimeChannel } from "./types-channel.js";
+
+type RuntimeSlackOps = Pick<
+  PluginRuntimeChannel["slack"],
+  | "listDirectoryGroupsLive"
+  | "listDirectoryPeersLive"
+  | "probeSlack"
+  | "resolveChannelAllowlist"
+  | "resolveUserAllowlist"
+  | "sendMessageSlack"
+  | "monitorSlackProvider"
+  | "handleSlackAction"
+>;
+
+export const runtimeSlackOps = {
+  listDirectoryGroupsLive: listSlackDirectoryGroupsLiveImpl,
+  listDirectoryPeersLive: listSlackDirectoryPeersLiveImpl,
+  probeSlack: probeSlackImpl,
+  resolveChannelAllowlist: resolveSlackChannelAllowlistImpl,
+  resolveUserAllowlist: resolveSlackUserAllowlistImpl,
+  sendMessageSlack: sendMessageSlackImpl,
+  monitorSlackProvider: monitorSlackProviderImpl,
+  handleSlackAction: handleSlackActionImpl,
+} satisfies RuntimeSlackOps;

@@ -1,18 +1,21 @@
+import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
+import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   applyAccountNameToChannelSection,
+  createTopLevelChannelAllowFromSetter,
+  createTopLevelChannelDmPolicySetter,
   patchScopedAccountConfig,
-} from "../../../src/channels/plugins/setup-helpers.js";
-import {
-  setTopLevelChannelAllowFrom,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import type { ChannelSetupInput } from "../../../src/channels/plugins/types.core.js";
-import type { DmPolicy } from "../../../src/config/types.js";
-import { normalizeAccountId } from "../../../src/routing/session-key.js";
+} from "openclaw/plugin-sdk/setup";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const channel = "irc" as const;
+const setIrcTopLevelDmPolicy = createTopLevelChannelDmPolicySetter({
+  channel,
+});
+const setIrcTopLevelAllowFrom = createTopLevelChannelAllowFromSetter({
+  channel,
+});
 
 type IrcSetupInput = ChannelSetupInput & {
   host?: string;
@@ -53,19 +56,11 @@ export function updateIrcAccountConfig(
 }
 
 export function setIrcDmPolicy(cfg: CoreConfig, dmPolicy: DmPolicy): CoreConfig {
-  return setTopLevelChannelDmPolicyWithAllowFrom({
-    cfg,
-    channel,
-    dmPolicy,
-  }) as CoreConfig;
+  return setIrcTopLevelDmPolicy(cfg, dmPolicy) as CoreConfig;
 }
 
 export function setIrcAllowFrom(cfg: CoreConfig, allowFrom: string[]): CoreConfig {
-  return setTopLevelChannelAllowFrom({
-    cfg,
-    channel,
-    allowFrom,
-  }) as CoreConfig;
+  return setIrcTopLevelAllowFrom(cfg, allowFrom) as CoreConfig;
 }
 
 export function setIrcNickServ(

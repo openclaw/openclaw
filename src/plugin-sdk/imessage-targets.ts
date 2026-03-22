@@ -1,1 +1,1 @@
-export { normalizeIMessageHandle } from "../../extensions/imessage/src/targets.js";
+export { normalizeIMessageHandle } from "../../extensions/imessage/api.js";

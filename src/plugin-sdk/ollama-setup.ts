@@ -12,6 +12,6 @@ export {
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
-} from "../commands/ollama-setup.js";
+} from "../plugins/provider-ollama-setup.js";
 
 export { buildOllamaProvider } from "../agents/models-config.providers.discovery.js";

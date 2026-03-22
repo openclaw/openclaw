@@ -7,8 +7,8 @@ import {
   clearPluginManifestRegistryCache,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
-import { validateConfigObject } from "./config.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+import { validateConfigObject } from "./validation.js";
 
 const tempDirs: string[] = [];
 
@@ -205,6 +205,19 @@ describe("applyPluginAutoEnable", () => {
     expect(result.changes).toEqual([]);
   });
 
+  it("does not auto-enable plugin channels when only enabled=false is set", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { matrix: { enabled: false } },
+      },
+      env: {},
+      manifestRegistry: makeRegistry([{ id: "matrix", channels: ["matrix"] }]),
+    });
+
+    expect(result.config.plugins?.entries?.matrix).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
   it("auto-enables irc when configured via env", () => {
     const result = applyPluginAutoEnable({
       config: {},
@@ -276,8 +289,8 @@ describe("applyPluginAutoEnable", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: {
-          "env-primary": { enabled: true },
-          "env-secondary": { enabled: true },
+          "env-primary": { token: "primary" },
+          "env-secondary": { token: "secondary" },
         },
       },
       env: {

@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { edgeTTS } from "./tts-core.js";
 
 let mockTtsPromise = vi.fn<(text: string, filePath: string) => Promise<void>>();
 
@@ -12,8 +13,6 @@ vi.mock("node-edge-tts", () => ({
     }
   },
 }));
-
-const { edgeTTS } = await import("./tts-core.js");
 
 const baseEdgeConfig = {
   enabled: true,

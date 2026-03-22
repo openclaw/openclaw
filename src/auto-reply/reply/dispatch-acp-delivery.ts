@@ -1,3 +1,4 @@
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -127,7 +128,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       state.blockCount += 1;
     }
 
-    if ((payload.text?.trim() ?? "").length > 0 || payload.mediaUrl || payload.mediaUrls?.length) {
+    if (hasOutboundReplyContent(payload, { trimText: true })) {
       await startReplyLifecycleOnce();
     }
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 
 const loggerMocks = vi.hoisted(() => ({
@@ -11,7 +11,18 @@ vi.mock("../logging/subsystem.js", () => ({
   }),
 }));
 
-import { isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } from "./env.js";
+type EnvModule = typeof import("./env.js");
+
+let isTruthyEnvValue: EnvModule["isTruthyEnvValue"];
+let logAcceptedEnvOption: EnvModule["logAcceptedEnvOption"];
+let normalizeEnv: EnvModule["normalizeEnv"];
+let normalizeZaiEnv: EnvModule["normalizeZaiEnv"];
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } =
+    await import("./env.js"));
+});
 
 describe("normalizeZaiEnv", () => {
   it("copies Z_AI_API_KEY to ZAI_API_KEY when missing", () => {

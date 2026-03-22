@@ -146,12 +146,16 @@ const createStubPluginRegistry = (): PluginRegistry => ({
   ],
   channelSetups: [],
   providers: [],
+  speechProviders: [],
+  mediaUnderstandingProviders: [],
+  imageGenerationProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
   commands: [],
+  conversationBindingResolvedHandlers: [],
   diagnostics: [],
 });
 
@@ -181,6 +185,26 @@ const hoisted = vi.hoisted(() => ({
   testTailscaleWhois: { value: null as TailscaleWhoisIdentity | null },
   getReplyFromConfig: vi.fn<GetReplyFromConfigFn>().mockResolvedValue(undefined),
   sendWhatsAppMock: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
+  testState: {
+    agentConfig: undefined as Record<string, unknown> | undefined,
+    agentsConfig: undefined as Record<string, unknown> | undefined,
+    bindingsConfig: undefined as AgentBinding[] | undefined,
+    channelsConfig: undefined as Record<string, unknown> | undefined,
+    sessionStorePath: undefined as string | undefined,
+    sessionConfig: undefined as Record<string, unknown> | undefined,
+    allowFrom: undefined as string[] | undefined,
+    cronStorePath: undefined as string | undefined,
+    cronEnabled: false as boolean | undefined,
+    gatewayBind: undefined as "auto" | "lan" | "tailnet" | "loopback" | undefined,
+    gatewayAuth: undefined as Record<string, unknown> | undefined,
+    gatewayControlUi: undefined as Record<string, unknown> | undefined,
+    hooksConfig: undefined as HooksConfig | undefined,
+    canvasHostPort: undefined as number | undefined,
+    legacyIssues: [] as Array<{ path: string; message: string }>,
+    legacyParsed: {} as Record<string, unknown>,
+    migrationConfig: null as Record<string, unknown> | null,
+    migrationChanges: [] as string[],
+  },
 }));
 
 const pluginRegistryState = {
@@ -214,26 +238,7 @@ export const cronIsolatedRun = hoisted.cronIsolatedRun;
 export const agentCommand: Mock<() => void> = hoisted.agentCommand;
 export const getReplyFromConfig: Mock<GetReplyFromConfigFn> = hoisted.getReplyFromConfig;
 
-export const testState = {
-  agentConfig: undefined as Record<string, unknown> | undefined,
-  agentsConfig: undefined as Record<string, unknown> | undefined,
-  bindingsConfig: undefined as AgentBinding[] | undefined,
-  channelsConfig: undefined as Record<string, unknown> | undefined,
-  sessionStorePath: undefined as string | undefined,
-  sessionConfig: undefined as Record<string, unknown> | undefined,
-  allowFrom: undefined as string[] | undefined,
-  cronStorePath: undefined as string | undefined,
-  cronEnabled: false as boolean | undefined,
-  gatewayBind: undefined as "auto" | "lan" | "tailnet" | "loopback" | undefined,
-  gatewayAuth: undefined as Record<string, unknown> | undefined,
-  gatewayControlUi: undefined as Record<string, unknown> | undefined,
-  hooksConfig: undefined as HooksConfig | undefined,
-  canvasHostPort: undefined as number | undefined,
-  legacyIssues: [] as Array<{ path: string; message: string }>,
-  legacyParsed: {} as Record<string, unknown>,
-  migrationConfig: null as Record<string, unknown> | null,
-  migrationChanges: [] as string[],
-};
+export const testState = hoisted.testState;
 
 export const testIsNixMode = hoisted.testIsNixMode;
 export const sessionStoreSaveDelayMs = hoisted.sessionStoreSaveDelayMs;
@@ -526,8 +531,11 @@ vi.mock("../config/config.js", async () => {
       } catch {
         fileConfig = {};
       }
-      return applyPluginAutoEnable({ config: composeTestConfig(fileConfig), env: process.env })
-        .config;
+      const config = applyPluginAutoEnable({
+        config: composeTestConfig(fileConfig),
+        env: process.env,
+      }).config;
+      return config;
     },
     parseConfigJson5: (raw: string) => {
       try {
@@ -570,7 +578,7 @@ vi.mock("../commands/health.js", () => ({
 vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
-vi.mock("../../extensions/whatsapp/src/send.js", () => ({
+vi.mock("../../extensions/whatsapp/runtime-api.js", () => ({
   sendMessageWhatsApp: (...args: unknown[]) =>
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
   sendPollWhatsApp: (...args: unknown[]) =>

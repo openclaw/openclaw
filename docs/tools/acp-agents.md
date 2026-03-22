@@ -415,7 +415,7 @@ Some controls depend on backend capabilities. If a backend does not support a co
 | `/acp cwd`           | Set runtime working directory override.                   | `/acp cwd /Users/user/Projects/repo`                           |
 | `/acp permissions`   | Set approval policy profile.                              | `/acp permissions strict`                                      |
 | `/acp timeout`       | Set runtime timeout (seconds).                            | `/acp timeout 120`                                             |
-| `/acp model`         | Set runtime model override.                               | `/acp model anthropic/claude-opus-4-5`                         |
+| `/acp model`         | Set runtime model override.                               | `/acp model anthropic/claude-opus-4-6`                         |
 | `/acp reset-options` | Remove session runtime option overrides.                  | `/acp reset-options`                                           |
 | `/acp sessions`      | List recent ACP sessions from store.                      | `/acp sessions`                                                |
 | `/acp doctor`        | Backend health, capabilities, actionable fixes.           | `/acp doctor`                                                  |
@@ -510,7 +510,7 @@ See [Configuration Reference](/gateway/configuration-reference).
 Install and enable plugin:
 
 ```bash
-openclaw plugins install acpx
+openclaw plugins install @openclaw/acpx-plugin
 openclaw config set plugins.entries.acpx.enabled true
 ```
 
@@ -528,7 +528,7 @@ Then verify backend health:
 
 ### acpx command and version configuration
 
-By default, the acpx plugin (published as `@openclaw/acpx`) uses the plugin-local pinned binary:
+By default, the acpx backend plugin package (`@openclaw/acpx-plugin`) uses the plugin-local pinned binary:
 
 1. Command defaults to `extensions/acpx/node_modules/.bin/acpx`.
 2. Expected version defaults to the extension pin.

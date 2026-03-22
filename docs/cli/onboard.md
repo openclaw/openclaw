@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw onboard` (interactive setup wizard)"
+summary: "CLI reference for `openclaw onboard` (interactive onboarding)"
 read_when:
   - You want guided setup for gateway, workspace, auth, channels, and skills
 title: "onboard"
@@ -7,11 +7,11 @@ title: "onboard"
 
 # `openclaw onboard`
 
-Interactive setup wizard (local or remote Gateway setup).
+Interactive onboarding for local or remote Gateway setup.
 
 ## Related guides
 
-- CLI onboarding hub: [Setup Wizard (CLI)](/start/wizard)
+- CLI onboarding hub: [Onboarding (CLI)](/start/wizard)
 - Onboarding overview: [Onboarding Overview](/start/onboarding-overview)
 - CLI onboarding reference: [CLI Setup Reference](/start/wizard-cli-reference)
 - CLI automation: [CLI Automation](/start/wizard-cli-automation)

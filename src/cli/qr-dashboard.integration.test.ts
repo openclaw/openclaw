@@ -35,8 +35,8 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
-const { registerQrCli } = await import("./qr-cli.js");
-const { registerMaintenanceCommands } = await import("./program/register.maintenance.js");
+let registerQrCli: typeof import("./qr-cli.js").registerQrCli;
+let registerMaintenanceCommands: typeof import("./program/register.maintenance.js").registerMaintenanceCommands;
 
 function createGatewayTokenRefFixture() {
   return {
@@ -69,8 +69,6 @@ function createGatewayTokenRefFixture() {
 function decodeSetupCode(setupCode: string): {
   url?: string;
   bootstrapToken?: string;
-  token?: string;
-  password?: string;
 } {
   const padded = setupCode.replace(/-/g, "+").replace(/_/g, "/");
   const padLength = (4 - (padded.length % 4)) % 4;
@@ -79,8 +77,6 @@ function decodeSetupCode(setupCode: string): {
   return JSON.parse(json) as {
     url?: string;
     bootstrapToken?: string;
-    token?: string;
-    password?: string;
   };
 }
 
@@ -104,6 +100,12 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     ]);
   });
 
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ registerQrCli } = await import("./qr-cli.js"));
+    ({ registerMaintenanceCommands } = await import("./program/register.maintenance.js"));
+  });
+
   afterAll(() => {
     envSnapshot.restore();
   });
@@ -119,7 +121,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     delete process.env.SHARED_GATEWAY_TOKEN;
   });
 
-  it("uses the same resolved token SecretRef for both qr and dashboard commands", async () => {
+  it("uses the same resolved token SecretRef for qr auth validation and dashboard commands", async () => {
     const fixture = createGatewayTokenRefFixture();
     process.env.SHARED_GATEWAY_TOKEN = "shared-token-123";
     loadConfigMock.mockReturnValue(fixture);
@@ -137,7 +139,6 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     const payload = decodeSetupCode(setupCode ?? "");
     expect(payload.url).toBe("ws://gateway.local:18789");
     expect(payload.bootstrapToken).toBeTruthy();
-    expect(payload.token).toBeUndefined();
     expect(runtimeErrors).toEqual([]);
 
     runtimeLogs.length = 0;
