@@ -1,52 +1,20 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { buildMemoryPromptSection, registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands, getPluginCommandSpecs } from "./commands.js";
-
-async function importFreshPluginTestModules() {
-  vi.resetModules();
-  vi.doUnmock("node:fs");
-  vi.doUnmock("node:fs/promises");
-  vi.doUnmock("node:module");
-  vi.doUnmock("./hook-runner-global.js");
-  vi.doUnmock("./hooks.js");
-  vi.doUnmock("./loader.js");
-  vi.doUnmock("jiti");
-  const [loader, hookRunnerGlobal, hooks, runtime, registry, promptSection] = await Promise.all([
-    import("./loader.js"),
-    import("./hook-runner-global.js"),
-    import("./hooks.js"),
-    import("./runtime.js"),
-    import("./registry.js"),
-    import("../memory/prompt-section.js"),
-  ]);
-  return {
-    ...loader,
-    ...hookRunnerGlobal,
-    ...hooks,
-    ...runtime,
-    ...registry,
-    ...promptSection,
-  };
-}
-
-const {
-  __testing,
-  buildMemoryPromptSection,
-  clearPluginLoaderCache,
-  createHookRunner,
-  createEmptyPluginRegistry,
+import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
+import { createHookRunner } from "./hooks.js";
+import { __testing, clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.js";
+import { createEmptyPluginRegistry } from "./registry.js";
+import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
-  getGlobalHookRunner,
-  loadOpenClawPlugins,
-  registerMemoryPromptSection,
-  resetGlobalHookRunner,
   setActivePluginRegistry,
-} = await importFreshPluginTestModules();
+} from "./runtime.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
 type PluginLoadConfig = NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>["config"];
