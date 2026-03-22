@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/blender-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OpenClaw Blender plugin — deep Blender integration for technical artists building games",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

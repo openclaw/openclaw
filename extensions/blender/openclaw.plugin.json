@@ -1,0 +1,41 @@
+{
+  "id": "blender",
+  "name": "Blender Plugin",
+  "description": "Deep Blender integration for technical artists — scene control, rendering pipelines, asset management, and game export via the Blender Python API.",
+  "uiHints": {
+    "blender.executablePath": {
+      "label": "Blender Executable Path",
+      "help": "Absolute path to the Blender executable (e.g. /Applications/Blender.app/Contents/MacOS/Blender).",
+      "placeholder": "/Applications/Blender.app/Contents/MacOS/Blender"
+    },
+    "blender.bridgeHost": {
+      "label": "Bridge Host",
+      "help": "Host where the OpenClaw Blender addon bridge is listening (default: 127.0.0.1)."
+    },
+    "blender.bridgePort": {
+      "label": "Bridge Port",
+      "help": "Port where the OpenClaw Blender addon bridge is listening (default: 7428)."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "blender": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "executablePath": {
+            "type": "string"
+          },
+          "bridgeHost": {
+            "type": "string"
+          },
+          "bridgePort": {
+            "type": "number"
+          }
+        }
+      }
+    }
+  }
+}

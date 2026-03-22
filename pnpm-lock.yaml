@@ -245,6 +245,8 @@ importers:
 
   extensions/anthropic: {}
 
+  extensions/blender: {}
+
   extensions/bluebubbles:
     dependencies:
       zod:
