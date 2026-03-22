@@ -830,6 +830,7 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
       let effectiveExtraSystemPrompt = params.extraSystemPrompt;
+      let postCompactionContextInjected = false;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -1083,6 +1084,21 @@ export async function runEmbeddedPiAgent(
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
             const hadAttemptLevelCompaction = attemptCompactionCount > 0;
+            // Pre-read AGENTS.md refresh to budget its token cost into compaction
+            // and reuse the content for injection (avoids reading the file twice).
+            let cachedPostCompactionCtx: string | null = null;
+            let postCompactionTokenOverhead = 0;
+            try {
+              cachedPostCompactionCtx = await readPostCompactionContext(
+                resolvedWorkspace,
+                params.config,
+              );
+              if (cachedPostCompactionCtx) {
+                postCompactionTokenOverhead = Math.ceil(cachedPostCompactionCtx.length / 4);
+              }
+            } catch {
+              // best-effort — use zero overhead
+            }
             // If this attempt already compacted (SDK auto-compaction), avoid immediately
             // running another explicit compaction for the same overflow trigger.
             if (
@@ -1091,20 +1107,13 @@ export async function runEmbeddedPiAgent(
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
               overflowCompactionAttempts++;
-              // Inject AGENTS.md critical sections into the retry's system prompt
-              // so the agent regains its grounding after SDK auto-compaction.
-              try {
-                const postCompactionCtx = await readPostCompactionContext(
-                  resolvedWorkspace,
-                  params.config,
-                );
-                if (postCompactionCtx) {
-                  effectiveExtraSystemPrompt = params.extraSystemPrompt
-                    ? `${params.extraSystemPrompt}\n\n${postCompactionCtx}`
-                    : postCompactionCtx;
-                }
-              } catch {
-                // Silent failure — post-compaction context is best-effort
+              // Inject cached AGENTS.md critical sections into the retry's
+              // system prompt after SDK auto-compaction.
+              if (cachedPostCompactionCtx) {
+                effectiveExtraSystemPrompt = params.extraSystemPrompt
+                  ? `${params.extraSystemPrompt}\n\n${cachedPostCompactionCtx}`
+                  : cachedPostCompactionCtx;
+                postCompactionContextInjected = true;
               }
               log.warn(
                 `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
@@ -1186,7 +1195,7 @@ export async function runEmbeddedPiAgent(
                   sessionId: params.sessionId,
                   sessionKey: params.sessionKey,
                   sessionFile: params.sessionFile,
-                  tokenBudget: ctxInfo.tokens,
+                  tokenBudget: Math.max(1, ctxInfo.tokens - postCompactionTokenOverhead),
                   ...(observedOverflowTokens !== undefined
                     ? { currentTokenCount: observedOverflowTokens }
                     : {}),
@@ -1233,20 +1242,13 @@ export async function runEmbeddedPiAgent(
               }
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
-                // Inject AGENTS.md critical sections into the retry's system prompt
-                // so the agent regains its grounding immediately, not on a later turn.
-                try {
-                  const postCompactionCtx = await readPostCompactionContext(
-                    resolvedWorkspace,
-                    params.config,
-                  );
-                  if (postCompactionCtx) {
-                    effectiveExtraSystemPrompt = params.extraSystemPrompt
-                      ? `${params.extraSystemPrompt}\n\n${postCompactionCtx}`
-                      : postCompactionCtx;
-                  }
-                } catch {
-                  // Silent failure — post-compaction context is best-effort
+                // Inject cached AGENTS.md critical sections into the retry's
+                // system prompt after explicit overflow compaction.
+                if (cachedPostCompactionCtx) {
+                  effectiveExtraSystemPrompt = params.extraSystemPrompt
+                    ? `${params.extraSystemPrompt}\n\n${cachedPostCompactionCtx}`
+                    : cachedPostCompactionCtx;
+                  postCompactionContextInjected = true;
                 }
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
@@ -1644,6 +1646,7 @@ export async function runEmbeddedPiAgent(
             lastCallUsage: lastCallUsage ?? undefined,
             promptTokens,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
+            postCompactionContextInjected: postCompactionContextInjected || undefined,
           };
 
           const payloads = buildEmbeddedRunPayloads({

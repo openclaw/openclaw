@@ -28,6 +28,10 @@ export type EmbeddedPiAgentMeta = {
     cacheWrite?: number;
     total?: number;
   };
+  /** True when post-compaction AGENTS.md context was already injected into the
+   *  overflow retry's system prompt, so callers should skip re-injecting it as
+   *  a system event for the next turn. */
+  postCompactionContextInjected?: boolean;
 };
 
 export type EmbeddedPiRunMeta = {
