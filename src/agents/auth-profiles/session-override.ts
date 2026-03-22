@@ -94,8 +94,13 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   if (current && order.length > 0 && !order.includes(current)) {
-    await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
-    current = undefined;
+    // Skip clearing when image model is temporarily switched.
+    // The current profile is for a different provider and won't be in this provider's order,
+    // but we should preserve it for when the session returns to the original provider.
+    if (!hasAppliedImageModelOverride) {
+      await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+      current = undefined;
+    }
   }
 
   if (order.length === 0) {

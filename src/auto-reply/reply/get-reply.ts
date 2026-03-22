@@ -404,7 +404,10 @@ export async function getReplyFromConfig(
   // If directives/stored override picked a different model, reset the flags
   // to avoid passing wrong auth profile and fallbacks.
   let finalHasAppliedImageModelOverride = hasAppliedImageModelOverride;
-  let finalModelOverrideFallbacks = opts?.modelOverrideFallbacks;
+  // Only pass fallbacks if image model override was actually applied
+  let finalModelOverrideFallbacks = hasAppliedImageModelOverride
+    ? opts?.modelOverrideFallbacks
+    : undefined;
   if (hasAppliedImageModelOverride && opts?.modelOverride) {
     const finalModelKey = modelKey(provider, model);
     const overrideRef = resolveModelRefFromString({
