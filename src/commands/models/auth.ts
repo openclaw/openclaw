@@ -81,6 +81,18 @@ function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
 }
 
+async function readStdinToken(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.from(chunk as Buffer));
+  }
+  const value = Buffer.concat(chunks).toString("utf-8").trim();
+  if (!value) {
+    throw new Error("No token received from stdin.");
+  }
+  return value;
+}
+
 type ResolvedModelsAuthContext = {
   config: OpenClawConfig;
   agentDir: string;
@@ -368,12 +380,18 @@ export async function modelsAuthPasteTokenCommand(
   const profileId = opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
 
   let token: string;
-  if (opts.token?.trim()) {
+  const envToken = process.env.OPENCLAW_PASTE_TOKEN?.trim();
+  if (opts.token === "-") {
+    // Read token from stdin (e.g. `echo $TOKEN | openclaw models auth paste-token --provider anthropic --token -`)
+    token = await readStdinToken();
+  } else if (opts.token?.trim()) {
     token = opts.token.trim();
+  } else if (envToken) {
+    token = envToken;
   } else {
     if (!process.stdin.isTTY) {
       throw new Error(
-        "paste-token requires --token <value> when running in a non-interactive environment (no TTY).",
+        "paste-token requires --token <value>, --token - (stdin), or OPENCLAW_PASTE_TOKEN env var in non-interactive environments.",
       );
     }
     const tokenInput = await text({

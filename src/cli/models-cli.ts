@@ -342,7 +342,10 @@ export function registerModelsCli(program: Command) {
     .command("paste-token")
     .description("Paste a token into auth-profiles.json and update config")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
-    .option("--token <value>", "Token value (skips interactive prompt; required for non-TTY)")
+    .option(
+      "--token <value>",
+      'Token value; use "--token -" to read from stdin. Also accepts OPENCLAW_PASTE_TOKEN env var.',
+    )
     .option("--profile-id <id>", "Auth profile id (default: <provider>:manual)")
     .option(
       "--expires-in <duration>",

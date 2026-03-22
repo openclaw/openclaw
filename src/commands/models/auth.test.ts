@@ -347,7 +347,7 @@ describe("modelsAuthLoginCommand", () => {
     });
     try {
       await expect(modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime)).rejects.toThrow(
-        "paste-token requires --token <value> when running in a non-interactive",
+        "paste-token requires --token",
       );
       expect(mocks.clackText).not.toHaveBeenCalled();
       expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
@@ -356,6 +356,51 @@ describe("modelsAuthLoginCommand", () => {
         Object.defineProperty(stdin, "isTTY", savedDescriptor);
       } else {
         delete (stdin as { isTTY?: boolean }).isTTY;
+      }
+    }
+  });
+
+  it("reads token from OPENCLAW_PASTE_TOKEN env var", async () => {
+    const runtime = createRuntime();
+    const orig = process.env.OPENCLAW_PASTE_TOKEN;
+    try {
+      process.env.OPENCLAW_PASTE_TOKEN = "env-token-abc";
+      await modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime);
+
+      expect(mocks.clackText).not.toHaveBeenCalled();
+      expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+        profileId: "anthropic:manual",
+        credential: {
+          type: "token",
+          provider: "anthropic",
+          token: "env-token-abc",
+        },
+      });
+    } finally {
+      if (orig === undefined) {
+        delete process.env.OPENCLAW_PASTE_TOKEN;
+      } else {
+        process.env.OPENCLAW_PASTE_TOKEN = orig;
+      }
+    }
+  });
+
+  it("prefers --token over OPENCLAW_PASTE_TOKEN env var", async () => {
+    const runtime = createRuntime();
+    const orig = process.env.OPENCLAW_PASTE_TOKEN;
+    try {
+      process.env.OPENCLAW_PASTE_TOKEN = "env-token";
+      await modelsAuthPasteTokenCommand({ provider: "anthropic", token: "flag-token" }, runtime);
+
+      expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+        profileId: "anthropic:manual",
+        credential: expect.objectContaining({ token: "flag-token" }),
+      });
+    } finally {
+      if (orig === undefined) {
+        delete process.env.OPENCLAW_PASTE_TOKEN;
+      } else {
+        process.env.OPENCLAW_PASTE_TOKEN = orig;
       }
     }
   });
