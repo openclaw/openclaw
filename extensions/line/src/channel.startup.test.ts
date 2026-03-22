@@ -1,12 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
-import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
+import type { PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { setLineRuntime } from "./runtime.js";
 
 function createRuntime() {
-  const probeLineBot = vi.fn(async () => ({ ok: false }));
   const monitorLineProvider = vi.fn(async () => ({
     account: { accountId: "default" },
     handleWebhook: async () => {},
@@ -16,7 +14,6 @@ function createRuntime() {
   const runtime = {
     channel: {
       line: {
-        probeLineBot,
         monitorLineProvider,
       },
     },
@@ -25,7 +22,7 @@ function createRuntime() {
     },
   } as unknown as PluginRuntime;
 
-  return { runtime, probeLineBot, monitorLineProvider };
+  return { runtime, monitorLineProvider };
 }
 
 function createAccount(params: { token: string; secret: string }): ResolvedLineAccount {
@@ -48,7 +45,6 @@ function startLineAccount(params: { account: ResolvedLineAccount; abortSignal?: 
       createStartAccountContext({
         account: params.account,
         abortSignal: params.abortSignal,
-        runtime: createRuntimeEnv(),
       }),
     ),
   };
