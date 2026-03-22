@@ -49,19 +49,17 @@ const cleanupTempArtifacts = () => {
   tempArtifactDir = null;
 };
 const existingUnitConfigFiles = (entries) => existingFiles(entries).filter(isUnitConfigTestFile);
-const baseThreadSingletonFiles = existingFiles(behaviorManifest.base?.threadSingleton ?? []);
-const unitBehaviorIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.isolated);
-const unitSingletonIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.singletonIsolated);
-const unitThreadSingletonFiles = existingUnitConfigFiles(behaviorManifest.unit.threadSingleton);
-const unitVmForkSingletonFiles = existingUnitConfigFiles(behaviorManifest.unit.vmForkSingleton);
-const extensionSingletonIsolatedFiles = existingFiles(
-  behaviorManifest.extensions.singletonIsolated,
-);
+const baseThreadPinnedFiles = existingFiles(behaviorManifest.base?.threadPinned ?? []);
+const unitForkIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.isolated);
+const unitForkBatchedConfiguredFiles = existingUnitConfigFiles(behaviorManifest.unit.forkBatched);
+const unitThreadPinnedFiles = existingUnitConfigFiles(behaviorManifest.unit.threadPinned);
+const unitVmForkPinnedFiles = existingUnitConfigFiles(behaviorManifest.unit.vmForkPinned);
+const extensionIsolatedFiles = existingFiles(behaviorManifest.extensions.isolated);
 const unitBehaviorOverrideSet = new Set([
-  ...unitBehaviorIsolatedFiles,
-  ...unitSingletonIsolatedFiles,
-  ...unitThreadSingletonFiles,
-  ...unitVmForkSingletonFiles,
+  ...unitForkIsolatedFiles,
+  ...unitForkBatchedConfiguredFiles,
+  ...unitThreadPinnedFiles,
+  ...unitVmForkPinnedFiles,
 ]);
 const channelSingletonFiles = [];
 
@@ -276,9 +274,9 @@ const allKnownTestFiles = [
 ];
 const defaultUnitPool = parsePoolOverride(process.env.OPENCLAW_TEST_UNIT_DEFAULT_POOL, "threads");
 const isTargetedIsolatedUnitFile = (fileFilter) =>
-  unitBehaviorIsolatedFiles.includes(fileFilter) ||
-  unitSingletonBatchFiles.includes(fileFilter) ||
-  unitMemorySingletonFiles.includes(fileFilter);
+  unitForkIsolatedFiles.includes(fileFilter) ||
+  unitForkBatchFiles.includes(fileFilter) ||
+  unitMemoryIsolatedFiles.includes(fileFilter);
 const inferTarget = (fileFilter) => {
   const isolated = isTargetedIsolatedUnitFile(fileFilter);
   if (isUnitConfigTestFile(fileFilter)) {
@@ -371,42 +369,40 @@ const { memoryHeavyFiles: memoryHeavyUnitFiles, timedHeavyFiles: timedHeavyUnitF
         memoryHeavyFiles: [],
         timedHeavyFiles: [],
       };
-const unitSingletonBatchFiles = dedupeFilesPreserveOrder(
-  unitSingletonIsolatedFiles,
-  new Set(unitBehaviorIsolatedFiles),
+const unitForkBatchFiles = dedupeFilesPreserveOrder(
+  unitForkBatchedConfiguredFiles,
+  new Set(unitForkIsolatedFiles),
 );
-const unitMemorySingletonFiles = dedupeFilesPreserveOrder(
+const unitMemoryIsolatedFiles = dedupeFilesPreserveOrder(
   memoryHeavyUnitFiles,
-  new Set([...unitBehaviorOverrideSet, ...unitSingletonBatchFiles]),
+  new Set([...unitBehaviorOverrideSet, ...unitForkBatchFiles]),
 );
 const unitSchedulingOverrideSet = new Set([...unitBehaviorOverrideSet, ...memoryHeavyUnitFiles]);
 const unitFastExcludedFiles = [
   ...new Set([...unitSchedulingOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
 ];
-const defaultSingletonBatchLaneCount =
+const defaultForkBatchLaneCount =
   testProfile === "serial"
     ? 0
-    : unitSingletonBatchFiles.length === 0
+    : unitForkBatchFiles.length === 0
       ? 0
       : isCI
-        ? Math.ceil(unitSingletonBatchFiles.length / 6)
+        ? Math.ceil(unitForkBatchFiles.length / 6)
         : testProfile === "low" && highMemLocalHost
-          ? Math.ceil(unitSingletonBatchFiles.length / 8) + 1
+          ? Math.ceil(unitForkBatchFiles.length / 8) + 1
           : highMemLocalHost
-            ? Math.ceil(unitSingletonBatchFiles.length / 8)
+            ? Math.ceil(unitForkBatchFiles.length / 8)
             : lowMemLocalHost
-              ? Math.ceil(unitSingletonBatchFiles.length / 12)
-              : Math.ceil(unitSingletonBatchFiles.length / 10);
-const singletonBatchLaneCount =
-  unitSingletonBatchFiles.length === 0
+              ? Math.ceil(unitForkBatchFiles.length / 12)
+              : Math.ceil(unitForkBatchFiles.length / 10);
+const configuredForkBatchLaneCount =
+  parseEnvNumber("OPENCLAW_TEST_UNIT_FORK_BATCH_LANES", null) ??
+  // Backward-compatible alias for the old manifest terminology.
+  parseEnvNumber("OPENCLAW_TEST_SINGLETON_ISOLATED_LANES", defaultForkBatchLaneCount);
+const forkBatchLaneCount =
+  unitForkBatchFiles.length === 0
     ? 0
-    : Math.min(
-        unitSingletonBatchFiles.length,
-        Math.max(
-          1,
-          parseEnvNumber("OPENCLAW_TEST_SINGLETON_ISOLATED_LANES", defaultSingletonBatchLaneCount),
-        ),
-      );
+    : Math.min(unitForkBatchFiles.length, Math.max(1, configuredForkBatchLaneCount));
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
 const splitFilesByDurationBudget = (files, targetDurationMs, estimateDurationMs) => {
@@ -435,17 +431,17 @@ const splitFilesByDurationBudget = (files, targetDurationMs, estimateDurationMs)
 
   return batches;
 };
-const unitSingletonBuckets =
-  singletonBatchLaneCount > 0
-    ? packFilesByDuration(unitSingletonBatchFiles, singletonBatchLaneCount, estimateUnitDurationMs)
+const unitForkBatchBuckets =
+  forkBatchLaneCount > 0
+    ? packFilesByDuration(unitForkBatchFiles, forkBatchLaneCount, estimateUnitDurationMs)
     : [];
 const unitFastExcludedFileSet = new Set(unitFastExcludedFiles);
 const unitFastCandidateFiles = allKnownUnitFiles.filter(
   (file) => !unitFastExcludedFileSet.has(file),
 );
-const extensionSingletonExcludedFileSet = new Set(extensionSingletonIsolatedFiles);
+const extensionIsolatedExcludedFileSet = new Set(extensionIsolatedFiles);
 const extensionSharedCandidateFiles = allKnownTestFiles.filter(
-  (file) => file.startsWith("extensions/") && !extensionSingletonExcludedFileSet.has(file),
+  (file) => file.startsWith("extensions/") && !extensionIsolatedExcludedFileSet.has(file),
 );
 const defaultUnitFastLaneCount = isCI && !isWindows ? 3 : 1;
 const unitFastLaneCount = Math.max(
@@ -502,13 +498,13 @@ const unitHeavyEntries = heavyUnitBuckets.map((files, index) => ({
   name: `unit-heavy-${String(index + 1)}`,
   args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
 }));
-const unitSingletonEntries = unitSingletonBuckets.map((files, index) => ({
+const unitForkBatchEntries = unitForkBatchBuckets.map((files, index) => ({
   name:
-    unitSingletonBuckets.length === 1 ? "unit-singleton" : `unit-singleton-${String(index + 1)}`,
+    unitForkBatchBuckets.length === 1 ? "unit-fork-batch" : `unit-fork-batch-${String(index + 1)}`,
   args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
 }));
 const unitThreadEntries =
-  unitThreadSingletonFiles.length > 0
+  unitThreadPinnedFiles.length > 0
     ? [
         {
           name: "unit-threads",
@@ -518,12 +514,16 @@ const unitThreadEntries =
             "--config",
             "vitest.unit.config.ts",
             "--pool=threads",
-            ...unitThreadSingletonFiles,
+            ...unitThreadPinnedFiles,
           ],
         },
       ]
     : [];
-const extensionSingletonEntries = extensionSingletonIsolatedFiles.map((file) => ({
+const unitIsolatedEntries = unitForkIsolatedFiles.map((file) => ({
+  name: `unit-${path.basename(file, ".test.ts")}-isolated`,
+  args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", file],
+}));
+const extensionIsolatedEntries = extensionIsolatedFiles.map((file) => ({
   name: `${path.basename(file, ".test.ts")}-extensions-isolated`,
   args: ["vitest", "run", "--config", "vitest.extensions.config.ts", "--pool=forks", file],
 }));
@@ -531,25 +531,11 @@ const baseRuns = [
   ...(shouldSplitUnitRuns
     ? [
         ...unitFastEntries,
-        ...(unitBehaviorIsolatedFiles.length > 0
-          ? [
-              {
-                name: "unit-isolated",
-                args: [
-                  "vitest",
-                  "run",
-                  "--config",
-                  "vitest.unit.config.ts",
-                  "--pool=forks",
-                  ...unitBehaviorIsolatedFiles,
-                ],
-              },
-            ]
-          : []),
+        ...unitIsolatedEntries,
         ...unitHeavyEntries,
-        ...unitSingletonEntries,
-        ...unitMemorySingletonFiles.map((file) => ({
-          name: `${path.basename(file, ".test.ts")}-isolated`,
+        ...unitForkBatchEntries,
+        ...unitMemoryIsolatedFiles.map((file) => ({
+          name: `unit-${path.basename(file, ".test.ts")}-memory-isolated`,
           args: [
             "vitest",
             "run",
@@ -560,7 +546,7 @@ const baseRuns = [
           ],
         })),
         ...unitThreadEntries,
-        ...unitVmForkSingletonFiles.map((file) => ({
+        ...unitVmForkPinnedFiles.map((file) => ({
           name: `${path.basename(file, ".test.ts")}-vmforks`,
           args: [
             "vitest",
@@ -611,7 +597,7 @@ const baseRuns = [
             ...(useVmForks ? ["--pool=vmForks"] : []),
           ],
         },
-        ...extensionSingletonEntries,
+        ...extensionIsolatedEntries,
       ]
     : []),
   ...(includeGatewaySuite
@@ -647,9 +633,9 @@ const resolveFilterMatches = (fileFilter) => {
   }
   return allKnownTestFiles.filter((file) => file.includes(normalizedFilter));
 };
-const isVmForkSingletonUnitFile = (fileFilter) => unitVmForkSingletonFiles.includes(fileFilter);
-const isThreadSingletonUnitFile = (fileFilter) => unitThreadSingletonFiles.includes(fileFilter);
-const isBaseThreadSingletonFile = (fileFilter) => baseThreadSingletonFiles.includes(fileFilter);
+const isVmForkPinnedUnitFile = (fileFilter) => unitVmForkPinnedFiles.includes(fileFilter);
+const isThreadPinnedUnitFile = (fileFilter) => unitThreadPinnedFiles.includes(fileFilter);
+const isBaseThreadPinnedFile = (fileFilter) => baseThreadPinnedFiles.includes(fileFilter);
 const createTargetedEntry = (owner, isolated, filters) => {
   const name = isolated ? `${owner}-isolated` : owner;
   const forceForks = isolated;
@@ -749,6 +735,28 @@ const createTargetedEntry = (owner, isolated, filters) => {
     ],
   };
 };
+const formatPerFileEntryName = (owner, file) => {
+  const baseName = path
+    .basename(file)
+    .replace(/\.live\.test\.ts$/u, "")
+    .replace(/\.e2e\.test\.ts$/u, "")
+    .replace(/\.test\.ts$/u, "");
+  return `${owner}-${baseName}`;
+};
+const createPerFileTargetedEntry = (file) => {
+  const target = inferTarget(file);
+  const owner = isThreadPinnedUnitFile(file)
+    ? "unit-threads"
+    : isVmForkPinnedUnitFile(file)
+      ? "unit-vmforks"
+      : isBaseThreadPinnedFile(file)
+        ? "base-threads"
+        : target.owner;
+  return {
+    ...createTargetedEntry(owner, target.isolated, [file]),
+    name: `${formatPerFileEntryName(owner, file)}${target.isolated ? "-isolated" : ""}`,
+  };
+};
 const targetedEntries = (() => {
   if (passthroughFileFilters.length === 0) {
     return [];
@@ -758,11 +766,11 @@ const targetedEntries = (() => {
     if (matchedFiles.length === 0) {
       const normalizedFile = normalizeRepoPath(fileFilter);
       const target = inferTarget(normalizedFile);
-      const owner = isThreadSingletonUnitFile(normalizedFile)
+      const owner = isThreadPinnedUnitFile(normalizedFile)
         ? "unit-threads"
-        : isVmForkSingletonUnitFile(normalizedFile)
+        : isVmForkPinnedUnitFile(normalizedFile)
           ? "unit-vmforks"
-          : isBaseThreadSingletonFile(normalizedFile)
+          : isBaseThreadPinnedFile(normalizedFile)
             ? "base-threads"
             : target.owner;
       const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
@@ -773,11 +781,11 @@ const targetedEntries = (() => {
     }
     for (const matchedFile of matchedFiles) {
       const target = inferTarget(matchedFile);
-      const owner = isThreadSingletonUnitFile(matchedFile)
+      const owner = isThreadPinnedUnitFile(matchedFile)
         ? "unit-threads"
-        : isVmForkSingletonUnitFile(matchedFile)
+        : isVmForkPinnedUnitFile(matchedFile)
           ? "unit-vmforks"
-          : isBaseThreadSingletonFile(matchedFile)
+          : isBaseThreadPinnedFile(matchedFile)
             ? "base-threads"
             : target.owner;
       const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
@@ -789,8 +797,12 @@ const targetedEntries = (() => {
   }, new Map());
   return Array.from(groups, ([key, filters]) => {
     const [owner, mode] = key.split(":");
-    return createTargetedEntry(owner, mode === "isolated", [...new Set(filters)]);
-  });
+    const uniqueFilters = [...new Set(filters)];
+    if (mode === "isolated") {
+      return uniqueFilters.map((file) => createPerFileTargetedEntry(file));
+    }
+    return [createTargetedEntry(owner, false, uniqueFilters)];
+  }).flat();
 })();
 // Node 25 local runs still show cross-process worker shutdown contention even
 // after moving the known heavy files into singleton lanes.
@@ -913,7 +925,7 @@ const maxWorkersForRun = (name) => {
   if (resolvedOverride) {
     return resolvedOverride;
   }
-  if (name === "unit-singleton" || name.startsWith("unit-singleton-")) {
+  if (name === "unit-fork-batch" || name.startsWith("unit-fork-batch-")) {
     return 1;
   }
   if (isCI && !isMacOS) {
@@ -925,10 +937,10 @@ const maxWorkersForRun = (name) => {
   if (name.endsWith("-threads") || name.endsWith("-vmforks")) {
     return 1;
   }
-  if (name.endsWith("-isolated") && name !== "unit-isolated") {
+  if (name.endsWith("-isolated")) {
     return 1;
   }
-  if (name === "unit-isolated" || name.startsWith("unit-heavy-")) {
+  if (name.startsWith("unit-heavy-")) {
     return defaultWorkerBudget.unitIsolated;
   }
   if (name === "extensions") {

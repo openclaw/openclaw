@@ -80,10 +80,14 @@ export function parseArgs(argv) {
 
 export function getExistingThreadCandidateExclusions(behavior) {
   return new Set([
+    ...(behavior.base?.threadPinned ?? []).map((entry) => entry.file),
     ...(behavior.base?.threadSingleton ?? []).map((entry) => entry.file),
     ...(behavior.unit?.isolated ?? []).map((entry) => entry.file),
+    ...(behavior.unit?.forkBatched ?? []).map((entry) => entry.file),
     ...(behavior.unit?.singletonIsolated ?? []).map((entry) => entry.file),
+    ...(behavior.unit?.threadPinned ?? []).map((entry) => entry.file),
     ...(behavior.unit?.threadSingleton ?? []).map((entry) => entry.file),
+    ...(behavior.unit?.vmForkPinned ?? []).map((entry) => entry.file),
     ...(behavior.unit?.vmForkSingleton ?? []).map((entry) => entry.file),
   ]);
 }
