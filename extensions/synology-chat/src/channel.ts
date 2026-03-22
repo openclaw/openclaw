@@ -11,7 +11,7 @@ import {
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import {
   createConditionalWarningCollector,
-  projectWarningCollector,
+  projectAccountWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
@@ -262,10 +262,10 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
     },
     security: {
       resolveDmPolicy: resolveSynologyChatDmPolicy,
-      collectWarnings: projectWarningCollector(
-        ({ account }: { account: ResolvedSynologyChatAccount }) => account,
-        collectSynologyChatSecurityWarnings,
-      ),
+      collectWarnings: projectAccountWarningCollector<
+        ResolvedSynologyChatAccount,
+        { account: ResolvedSynologyChatAccount }
+      >(collectSynologyChatSecurityWarnings),
     },
     outbound: {
       deliveryMode: "gateway" as const,
