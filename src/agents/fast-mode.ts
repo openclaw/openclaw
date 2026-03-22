@@ -1,4 +1,4 @@
-import { normalizeFastMode } from "../auto-reply/thinking.js";
+import { normalizeFastMode } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 

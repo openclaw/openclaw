@@ -1,7 +1,7 @@
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
   buildConfiguredModelCatalog,
   buildAllowedModelSet,
@@ -14,7 +14,7 @@ import {
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import type { ThinkLevel } from "./directives.js";
@@ -26,7 +26,7 @@ export type ModelDirectiveSelection = {
   alias?: string;
 };
 
-type ModelCatalog = Awaited<ReturnType<typeof loadModelCatalog>>;
+type ModelCatalog = ModelCatalogEntry[];
 
 type ModelSelectionState = {
   provider: string;
@@ -42,6 +42,23 @@ type ModelSelectionState = {
 
 function shouldLogModelSelectionTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+}
+
+let modelCatalogRuntimePromise:
+  | Promise<typeof import("../../agents/model-catalog.runtime.js")>
+  | undefined;
+let sessionStoreRuntimePromise:
+  | Promise<typeof import("../../config/sessions/store.runtime.js")>
+  | undefined;
+
+function loadModelCatalogRuntime() {
+  modelCatalogRuntimePromise ??= import("../../agents/model-catalog.runtime.js");
+  return modelCatalogRuntimePromise;
+}
+
+function loadSessionStoreRuntime() {
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return sessionStoreRuntimePromise;
 }
 
 const FUZZY_VARIANT_TOKENS = [
@@ -328,7 +345,7 @@ export async function createModelSelectionState(params: {
   let resetModelOverride = false;
 
   if (needsModelCatalog) {
-    modelCatalog = await loadModelCatalog({ config: cfg });
+    modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
     logStage("catalog-loaded", `entries=${modelCatalog.length}`);
     const allowed = buildAllowedModelSet({
       cfg,
@@ -375,7 +392,9 @@ export async function createModelSelectionState(params: {
         if (updated) {
           sessionStore[sessionKey] = sessionEntry;
           if (storePath) {
-            await updateSessionStore(storePath, (store) => {
+            await (
+              await loadSessionStoreRuntime()
+            ).updateSessionStore(storePath, (store) => {
               store[sessionKey] = sessionEntry;
             });
           }
@@ -432,7 +451,7 @@ export async function createModelSelectionState(params: {
     }
     let catalogForThinking = modelCatalog ?? allowedModelCatalog;
     if (!catalogForThinking || catalogForThinking.length === 0) {
-      modelCatalog = await loadModelCatalog({ config: cfg });
+      modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
       logStage("catalog-loaded-for-thinking", `entries=${modelCatalog.length}`);
       catalogForThinking = modelCatalog;
     }
@@ -450,7 +469,7 @@ export async function createModelSelectionState(params: {
   const resolveDefaultReasoningLevel = async (): Promise<"on" | "off"> => {
     let catalogForReasoning = modelCatalog ?? allowedModelCatalog;
     if (!catalogForReasoning || catalogForReasoning.length === 0) {
-      modelCatalog = await loadModelCatalog({ config: cfg });
+      modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
       logStage("catalog-loaded-for-reasoning", `entries=${modelCatalog.length}`);
       catalogForReasoning = modelCatalog;
     }
