@@ -85,6 +85,61 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
   });
 
+  it("surfaces a prior assistant error when trailing tool-use masked it", () => {
+    const maskedError =
+      '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_masked"}';
+    const payloads = buildPayloads({
+      assistantTexts: [maskedError],
+      lastAssistant: makeAssistant({
+        stopReason: "toolUse",
+        errorMessage: undefined,
+        content: [
+          {
+            type: "toolCall",
+            id: "toolu_masked",
+            name: "browser",
+            arguments: { action: "search", query: "openclaw" },
+          },
+        ],
+      }),
+      lastErroredAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: maskedError,
+        content: [{ type: "text", text: maskedError }],
+      }),
+    });
+
+    expectOverloadedFallback(payloads);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads.some((payload) => payload.text?.includes("req_masked"))).toBe(false);
+  });
+
+  it("keeps the final assistant answer when a prior assistant error was later recovered", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Recovered with the final answer."],
+      lastAssistant: makeAssistant({
+        stopReason: "toolUse",
+        errorMessage: undefined,
+        content: [
+          {
+            type: "toolCall",
+            id: "toolu_recovered",
+            name: "browser",
+            arguments: { action: "search", query: "openclaw docs" },
+          },
+        ],
+      }),
+      lastErroredAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: errorJson,
+        content: [{ type: "text", text: errorJson }],
+      }),
+    });
+
+    expectSinglePayloadText(payloads, "Recovered with the final answer.");
+    expect(payloads[0]?.isError).toBeUndefined();
+  });
+
   it("includes provider and model context for billing errors", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({

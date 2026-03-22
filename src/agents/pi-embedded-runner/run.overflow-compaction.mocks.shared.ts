@@ -60,6 +60,8 @@ export const mockedContextEngine = {
 
 export const mockedContextEngineCompact = vi.mocked(mockedContextEngine.compact);
 export const mockedEnsureRuntimePluginsLoaded: (...args: unknown[]) => void = vi.fn();
+export const mockedBuildEmbeddedRunPayloads = vi.fn(() => []);
+export const mockedResolveEmbeddedRunPayloadErrorAssistant = vi.fn(() => undefined);
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
@@ -144,6 +146,19 @@ vi.mock("./compact.js", () => ({
 
 vi.mock("./model.js", () => ({
   resolveModel: vi.fn(() => ({
+    model: {
+      id: "test-model",
+      provider: "anthropic",
+      contextWindow: 200000,
+      api: "messages",
+    },
+    error: null,
+    authStorage: {
+      setRuntimeApiKey: vi.fn(),
+    },
+    modelRegistry: {},
+  })),
+  resolveModelAsync: vi.fn(async () => ({
     model: {
       id: "test-model",
       provider: "anthropic",
@@ -257,7 +272,8 @@ vi.mock("./logger.js", () => ({
 }));
 
 vi.mock("./run/payloads.js", () => ({
-  buildEmbeddedRunPayloads: vi.fn(() => []),
+  buildEmbeddedRunPayloads: mockedBuildEmbeddedRunPayloads,
+  resolveEmbeddedRunPayloadErrorAssistant: mockedResolveEmbeddedRunPayloadErrorAssistant,
 }));
 
 vi.mock("./tool-result-truncation.js", () => ({

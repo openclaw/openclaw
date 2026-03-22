@@ -46,6 +46,7 @@ export type EmbeddedRunAttemptResult = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
+  lastErroredAssistant?: AssistantMessage;
   lastToolError?: {
     toolName: string;
     meta?: string;
