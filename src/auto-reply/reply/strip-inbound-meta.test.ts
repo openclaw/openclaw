@@ -162,6 +162,16 @@ describe("user-message separator stripping", () => {
     expect(stripInboundMetadata(input)).toBe(input);
   });
 
+  it("strips separator after metadata removal even when events precede the metadata", () => {
+    const input = `System: queued follow-up\n\n${CONV_BLOCK}\n\n---openclaw:user-msg---\nHello world`;
+    expect(stripInboundMetadata(input)).toBe("System: queued follow-up\n\nHello world");
+  });
+
+  it("preserves mid-message separator when no metadata blocks are present", () => {
+    const input = `System: queued follow-up\n\n---openclaw:user-msg---\nHello world`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
   it("preserves user content starting with --- when it is not the separator", () => {
     const input = `${CONV_BLOCK}\n\n---\nSome regular content`;
     expect(stripInboundMetadata(input)).toBe("---\nSome regular content");

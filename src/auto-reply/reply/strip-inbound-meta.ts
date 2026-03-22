@@ -197,7 +197,10 @@ export function stripInboundMetadata(text: string): string {
  * The marker is unique to post-upgrade messages and cannot appear in legacy data.
  */
 function stripUserMessageSeparator(text: string): string {
-  return text.replace(/^[\t ]*---openclaw:user-msg---[\t ]*\n?/, "");
+  return text.replace(
+    /(^|(?:\n[\t ]*){2,})[\t ]*---openclaw:user-msg---[\t ]*\n?/g,
+    (_, prefix: string) => (prefix ? "\n\n" : ""),
+  );
 }
 
 export function stripLeadingInboundMetadata(text: string): string {
