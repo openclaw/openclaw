@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {
   installRequestBodyLimitGuard,
@@ -104,6 +104,10 @@ function createMockRequest(params: {
 }
 
 describe("http body limits", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("reads body within max bytes", async () => {
     const req = createMockRequest({ chunks: ['{"ok":true}'] });
     await expect(readRequestBodyWithLimit(req, { maxBytes: 1024 })).resolves.toBe('{"ok":true}');

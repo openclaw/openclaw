@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 
 export const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -147,7 +148,7 @@ export async function readRequestBodyWithLimit(
       req.removeListener("end", onEnd);
       req.removeListener("error", onError);
       req.removeListener("close", onClose);
-      clearTimeout(timer);
+      clearNodeTimeout(timer);
     };
 
     const finish = (cb: () => void) => {
@@ -163,7 +164,7 @@ export async function readRequestBodyWithLimit(
       finish(() => reject(error));
     };
 
-    const timer = setTimeout(() => {
+    const timer = setNodeTimeout(() => {
       const error = new RequestBodyLimitError({ code: "REQUEST_BODY_TIMEOUT" });
       if (!req.destroyed) {
         req.destroy();
@@ -289,7 +290,7 @@ export function installRequestBodyLimitGuard(
     req.removeListener("end", onEnd);
     req.removeListener("close", onClose);
     req.removeListener("error", onError);
-    clearTimeout(timer);
+    clearNodeTimeout(timer);
   };
 
   const finish = () => {
@@ -356,7 +357,7 @@ export function installRequestBodyLimitGuard(
     finish();
   };
 
-  const timer = setTimeout(() => {
+  const timer = setNodeTimeout(() => {
     trip(new RequestBodyLimitError({ code: "REQUEST_BODY_TIMEOUT" }));
   }, timeoutMs);
 

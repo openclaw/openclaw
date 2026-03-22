@@ -1,14 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
-import {
-  buildGeminiEmbeddingRequest,
-  buildGeminiTextEmbeddingRequest,
-  createGeminiEmbeddingProvider,
-  DEFAULT_GEMINI_EMBEDDING_MODEL,
-  GEMINI_EMBEDDING_2_MODELS,
-  isGeminiEmbedding2Model,
-  resolveGeminiOutputDimensionality,
-} from "./embeddings-gemini.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
 vi.mock("../agents/model-auth.js", async () => {
@@ -46,7 +37,31 @@ function magnitude(values: number[]) {
   return Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
 }
 
+let buildGeminiEmbeddingRequest: typeof import("./embeddings-gemini.js").buildGeminiEmbeddingRequest;
+let buildGeminiTextEmbeddingRequest: typeof import("./embeddings-gemini.js").buildGeminiTextEmbeddingRequest;
+let createGeminiEmbeddingProvider: typeof import("./embeddings-gemini.js").createGeminiEmbeddingProvider;
+let DEFAULT_GEMINI_EMBEDDING_MODEL: typeof import("./embeddings-gemini.js").DEFAULT_GEMINI_EMBEDDING_MODEL;
+let GEMINI_EMBEDDING_2_MODELS: typeof import("./embeddings-gemini.js").GEMINI_EMBEDDING_2_MODELS;
+let isGeminiEmbedding2Model: typeof import("./embeddings-gemini.js").isGeminiEmbedding2Model;
+let resolveGeminiOutputDimensionality: typeof import("./embeddings-gemini.js").resolveGeminiOutputDimensionality;
+
+beforeEach(async () => {
+  vi.useRealTimers();
+  vi.doUnmock("undici");
+  vi.resetModules();
+  ({
+    buildGeminiEmbeddingRequest,
+    buildGeminiTextEmbeddingRequest,
+    createGeminiEmbeddingProvider,
+    DEFAULT_GEMINI_EMBEDDING_MODEL,
+    GEMINI_EMBEDDING_2_MODELS,
+    isGeminiEmbedding2Model,
+    resolveGeminiOutputDimensionality,
+  } = await import("./embeddings-gemini.js"));
+});
+
 afterEach(() => {
+  vi.doUnmock("undici");
   vi.resetAllMocks();
   vi.unstubAllGlobals();
 });
