@@ -1705,6 +1705,82 @@ describe("BlueBubbles webhook monitor", () => {
       expect(secondCallArgs?.ctx.MediaPaths).toEqual(["/tmp/test-media.jpg"]);
     });
 
+    it("drops out-of-order retries of older replay variants after a newer edit flushes", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const messageId = "dup-msg-out-of-order-1";
+      const sender = "+15551234567";
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "new-message",
+          data: {
+            text: "original body",
+            handle: { address: sender },
+            isGroup: false,
+            isFromMe: false,
+            guid: messageId,
+            chatGuid: "iMessage;-;+15551234567",
+            date: Date.now(),
+          },
+        }),
+        createMockResponse(),
+      );
+      await flushAsync();
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "updated-message",
+          data: {
+            text: "edited body",
+            handle: { address: sender },
+            isGroup: false,
+            isFromMe: false,
+            guid: messageId,
+            chatGuid: "iMessage;-;+15551234567",
+            date: Date.now(),
+          },
+        }),
+        createMockResponse(),
+      );
+      await flushAsync();
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "updated-message",
+          data: {
+            text: "original body",
+            handle: { address: sender },
+            isGroup: false,
+            isFromMe: false,
+            guid: messageId,
+            chatGuid: "iMessage;-;+15551234567",
+            date: Date.now(),
+          },
+        }),
+        createMockResponse(),
+      );
+
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
+      const bodies = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls.map(
+        ([args]) => args.ctx.Body,
+      );
+      expect(bodies).toEqual(["original body", "edited body"]);
+    });
+
     it("processes media-only updated-message payloads", async () => {
       const account = createMockAccount({ dmPolicy: "open" });
       const config: OpenClawConfig = {};

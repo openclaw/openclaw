@@ -38,7 +38,7 @@ const webhookInFlightLimiter = createWebhookInFlightLimiter();
 const debounceRegistry = createBlueBubblesDebounceRegistry({ processMessage });
 const BLUEBUBBLES_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
 const BLUEBUBBLES_WEBHOOK_REPLAY_CACHE_MAX_SIZE = 10_000;
-const recentInboundWebhookReplayScopes = new Map<string, { replayKey: string; seenAt: number }>();
+const recentInboundWebhookReplayScopes = new Map<string, Map<string, number>>();
 const pendingInboundWebhookReplayScopes = new Map<string, string>();
 const pendingInboundWebhookReplayKeys = new Set<string>();
 type PendingWebhookReplayRetryEntry = {
@@ -335,48 +335,64 @@ function buildInboundReplayScopeKey(params: {
 }
 
 function pruneRecentInboundWebhookReplayScopes(now: number): void {
-  for (const [scopeKey, entry] of recentInboundWebhookReplayScopes) {
-    if (now - entry.seenAt <= BLUEBUBBLES_WEBHOOK_REPLAY_WINDOW_MS) {
-      break;
+  let replayEntryCount = 0;
+  for (const [scopeKey, replayEntries] of recentInboundWebhookReplayScopes) {
+    for (const [replayKey, seenAt] of replayEntries) {
+      if (now - seenAt > BLUEBUBBLES_WEBHOOK_REPLAY_WINDOW_MS) {
+        replayEntries.delete(replayKey);
+        continue;
+      }
+      replayEntryCount += 1;
     }
-    recentInboundWebhookReplayScopes.delete(scopeKey);
+    if (replayEntries.size === 0) {
+      recentInboundWebhookReplayScopes.delete(scopeKey);
+    }
   }
-  while (recentInboundWebhookReplayScopes.size > BLUEBUBBLES_WEBHOOK_REPLAY_CACHE_MAX_SIZE) {
-    const oldestKey = recentInboundWebhookReplayScopes.keys().next().value;
-    if (!oldestKey) {
+
+  while (replayEntryCount > BLUEBUBBLES_WEBHOOK_REPLAY_CACHE_MAX_SIZE) {
+    let oldestScopeKey: string | undefined;
+    let oldestReplayKey: string | undefined;
+    let oldestSeenAt = Number.POSITIVE_INFINITY;
+    for (const [scopeKey, replayEntries] of recentInboundWebhookReplayScopes) {
+      for (const [replayKey, seenAt] of replayEntries) {
+        if (seenAt < oldestSeenAt) {
+          oldestSeenAt = seenAt;
+          oldestScopeKey = scopeKey;
+          oldestReplayKey = replayKey;
+        }
+      }
+    }
+    if (!oldestScopeKey || !oldestReplayKey) {
       break;
     }
-    recentInboundWebhookReplayScopes.delete(oldestKey);
+    const replayEntries = recentInboundWebhookReplayScopes.get(oldestScopeKey);
+    replayEntries?.delete(oldestReplayKey);
+    if (replayEntries && replayEntries.size === 0) {
+      recentInboundWebhookReplayScopes.delete(oldestScopeKey);
+    }
+    replayEntryCount -= 1;
   }
 }
 
 function rememberRecentInboundWebhookReplay(scopeKey: string, replayKey: string): void {
   const now = Date.now();
-  recentInboundWebhookReplayScopes.delete(scopeKey);
-  recentInboundWebhookReplayScopes.set(scopeKey, { replayKey, seenAt: now });
+  const replayEntries = recentInboundWebhookReplayScopes.get(scopeKey) ?? new Map<string, number>();
+  replayEntries.set(replayKey, now);
+  recentInboundWebhookReplayScopes.set(scopeKey, replayEntries);
   pruneRecentInboundWebhookReplayScopes(now);
 }
 
-function resolveRecentInboundWebhookReplayKey(scopeKey: string): string | undefined {
+function hasRecentInboundWebhookReplay(scopeKey: string, replayKey: string): boolean {
   const now = Date.now();
   pruneRecentInboundWebhookReplayScopes(now);
-  const recent = recentInboundWebhookReplayScopes.get(scopeKey);
-  if (!recent) {
-    return undefined;
-  }
-  if (now - recent.seenAt > BLUEBUBBLES_WEBHOOK_REPLAY_WINDOW_MS) {
-    recentInboundWebhookReplayScopes.delete(scopeKey);
-    return undefined;
-  }
-  return recent.replayKey;
+  return recentInboundWebhookReplayScopes.get(scopeKey)?.has(replayKey) === true;
 }
 
-function resolveCurrentInboundWebhookReplayKey(scopeKey: string): string | undefined {
-  const pendingReplayKey = pendingInboundWebhookReplayScopes.get(scopeKey);
-  if (pendingReplayKey) {
-    return pendingReplayKey;
-  }
-  return resolveRecentInboundWebhookReplayKey(scopeKey);
+function hasCurrentInboundWebhookReplay(scopeKey: string, replayKey: string): boolean {
+  return (
+    pendingInboundWebhookReplayScopes.get(scopeKey) === replayKey ||
+    hasRecentInboundWebhookReplay(scopeKey, replayKey)
+  );
 }
 
 export async function handleBlueBubblesWebhookRequest(
@@ -600,7 +616,7 @@ export async function handleBlueBubblesWebhookRequest(
       if (
         replayKey &&
         replayScopeKey &&
-        resolveCurrentInboundWebhookReplayKey(replayScopeKey) === replayKey
+        hasCurrentInboundWebhookReplay(replayScopeKey, replayKey)
       ) {
         logVerbose(
           target.core,
