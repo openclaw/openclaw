@@ -75,7 +75,12 @@ const resolveNextcloudTalkDmPolicy = createScopedDmSecurityResolver<ResolvedNext
   resolvePolicy: (account) => account.config.dmPolicy,
   resolveAllowFrom: (account) => account.config.allowFrom,
   policyPathSuffix: "dmPolicy",
-  normalizeEntry: (raw) => raw.replace(/^(nextcloud-talk|nc-talk|nc):/i, "").toLowerCase(),
+  normalizeEntry: (raw) =>
+    raw
+      .trim()
+      .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
+      .trim()
+      .toLowerCase(),
 });
 
 const collectNextcloudTalkSecurityWarnings =

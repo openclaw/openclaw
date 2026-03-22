@@ -45,7 +45,7 @@ const resolveNostrDmPolicy = createScopedDmSecurityResolver<ResolvedNostrAccount
   approveHint: formatPairingApproveHint("nostr"),
   normalizeEntry: (raw) => {
     try {
-      return normalizePubkey(raw.replace(/^nostr:/i, "").trim());
+      return normalizePubkey(raw.trim().replace(/^nostr:/i, ""));
     } catch {
       return raw.trim();
     }
@@ -121,9 +121,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
     idLabel: "nostrPubkey",
     normalizeAllowEntry: (entry) => {
       try {
-        return normalizePubkey(entry.replace(/^nostr:/i, ""));
+        return normalizePubkey(entry.trim().replace(/^nostr:/i, ""));
       } catch {
-        return entry;
+        return entry.trim();
       }
     },
     notifyApproval: async ({ id }) => {
@@ -142,7 +142,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   messaging: {
     normalizeTarget: (target) => {
       // Strip nostr: prefix if present
-      const cleaned = target.replace(/^nostr:/i, "").trim();
+      const cleaned = target.trim().replace(/^nostr:/i, "");
       try {
         return normalizePubkey(cleaned);
       } catch {

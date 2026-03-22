@@ -16,13 +16,36 @@ vi.mock("./send.js", async (importOriginal) => {
 const mockSendMessage = vi.mocked(sendMessageZalouser);
 const mockSendReaction = vi.mocked(sendReactionZalouser);
 
+function requireZalouserSendText() {
+  const sendText = zalouserPlugin.outbound?.sendText;
+  if (!sendText) {
+    throw new Error("zalouser outbound.sendText unavailable");
+  }
+  return sendText;
+}
+
 function getResolveToolPolicy() {
   const resolveToolPolicy = zalouserPlugin.groups?.resolveToolPolicy;
-  expect(resolveToolPolicy).toBeTypeOf("function");
   if (!resolveToolPolicy) {
     throw new Error("resolveToolPolicy unavailable");
   }
   return resolveToolPolicy;
+}
+
+function requireZalouserResolveRequireMention() {
+  const resolveRequireMention = zalouserPlugin.groups?.resolveRequireMention;
+  if (!resolveRequireMention) {
+    throw new Error("resolveRequireMention unavailable");
+  }
+  return resolveRequireMention;
+}
+
+function requireZalouserPairingNormalizer() {
+  const normalizeAllowEntry = zalouserPlugin.pairing?.normalizeAllowEntry;
+  if (!normalizeAllowEntry) {
+    throw new Error("pairing.normalizeAllowEntry unavailable");
+  }
+  return normalizeAllowEntry;
 }
 
 function resolveGroupToolPolicy(
@@ -57,11 +80,7 @@ describe("zalouser outbound", () => {
   });
 
   it("passes markdown chunk settings through sendText", async () => {
-    const sendText = zalouserPlugin.outbound?.sendText;
-    expect(sendText).toBeTypeOf("function");
-    if (!sendText) {
-      return;
-    }
+    const sendText = requireZalouserSendText();
 
     const result = await sendText({
       cfg: { channels: { zalouser: { enabled: true } } } as never,
@@ -97,12 +116,50 @@ describe("zalouser channel policies", () => {
     mockSendReaction.mockResolvedValue({ ok: true });
   });
 
-  it("resolves requireMention from group config", () => {
-    const resolveRequireMention = zalouserPlugin.groups?.resolveRequireMention;
-    expect(resolveRequireMention).toBeTypeOf("function");
-    if (!resolveRequireMention) {
-      return;
+  it("normalizes dm allowlist entries after trimming channel prefixes", () => {
+    const resolveDmPolicy = zalouserPlugin.security?.resolveDmPolicy;
+    if (!resolveDmPolicy) {
+      throw new Error("resolveDmPolicy unavailable");
     }
+
+    const cfg = {
+      channels: {
+        zalouser: {
+          dmPolicy: "allowlist",
+          allowFrom: ["  zlu:123456  "],
+        },
+      },
+    } as never;
+    const account = {
+      accountId: "default",
+      enabled: true,
+      authenticated: false,
+      profile: "default",
+      config: {
+        dmPolicy: "allowlist",
+        allowFrom: ["  zlu:123456  "],
+      },
+    } as never;
+
+    const result = resolveDmPolicy({ cfg, account });
+    if (!result) {
+      throw new Error("zalouser resolveDmPolicy returned null");
+    }
+
+    expect(result.policy).toBe("allowlist");
+    expect(result.allowFrom).toEqual(["  zlu:123456  "]);
+    expect(result.normalizeEntry?.("  zlu:123456  ")).toBe("123456");
+  });
+
+  it("normalizes pairing allowlist entries after trimming channel prefixes", () => {
+    const normalizeAllowEntry = requireZalouserPairingNormalizer();
+
+    expect(normalizeAllowEntry("  zlu:123456  ")).toBe("123456");
+    expect(normalizeAllowEntry("  zalouser:654321  ")).toBe("654321");
+  });
+
+  it("resolves requireMention from group config", () => {
+    const resolveRequireMention = requireZalouserResolveRequireMention();
     const requireMention = resolveRequireMention({
       cfg: {
         channels: {
@@ -163,6 +220,13 @@ describe("zalouser channel policies", () => {
       emoji: "👍",
       remove: false,
     });
-    expect(result).toBeDefined();
+    expect(result).toMatchObject({
+      content: [{ type: "text", text: "Reacted 👍 on 111" }],
+      details: {
+        messageId: "111",
+        cliMsgId: "222",
+        threadId: "123456",
+      },
+    });
   });
 });

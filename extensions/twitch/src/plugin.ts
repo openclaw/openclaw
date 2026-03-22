@@ -58,7 +58,7 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
   /** Pairing configuration */
   pairing: {
     idLabel: "twitchUserId",
-    normalizeAllowEntry: (entry) => entry.replace(/^(twitch:)?user:?/i, ""),
+    normalizeAllowEntry: (entry) => entry.trim().replace(/^(twitch:)?user:?/i, ""),
     notifyApproval: async ({ id }) => {
       // Note: Twitch doesn't support DMs from bots, so pairing approval is limited
       // We'll log the approval instead

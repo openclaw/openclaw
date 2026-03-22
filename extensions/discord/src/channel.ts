@@ -86,7 +86,12 @@ const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAcc
   resolvePolicy: (account) => account.config.dm?.policy,
   resolveAllowFrom: (account) => account.config.dm?.allowFrom,
   allowFromPathSuffix: "dm.",
-  normalizeEntry: (raw) => raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
+  normalizeEntry: (raw) =>
+    raw
+      .trim()
+      .replace(/^(discord|user):/i, "")
+      .trim()
+      .replace(/^<@!?(\d+)>$/, "$1"),
 });
 
 function formatDiscordIntents(intents?: {

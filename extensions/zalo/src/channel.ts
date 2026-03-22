@@ -60,7 +60,7 @@ function normalizeZaloMessagingTarget(raw: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  return trimmed.replace(/^(zalo|zl):/i, "");
+  return trimmed.replace(/^(zalo|zl):/i, "").trim();
 }
 
 const loadZaloChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
@@ -81,7 +81,7 @@ const resolveZaloDmPolicy = createScopedDmSecurityResolver<ResolvedZaloAccount>(
   resolvePolicy: (account) => account.config.dmPolicy,
   resolveAllowFrom: (account) => account.config.allowFrom,
   policyPathSuffix: "dmPolicy",
-  normalizeEntry: (raw) => raw.replace(/^(zalo|zl):/i, ""),
+  normalizeEntry: (raw) => raw.trim().replace(/^(zalo|zl):/i, ""),
 });
 
 const collectZaloSecurityWarnings = createOpenProviderGroupPolicyWarningCollector<{
@@ -171,13 +171,13 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
         ...params,
         resolveAccount: (cfg, accountId) => resolveZaloAccount({ cfg, accountId }),
         resolveAllowFrom: (account) => account.config.allowFrom,
-        normalizeId: (entry) => entry.replace(/^(zalo|zl):/i, ""),
+        normalizeId: (entry) => entry.trim().replace(/^(zalo|zl):/i, ""),
       }),
     listGroups: async () => [],
   }),
   pairing: {
     idLabel: "zaloUserId",
-    normalizeAllowEntry: (entry) => entry.replace(/^(zalo|zl):/i, ""),
+    normalizeAllowEntry: (entry) => entry.trim().replace(/^(zalo|zl):/i, ""),
     notifyApproval: async (params) =>
       await (await loadZaloChannelRuntime()).notifyZaloPairingApproval(params),
   },

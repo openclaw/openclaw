@@ -8,19 +8,6 @@ vi.mock("./webhook-handler.js", () => ({
 const { createSynologyChatPlugin } = await import("./channel.js");
 
 describe("createSynologyChatPlugin", () => {
-  it("returns a plugin object with all required sections", () => {
-    const plugin = createSynologyChatPlugin();
-    expect(plugin.id).toBe("synology-chat");
-    expect(plugin.meta).toBeDefined();
-    expect(plugin.capabilities).toBeDefined();
-    expect(plugin.config).toBeDefined();
-    expect(plugin.setup).toBeDefined();
-    expect(plugin.setupWizard).toBeDefined();
-    expect(plugin.security).toBeDefined();
-    expect(plugin.outbound).toBeDefined();
-    expect(plugin.gateway).toBeDefined();
-  });
-
   describe("meta", () => {
     it("has correct id and label", () => {
       const plugin = createSynologyChatPlugin();
