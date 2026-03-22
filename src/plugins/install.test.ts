@@ -4,6 +4,7 @@ import path from "node:path";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import * as skillScanner from "../security/skill-scanner.js";
 import {
   expectSingleNpmInstallIgnoreScriptsCall,
@@ -14,18 +15,19 @@ import {
   expectIntegrityDriftRejected,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
+import {
+  installPluginFromArchive,
+  installPluginFromDir,
+  installPluginFromNpmSpec,
+  installPluginFromPath,
+  PLUGIN_INSTALL_ERROR_CODE,
+  resolvePluginInstallDir,
+} from "./install.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
-let installPluginFromArchive: typeof import("./install.js").installPluginFromArchive;
-let installPluginFromDir: typeof import("./install.js").installPluginFromDir;
-let installPluginFromNpmSpec: typeof import("./install.js").installPluginFromNpmSpec;
-let installPluginFromPath: typeof import("./install.js").installPluginFromPath;
-let PLUGIN_INSTALL_ERROR_CODE: typeof import("./install.js").PLUGIN_INSTALL_ERROR_CODE;
-let resolvePluginInstallDir: typeof import("./install.js").resolvePluginInstallDir;
-let runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout;
 let suiteTempRoot = "";
 let suiteFixtureRoot = "";
 let tempDirCounter = 0;
@@ -433,16 +435,6 @@ afterAll(() => {
 });
 
 beforeAll(async () => {
-  ({
-    installPluginFromArchive,
-    installPluginFromDir,
-    installPluginFromNpmSpec,
-    installPluginFromPath,
-    PLUGIN_INSTALL_ERROR_CODE,
-    resolvePluginInstallDir,
-  } = await import("./install.js"));
-  ({ runCommandWithTimeout } = await import("../process/exec.js"));
-
   installPluginFromDirTemplateDir = path.join(
     ensureSuiteFixtureRoot(),
     "install-from-dir-template",
