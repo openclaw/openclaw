@@ -1,5 +1,1 @@
-export {
-  listReservedChatSlashCommandNames,
-  listSkillCommandsForWorkspace,
-  resolveSkillCommandInvocation,
-} from "./skill-commands.js";
+export { listSkillCommandsForAgents, listSkillCommandsForWorkspace } from "./skill-commands.js";
