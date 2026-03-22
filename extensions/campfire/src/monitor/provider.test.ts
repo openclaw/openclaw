@@ -86,6 +86,7 @@ describe("campfire gateway", () => {
     expect(sendText).toHaveBeenCalledWith(
       "https://campfire.example.com/rooms/7/42-AbCdEf/messages",
       "Hello back",
+      "42-AbCdEf",
       4000,
     );
 

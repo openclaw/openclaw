@@ -12,12 +12,25 @@ export function chunkCampfireText(text: string, chunkLimit = DEFAULT_TEXT_CHUNK_
   return chunks.length > 0 ? chunks : [""];
 }
 
-export async function sendCampfireReply(replyUrl: string, text: string): Promise<void> {
+function buildCampfireHeaders(botKey: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "text/plain; charset=utf-8",
+  };
+  const normalizedBotKey = botKey.trim();
+  if (normalizedBotKey) {
+    headers.Authorization = `Bearer ${normalizedBotKey}`;
+  }
+  return headers;
+}
+
+export async function sendCampfireReply(
+  replyUrl: string,
+  text: string,
+  botKey = "",
+): Promise<void> {
   const response = await fetch(replyUrl, {
     method: "POST",
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-    },
+    headers: buildCampfireHeaders(botKey),
     body: text,
   });
 
@@ -29,10 +42,11 @@ export async function sendCampfireReply(replyUrl: string, text: string): Promise
 export async function sendCampfireText(
   replyUrl: string,
   text: string,
+  botKey: string,
   chunkLimit = DEFAULT_TEXT_CHUNK_LIMIT,
 ): Promise<void> {
   const chunks = chunkCampfireText(text, chunkLimit);
   for (const chunk of chunks) {
-    await sendCampfireReply(replyUrl, chunk);
+    await sendCampfireReply(replyUrl, chunk, botKey);
   }
 }

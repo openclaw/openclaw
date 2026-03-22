@@ -30,6 +30,7 @@ describe("campfire channel plugin", () => {
     expect(sendText).toHaveBeenCalledWith(
       "https://campfire.example.com/rooms/7/42-AbCdEf/messages",
       "Hello world",
+      "42-AbCdEf",
       2500,
     );
     expect(result).toEqual(

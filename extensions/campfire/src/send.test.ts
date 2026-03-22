@@ -6,7 +6,7 @@ describe("sendCampfireReply", () => {
     vi.unstubAllGlobals();
   });
 
-  it("sends a plain text POST request", async () => {
+  it("sends a plain text POST request with bot authorization", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(null, {
         status: 200,
@@ -14,13 +14,18 @@ describe("sendCampfireReply", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await sendCampfireReply("https://campfire.example.com/rooms/7/key/messages", "Hello world");
+    await sendCampfireReply(
+      "https://campfire.example.com/rooms/7/key/messages",
+      "Hello world",
+      "42-AbCdEf",
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://campfire.example.com/rooms/7/key/messages",
       expect.objectContaining({
         method: "POST",
         headers: {
+          Authorization: "Bearer 42-AbCdEf",
           "Content-Type": "text/plain; charset=utf-8",
         },
         body: "Hello world",
@@ -56,7 +61,12 @@ describe("sendCampfireText", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await sendCampfireText("https://campfire.example.com/rooms/7/key/messages", "abcdefghij", 4);
+    await sendCampfireText(
+      "https://campfire.example.com/rooms/7/key/messages",
+      "abcdefghij",
+      "42-AbCdEf",
+      4,
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls[0]?.[1]).toEqual(

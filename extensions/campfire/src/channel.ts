@@ -86,7 +86,7 @@ export function createCampfirePlugin(params?: {
         const account = resolveCampfireAccount(cfg as OpenClawConfig, accountId);
         const target = assertCampfireOutboundTarget(to, account);
 
-        await sendText(target, text, account.textChunkLimit);
+        await sendText(target, text, account.botKey, account.textChunkLimit);
         return attachChannelToResult("campfire", {
           chatId: target,
           messageId: `campfire-${now()}`,

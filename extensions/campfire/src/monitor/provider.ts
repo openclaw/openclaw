@@ -121,7 +121,12 @@ export function createCampfireGateway(params?: {
               if (!text) {
                 return;
               }
-              await sendText(inbound.replyUrl, text, ctx.account.textChunkLimit);
+              await sendText(
+                inbound.replyUrl,
+                text,
+                ctx.account.botKey,
+                ctx.account.textChunkLimit,
+              );
             },
             onError: (err: unknown, info: { kind: string }) => {
               ctx.log?.error?.(
