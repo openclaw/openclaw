@@ -465,6 +465,8 @@ export type NormalizedWebhookMessage = {
   senderIdExplicit: boolean;
   senderName?: string;
   messageId?: string;
+  itemType?: number;
+  dateEdited?: number;
   timestamp?: number;
   isGroup: boolean;
   chatId?: number;
@@ -738,6 +740,10 @@ export function normalizeWebhookMessage(
     readNumber(message, "date") ??
     readNumber(message, "dateCreated") ??
     readNumber(message, "timestamp");
+  const itemType =
+    readNumberLike(message, "itemType") ?? readNumberLike(message, "item_type") ?? undefined;
+  const dateEdited =
+    readNumberLike(message, "dateEdited") ?? readNumberLike(message, "date_edited") ?? undefined;
   const timestamp =
     typeof timestampRaw === "number"
       ? timestampRaw > 1_000_000_000_000
@@ -760,6 +766,8 @@ export function normalizeWebhookMessage(
     senderIdExplicit,
     senderName,
     messageId,
+    itemType,
+    dateEdited,
     timestamp,
     isGroup,
     chatId,
