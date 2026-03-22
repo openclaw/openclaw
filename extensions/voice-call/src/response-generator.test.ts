@@ -70,9 +70,14 @@ describe("generateVoiceResponse", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
     const calls = runEmbeddedPiAgent.mock.calls as unknown[][];
     const firstCall = calls[0];
-    expect(firstCall).toBeDefined();
-    const args = firstCall?.[0] as { extraSystemPrompt?: string } | undefined;
-    expect(args?.extraSystemPrompt).toContain('{"spoken":"..."}');
+    if (!firstCall) {
+      throw new Error("voice response generator did not invoke the embedded agent");
+    }
+    const args = firstCall[0] as { extraSystemPrompt?: string } | undefined;
+    if (!args?.extraSystemPrompt) {
+      throw new Error("voice response generator did not pass the spoken-output contract prompt");
+    }
+    expect(args.extraSystemPrompt).toContain('{"spoken":"..."}');
   });
 
   it("extracts spoken text from fenced JSON", async () => {

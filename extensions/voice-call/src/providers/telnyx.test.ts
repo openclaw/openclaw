@@ -46,8 +46,12 @@ function expectReplayVerification(
 ) {
   expect(results.map((result) => result.ok)).toEqual([true, true]);
   expect(results.map((result) => Boolean(result.isReplay))).toEqual([false, true]);
-  expect(results[0]?.verifiedRequestKey).toEqual(expect.any(String));
-  expect(results[1]?.verifiedRequestKey).toBe(results[0]?.verifiedRequestKey);
+  const firstKey = results[0]?.verifiedRequestKey;
+  if (!firstKey) {
+    throw new Error("expected Telnyx verification to produce a request key");
+  }
+  expect(firstKey).toEqual(expect.any(String));
+  expect(results[1]?.verifiedRequestKey).toBe(firstKey);
 }
 
 function expectWebhookVerificationSucceeds(params: {
