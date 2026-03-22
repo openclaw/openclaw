@@ -6,6 +6,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
   buildConfiguredModelCatalog,
   buildAllowedModelSet,
+  buildModelAliasIndex,
   type ModelAliasIndex,
   modelKey,
   normalizeModelRef,
@@ -65,26 +66,51 @@ function loadSessionStoreRuntime() {
 
 /**
  * Collect all configured image models (primary + fallbacks) into a Set of model keys.
- * Returns a Set of "provider/model" strings for quick lookup.
+ * Resolves aliases using aliasIndex and defaultProvider.
+ * Returns a Set of both raw strings and resolved "provider/model" keys.
  */
-function collectImageModelKeys(imageModelConfig: AgentModelConfig | undefined): Set<string> {
+function collectImageModelKeys(
+  imageModelConfig: AgentModelConfig | undefined,
+  aliasIndex?: ModelAliasIndex,
+  defaultProvider?: string,
+): Set<string> {
   const keys = new Set<string>();
   if (!imageModelConfig) {
     return keys;
   }
-  if (typeof imageModelConfig === "string") {
-    const trimmed = imageModelConfig.trim();
-    if (trimmed) {
-      keys.add(trimmed);
+
+  const addModelKey = (rawModel: string) => {
+    const trimmed = rawModel.trim();
+    if (!trimmed) {
+      return;
     }
+
+    // Always add the raw string for backward compatibility
+    keys.add(trimmed);
+
+    // Also resolve alias and add canonical key
+    if (aliasIndex && defaultProvider) {
+      const resolved = resolveModelRefFromString({
+        raw: trimmed,
+        defaultProvider,
+        aliasIndex,
+      });
+      if (resolved) {
+        keys.add(modelKey(resolved.ref.provider, resolved.ref.model));
+      }
+    }
+  };
+
+  if (typeof imageModelConfig === "string") {
+    addModelKey(imageModelConfig);
   } else {
     if (imageModelConfig.primary?.trim()) {
-      keys.add(imageModelConfig.primary.trim());
+      addModelKey(imageModelConfig.primary);
     }
     if (Array.isArray(imageModelConfig.fallbacks)) {
       for (const fb of imageModelConfig.fallbacks) {
         if (fb?.trim()) {
-          keys.add(fb.trim());
+          addModelKey(fb);
         }
       }
     }
@@ -466,7 +492,13 @@ export async function createModelSelectionState(params: {
   // When images triggered a model switch, check if stored override is an image model
   let skipForImageSwitch = false;
   if (params.hasAppliedImageModelOverride && storedOverride?.model) {
-    const imageModelKeys = collectImageModelKeys(cfg.agents?.defaults?.imageModel);
+    // Build alias index for resolving model aliases
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
+    const imageModelKeys = collectImageModelKeys(
+      cfg.agents?.defaults?.imageModel,
+      aliasIndex,
+      defaultProvider,
+    );
     const storedProvider = storedOverride.provider || defaultProvider;
     if (!isImageModel(storedProvider, storedOverride.model, imageModelKeys)) {
       // Stored override is not an image model, skip it for image requests

@@ -140,6 +140,15 @@ export async function resolveSessionAuthProfileOverride(params: {
     return current;
   }
 
+  // When image model is temporarily switched, skip the rotate/persist logic.
+  // The current profile is for a different provider, and we should preserve it
+  // for when the session returns to the original provider.
+  // Without this, pickNextAvailable() would fall back to the image provider's
+  // first profile and persist it, silently replacing the user's chosen credential.
+  if (hasAppliedImageModelOverride && current) {
+    return current;
+  }
+
   let next = current;
   if (isNewSession) {
     next = current ? pickNextAvailable(current) : pickFirstAvailable();
