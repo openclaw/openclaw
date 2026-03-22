@@ -14,6 +14,7 @@ const withProgress = vi.fn(async (_opts: unknown, fn: () => Promise<unknown>) =>
 const runtime = {
   log: vi.fn(),
   error: vi.fn(),
+  writeJson: vi.fn(),
   exit: vi.fn(),
 };
 
