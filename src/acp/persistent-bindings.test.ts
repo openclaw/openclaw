@@ -1,11 +1,11 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseFeishuConversationId } from "../../extensions/feishu/src/conversation-id.js";
-import { parseTelegramTopicConversation } from "../../extensions/telegram/runtime-api.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { ChannelConfiguredBindingProvider, ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { parseTelegramTopicConversation } from "./conversation-id.js";
 import * as persistentBindingsResolveModule from "./persistent-bindings.resolve.js";
 import { buildConfiguredAcpSessionKey } from "./persistent-bindings.types.js";
 const managerMocks = vi.hoisted(() => ({
