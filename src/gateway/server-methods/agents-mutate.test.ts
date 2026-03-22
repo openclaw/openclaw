@@ -436,6 +436,36 @@ describe("agents.create", () => {
     );
   });
 
+  it("skips an extra refresh when the written agent is already runtime-visible", async () => {
+    mocks.loadConfigReturn = { gateway: { reload: { mode: "off" } } };
+    mocks.writeConfigFile.mockImplementationOnce(async (cfg: unknown) => {
+      if (cfg && typeof cfg === "object") {
+        const nextConfig = { ...(cfg as Record<string, unknown>) };
+        mocks.state.writtenConfig = nextConfig;
+        mocks.state.runtimeConfig = nextConfig;
+        return;
+      }
+      mocks.state.writtenConfig = {};
+      mocks.state.runtimeConfig = {};
+    });
+
+    const { respond, promise } = makeCall("agents.create", {
+      name: "Visible Agent",
+      workspace: "/home/user/agents/visible",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        ok: true,
+        agentId: "visible-agent",
+      }),
+      undefined,
+    );
+    expect(mocks.refreshRuntimeConfigFromDisk).not.toHaveBeenCalled();
+  });
+
   it("retries runtime refresh during readiness polling after transient failures", async () => {
     const previousTimeout = process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_TIMEOUT_MS;
     const previousPoll = process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS;

@@ -148,6 +148,15 @@ async function waitForAgentReady(params: {
 
   for (;;) {
     const now = Date.now();
+    clearConfigCache();
+    // Readiness must reflect runtime visibility because follow-up RPCs resolve
+    // agent IDs from loadConfig().
+    const cfg = loadConfig();
+    const foundInEntries = findAgentEntryIndex(listAgentEntries(cfg), params.agentId) >= 0;
+    const resolvableForFiles = resolveAgentIdOrError(params.agentId, cfg) === params.agentId;
+    if (foundInEntries && resolvableForFiles) {
+      return { ok: true };
+    }
     const remainingMsBeforeRefresh = deadline - now;
     if (remainingMsBeforeRefresh <= 0) {
       return { ok: false };
@@ -170,15 +179,6 @@ async function waitForAgentReady(params: {
         }
         // Best-effort: transient refresh failures should not prevent retries.
       }
-    }
-    clearConfigCache();
-    // Readiness must reflect runtime visibility because follow-up RPCs resolve
-    // agent IDs from loadConfig().
-    const cfg = loadConfig();
-    const foundInEntries = findAgentEntryIndex(listAgentEntries(cfg), params.agentId) >= 0;
-    const resolvableForFiles = resolveAgentIdOrError(params.agentId, cfg) === params.agentId;
-    if (foundInEntries && resolvableForFiles) {
-      return { ok: true };
     }
 
     const remainingMs = deadline - Date.now();
