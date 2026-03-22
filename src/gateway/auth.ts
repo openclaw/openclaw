@@ -455,7 +455,7 @@ export async function authorizeGatewayConnect(
   }
 
   if (auth.mode === "password") {
-    const password = connectAuth?.password;
+    const password = connectAuth?.password ?? connectAuth?.token;
     if (!auth.password) {
       return { ok: false, reason: "password_missing_config" };
     }
