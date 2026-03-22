@@ -2207,80 +2207,55 @@ export const registerTelegramHandlers = ({
     });
 
     const t0 = Date.now();
-    await recordInboundSessionMetaSafe({
-      cfg,
-      agentId: route.agentId,
-      sessionKey,
-      ctx: finalizeInboundContext({
-        Body: "",
-        BodyForAgent: "",
-        RawBody: queryText,
-        From: `telegram:${senderId}`,
-        To: `telegram:${senderId}`,
-        ChatType: "direct",
-        SenderName: senderName,
-        SenderId: senderId || undefined,
-        SenderUsername: senderUsername || undefined,
-        Surface: "telegram",
-        Provider: "telegram",
-        MessageSid: query.id,
-        Timestamp: Date.now(),
-        WasMentioned: true,
-        SessionKey: sessionKey,
-        AccountId: route.accountId,
-        OriginatingChannel: "telegram",
-        OriginatingTo: `telegram:${senderId}`,
-      }),
-      onError: (err) =>
-        runtime.error?.(danger(`[telegram] inline: failed updating session meta: ${String(err)}`)),
-    });
-    const t1 = Date.now();
-    runtime.log?.(`[telegram/inline/timing] recordSessionMeta: ${t1 - t0}ms`);
 
-    const capturedReplies: string[] = [];
-    const ctxPayload = finalizeInboundContext({
-      Body: body,
-      BodyForAgent: quickBodyForAgent,
-      RawBody: queryText,
-      From: `telegram:${senderId}`,
-      To: `telegram:${senderId}`,
-      ChatType: "direct",
-      SenderName: senderName,
-      SenderId: senderId || undefined,
-      SenderUsername: senderUsername || undefined,
-      Surface: "telegram",
-      Provider: "telegram",
-      MessageSid: query.id,
-      Timestamp: Date.now(),
-      WasMentioned: true,
-      SessionKey: sessionKey,
-      AccountId: route.accountId,
-      OriginatingChannel: "telegram",
-      OriginatingTo: `telegram:${senderId}`,
-    });
+    // Fast path: call Anthropic directly, bypassing the full dispatch pipeline
+    const agentDir = resolveAgentDir(cfg, route.agentId);
+    const llmPromise = (async (): Promise<string> => {
+      // Read API key from agent auth-profiles
+      let apiKey = process.env.ANTHROPIC_API_KEY ?? "";
+      if (!apiKey && agentDir) {
+        try {
+          const { readFileSync } = await import("fs");
+          const profiles = JSON.parse(
+            readFileSync(`${agentDir}/auth-profiles.json`, "utf-8"),
+          ) as Record<string, unknown>;
+          const p = (profiles as { profiles?: Record<string, { key?: string }> }).profiles ?? {};
+          apiKey = p["anthropic:default"]?.key ?? "";
+        } catch {
+          // ignore
+        }
+      }
+      if (!apiKey) throw new Error("No Anthropic API key found");
 
-    const t2 = Date.now();
-    const llmPromise = dispatchReplyWithBufferedBlockDispatcher({
-      ctx: ctxPayload,
-      cfg,
-      dispatcherOptions: {
-        deliver: async (payload) => {
-          if (payload.text) capturedReplies.push(payload.text);
+      const t1 = Date.now();
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
         },
-        onError: (err) => {
-          runtime.error?.(danger(`[telegram] inline query dispatch failed: ${String(err)}`));
-        },
-      },
-      replyOptions: { bootstrapContextMode: "lightweight" },
-    })
-      .then(() => capturedReplies.join("\n\n").trim())
-      .catch((err) => {
-        runtime.error?.(danger(`[telegram] inline LLM failed: ${String(err)}`));
-        return "";
+        body: JSON.stringify({
+          model: "claude-haiku-4-5",
+          max_tokens: 512,
+          messages: [{ role: "user", content: quickBodyForAgent }],
+        }),
       });
-    llmPromise.then(() => {
-      const t3 = Date.now();
-      runtime.log?.(`[telegram/inline/timing] llmDispatch: ${t3 - t2}ms (total: ${t3 - t0}ms)`);
+      if (!resp.ok) throw new Error(`Anthropic API error: ${resp.status}`);
+      const json = (await resp.json()) as {
+        content?: { type: string; text: string }[];
+      };
+      const text =
+        json.content
+          ?.filter((b) => b.type === "text")
+          .map((b) => b.text)
+          .join("") ?? "";
+      const t2 = Date.now();
+      runtime.log?.(`[telegram/inline/timing] directApi: ${t2 - t1}ms (total: ${t2 - t0}ms)`);
+      return text.trim();
+    })().catch((err) => {
+      runtime.error?.(danger(`[telegram] inline LLM failed: ${String(err)}`));
+      return "";
     });
 
     const TELEGRAM_DEADLINE_MS = 8000;
