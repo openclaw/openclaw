@@ -132,6 +132,7 @@ export function createBlockReplyDeliveryHandler(params: {
       // When block streaming is disabled, text-only block replies are accumulated into the
       // final response. Media cannot be reconstructed later, so send it immediately and let
       // the assistant's final text arrive through the normal final-reply path.
+      params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
       await params.onBlockReply({ ...blockPayload, text: undefined });
     }
     // When streaming is disabled entirely, text-only blocks are accumulated in final text.
