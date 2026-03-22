@@ -10,19 +10,21 @@ import { fetchBlueBubblesHistory } from "./history.js";
 import { handleBlueBubblesWebhookRequest, resolveBlueBubblesMessageId } from "./monitor.js";
 import {
   LOOPBACK_REMOTE_ADDRESSES_FOR_TEST,
+  createWebhookDispatchForTest,
   createMockAccount,
   createHangingWebhookRequestForTest,
-  createMockResponse,
   createLoopbackWebhookRequestParamsForTest,
-  createNewMessagePayloadForTest,
   createPasswordQueryRequestParamsForTest,
   createProtectedWebhookAccountForTest,
   createRemoteWebhookRequestParamsForTest,
+  createTimestampedNewMessagePayloadForTest,
   dispatchWebhookPayloadForTest,
   expectWebhookRequestStatusForTest,
   expectWebhookStatusForTest,
   setupWebhookTargetForTest,
   setupWebhookTargetsForTest,
+  trackWebhookRegistrationForTest,
+  type WebhookRequestParams,
 } from "./monitor.webhook.test-helpers.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
 
@@ -162,14 +164,18 @@ describe("BlueBubbles webhook monitor", () => {
     core?: PluginRuntime;
     statusSink?: (event: unknown) => void;
   }) {
-    const registration = setupWebhookTargetForTest({
-      createCore: createMockRuntime,
-      core: params?.core,
-      account: params?.account,
-      config: params?.config,
-      statusSink: params?.statusSink,
-    });
-    unregister = registration.unregister;
+    const registration = trackWebhookRegistrationForTest(
+      setupWebhookTargetForTest({
+        createCore: createMockRuntime,
+        core: params?.core,
+        account: params?.account,
+        config: params?.config,
+        statusSink: params?.statusSink,
+      }),
+      (nextUnregister) => {
+        unregister = nextUnregister;
+      },
+    );
     return {
       account: registration.account,
       config: registration.config,
@@ -183,43 +189,72 @@ describe("BlueBubbles webhook monitor", () => {
     return account;
   }
 
+  function createWebhookTarget(
+    account: ResolvedBlueBubblesAccount,
+    statusSink: (event: unknown) => void = vi.fn(),
+  ) {
+    return { account, statusSink };
+  }
+
+  function createProtectedWebhookTarget(password = TEST_WEBHOOK_PASSWORD) {
+    return createWebhookTarget(createProtectedWebhookAccountForTest(password));
+  }
+
+  async function expectProtectedWebhookRequestStatus(
+    params: WebhookRequestParams,
+    expectedStatus: number,
+    expectedBody?: string,
+  ) {
+    setupProtectedWebhookTarget();
+    return expectWebhookRequestStatusForTest(params, expectedStatus, expectedBody);
+  }
+
+  async function expectRegisteredWebhookRequestStatus(
+    params: WebhookRequestParams,
+    expectedStatus: number,
+    expectedBody?: string,
+  ) {
+    setupWebhookTarget();
+    return expectWebhookRequestStatusForTest(params, expectedStatus, expectedBody);
+  }
+
   function registerWebhookTargets(
     params: Array<{
       account: ResolvedBlueBubblesAccount;
       statusSink?: (event: unknown) => void;
     }>,
   ) {
-    const registration = setupWebhookTargetsForTest({
-      createCore: createMockRuntime,
-      accounts: params,
-    });
-    unregister = registration.unregister;
+    trackWebhookRegistrationForTest(
+      setupWebhookTargetsForTest({
+        createCore: createMockRuntime,
+        accounts: params,
+      }),
+      (nextUnregister) => {
+        unregister = nextUnregister;
+      },
+    );
   }
 
   describe("webhook parsing + auth handling", () => {
     it("rejects non-POST requests", async () => {
-      setupWebhookTarget();
-      await expectWebhookRequestStatusForTest({ method: "GET" }, 405);
+      await expectRegisteredWebhookRequestStatus({ method: "GET" }, 405);
     });
 
     it("accepts POST requests with valid JSON payload", async () => {
-      setupWebhookTarget();
-      const payload = createNewMessagePayloadForTest({ date: Date.now() });
-      await expectWebhookRequestStatusForTest({ body: payload }, 200, "ok");
+      const payload = createTimestampedNewMessagePayloadForTest();
+      await expectRegisteredWebhookRequestStatus({ body: payload }, 200, "ok");
     });
 
     it("rejects requests with invalid JSON", async () => {
-      setupWebhookTarget();
-      await expectWebhookRequestStatusForTest({ body: "invalid json {{" }, 400);
+      await expectRegisteredWebhookRequestStatus({ body: "invalid json {{" }, 400);
     });
 
     it("accepts URL-encoded payload wrappers", async () => {
-      setupWebhookTarget();
-      const payload = createNewMessagePayloadForTest({ date: Date.now() });
+      const payload = createTimestampedNewMessagePayloadForTest();
       const encodedBody = new URLSearchParams({
         payload: JSON.stringify(payload),
       }).toString();
-      await expectWebhookRequestStatusForTest({ body: encodedBody }, 200, "ok");
+      await expectRegisteredWebhookRequestStatus({ body: encodedBody }, 200, "ok");
     });
 
     it("returns 408 when request body times out (Slow-Loris protection)", async () => {
@@ -230,9 +265,7 @@ describe("BlueBubbles webhook monitor", () => {
         // Create a request that never sends data or ends (simulates slow-loris)
         const { req, destroyMock } = createHangingWebhookRequestForTest();
 
-        const res = createMockResponse();
-
-        const handledPromise = handleBlueBubblesWebhookRequest(req, res);
+        const { res, handledPromise } = createWebhookDispatchForTest(req);
 
         // Advance past the 30s timeout
         await vi.advanceTimersByTimeAsync(31_000);
@@ -257,21 +290,15 @@ describe("BlueBubbles webhook monitor", () => {
     });
 
     it("authenticates via password query parameter", async () => {
-      setupProtectedWebhookTarget();
-      await expectWebhookRequestStatusForTest(
-        createPasswordQueryRequestParamsForTest({
-          body: createNewMessagePayloadForTest(),
-          password: TEST_WEBHOOK_PASSWORD,
-        }),
+      await expectProtectedWebhookRequestStatus(
+        createPasswordQueryRequestParamsForTest({ password: TEST_WEBHOOK_PASSWORD }),
         200,
       );
     });
 
     it("authenticates via x-password header", async () => {
-      setupProtectedWebhookTarget();
-      await expectWebhookRequestStatusForTest(
+      await expectProtectedWebhookRequestStatus(
         createRemoteWebhookRequestParamsForTest({
-          body: createNewMessagePayloadForTest(),
           overrides: {
             headers: { "x-password": TEST_WEBHOOK_PASSWORD }, // pragma: allowlist secret
           },
@@ -281,65 +308,43 @@ describe("BlueBubbles webhook monitor", () => {
     });
 
     it("rejects unauthorized requests with wrong password", async () => {
-      setupProtectedWebhookTarget();
-      await expectWebhookRequestStatusForTest(
-        createPasswordQueryRequestParamsForTest({
-          body: createNewMessagePayloadForTest(),
-          password: "wrong-token",
-        }),
+      await expectProtectedWebhookRequestStatus(
+        createPasswordQueryRequestParamsForTest({ password: "wrong-token" }),
         401,
       );
     });
 
     it("rejects ambiguous routing when multiple targets match the same password", async () => {
-      const accountA = createProtectedWebhookAccountForTest(TEST_WEBHOOK_PASSWORD);
-      const accountB = createProtectedWebhookAccountForTest(TEST_WEBHOOK_PASSWORD);
-      const sinkA = vi.fn();
-      const sinkB = vi.fn();
-      registerWebhookTargets([
-        { account: accountA, statusSink: sinkA },
-        { account: accountB, statusSink: sinkB },
-      ]);
+      const targetA = createProtectedWebhookTarget();
+      const targetB = createProtectedWebhookTarget();
+      registerWebhookTargets([targetA, targetB]);
 
       await expectWebhookRequestStatusForTest(
-        createPasswordQueryRequestParamsForTest({
-          body: createNewMessagePayloadForTest(),
-          password: TEST_WEBHOOK_PASSWORD,
-        }),
+        createPasswordQueryRequestParamsForTest({ password: TEST_WEBHOOK_PASSWORD }),
         401,
       );
-      expect(sinkA).not.toHaveBeenCalled();
-      expect(sinkB).not.toHaveBeenCalled();
+      expect(targetA.statusSink).not.toHaveBeenCalled();
+      expect(targetB.statusSink).not.toHaveBeenCalled();
     });
 
     it("ignores targets without passwords when a password-authenticated target matches", async () => {
-      const accountStrict = createProtectedWebhookAccountForTest(TEST_WEBHOOK_PASSWORD);
-      const accountWithoutPassword = createMockAccount({ password: undefined });
-      const sinkStrict = vi.fn();
-      const sinkWithoutPassword = vi.fn();
-      registerWebhookTargets([
-        { account: accountStrict, statusSink: sinkStrict },
-        { account: accountWithoutPassword, statusSink: sinkWithoutPassword },
-      ]);
+      const strictTarget = createProtectedWebhookTarget();
+      const passwordlessTarget = createWebhookTarget(createMockAccount({ password: undefined }));
+      registerWebhookTargets([strictTarget, passwordlessTarget]);
 
       await expectWebhookRequestStatusForTest(
-        createPasswordQueryRequestParamsForTest({
-          body: createNewMessagePayloadForTest(),
-          password: TEST_WEBHOOK_PASSWORD,
-        }),
+        createPasswordQueryRequestParamsForTest({ password: TEST_WEBHOOK_PASSWORD }),
         200,
       );
-      expect(sinkStrict).toHaveBeenCalledTimes(1);
-      expect(sinkWithoutPassword).not.toHaveBeenCalled();
+      expect(strictTarget.statusSink).toHaveBeenCalledTimes(1);
+      expect(passwordlessTarget.statusSink).not.toHaveBeenCalled();
     });
 
     it("requires authentication for loopback requests when password is configured", async () => {
       setupProtectedWebhookTarget();
       for (const remoteAddress of LOOPBACK_REMOTE_ADDRESSES_FOR_TEST) {
         await expectWebhookRequestStatusForTest(
-          createLoopbackWebhookRequestParamsForTest(remoteAddress, {
-            body: createNewMessagePayloadForTest(),
-          }),
+          createLoopbackWebhookRequestParamsForTest(remoteAddress),
           401,
         );
       }
@@ -357,7 +362,6 @@ describe("BlueBubbles webhook monitor", () => {
       for (const headers of headerVariants) {
         await expectWebhookRequestStatusForTest(
           createLoopbackWebhookRequestParamsForTest("127.0.0.1", {
-            body: createNewMessagePayloadForTest(),
             overrides: { headers },
           }),
           401,
@@ -377,12 +381,11 @@ describe("BlueBubbles webhook monitor", () => {
       const { resolveChatGuidForTarget } = await import("./send.js");
       vi.mocked(resolveChatGuidForTarget).mockClear();
 
-      setupWebhookTarget({ account: createMockAccount({ groupPolicy: "open" }) });
-      const payload = createNewMessagePayloadForTest({
+      setupWebhookTarget();
+      const payload = createTimestampedNewMessagePayloadForTest({
         text: "hello from group",
         isGroup: true,
         chatId: "123",
-        date: Date.now(),
       });
 
       await dispatchWebhookPayloadForTest({ body: payload });
@@ -404,12 +407,11 @@ describe("BlueBubbles webhook monitor", () => {
         return EMPTY_DISPATCH_RESULT;
       });
 
-      setupWebhookTarget({ account: createMockAccount({ groupPolicy: "open" }) });
-      const payload = createNewMessagePayloadForTest({
+      setupWebhookTarget();
+      const payload = createTimestampedNewMessagePayloadForTest({
         text: "hello from group",
         isGroup: true,
         chat: { chatGuid: "iMessage;+;chat123456" },
-        date: Date.now(),
       });
 
       await dispatchWebhookPayloadForTest({ body: payload });
