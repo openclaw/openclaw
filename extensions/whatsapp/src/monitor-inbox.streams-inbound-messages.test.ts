@@ -14,7 +14,7 @@ import {
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
-  async function expectQuotedReplyContext(quotedMessage: unknown) {
+  async function expectQuotedReplyContext(quotedMessage: unknown, messageId: string) {
     const onMessage = vi.fn(async (msg) => {
       await msg.reply("pong");
     });
@@ -24,7 +24,7 @@ describe("web monitor inbox", () => {
       type: "notify",
       messages: [
         {
-          key: { id: "abc", fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          key: { id: messageId, fromMe: false, remoteJid: "999@s.whatsapp.net" },
           message: {
             extendedTextMessage: {
               text: "reply",
@@ -104,7 +104,7 @@ describe("web monitor inbox", () => {
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const upsert = buildNotifyMessageUpsert({
-      id: "abc",
+      id: "dedupe-1",
       remoteJid: "999@s.whatsapp.net",
       text: "ping",
       timestamp: 1_700_000_000,
@@ -129,7 +129,7 @@ describe("web monitor inbox", () => {
     const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
     sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce("999:0@s.whatsapp.net");
     const upsert = buildNotifyMessageUpsert({
-      id: "abc",
+      id: "lid-store-1",
       remoteJid: "999@lid",
       text: "ping",
       timestamp: 1_700_000_000,
@@ -159,7 +159,7 @@ describe("web monitor inbox", () => {
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
     const upsert = buildNotifyMessageUpsert({
-      id: "abc",
+      id: "lid-file-1",
       remoteJid: "555@lid",
       text: "ping",
       timestamp: 1_700_000_000,
@@ -186,7 +186,7 @@ describe("web monitor inbox", () => {
     const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
     sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce("444:0@s.whatsapp.net");
     const upsert = buildNotifyMessageUpsert({
-      id: "abc",
+      id: "group-lid-1",
       remoteJid: "123@g.us",
       participant: "444@lid",
       text: "ping",
@@ -246,14 +246,17 @@ describe("web monitor inbox", () => {
   });
 
   it("captures reply context from quoted messages", async () => {
-    await expectQuotedReplyContext({ conversation: "original" });
+    await expectQuotedReplyContext({ conversation: "original" }, "quoted-1");
   });
 
   it("captures reply context from wrapped quoted messages", async () => {
-    await expectQuotedReplyContext({
-      viewOnceMessageV2Extension: {
-        message: { conversation: "original" },
+    await expectQuotedReplyContext(
+      {
+        viewOnceMessageV2Extension: {
+          message: { conversation: "original" },
+        },
       },
-    });
+      "quoted-2",
+    );
   });
 });

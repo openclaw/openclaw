@@ -326,9 +326,13 @@ describe("sendMessageMatrix threads", () => {
   });
 
   it("includes thread relation metadata when threadId is set", async () => {
+    vi.resetModules();
+    const runtimeModule = await import("../runtime.js");
+    runtimeModule.setMatrixRuntime(runtimeStub);
+    const sendModule = await import("./send.js");
     const { client, sendMessage } = makeClient();
 
-    await sendMessageMatrix("room:!room:example", "hello thread", {
+    await sendModule.sendMessageMatrix("room:!room:example", "hello thread", {
       client,
       threadId: "$thread",
     });
@@ -349,9 +353,13 @@ describe("sendMessageMatrix threads", () => {
   });
 
   it("resolves text chunk limit using the active Matrix account", async () => {
+    vi.resetModules();
+    const runtimeModule = await import("../runtime.js");
+    runtimeModule.setMatrixRuntime(runtimeStub);
+    const sendModule = await import("./send.js");
     const { client } = makeClient();
 
-    await sendMessageMatrix("room:!room:example", "hello", {
+    await sendModule.sendMessageMatrix("room:!room:example", "hello", {
       client,
       accountId: "ops",
     });

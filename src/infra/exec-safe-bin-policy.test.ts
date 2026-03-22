@@ -12,10 +12,10 @@ import {
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
 
-const SAFE_BIN_DOC_DEFAULTS_START = '[//]: # "SAFE_BIN_DEFAULTS:START"';
-const SAFE_BIN_DOC_DEFAULTS_END = '[//]: # "SAFE_BIN_DEFAULTS:END"';
-const SAFE_BIN_DOC_DENIED_FLAGS_START = '[//]: # "SAFE_BIN_DENIED_FLAGS:START"';
-const SAFE_BIN_DOC_DENIED_FLAGS_END = '[//]: # "SAFE_BIN_DENIED_FLAGS:END"';
+const SAFE_BIN_DOC_DEFAULTS_START = "<!-- SAFE_BIN_DEFAULTS:START -->";
+const SAFE_BIN_DOC_DEFAULTS_END = "<!-- SAFE_BIN_DEFAULTS:END -->";
+const SAFE_BIN_DOC_DENIED_FLAGS_START = "<!-- SAFE_BIN_DENIED_FLAGS:START -->";
+const SAFE_BIN_DOC_DENIED_FLAGS_END = "<!-- SAFE_BIN_DENIED_FLAGS:END -->";
 
 function buildDeniedFlagArgvVariants(flag: string): string[][] {
   const value = "blocked";
