@@ -7,6 +7,7 @@ describe("doctor channel capabilities", () => {
       dmAllowFromMode: "nestedOnly",
       groupModel: "sender",
       groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: true,
     });
   });
 
@@ -15,6 +16,16 @@ describe("doctor channel capabilities", () => {
       dmAllowFromMode: "topOnly",
       groupModel: "hybrid",
       groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: false,
+    });
+  });
+
+  it("preserves empty sender allowlist warnings for msteams hybrid routing", () => {
+    expect(getDoctorChannelCapabilities("msteams")).toEqual({
+      dmAllowFromMode: "topOnly",
+      groupModel: "hybrid",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: true,
     });
   });
 
@@ -23,6 +34,7 @@ describe("doctor channel capabilities", () => {
       dmAllowFromMode: "topOnly",
       groupModel: "sender",
       groupAllowFromFallbackToAllowFrom: true,
+      warnOnEmptyGroupSenderAllowlist: true,
     });
   });
 });

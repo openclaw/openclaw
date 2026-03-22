@@ -11,7 +11,7 @@ type CollectEmptyAllowlistPolicyWarningsParams = {
 };
 
 function usesSenderBasedGroupAllowlist(channelName?: string): boolean {
-  return getDoctorChannelCapabilities(channelName).groupModel === "sender";
+  return getDoctorChannelCapabilities(channelName).warnOnEmptyGroupSenderAllowlist;
 }
 
 function allowsGroupAllowFromFallback(channelName?: string): boolean {
