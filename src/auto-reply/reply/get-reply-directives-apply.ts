@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -11,6 +12,7 @@ import type { createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
+type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
 let commandsStatusPromise: Promise<typeof import("./commands-status.runtime.js")> | null = null;
 let directiveLevelsPromise: Promise<typeof import("./directive-handling.levels.js")> | null = null;
@@ -69,6 +71,7 @@ export async function applyInlineDirectiveOverrides(params: {
   agentId: string;
   agentDir: string;
   agentCfg: AgentDefaults;
+  agentEntry?: AgentEntry;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
@@ -102,6 +105,7 @@ export async function applyInlineDirectiveOverrides(params: {
     agentId,
     agentDir,
     agentCfg,
+    agentEntry,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -156,6 +160,16 @@ export async function applyInlineDirectiveOverrides(params: {
 
   let directiveAck: ReplyPayload | undefined;
 
+  if (modelState.resetModelOverride) {
+    enqueueSystemEvent(
+      `Model override not allowed for this agent; reverted to ${initialModelLabel}.`,
+      {
+        sessionKey,
+        contextKey: `model:reset:${initialModelLabel}`,
+      },
+    );
+  }
+
   if (!command.isAuthorizedSender) {
     directives = clearInlineDirectives(directives.cleaned);
   }
@@ -184,6 +198,7 @@ export async function applyInlineDirectiveOverrides(params: {
       await loadDirectiveLevels()
     ).resolveCurrentDirectiveLevels({
       sessionEntry,
+      agentEntry,
       agentCfg,
       resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
     });
