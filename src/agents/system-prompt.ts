@@ -72,6 +72,24 @@ function buildMemorySection(params: {
   return lines;
 }
 
+export function buildChannelSection(params: {
+  channelType?: string;
+  channelId?: string;
+  topicId?: string;
+}): string[] {
+  if (!params.channelType) {
+    return [];
+  }
+  return [
+    "## Current Channel",
+    `Channel: ${sanitizeForPromptLiteral(params.channelType)} | Topic: ${sanitizeForPromptLiteral(params.topicId ?? "main")} | ID: ${sanitizeForPromptLiteral(params.channelId ?? "unknown")}`,
+    "Rule: Only respond to messages from this channel and topic.",
+    "Rule: Do NOT reference conversations from other channels.",
+    `Rule: If a message is not for this channel, reply ${SILENT_REPLY_TOKEN}.`,
+    "",
+  ];
+}
+
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
   if (!ownerLine || isMinimal) {
     return [];
@@ -242,6 +260,9 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  channelType?: string;
+  channelId?: string;
+  topicId?: string;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
@@ -488,8 +509,13 @@ export function buildAgentSystemPrompt(params: {
     "- openclaw gateway restart",
     "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
     "",
-    ...skillsSection,
+    ...buildChannelSection({
+      channelType: params.channelType,
+      channelId: params.channelId,
+      topicId: params.topicId,
+    }),
     ...memorySection,
+    ...skillsSection,
     // Skip self-update for subagent/none modes
     hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
     hasGateway && !isMinimal

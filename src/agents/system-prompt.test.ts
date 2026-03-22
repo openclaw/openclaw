@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
-import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
+import { buildAgentSystemPrompt, buildChannelSection, buildRuntimeLine } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
   it("formats owner section for plain, hash, and missing owner lists", () => {
@@ -678,6 +678,32 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
+  });
+});
+
+describe("buildChannelSection", () => {
+  it("returns empty array when no channelType", () => {
+    expect(buildChannelSection({})).toEqual([]);
+  });
+
+  it("includes channel type and topic", () => {
+    const lines = buildChannelSection({
+      channelType: "telegram",
+      channelId: "12345",
+      topicId: "17",
+    });
+    const text = lines.join("\n");
+    expect(text).toContain("Channel: telegram");
+    expect(text).toContain("Topic: 17");
+    expect(text).toContain("NO_REPLY");
+  });
+
+  it("defaults topic to main when not provided", () => {
+    const lines = buildChannelSection({
+      channelType: "web",
+      channelId: "ui-1",
+    });
+    expect(lines.join("\n")).toContain("Topic: main");
   });
 });
 
