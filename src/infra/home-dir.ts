@@ -3,7 +3,13 @@ import path from "node:path";
 
 function normalize(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed === "undefined" || trimmed === "null") {
+    return undefined;
+  }
+  return trimmed;
 }
 
 export function resolveEffectiveHomeDir(
