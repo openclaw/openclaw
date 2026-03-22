@@ -1,3 +1,4 @@
+import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution";
 import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
@@ -28,17 +29,9 @@ export function resolveTelegramToken(
   // be normalized, so resolve per-account config by matching normalized IDs.
   const resolveAccountCfg = (id: string): TelegramAccountConfig | undefined => {
     const accounts = telegramCfg?.accounts;
-    if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
-      return undefined;
-    }
-    // Direct hit (already normalized key)
-    const direct = accounts[id];
-    if (direct) {
-      return direct;
-    }
-    // Fallback: match by normalized key
-    const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === id);
-    return matchKey ? accounts[matchKey] : undefined;
+    return Array.isArray(accounts)
+      ? undefined
+      : resolveNormalizedAccountEntry(accounts, id, normalizeAccountId);
   };
 
   const accountCfg = resolveAccountCfg(

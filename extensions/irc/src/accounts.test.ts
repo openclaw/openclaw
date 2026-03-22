@@ -81,6 +81,29 @@ describe("resolveDefaultIrcAccountId", () => {
 });
 
 describe("resolveIrcAccount", () => {
+  it("matches normalized configured account ids", () => {
+    const account = resolveIrcAccount({
+      cfg: asConfig({
+        channels: {
+          irc: {
+            accounts: {
+              "Ops Team": {
+                host: "irc.example.com",
+                nick: "claw",
+              },
+            },
+          },
+        },
+      }),
+      accountId: "ops-team",
+    });
+
+    expect(account.accountId).toBe("ops-team");
+    expect(account.host).toBe("irc.example.com");
+    expect(account.nick).toBe("claw");
+    expect(account.configured).toBe(true);
+  });
+
   it("parses delimited IRC_CHANNELS env values for the default account", () => {
     const previousChannels = process.env.IRC_CHANNELS;
     process.env.IRC_CHANNELS = "alpha, beta\ngamma; delta";

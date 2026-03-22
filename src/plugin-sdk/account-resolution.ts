@@ -6,7 +6,7 @@ export {
   mergeAccountConfig,
 } from "../channels/plugins/account-helpers.js";
 export { normalizeChatType } from "../channels/chat-type.js";
-export { resolveAccountEntry } from "../routing/account-lookup.js";
+export { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 export {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
