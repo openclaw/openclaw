@@ -373,7 +373,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   flex-shrink: 0;
-  overflow: hidden;
+  overflow: visible;
   transition:
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease;
