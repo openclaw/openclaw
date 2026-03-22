@@ -18,10 +18,11 @@ mkdir -p "$OUTPUT_DIR"
 node - "$URL" "$OUTPUT_DIR" "$SLUG" << 'NODESCRIPT'
 const { chromium } = require('playwright');
 
+let browser;
 (async () => {
   const [,, url, outputDir, slug] = process.argv;
 
-  const browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true });
 
   const revealScript = `
     document.querySelectorAll('[class*="reveal"], [class*="fade"], [class*="animate"], [class*="scroll"]').forEach(el => {
@@ -43,7 +44,7 @@ const { chromium } = require('playwright');
 
   // Desktop screenshot (1280px)
   const desktopPage = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  await desktopPage.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+  await desktopPage.goto(url, { waitUntil: 'load', timeout: 30000 });
   await desktopPage.evaluate(revealScript);
   await desktopPage.waitForTimeout(2000);
   await desktopPage.evaluate(() => window.scrollTo(0, 0));
@@ -54,7 +55,7 @@ const { chromium } = require('playwright');
 
   // Mobile screenshot (375px)
   const mobilePage = await browser.newPage({ viewport: { width: 375, height: 812 } });
-  await mobilePage.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+  await mobilePage.goto(url, { waitUntil: 'load', timeout: 30000 });
   await mobilePage.evaluate(revealScript);
   await mobilePage.waitForTimeout(2000);
   await mobilePage.evaluate(() => window.scrollTo(0, 0));
@@ -65,8 +66,9 @@ const { chromium } = require('playwright');
 
   await browser.close();
   console.log('Done.');
-})().catch(err => {
+})().catch(async err => {
   console.error('Error:', err.message);
+  if (browser) await browser.close().catch(() => {});
   process.exit(1);
 });
 NODESCRIPT
