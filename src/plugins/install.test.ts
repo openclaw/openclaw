@@ -840,25 +840,13 @@ describe("installPluginFromDir", () => {
     expectInstalledWithPluginId(res, extensionsDir, "@openclaw/test-plugin");
   });
 
-  it("rejects bare @ as an invalid scoped id", () => {
-    expect(() => resolvePluginInstallDir("@")).toThrow(
-      "invalid plugin name: scoped ids must use @scope/name format",
-    );
-  });
+  it("keeps scoped install-dir validation aligned", () => {
+    for (const invalidId of ["@", "@/name", "team/name"]) {
+      expect(() => resolvePluginInstallDir(invalidId)).toThrow(
+        "invalid plugin name: scoped ids must use @scope/name format",
+      );
+    }
 
-  it("rejects empty scoped segments like @/name", () => {
-    expect(() => resolvePluginInstallDir("@/name")).toThrow(
-      "invalid plugin name: scoped ids must use @scope/name format",
-    );
-  });
-
-  it("rejects two-segment ids without a scope prefix", () => {
-    expect(() => resolvePluginInstallDir("team/name")).toThrow(
-      "invalid plugin name: scoped ids must use @scope/name format",
-    );
-  });
-
-  it("uses a unique hashed install dir for scoped ids", () => {
     const extensionsDir = path.join(makeTempDir(), "extensions");
     const scopedTarget = resolvePluginInstallDir("@scope/name", extensionsDir);
     const hashedFlatId = safePathSegmentHashed("@scope/name");
