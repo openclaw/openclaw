@@ -185,8 +185,8 @@ jobs:
         run: pnpm release:check
 
   checks:
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    needs: [docs-scope, changed-scope, build-artifacts]
+    if: always() && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     strategy:
       fail-fast: false
@@ -262,6 +262,17 @@ jobs:
             echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
             echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
           fi
+
+      - name: Download dist artifact
+        if: github.event_name == 'push' && matrix.task == 'test'
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Build dist
+        if: github.event_name != 'push' && matrix.task == 'test' && matrix.runtime == 'node'
+        run: pnpm build
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
@@ -570,8 +581,8 @@ jobs:
         run: pre-commit run --all-files pnpm-audit-prod
 
   checks-windows:
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_windows == 'true'
+    needs: [docs-scope, changed-scope, build-artifacts]
+    if: always() && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_windows == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-32vcpu-windows-2025
     timeout-minutes: 45
     env:
@@ -690,6 +701,17 @@ jobs:
       - name: Build A2UI bundle (Windows)
         if: matrix.task == 'test'
         run: pnpm canvas:a2ui:bundle
+
+      - name: Download dist artifact
+        if: github.event_name == 'push' && matrix.task == 'test'
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Build dist (Windows)
+        if: github.event_name != 'push' && matrix.task == 'test'
+        run: pnpm build
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
