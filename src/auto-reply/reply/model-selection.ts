@@ -16,6 +16,7 @@ import {
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import type { ThinkLevel } from "./directives.js";
@@ -60,6 +61,45 @@ function loadModelCatalogRuntime() {
 function loadSessionStoreRuntime() {
   sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
   return sessionStoreRuntimePromise;
+}
+
+/**
+ * Collect all configured image models (primary + fallbacks) into a Set of model keys.
+ * Returns a Set of "provider/model" strings for quick lookup.
+ */
+function collectImageModelKeys(imageModelConfig: AgentModelConfig | undefined): Set<string> {
+  const keys = new Set<string>();
+  if (!imageModelConfig) {
+    return keys;
+  }
+  if (typeof imageModelConfig === "string") {
+    const trimmed = imageModelConfig.trim();
+    if (trimmed) {
+      keys.add(trimmed);
+    }
+  } else {
+    if (imageModelConfig.primary?.trim()) {
+      keys.add(imageModelConfig.primary.trim());
+    }
+    if (Array.isArray(imageModelConfig.fallbacks)) {
+      for (const fb of imageModelConfig.fallbacks) {
+        if (fb?.trim()) {
+          keys.add(fb.trim());
+        }
+      }
+    }
+  }
+  return keys;
+}
+
+/**
+ * Check if a given provider/model combination is in the set of image models.
+ * Normalizes the key format for comparison.
+ */
+function isImageModel(provider: string, model: string, imageModelKeys: Set<string>): boolean {
+  const key = modelKey(provider, model);
+  // Check both "provider/model" format and raw model string
+  return imageModelKeys.has(key) || imageModelKeys.has(`${provider}/${model}`);
 }
 
 const FUZZY_VARIANT_TOKENS = [
@@ -416,11 +456,25 @@ export async function createModelSelectionState(params: {
     parentSessionKey,
   });
   // Skip stored session model override only when an explicit heartbeat.model
-  // was resolved. For image-triggered model switches, we still respect stored
-  // overrides - if the user explicitly selected a model with /model, honor it.
+  // was resolved. For image-triggered model switches, we check if the stored
+  // override model supports images (is in the imageModel list). If not, we
+  // skip the stored override to allow automatic image model switching.
   // Heartbeat runs without heartbeat.model should still inherit
   // the regular session/parent model override behavior.
-  const skipStoredOverride = params.hasResolvedHeartbeatModelOverride === true;
+  const skipForHeartbeat = params.hasResolvedHeartbeatModelOverride === true;
+
+  // When images triggered a model switch, check if stored override is an image model
+  let skipForImageSwitch = false;
+  if (params.hasAppliedImageModelOverride && storedOverride?.model) {
+    const imageModelKeys = collectImageModelKeys(cfg.agents?.defaults?.imageModel);
+    const storedProvider = storedOverride.provider || defaultProvider;
+    if (!isImageModel(storedProvider, storedOverride.model, imageModelKeys)) {
+      // Stored override is not an image model, skip it for image requests
+      skipForImageSwitch = true;
+    }
+  }
+
+  const skipStoredOverride = skipForHeartbeat || skipForImageSwitch;
   // Track if we're using a stored override (for auth profile logic below)
   let usingStoredOverride = false;
   if (storedOverride?.model && !skipStoredOverride) {
