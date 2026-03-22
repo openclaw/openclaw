@@ -16,19 +16,19 @@ vi.mock("../agents/openai-codex-oauth.js", () => ({
 vi.mock("../plugins/provider-oauth-flow.js", () => ({
   createVpsAwareOAuthHandlers: mocks.createVpsAwareOAuthHandlers,
 }));
-
 vi.mock("../plugins/provider-openai-codex-oauth-tls.js", () => ({
   runOpenAIOAuthTlsPreflight: mocks.runOpenAIOAuthTlsPreflight,
   formatOpenAIOAuthTlsPreflightFix: mocks.formatOpenAIOAuthTlsPreflightFix,
 }));
 
-import { loginOpenAICodexOAuth } from "./openai-codex-oauth.js";
+import { loginOpenAICodexOAuth } from "../plugins/provider-openai-codex-oauth.js";
 
 function createPrompter() {
   const spin = { update: vi.fn(), stop: vi.fn() };
-  const prompter: Pick<WizardPrompter, "note" | "progress"> = {
+  const prompter: Pick<WizardPrompter, "note" | "progress" | "text"> = {
     note: vi.fn(async () => {}),
     progress: vi.fn(() => spin),
+    text: vi.fn(async () => "http://localhost:1455/auth/callback?code=test"),
   };
   return { prompter: prompter as unknown as WizardPrompter, spin };
 }
@@ -43,14 +43,17 @@ function createRuntime(): RuntimeEnv {
   };
 }
 
-async function runCodexOAuth(params: { isRemote: boolean }) {
+async function runCodexOAuth(params: {
+  isRemote: boolean;
+  openUrl?: (url: string) => Promise<void>;
+}) {
   const { prompter, spin } = createPrompter();
   const runtime = createRuntime();
   const result = await loginOpenAICodexOAuth({
     prompter,
     runtime,
     isRemote: params.isRemote,
-    openUrl: async () => {},
+    openUrl: params.openUrl ?? (async () => {}),
   });
   return { result, prompter, spin, runtime };
 }
@@ -106,12 +109,14 @@ describe("loginOpenAICodexOAuth", () => {
       },
     );
 
-    await runCodexOAuth({ isRemote: false });
+    const openUrl = vi.fn(async () => {});
+    const { runtime } = await runCodexOAuth({ isRemote: false, openUrl });
 
-    expect(onAuthSpy).toHaveBeenCalledTimes(1);
-    const event = onAuthSpy.mock.calls[0]?.[0] as { url: string };
-    expect(event.url).toBe(
+    expect(openUrl).toHaveBeenCalledWith(
       "https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Open: https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
     );
   });
 
