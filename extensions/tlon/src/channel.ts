@@ -1,9 +1,10 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/infra-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
 import {
@@ -43,10 +44,9 @@ const tlonSetupWizardProxy = createTlonSetupWizardBase({
 
 const tlonConfigAdapter = createHybridChannelConfigAdapter({
   sectionKey: TLON_CHANNEL_ID,
-  listAccountIds: (cfg: OpenClawConfig) => listTlonAccountIds(cfg),
-  resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
-    resolveTlonAccount(cfg, accountId ?? undefined),
-  defaultAccountId: () => "default",
+  listAccountIds: listTlonAccountIds,
+  resolveAccount: resolveTlonAccount,
+  defaultAccountId: () => DEFAULT_ACCOUNT_ID,
   clearBaseFields: ["ship", "code", "url", "name"],
   preserveSectionOnDefaultDelete: true,
   resolveAllowFrom: (account) => account.dmAllowlist,

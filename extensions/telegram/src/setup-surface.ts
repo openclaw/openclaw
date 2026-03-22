@@ -27,6 +27,31 @@ import {
 
 const channel = "telegram" as const;
 
+function ensureTelegramDefaultGroupMentionGate(
+  cfg: OpenClawConfig,
+  accountId: string,
+): OpenClawConfig {
+  const resolved = resolveTelegramAccount({ cfg, accountId });
+  const wildcardGroup = resolved.config.groups?.["*"];
+  if (wildcardGroup?.requireMention !== undefined) {
+    return cfg;
+  }
+  return patchChannelConfigForAccount({
+    cfg,
+    channel,
+    accountId,
+    patch: {
+      groups: {
+        ...resolved.config.groups,
+        "*": {
+          ...wildcardGroup,
+          requireMention: true,
+        },
+      },
+    },
+  });
+}
+
 function shouldShowTelegramDmAccessWarning(cfg: OpenClawConfig, accountId: string): boolean {
   const merged = mergeTelegramAccountConfig(cfg, accountId);
   const policy = merged.dmPolicy ?? "pairing";
@@ -80,6 +105,10 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         return account.configured;
       }),
   },
+  prepare: async ({ cfg, accountId, credentialValues }) => ({
+    cfg: ensureTelegramDefaultGroupMentionGate(cfg, accountId),
+    credentialValues,
+  }),
   credentials: [
     {
       inputKey: "token",
@@ -119,10 +148,11 @@ export const telegramSetupWizard: ChannelSetupWizard = {
       "Telegram token missing; use numeric sender ids (usernames require a bot token).",
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
-    resolveEntries: async ({ credentialValues, entries }) =>
+    resolveEntries: async ({ cfg, accountId, credentialValues, entries }) =>
       resolveTelegramAllowFromEntries({
         credentialValue: credentialValues.token,
         entries,
+        apiRoot: resolveTelegramAccount({ cfg, accountId }).config.apiRoot,
       }),
     apply: async ({ cfg, accountId, allowFrom }) =>
       patchChannelConfigForAccount({

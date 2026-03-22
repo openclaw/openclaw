@@ -117,6 +117,23 @@ describe("resolveTelegramToken", () => {
     expect(res.source).toBe("config");
   });
 
+  it("resolves per-account tokens when config keys normalize spaces to dashes", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            "Carey Notifications": { botToken: "acct-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "carey-notifications" });
+    expect(res.token).toBe("acct-token");
+    expect(res.source).toBe("config");
+  });
+
   it("falls back to top-level token for non-default accounts without account token", () => {
     const cfg = {
       channels: {

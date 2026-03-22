@@ -1,8 +1,8 @@
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   collectStatusIssuesFromLastError,
@@ -116,7 +116,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   },
   allowlist: buildDmGroupAccountAllowlistAdapter({
     channelId: "imessage",
-    resolveAccount: ({ cfg, accountId }) => resolveIMessageAccount({ cfg, accountId }),
+    resolveAccount: resolveIMessageAccount,
     normalize: ({ values }) => formatTrimmedAllowFromEntries(values),
     resolveDmAllowFrom: (account) => account.config.allowFrom,
     resolveGroupAllowFrom: (account) => account.config.groupAllowFrom,

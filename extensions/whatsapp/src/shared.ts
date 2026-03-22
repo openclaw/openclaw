@@ -1,4 +1,5 @@
 import {
+  adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -36,7 +37,7 @@ export const whatsappSetupWizardProxy = createWhatsAppSetupWizardProxy(
 const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppAccount>({
   sectionKey: WHATSAPP_CHANNEL,
   listAccountIds: listWhatsAppAccountIds,
-  resolveAccount: (cfg, accountId) => resolveWhatsAppAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveWhatsAppAccount),
   defaultAccountId: resolveDefaultWhatsAppAccountId,
   clearBaseFields: [],
   allowTopLevel: false,

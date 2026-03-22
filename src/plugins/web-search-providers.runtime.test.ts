@@ -72,6 +72,7 @@ describe("resolvePluginWebSearchProviders", () => {
   beforeEach(() => {
     loadOpenClawPluginsMock.mockClear();
     setActivePluginRegistry(createEmptyPluginRegistry());
+    vi.useRealTimers();
   });
 
   afterEach(() => {
@@ -91,6 +92,212 @@ describe("resolvePluginWebSearchProviders", () => {
       "tavily:tavily",
     ]);
     expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("memoizes snapshot provider resolution for the same config and env", () => {
+    const config = {
+      plugins: {
+        allow: ["brave"],
+      },
+    };
+    const env = { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
+
+    const first = resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+    const second = resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(second).toBe(first);
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates the snapshot cache when config or env contents change in place", () => {
+    const config = {
+      plugins: {
+        allow: ["brave"],
+      },
+    };
+    const env = {
+      OPENCLAW_HOME: "/tmp/openclaw-home-a",
+    } as NodeJS.ProcessEnv;
+
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+    config.plugins.allow = ["perplexity"];
+    env.OPENCLAW_HOME = "/tmp/openclaw-home-b";
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips web-search snapshot memoization when plugin cache opt-outs are set", () => {
+    const config = {
+      plugins: {
+        allow: ["brave"],
+      },
+    };
+    const env = {
+      OPENCLAW_HOME: "/tmp/openclaw-home",
+      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+    } as NodeJS.ProcessEnv;
+
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips web-search snapshot memoization when discovery cache ttl is zero", () => {
+    const config = {
+      plugins: {
+        allow: ["brave"],
+      },
+    };
+    const env = {
+      OPENCLAW_HOME: "/tmp/openclaw-home",
+      OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "0",
+    } as NodeJS.ProcessEnv;
+
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates the snapshot cache when global Vitest fallback changes", () => {
+    const originalVitest = process.env.VITEST;
+    const config = {};
+    const env = { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
+
+    try {
+      delete process.env.VITEST;
+      resolvePluginWebSearchProviders({
+        config,
+        env,
+        bundledAllowlistCompat: true,
+        workspaceDir: "/tmp/workspace",
+      });
+
+      process.env.VITEST = "1";
+      resolvePluginWebSearchProviders({
+        config,
+        env,
+        bundledAllowlistCompat: true,
+        workspaceDir: "/tmp/workspace",
+      });
+    } finally {
+      if (originalVitest === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = originalVitest;
+      }
+    }
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("expires web-search snapshot memoization after the shortest plugin cache ttl", () => {
+    vi.useFakeTimers();
+    const config = {
+      plugins: {
+        allow: ["brave"],
+      },
+    };
+    const env = {
+      OPENCLAW_HOME: "/tmp/openclaw-home",
+      OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5",
+      OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "20",
+    } as NodeJS.ProcessEnv;
+
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+    vi.advanceTimersByTime(4);
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+    vi.advanceTimersByTime(2);
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates web-search snapshots when cache-control env values change in place", () => {
+    const config = {
+      plugins: {
+        allow: ["brave"],
+      },
+    };
+    const env = {
+      OPENCLAW_HOME: "/tmp/openclaw-home",
+      OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "1000",
+    } as NodeJS.ProcessEnv;
+
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS = "5";
+
+    resolvePluginWebSearchProviders({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
   });
 
   it("prefers the active plugin registry for runtime resolution", () => {
