@@ -1,3 +1,4 @@
+import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import {
   resolveConfiguredMatrixAccountIds,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -8,25 +9,9 @@ import {
   normalizeAccountId,
 } from "../runtime-api.js";
 import type { CoreConfig, MatrixConfig } from "../types.js";
-import { findMatrixAccountConfig, resolveMatrixBaseConfig } from "./account-config.js";
+import { resolveMatrixBaseConfig } from "./account-config.js";
 import { resolveMatrixConfigForAccount } from "./client.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials-read.js";
-
-/** Merge account config with top-level defaults, preserving nested objects. */
-function mergeAccountConfig(base: MatrixConfig, account: MatrixConfig): MatrixConfig {
-  const merged = { ...base, ...account };
-  // Deep-merge known nested objects so partial overrides inherit base fields
-  for (const key of ["dm", "actions"] as const) {
-    const b = base[key];
-    const o = account[key];
-    if (typeof b === "object" && b != null && typeof o === "object" && o != null) {
-      (merged as Record<string, unknown>)[key] = { ...b, ...o };
-    }
-  }
-  // Don't propagate the accounts map into the merged per-account config
-  delete (merged as Record<string, unknown>).accounts;
-  return merged;
-}
 
 export type ResolvedMatrixAccount = {
   accountId: string;
@@ -145,12 +130,13 @@ export function resolveMatrixAccountConfig(params: {
   accountId?: string | null;
 }): MatrixConfig {
   const accountId = normalizeAccountId(params.accountId);
-  const matrixBase = resolveMatrixBaseConfig(params.cfg);
-  const accountConfig = findMatrixAccountConfig(params.cfg, accountId);
-  if (!accountConfig) {
-    return matrixBase;
-  }
-  // Merge account-specific config with top-level defaults so settings like
-  // groupPolicy and blockStreaming inherit when not overridden.
-  return mergeAccountConfig(matrixBase, accountConfig);
+  return resolveMergedAccountConfig<MatrixConfig>({
+    channelConfig: resolveMatrixBaseConfig(params.cfg),
+    accounts: params.cfg.channels?.matrix?.accounts as
+      | Record<string, Partial<MatrixConfig>>
+      | undefined,
+    accountId,
+    normalizeAccountId,
+    nestedObjectKeys: ["dm", "actions"],
+  });
 }

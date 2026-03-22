@@ -87,4 +87,31 @@ describe("resolveMattermostReplyToMode", () => {
     const account = resolveMattermostAccount({ cfg: {}, accountId: "default" });
     expect(resolveMattermostReplyToMode(account, "channel")).toBe("off");
   });
+
+  it("preserves shared commands config when an account overrides one commands field", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            commands: {
+              native: true,
+            },
+            accounts: {
+              work: {
+                commands: {
+                  callbackPath: "/hooks/work",
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(account.config.commands).toEqual({
+      native: true,
+      callbackPath: "/hooks/work",
+    });
+  });
 });

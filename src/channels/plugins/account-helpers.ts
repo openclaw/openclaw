@@ -123,6 +123,7 @@ export function mergeAccountConfig<TConfig extends Record<string, unknown>>(para
   channelConfig: TConfig | undefined;
   accountConfig: Partial<TConfig> | undefined;
   omitKeys?: string[];
+  nestedObjectKeys?: string[];
 }): TConfig {
   const omitKeys = new Set(["accounts", ...(params.omitKeys ?? [])]);
   const base = Object.fromEntries(
@@ -130,10 +131,28 @@ export function mergeAccountConfig<TConfig extends Record<string, unknown>>(para
       ([key]) => !omitKeys.has(key),
     ),
   ) as TConfig;
-  return {
+  const merged = {
     ...base,
     ...params.accountConfig,
   };
+  for (const key of params.nestedObjectKeys ?? []) {
+    const baseValue = base[key as keyof TConfig];
+    const accountValue = params.accountConfig?.[key as keyof TConfig];
+    if (
+      typeof baseValue === "object" &&
+      baseValue != null &&
+      !Array.isArray(baseValue) &&
+      typeof accountValue === "object" &&
+      accountValue != null &&
+      !Array.isArray(accountValue)
+    ) {
+      (merged as Record<string, unknown>)[key] = {
+        ...(baseValue as Record<string, unknown>),
+        ...(accountValue as Record<string, unknown>),
+      };
+    }
+  }
+  return merged;
 }
 
 export function resolveMergedAccountConfig<TConfig extends Record<string, unknown>>(params: {
@@ -142,6 +161,7 @@ export function resolveMergedAccountConfig<TConfig extends Record<string, unknow
   accountId: string;
   omitKeys?: string[];
   normalizeAccountId?: (accountId: string) => string;
+  nestedObjectKeys?: string[];
 }): TConfig {
   const accountConfig = params.normalizeAccountId
     ? resolveNormalizedAccountEntry(params.accounts, params.accountId, params.normalizeAccountId)
@@ -150,5 +170,6 @@ export function resolveMergedAccountConfig<TConfig extends Record<string, unknow
     channelConfig: params.channelConfig,
     accountConfig,
     omitKeys: params.omitKeys,
+    nestedObjectKeys: params.nestedObjectKeys,
   });
 }

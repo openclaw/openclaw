@@ -152,4 +152,33 @@ describe("resolveIrcAccount", () => {
     expect(account.passwordSource).toBe("none");
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it("preserves shared NickServ config when an account overrides one NickServ field", () => {
+    const account = resolveIrcAccount({
+      cfg: asConfig({
+        channels: {
+          irc: {
+            host: "irc.example.com",
+            nick: "claw",
+            nickserv: {
+              service: "NickServ",
+            },
+            accounts: {
+              work: {
+                nickserv: {
+                  registerEmail: "work@example.com",
+                },
+              },
+            },
+          },
+        },
+      }),
+      accountId: "work",
+    });
+
+    expect(account.config.nickserv).toEqual({
+      service: "NickServ",
+      registerEmail: "work@example.com",
+    });
+  });
 });

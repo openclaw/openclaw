@@ -267,4 +267,47 @@ describe("resolveMatrixAccount", () => {
       "@ops:example.org",
     ]);
   });
+
+  it("preserves shared nested dm and actions config when an account overrides one field", () => {
+    const account = resolveMatrixAccount({
+      cfg: {
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.example.org",
+            accessToken: "main-token",
+            dm: {
+              enabled: true,
+              policy: "pairing",
+            },
+            actions: {
+              reactions: true,
+              messages: true,
+            },
+            accounts: {
+              ops: {
+                accessToken: "ops-token",
+                dm: {
+                  allowFrom: ["@ops:example.org"],
+                },
+                actions: {
+                  messages: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "ops",
+    });
+
+    expect(account.config.dm).toEqual({
+      enabled: true,
+      policy: "pairing",
+      allowFrom: ["@ops:example.org"],
+    });
+    expect(account.config.actions).toEqual({
+      reactions: true,
+      messages: false,
+    });
+  });
 });
