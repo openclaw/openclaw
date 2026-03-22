@@ -528,12 +528,13 @@ export function attachGatewayWsMessageHandler(params: {
             trustedProxyAuthOk,
             sharedAuthOk,
             authOk,
+            authMethod,
             hasSharedAuth,
             isLocalClient,
           });
           // Shared token/password auth can bypass pairing for trusted operators.
           // Device-less clients only keep self-declared scopes on the explicit
-          // allow path, including trusted token-authenticated backend operators.
+          // allow path, including trusted token-authenticated backend operators (#51396).
           if (!device && decision.kind !== "allow") {
             clearUnboundScopes();
           }

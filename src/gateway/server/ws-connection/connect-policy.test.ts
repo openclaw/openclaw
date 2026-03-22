@@ -141,6 +141,23 @@ describe("ws connect policy", () => {
       }).kind,
     ).toBe("reject-unauthorized");
 
+    // #51396: non-local token-auth backend clients retain scopes when authOk
+    // (primary auth) succeeded, even if sharedAuthOk (probe) disagrees.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: false,
+        controlUiAuthPolicy: policy,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: true,
+        authMethod: "token",
+        hasSharedAuth: true,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
+
     expect(
       evaluateMissingDeviceIdentity({
         hasDeviceIdentity: false,

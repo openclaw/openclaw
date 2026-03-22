@@ -89,6 +89,7 @@ export function evaluateMissingDeviceIdentity(params: {
   trustedProxyAuthOk?: boolean;
   sharedAuthOk: boolean;
   authOk: boolean;
+  authMethod?: string;
   hasSharedAuth: boolean;
   isLocalClient: boolean;
 }): MissingDeviceIdentityDecision {
@@ -116,7 +117,15 @@ export function evaluateMissingDeviceIdentity(params: {
       return { kind: "reject-control-ui-insecure-auth" };
     }
   }
-  if (roleCanSkipDeviceIdentity(params.role, params.sharedAuthOk)) {
+  // Operator with shared auth (token/password) skips device identity.
+  // Also allow when token/password auth succeeded directly (#51396: non-local
+  // token-auth clients were incorrectly getting scopes stripped).
+  const sharedAuthSufficient =
+    params.sharedAuthOk ||
+    (params.role === "operator" &&
+      params.authOk &&
+      (params.authMethod === "token" || params.authMethod === "password"));
+  if (roleCanSkipDeviceIdentity(params.role, sharedAuthSufficient)) {
     return { kind: "allow" };
   }
   if (!params.authOk && params.hasSharedAuth) {
