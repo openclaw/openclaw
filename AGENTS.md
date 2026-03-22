@@ -206,3 +206,24 @@
 - For manual `openclaw message send` messages that include `!`, use the heredoc pattern noted below to avoid the Bash tool’s escaping.
 - Release guardrails: do not change version numbers without operator’s explicit consent; always ask permission before running any npm publish/release step.
 - Beta release guardrail: when using a beta Git tag (for example `vYYYY.M.D-beta.N`), publish npm with a matching beta version suffix (for example `YYYY.M.D-beta.N`) rather than a plain version on `--tag beta`; otherwise the plain version name gets consumed/blocked.
+
+## Daily Brief — Reporting Format
+
+- Output folder: `~/Desktop/Acquisition_Reports/`
+- After writing the markdown brief (`Daily_Brief_YYYY_MM_DD.md`), immediately render it to PDF:
+  ```
+  npx md-to-pdf --stylesheet ~/Desktop/Acquisition_Reports/brief-style.css \
+    --launch-options '{"executablePath":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome","args":["--no-sandbox"]}' \
+    ~/Desktop/Acquisition_Reports/Daily_Brief_YYYY_MM_DD.md
+  ```
+- The stylesheet (`brief-style.css`) lives in the same folder; do not delete it.
+- The PDF filename matches the markdown file (`.md` → `.pdf`).
+- Both files are kept; do not remove the markdown source after PDF generation.
+
+## Research-First Guidelines
+
+- For questions that involve researching, analyzing, or comparing topics, use `web_search` before generating a response. Do not answer from memory alone when current or external information could change the answer.
+- When the query involves technology, libraries, APIs, or external services: verify current state via search before making claims about versions, availability, or behavior.
+- After searching, cross-reference findings across at least two distinct sources when the topic is consequential (security, release decisions, architecture choices).
+- Acknowledge uncertainty when search results are sparse or conflicting; do not fill gaps with confident-sounding inference.
+- For pure code/repo questions where the answer is derivable from local files, skip web search and read the source directly.
