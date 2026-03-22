@@ -1,15 +1,12 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig, writeConfigFile } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import { installHooksFromNpmSpec, installHooksFromPath } from "../hooks/install.js";
-import { recordHookInstall } from "../hooks/installs.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { formatClawHubSpecifier, installPluginFromClawHub } from "../plugins/clawhub.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
-import { recordPluginInstall } from "../plugins/installs.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import {
   installPluginFromMarketplace,
@@ -25,17 +22,14 @@ import {
   resolveBundledInstallPlanForNpmFailure,
 } from "./plugin-install-plan.js";
 import {
-  applySlotSelectionForPlugin,
   buildPreferredClawHubSpec,
   createHookPackInstallLogger,
   createPluginInstallLogger,
-  enableInternalHookEntries,
   formatPluginInstallWithHookFallbackError,
-  logHookPackRestartHint,
-  logSlotWarnings,
   resolveFileNpmSpecToLocalPath,
   shouldFallbackFromClawHubToNpm,
 } from "./plugins-command-helpers.js";
+import { persistHookPackInstall, persistPluginInstall } from "./plugins-install-persist.js";
 
 async function installBundledPluginSource(params: {
   config: OpenClawConfig;
@@ -45,39 +39,26 @@ async function installBundledPluginSource(params: {
 }) {
   const existing = params.config.plugins?.load?.paths ?? [];
   const mergedPaths = Array.from(new Set([...existing, params.bundledSource.localPath]));
-  let next: OpenClawConfig = {
-    ...params.config,
-    plugins: {
-      ...params.config.plugins,
-      load: {
-        ...params.config.plugins?.load,
-        paths: mergedPaths,
-      },
-      entries: {
-        ...params.config.plugins?.entries,
-        [params.bundledSource.pluginId]: {
-          ...(params.config.plugins?.entries?.[params.bundledSource.pluginId] as
-            | object
-            | undefined),
-          enabled: true,
+  await persistPluginInstall({
+    config: {
+      ...params.config,
+      plugins: {
+        ...params.config.plugins,
+        load: {
+          ...params.config.plugins?.load,
+          paths: mergedPaths,
         },
       },
     },
-  };
-  next = recordPluginInstall(next, {
     pluginId: params.bundledSource.pluginId,
-    source: "path",
-    spec: params.rawSpec,
-    sourcePath: params.bundledSource.localPath,
-    installPath: params.bundledSource.localPath,
+    install: {
+      source: "path",
+      spec: params.rawSpec,
+      sourcePath: params.bundledSource.localPath,
+      installPath: params.bundledSource.localPath,
+    },
+    warningMessage: params.warning,
   });
-  const slotResult = applySlotSelectionForPlugin(next, params.bundledSource.pluginId);
-  next = slotResult.config;
-  await writeConfigFile(next);
-  logSlotWarnings(slotResult.warnings);
-  defaultRuntime.log(theme.warn(params.warning));
-  defaultRuntime.log(`Installed plugin: ${params.bundledSource.pluginId}`);
-  defaultRuntime.log("Restart the gateway to load plugins.");
 }
 
 async function tryInstallHookPackFromLocalPath(params: {
@@ -104,32 +85,31 @@ async function tryInstallHookPackFromLocalPath(params: {
 
     const existing = params.config.hooks?.internal?.load?.extraDirs ?? [];
     const merged = Array.from(new Set([...existing, params.resolvedPath]));
-    let next: OpenClawConfig = {
-      ...params.config,
-      hooks: {
-        ...params.config.hooks,
-        internal: {
-          ...params.config.hooks?.internal,
-          enabled: true,
-          load: {
-            ...params.config.hooks?.internal?.load,
-            extraDirs: merged,
+    await persistHookPackInstall({
+      config: {
+        ...params.config,
+        hooks: {
+          ...params.config.hooks,
+          internal: {
+            ...params.config.hooks?.internal,
+            enabled: true,
+            load: {
+              ...params.config.hooks?.internal?.load,
+              extraDirs: merged,
+            },
           },
         },
       },
-    };
-    next = enableInternalHookEntries(next, probe.hooks);
-    next = recordHookInstall(next, {
-      hookId: probe.hookPackId,
-      source: "path",
-      sourcePath: params.resolvedPath,
-      installPath: params.resolvedPath,
-      version: probe.version,
+      hookPackId: probe.hookPackId,
       hooks: probe.hooks,
+      install: {
+        source: "path",
+        sourcePath: params.resolvedPath,
+        installPath: params.resolvedPath,
+        version: probe.version,
+      },
+      successMessage: `Linked hook pack path: ${shortenHomePath(params.resolvedPath)}`,
     });
-    await writeConfigFile(next);
-    defaultRuntime.log(`Linked hook pack path: ${shortenHomePath(params.resolvedPath)}`);
-    logHookPackRestartHint();
     return { ok: true };
   }
 
@@ -141,19 +121,18 @@ async function tryInstallHookPackFromLocalPath(params: {
     return result;
   }
 
-  let next = enableInternalHookEntries(params.config, result.hooks);
   const source: "archive" | "path" = resolveArchiveKind(params.resolvedPath) ? "archive" : "path";
-  next = recordHookInstall(next, {
-    hookId: result.hookPackId,
-    source,
-    sourcePath: params.resolvedPath,
-    installPath: result.targetDir,
-    version: result.version,
+  await persistHookPackInstall({
+    config: params.config,
+    hookPackId: result.hookPackId,
     hooks: result.hooks,
+    install: {
+      source,
+      sourcePath: params.resolvedPath,
+      installPath: result.targetDir,
+      version: result.version,
+    },
   });
-  await writeConfigFile(next);
-  defaultRuntime.log(`Installed hook pack: ${result.hookPackId}`);
-  logHookPackRestartHint();
   return { ok: true };
 }
 
@@ -170,7 +149,6 @@ async function tryInstallHookPackFromNpmSpec(params: {
     return result;
   }
 
-  let next = enableInternalHookEntries(params.config, result.hooks);
   const installRecord = resolvePinnedNpmInstallRecordForCli(
     params.spec,
     Boolean(params.pin),
@@ -180,14 +158,12 @@ async function tryInstallHookPackFromNpmSpec(params: {
     defaultRuntime.log,
     theme.warn,
   );
-  next = recordHookInstall(next, {
-    hookId: result.hookPackId,
-    ...installRecord,
+  await persistHookPackInstall({
+    config: params.config,
+    hookPackId: result.hookPackId,
     hooks: result.hooks,
+    install: installRecord,
   });
-  await writeConfigFile(next);
-  defaultRuntime.log(`Installed hook pack: ${result.hookPackId}`);
-  logHookPackRestartHint();
   return { ok: true };
 }
 
@@ -232,23 +208,18 @@ export async function runPluginInstallCommand(params: {
     }
 
     clearPluginManifestRegistryCache();
-
-    let next = enablePluginInConfig(cfg, result.pluginId).config;
-    next = recordPluginInstall(next, {
+    await persistPluginInstall({
+      config: cfg,
       pluginId: result.pluginId,
-      source: "marketplace",
-      installPath: result.targetDir,
-      version: result.version,
-      marketplaceName: result.marketplaceName,
-      marketplaceSource: result.marketplaceSource,
-      marketplacePlugin: result.marketplacePlugin,
+      install: {
+        source: "marketplace",
+        installPath: result.targetDir,
+        version: result.version,
+        marketplaceName: result.marketplaceName,
+        marketplaceSource: result.marketplaceSource,
+        marketplacePlugin: result.marketplacePlugin,
+      },
     });
-    const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
-    next = slotResult.config;
-    await writeConfigFile(next);
-    logSlotWarnings(slotResult.warnings);
-    defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
-    defaultRuntime.log("Restart the gateway to load plugins.");
     return;
   }
 
@@ -281,8 +252,8 @@ export async function runPluginInstallCommand(params: {
         return defaultRuntime.exit(1);
       }
 
-      let next: OpenClawConfig = enablePluginInConfig(
-        {
+      await persistPluginInstall({
+        config: {
           ...cfg,
           plugins: {
             ...cfg.plugins,
@@ -292,21 +263,15 @@ export async function runPluginInstallCommand(params: {
             },
           },
         },
-        probe.pluginId,
-      ).config;
-      next = recordPluginInstall(next, {
         pluginId: probe.pluginId,
-        source: "path",
-        sourcePath: resolved,
-        installPath: resolved,
-        version: probe.version,
+        install: {
+          source: "path",
+          sourcePath: resolved,
+          installPath: resolved,
+          version: probe.version,
+        },
+        successMessage: `Linked plugin path: ${shortenHomePath(resolved)}`,
       });
-      const slotResult = applySlotSelectionForPlugin(next, probe.pluginId);
-      next = slotResult.config;
-      await writeConfigFile(next);
-      logSlotWarnings(slotResult.warnings);
-      defaultRuntime.log(`Linked plugin path: ${shortenHomePath(resolved)}`);
-      defaultRuntime.log("Restart the gateway to load plugins.");
       return;
     }
 
@@ -327,23 +292,19 @@ export async function runPluginInstallCommand(params: {
       );
       return defaultRuntime.exit(1);
     }
-    clearPluginManifestRegistryCache();
 
-    let next = enablePluginInConfig(cfg, result.pluginId).config;
+    clearPluginManifestRegistryCache();
     const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
-    next = recordPluginInstall(next, {
+    await persistPluginInstall({
+      config: cfg,
       pluginId: result.pluginId,
-      source,
-      sourcePath: resolved,
-      installPath: result.targetDir,
-      version: result.version,
+      install: {
+        source,
+        sourcePath: resolved,
+        installPath: result.targetDir,
+        version: result.version,
+      },
     });
-    const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
-    next = slotResult.config;
-    await writeConfigFile(next);
-    logSlotWarnings(slotResult.warnings);
-    defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
-    defaultRuntime.log("Restart the gateway to load plugins.");
     return;
   }
 
@@ -394,30 +355,25 @@ export async function runPluginInstallCommand(params: {
     }
 
     clearPluginManifestRegistryCache();
-
-    let next = enablePluginInConfig(cfg, result.pluginId).config;
-    next = recordPluginInstall(next, {
+    await persistPluginInstall({
+      config: cfg,
       pluginId: result.pluginId,
-      source: "clawhub",
-      spec: formatClawHubSpecifier({
-        name: result.clawhub.clawhubPackage,
-        version: result.clawhub.version,
-      }),
-      installPath: result.targetDir,
-      version: result.version,
-      integrity: result.clawhub.integrity,
-      resolvedAt: result.clawhub.resolvedAt,
-      clawhubUrl: result.clawhub.clawhubUrl,
-      clawhubPackage: result.clawhub.clawhubPackage,
-      clawhubFamily: result.clawhub.clawhubFamily,
-      clawhubChannel: result.clawhub.clawhubChannel,
+      install: {
+        source: "clawhub",
+        spec: formatClawHubSpecifier({
+          name: result.clawhub.clawhubPackage,
+          version: result.clawhub.version,
+        }),
+        installPath: result.targetDir,
+        version: result.version,
+        integrity: result.clawhub.integrity,
+        resolvedAt: result.clawhub.resolvedAt,
+        clawhubUrl: result.clawhub.clawhubUrl,
+        clawhubPackage: result.clawhub.clawhubPackage,
+        clawhubFamily: result.clawhub.clawhubFamily,
+        clawhubChannel: result.clawhub.clawhubChannel,
+      },
     });
-    const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
-    next = slotResult.config;
-    await writeConfigFile(next);
-    logSlotWarnings(slotResult.warnings);
-    defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
-    defaultRuntime.log("Restart the gateway to load plugins.");
     return;
   }
 
@@ -429,30 +385,25 @@ export async function runPluginInstallCommand(params: {
     });
     if (clawhubResult.ok) {
       clearPluginManifestRegistryCache();
-
-      let next = enablePluginInConfig(cfg, clawhubResult.pluginId).config;
-      next = recordPluginInstall(next, {
+      await persistPluginInstall({
+        config: cfg,
         pluginId: clawhubResult.pluginId,
-        source: "clawhub",
-        spec: formatClawHubSpecifier({
-          name: clawhubResult.clawhub.clawhubPackage,
-          version: clawhubResult.clawhub.version,
-        }),
-        installPath: clawhubResult.targetDir,
-        version: clawhubResult.version,
-        integrity: clawhubResult.clawhub.integrity,
-        resolvedAt: clawhubResult.clawhub.resolvedAt,
-        clawhubUrl: clawhubResult.clawhub.clawhubUrl,
-        clawhubPackage: clawhubResult.clawhub.clawhubPackage,
-        clawhubFamily: clawhubResult.clawhub.clawhubFamily,
-        clawhubChannel: clawhubResult.clawhub.clawhubChannel,
+        install: {
+          source: "clawhub",
+          spec: formatClawHubSpecifier({
+            name: clawhubResult.clawhub.clawhubPackage,
+            version: clawhubResult.clawhub.version,
+          }),
+          installPath: clawhubResult.targetDir,
+          version: clawhubResult.version,
+          integrity: clawhubResult.clawhub.integrity,
+          resolvedAt: clawhubResult.clawhub.resolvedAt,
+          clawhubUrl: clawhubResult.clawhub.clawhubUrl,
+          clawhubPackage: clawhubResult.clawhub.clawhubPackage,
+          clawhubFamily: clawhubResult.clawhub.clawhubFamily,
+          clawhubChannel: clawhubResult.clawhub.clawhubChannel,
+        },
       });
-      const slotResult = applySlotSelectionForPlugin(next, clawhubResult.pluginId);
-      next = slotResult.config;
-      await writeConfigFile(next);
-      logSlotWarnings(slotResult.warnings);
-      defaultRuntime.log(`Installed plugin: ${clawhubResult.pluginId}`);
-      defaultRuntime.log("Restart the gateway to load plugins.");
       return;
     }
     if (!shouldFallbackFromClawHubToNpm(clawhubResult.error)) {
@@ -494,9 +445,8 @@ export async function runPluginInstallCommand(params: {
     });
     return;
   }
-  clearPluginManifestRegistryCache();
 
-  let next = enablePluginInConfig(cfg, result.pluginId).config;
+  clearPluginManifestRegistryCache();
   const installRecord = resolvePinnedNpmInstallRecordForCli(
     raw,
     Boolean(opts.pin),
@@ -506,14 +456,9 @@ export async function runPluginInstallCommand(params: {
     defaultRuntime.log,
     theme.warn,
   );
-  next = recordPluginInstall(next, {
+  await persistPluginInstall({
+    config: cfg,
     pluginId: result.pluginId,
-    ...installRecord,
+    install: installRecord,
   });
-  const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
-  next = slotResult.config;
-  await writeConfigFile(next);
-  logSlotWarnings(slotResult.warnings);
-  defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
-  defaultRuntime.log("Restart the gateway to load plugins.");
 }
