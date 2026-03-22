@@ -575,7 +575,7 @@ export async function startGatewayServer(
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
   const channelRuntimeEnvs = Object.fromEntries(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
-  ) as Record<ChannelId, RuntimeEnv>;
+  ) as unknown as Record<ChannelId, RuntimeEnv>;
   const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
   const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
   let pluginServices: PluginServicesHandle | null = null;
