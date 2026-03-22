@@ -31,6 +31,7 @@ export function logModelFallbackDecision(params: {
   decision:
     | "skip_candidate"
     | "probe_cooldown_candidate"
+    | "stop_before_candidate"
     | "candidate_failed"
     | "candidate_succeeded";
   runId?: string;

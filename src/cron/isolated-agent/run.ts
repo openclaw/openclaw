@@ -8,6 +8,7 @@ import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
+import { resolveCronJobTimeoutMs } from "../service/timeout-policy.js";
 import type {
   CronDeliveryTrace,
   CronDeliveryTraceMessageTarget,
@@ -152,6 +153,17 @@ type CronExecutionResult = Awaited<ReturnType<CronExecutionRuntime["executeCronR
 type CronModelCatalogRuntime = typeof import("./run-model-catalog.runtime.js");
 type CronDeliveryRuntime = typeof import("./run-delivery.runtime.js");
 type ResolvedCronDeliveryTarget = Awaited<ReturnType<CronDeliveryRuntime["resolveDeliveryTarget"]>>;
+
+const MIN_CRON_FALLBACK_REMAINING_MS = 1_000;
+const MAX_CRON_FALLBACK_REMAINING_MS = 30_000;
+
+function resolveCronFallbackMinRemainingMs(timeoutMs: number): number {
+  const quarterTimeoutMs = Math.floor(timeoutMs / 4);
+  return Math.max(
+    MIN_CRON_FALLBACK_REMAINING_MS,
+    Math.min(MAX_CRON_FALLBACK_REMAINING_MS, quarterTimeoutMs),
+  );
+}
 
 function normalizeCronTraceTarget(
   target: CronDeliveryTraceTarget | undefined,
@@ -954,6 +966,7 @@ export async function runCronIsolatedAgentTurn(params: {
   job: CronJob;
   message: string;
   abortSignal?: AbortSignal;
+  deadlineAtMs?: number;
   signal?: AbortSignal;
   sessionKey: string;
   agentId?: string;
@@ -972,7 +985,11 @@ export async function runCronIsolatedAgentTurn(params: {
   if (!prepared.ok) {
     return prepared.result;
   }
-
+  const cronTimeoutMs = resolveCronJobTimeoutMs(params.job);
+  const fallbackMinRemainingMs =
+    typeof cronTimeoutMs === "number" && cronTimeoutMs > 0
+      ? resolveCronFallbackMinRemainingMs(cronTimeoutMs)
+      : undefined;
   try {
     const { executeCronRun } = await loadCronExecutorRuntime();
     const execution = await executeCronRun({
@@ -1003,6 +1020,9 @@ export async function runCronIsolatedAgentTurn(params: {
       isAborted,
       thinkLevel: prepared.context.thinkLevel,
       timeoutMs: prepared.context.timeoutMs,
+      suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
+      deadlineAtMs: params.deadlineAtMs,
+      fallbackMinRemainingMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
     });
     if (isAborted()) {

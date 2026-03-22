@@ -707,6 +707,104 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
+  it("stops before starting a fallback candidate when beforeAttempt requests stop", async () => {
+    const cfg = makeCfg();
+    const run = vi.fn().mockRejectedValueOnce(new Error("primary failed"));
+    const beforeAttempt = vi.fn(({ attempt }: { attempt: number }) => {
+      if (attempt === 2) {
+        return {
+          type: "stop" as const,
+          reason: "timeout" as const,
+          error: "Skipping fallback: cron budget exhausted.",
+        };
+      }
+      return undefined;
+    });
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+        beforeAttempt,
+      }),
+    ).rejects.toThrow("primary failed");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(beforeAttempt).toHaveBeenCalledTimes(2);
+    expect(beforeAttempt.mock.calls[1]?.[0]).toMatchObject({
+      attempt: 2,
+      candidate: { provider: "anthropic", model: "claude-haiku-3-5" },
+      previousAttempts: [
+        expect.objectContaining({
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          error: "primary failed",
+          reason: "unknown",
+        }),
+      ],
+    });
+  });
+
+  it("preserves the last real error when beforeAttempt stops after skipped candidates", async () => {
+    const cfg = makeCfg();
+    const primaryError = new Error("primary failed");
+    const skippedProvider = `cooldown-stop-${crypto.randomUUID()}`;
+    const store = makeSingleProviderStore({
+      provider: skippedProvider,
+      usageStat: {
+        disabledUntil: Date.now() + 60_000,
+        disabledReason: "billing",
+      },
+    });
+    const run = vi.fn().mockRejectedValueOnce(primaryError);
+    const beforeAttempt = vi.fn(({ attempt }: { attempt: number }) => {
+      if (attempt === 3) {
+        return {
+          type: "stop" as const,
+          reason: "timeout" as const,
+          error: "Skipping fallback: cron budget exhausted.",
+        };
+      }
+      return undefined;
+    });
+
+    await withTempAuthStore(store, async (tempDir) => {
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          agentDir: tempDir,
+          fallbacksOverride: [`${skippedProvider}/m1`, "anthropic/claude-haiku-3-5"],
+          run,
+          beforeAttempt,
+        }),
+      ).rejects.toBe(primaryError);
+    });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(beforeAttempt).toHaveBeenCalledTimes(2);
+    expect(beforeAttempt.mock.calls[1]?.[0]).toMatchObject({
+      attempt: 3,
+      candidate: { provider: "anthropic", model: "claude-haiku-3-5" },
+      previousAttempts: [
+        expect.objectContaining({
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          error: "primary failed",
+          reason: "unknown",
+        }),
+        expect.objectContaining({
+          provider: skippedProvider,
+          model: "m1",
+          reason: "billing",
+        }),
+      ],
+    });
+  });
+
   it("falls back on auth errors", async () => {
     await expectFallsBackToHaiku({
       provider: "openai",
