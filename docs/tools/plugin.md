@@ -231,7 +231,8 @@ Common registration methods:
 | `registerProvider`                   | Model provider (LLM) |
 | `registerChannel`                    | Chat channel         |
 | `registerTool`                       | Agent tool           |
-| `registerHook` / `on(...)`           | Lifecycle hooks      |
+| `registerHook`                       | Command / gateway hooks|
+| `on(...)`                            | Agent lifecycle hooks|
 | `registerSpeechProvider`             | Text-to-speech / STT |
 | `registerMediaUnderstandingProvider` | Image/audio analysis |
 | `registerImageGenerationProvider`    | Image generation     |
