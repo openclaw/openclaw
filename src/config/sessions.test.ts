@@ -355,6 +355,33 @@ describe("sessions", () => {
     expect(store[sessionKey]?.origin?.chatType).toBe("group");
   });
 
+  it("updateLastRoute preserves updatedAt on existing session for idle reset", async () => {
+    const mainSessionKey = "agent:main:discord:direct:12345";
+    const oldUpdatedAt = Date.now() - 10 * 60 * 1000; // 10 minutes ago
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute-preserve-updatedAt",
+      entries: {
+        [mainSessionKey]: buildMainSessionEntry({
+          updatedAt: oldUpdatedAt,
+        }),
+      },
+    });
+
+    await updateLastRoute({
+      storePath,
+      sessionKey: mainSessionKey,
+      deliveryContext: {
+        channel: "discord",
+        to: "12345",
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    // updatedAt must stay at the old value so idle reset can detect inactivity.
+    // Previously this was bumped to Date.now(), defeating idle session reset.
+    expect(store[mainSessionKey]?.updatedAt).toBe(oldUpdatedAt);
+  });
+
   it("updateSessionStoreEntry preserves existing fields when patching", async () => {
     const sessionKey = "agent:main:main";
     const { storePath } = await createSessionStoreFixture({
