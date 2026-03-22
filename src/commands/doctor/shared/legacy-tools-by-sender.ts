@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import { parseToolsBySenderTypedKey } from "../../../config/types.tools.js";
+import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { formatConfigPath, resolveConfigPathTarget } from "../../doctor-config-analysis.js";
 import { asObjectRecord } from "./object.js";
 
@@ -56,6 +57,24 @@ export function scanLegacyToolsBySenderKeys(cfg: OpenClawConfig): LegacyToolsByS
   const hits: LegacyToolsBySenderKeyHit[] = [];
   collectLegacyToolsBySenderKeyHits(cfg, [], hits);
   return hits;
+}
+
+export function collectLegacyToolsBySenderWarnings(params: {
+  hits: LegacyToolsBySenderKeyHit[];
+  doctorFixCommand: string;
+}): string[] {
+  if (params.hits.length === 0) {
+    return [];
+  }
+  const sample = params.hits[0];
+  const sampleLabel = sanitizeForLog(
+    sample ? `${sample.pathLabel}.${sample.key}` : "toolsBySender",
+  );
+  return [
+    `- Found ${params.hits.length} legacy untyped toolsBySender key${params.hits.length === 1 ? "" : "s"} (for example ${sampleLabel}).`,
+    "- Untyped sender keys are deprecated; use explicit prefixes (id:, e164:, username:, name:).",
+    `- Run "${params.doctorFixCommand}" to migrate legacy keys to typed id: entries.`,
+  ];
 }
 
 export function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
