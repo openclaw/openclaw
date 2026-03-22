@@ -13,6 +13,10 @@ import {
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
+import {
+  describeInterpreterInlineEval,
+  detectInterpreterInlineEvalArgv,
+} from "../infra/exec-inline-eval.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   inspectHostExecEnvOverrides,
@@ -91,6 +95,7 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   approvals: ResolvedExecApprovals;
   security: ExecSecurity;
   policy: ReturnType<typeof evaluateSystemRunPolicy>;
+  inlineEvalHit: ReturnType<typeof detectInterpreterInlineEvalArgv>;
   allowlistMatches: ExecAllowlistEntry[];
   analysisOk: boolean;
   allowlistSatisfied: boolean;
@@ -338,6 +343,15 @@ async function evaluateSystemRunPolicyPhase(
     skillBins: bins,
     autoAllowSkills,
   });
+  const strictInlineEval =
+    agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
+  const inlineEvalHit = strictInlineEval
+    ? (segments
+        .map((segment) =>
+          detectInterpreterInlineEvalArgv(segment.resolution?.effectiveArgv ?? segment.argv),
+        )
+        .find((entry) => entry !== null) ?? null)
+    : null;
   const isWindows = process.platform === "win32";
   const cmdInvocation = parsed.shellPayload
     ? opts.isCmdExeInvocation(segments[0]?.argv ?? [])
@@ -359,6 +373,16 @@ async function evaluateSystemRunPolicyPhase(
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: policy.eventReason,
       message: policy.errorMessage,
+    });
+    return null;
+  }
+
+  if (inlineEvalHit && !policy.approvedByAsk) {
+    await sendSystemRunDenied(opts, parsed.execution, {
+      reason: "approval-required",
+      message:
+        `SYSTEM_RUN_DENIED: approval required (` +
+        `${describeInterpreterInlineEval(inlineEvalHit)} requires explicit approval in strictInlineEval mode)`,
     });
     return null;
   }
@@ -414,6 +438,7 @@ async function evaluateSystemRunPolicyPhase(
     approvals,
     security,
     policy,
+    inlineEvalHit,
     allowlistMatches,
     analysisOk,
     allowlistSatisfied,
@@ -518,7 +543,11 @@ async function executeSystemRunPhase(
     }
   }
 
-  if (phase.policy.approvalDecision === "allow-always" && phase.security === "allowlist") {
+  if (
+    phase.policy.approvalDecision === "allow-always" &&
+    phase.security === "allowlist" &&
+    phase.inlineEvalHit === null
+  ) {
     if (phase.policy.analysisOk) {
       const patterns = resolveAllowAlwaysPatterns({
         segments: phase.segments,
