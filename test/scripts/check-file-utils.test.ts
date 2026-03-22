@@ -51,10 +51,7 @@ describe("scripts/check-file-utils collectFilesSync", () => {
       skipDirNames: new Set(["node_modules", "dist", "ignored"]),
     }).map((filePath) => toPosixPath(path.relative(rootDir, filePath)));
 
-    expect(files.toSorted((left, right) => left.localeCompare(right))).toEqual([
-      "src/keep.ts",
-      "src/nested/keep.test.ts",
-    ]);
+    expect(files.toSorted()).toEqual(["src/keep.ts", "src/nested/keep.test.ts"]);
   });
 
   it("supports custom skipped directories", () => {

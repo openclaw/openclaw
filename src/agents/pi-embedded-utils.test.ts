@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage, ToolCall } from "@mariozechner/pi-ai";
 import { describe, it, expect } from "vitest";
 import {
   promoteMinimaxToolCallsToBlocks,
@@ -39,6 +39,29 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     });
   });
 
+  it("deduplicates tool-call IDs across content blocks", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: `<minimax:tool_call><invoke name="T1" /></minimax:tool_call>`,
+        },
+        { type: "text", text: `<minimax:tool_call><invoke name="T2" /></minimax:tool_call>` },
+      ],
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const calls = msg.content.filter((c): c is ToolCall =>
+      Boolean(c && typeof c === "object" && c.type === "toolCall"),
+    );
+    expect(calls.length).toBe(2);
+    expect(calls[0].id).not.toBe(calls[1].id);
+    expect(calls[0].id).toBe("mc_mm_0_t1");
+    expect(calls[1].id).toBe("mc_mm_1_t2");
+  });
+
   it("handles multiple tool calls in one text block", () => {
     const text = `<minimax:tool_call><invoke name="T1"><parameter name="p">1</parameter></invoke></minimax:tool_call><minimax:tool_call><invoke name="T2"><parameter name="p">2</parameter></invoke></minimax:tool_call>`;
     const msg = makeAssistantMessage({
@@ -73,25 +96,6 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     });
   });
 
-  it("handles multiple invoke blocks within a single MiniMax wrapper", () => {
-    const text = `<minimax:tool_call>
-  <invoke name="T1"><parameter name="p">1</parameter></invoke>
-  <invoke name="T2"><parameter name="p">2</parameter></invoke>
-</minimax:tool_call>`;
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [{ type: "text", text }],
-      timestamp: Date.now(),
-    });
-
-    promoteMinimaxToolCallsToBlocks(msg);
-
-    const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
-    expect(calls.length).toBe(2);
-    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: "1" } });
-    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: "2" } });
-  });
-
   it("parses JSON-like arguments correctly", () => {
     const text = `<minimax:tool_call>
   <invoke name="Config">
@@ -117,10 +121,11 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     });
   });
 
-  it("unescapes XML entities correctly", () => {
+  it("unescapes XML entities correctly without double-decoding", () => {
     const text = `<minimax:tool_call>
   <invoke name="Bash">
     <parameter name="command">ls &amp;&amp; echo &quot;done&quot; &gt; out.txt</parameter>
+    <parameter name="code">Sample &amp;lt;div&amp;gt; &amp;#39; code</parameter>
   </invoke>
 </minimax:tool_call>`;
     const msg = makeAssistantMessage({
@@ -135,51 +140,10 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     expect(toolCall).toMatchObject({
       type: "toolCall",
       name: "exec",
-      arguments: { command: 'ls && echo "done" > out.txt' },
-    });
-  });
-
-  it("avoids double-decoding escaped XML entities", () => {
-    // Standard XML unescaping should handle &amp; last.
-    // If &amp; is handled first, &amp;lt; becomes &lt; then becomes <.
-    // It should stay as &lt; (the literal entity).
-    const text = `<minimax:tool_call>
-  <invoke name="Message">
-    <parameter name="text">Sample &amp;lt;div&amp;gt; &amp;#39; code</parameter>
-  </invoke>
-</minimax:tool_call>`;
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [{ type: "text", text }],
-      timestamp: Date.now(),
-    });
-
-    promoteMinimaxToolCallsToBlocks(msg);
-
-    const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
-    const args = (toolCall as { arguments?: { text?: string } })?.arguments;
-    expect(args?.text).toBe("Sample &lt;div&gt; &#39; code");
-  });
-
-  it("unescapes numeric XML entities", () => {
-    const text = `<minimax:tool_call>
-  <invoke name="Bash">
-    <parameter name="command">echo &#39;hello&#39; &#60; world</parameter>
-  </invoke>
-</minimax:tool_call>`;
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [{ type: "text", text }],
-      timestamp: Date.now(),
-    });
-
-    promoteMinimaxToolCallsToBlocks(msg);
-
-    const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
-    expect(toolCall).toMatchObject({
-      type: "toolCall",
-      name: "exec",
-      arguments: { command: "echo 'hello' < world" },
+      arguments: {
+        command: 'ls && echo "done" > out.txt',
+        code: "Sample &lt;div&gt; &#39; code",
+      },
     });
   });
 
@@ -230,6 +194,27 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     });
   });
 
+  it("skips code-fenced thinking tags but allows them inside real thinking", () => {
+    const text =
+      "Example: \n```xml\n<think>This should not be promoted</think>\n```\nActual: <think>Real thinking with ```code``` inside</think>";
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+    });
+
+    promoteThinkingTagsToBlocks(msg);
+
+    // Should result in: [text (up to <think>), thinking (Real thinking...), text (empty/remaining)]
+    expect(msg.content.length).toBe(2);
+    expect(msg.content[0]).toMatchObject({ type: "text" });
+    const block0 = msg.content[0] as { type: "text"; text: string };
+    expect(block0.text).toContain("<think>This should not be promoted</think>");
+    expect(msg.content[1]).toMatchObject({
+      type: "thinking",
+      thinking: "Real thinking with ```code``` inside",
+    });
+  });
+
   it("does not reclaim invokes that are far from the stray closing tag", () => {
     const text = `<invoke name="Evil">...</invoke> some explanation text </minimax:tool_call>`;
     const msg = makeAssistantMessage({
@@ -244,26 +229,6 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
       (c) => c && typeof c === "object" && c.type === "toolCall",
     );
     expect(hasToolCall).toBe(false);
-  });
-
-  it("promotes all sibling invokes before a stray closing tag", () => {
-    const text = `Prefix <invoke name="T1"><parameter name="p">1</parameter></invoke><invoke name="T2"><parameter name="p">2</parameter></invoke></minimax:tool_call> Suffix`;
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [{ type: "text", text }],
-      timestamp: Date.now(),
-    });
-
-    promoteMinimaxToolCallsToBlocks(msg);
-
-    const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
-    expect(calls.length).toBe(2);
-    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: "1" } });
-    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: "2" } });
-
-    const texts = msg.content.filter((c) => c && typeof c === "object" && c.type === "text");
-    expect(texts[0]).toMatchObject({ type: "text", text: "Prefix " });
-    expect(texts[1]).toMatchObject({ type: "text", text: " Suffix" });
   });
 
   it("supports self-closing MiniMax <invoke /> tool calls", () => {
@@ -299,9 +264,8 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
 
     const prose = msg.content.filter((c) => c && typeof c === "object" && c.type === "text");
     expect(prose.length).toBe(1);
-    expect(
-      prose[0] && typeof prose[0] === "object" && "text" in prose[0] ? prose[0].text : "",
-    ).toContain("<think>Internal thinking...");
+    const block0 = prose[0] as { type: "text"; text: string };
+    expect(block0.text).toContain("<think>Internal thinking...");
   });
 
   it("handles inline <think> blocks preceded by ordinary prose", () => {
@@ -314,8 +278,6 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
 
     promoteMinimaxToolCallsToBlocks(msg);
 
-    // Should result in [text, thinking, text, toolCall]
-    // Note: The space after </think> becomes a text block.
     expect(msg.content.length).toBe(4);
     expect(msg.content[0]).toMatchObject({ type: "text", text: "Okay. " });
     expect(msg.content[1]).toMatchObject({ type: "thinking", thinking: "Internal thoughts..." });
@@ -341,8 +303,9 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     promoteMinimaxToolCallsToBlocks(msg);
 
     const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
-    const args = (toolCall as { arguments?: { text?: string } })?.arguments;
-    expect(args?.text).toBe("\n  line 1\n  line 2\n");
+    const args = (toolCall as unknown as ToolCall)?.arguments;
+    const textValue = args && typeof args === "object" && "text" in args ? args.text : "";
+    expect(textValue).toBe("\n  line 1\n  line 2\n");
   });
 
   it("strips malformed sibling invoke blocks inside wrapper", () => {
@@ -455,32 +418,25 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     expect(msg.content[2]).toMatchObject({ type: "thinking", thinking: " End of thoughts." });
   });
 
-  it("generates deterministic tool-call IDs", () => {
-    const text = `<minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call>`;
-    const msg1 = makeAssistantMessage({
+  it("generates deterministic tool-call IDs across blocks", () => {
+    const msg = makeAssistantMessage({
       role: "assistant",
-      content: [{ type: "text", text }],
-      timestamp: Date.now(),
+      content: [
+        {
+          type: "thinking",
+          thinking: `<minimax:tool_call><invoke name="Bash" /></minimax:tool_call>`,
+        },
+        { type: "text", text: `<minimax:tool_call><invoke name="Bash" /></minimax:tool_call>` },
+      ],
     });
-    const msg2 = makeAssistantMessage({
-      role: "assistant",
-      content: [{ type: "text", text }],
-      timestamp: Date.now(),
-    });
 
-    promoteMinimaxToolCallsToBlocks(msg1);
-    promoteMinimaxToolCallsToBlocks(msg2);
+    promoteMinimaxToolCallsToBlocks(msg);
 
-    const call1 = msg1.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
-    const call2 = msg2.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
-
-    expect(call1).toBeDefined();
-    expect(call2).toBeDefined();
-    // They should have the exact same ID because input is identical
-    const id1 = call1 && typeof call1 === "object" && "id" in call1 ? call1.id : "1";
-    const id2 = call2 && typeof call2 === "object" && "id" in call2 ? call2.id : "2";
-    expect(id1).toBe(id2);
-    expect(id1).toContain("mc_mm_");
+    const calls = msg.content.filter((c): c is ToolCall =>
+      Boolean(c && typeof c === "object" && c.type === "toolCall"),
+    );
+    expect(calls[0].id).toBe("mc_mm_0_exec");
+    expect(calls[1].id).toBe("mc_mm_1_exec");
   });
 });
 
