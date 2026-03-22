@@ -877,8 +877,6 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v5
-        with:
-          gradle-version: 8.11.1
 
       - name: Install Android SDK packages
         run: |
