@@ -104,6 +104,9 @@ export function resolveDiscordPreviewStreamMode(
   if (typeof params.streaming === "boolean") {
     return params.streaming ? "partial" : "off";
   }
+  // Discord preview streaming edits can hit aggressive rate limits, especially
+  // when multiple gateways or multiple bots share the same account/server. Keep
+  // the default off unless the operator opts in explicitly.
   return "off";
 }
 
