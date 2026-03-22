@@ -243,5 +243,10 @@ describe("config schema regressions", () => {
       },
     });
     expect(resFalse.ok).toBe(true);
+
+    const resWeb = validateConfigObject({
+      web: { reconnect: { jitter: true as unknown as number } },
+    });
+    expect(resWeb.ok).toBe(true);
   });
 });
