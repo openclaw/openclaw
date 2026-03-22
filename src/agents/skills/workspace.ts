@@ -48,10 +48,17 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
   const home = os.homedir();
   if (!home) return skills;
   const prefix = home.endsWith(path.sep) ? home : home + path.sep;
-  return skills.map((s) => ({
-    ...s,
-    filePath: s.filePath.startsWith(prefix) ? "~/" + s.filePath.slice(prefix.length) : s.filePath,
-  }));
+  return skills.map((s) => {
+    let filePath = s.filePath.startsWith(prefix)
+      ? "~/" + s.filePath.slice(prefix.length)
+      : s.filePath;
+    // On Windows, normalize remaining backslashes to forward slashes so
+    // models receive consistent POSIX-style paths (e.g. ~/AppData/…)
+    if (path.sep === "\\") {
+      filePath = filePath.replace(/\\/g, "/");
+    }
+    return { ...s, filePath };
+  });
 }
 
 function debugSkillCommandOnce(
