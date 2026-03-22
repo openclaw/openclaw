@@ -7,26 +7,31 @@ import {
   recordSessionsSpawnFailureBudget,
   recordSessionsSpawnFailureGuard,
   resetSessionsSpawnFailureGuardForTests,
+  SESSIONS_SPAWN_FAILURE_BUDGET_BLOCK_TTL_MAX_MS,
+  SESSIONS_SPAWN_FAILURE_BUDGET_BLOCK_TTL_MS,
   SESSIONS_SPAWN_FAILURE_BUDGET_LIMIT,
   SESSIONS_SPAWN_FAILURE_BUDGET_WINDOW_MS,
   SESSIONS_SPAWN_FAILURE_GUARD_TTL_MS,
   SESSIONS_SPAWN_FAILURE_GUARD_TTL_MAX_MS,
 } from "./sessions-spawn-failure-guard.js";
 
+const REQUESTER_KEY = "agent:test-requester:main";
+const TARGET_ID = "test-target";
+
 describe("sessions_spawn failure guard", () => {
   it("records and expires unrecoverable failures by requester+target", () => {
     resetSessionsSpawnFailureGuardForTests();
     const nowMs = 1000;
     const guardKey = buildSessionsSpawnFailureGuardKey({
-      requesterInternalKey: "agent:tony:main",
-      targetAgentId: "scout",
+      requesterInternalKey: REQUESTER_KEY,
+      targetAgentId: TARGET_ID,
     });
 
     recordSessionsSpawnFailureGuard({
       guardKey,
       code: "missing_workspace",
       status: "error",
-      error: 'agentId "scout" is not workspace-backed for sessions_spawn.',
+      error: `agentId "${TARGET_ID}" is not workspace-backed for sessions_spawn.`,
       nowMs,
     });
 
@@ -42,18 +47,18 @@ describe("sessions_spawn failure guard", () => {
     ).toBeUndefined();
   });
 
-  it("escalates target-specific cooldown from 30s to 60s then 120s", () => {
+  it("escalates target-specific cooldown from base to 2x then max", () => {
     resetSessionsSpawnFailureGuardForTests();
     const guardKey = buildSessionsSpawnFailureGuardKey({
-      requesterInternalKey: "agent:tony:main",
-      targetAgentId: "scout",
+      requesterInternalKey: REQUESTER_KEY,
+      targetAgentId: TARGET_ID,
     });
 
     const first = recordSessionsSpawnFailureGuard({
       guardKey,
       code: "missing_workspace",
       status: "error",
-      error: 'agentId "scout" is not workspace-backed for sessions_spawn.',
+      error: `agentId "${TARGET_ID}" is not workspace-backed for sessions_spawn.`,
       nowMs: 10_000,
     });
     expect(first.ttlMs).toBe(SESSIONS_SPAWN_FAILURE_GUARD_TTL_MS);
@@ -80,7 +85,7 @@ describe("sessions_spawn failure guard", () => {
   it("blocks a requester after repeated failures across targets", () => {
     resetSessionsSpawnFailureGuardForTests();
     const budgetKey = buildSessionsSpawnFailureBudgetKey({
-      requesterInternalKey: "agent:tony:main",
+      requesterInternalKey: REQUESTER_KEY,
     });
     const baseNow = 20_000;
 
@@ -116,5 +121,38 @@ describe("sessions_spawn failure guard", () => {
           5_000,
       }),
     ).toBeUndefined();
+  });
+
+  it("escalates global budget block TTL from base to 2x then max", () => {
+    resetSessionsSpawnFailureGuardForTests();
+    const budgetKey = buildSessionsSpawnFailureBudgetKey({
+      requesterInternalKey: REQUESTER_KEY,
+    });
+    const baseNow = 50_000;
+
+    for (let idx = 0; idx < SESSIONS_SPAWN_FAILURE_BUDGET_LIMIT - 1; idx += 1) {
+      recordSessionsSpawnFailureBudget({
+        budgetKey,
+        nowMs: baseNow + idx,
+      });
+    }
+
+    const firstBlock = recordSessionsSpawnFailureBudget({
+      budgetKey,
+      nowMs: baseNow + SESSIONS_SPAWN_FAILURE_BUDGET_LIMIT,
+    });
+    expect(firstBlock.retryAfterMs).toBe(SESSIONS_SPAWN_FAILURE_BUDGET_BLOCK_TTL_MS);
+
+    const secondBlock = recordSessionsSpawnFailureBudget({
+      budgetKey,
+      nowMs: baseNow + SESSIONS_SPAWN_FAILURE_BUDGET_LIMIT + 1,
+    });
+    expect(secondBlock.retryAfterMs).toBe(SESSIONS_SPAWN_FAILURE_BUDGET_BLOCK_TTL_MS * 2);
+
+    const thirdBlock = recordSessionsSpawnFailureBudget({
+      budgetKey,
+      nowMs: baseNow + SESSIONS_SPAWN_FAILURE_BUDGET_LIMIT + 2,
+    });
+    expect(thirdBlock.retryAfterMs).toBe(SESSIONS_SPAWN_FAILURE_BUDGET_BLOCK_TTL_MAX_MS);
   });
 });

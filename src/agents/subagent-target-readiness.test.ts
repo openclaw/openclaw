@@ -9,6 +9,15 @@ import {
   resolveSubagentTargetReadiness,
 } from "./subagent-target-readiness.js";
 
+const LEAD_ID = "test-lead";
+const WORKER_ID = "test-worker";
+const WORKER_ID_B = "test-worker-b";
+const CONTAINER_ROOT = "/agent-homes";
+
+function containerPath(...segments: string[]): string {
+  return [CONTAINER_ROOT, ...segments].join("/");
+}
+
 async function withRuntimePathMap<T>(
   stateDir: string,
   document: unknown,
@@ -39,14 +48,15 @@ async function writePromptPack(rootDir: string): Promise<void> {
 
 describe("subagent target readiness", () => {
   it("treats configured explicit subagent workspaces under lead mounts as ready", async () => {
+    const hostRoot = `workspace-${LEAD_ID}`;
     await withStateDirEnv("subagent-target-ready-", async ({ stateDir }) => {
       await withRuntimePathMap(
         stateDir,
         {
-          container_host_roots: [{ container: "/agent-homes/deb", host: "workspace-deb" }],
+          container_host_roots: [{ container: containerPath(LEAD_ID), host: hostRoot }],
         },
         async () => {
-          const hostWorkspaceDir = path.join(stateDir, "workspace-deb", "subagents", "jeffy");
+          const hostWorkspaceDir = path.join(stateDir, hostRoot, "subagents", WORKER_ID);
           await writePromptPack(hostWorkspaceDir);
 
           const readiness = resolveConfiguredSubagentTargetReadiness(
@@ -54,13 +64,13 @@ describe("subagent target readiness", () => {
               agents: {
                 list: [
                   {
-                    id: "jeffy",
-                    workspace: "/agent-homes/deb/subagents/jeffy",
+                    id: WORKER_ID,
+                    workspace: containerPath(LEAD_ID, "subagents", WORKER_ID),
                   },
                 ],
               },
             },
-            "jeffy",
+            WORKER_ID,
           );
 
           expect(readiness.status).toBe("ready");
@@ -71,6 +81,7 @@ describe("subagent target readiness", () => {
   });
 
   it("uses the canonical state-dir runtime path map when OPENCLAW_LOCAL_PATH_MAP is unset", async () => {
+    const hostRoot = `workspace-${WORKER_ID}`;
     await withStateDirEnv("subagent-target-default-runtime-map-", async ({ stateDir }) => {
       const runtimePathMapPath = path.join(stateDir, "config", "runtime-path-map.json");
       await fs.mkdir(path.dirname(runtimePathMapPath), { recursive: true });
@@ -78,7 +89,7 @@ describe("subagent target readiness", () => {
         runtimePathMapPath,
         JSON.stringify(
           {
-            container_host_roots: [{ container: "/agent-homes/scout", host: "workspace-scout" }],
+            container_host_roots: [{ container: containerPath(WORKER_ID), host: hostRoot }],
           },
           null,
           2,
@@ -91,16 +102,16 @@ describe("subagent target readiness", () => {
       __resetRuntimePathMapCacheForTests();
 
       try {
-        const hostWorkspaceDir = path.join(stateDir, "workspace-scout");
+        const hostWorkspaceDir = path.join(stateDir, hostRoot);
         await writePromptPack(hostWorkspaceDir);
 
         const readiness = resolveConfiguredSubagentTargetReadiness(
           {
             agents: {
-              list: [{ id: "scout", workspace: "/agent-homes/scout" }],
+              list: [{ id: WORKER_ID, workspace: containerPath(WORKER_ID) }],
             },
           },
-          "scout",
+          WORKER_ID,
         );
 
         expect(readiness.status).toBe("ready");
@@ -118,25 +129,28 @@ describe("subagent target readiness", () => {
   });
 
   it("classifies configured workspaces with missing prompt packs as missing_workspace", async () => {
+    const hostRoot = `workspace-${LEAD_ID}`;
     await withStateDirEnv("subagent-target-missing-workspace-", async ({ stateDir }) => {
       await withRuntimePathMap(
         stateDir,
         {
-          container_host_roots: [{ container: "/agent-homes/angela", host: "workspace-angela" }],
+          container_host_roots: [{ container: containerPath(LEAD_ID), host: hostRoot }],
         },
         async () => {
           const readiness = resolveConfiguredSubagentTargetReadiness(
             {
               agents: {
-                list: [{ id: "salt", workspace: "/agent-homes/angela/subagents/salt" }],
+                list: [
+                  { id: WORKER_ID, workspace: containerPath(LEAD_ID, "subagents", WORKER_ID) },
+                ],
               },
             },
-            "salt",
+            WORKER_ID,
           );
 
           expect(readiness.status).toBe("missing_workspace");
           expect(readiness.hostWorkspaceDir).toBe(
-            path.join(stateDir, "workspace-angela", "subagents", "salt"),
+            path.join(stateDir, hostRoot, "subagents", WORKER_ID),
           );
           expect(readiness.reasons).toContain("workspace is missing AGENTS.md");
         },
@@ -148,11 +162,11 @@ describe("subagent target readiness", () => {
     const readiness = resolveSubagentTargetReadiness({
       cfg: {
         agents: {
-          list: [{ id: "reverend-run", subagents: { allowAgents: ["dmc"] } }],
+          list: [{ id: LEAD_ID, subagents: { allowAgents: [WORKER_ID] } }],
         },
       },
-      requesterAgentId: "reverend-run",
-      targetAgentId: "dmc",
+      requesterAgentId: LEAD_ID,
+      targetAgentId: WORKER_ID,
       classifyStaleAllowlist: true,
     });
 
@@ -160,29 +174,30 @@ describe("subagent target readiness", () => {
   });
 
   it("audits allowlist entries using the shared readiness classification", async () => {
+    const hostRoot = `workspace-${LEAD_ID}`;
     await withStateDirEnv("subagent-target-audit-", async ({ stateDir }) => {
       await withRuntimePathMap(
         stateDir,
         {
-          container_host_roots: [{ container: "/agent-homes/deb", host: "workspace-deb" }],
+          container_host_roots: [{ container: containerPath(LEAD_ID), host: hostRoot }],
         },
         async () => {
-          await writePromptPack(path.join(stateDir, "workspace-deb", "subagents", "jeffy"));
+          await writePromptPack(path.join(stateDir, hostRoot, "subagents", WORKER_ID));
 
           const audit = collectSubagentAllowlistAudit({
             agents: {
               list: [
-                { id: "deb", subagents: { allowAgents: ["jeffy"] } },
-                { id: "jeffy", workspace: "/agent-homes/deb/subagents/jeffy" },
-                { id: "reverend-run", subagents: { allowAgents: ["dmc"] } },
+                { id: LEAD_ID, subagents: { allowAgents: [WORKER_ID] } },
+                { id: WORKER_ID, workspace: containerPath(LEAD_ID, "subagents", WORKER_ID) },
+                { id: WORKER_ID_B, subagents: { allowAgents: [LEAD_ID] } },
               ],
             },
           });
           const statuses = Object.fromEntries(audit.map((entry) => [entry.agentId, entry.status]));
 
           expect(statuses).toEqual({
-            dmc: "stale_allowlist",
-            jeffy: "ready",
+            [LEAD_ID]: "stale_allowlist",
+            [WORKER_ID]: "ready",
           });
         },
       );

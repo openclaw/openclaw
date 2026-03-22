@@ -26,8 +26,10 @@ import {
   SESSIONS_SPAWN_DEDUP_TTL_MS,
 } from "./sessions-spawn-dedup.js";
 import {
+  buildSessionsSpawnFailureBudgetError,
   buildSessionsSpawnFailureBudgetKey,
   buildSessionsSpawnFailureGuardKey,
+  formatRetrySeconds,
   logSessionsSpawnFailureBudgetHit,
   logSessionsSpawnFailureGuardHit,
   peekSessionsSpawnFailureBudget,
@@ -308,17 +310,6 @@ function buildUnrecoverableSpawnError(params: {
   return [
     `agentId "${params.targetAgentId}" is a stale allowlist entry. ${params.reason ?? "target agent is not ready"}.`,
     guidanceFor("allowAgents or the target runtime config is fixed"),
-  ].join(" ");
-}
-
-function formatRetrySeconds(ms: number): number {
-  return Math.max(1, Math.ceil(ms / 1000));
-}
-
-function buildSessionsSpawnFailureBudgetError(params: { retryAfterMs: number }): string {
-  return [
-    "sessions_spawn is temporarily blocked for this session after repeated failures across targets.",
-    `Wait about ${formatRetrySeconds(params.retryAfterMs)}s before retrying, and fix task/config input first.`,
   ].join(" ");
 }
 

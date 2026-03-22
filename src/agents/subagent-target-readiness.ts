@@ -101,7 +101,11 @@ export function resolveConfiguredSubagentTargetReadiness(
 
   const runtimeMapped = isRuntimePathMapped(workspaceDir);
   const hostWorkspaceDir = translateContainerPathToHostPath(workspaceDir);
-  const promptPath = path.join(hostWorkspaceDir, "AGENTS.md");
+  // Check container path first (works inside Docker), then fall back to
+  // translated host path (works on host / in tests where container paths
+  // like /agent-homes/* don't exist on the local filesystem).
+  const containerPromptPath = path.join(workspaceDir, "AGENTS.md");
+  const hostPromptPath = path.join(hostWorkspaceDir, "AGENTS.md");
   const reasons: string[] = [];
   if (!runtimeMapped) {
     reasons.push("workspace does not resolve through the runtime path map");
@@ -110,7 +114,11 @@ export function resolveConfiguredSubagentTargetReadiness(
   // Do not flag missing AGENTS.md as a readiness failure for those agents.
   const targetEntry = cfg.agents?.list?.find((a) => normalizeAgentId(a.id) === normalizedTargetId);
   const targetSkipsBootstrap = targetEntry?.skipBootstrap === true;
-  if (!targetSkipsBootstrap && !fs.existsSync(promptPath)) {
+  if (
+    !targetSkipsBootstrap &&
+    !fs.existsSync(containerPromptPath) &&
+    !fs.existsSync(hostPromptPath)
+  ) {
     reasons.push("workspace is missing AGENTS.md");
   }
   return buildWorkspaceReadiness({
@@ -120,7 +128,7 @@ export function resolveConfiguredSubagentTargetReadiness(
     registryKnown,
     workspaceDir,
     hostWorkspaceDir,
-    promptPath,
+    promptPath: hostPromptPath,
     runtimeMapped,
     reasons,
   });
