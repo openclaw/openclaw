@@ -3,7 +3,7 @@ name: coding-agent
 description: 'Delegate coding tasks to Codex, Claude Code, Kiro, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Claude Code: use --print --permission-mode bypassPermissions (no PTY). Kiro: use --no-interactive --trust-all-tools (no PTY). Codex/Pi/OpenCode: pty:true required.'
 metadata:
   {
-    "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "opencode", "pi", "kiro-cli"] } },
+    "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "kiro-cli", "opencode", "pi"] } },
   }
 ---
 
@@ -250,6 +250,7 @@ REVIEW_DIR=$(mktemp -d)
 git clone https://github.com/user/repo.git $REVIEW_DIR
 cd $REVIEW_DIR && gh pr checkout 130
 bash workdir:$REVIEW_DIR command:"kiro-cli chat --no-interactive --trust-all-tools 'Review this PR. Summarize changes, flag issues, suggest improvements.'"
+# Clean up after: trash $REVIEW_DIR
 ```
 
 ### Kiro Parallel with git worktrees
@@ -296,7 +297,6 @@ When Kiro runs in background:
 - Kiro respects `workdir` context — files outside the working directory are less likely to be touched.
 - For scratch work, `mktemp -d && cd` + run works fine (no git init required, unlike Codex).
 
-> **Note:** For Kiro ACP multi-turn orchestration, session/agent/settings management, or advanced delegation modes (manual/semi-auto/full-auto), use the dedicated `kiro-agent` skill instead. This section covers coding-agent-style process-first usage only.
 
 ---
 
