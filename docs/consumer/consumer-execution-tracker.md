@@ -170,6 +170,7 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
 - [ ] Add explicit benchmark rows for Gmail test account, Reddit DM/reply, Google Sign-In throwaway account, and Emirates baseline
 - [ ] Evaluate Claude for Chrome extension as its own browser-control lane if access and reproducible policy boundaries are available
 - [ ] Try `Kernel` or `Steel` before paying to continue Browserbase evaluation
+- [ ] Run the new Kernel repro helper (`doctor` -> `smoke-open` -> `open-emirates`) once `KERNEL_API_KEY` exists
 - [ ] Productize Chrome profile detection/setup so users do not need manual `chrome://version` discovery for cloned-profile lanes
 - [ ] Keep Agent S3 documented as a later experiment, not a week-1 gate
 - [ ] Teach the browser prompt/skill routing which browser lane to prefer by task shape (for example signed-in hostile travel flow vs clean generic browsing)
@@ -189,6 +190,10 @@ Current objective: convert the Chrome/user Emirates flow from "transport works b
     - cloned real-Chrome state for signed-in travel/browser tasks
     - `openclaw` managed browser as fallback
 11. Add browser-lane guidance to the system prompt / browser skill layer so the agent chooses the right lane automatically instead of treating all browser tasks as equivalent.
+12. Use the repo-local Kernel smoke helper instead of ad-hoc shell experiments:
+    - `scripts/repro/kernel-browser-smoke.sh doctor`
+    - `scripts/repro/kernel-browser-smoke.sh smoke-open https://example.com`
+    - `scripts/repro/kernel-browser-smoke.sh open-emirates`
 
 ### Auth and rate-limit sanity checks
 

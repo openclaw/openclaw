@@ -418,6 +418,7 @@
     "@grammyjs/types": "^3.25.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
+    "@onkernel/sdk": "^0.44.0",
     "@types/express": "^5.0.6",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^25.5.0",

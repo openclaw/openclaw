@@ -40,6 +40,7 @@ Legend:
 | `user` (existing-session) | PASS (median `121.0s`; `r1`: `107.2s`, `r2`: `134.9s`) | PASS (`r1`: `63.1s`) | PASS (median `39.0s`; `r1`: `49.2s`, `r2`: `28.7s`) | FAIL (`r1`: `40.3s`) | FAIL (`r1`: `59.3s`)  | Control lane passes when Chrome exposes standard CDP endpoint (example: launch with `--remote-debugging-port=9333` and attach via browser URL); heavier social/travel flows still time out early                                                                                                           |
 | `openclaw` (managed)      | PASS (median `69.9s`; `r1`: `85.4s`, `r2`: `54.5s`)    | PASS (`r1`: `78.8s`) | PASS (median `33.9s`; `r1`: `29.1s`, `r2`: `38.6s`) | PASS (`r1`: `66.5s`) | FAIL (`r1`: `126.2s`) | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`); survives more sites than `user` but still times out in long multi-step travel workflows. On Emirates `DPS -> DXB` for `2026-03-22`, this lane failed to keep the booking widget stable long enough to load results. |
 | Claude for Chrome         | PENDING                                                | PENDING              | PENDING                                             | PENDING              | PENDING               | Separate category from Anthropic computer-use. It is Chrome-integrated browser control, not generic desktop control, and should be evaluated on its own terms if we can get access and a reproducible test path.                                                                                           |
+| Kernel                    | PENDING                                                | PENDING              | PENDING                                             | PENDING              | PENDING               | Next remote-infra lane. Cleaner architecture comparison than Browser Use because it exposes remote browser infrastructure instead of another agent loop.                                                                                                                                                   |
 | Browserbase               | FAIL (`r1`: `12.2s`)                                   | PENDING              | FAIL (`r1`: `24.0s`, `r2`: `41.6s`, `r3`: `83.6s`)  | PENDING              | PENDING               | Still relevant for anti-bot/CAPTCHA/Cloudflare, but now a later paid comparison lane because cheaper/free infra lanes should be tested first. Transport is healthy only with fresh `keepAlive: true` sessions; real benchmark tasks still fail deeper in the stack.                                        |
 
 ## Current blocker summary
@@ -116,6 +117,13 @@ Legend:
     - `Kernel` first if we want to evaluate non-CDP computer-controls + managed auth claims
     - `Steel` first if we want to evaluate session/auth persistence and credentials handling
   - Browserbase still matters if we explicitly want to test Cloudflare Signed Agents / CAPTCHA / anti-bot claims.
+  - Kernel prep is now repo-local:
+    - dependency added: `@onkernel/sdk`
+    - helper added: `scripts/repro/kernel-browser-smoke.sh`
+    - first evaluation order:
+      1. `doctor`
+      2. `smoke-open https://example.com`
+      3. `open-emirates`
 
 ## Recommended next benchmark set
 

@@ -213,6 +213,9 @@ importers:
       '@lit/context':
         specifier: ^1.1.6
         version: 1.1.6
+      '@onkernel/sdk':
+        specifier: ^0.44.0
+        version: 0.44.0
       '@types/express':
         specifier: ^5.0.6
         version: 5.0.6
@@ -2104,6 +2107,9 @@ packages:
   '@octokit/webhooks@14.2.0':
     resolution: {integrity: sha512-da6KbdNCV5sr1/txD896V+6W0iamFWrvVl8cHkBSPT+YlvmT3DwXa4jxZnQc+gnuTEqSWbBeoSZYTayXH9wXcw==}
     engines: {node: '>= 20'}
+
+  '@onkernel/sdk@0.44.0':
+    resolution: {integrity: sha512-e7EoX+4KwOe7fWuoqOl3rAOr2WQ6c5lP6C977ZbYD9aHx/VwhngkTHFSBUOEQER7xze2+Z1mZj6P3eyAe7Q4pg==}
 
   '@opentelemetry/api-logs@0.213.0':
     resolution: {integrity: sha512-zRM5/Qj6G84Ej3F1yt33xBVY/3tnMxtL1fiDIxYbDWYaZ/eudVw3/PBiZ8G7JwUxXxjW8gU4g6LnOyfGKYHYgw==}
@@ -8967,6 +8973,8 @@ snapshots:
       '@octokit/openapi-webhooks-types': 12.1.0
       '@octokit/request-error': 7.1.0
       '@octokit/webhooks-methods': 6.0.0
+
+  '@onkernel/sdk@0.44.0': {}
 
   '@opentelemetry/api-logs@0.213.0':
     dependencies:
