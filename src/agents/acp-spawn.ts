@@ -483,17 +483,19 @@ export async function spawnAcpDirect(
       : false;
 
   // For mode=run without thread binding, implicitly route output to parent
-  // only for spawned subagent orchestrator sessions with heartbeat enabled
-  // AND a session-local heartbeat delivery route (target=last + usable last route).
+  // when acp.progressForward is not explicitly disabled.
   // Skip requester sessions that are thread-bound (or carrying thread context)
   // so user-facing threads do not receive unsolicited ACP progress chatter
   // unless streamTo="parent" is explicitly requested. Use resolved spawnMode
   // (not params.mode) so default mode selection works.
+  // progressForward defaults to true when not set, so ACP sessions forward
+  // milestone updates to their parent session by default.
+  const progressForwardEnabled = cfg.acp?.progressForward !== false;
   const implicitStreamToParent =
     !streamToParentRequested &&
+    progressForwardEnabled &&
     spawnMode === "run" &&
     !requestThreadBinding &&
-    requesterIsSubagentSession &&
     !requesterHasActiveSubagentBinding &&
     !requesterHasThreadContext &&
     requesterHeartbeatEnabled &&

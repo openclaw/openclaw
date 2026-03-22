@@ -45,4 +45,11 @@ export type AcpConfig = {
   maxConcurrentSessions?: number;
   stream?: AcpStreamConfig;
   runtime?: AcpRuntimeConfig;
+  /**
+   * Default progress forwarding to parent session for ACP sessions.
+   * When true (default), ACP sessions forward compact milestone updates
+   * (start, phase changes, completion) to the parent session that spawned them.
+   * Set to false to disable automatic progress forwarding.
+   */
+  progressForward?: boolean;
 };

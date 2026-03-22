@@ -188,6 +188,55 @@ Rules:
 - `resetSession`: mint a new transcript for the key before first use.
 - `requireExisting`: fail if the key/label does not exist.
 
+## Progress Forwarding to Parent Session
+
+When an ACP session is spawned from a parent Gateway session (e.g., via the `sessions_spawn` tool with `runtime=acp`), milestone progress updates are forwarded to the parent session by default. This provides visibility into long-running ACP operations without requiring polling of `.acp-stream.jsonl` log files.
+
+### What Gets Forwarded
+
+Progress updates are compact, milestone-oriented messages sent as system events to the parent session:
+
+- **Start notice**: "Started ACP child session X. Streaming progress updates to parent session."
+- **Completion notice**: "ACP child run completed in Ns." (includes duration)
+- **Error notice**: "ACP child run failed: [error]"
+- **Stall notice**: "ACP child has produced no output for Xs. It may be waiting for interactive input."
+- **Timeout notice**: "ACP child stream relay timed out after Xs without completion."
+- **Resumed notice**: "ACP child resumed output."
+
+### How It Works
+
+The progress relay buffers text output and emits compact snippets periodically (default: 2.5s flush interval). Full raw events are written to `.acp-stream.jsonl` in the session directory for debugging.
+
+### Configuration
+
+By default, `acp.progressForward` is `true` (enabled). To disable:
+
+```json
+{
+  "acp": {
+    "progressForward": false
+  }
+}
+```
+
+To tune the relay behavior:
+
+```json
+{
+  "acp": {
+    "progressForward": true,
+    "stream": {
+      "coalesceIdleMs": 2500,
+      "maxOutputChars": 10000
+    }
+  }
+}
+```
+
+### Explicit Control
+
+Use `streamTo="parent"` when calling `sessions_spawn` to explicitly enable forwarding, or `streamTo` omitted to use the default behavior based on `acp.progressForward`.
+
 ### Session Listing
 
 ACP `listSessions` maps to Gateway `sessions.list` and returns a filtered
