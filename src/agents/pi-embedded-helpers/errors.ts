@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   extractLeadingHttpStatus,
@@ -634,9 +635,19 @@ export function formatAssistantErrorText(
     return formatRawAssistantErrorForUi(raw);
   }
 
-  // Never return raw unhandled errors — log the full text for debugging,
+  // Preserve actionable auth/model error messages instead of swallowing them
+  // into the generic catch-all (these can reach here after retries are exhausted).
+  if (isAuthPermanentErrorMessage(raw) || isAuthErrorMessage(raw)) {
+    return "Authentication failed. Please check your API key or re-authenticate.";
+  }
+  if (isModelNotFoundErrorMessage(raw)) {
+    return "The configured model was not found. Check your model setting or try a different model.";
+  }
+
+  // Never return raw unhandled errors — log a redacted preview for debugging,
   // but return a safe generic message to the user.
-  log.warn(`Unrecognized error suppressed from user surface: ${raw.slice(0, 500)}`);
+  const preview = redactSensitiveText(raw.slice(0, 500)).replace(/[\r\n]+/g, " ");
+  log.warn(`Unrecognized error suppressed from user surface: ${preview}`);
   return "Something went wrong. Please try again, or use /new to start a fresh session.";
 }
 
