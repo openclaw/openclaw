@@ -79,9 +79,13 @@ describe("outbound", () => {
       expect(twitchOutbound.textChunkLimit).toBe(500);
     });
 
-    it("should have chunker function", () => {
-      expect(twitchOutbound.chunker).toBeDefined();
-      expect(typeof twitchOutbound.chunker).toBe("function");
+    it("should chunk long messages at 500 characters", () => {
+      const chunker = twitchOutbound.chunker;
+      if (!chunker) {
+        throw new Error("twitch outbound.chunker unavailable");
+      }
+
+      expect(chunker("a".repeat(600), 500)).toEqual(["a".repeat(500), "a".repeat(100)]);
     });
   });
 
