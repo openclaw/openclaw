@@ -501,7 +501,7 @@ export async function initSessionState(params: {
         `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
           `parentTokens=${parentTokens}`,
       );
-      const forked = forkSessionFromParent({
+      const forked = await forkSessionFromParent({
         parentEntry: sessionStore[parentSessionKey],
         agentId,
         sessionsDir: path.dirname(storePath),

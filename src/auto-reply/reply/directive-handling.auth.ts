@@ -217,27 +217,4 @@ export const formatAuthLabel = (auth: { label: string; source: string }) => {
   return `${auth.label} (${auth.source})`;
 };
 
-export const resolveProfileOverride = (params: {
-  rawProfile?: string;
-  provider: string;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-}): { profileId?: string; error?: string } => {
-  const raw = params.rawProfile?.trim();
-  if (!raw) {
-    return {};
-  }
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
-  const profile = store.profiles[raw];
-  if (!profile) {
-    return { error: `Auth profile "${raw}" not found.` };
-  }
-  if (profile.provider !== params.provider) {
-    return {
-      error: `Auth profile "${raw}" is for ${profile.provider}, not ${params.provider}.`,
-    };
-  }
-  return { profileId: raw };
-};
+export { resolveProfileOverride } from "./directive-handling.auth-profile.js";
