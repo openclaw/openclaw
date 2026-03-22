@@ -57,21 +57,15 @@ export function registerNodesScreenCommands(nodes: Command) {
           const written = await writeScreenRecordToFile(filePath, parsed.base64);
 
           if (opts.json) {
-            defaultRuntime.log(
-              JSON.stringify(
-                {
-                  file: {
-                    path: written.path,
-                    durationMs: parsed.durationMs,
-                    fps: parsed.fps,
-                    screenIndex: parsed.screenIndex,
-                    hasAudio: parsed.hasAudio,
-                  },
-                },
-                null,
-                2,
-              ),
-            );
+            defaultRuntime.writeJson({
+              file: {
+                path: written.path,
+                durationMs: parsed.durationMs,
+                fps: parsed.fps,
+                screenIndex: parsed.screenIndex,
+                hasAudio: parsed.hasAudio,
+              },
+            });
             return;
           }
           defaultRuntime.log(`MEDIA:${shortenHomePath(written.path)}`);

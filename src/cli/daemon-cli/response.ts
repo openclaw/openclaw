@@ -21,7 +21,7 @@ export type DaemonActionResponse = {
 };
 
 export function emitDaemonActionJson(payload: DaemonActionResponse) {
-  defaultRuntime.log(JSON.stringify(payload, null, 2));
+  defaultRuntime.writeJson(payload);
 }
 
 export function buildDaemonServiceSnapshot(service: GatewayService, loaded: boolean) {

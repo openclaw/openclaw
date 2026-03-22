@@ -414,7 +414,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   }
 
   if (opts.json) {
-    defaultRuntime.log(JSON.stringify(allResults, null, 2));
+    defaultRuntime.writeJson(allResults);
     return;
   }
 
@@ -723,7 +723,7 @@ export async function runMemorySearch(
         return;
       }
       if (opts.json) {
-        defaultRuntime.log(JSON.stringify({ results }, null, 2));
+        defaultRuntime.writeJson({ results });
         return;
       }
       if (results.length === 0) {

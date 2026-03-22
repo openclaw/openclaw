@@ -30,7 +30,7 @@ export async function runBrowserResizeWithOutput(params: {
   );
 
   if (params.parent?.json) {
-    defaultRuntime.log(JSON.stringify(result, null, 2));
+    defaultRuntime.writeJson(result);
     return;
   }
   defaultRuntime.log(params.successMessage);

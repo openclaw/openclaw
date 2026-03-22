@@ -71,7 +71,7 @@ export function registerSkillsCli(program: Command) {
           limit: opts.limit,
         });
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify({ results }, null, 2));
+          defaultRuntime.writeJson({ results });
           return;
         }
         if (results.length === 0) {

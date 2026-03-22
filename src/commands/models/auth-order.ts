@@ -5,7 +5,7 @@ import {
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
@@ -54,19 +54,13 @@ export async function modelsAuthOrderGetCommand(
   const order = describeOrder(store, provider);
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          agentId,
-          agentDir,
-          provider,
-          authStorePath: shortenHomePath(`${agentDir}/auth-profiles.json`),
-          order: order.length > 0 ? order : null,
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      agentId,
+      agentDir,
+      provider,
+      authStorePath: shortenHomePath(`${agentDir}/auth-profiles.json`),
+      order: order.length > 0 ? order : null,
+    });
     return;
   }
 

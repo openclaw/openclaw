@@ -14,7 +14,7 @@ function fail(message: string): never {
 }
 
 function printJson(value: unknown): void {
-  defaultRuntime.log(JSON.stringify(value, null, 2));
+  defaultRuntime.writeJson(value);
 }
 
 export function registerMcpCli(program: Command) {

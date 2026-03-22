@@ -1,4 +1,4 @@
-import type { RuntimeEnv } from "../../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 export type GatewayHealthFailureDiagnostics = {
@@ -41,24 +41,18 @@ export function logNonInteractiveOnboardingJson(params: {
   if (!params.opts.json) {
     return;
   }
-  params.runtime.log(
-    JSON.stringify(
-      {
-        ok: true,
-        mode: params.mode,
-        workspace: params.workspaceDir,
-        authChoice: params.authChoice,
-        gateway: params.gateway,
-        installDaemon: Boolean(params.installDaemon),
-        daemonInstall: params.daemonInstall,
-        daemonRuntime: params.daemonRuntime,
-        skipSkills: Boolean(params.skipSkills),
-        skipHealth: Boolean(params.skipHealth),
-      },
-      null,
-      2,
-    ),
-  );
+  writeRuntimeJson(params.runtime, {
+    ok: true,
+    mode: params.mode,
+    workspace: params.workspaceDir,
+    authChoice: params.authChoice,
+    gateway: params.gateway,
+    installDaemon: Boolean(params.installDaemon),
+    daemonInstall: params.daemonInstall,
+    daemonRuntime: params.daemonRuntime,
+    skipSkills: Boolean(params.skipSkills),
+    skipHealth: Boolean(params.skipHealth),
+  });
 }
 
 function formatGatewayRuntimeSummary(
@@ -109,25 +103,19 @@ export function logNonInteractiveOnboardingFailure(params: {
   const gatewayRuntime = formatGatewayRuntimeSummary(params.diagnostics);
 
   if (params.opts.json) {
-    params.runtime.error(
-      JSON.stringify(
-        {
-          ok: false,
-          mode: params.mode,
-          phase: params.phase,
-          message: params.message,
-          detail: params.detail,
-          gateway: params.gateway,
-          installDaemon: Boolean(params.installDaemon),
-          daemonInstall: params.daemonInstall,
-          daemonRuntime: params.daemonRuntime,
-          diagnostics: params.diagnostics,
-          hints: hints.length > 0 ? hints : undefined,
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(params.runtime, {
+      ok: false,
+      mode: params.mode,
+      phase: params.phase,
+      message: params.message,
+      detail: params.detail,
+      gateway: params.gateway,
+      installDaemon: Boolean(params.installDaemon),
+      daemonInstall: params.daemonInstall,
+      daemonRuntime: params.daemonRuntime,
+      diagnostics: params.diagnostics,
+      hints: hints.length > 0 ? hints : undefined,
+    });
     return;
   }
 
