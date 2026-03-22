@@ -6,6 +6,10 @@ import {
   sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
 import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-helpers.js";
+import {
+  consumePendingToolMediaReply,
+  hasAssistantVisibleReply,
+} from "./pi-embedded-subscribe.handlers.messages.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
@@ -97,6 +101,10 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   }
 
   ctx.flushBlockReplyBuffer();
+  const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
+  if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
+    ctx.emitBlockReply(pendingToolMediaReply);
+  }
   // Flush the reply pipeline so the response reaches the channel before
   // compaction wait blocks the run.  This mirrors the pattern used by
   // handleToolExecutionStart and ensures delivery is not held hostage to
