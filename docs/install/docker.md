@@ -22,7 +22,7 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
 - At least 2 GB RAM for image build (`pnpm install` may be OOM-killed on 1 GB hosts with exit 137)
 - Enough disk for images and logs
 - If running on a VPS/public host, review
-  [Security hardening for network exposure](/gateway/security#0-4-network-exposure-bind-port-firewall),
+  [Security hardening for network exposure](/gateway/security),
   especially Docker `DOCKER-USER` firewall policy.
 
 ## Containerized Gateway
