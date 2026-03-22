@@ -609,215 +609,219 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles({ cfg: input.cfg });
-    await this.withSessionActor(sessionKey, async () => {
-      const turnStartedAt = Date.now();
-      const actorKey = normalizeActorKey(sessionKey);
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const resolution = this.resolveSession({
-          cfg: input.cfg,
-          sessionKey,
-        });
-        const resolvedMeta = requireReadySessionMeta(resolution);
-        let runtime: AcpRuntime | undefined;
-        let handle: AcpRuntimeHandle | undefined;
-        let meta: SessionAcpMeta | undefined;
-        let activeTurn: ActiveTurnState | undefined;
-        let internalAbortController: AbortController | undefined;
-        let onCallerAbort: (() => void) | undefined;
-        let activeTurnStarted = false;
-        let sawTurnOutput = false;
-        let retryFreshHandle = false;
-        let skipPostTurnCleanup = false;
-        try {
-          const ensured = await this.ensureRuntimeHandle({
+    await this.withSessionActor(
+      sessionKey,
+      async () => {
+        const turnStartedAt = Date.now();
+        const actorKey = normalizeActorKey(sessionKey);
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const resolution = this.resolveSession({
             cfg: input.cfg,
             sessionKey,
-            meta: resolvedMeta,
           });
-          runtime = ensured.runtime;
-          handle = ensured.handle;
-          meta = ensured.meta;
-          await this.applyRuntimeControls({
-            sessionKey,
-            runtime,
-            handle,
-            meta,
-          });
-
-          await this.setSessionState({
-            cfg: input.cfg,
-            sessionKey,
-            state: "running",
-            clearLastError: true,
-          });
-
-          internalAbortController = new AbortController();
-          onCallerAbort = () => {
-            internalAbortController?.abort();
-          };
-          if (input.signal?.aborted) {
-            internalAbortController.abort();
-          } else if (input.signal) {
-            input.signal.addEventListener("abort", onCallerAbort, { once: true });
-          }
-
-          activeTurn = {
-            runtime,
-            handle,
-            abortController: internalAbortController,
-          };
-          this.activeTurnBySession.set(actorKey, activeTurn);
-          activeTurnStarted = true;
-
-          let streamError: AcpRuntimeError | null = null;
-          const combinedSignal =
-            input.signal && typeof AbortSignal.any === "function"
-              ? AbortSignal.any([input.signal, internalAbortController.signal])
-              : internalAbortController.signal;
-          const eventGate = { open: true };
-          const turnPromise = (async () => {
-            for await (const event of runtime.runTurn({
-              handle,
-              text: input.text,
-              attachments: input.attachments,
-              mode: input.mode,
-              requestId: input.requestId,
-              signal: combinedSignal,
-            })) {
-              if (!eventGate.open) {
-                continue;
-              }
-              if (event.type === "error") {
-                streamError = new AcpRuntimeError(
-                  normalizeAcpErrorCode(event.code),
-                  event.message?.trim() || "ACP turn failed before completion.",
-                );
-              } else if (event.type === "text_delta" || event.type === "tool_call") {
-                sawTurnOutput = true;
-              }
-              if (input.onEvent) {
-                await input.onEvent(event);
-              }
-            }
-            if (eventGate.open && streamError) {
-              throw streamError;
-            }
-          })();
-          const turnTimeoutMs = this.resolveTurnTimeoutMs({
-            cfg: input.cfg,
-            meta,
-          });
-          const sessionMode = meta.mode;
-          await this.awaitTurnWithTimeout({
-            sessionKey,
-            turnPromise,
-            timeoutMs: turnTimeoutMs + ACP_TURN_TIMEOUT_GRACE_MS,
-            timeoutLabelMs: turnTimeoutMs,
-            onTimeout: async () => {
-              eventGate.open = false;
-              skipPostTurnCleanup = true;
-              if (!activeTurn) {
-                return;
-              }
-              await this.cleanupTimedOutTurn({
-                sessionKey,
-                activeTurn,
-                mode: sessionMode,
-              });
-            },
-          });
-          if (streamError) {
-            throw streamError;
-          }
-          this.recordTurnCompletion({
-            startedAt: turnStartedAt,
-          });
-          await this.setSessionState({
-            cfg: input.cfg,
-            sessionKey,
-            state: "idle",
-            clearLastError: true,
-          });
-          return;
-        } catch (error) {
-          const acpError = toAcpRuntimeError({
-            error,
-            fallbackCode: activeTurnStarted ? "ACP_TURN_FAILED" : "ACP_SESSION_INIT_FAILED",
-            fallbackMessage: activeTurnStarted
-              ? "ACP turn failed before completion."
-              : "Could not initialize ACP session runtime.",
-          });
-          retryFreshHandle = this.shouldRetryTurnWithFreshHandle({
-            attempt,
-            sessionKey,
-            error: acpError,
-            sawTurnOutput,
-          });
-          if (retryFreshHandle) {
-            continue;
-          }
-          this.recordTurnCompletion({
-            startedAt: turnStartedAt,
-            errorCode: acpError.code,
-          });
-          await this.setSessionState({
-            cfg: input.cfg,
-            sessionKey,
-            state: "error",
-            lastError: acpError.message,
-          });
-          throw acpError;
-        } finally {
-          if (input.signal && onCallerAbort) {
-            input.signal.removeEventListener("abort", onCallerAbort);
-          }
-          if (activeTurn && this.activeTurnBySession.get(actorKey) === activeTurn) {
-            this.activeTurnBySession.delete(actorKey);
-          }
-          if (
-            !retryFreshHandle &&
-            !skipPostTurnCleanup &&
-            runtime &&
-            handle &&
-            meta &&
-            meta.mode !== "oneshot"
-          ) {
-            ({ handle } = await this.reconcileRuntimeSessionIdentifiers({
+          const resolvedMeta = requireReadySessionMeta(resolution);
+          let runtime: AcpRuntime | undefined;
+          let handle: AcpRuntimeHandle | undefined;
+          let meta: SessionAcpMeta | undefined;
+          let activeTurn: ActiveTurnState | undefined;
+          let internalAbortController: AbortController | undefined;
+          let onCallerAbort: (() => void) | undefined;
+          let activeTurnStarted = false;
+          let sawTurnOutput = false;
+          let retryFreshHandle = false;
+          let skipPostTurnCleanup = false;
+          try {
+            const ensured = await this.ensureRuntimeHandle({
               cfg: input.cfg,
+              sessionKey,
+              meta: resolvedMeta,
+            });
+            runtime = ensured.runtime;
+            handle = ensured.handle;
+            meta = ensured.meta;
+            await this.applyRuntimeControls({
               sessionKey,
               runtime,
               handle,
               meta,
-              failOnStatusError: false,
-            }));
-          }
-          if (
-            !retryFreshHandle &&
-            !skipPostTurnCleanup &&
-            runtime &&
-            handle &&
-            meta &&
-            meta.mode === "oneshot"
-          ) {
-            try {
-              await runtime.close({
+            });
+
+            await this.setSessionState({
+              cfg: input.cfg,
+              sessionKey,
+              state: "running",
+              clearLastError: true,
+            });
+
+            internalAbortController = new AbortController();
+            onCallerAbort = () => {
+              internalAbortController?.abort();
+            };
+            if (input.signal?.aborted) {
+              internalAbortController.abort();
+            } else if (input.signal) {
+              input.signal.addEventListener("abort", onCallerAbort, { once: true });
+            }
+
+            activeTurn = {
+              runtime,
+              handle,
+              abortController: internalAbortController,
+            };
+            this.activeTurnBySession.set(actorKey, activeTurn);
+            activeTurnStarted = true;
+
+            let streamError: AcpRuntimeError | null = null;
+            const combinedSignal =
+              input.signal && typeof AbortSignal.any === "function"
+                ? AbortSignal.any([input.signal, internalAbortController.signal])
+                : internalAbortController.signal;
+            const eventGate = { open: true };
+            const turnPromise = (async () => {
+              for await (const event of runtime.runTurn({
                 handle,
-                reason: "oneshot-complete",
-              });
-            } catch (error) {
-              logVerbose(
-                `acp-manager: ACP oneshot close failed for ${sessionKey}: ${String(error)}`,
-              );
-            } finally {
-              this.clearCachedRuntimeState(sessionKey);
+                text: input.text,
+                attachments: input.attachments,
+                mode: input.mode,
+                requestId: input.requestId,
+                signal: combinedSignal,
+              })) {
+                if (!eventGate.open) {
+                  continue;
+                }
+                if (event.type === "error") {
+                  streamError = new AcpRuntimeError(
+                    normalizeAcpErrorCode(event.code),
+                    event.message?.trim() || "ACP turn failed before completion.",
+                  );
+                } else if (event.type === "text_delta" || event.type === "tool_call") {
+                  sawTurnOutput = true;
+                }
+                if (input.onEvent) {
+                  await input.onEvent(event);
+                }
+              }
+              if (eventGate.open && streamError) {
+                throw streamError;
+              }
+            })();
+            const turnTimeoutMs = this.resolveTurnTimeoutMs({
+              cfg: input.cfg,
+              meta,
+            });
+            const sessionMode = meta.mode;
+            await this.awaitTurnWithTimeout({
+              sessionKey,
+              turnPromise,
+              timeoutMs: turnTimeoutMs + ACP_TURN_TIMEOUT_GRACE_MS,
+              timeoutLabelMs: turnTimeoutMs,
+              onTimeout: async () => {
+                eventGate.open = false;
+                skipPostTurnCleanup = true;
+                if (!activeTurn) {
+                  return;
+                }
+                await this.cleanupTimedOutTurn({
+                  sessionKey,
+                  activeTurn,
+                  mode: sessionMode,
+                });
+              },
+            });
+            if (streamError) {
+              throw streamError;
+            }
+            this.recordTurnCompletion({
+              startedAt: turnStartedAt,
+            });
+            await this.setSessionState({
+              cfg: input.cfg,
+              sessionKey,
+              state: "idle",
+              clearLastError: true,
+            });
+            return;
+          } catch (error) {
+            const acpError = toAcpRuntimeError({
+              error,
+              fallbackCode: activeTurnStarted ? "ACP_TURN_FAILED" : "ACP_SESSION_INIT_FAILED",
+              fallbackMessage: activeTurnStarted
+                ? "ACP turn failed before completion."
+                : "Could not initialize ACP session runtime.",
+            });
+            retryFreshHandle = this.shouldRetryTurnWithFreshHandle({
+              attempt,
+              sessionKey,
+              error: acpError,
+              sawTurnOutput,
+            });
+            if (retryFreshHandle) {
+              continue;
+            }
+            this.recordTurnCompletion({
+              startedAt: turnStartedAt,
+              errorCode: acpError.code,
+            });
+            await this.setSessionState({
+              cfg: input.cfg,
+              sessionKey,
+              state: "error",
+              lastError: acpError.message,
+            });
+            throw acpError;
+          } finally {
+            if (input.signal && onCallerAbort) {
+              input.signal.removeEventListener("abort", onCallerAbort);
+            }
+            if (activeTurn && this.activeTurnBySession.get(actorKey) === activeTurn) {
+              this.activeTurnBySession.delete(actorKey);
+            }
+            if (
+              !retryFreshHandle &&
+              !skipPostTurnCleanup &&
+              runtime &&
+              handle &&
+              meta &&
+              meta.mode !== "oneshot"
+            ) {
+              ({ handle } = await this.reconcileRuntimeSessionIdentifiers({
+                cfg: input.cfg,
+                sessionKey,
+                runtime,
+                handle,
+                meta,
+                failOnStatusError: false,
+              }));
+            }
+            if (
+              !retryFreshHandle &&
+              !skipPostTurnCleanup &&
+              runtime &&
+              handle &&
+              meta &&
+              meta.mode === "oneshot"
+            ) {
+              try {
+                await runtime.close({
+                  handle,
+                  reason: "oneshot-complete",
+                });
+              } catch (error) {
+                logVerbose(
+                  `acp-manager: ACP oneshot close failed for ${sessionKey}: ${String(error)}`,
+                );
+              } finally {
+                this.clearCachedRuntimeState(sessionKey);
+              }
             }
           }
+          if (retryFreshHandle) {
+            continue;
+          }
         }
-        if (retryFreshHandle) {
-          continue;
-        }
-      }
-    });
+      },
+      input.signal,
+    );
   }
 
   private resolveTurnTimeoutMs(params: { cfg: OpenClawConfig; meta: SessionAcpMeta }): number {
@@ -1632,9 +1636,55 @@ export class AcpSessionManager {
     signal?: AbortSignal,
   ): Promise<T> {
     const actorKey = normalizeActorKey(sessionKey);
-    return await this.actorQueue.run(actorKey, async () => {
+    this.throwIfAborted(signal);
+
+    let actorStarted = false;
+    const queued = this.actorQueue.run(actorKey, async () => {
+      actorStarted = true;
       this.throwIfAborted(signal);
       return await op();
+    });
+    if (!signal) {
+      return await queued;
+    }
+
+    return await new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        signal.removeEventListener("abort", onAbort);
+      };
+      const settleValue = (value: T) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(value);
+      };
+      const settleError = (error: unknown) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const onAbort = () => {
+        if (actorStarted) {
+          return;
+        }
+        try {
+          this.throwIfAborted(signal);
+        } catch (error) {
+          settleError(error);
+        }
+      };
+
+      signal.addEventListener("abort", onAbort, { once: true });
+      queued.then(settleValue, settleError);
+      if (signal.aborted) {
+        onAbort();
+      }
     });
   }
 
