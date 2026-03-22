@@ -13,13 +13,28 @@ import { requireProviderContractProvider as requireBundledProviderContractProvid
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
 const getOAuthApiKeyMock = vi.hoisted(() => vi.fn());
+const getOAuthProvidersMock = vi.hoisted(() =>
+  vi.fn(() => [
+    { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
+    { id: "google", envApiKey: "GOOGLE_API_KEY", oauthTokenEnv: "GOOGLE_OAUTH_TOKEN" }, // pragma: allowlist secret
+    { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
+    {
+      id: "qwen-portal",
+      envApiKey: "QWEN_PORTAL_API_KEY",
+      oauthTokenEnv: "QWEN_PORTAL_OAUTH_TOKEN",
+    }, // pragma: allowlist secret
+  ]),
+);
 const refreshQwenPortalCredentialsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@mariozechner/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<object>("@mariozechner/pi-ai/oauth");
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
   return {
     ...actual,
     getOAuthApiKey: getOAuthApiKeyMock,
+    getOAuthProviders: getOAuthProvidersMock,
   };
 });
 
@@ -75,6 +90,7 @@ function requireProviderContractProvider(providerId: string): ProviderPlugin {
 describe("provider runtime contract", () => {
   beforeEach(() => {
     getOAuthApiKeyMock.mockReset();
+    getOAuthProvidersMock.mockClear();
     refreshQwenPortalCredentialsMock.mockReset();
   }, CONTRACT_SETUP_TIMEOUT_MS);
 
