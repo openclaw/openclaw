@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { readPostCompactionContext } from "../../auto-reply/reply/post-compaction-context.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
   ensureContextEnginesInitialized,
@@ -828,6 +829,7 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      let effectiveExtraSystemPrompt = params.extraSystemPrompt;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -993,7 +995,7 @@ export async function runEmbeddedPiAgent(
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
-            extraSystemPrompt: params.extraSystemPrompt,
+            extraSystemPrompt: effectiveExtraSystemPrompt,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
@@ -1153,7 +1155,7 @@ export async function runEmbeddedPiAgent(
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
-                    extraSystemPrompt: params.extraSystemPrompt,
+                    extraSystemPrompt: effectiveExtraSystemPrompt,
                     ownerNumbers: params.ownerNumbers,
                   }),
                   runId: params.runId,
@@ -1216,6 +1218,21 @@ export async function runEmbeddedPiAgent(
               }
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
+                // Inject AGENTS.md critical sections into the retry's system prompt
+                // so the agent regains its grounding immediately, not on a later turn.
+                try {
+                  const postCompactionCtx = await readPostCompactionContext(
+                    resolvedWorkspace,
+                    params.config,
+                  );
+                  if (postCompactionCtx) {
+                    effectiveExtraSystemPrompt = effectiveExtraSystemPrompt
+                      ? `${effectiveExtraSystemPrompt}\n\n${postCompactionCtx}`
+                      : postCompactionCtx;
+                  }
+                } catch {
+                  // Silent failure — post-compaction context is best-effort
+                }
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
               }
