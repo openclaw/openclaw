@@ -1,242 +1,264 @@
 [
-  {
-    "source": "OpenClaw",
-    "target": "OpenClaw"
-  },
-  {
-    "source": "Gateway",
-    "target": "Gateway 网关"
-  },
-  {
-    "source": "Pi",
-    "target": "Pi"
-  },
-  {
-    "source": "Skills",
-    "target": "Skills"
-  },
-  {
-    "source": "Skills config",
-    "target": "Skills 配置"
-  },
-  {
-    "source": "Skills Config",
-    "target": "Skills 配置"
-  },
-  {
-    "source": "local loopback",
-    "target": "local loopback"
-  },
-  {
-    "source": "Tailscale",
-    "target": "Tailscale"
-  },
-  {
-    "source": "Getting Started",
-    "target": "入门指南"
-  },
-  {
-    "source": "Getting started",
-    "target": "入门指南"
-  },
-  {
-    "source": "Quick start",
-    "target": "快速开始"
-  },
-  {
-    "source": "Quick Start",
-    "target": "快速开始"
-  },
-  {
-    "source": "Capability Cookbook",
-    "target": "能力扩展手册"
-  },
-  {
-    "source": "Setup Wizard Reference",
-    "target": "设置向导参考"
-  },
-  {
-    "source": "CLI Setup Reference",
-    "target": "CLI 设置参考"
-  },
-  {
-    "source": "Setup Wizard (CLI)",
-    "target": "设置向导（CLI）"
-  },
-  {
-    "source": "Docs directory",
-    "target": "文档目录"
-  },
-  {
-    "source": "Credits",
-    "target": "致谢"
-  },
-  {
-    "source": "Features",
-    "target": "功能"
-  },
-  {
-    "source": "DMs",
-    "target": "私信"
-  },
-  {
-    "source": "DM",
-    "target": "私信"
-  },
-  {
-    "source": "sandbox",
-    "target": "沙箱"
-  },
-  {
-    "source": "Sandbox",
-    "target": "沙箱"
-  },
-  {
-    "source": "sandboxing",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "Sandboxing",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "sandboxed",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "Sandboxed",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "Sandboxing note",
-    "target": "沙箱注意事项"
-  },
-  {
-    "source": "Companion apps",
-    "target": "配套应用"
-  },
-  {
-    "source": "expected keys",
-    "target": "预期键名"
-  },
-  {
-    "source": "block streaming",
-    "target": "分块流式传输"
-  },
-  {
-    "source": "Block streaming",
-    "target": "分块流式传输"
-  },
-  {
-    "source": "Discovery + transports",
-    "target": "设备发现 + 传输协议"
-  },
-  {
-    "source": "Discovery",
-    "target": "设备发现"
-  },
-  {
-    "source": "Network model",
-    "target": "网络模型"
-  },
-  {
-    "source": "Doctor",
-    "target": "Doctor"
-  },
-  {
-    "source": "Polls",
-    "target": "投票"
-  },
-  {
-    "source": "Release Policy",
-    "target": "发布策略"
-  },
-  {
-    "source": "Release policy",
-    "target": "发布策略"
-  },
-  {
-    "source": "for full details",
-    "target": "了解详情"
-  },
-  {
-    "source": "First 60 seconds",
-    "target": "最初的六十秒"
-  },
-  {
-    "source": "Auth: where it lives (important)",
-    "target": "凭证：存储位置（重要）"
-  },
-  {
-    "source": "agent",
-    "target": "智能体"
-  },
-  {
-    "source": "channel",
-    "target": "渠道"
-  },
-  {
-    "source": "session",
-    "target": "会话"
-  },
-  {
-    "source": "provider",
-    "target": "提供商"
-  },
-  {
-    "source": "model",
-    "target": "模型"
-  },
-  {
-    "source": "tool",
-    "target": "工具"
-  },
-  {
-    "source": "CLI",
-    "target": "CLI"
-  },
-  {
-    "source": "install sanity",
-    "target": "安装完整性检查"
-  },
-  {
-    "source": "get unstuck",
-    "target": "解决问题"
-  },
-  {
-    "source": "troubleshooting",
-    "target": "故障排除"
-  },
-  {
-    "source": "FAQ",
-    "target": "常见问题"
-  },
-  {
-    "source": "onboarding",
-    "target": "新手引导"
-  },
-  {
-    "source": "Onboarding",
-    "target": "新手引导"
-  },
-  {
-    "source": "wizard",
-    "target": "向导"
-  },
-  {
-    "source": "environment variables",
-    "target": "环境变量"
-  },
-  {
-    "source": "environment variable",
-    "target": "环境变量"
-  },
-  {
-    "source": "env vars",
-    "target": "环境变量"
-  },
-  {
-    "source": "env var",
-    "target": "环境变量"
-  }
+  {"source": "OpenClaw", "target": "OpenClaw"},
+  {"source": "Gateway", "target": "Gateway 网关"},
+  {"source": "Pi", "target": "Pi"},
+  {"source": "Skills", "target": "Skills"},
+  {"source": "Skills config", "target": "Skills 配置"},
+  {"source": "Skills Config", "target": "Skills 配置"},
+  {"source": "local loopback", "target": "local loopback"},
+  {"source": "Tailscale", "target": "Tailscale"},
+  {"source": "Getting Started", "target": "入门指南"},
+  {"source": "Getting started", "target": "入门指南"},
+  {"source": "Quick start", "target": "快速开始"},
+  {"source": "Quick Start", "target": "快速开始"},
+  {"source": "Capability Cookbook", "target": "能力扩展手册"},
+  {"source": "Setup Wizard Reference", "target": "设置向导参考"},
+  {"source": "CLI Setup Reference", "target": "CLI 设置参考"},
+  {"source": "Setup Wizard (CLI)", "target": "设置向导（CLI）"},
+  {"source": "Docs directory", "target": "文档目录"},
+  {"source": "Credits", "target": "致谢"},
+  {"source": "Features", "target": "功能"},
+  {"source": "DMs", "target": "私信"},
+  {"source": "DM", "target": "私信"},
+  {"source": "sandbox", "target": "沙箱"},
+  {"source": "Sandbox", "target": "沙箱"},
+  {"source": "sandboxing", "target": "沙箱隔离"},
+  {"source": "Sandboxing", "target": "沙箱隔离"},
+  {"source": "sandboxed", "target": "沙箱隔离"},
+  {"source": "Sandboxed", "target": "沙箱隔离"},
+  {"source": "Sandboxing note", "target": "沙箱注意事项"},
+  {"source": "Companion apps", "target": "配套应用"},
+  {"source": "expected keys", "target": "预期键名"},
+  {"source": "block streaming", "target": "分块流式传输"},
+  {"source": "Block streaming", "target": "分块流式传输"},
+  {"source": "Discovery + transports", "target": "设备发现 + 传输协议"},
+  {"source": "Discovery", "target": "设备发现"},
+  {"source": "Network model", "target": "网络模型"},
+  {"source": "Doctor", "target": "Doctor"},
+  {"source": "Polls", "target": "投票"},
+  {"source": "Release Policy", "target": "发布策略"},
+  {"source": "Release policy", "target": "发布策略"},
+  {"source": "for full details", "target": "了解详情"},
+  {"source": "First 60 seconds", "target": "最初的六十秒"},
+  {"source": "Auth: where it lives (important)", "target": "凭证：存储位置（重要）"},
+  {"source": "agent", "target": "智能体"},
+  {"source": "channel", "target": "渠道"},
+  {"source": "session", "target": "会话"},
+  {"source": "provider", "target": "提供商"},
+  {"source": "model", "target": "模型"},
+  {"source": "tool", "target": "工具"},
+  {"source": "CLI", "target": "CLI"},
+  {"source": "install sanity", "target": "安装完整性检查"},
+  {"source": "get unstuck", "target": "解决问题"},
+  {"source": "troubleshooting", "target": "故障排除"},
+  {"source": "FAQ", "target": "常见问题"},
+  {"source": "onboarding", "target": "新手引导"},
+  {"source": "Onboarding", "target": "新手引导"},
+  {"source": "wizard", "target": "向导"},
+  {"source": "environment variables", "target": "环境变量"},
+  {"source": "environment variable", "target": "环境变量"},
+  {"source": "env vars", "target": "环境变量"},
+  {"source": "env var", "target": "环境变量"},
+
+  {"source": "webhook", "target": "Webhook"},
+  {"source": "Webhook", "target": "Webhook"},
+  {"source": "Webhooks", "target": "Webhook"},
+  {"source": "webhooks", "target": "Webhook"},
+  {"source": "cron job", "target": "定时任务"},
+  {"source": "Cron job", "target": "定时任务"},
+  {"source": "Cron Jobs", "target": "定时任务"},
+  {"source": "cron jobs", "target": "定时任务"},
+  {"source": "heartbeat", "target": "心跳"},
+  {"source": "Heartbeat", "target": "心跳"},
+  {"source": "hooks", "target": "Hooks"},
+  {"source": "Hooks", "target": "Hooks"},
+  {"source": "hook", "target": "Hook"},
+  {"source": "Hook", "target": "Hook"},
+  {"source": "standing orders", "target": "常驻指令"},
+  {"source": "Standing Orders", "target": "常驻指令"},
+  {"source": "standing order", "target": "常驻指令"},
+
+  {"source": "memory", "target": "记忆"},
+  {"source": "Memory", "target": "记忆"},
+  {"source": "memory search", "target": "记忆搜索"},
+  {"source": "memory flush", "target": "记忆刷写"},
+  {"source": "Memory flush", "target": "记忆刷写"},
+  {"source": "compaction", "target": "上下文压缩"},
+  {"source": "Compaction", "target": "上下文压缩"},
+  {"source": "context engine", "target": "上下文引擎"},
+  {"source": "Context Engine", "target": "上下文引擎"},
+  {"source": "context window", "target": "上下文窗口"},
+  {"source": "system prompt", "target": "系统提示词"},
+  {"source": "System Prompt", "target": "系统提示词"},
+  {"source": "system prompt", "target": "系统提示词"},
+  {"source": "session pruning", "target": "会话修剪"},
+  {"source": "Session Pruning", "target": "会话修剪"},
+  {"source": "usage tracking", "target": "用量追踪"},
+  {"source": "Usage Tracking", "target": "用量追踪"},
+
+  {"source": "agent loop", "target": "智能体循环"},
+  {"source": "Agent Loop", "target": "智能体循环"},
+  {"source": "multi-agent", "target": "多智能体"},
+  {"source": "Multi-Agent", "target": "多智能体"},
+  {"source": "subagent", "target": "子智能体"},
+  {"source": "subagents", "target": "子智能体"},
+  {"source": "Subagents", "target": "子智能体"},
+  {"source": "agent workspace", "target": "智能体工作区"},
+  {"source": "Agent Workspace", "target": "智能体工作区"},
+  {"source": "binding", "target": "绑定"},
+  {"source": "bindings", "target": "绑定"},
+  {"source": "Bindings", "target": "绑定"},
+  {"source": "routing", "target": "路由"},
+  {"source": "Routing", "target": "路由"},
+  {"source": "channel routing", "target": "渠道路由"},
+  {"source": "Channel Routing", "target": "渠道路由"},
+  {"source": "model failover", "target": "模型故障转移"},
+  {"source": "Model Failover", "target": "模型故障转移"},
+  {"source": "model provider", "target": "模型提供商"},
+  {"source": "model providers", "target": "模型提供商"},
+  {"source": "Model Providers", "target": "模型提供商"},
+
+  {"source": "pairing", "target": "配对"},
+  {"source": "Pairing", "target": "配对"},
+  {"source": "pairing code", "target": "配对码"},
+  {"source": "DM pairing", "target": "私信配对"},
+  {"source": "DM policy", "target": "私信策略"},
+  {"source": "dmPolicy", "target": "dmPolicy"},
+  {"source": "allowlist", "target": "允许列表"},
+  {"source": "allowlisting", "target": "加入允许列表"},
+  {"source": "allowFrom", "target": "allowFrom"},
+  {"source": "groupAllowFrom", "target": "groupAllowFrom"},
+  {"source": "mention gating", "target": "提及门控"},
+  {"source": "requireMention", "target": "requireMention"},
+
+  {"source": "tool policy", "target": "工具策略"},
+  {"source": "Tool Policy", "target": "工具策略"},
+  {"source": "elevated", "target": "提权"},
+  {"source": "Elevated", "target": "提权"},
+  {"source": "elevated access", "target": "提权访问"},
+  {"source": "exec", "target": "exec 执行"},
+  {"source": "exec approvals", "target": "执行审批"},
+  {"source": "Exec Approvals", "target": "执行审批"},
+  {"source": "thinking level", "target": "思考级别"},
+  {"source": "thinking", "target": "思考"},
+  {"source": "Thinking", "target": "思考"},
+
+  {"source": "ClawHub", "target": "ClawHub"},
+  {"source": "clawhub", "target": "ClawHub"},
+  {"source": "plugin", "target": "插件"},
+  {"source": "Plugin", "target": "插件"},
+  {"source": "plugins", "target": "插件"},
+  {"source": "Plugins", "target": "插件"},
+  {"source": "skill", "target": "Skill 技能"},
+  {"source": "Skill", "target": "Skill 技能"},
+  {"source": "bundled skills", "target": "内置 Skill"},
+  {"source": "Bundled Skills", "target": "内置 Skill"},
+  {"source": "managed skills", "target": "托管 Skill"},
+  {"source": "workspace skills", "target": "工作区 Skill"},
+  {"source": "slash commands", "target": "斜杠命令"},
+  {"source": "Slash Commands", "target": "斜杠命令"},
+
+  {"source": "bearer token", "target": "Bearer 令牌"},
+  {"source": "shared secret", "target": "共享密钥"},
+  {"source": "rate limiting", "target": "速率限制"},
+  {"source": "Rate Limiting", "target": "速率限制"},
+  {"source": "SecretRef", "target": "SecretRef"},
+  {"source": "secrets", "target": "密钥"},
+  {"source": "Secrets", "target": "密钥"},
+  {"source": "credential", "target": "凭证"},
+  {"source": "credentials", "target": "凭证"},
+  {"source": "Credentials", "target": "凭证"},
+  {"source": "auth profiles", "target": "认证配置"},
+  {"source": "Auth Profiles", "target": "认证配置"},
+
+  {"source": "threat model", "target": "威胁模型"},
+  {"source": "Threat Model", "target": "威胁模型"},
+  {"source": "Threat Model Atlas", "target": "威胁模型图谱"},
+  {"source": "formal verification", "target": "形式化验证"},
+  {"source": "Formal Verification", "target": "形式化验证"},
+  {"source": "blast radius", "target": "影响范围"},
+  {"source": "prompt injection", "target": "提示词注入"},
+
+  {"source": "session key", "target": "会话密钥"},
+  {"source": "session target", "target": "会话目标"},
+  {"source": "isolated session", "target": "隔离会话"},
+  {"source": "main session", "target": "主会话"},
+  {"source": "wake mode", "target": "唤醒模式"},
+  {"source": "Wake Mode", "target": "唤醒模式"},
+  {"source": "delivery", "target": "投递"},
+  {"source": "announce delivery", "target": "通告投递"},
+  {"source": "webhook delivery", "target": "Webhook 投递"},
+  {"source": "job store", "target": "任务存储"},
+  {"source": "run history", "target": "运行历史"},
+  {"source": "stagger window", "target": "错峰窗口"},
+
+  {"source": "mapping", "target": "映射"},
+  {"source": "mappings", "target": "映射"},
+  {"source": "transform module", "target": "转换模块"},
+  {"source": "transform", "target": "转换"},
+
+  {"source": "hot-reload", "target": "热重载"},
+  {"source": "hot reload", "target": "热重载"},
+  {"source": "config reload", "target": "配置重载"},
+  {"source": "gateway lock", "target": "Gateway 锁"},
+
+  {"source": "group messages", "target": "群消息"},
+  {"source": "Group Messages", "target": "群消息"},
+  {"source": "broadcast groups", "target": "广播群组"},
+  {"source": "Broadcast Groups", "target": "广播群组"},
+  {"source": "typing indicators", "target": "输入状态指示"},
+  {"source": "Typing Indicators", "target": "输入状态指示"},
+  {"source": "presence", "target": "在线状态"},
+  {"source": "Presence", "target": "在线状态"},
+  {"source": "reactions", "target": "表情回应"},
+  {"source": "Reactions", "target": "表情回应"},
+
+  {"source": "DingTalk", "target": "钉钉"},
+  {"source": "WeCom", "target": "企业微信"},
+  {"source": "Feishu", "target": "飞书"},
+  {"source": "WhatsApp", "target": "WhatsApp"},
+  {"source": "Telegram", "target": "Telegram"},
+  {"source": "Discord", "target": "Discord"},
+  {"source": "Slack", "target": "Slack"},
+  {"source": "Signal", "target": "Signal"},
+  {"source": "iMessage", "target": "iMessage"},
+  {"source": "BlueBubbles", "target": "BlueBubbles"},
+  {"source": "Microsoft Teams", "target": "Microsoft Teams"},
+  {"source": "Matrix", "target": "Matrix"},
+  {"source": "Mattermost", "target": "Mattermost"},
+  {"source": "LINE", "target": "LINE"},
+  {"source": "Google Chat", "target": "Google Chat"},
+  {"source": "IRC", "target": "IRC"},
+  {"source": "Nostr", "target": "Nostr"},
+  {"source": "Zalo", "target": "Zalo"},
+
+  {"source": "browser automation", "target": "浏览器自动化"},
+  {"source": "Browser", "target": "浏览器"},
+  {"source": "loop detection", "target": "循环检测"},
+  {"source": "Loop Detection", "target": "循环检测"},
+  {"source": "TTS", "target": "TTS 语音合成"},
+  {"source": "text-to-speech", "target": "文本转语音"},
+
+  {"source": "OpenShell", "target": "OpenShell"},
+  {"source": "bridge protocol", "target": "桥接协议"},
+  {"source": "Bridge Protocol", "target": "桥接协议"},
+  {"source": "health check", "target": "健康检查"},
+  {"source": "Health Check", "target": "健康检查"},
+  {"source": "remote gateway", "target": "远程 Gateway"},
+  {"source": "Remote Gateway", "target": "远程 Gateway"},
+  {"source": "trusted proxy", "target": "可信代理"},
+  {"source": "Trusted Proxy", "target": "可信代理"},
+  {"source": "trusted proxy auth", "target": "可信代理认证"},
+
+  {"source": "OAuth", "target": "OAuth"},
+  {"source": "SOUL.md", "target": "SOUL.md"},
+  {"source": "MEMORY.md", "target": "MEMORY.md"},
+  {"source": "vector search", "target": "向量搜索"},
+  {"source": "embedding", "target": "向量嵌入"},
+  {"source": "embeddings", "target": "向量嵌入"},
+  {"source": "hybrid search", "target": "混合搜索"},
+  {"source": "BM25", "target": "BM25"},
+  {"source": "semantic search", "target": "语义搜索"},
+  {"source": "translation memory", "target": "翻译记忆"},
+  {"source": "Translation Memory", "target": "翻译记忆"}
 ]
