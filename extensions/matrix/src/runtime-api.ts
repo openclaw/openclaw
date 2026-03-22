@@ -1,4 +1,4 @@
-export * from "../../../src/plugin-sdk/matrix.js";
+export * from "openclaw/plugin-sdk/matrix";
 export {
   assertHttpUrlTargetsPrivateNetwork,
   closeDispatcher,

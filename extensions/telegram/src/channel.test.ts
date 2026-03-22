@@ -1,11 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  ChannelAccountSnapshot,
-  ChannelGatewayContext,
-} from "../../../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
 import * as auditModule from "./audit.js";
 import { telegramPlugin } from "./channel.js";
@@ -58,31 +55,8 @@ function createCfg(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function createStartAccountCtx(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  runtime: ReturnType<typeof createRuntimeEnv>;
-}): ChannelGatewayContext<ResolvedTelegramAccount> {
-  const account = telegramPlugin.config.resolveAccount(
-    params.cfg,
-    params.accountId,
-  ) as ResolvedTelegramAccount;
-  const snapshot: ChannelAccountSnapshot = {
-    accountId: params.accountId,
-    configured: true,
-    enabled: true,
-    running: false,
-  };
-  return {
-    accountId: params.accountId,
-    account,
-    cfg: params.cfg,
-    runtime: params.runtime,
-    abortSignal: new AbortController().signal,
-    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    getStatus: () => snapshot,
-    setStatus: vi.fn(),
-  };
+function resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedTelegramAccount {
+  return telegramPlugin.config.resolveAccount(cfg, accountId) as ResolvedTelegramAccount;
 }
 
 function installGatewayRuntime(params?: { probeOk?: boolean; botUsername?: string }) {
@@ -225,12 +199,13 @@ describe("telegramPlugin duplicate token guard", () => {
     const { monitorTelegramProvider, probeTelegram } = installGatewayRuntime({
       probeOk: true,
     });
+    const cfg = createCfg();
 
     await expect(
       telegramPlugin.gateway!.startAccount!(
-        createStartAccountCtx({
-          cfg: createCfg(),
-          accountId: "work",
+        createStartAccountContext({
+          account: resolveAccount(cfg, "work"),
+          cfg,
           runtime: createRuntimeEnv(),
         }),
       ),
@@ -263,9 +238,9 @@ describe("telegramPlugin duplicate token guard", () => {
     };
 
     await telegramPlugin.gateway!.startAccount!(
-      createStartAccountCtx({
+      createStartAccountContext({
+        account: resolveAccount(cfg, "ops"),
         cfg,
-        accountId: "ops",
         runtime: createRuntimeEnv(),
       }),
     );
@@ -521,9 +496,9 @@ describe("telegramPlugin duplicate token guard", () => {
     monitorTelegramProviderMock.mockResolvedValue(undefined);
 
     const cfg = createCfg();
-    const ctx = createStartAccountCtx({
+    const ctx = createStartAccountContext({
+      account: resolveAccount(cfg, "ops"),
       cfg,
-      accountId: "ops",
       runtime: createRuntimeEnv(),
     });
     ctx.account = {
