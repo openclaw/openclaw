@@ -74,7 +74,7 @@ import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import { startGatewayConfigReloader } from "./config-reload.js";
+import { resolveGatewayReloadSettings, startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -434,6 +434,7 @@ export async function startGatewayServer(
     });
   };
   let secretsActivationTail: Promise<void> = Promise.resolve();
+  let runtimeSecretsActivationSerial = 0;
   const runWithSecretsActivationLock = async <T>(operation: () => Promise<T>): Promise<T> => {
     const run = secretsActivationTail.then(operation, operation);
     secretsActivationTail = run.then(
@@ -451,6 +452,7 @@ export async function startGatewayServer(
         const prepared = await prepareSecretsRuntimeSnapshot({ config });
         if (params.activate) {
           activateSecretsRuntimeSnapshot(prepared);
+          runtimeSecretsActivationSerial += 1;
           logGatewayAuthSurfaceDiagnostics(prepared);
         }
         for (const warning of prepared.warnings) {
@@ -487,7 +489,6 @@ export async function startGatewayServer(
         throw err;
       }
     });
-
   let cfgAtStart: OpenClawConfig;
   const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
   const authBootstrap = await prepareGatewayStartupConfig({
@@ -1149,7 +1150,27 @@ export async function startGatewayServer(
       ...secretsHandlers,
     },
     broadcast,
-    context: gatewayRequestContext,
+    context: {
+      ...gatewayRequestContext,
+      refreshRuntimeConfigFromDisk: async (configOverride) => {
+        if (!getActiveSecretsRuntimeSnapshot()) {
+          return;
+        }
+        if (configOverride) {
+          await activateRuntimeSecrets(configOverride, { reason: "reload", activate: true });
+          return;
+        }
+        const reloadMode = resolveGatewayReloadSettings(loadConfig()).mode;
+        if (reloadMode === "off" || reloadMode === "restart") {
+          return;
+        }
+        const snapshot = await readConfigFileSnapshot();
+        if (!snapshot.exists || !snapshot.valid) {
+          return;
+        }
+        await activateRuntimeSecrets(snapshot.config, { reason: "reload", activate: true });
+      },
+    },
   });
   logGatewayStartup({
     cfg: cfgAtStart,
@@ -1273,14 +1294,23 @@ export async function startGatewayServer(
               reason: "reload",
               activate: true,
             });
+            const preparedActivationSerial = runtimeSecretsActivationSerial;
             try {
               await applyHotReload(plan, prepared.config);
             } catch (err) {
-              if (previousSnapshot) {
-                activateSecretsRuntimeSnapshot(previousSnapshot);
-              } else {
-                clearSecretsRuntimeSnapshot();
-              }
+              await runWithSecretsActivationLock(async () => {
+                if (runtimeSecretsActivationSerial !== preparedActivationSerial) {
+                  logReload.warn(
+                    "gateway: skipping hot-reload snapshot rollback because runtime snapshot advanced",
+                  );
+                  return;
+                }
+                if (previousSnapshot) {
+                  activateSecretsRuntimeSnapshot(previousSnapshot);
+                } else {
+                  clearSecretsRuntimeSnapshot();
+                }
+              });
               throw err;
             }
           },
