@@ -62,12 +62,16 @@ describe("memory cli", () => {
     return vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   }
 
+  function spyRuntimeJson() {
+    return vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  }
+
   function spyRuntimeErrors() {
     return vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
   }
 
-  function firstLoggedJson(log: ReturnType<typeof vi.spyOn>) {
-    return JSON.parse(String(log.mock.calls[0]?.[0] ?? "null")) as Record<string, unknown>;
+  function firstWrittenJson(writeJson: ReturnType<typeof vi.spyOn>) {
+    return (writeJson.mock.calls[0]?.[0] ?? null) as Record<string, unknown>;
   }
 
   const inactiveMemorySecretDiagnostic = "agents.defaults.memorySearch.remote.apiKey inactive"; // pragma: allowlist secret
@@ -450,10 +454,10 @@ describe("memory cli", () => {
       close,
     });
 
-    const log = spyRuntimeLogs();
+    const writeJson = spyRuntimeJson();
     await runMemoryCli(["status", "--json"]);
 
-    const payload = firstLoggedJson(log);
+    const payload = firstWrittenJson(writeJson);
     expect(Array.isArray(payload)).toBe(true);
     expect((payload[0] as Record<string, unknown>)?.agentId).toBe("main");
     expect(close).toHaveBeenCalled();
@@ -463,11 +467,11 @@ describe("memory cli", () => {
     const close = vi.fn(async () => {});
     setupMemoryStatusWithInactiveSecretDiagnostics(close);
 
-    const log = spyRuntimeLogs();
+    const writeJson = spyRuntimeJson();
     const error = spyRuntimeErrors();
     await runMemoryCli(["status", "--json"]);
 
-    const payload = firstLoggedJson(log);
+    const payload = firstWrittenJson(writeJson);
     expect(Array.isArray(payload)).toBe(true);
     expect(hasLoggedInactiveSecretDiagnostic(error)).toBe(true);
   });
@@ -567,10 +571,10 @@ describe("memory cli", () => {
     ]);
     mockManager({ search, close });
 
-    const log = spyRuntimeLogs();
+    const writeJson = spyRuntimeJson();
     await runMemoryCli(["search", "hello", "--json"]);
 
-    const payload = firstLoggedJson(log);
+    const payload = firstWrittenJson(writeJson);
     expect(Array.isArray(payload.results)).toBe(true);
     expect(payload.results as unknown[]).toHaveLength(1);
     expect(close).toHaveBeenCalled();
