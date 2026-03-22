@@ -6,18 +6,8 @@ const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_SIZE = "1024x1024";
 const OPENAI_SUPPORTED_SIZES = ["1024x1024", "1024x1536", "1536x1024"] as const;
-const OPENAI_SUPPORTED_ASPECT_RATIOS = [
-  "1:1",
-  "2:3",
-  "3:2",
-  "3:4",
-  "4:3",
-  "4:5",
-  "5:4",
-  "9:16",
-  "16:9",
-  "21:9",
-] as const;
+// Only advertise ratios we can satisfy exactly with OpenAI's supported size presets.
+const OPENAI_SUPPORTED_ASPECT_RATIOS = ["1:1", "2:3", "3:2"] as const;
 
 type OpenAIImageApiResponse = {
   data?: Array<{
@@ -41,15 +31,8 @@ function resolveOpenAISize(params: { size?: string; aspectRatio?: string }): str
     case "1:1":
       return "1024x1024";
     case "2:3":
-    case "3:4":
-    case "4:5":
-    case "9:16":
       return "1024x1536";
     case "3:2":
-    case "4:3":
-    case "5:4":
-    case "16:9":
-    case "21:9":
       return "1536x1024";
     default:
       return DEFAULT_SIZE;
