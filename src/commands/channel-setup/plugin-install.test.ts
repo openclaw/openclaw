@@ -380,12 +380,12 @@ describe("ensureChannelSetupPluginInstalled", () => {
       expect.objectContaining({
         config: cfg,
         workspaceDir: "/tmp/openclaw-workspace",
-        cache: false,
         onlyPluginIds: ["telegram"],
         includeSetupOnlyChannelPlugins: true,
         activate: false,
       }),
     );
+    expect(clearPluginDiscoveryCache).not.toHaveBeenCalled();
   });
 
   it("scopes snapshots by plugin id when channel and plugin ids differ", () => {
@@ -404,11 +404,11 @@ describe("ensureChannelSetupPluginInstalled", () => {
       expect.objectContaining({
         config: cfg,
         workspaceDir: "/tmp/openclaw-workspace",
-        cache: false,
         onlyPluginIds: ["@openclaw/msteams-plugin"],
         includeSetupOnlyChannelPlugins: true,
         activate: false,
       }),
     );
+    expect(clearPluginDiscoveryCache).not.toHaveBeenCalled();
   });
 });

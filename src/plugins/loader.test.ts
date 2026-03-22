@@ -954,6 +954,46 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
           expect(getGlobalHookRunner()).toBeNull();
         },
       },
+      {
+        label: "reuses cached non-activating scoped registries without re-running register",
+        run: () => {
+          useNoBundledPlugins();
+          const marker = path.join(makeTempDir(), "snapshot-register-count.txt");
+          const plugin = writePlugin({
+            id: "cached-snapshot-register",
+            filename: "cached-snapshot-register.cjs",
+            body: `const fs = require("node:fs");
+module.exports = {
+  id: "cached-snapshot-register",
+  register() {
+    const previous = fs.existsSync(${JSON.stringify(marker)})
+      ? Number.parseInt(fs.readFileSync(${JSON.stringify(marker)}, "utf-8"), 10) || 0
+      : 0;
+    fs.writeFileSync(${JSON.stringify(marker)}, String(previous + 1), "utf-8");
+  },
+};`,
+          });
+
+          const options = {
+            activate: false as const,
+            workspaceDir: plugin.dir,
+            config: {
+              plugins: {
+                load: { paths: [plugin.file] },
+                allow: ["cached-snapshot-register"],
+              },
+            },
+            onlyPluginIds: ["cached-snapshot-register"],
+          };
+
+          const first = loadOpenClawPlugins(options);
+          const second = loadOpenClawPlugins(options);
+
+          expect(first.plugins.map((entry) => entry.id)).toEqual(["cached-snapshot-register"]);
+          expect(second).toBe(first);
+          expect(fs.readFileSync(marker, "utf-8")).toBe("1");
+        },
+      },
     ] as const;
 
     for (const scenario of scenarios) {
@@ -1088,13 +1128,43 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
   });
 
-  it("throws when activate:false is used without cache:false", () => {
-    expect(() => loadOpenClawPlugins({ activate: false })).toThrow(
-      "activate:false requires cache:false",
-    );
-    expect(() => loadOpenClawPlugins({ activate: false, cache: true })).toThrow(
-      "activate:false requires cache:false",
-    );
+  it("keeps activating and non-activating caches separate", () => {
+    useNoBundledPlugins();
+    const marker = path.join(makeTempDir(), "activation-cache-mode.txt");
+    const plugin = writePlugin({
+      id: "activation-cache-mode",
+      filename: "activation-cache-mode.cjs",
+      body: `const fs = require("node:fs");
+module.exports = {
+  id: "activation-cache-mode",
+  register() {
+    const previous = fs.existsSync(${JSON.stringify(marker)})
+      ? Number.parseInt(fs.readFileSync(${JSON.stringify(marker)}, "utf-8"), 10) || 0
+      : 0;
+    fs.writeFileSync(${JSON.stringify(marker)}, String(previous + 1), "utf-8");
+  },
+};`,
+    });
+
+    const baseOptions = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["activation-cache-mode"],
+        },
+      },
+      onlyPluginIds: ["activation-cache-mode"],
+    };
+
+    const snapshot = loadOpenClawPlugins({
+      ...baseOptions,
+      activate: false,
+    });
+    const active = loadOpenClawPlugins(baseOptions);
+
+    expect(snapshot).not.toBe(active);
+    expect(fs.readFileSync(marker, "utf-8")).toBe("2");
   });
 
   it("re-initializes global hook runner when serving registry from cache", () => {

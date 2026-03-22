@@ -240,14 +240,16 @@ function loadChannelSetupPluginRegistry(params: {
   onlyPluginIds?: string[];
   activate?: boolean;
 }): PluginRegistry {
-  clearPluginDiscoveryCache();
+  if (params.activate !== false) {
+    clearPluginDiscoveryCache();
+  }
   const workspaceDir =
     params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
   const log = createSubsystemLogger("plugins");
   return loadOpenClawPlugins({
     config: params.cfg,
     workspaceDir,
-    cache: false,
+    ...(params.activate === false ? {} : { cache: false }),
     logger: createPluginLoaderLogger(log),
     onlyPluginIds: params.onlyPluginIds,
     includeSetupOnlyChannelPlugins: true,
