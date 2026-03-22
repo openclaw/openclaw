@@ -2,6 +2,7 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
+import { stableStringify } from "../agents/stable-stringify.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
@@ -1404,11 +1405,19 @@ export async function startGatewayServer(
               activate: true,
             });
             const preparedActivationSerial = runtimeSecretsActivationSerial;
+            const preparedConfigKey = stableStringify(prepared.config);
             try {
               await applyHotReload(plan, prepared.config);
             } catch (err) {
               await runWithSecretsActivationLock(async () => {
-                if (runtimeSecretsActivationSerial !== preparedActivationSerial) {
+                const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+                const activeConfigKey = activeSnapshot
+                  ? stableStringify(activeSnapshot.config)
+                  : null;
+                if (
+                  runtimeSecretsActivationSerial !== preparedActivationSerial &&
+                  activeConfigKey !== preparedConfigKey
+                ) {
                   logReload.warn(
                     "gateway: skipping hot-reload snapshot rollback because runtime snapshot advanced",
                   );
