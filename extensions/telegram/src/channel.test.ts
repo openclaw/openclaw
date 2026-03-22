@@ -59,6 +59,18 @@ function resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedTelegra
   return telegramPlugin.config.resolveAccount(cfg, accountId) as ResolvedTelegramAccount;
 }
 
+function createStartTelegramContext(cfg: OpenClawConfig, accountId: string) {
+  return createStartAccountContext({
+    account: resolveAccount(cfg, accountId),
+    cfg,
+    runtime: createRuntimeEnv(),
+  });
+}
+
+function startTelegramAccount(cfg: OpenClawConfig, accountId: string) {
+  return telegramPlugin.gateway!.startAccount!(createStartTelegramContext(cfg, accountId));
+}
+
 function installGatewayRuntime(params?: { probeOk?: boolean; botUsername?: string }) {
   const monitorTelegramProvider = vi
     .spyOn(monitorModule, "monitorTelegramProvider")
@@ -167,9 +179,9 @@ describe("telegramPlugin groups", () => {
 describe("telegramPlugin duplicate token guard", () => {
   it("marks secondary account as not configured when token is shared", async () => {
     const cfg = createCfg();
-    const alertsAccount = telegramPlugin.config.resolveAccount(cfg, "alerts");
-    const workAccount = telegramPlugin.config.resolveAccount(cfg, "work");
-    const opsAccount = telegramPlugin.config.resolveAccount(cfg, "ops");
+    const alertsAccount = resolveAccount(cfg, "alerts");
+    const workAccount = resolveAccount(cfg, "work");
+    const opsAccount = resolveAccount(cfg, "ops");
 
     expect(await telegramPlugin.config.isConfigured!(alertsAccount, cfg)).toBe(true);
     expect(await telegramPlugin.config.isConfigured!(workAccount, cfg)).toBe(false);
@@ -182,7 +194,7 @@ describe("telegramPlugin duplicate token guard", () => {
 
   it("surfaces duplicate-token reason in status snapshot", async () => {
     const cfg = createCfg();
-    const workAccount = telegramPlugin.config.resolveAccount(cfg, "work");
+    const workAccount = resolveAccount(cfg, "work");
     const snapshot = await telegramPlugin.status!.buildAccountSnapshot!({
       account: workAccount,
       cfg,
@@ -201,15 +213,7 @@ describe("telegramPlugin duplicate token guard", () => {
     });
     const cfg = createCfg();
 
-    await expect(
-      telegramPlugin.gateway!.startAccount!(
-        createStartAccountContext({
-          account: resolveAccount(cfg, "work"),
-          cfg,
-          runtime: createRuntimeEnv(),
-        }),
-      ),
-    ).rejects.toThrow("Duplicate Telegram bot token");
+    await expect(startTelegramAccount(cfg, "work")).rejects.toThrow("Duplicate Telegram bot token");
 
     expect(probeTelegramMock).not.toHaveBeenCalled();
     expect(monitorTelegramProviderMock).not.toHaveBeenCalled();
@@ -237,13 +241,7 @@ describe("telegramPlugin duplicate token guard", () => {
       webhookPort: 9876,
     };
 
-    await telegramPlugin.gateway!.startAccount!(
-      createStartAccountContext({
-        account: resolveAccount(cfg, "ops"),
-        cfg,
-        runtime: createRuntimeEnv(),
-      }),
-    );
+    await startTelegramAccount(cfg, "ops");
 
     expect(probeTelegramMock).toHaveBeenCalledWith("token-ops", 2500, {
       accountId: "ops",
@@ -282,7 +280,7 @@ describe("telegramPlugin duplicate token guard", () => {
 
     const cfg = createCfg();
     configureOpsProxyNetwork(cfg);
-    const account = telegramPlugin.config.resolveAccount(cfg, "ops");
+    const account = resolveAccount(cfg, "ops");
 
     await telegramPlugin.status!.probeAccount!({
       account,
@@ -341,7 +339,7 @@ describe("telegramPlugin duplicate token guard", () => {
         "-100123": { requireMention: false },
       },
     };
-    const account = telegramPlugin.config.resolveAccount(cfg, "ops");
+    const account = resolveAccount(cfg, "ops");
 
     await telegramPlugin.status!.auditAccount!({
       account,
@@ -484,7 +482,7 @@ describe("telegramPlugin duplicate token guard", () => {
     const cfg = createCfg();
     cfg.channels!.telegram!.accounts!.ops = {} as never;
 
-    const alertsAccount = telegramPlugin.config.resolveAccount(cfg, "alerts");
+    const alertsAccount = resolveAccount(cfg, "alerts");
     expect(await telegramPlugin.config.isConfigured!(alertsAccount, cfg)).toBe(true);
   });
 
@@ -496,11 +494,7 @@ describe("telegramPlugin duplicate token guard", () => {
     monitorTelegramProviderMock.mockResolvedValue(undefined);
 
     const cfg = createCfg();
-    const ctx = createStartAccountContext({
-      account: resolveAccount(cfg, "ops"),
-      cfg,
-      runtime: createRuntimeEnv(),
-    });
+    const ctx = createStartTelegramContext(cfg, "ops");
     ctx.account = {
       ...ctx.account,
       token: undefined as unknown as string,
