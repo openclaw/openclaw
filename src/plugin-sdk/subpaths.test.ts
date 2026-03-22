@@ -346,8 +346,10 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("channel-inbound", [
       "buildMentionRegexes",
+      "createDirectDmPreCryptoGuardPolicy",
       "createChannelInboundDebouncer",
       "createInboundDebouncer",
+      "dispatchInboundDirectDmWithRuntime",
       "formatInboundEnvelope",
       "formatInboundFromLabel",
       "formatLocationText",
@@ -446,8 +448,10 @@ describe("plugin-sdk subpath exports", () => {
       "listNativeCommandSpecsForConfig",
       "listSkillCommandsForAgents",
       "normalizeCommandBody",
+      "createPreCryptoDirectDmAuthorizer",
       "resolveCommandAuthorization",
       "resolveCommandAuthorizedFromAuthorizers",
+      "resolveInboundDirectDmAccessWithRuntime",
       "resolveControlCommandGate",
       "resolveDualTextControlCommandGate",
       "resolveNativeCommandSessionTargets",

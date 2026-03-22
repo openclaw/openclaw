@@ -1,5 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveDmGroupAccessWithLists } from "../security/dm-policy-shared.js";
+export {
+  createPreCryptoDirectDmAuthorizer,
+  resolveInboundDirectDmAccessWithRuntime,
+  type DirectDmCommandAuthorizationRuntime,
+  type ResolvedInboundDirectDmAccess,
+} from "./direct-dm.js";
 
 export {
   hasControlCommand,
