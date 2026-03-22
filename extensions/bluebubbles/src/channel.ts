@@ -15,6 +15,7 @@ import {
   projectWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import {
@@ -103,261 +104,270 @@ const meta = {
   preferOver: ["imessage"],
 };
 
-export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
-  id: "bluebubbles",
-  meta,
-  capabilities: {
-    chatTypes: ["direct", "group"],
-    media: true,
-    reactions: true,
-    edit: true,
-    unsend: true,
-    reply: true,
-    effects: true,
-    groupManagement: true,
-  },
-  groups: {
-    resolveRequireMention: resolveBlueBubblesGroupRequireMention,
-    resolveToolPolicy: resolveBlueBubblesGroupToolPolicy,
-  },
-  threading: {
-    buildToolContext: ({ context, hasRepliedRef }) => ({
-      currentChannelId: context.To?.trim() || undefined,
-      currentThreadTs: context.ReplyToIdFull ?? context.ReplyToId,
-      hasRepliedRef,
-    }),
-  },
-  reload: { configPrefixes: ["channels.bluebubbles"] },
-  configSchema: buildChannelConfigSchema(BlueBubblesConfigSchema),
-  setupWizard: blueBubblesSetupWizard,
-  config: {
-    ...bluebubblesConfigAdapter,
-    isConfigured: (account) => account.configured,
-    describeAccount: (account): ChannelAccountSnapshot =>
-      describeAccountSnapshot({
-        account,
-        configured: account.configured,
-        extra: {
-          baseUrl: account.baseUrl,
-        },
-      }),
-  },
-  actions: bluebubblesMessageActions,
-  security: {
-    resolveDmPolicy: resolveBlueBubblesDmPolicy,
-    collectWarnings: projectWarningCollector(
-      ({ account }: { account: ResolvedBlueBubblesAccount }) => account,
-      collectBlueBubblesSecurityWarnings,
-    ),
-  },
-  messaging: {
-    normalizeTarget: normalizeBlueBubblesMessagingTarget,
-    inferTargetChatType: ({ to }) => inferBlueBubblesTargetChatType(to),
-    resolveOutboundSessionRoute: (params) => resolveBlueBubblesOutboundSessionRoute(params),
-    targetResolver: {
-      looksLikeId: looksLikeBlueBubblesExplicitTargetId,
-      hint: "<handle|chat_guid:GUID|chat_id:ID|chat_identifier:ID>",
-      resolveTarget: async ({ normalized }) => {
-        const to = normalized?.trim();
-        if (!to) {
-          return null;
-        }
-        const chatType = inferBlueBubblesTargetChatType(to);
-        if (!chatType) {
-          return null;
-        }
-        return {
-          to,
-          kind: chatType === "direct" ? "user" : "group",
-          source: "normalized" as const,
-        };
+export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = createChatChannelPlugin(
+  {
+    base: {
+      id: "bluebubbles",
+      meta,
+      capabilities: {
+        chatTypes: ["direct", "group"],
+        media: true,
+        reactions: true,
+        edit: true,
+        unsend: true,
+        reply: true,
+        effects: true,
+        groupManagement: true,
       },
-    },
-    formatTargetDisplay: ({ target, display }) => {
-      const shouldParseDisplay = (value: string): boolean => {
-        if (looksLikeBlueBubblesTargetId(value)) {
-          return true;
-        }
-        return /^(bluebubbles:|chat_guid:|chat_id:|chat_identifier:)/i.test(value);
-      };
+      groups: {
+        resolveRequireMention: resolveBlueBubblesGroupRequireMention,
+        resolveToolPolicy: resolveBlueBubblesGroupToolPolicy,
+      },
+      reload: { configPrefixes: ["channels.bluebubbles"] },
+      configSchema: buildChannelConfigSchema(BlueBubblesConfigSchema),
+      setupWizard: blueBubblesSetupWizard,
+      config: {
+        ...bluebubblesConfigAdapter,
+        isConfigured: (account) => account.configured,
+        describeAccount: (account): ChannelAccountSnapshot =>
+          describeAccountSnapshot({
+            account,
+            configured: account.configured,
+            extra: {
+              baseUrl: account.baseUrl,
+            },
+          }),
+      },
+      actions: bluebubblesMessageActions,
+      messaging: {
+        normalizeTarget: normalizeBlueBubblesMessagingTarget,
+        inferTargetChatType: ({ to }) => inferBlueBubblesTargetChatType(to),
+        resolveOutboundSessionRoute: (params) => resolveBlueBubblesOutboundSessionRoute(params),
+        targetResolver: {
+          looksLikeId: looksLikeBlueBubblesExplicitTargetId,
+          hint: "<handle|chat_guid:GUID|chat_id:ID|chat_identifier:ID>",
+          resolveTarget: async ({ normalized }) => {
+            const to = normalized?.trim();
+            if (!to) {
+              return null;
+            }
+            const chatType = inferBlueBubblesTargetChatType(to);
+            if (!chatType) {
+              return null;
+            }
+            return {
+              to,
+              kind: chatType === "direct" ? "user" : "group",
+              source: "normalized" as const,
+            };
+          },
+        },
+        formatTargetDisplay: ({ target, display }) => {
+          const shouldParseDisplay = (value: string): boolean => {
+            if (looksLikeBlueBubblesTargetId(value)) {
+              return true;
+            }
+            return /^(bluebubbles:|chat_guid:|chat_id:|chat_identifier:)/i.test(value);
+          };
 
-      // Helper to extract a clean handle from any BlueBubbles target format
-      const extractCleanDisplay = (value: string | undefined): string | null => {
-        const trimmed = value?.trim();
-        if (!trimmed) {
-          return null;
-        }
-        try {
-          const parsed = parseBlueBubblesTarget(trimmed);
-          if (parsed.kind === "chat_guid") {
-            const handle = extractHandleFromChatGuid(parsed.chatGuid);
+          // Helper to extract a clean handle from any BlueBubbles target format
+          const extractCleanDisplay = (value: string | undefined): string | null => {
+            const trimmed = value?.trim();
+            if (!trimmed) {
+              return null;
+            }
+            try {
+              const parsed = parseBlueBubblesTarget(trimmed);
+              if (parsed.kind === "chat_guid") {
+                const handle = extractHandleFromChatGuid(parsed.chatGuid);
+                if (handle) {
+                  return handle;
+                }
+              }
+              if (parsed.kind === "handle") {
+                return normalizeBlueBubblesHandle(parsed.to);
+              }
+            } catch {
+              // Fall through
+            }
+            // Strip common prefixes and try raw extraction
+            const stripped = trimmed
+              .replace(/^bluebubbles:/i, "")
+              .replace(/^chat_guid:/i, "")
+              .replace(/^chat_id:/i, "")
+              .replace(/^chat_identifier:/i, "");
+            const handle = extractHandleFromChatGuid(stripped);
             if (handle) {
               return handle;
             }
+            // Don't return raw chat_guid formats - they contain internal routing info
+            if (stripped.includes(";-;") || stripped.includes(";+;")) {
+              return null;
+            }
+            return stripped;
+          };
+
+          // Try to get a clean display from the display parameter first
+          const trimmedDisplay = display?.trim();
+          if (trimmedDisplay) {
+            if (!shouldParseDisplay(trimmedDisplay)) {
+              return trimmedDisplay;
+            }
+            const cleanDisplay = extractCleanDisplay(trimmedDisplay);
+            if (cleanDisplay) {
+              return cleanDisplay;
+            }
           }
-          if (parsed.kind === "handle") {
-            return normalizeBlueBubblesHandle(parsed.to);
+
+          // Fall back to extracting from target
+          const cleanTarget = extractCleanDisplay(target);
+          if (cleanTarget) {
+            return cleanTarget;
           }
-        } catch {
-          // Fall through
-        }
-        // Strip common prefixes and try raw extraction
-        const stripped = trimmed
-          .replace(/^bluebubbles:/i, "")
-          .replace(/^chat_guid:/i, "")
-          .replace(/^chat_id:/i, "")
-          .replace(/^chat_identifier:/i, "");
-        const handle = extractHandleFromChatGuid(stripped);
-        if (handle) {
-          return handle;
-        }
-        // Don't return raw chat_guid formats - they contain internal routing info
-        if (stripped.includes(";-;") || stripped.includes(";+;")) {
-          return null;
-        }
-        return stripped;
-      };
 
-      // Try to get a clean display from the display parameter first
-      const trimmedDisplay = display?.trim();
-      if (trimmedDisplay) {
-        if (!shouldParseDisplay(trimmedDisplay)) {
-          return trimmedDisplay;
-        }
-        const cleanDisplay = extractCleanDisplay(trimmedDisplay);
-        if (cleanDisplay) {
-          return cleanDisplay;
-        }
-      }
-
-      // Fall back to extracting from target
-      const cleanTarget = extractCleanDisplay(target);
-      if (cleanTarget) {
-        return cleanTarget;
-      }
-
-      // Last resort: return display or target as-is
-      return display?.trim() || target?.trim() || "";
-    },
-  },
-  setup: blueBubblesSetupAdapter,
-  pairing: createTextPairingAdapter({
-    idLabel: "bluebubblesSenderId",
-    message: PAIRING_APPROVED_MESSAGE,
-    normalizeAllowEntry: createPairingPrefixStripper(/^bluebubbles:/i, normalizeBlueBubblesHandle),
-    notify: async ({ cfg, id, message }) => {
-      await (
-        await loadBlueBubblesChannelRuntime()
-      ).sendMessageBlueBubbles(id, message, {
-        cfg: cfg,
-      });
-    },
-  }),
-  outbound: {
-    deliveryMode: "direct",
-    textChunkLimit: 4000,
-    resolveTarget: ({ to }) => {
-      const trimmed = to?.trim();
-      if (!trimmed) {
-        return {
-          ok: false,
-          error: new Error("Delivering to BlueBubbles requires --to <handle|chat_guid:GUID>"),
-        };
-      }
-      return { ok: true, to: trimmed };
-    },
-    ...createAttachedChannelResultAdapter({
-      channel: "bluebubbles",
-      sendText: async ({ cfg, to, text, accountId, replyToId }) => {
-        const runtime = await loadBlueBubblesChannelRuntime();
-        const rawReplyToId = typeof replyToId === "string" ? replyToId.trim() : "";
-        const replyToMessageGuid = rawReplyToId
-          ? runtime.resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
-          : "";
-        return await runtime.sendMessageBlueBubbles(to, text, {
-          cfg: cfg,
-          accountId: accountId ?? undefined,
-          replyToMessageGuid: replyToMessageGuid || undefined,
-        });
+          // Last resort: return display or target as-is
+          return display?.trim() || target?.trim() || "";
+        },
       },
-      sendMedia: async (ctx) => {
-        const runtime = await loadBlueBubblesChannelRuntime();
-        const { cfg, to, text, mediaUrl, accountId, replyToId } = ctx;
-        const { mediaPath, mediaBuffer, contentType, filename, caption } = ctx as {
-          mediaPath?: string;
-          mediaBuffer?: Uint8Array;
-          contentType?: string;
-          filename?: string;
-          caption?: string;
-        };
-        return await runtime.sendBlueBubblesMedia({
+      setup: blueBubblesSetupAdapter,
+      status: createComputedAccountStatusAdapter<ResolvedBlueBubblesAccount, BlueBubblesProbe>({
+        defaultRuntime: {
+          accountId: DEFAULT_ACCOUNT_ID,
+          running: false,
+          lastStartAt: null,
+          lastStopAt: null,
+          lastError: null,
+        },
+        collectStatusIssues: collectBlueBubblesStatusIssues,
+        buildChannelSummary: ({ snapshot }) =>
+          buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
+        probeAccount: async ({ account, timeoutMs }) =>
+          (await loadBlueBubblesChannelRuntime()).probeBlueBubbles({
+            baseUrl: account.baseUrl,
+            password: account.config.password ?? null,
+            timeoutMs,
+          }),
+        resolveAccountSnapshot: ({ account, runtime, probe }) => {
+          const running = runtime?.running ?? false;
+          const probeOk = probe?.ok;
+          return {
+            accountId: account.accountId,
+            name: account.name,
+            enabled: account.enabled,
+            configured: account.configured,
+            extra: {
+              baseUrl: account.baseUrl,
+              connected: probeOk ?? running,
+            },
+          };
+        },
+      }),
+      gateway: {
+        startAccount: async (ctx) => {
+          const runtime = await loadBlueBubblesChannelRuntime();
+          const account = ctx.account;
+          const webhookPath = runtime.resolveWebhookPathFromConfig(account.config);
+          const statusSink = createAccountStatusSink({
+            accountId: ctx.accountId,
+            setStatus: ctx.setStatus,
+          });
+          statusSink({
+            baseUrl: account.baseUrl,
+          });
+          ctx.log?.info(`[${account.accountId}] starting provider (webhook=${webhookPath})`);
+          return runtime.monitorBlueBubblesProvider({
+            account,
+            config: ctx.cfg,
+            runtime: ctx.runtime,
+            abortSignal: ctx.abortSignal,
+            statusSink,
+            webhookPath,
+          });
+        },
+      },
+    },
+    security: {
+      resolveDmPolicy: resolveBlueBubblesDmPolicy,
+      collectWarnings: projectWarningCollector(
+        ({ account }: { account: ResolvedBlueBubblesAccount }) => account,
+        collectBlueBubblesSecurityWarnings,
+      ),
+    },
+    threading: {
+      buildToolContext: ({ context, hasRepliedRef }) => ({
+        currentChannelId: context.To?.trim() || undefined,
+        currentThreadTs: context.ReplyToIdFull ?? context.ReplyToId,
+        hasRepliedRef,
+      }),
+    },
+    pairing: createTextPairingAdapter({
+      idLabel: "bluebubblesSenderId",
+      message: PAIRING_APPROVED_MESSAGE,
+      normalizeAllowEntry: createPairingPrefixStripper(
+        /^bluebubbles:/i,
+        normalizeBlueBubblesHandle,
+      ),
+      notify: async ({ cfg, id, message }) => {
+        await (
+          await loadBlueBubblesChannelRuntime()
+        ).sendMessageBlueBubbles(id, message, {
           cfg: cfg,
-          to,
-          mediaUrl,
-          mediaPath,
-          mediaBuffer,
-          contentType,
-          filename,
-          caption: caption ?? text ?? undefined,
-          replyToId: replyToId ?? null,
-          accountId: accountId ?? undefined,
         });
       },
     }),
-  },
-  status: createComputedAccountStatusAdapter<ResolvedBlueBubblesAccount, BlueBubblesProbe>({
-    defaultRuntime: {
-      accountId: DEFAULT_ACCOUNT_ID,
-      running: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
-    },
-    collectStatusIssues: collectBlueBubblesStatusIssues,
-    buildChannelSummary: ({ snapshot }) =>
-      buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
-    probeAccount: async ({ account, timeoutMs }) =>
-      (await loadBlueBubblesChannelRuntime()).probeBlueBubbles({
-        baseUrl: account.baseUrl,
-        password: account.config.password ?? null,
-        timeoutMs,
-      }),
-    resolveAccountSnapshot: ({ account, runtime, probe }) => {
-      const running = runtime?.running ?? false;
-      const probeOk = probe?.ok;
-      return {
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: account.configured,
-        extra: {
-          baseUrl: account.baseUrl,
-          connected: probeOk ?? running,
+    outbound: {
+      base: {
+        deliveryMode: "direct",
+        textChunkLimit: 4000,
+        resolveTarget: ({ to }) => {
+          const trimmed = to?.trim();
+          if (!trimmed) {
+            return {
+              ok: false,
+              error: new Error("Delivering to BlueBubbles requires --to <handle|chat_guid:GUID>"),
+            };
+          }
+          return { ok: true, to: trimmed };
         },
-      };
-    },
-  }),
-  gateway: {
-    startAccount: async (ctx) => {
-      const runtime = await loadBlueBubblesChannelRuntime();
-      const account = ctx.account;
-      const webhookPath = runtime.resolveWebhookPathFromConfig(account.config);
-      const statusSink = createAccountStatusSink({
-        accountId: ctx.accountId,
-        setStatus: ctx.setStatus,
-      });
-      statusSink({
-        baseUrl: account.baseUrl,
-      });
-      ctx.log?.info(`[${account.accountId}] starting provider (webhook=${webhookPath})`);
-      return runtime.monitorBlueBubblesProvider({
-        account,
-        config: ctx.cfg,
-        runtime: ctx.runtime,
-        abortSignal: ctx.abortSignal,
-        statusSink,
-        webhookPath,
-      });
+      },
+      attachedResults: {
+        channel: "bluebubbles",
+        sendText: async ({ cfg, to, text, accountId, replyToId }) => {
+          const runtime = await loadBlueBubblesChannelRuntime();
+          const rawReplyToId = typeof replyToId === "string" ? replyToId.trim() : "";
+          const replyToMessageGuid = rawReplyToId
+            ? runtime.resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
+            : "";
+          return await runtime.sendMessageBlueBubbles(to, text, {
+            cfg: cfg,
+            accountId: accountId ?? undefined,
+            replyToMessageGuid: replyToMessageGuid || undefined,
+          });
+        },
+        sendMedia: async (ctx) => {
+          const runtime = await loadBlueBubblesChannelRuntime();
+          const { cfg, to, text, mediaUrl, accountId, replyToId } = ctx;
+          const { mediaPath, mediaBuffer, contentType, filename, caption } = ctx as {
+            mediaPath?: string;
+            mediaBuffer?: Uint8Array;
+            contentType?: string;
+            filename?: string;
+            caption?: string;
+          };
+          return await runtime.sendBlueBubblesMedia({
+            cfg: cfg,
+            to,
+            mediaUrl,
+            mediaPath,
+            mediaBuffer,
+            contentType,
+            filename,
+            caption: caption ?? text ?? undefined,
+            replyToId: replyToId ?? null,
+            accountId: accountId ?? undefined,
+          });
+        },
+      },
     },
   },
-};
+);
