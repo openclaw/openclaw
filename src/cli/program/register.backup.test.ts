@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const backupCreateCommand = vi.fn();
 const backupVerifyCommand = vi.fn();
@@ -22,10 +22,23 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+const mockedModuleIds = [
+  "../../commands/backup.js",
+  "../../commands/backup-verify.js",
+  "../../runtime.js",
+];
+
 let registerBackupCommand: typeof import("./register.backup.js").registerBackupCommand;
 
 beforeAll(async () => {
   ({ registerBackupCommand } = await import("./register.backup.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });
 
 describe("registerBackupCommand", () => {

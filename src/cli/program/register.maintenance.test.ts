@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const doctorCommand = vi.fn();
 const dashboardCommand = vi.fn();
@@ -32,10 +32,25 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+const mockedModuleIds = [
+  "../../commands/doctor.js",
+  "../../commands/dashboard.js",
+  "../../commands/reset.js",
+  "../../commands/uninstall.js",
+  "../../runtime.js",
+];
+
 let registerMaintenanceCommands: typeof import("./register.maintenance.js").registerMaintenanceCommands;
 
 beforeAll(async () => {
   ({ registerMaintenanceCommands } = await import("./register.maintenance.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });
 
 describe("registerMaintenanceCommands doctor action", () => {

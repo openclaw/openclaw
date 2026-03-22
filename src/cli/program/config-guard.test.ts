@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
@@ -11,6 +11,8 @@ vi.mock("../../commands/doctor-config-preflight.js", () => ({
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
 }));
+
+const mockedModuleIds = ["../../commands/doctor-config-preflight.js", "../../config/config.js"];
 
 function makeSnapshot() {
   return {
@@ -77,6 +79,13 @@ describe("ensureConfigReady", () => {
       ensureConfigReady,
       __test__: { resetConfigGuardStateForTests },
     } = await import("./config-guard.js"));
+  });
+
+  afterAll(() => {
+    for (const id of mockedModuleIds) {
+      vi.doUnmock(id);
+    }
+    vi.resetModules();
   });
 
   beforeEach(() => {
