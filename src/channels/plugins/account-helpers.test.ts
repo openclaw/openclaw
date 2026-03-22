@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
-import { createAccountListHelpers } from "./account-helpers.js";
+import {
+  createAccountListHelpers,
+  mergeAccountConfig,
+  resolveMergedAccountConfig,
+} from "./account-helpers.js";
 
 const { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId } =
   createAccountListHelpers("testchannel");
@@ -106,6 +110,100 @@ describe("createAccountListHelpers", () => {
 
     it('returns "default" for empty config', () => {
       expect(resolveDefaultAccountId({} as OpenClawConfig)).toBe("default");
+    });
+  });
+});
+
+describe("mergeAccountConfig", () => {
+  it("drops accounts from the base config before merging", () => {
+    const merged = mergeAccountConfig<{
+      enabled?: boolean;
+      name?: string;
+      accounts?: Record<string, { name?: string }>;
+    }>({
+      channelConfig: {
+        enabled: true,
+        accounts: {
+          work: { name: "Work" },
+        },
+      },
+      accountConfig: {
+        name: "Work",
+      },
+    });
+
+    expect(merged).toEqual({
+      enabled: true,
+      name: "Work",
+    });
+  });
+
+  it("drops caller-specified keys from the base config before merging", () => {
+    const merged = mergeAccountConfig<{
+      enabled?: boolean;
+      defaultAccount?: string;
+      name?: string;
+    }>({
+      channelConfig: {
+        enabled: true,
+        defaultAccount: "work",
+      },
+      accountConfig: {
+        name: "Work",
+      },
+      omitKeys: ["defaultAccount"],
+    });
+
+    expect(merged).toEqual({
+      enabled: true,
+      name: "Work",
+    });
+  });
+});
+
+describe("resolveMergedAccountConfig", () => {
+  it("merges the matching account config into channel config", () => {
+    const merged = resolveMergedAccountConfig<{
+      enabled?: boolean;
+      name?: string;
+    }>({
+      channelConfig: {
+        enabled: true,
+      },
+      accounts: {
+        work: {
+          name: "Work",
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(merged).toEqual({
+      enabled: true,
+      name: "Work",
+    });
+  });
+
+  it("supports normalized account lookups", () => {
+    const merged = resolveMergedAccountConfig<{
+      enabled?: boolean;
+      name?: string;
+    }>({
+      channelConfig: {
+        enabled: true,
+      },
+      accounts: {
+        "Router D": {
+          name: "Router",
+        },
+      },
+      accountId: "router-d",
+      normalizeAccountId,
+    });
+
+    expect(merged).toEqual({
+      enabled: true,
+      name: "Router",
     });
   });
 });

@@ -1,5 +1,6 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import { createAccountListHelpers, mergeAccountConfig } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution";
 import { parseOptionalDelimitedEntries } from "openclaw/plugin-sdk/core";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
@@ -46,33 +47,24 @@ const { listAccountIds: listIrcAccountIds, resolveDefaultAccountId: resolveDefau
 export { listIrcAccountIds, resolveDefaultIrcAccountId };
 
 function resolveAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountConfig | undefined {
-  const accounts = cfg.channels?.irc?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  const direct = accounts[accountId] as IrcAccountConfig | undefined;
-  if (direct) {
-    return direct;
-  }
-  const normalized = normalizeAccountId(accountId);
-  const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
-  return matchKey ? (accounts[matchKey] as IrcAccountConfig | undefined) : undefined;
+  return resolveNormalizedAccountEntry(
+    cfg.channels?.irc?.accounts as Record<string, IrcAccountConfig> | undefined,
+    accountId,
+    normalizeAccountId,
+  );
 }
 
 function mergeIrcAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountConfig {
-  const {
-    accounts: _ignored,
-    defaultAccount: _ignoredDefaultAccount,
-    ...base
-  } = (cfg.channels?.irc ?? {}) as IrcAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  const merged: IrcAccountConfig = { ...base, ...account };
-  if (base.nickserv || account.nickserv) {
+  const merged: IrcAccountConfig = mergeAccountConfig<IrcAccountConfig>({
+    channelConfig: cfg.channels?.irc as IrcAccountConfig | undefined,
+    accountConfig: account,
+    omitKeys: ["defaultAccount"],
+  });
+  const baseNickServ = (cfg.channels?.irc as IrcAccountConfig | undefined)?.nickserv;
+  if (baseNickServ || account.nickserv) {
     merged.nickserv = {
-      ...base.nickserv,
+      ...baseNickServ,
       ...account.nickserv,
     };
   }

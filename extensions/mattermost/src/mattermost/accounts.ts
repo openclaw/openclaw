@@ -1,4 +1,8 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  resolveAccountEntry,
+  resolveMergedAccountConfig,
+} from "openclaw/plugin-sdk/account-resolution";
 import { createAccountListHelpers, type OpenClawConfig } from "../runtime-api.js";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
 import type {
@@ -39,36 +43,30 @@ function resolveAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): MattermostAccountConfig | undefined {
-  const accounts = cfg.channels?.mattermost?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  return accounts[accountId] as MattermostAccountConfig | undefined;
+  return resolveAccountEntry(cfg.channels?.mattermost?.accounts, accountId);
 }
 
 function mergeMattermostAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): MattermostAccountConfig {
-  const {
-    accounts: _ignored,
-    defaultAccount: _ignoredDefaultAccount,
-    ...base
-  } = (cfg.channels?.mattermost ?? {}) as MattermostAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
+  const merged = resolveMergedAccountConfig<MattermostAccountConfig>({
+    channelConfig: cfg.channels?.mattermost as MattermostAccountConfig | undefined,
+    accounts: cfg.channels?.mattermost?.accounts as
+      | Record<string, Partial<MattermostAccountConfig>>
+      | undefined,
+    accountId,
+    omitKeys: ["defaultAccount"],
+  });
 
   // Shallow merging is fine for most keys, but `commands` should be merged
   // so that account-specific overrides (callbackPath/callbackUrl) do not
   // accidentally reset global settings like `native: true`.
   const mergedCommands = {
-    ...(base.commands ?? {}),
+    ...((cfg.channels?.mattermost as MattermostAccountConfig | undefined)?.commands ?? {}),
     ...(account.commands ?? {}),
   };
-
-  const merged = { ...base, ...account };
   if (Object.keys(mergedCommands).length > 0) {
     merged.commands = mergedCommands;
   }
