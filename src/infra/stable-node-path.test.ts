@@ -25,6 +25,42 @@ describe("resolveStableNodePath", () => {
     await expect(resolveStableNodePath(versionedNode)).resolves.toBe(optVersioned);
   });
 
+  it("resolves Volta tools/image path to the stable Volta shim", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stable-node-volta-"));
+    const voltaImageNode = path.join(
+      home,
+      ".volta",
+      "tools",
+      "image",
+      "node",
+      "24.14.0",
+      "bin",
+      "node",
+    );
+    const voltaShim = path.join(home, ".volta", "bin", "node");
+
+    await fs.mkdir(path.dirname(voltaShim), { recursive: true });
+    await fs.writeFile(voltaShim, "", "utf8");
+
+    await expect(resolveStableNodePath(voltaImageNode)).resolves.toBe(voltaShim);
+  });
+
+  it("returns Volta tools/image path unchanged when shim is not accessible", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stable-node-volta-"));
+    const voltaImageNode = path.join(
+      home,
+      ".volta",
+      "tools",
+      "image",
+      "node",
+      "24.14.0",
+      "bin",
+      "node",
+    );
+    // No shim created — shim directory doesn't exist.
+    await expect(resolveStableNodePath(voltaImageNode)).resolves.toBe(voltaImageNode);
+  });
+
   it("falls back to the bin symlink for the default formula, otherwise original path", async () => {
     const prefix = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stable-node-"));
     const defaultNode = path.join(prefix, "Cellar", "node", "25.7.0", "bin", "node");
