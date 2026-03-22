@@ -36,7 +36,7 @@ import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
 import zaiPlugin from "../../../extensions/zai/index.js";
 import { bundledWebSearchPluginRegistrations } from "../../bundled-web-search-registry.js";
 import { createCapturedPluginRegistration } from "../captured-registration.js";
-import { resolvePluginProviders } from "../providers.js";
+import { resolvePluginProviders } from "../providers.runtime.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
