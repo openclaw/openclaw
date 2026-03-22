@@ -26,6 +26,18 @@ import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { TeamsHttpStream } from "./streaming-message.js";
 
+/** Informative status messages shown while the LLM is processing. */
+const THINKING_MESSAGES = [
+  "Scuttling through ideas...",
+  "Clawing through the details...",
+  "Diving deep...",
+  "Snapping neurons together...",
+  "Mulling it over in my shell...",
+  "Surfacing an answer...",
+  "Pinching together some thoughts...",
+  "Crawling through possibilities...",
+];
+
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -46,33 +58,43 @@ export function createMSTeamsReplyDispatcher(params: {
 }) {
   const core = getMSTeamsRuntime();
 
+  // Determine conversation type to decide typing vs streaming behavior:
+  // - personal (1:1): streaming only, no typing bubble (streaming uses its own typing activities)
+  // - groupChat: typing bubble only, no streaming
+  // - channel: neither (Teams doesn't support typing or streaming in channels)
+  const conversationType = params.conversationRef.conversation?.conversationType?.toLowerCase();
+  const isPersonal = conversationType === "personal";
+  const isGroupChat = conversationType === "groupchat";
+
   /**
    * Send a typing indicator.
-   *
-   * First tries the live turn context (cheapest path).  When the context has
-   * been revoked (debounced messages) we fall back to proactive messaging via
-   * the stored conversation reference so the user still sees the "…" bubble.
+   * Only sends the visible "..." bubble for group chats.
+   * Personal chats use streaming instead; channels don't support typing.
    */
-  const sendTypingIndicator = async () => {
-    await withRevokedProxyFallback({
-      run: async () => {
-        await params.context.sendActivity({ type: "typing" });
-      },
-      onRevoked: async () => {
-        const baseRef = buildConversationReference(params.conversationRef);
-        await params.adapter.continueConversation(
-          params.appId,
-          { ...baseRef, activityId: undefined },
-          async (ctx) => {
-            await ctx.sendActivity({ type: "typing" });
+  const sendTypingIndicator = isGroupChat
+    ? async () => {
+        await withRevokedProxyFallback({
+          run: async () => {
+            await params.context.sendActivity({ type: "typing" });
           },
-        );
-      },
-      onRevokedLog: () => {
-        params.log.debug?.("turn context revoked, sending typing via proactive messaging");
-      },
-    });
-  };
+          onRevoked: async () => {
+            const baseRef = buildConversationReference(params.conversationRef);
+            await params.adapter.continueConversation(
+              params.appId,
+              { ...baseRef, activityId: undefined },
+              async (ctx) => {
+                await ctx.sendActivity({ type: "typing" });
+              },
+            );
+          },
+          onRevokedLog: () => {
+            params.log.debug?.("turn context revoked, sending typing via proactive messaging");
+          },
+        });
+      }
+    : async () => {
+        // No-op for personal (streaming handles UX) and channels (not supported)
+      };
 
   const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
@@ -103,9 +125,6 @@ export function createMSTeamsReplyDispatcher(params: {
   const feedbackLoopEnabled = params.cfg.channels?.msteams?.feedbackEnabled !== false;
 
   // Streaming for personal (1:1) chats using the Teams streaminfo protocol.
-  const conversationType = params.conversationRef.conversation?.conversationType?.toLowerCase();
-  const isPersonal = conversationType === "personal";
-
   let stream: TeamsHttpStream | undefined;
   if (isPersonal) {
     stream = new TeamsHttpStream({
@@ -114,6 +133,13 @@ export function createMSTeamsReplyDispatcher(params: {
       onError: (err) => {
         params.log.debug?.(`stream error: ${err instanceof Error ? err.message : String(err)}`);
       },
+    });
+    // Send an informative update immediately so the user sees a progress bar
+    // while the LLM is processing (before any tokens arrive).
+    const msg =
+      THINKING_MESSAGES[Math.floor(Math.random() * THINKING_MESSAGES.length)] ?? "Thinking...";
+    stream.sendInformativeUpdate(msg).catch(() => {
+      // Best effort — don't block the reply pipeline
     });
   }
 

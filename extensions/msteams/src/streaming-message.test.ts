@@ -131,6 +131,57 @@ describe("TeamsHttpStream", () => {
     expect(channelData.feedbackLoopEnabled).toBe(true);
   });
 
+  it("sends informative update with streamType informative", async () => {
+    const sent: unknown[] = [];
+    const stream = new TeamsHttpStream({
+      sendActivity: vi.fn(async (activity) => {
+        sent.push(activity);
+        return { id: "stream-1" };
+      }),
+    });
+
+    await stream.sendInformativeUpdate("Thinking...");
+
+    expect(sent.length).toBe(1);
+    const activity = sent[0] as Record<string, unknown>;
+    expect(activity.type).toBe("typing");
+    expect(activity.text).toBe("Thinking...");
+    const entities = activity.entities as Array<Record<string, unknown>>;
+    expect(entities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "streaminfo",
+          streamType: "informative",
+          streamSequence: 1,
+        }),
+      ]),
+    );
+  });
+
+  it("informative update establishes streamId for subsequent chunks", async () => {
+    const sent: unknown[] = [];
+    const stream = new TeamsHttpStream({
+      sendActivity: vi.fn(async (activity) => {
+        sent.push(activity);
+        return { id: "stream-1" };
+      }),
+    });
+
+    await stream.sendInformativeUpdate("Working...");
+    stream.update("Hello, this is a long enough response for streaming to begin.");
+    await new Promise((r) => setTimeout(r, 1600));
+
+    // Second activity (streaming chunk) should have the streamId from the informative update
+    expect(sent.length).toBeGreaterThanOrEqual(2);
+    const chunk = sent[1] as Record<string, unknown>;
+    const entities = chunk.entities as Array<Record<string, unknown>>;
+    expect(entities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "streaminfo", streamId: "stream-1" }),
+      ]),
+    );
+  });
+
   it("hasContent is true after update", () => {
     const stream = new TeamsHttpStream({
       sendActivity: vi.fn(async () => ({ id: "x" })),

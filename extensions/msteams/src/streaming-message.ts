@@ -90,6 +90,34 @@ export class TeamsHttpStream {
   }
 
   /**
+   * Send an informative status update (blue progress bar in Teams).
+   * Call this immediately when a message is received, before LLM starts generating.
+   * Establishes the stream so subsequent chunks continue from this stream ID.
+   */
+  async sendInformativeUpdate(text: string): Promise<void> {
+    if (this.stopped || this.finalized) {
+      return;
+    }
+
+    this.sequenceNumber++;
+
+    const activity: Record<string, unknown> = {
+      type: "typing",
+      text,
+      entities: [buildStreamInfoEntity(this.streamId, "informative", this.sequenceNumber)],
+    };
+
+    try {
+      const response = await this.sendActivity(activity);
+      if (!this.streamId) {
+        this.streamId = extractId(response);
+      }
+    } catch (err) {
+      this.onError?.(err);
+    }
+  }
+
+  /**
    * Ingest partial text from the LLM token stream.
    * Called by onPartialReply — accumulates text and throttles updates.
    */
@@ -128,7 +156,20 @@ export class TeamsHttpStream {
     this.loop.stop();
     await this.loop.waitForInFlight();
 
+    // If no text was streamed but an informative update was sent (streamId exists),
+    // close the stream with an empty final message so Teams clears the progress bar.
     if (!this.accumulatedText.trim()) {
+      if (this.streamId) {
+        try {
+          await this.sendActivity({
+            type: "message",
+            text: "",
+            entities: [buildStreamInfoEntity(this.streamId, "final")],
+          });
+        } catch {
+          // Best effort — just clear the progress bar
+        }
+      }
       return;
     }
 

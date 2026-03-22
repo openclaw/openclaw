@@ -124,11 +124,6 @@ async function updateActivityViaRest(params: {
 export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MSTeamsAdapter {
   return {
     async continueConversation(_appId, reference, logic) {
-      const token = await (
-        app as unknown as { getBotToken(): Promise<{ toString(): string } | null> }
-      ).getBotToken();
-      const tokenValue = token ? String(token) : undefined;
-
       const serviceUrl = reference.serviceUrl;
       if (!serviceUrl) {
         throw new Error("Missing serviceUrl in conversation reference");
@@ -139,9 +134,19 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
         throw new Error("Missing conversation.id in conversation reference");
       }
 
-      // Build a send context that uses the Bot Framework REST API
+      // Fetch a fresh token for each call via a token factory.
+      // The SDK's App manages token caching/refresh internally.
+      const getToken = async () => {
+        const token = await (
+          app as unknown as { getBotToken(): Promise<{ toString(): string } | null> }
+        ).getBotToken();
+        return token ? String(token) : undefined;
+      };
+
+      // Build a send context that uses the Bot Framework REST API.
+      // Pass a token factory (not a cached value) so each request gets a fresh token.
       const apiClient = new sdk.Client(serviceUrl, {
-        token: () => tokenValue || undefined,
+        token: async () => (await getToken()) || undefined,
         headers: { "User-Agent": buildUserAgent() },
       } as Record<string, unknown>);
 
@@ -185,7 +190,7 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
             conversationId,
             activityId,
             activity: activityUpdate,
-            token: tokenValue,
+            token: await getToken(),
           });
         },
       };
@@ -201,11 +206,15 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
 
       try {
         const activity = request.body;
-        const token = await (
-          app as unknown as { getBotToken(): Promise<{ toString(): string } | null> }
-        ).getBotToken();
-        const tokenValue = token ? String(token) : undefined;
         const serviceUrl = activity?.serviceUrl as string | undefined;
+
+        // Token factory — fetches a fresh token for each API call.
+        const getToken = async () => {
+          const token = await (
+            app as unknown as { getBotToken(): Promise<{ toString(): string } | null> }
+          ).getBotToken();
+          return token ? String(token) : undefined;
+        };
 
         const context = {
           activity,
@@ -233,7 +242,7 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
             }
 
             const apiClient = new sdk.Client(serviceUrl, {
-              token: () => tokenValue || undefined,
+              token: async () => (await getToken()) || undefined,
               headers: { "User-Agent": buildUserAgent() },
             } as Record<string, unknown>);
 
@@ -286,7 +295,7 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
               conversationId: convId,
               activityId,
               activity: activityUpdate,
-              token: tokenValue,
+              token: await getToken(),
             });
           },
         };
