@@ -81,6 +81,14 @@ function normalizeWsUrl(value: string): string | null {
   return trimmed;
 }
 
+function pickPrimaryTailnetIPv4ForStatus(): string | undefined {
+  try {
+    return pickPrimaryTailnetIPv4();
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): GatewayStatusTarget[] {
   const targets: GatewayStatusTarget[] = [];
   const add = (t: GatewayStatusTarget) => {
@@ -310,7 +318,7 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
 }
 
 export function buildNetworkHints(cfg: OpenClawConfig) {
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
+  const tailnetIPv4 = pickPrimaryTailnetIPv4ForStatus();
   const port = resolveGatewayPort(cfg);
   return {
     localLoopbackUrl: `ws://127.0.0.1:${port}`,
