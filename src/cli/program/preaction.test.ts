@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setCommandJsonMode } from "./json-mode.js";
 
 const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
@@ -10,6 +11,8 @@ const routeLogsToStderrMock = vi.fn();
 const runtimeMock = {
   log: vi.fn(),
   error: vi.fn(),
+  writeStdout: vi.fn(),
+  writeJson: vi.fn(),
   exit: vi.fn(),
 };
 
@@ -100,7 +103,10 @@ describe("registerPreActionHooks", () => {
 
   function buildProgram() {
     const program = new Command().name("openclaw");
-    program.command("status").action(() => {});
+    program
+      .command("status")
+      .option("--json")
+      .action(() => {});
     program
       .command("backup")
       .command("create")
@@ -109,7 +115,11 @@ describe("registerPreActionHooks", () => {
     program.command("doctor").action(() => {});
     program.command("completion").action(() => {});
     program.command("secrets").action(() => {});
-    program.command("agents").action(() => {});
+    program
+      .command("agents")
+      .command("list")
+      .option("--json")
+      .action(() => {});
     program.command("configure").action(() => {});
     program.command("onboard").action(() => {});
     const channels = program.command("channels");
@@ -125,8 +135,7 @@ describe("registerPreActionHooks", () => {
       .option("--json")
       .action(() => {});
     const config = program.command("config");
-    config
-      .command("set")
+    setCommandJsonMode(config.command("set"), "parse-only")
       .argument("<path>")
       .argument("<value>")
       .option("--json")
@@ -277,8 +286,8 @@ describe("registerPreActionHooks", () => {
 
   it("routes logs to stderr in --json mode so stdout stays clean", async () => {
     await runPreAction({
-      parseArgv: ["agents"],
-      processArgv: ["node", "openclaw", "agents", "--json"],
+      parseArgv: ["agents", "list"],
+      processArgv: ["node", "openclaw", "agents", "list", "--json"],
     });
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
@@ -297,8 +306,8 @@ describe("registerPreActionHooks", () => {
 
     // non-json command should not route
     await runPreAction({
-      parseArgv: ["agents"],
-      processArgv: ["node", "openclaw", "agents"],
+      parseArgv: ["agents", "list"],
+      processArgv: ["node", "openclaw", "agents", "list"],
     });
 
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();

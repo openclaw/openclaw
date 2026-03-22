@@ -191,7 +191,7 @@ export function registerPluginsCli(program: Command) {
           plugins: list,
           diagnostics: report.diagnostics,
         };
-        defaultRuntime.log(JSON.stringify(payload, null, 2));
+        defaultRuntime.writeJson(payload);
         return;
       }
 
@@ -298,7 +298,7 @@ export function registerPluginsCli(program: Command) {
         }));
 
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify(inspectAllWithInstall, null, 2));
+          defaultRuntime.writeJson(inspectAllWithInstall);
           return;
         }
 
@@ -367,16 +367,10 @@ export function registerPluginsCli(program: Command) {
       const install = cfg.plugins?.installs?.[inspect.plugin.id];
 
       if (opts.json) {
-        defaultRuntime.log(
-          JSON.stringify(
-            {
-              ...inspect,
-              install,
-            },
-            null,
-            2,
-          ),
-        );
+        defaultRuntime.writeJson({
+          ...inspect,
+          install,
+        });
         return;
       }
 
@@ -760,18 +754,12 @@ export function registerPluginsCli(program: Command) {
       }
 
       if (opts.json) {
-        defaultRuntime.log(
-          JSON.stringify(
-            {
-              source: result.sourceLabel,
-              name: result.manifest.name,
-              version: result.manifest.version,
-              plugins: result.manifest.plugins,
-            },
-            null,
-            2,
-          ),
-        );
+        defaultRuntime.writeJson({
+          source: result.sourceLabel,
+          name: result.manifest.name,
+          version: result.manifest.version,
+          plugins: result.manifest.plugins,
+        });
         return;
       }
 
