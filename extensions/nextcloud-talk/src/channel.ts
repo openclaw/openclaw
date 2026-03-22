@@ -13,6 +13,7 @@ import {
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
+import { createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/status-helpers";
 import {
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
@@ -168,13 +169,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       },
       setup: nextcloudTalkSetupAdapter,
       status: {
-        defaultRuntime: {
-          accountId: DEFAULT_ACCOUNT_ID,
-          running: false,
-          lastStartAt: null,
-          lastStopAt: null,
-          lastError: null,
-        },
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         buildChannelSummary: ({ snapshot }) =>
           buildBaseChannelStatusSummary(snapshot, {
             secretSource: snapshot.secretSource ?? "none",

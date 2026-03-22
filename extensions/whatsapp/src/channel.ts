@@ -1,5 +1,6 @@
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import { createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/status-helpers";
 // WhatsApp-specific imports from local extension code (moved from src/web/ and src/channels/plugins/)
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
@@ -207,9 +208,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         resolveRecipients: ({ cfg, opts }) => resolveWhatsAppHeartbeatRecipients(cfg, opts),
       },
       status: {
-        defaultRuntime: {
-          accountId: DEFAULT_ACCOUNT_ID,
-          running: false,
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
           connected: false,
           reconnectAttempts: 0,
           lastConnectedAt: null,
@@ -217,9 +216,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           lastInboundAt: null,
           lastMessageAt: null,
           lastEventAt: null,
-          lastError: null,
           healthState: "stopped",
-        },
+        }),
         collectStatusIssues: collectWhatsAppStatusIssues,
         buildChannelSummary: async ({ account, snapshot }) => {
           const authDir = account.authDir;

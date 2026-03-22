@@ -24,7 +24,10 @@ import {
   resolveThreadSessionKeys,
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
-import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import {
   listDiscordAccountIds,
   resolveDiscordAccount,
@@ -429,18 +432,13 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = createChatCh
         }),
     },
     status: createComputedAccountStatusAdapter<ResolvedDiscordAccount, DiscordProbe, unknown>({
-      defaultRuntime: {
-        accountId: DEFAULT_ACCOUNT_ID,
-        running: false,
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
         connected: false,
         reconnectAttempts: 0,
         lastConnectedAt: null,
         lastDisconnect: null,
         lastEventAt: null,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-      },
+      }),
       collectStatusIssues: collectDiscordStatusIssues,
       buildChannelSummary: ({ snapshot }) =>
         buildTokenChannelStatusSummary(snapshot, { includeMode: false }),
