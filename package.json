@@ -41,6 +41,10 @@
       "types": "./dist/plugin-sdk/index.d.ts",
       "default": "./dist/plugin-sdk/index.js"
     },
+    "./plugin-sdk/compat": {
+      "types": "./dist/plugin-sdk/compat.d.ts",
+      "default": "./dist/plugin-sdk/compat.js"
+    },
     "./plugin-sdk/core": {
       "types": "./dist/plugin-sdk/core.d.ts",
       "default": "./dist/plugin-sdk/core.js"
