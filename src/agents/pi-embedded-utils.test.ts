@@ -203,8 +203,8 @@ All done.`;
 
     const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(calls.length).toBe(2);
-    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: 1 } });
-    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: 2 } });
+    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: "1" } });
+    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: "2" } });
   });
 
   it("handles malformed XML with only closing wrapper tag", () => {
@@ -240,8 +240,8 @@ All done.`;
 
     const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(calls.length).toBe(2);
-    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: 1 } });
-    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: 2 } });
+    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: "1" } });
+    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: "2" } });
   });
 
   it("parses JSON-like arguments correctly", () => {
@@ -352,9 +352,27 @@ All done.`;
       arguments: {
         b1: true,
         b2: false,
-        n1: 123, // Numbers should now be parsed
+        n1: "123", // Reverted to string for stability
       },
     });
+  });
+
+  it("does not reclaim invokes that are far from the stray closing tag", () => {
+    // Here, there is non-whitespace prose between the invoke and the closing tag.
+    // This suggests the invoke might just be a prose example.
+    const text = `<invoke name="Evil">...</invoke> some explanation text </minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const hasToolCall = msg.content.some(
+      (c) => c && typeof c === "object" && c.type === "toolCall",
+    );
+    expect(hasToolCall).toBe(false);
   });
 
   it("handles tool calls nested in thinking tags within string-form content", () => {
@@ -413,8 +431,8 @@ All done.`;
 
     const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
     expect(calls.length).toBe(2);
-    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: 1 } });
-    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: 2 } });
+    expect(calls[0]).toMatchObject({ type: "toolCall", name: "t1", arguments: { p: "1" } });
+    expect(calls[1]).toMatchObject({ type: "toolCall", name: "t2", arguments: { p: "2" } });
 
     const texts = msg.content.filter((c) => c && typeof c === "object" && c.type === "text");
     expect(texts[0]).toMatchObject({ type: "text", text: "Prefix " });

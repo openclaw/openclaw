@@ -473,13 +473,11 @@ export function parseXmlParameterValue(value: string): unknown {
     return false;
   }
 
-  // Parse numeric scalars (integers or floats).
-  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
-    const num = Number(trimmed);
-    if (!isNaN(num)) {
-      return num;
-    }
-  }
+  // NOTE: We used to parse numeric scalars here, but Codex pointed out that
+  // identifiers (sessionId, channelId) frequently look like numbers but
+  // must remain strings to avoid precision loss (64-bit snowflakes) or
+  // tool input validation failures. Most tools handle string-to-number
+  // conversion themselves if needed.
 
   if (
     (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
@@ -530,54 +528,64 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
     const isExplicitWrapper = innerContent !== undefined;
 
     // Case B: Malformed closing tag fallback.
-    // If it's a isolated </minimax:tool_call>, we look for ANY preceding <invoke> in the LAST block.
+    // If it's a isolated </minimax:tool_call>, we look for IMMEDIATELY preceding <invoke> tags.
     if (!isExplicitWrapper && blocks.length > 0) {
       const lastBlock = blocks[blocks.length - 1];
       if (lastBlock.type === "text" && /<invoke\b/i.test(lastBlock.text)) {
         const lastText = lastBlock.text;
+
+        // Find ALL invokes in the last text block.
         const matchedInvokes = Array.from(lastText.matchAll(MINIMAX_INVOKE_RE));
 
+        // IMPORTANT: Only recover invokes that are PART OF the malformed sequence
+        // leading up to this closing tag. If there's prose between the last invoke
+        // and the closing tag, we only reclaim if that prose is just whitespace.
         if (matchedInvokes.length > 0) {
-          let lastProcessedIdx = 0;
-          // Temporarily remove the last block to replace it with split parts
-          blocks.pop();
+          const lastInvoke = matchedInvokes[matchedInvokes.length - 1];
+          const trailingProse = lastText.slice((lastInvoke.index ?? 0) + lastInvoke[0].length);
 
-          for (const iMatch of matchedInvokes) {
-            const iIndex = iMatch.index ?? 0;
-            const [iFullMatch, attributes, invokeBody] = iMatch;
+          // If the last invoke is followed by non-whitespace prose, it might be
+          // a prose example rather than a malformed call. We only reclaim if
+          // it's "close enough" (trailing prose is just whitespace).
+          if (!trailingProse.trim()) {
+            let lastProcessedIdx = 0;
+            blocks.pop(); // Replace the last block with split parts
 
-            // Prose before this specific invoke
-            if (iIndex > lastProcessedIdx) {
-              const subProse = lastText.slice(lastProcessedIdx, iIndex);
-              if (subProse) {
-                blocks.push({ type: "text", text: subProse });
+            for (const iMatch of matchedInvokes) {
+              const iIndex = iMatch.index ?? 0;
+              const [iFullMatch, attributes, invokeBody] = iMatch;
+
+              if (iIndex > lastProcessedIdx) {
+                const subProse = lastText.slice(lastProcessedIdx, iIndex);
+                if (subProse) {
+                  blocks.push({ type: "text", text: subProse });
+                }
               }
+
+              const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
+              const toolName = nameMatch ? nameMatch[1] : undefined;
+              if (toolName) {
+                const args: Record<string, unknown> = {};
+                for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
+                  const [, pName, pValue] = pMatch;
+                  args[pName] = parseXmlParameterValue(pValue);
+                }
+                blocks.push({
+                  type: "toolCall",
+                  id: `mc_${Math.random().toString(36).slice(2, 11)}`,
+                  name: normalizeToolName(toolName),
+                  arguments: args,
+                });
+                hasToolCall = true;
+              }
+              lastProcessedIdx = iIndex + iFullMatch.length;
             }
 
-            const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
-            const toolName = nameMatch ? nameMatch[1] : undefined;
-            if (toolName) {
-              const args: Record<string, unknown> = {};
-              for (const pMatch of invokeBody.matchAll(MINIMAX_PARAM_RE)) {
-                const [, pName, pValue] = pMatch;
-                args[pName] = parseXmlParameterValue(pValue);
+            if (lastProcessedIdx < lastText.length) {
+              const finalSubProse = lastText.slice(lastProcessedIdx);
+              if (finalSubProse) {
+                blocks.push({ type: "text", text: finalSubProse });
               }
-              blocks.push({
-                type: "toolCall",
-                id: `mc_${Math.random().toString(36).slice(2, 11)}`,
-                name: normalizeToolName(toolName),
-                arguments: args,
-              });
-              hasToolCall = true;
-            }
-            lastProcessedIdx = iIndex + iFullMatch.length;
-          }
-
-          // Prose after the last invoke
-          if (lastProcessedIdx < lastText.length) {
-            const finalSubProse = lastText.slice(lastProcessedIdx);
-            if (finalSubProse) {
-              blocks.push({ type: "text", text: finalSubProse });
             }
           }
         }
