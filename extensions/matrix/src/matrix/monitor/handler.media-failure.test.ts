@@ -1,6 +1,6 @@
-import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { setMatrixRuntime } from "../../runtime.js";
+import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "../../../runtime-api.js";
+import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
@@ -40,6 +40,9 @@ function createHandlerHarness() {
           mainSessionKey: "agent:main:main",
         }),
       },
+      mentions: {
+        buildMentionRegexes: vi.fn().mockReturnValue([]),
+      },
       session: {
         resolveStorePath: vi.fn().mockReturnValue("/tmp/openclaw-test-session.json"),
         readSessionUpdatedAt: vi.fn().mockReturnValue(123),
@@ -53,11 +56,19 @@ function createHandlerHarness() {
           dispatcher: {},
           replyOptions: {},
           markDispatchIdle: vi.fn(),
+          markRunComplete: vi.fn(),
         }),
         resolveHumanDelayConfig: vi.fn().mockReturnValue(undefined),
         dispatchReplyFromConfig: vi
           .fn()
           .mockResolvedValue({ queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } }),
+        withReplyDispatcher: vi.fn().mockImplementation(async ({ run, onSettled }) => {
+          try {
+            return await run();
+          } finally {
+            await onSettled?.();
+          }
+        }),
       },
       commands: {
         shouldHandleTextCommands: vi.fn().mockReturnValue(true),
@@ -100,10 +111,10 @@ function createHandlerHarness() {
     mediaMaxBytes: 5 * 1024 * 1024,
     startupMs: Date.now() - 120_000,
     startupGraceMs: 60_000,
-    dropPreStartupMessages: false,
     directTracker: {
       isDirectMessage: vi.fn().mockResolvedValue(true),
     },
+    dropPreStartupMessages: true,
     getRoomInfo: vi.fn().mockResolvedValue({
       name: "Media Room",
       canonicalAlias: "#media:example.org",
@@ -132,23 +143,7 @@ function createImageEvent(content: Record<string, unknown>): MatrixRawEvent {
 describe("createMatrixRoomMessageHandler media failures", () => {
   beforeEach(() => {
     downloadMatrixMediaMock.mockReset();
-    setMatrixRuntime({
-      channel: {
-        mentions: {
-          matchesMentionPatterns: (text: string, patterns: RegExp[]) =>
-            patterns.some((pattern) => pattern.test(text)),
-        },
-        media: {
-          saveMediaBuffer: vi.fn(),
-        },
-      },
-      config: {
-        loadConfig: () => ({}),
-      },
-      state: {
-        resolveStateDir: () => "/tmp",
-      },
-    } as unknown as PluginRuntime);
+    installMatrixMonitorTestRuntime();
   });
 
   it("replaces bare image filenames with an unavailable marker when unencrypted download fails", async () => {

@@ -1,7 +1,8 @@
-import type { RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/matrix";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import type { RuntimeEnv, WizardPrompter } from "../runtime-api.js";
 import { matrixOnboardingAdapter } from "./onboarding.js";
-import { setMatrixRuntime } from "./runtime.js";
+import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
 vi.mock("./matrix/deps.js", () => ({
@@ -32,15 +33,7 @@ describe("matrix onboarding", () => {
   });
 
   it("offers env shortcut for non-default account when scoped env vars are present", async () => {
-    setMatrixRuntime({
-      state: {
-        resolveStateDir: (_env: NodeJS.ProcessEnv, homeDir?: () => string) =>
-          (homeDir ?? (() => "/tmp"))(),
-      },
-      config: {
-        loadConfig: () => ({}),
-      },
-    } as never);
+    installMatrixTestRuntime();
 
     process.env.MATRIX_HOMESERVER = "https://matrix.env.example.org";
     process.env.MATRIX_USER_ID = "@env:example.org";
@@ -89,7 +82,7 @@ describe("matrix onboarding", () => {
           },
         },
       } as CoreConfig,
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
+      runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
       prompter,
       options: undefined,
       accountOverrides: {},
@@ -118,15 +111,7 @@ describe("matrix onboarding", () => {
   });
 
   it("promotes legacy top-level Matrix config before adding a named account", async () => {
-    setMatrixRuntime({
-      state: {
-        resolveStateDir: (_env: NodeJS.ProcessEnv, homeDir?: () => string) =>
-          (homeDir ?? (() => "/tmp"))(),
-      },
-      config: {
-        loadConfig: () => ({}),
-      },
-    } as never);
+    installMatrixTestRuntime();
 
     const prompter = {
       note: vi.fn(async () => {}),
@@ -167,7 +152,7 @@ describe("matrix onboarding", () => {
           },
         },
       } as CoreConfig,
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
+      runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
       prompter,
       options: undefined,
       accountOverrides: {},
@@ -197,15 +182,7 @@ describe("matrix onboarding", () => {
   });
 
   it("includes device env var names in auth help text", async () => {
-    setMatrixRuntime({
-      state: {
-        resolveStateDir: (_env: NodeJS.ProcessEnv, homeDir?: () => string) =>
-          (homeDir ?? (() => "/tmp"))(),
-      },
-      config: {
-        loadConfig: () => ({}),
-      },
-    } as never);
+    installMatrixTestRuntime();
 
     const notes: string[] = [];
     const prompter = {
@@ -222,7 +199,7 @@ describe("matrix onboarding", () => {
     await expect(
       matrixOnboardingAdapter.configureInteractive!({
         cfg: { channels: {} } as CoreConfig,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
+        runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
         prompter,
         options: undefined,
         accountOverrides: {},
@@ -238,6 +215,64 @@ describe("matrix onboarding", () => {
     expect(noteText).toContain("MATRIX_DEVICE_NAME");
     expect(noteText).toContain("MATRIX_<ACCOUNT_ID>_DEVICE_ID");
     expect(noteText).toContain("MATRIX_<ACCOUNT_ID>_DEVICE_NAME");
+  });
+
+  it("prompts for private-network access when onboarding an internal http homeserver", async () => {
+    installMatrixTestRuntime();
+
+    const prompter = {
+      note: vi.fn(async () => {}),
+      select: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Matrix auth method") {
+          return "token";
+        }
+        throw new Error(`unexpected select prompt: ${message}`);
+      }),
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Matrix homeserver URL") {
+          return "http://localhost.localdomain:8008";
+        }
+        if (message === "Matrix access token") {
+          return "ops-token";
+        }
+        if (message === "Matrix device name (optional)") {
+          return "";
+        }
+        throw new Error(`unexpected text prompt: ${message}`);
+      }),
+      confirm: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Allow private/internal Matrix homeserver traffic for this account?") {
+          return true;
+        }
+        if (message === "Enable end-to-end encryption (E2EE)?") {
+          return false;
+        }
+        return false;
+      }),
+    } as unknown as WizardPrompter;
+
+    const result = await matrixOnboardingAdapter.configureInteractive!({
+      cfg: {} as CoreConfig,
+      runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
+      prompter,
+      options: undefined,
+      accountOverrides: {},
+      shouldPromptAccountIds: false,
+      forceAllowFrom: false,
+      configured: false,
+      label: "Matrix",
+    });
+
+    expect(result).not.toBe("skip");
+    if (result === "skip") {
+      return;
+    }
+
+    expect(result.cfg.channels?.matrix).toMatchObject({
+      homeserver: "http://localhost.localdomain:8008",
+      allowPrivateNetwork: true,
+      accessToken: "ops-token",
+    });
   });
 
   it("resolves status using the overridden Matrix account", async () => {
@@ -270,15 +305,7 @@ describe("matrix onboarding", () => {
   });
 
   it("writes allowlists and room access to the selected Matrix account", async () => {
-    setMatrixRuntime({
-      state: {
-        resolveStateDir: (_env: NodeJS.ProcessEnv, homeDir?: () => string) =>
-          (homeDir ?? (() => "/tmp"))(),
-      },
-      config: {
-        loadConfig: () => ({}),
-      },
-    } as never);
+    installMatrixTestRuntime();
 
     const prompter = {
       note: vi.fn(async () => {}),
@@ -339,7 +366,7 @@ describe("matrix onboarding", () => {
           },
         },
       } as CoreConfig,
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
+      runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
       prompter,
       options: undefined,
       accountOverrides: {},
@@ -404,15 +431,7 @@ describe("matrix onboarding", () => {
   });
 
   it("reports configured when only the effective default Matrix account is configured", async () => {
-    setMatrixRuntime({
-      state: {
-        resolveStateDir: (_env: NodeJS.ProcessEnv, homeDir?: () => string) =>
-          (homeDir ?? (() => "/tmp"))(),
-      },
-      config: {
-        loadConfig: () => ({}),
-      },
-    } as never);
+    installMatrixTestRuntime();
 
     const status = await matrixOnboardingAdapter.getStatus({
       cfg: {
@@ -437,15 +456,7 @@ describe("matrix onboarding", () => {
   });
 
   it("asks for defaultAccount when multiple named Matrix accounts exist", async () => {
-    setMatrixRuntime({
-      state: {
-        resolveStateDir: (_env: NodeJS.ProcessEnv, homeDir?: () => string) =>
-          (homeDir ?? (() => "/tmp"))(),
-      },
-      config: {
-        loadConfig: () => ({}),
-      },
-    } as never);
+    installMatrixTestRuntime();
 
     const status = await matrixOnboardingAdapter.getStatus({
       cfg: {

@@ -110,15 +110,14 @@ export async function promptAuthConfig(
   });
 
   let next = cfg;
-  if (authChoice === "azure-openai-api-key") {
-    const customResult = await promptCustomApiConfig({
-      prompter,
-      runtime,
-      config: next,
-      preset: "azure-openai",
-    });
-    next = customResult.config;
-  } else if (authChoice === "custom-api-key") {
+  const preferredProvider =
+    authChoice === "skip"
+      ? undefined
+      : await resolvePreferredProviderForAuthChoice({
+          choice: authChoice,
+          config: cfg,
+        });
+  if (authChoice === "custom-api-key") {
     const customResult = await promptCustomApiConfig({ prompter, runtime, config: next });
     next = customResult.config;
   } else if (authChoice !== "skip") {
@@ -137,10 +136,7 @@ export async function promptAuthConfig(
       allowKeep: true,
       ignoreAllowlist: true,
       includeProviderPluginSetups: true,
-      preferredProvider: await resolvePreferredProviderForAuthChoice({
-        choice: authChoice,
-        config: next,
-      }),
+      preferredProvider,
       workspaceDir: resolveDefaultAgentWorkspaceDir(),
       runtime,
     });
@@ -165,6 +161,7 @@ export async function promptAuthConfig(
       allowedKeys: modelAllowlist?.allowedKeys,
       initialSelections: modelAllowlist?.initialSelections,
       message: modelAllowlist?.message,
+      preferredProvider,
     });
     if (allowlistSelection.models) {
       next = applyModelAllowlist(next, allowlistSelection.models);

@@ -6,7 +6,7 @@ export function createPairingPrefixStripper(
   prefixRe: RegExp,
   map: (entry: string) => string = (entry) => entry,
 ): NonNullable<ChannelPairingAdapter["normalizeAllowEntry"]> {
-  return (entry) => map(entry.replace(prefixRe, ""));
+  return (entry) => map(entry.trim().replace(prefixRe, "").trim());
 }
 
 export function createLoggedPairingApprovalNotifier(
