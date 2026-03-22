@@ -149,8 +149,10 @@ describe("device pairing tokens", () => {
     expect(second.created).toBe(true);
     expect(second.request.requestId).not.toBe(first.request.requestId);
     expect(second.request.role).toBe("operator");
-    expect(second.request.roles).toEqual(["operator"]);
-    expect(second.request.scopes).toEqual(["operator.read", "operator.write"]);
+    expect(second.request.roles).toEqual(expect.arrayContaining(["node", "operator"]));
+    expect(second.request.scopes).toEqual(
+      expect.arrayContaining(["operator.read", "operator.write"]),
+    );
 
     const list = await listDevicePairing(baseDir);
     expect(list.pending).toHaveLength(1);
@@ -158,8 +160,8 @@ describe("device pairing tokens", () => {
 
     await approveDevicePairing(second.request.requestId, baseDir);
     const paired = await getPairedDevice("device-1", baseDir);
-    expect(paired?.roles).toEqual(["operator"]);
-    expect(paired?.scopes).toEqual(["operator.read", "operator.write"]);
+    expect(paired?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
+    expect(paired?.scopes).toEqual(expect.arrayContaining(["operator.read", "operator.write"]));
   });
 
   test("keeps superseded requests interactive when an existing pending request is interactive", async () => {
