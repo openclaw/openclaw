@@ -358,54 +358,89 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   return normalizeToolErrorText(text);
 }
 
-function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {
-  const toRaw = typeof args.to === "string" ? args.to : undefined;
-  if (toRaw) {
-    return toRaw;
+function normalizeMessageToolTarget(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
   }
-  return typeof args.target === "string" ? args.target : undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
 }
 
-export function extractMessagingToolSend(
+function resolveMessageToolTargets(args: Record<string, unknown>): string[] {
+  const targets = [
+    normalizeMessageToolTarget(args.to),
+    normalizeMessageToolTarget(args.target),
+    normalizeMessageToolTarget(args.channelId),
+    ...(Array.isArray(args.targets)
+      ? args.targets.map((value) => normalizeMessageToolTarget(value))
+      : []),
+  ].filter((value): value is string => Boolean(value));
+  return Array.from(new Set(targets));
+}
+
+export function extractMessagingToolSends(
   toolName: string,
   args: Record<string, unknown>,
-): MessagingToolSend | undefined {
+): MessagingToolSend[] {
   // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
   const action = typeof args.action === "string" ? args.action.trim() : "";
   const accountIdRaw = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
   const accountId = accountIdRaw ? accountIdRaw : undefined;
+  const threadIdRaw =
+    typeof args.threadId === "string" || typeof args.threadId === "number"
+      ? String(args.threadId).trim()
+      : undefined;
+  const threadId = threadIdRaw ? threadIdRaw : undefined;
   if (toolName === "message") {
     if (action !== "send" && action !== "thread-reply") {
-      return undefined;
+      return [];
     }
-    const toRaw = resolveMessageToolTarget(args);
-    if (!toRaw) {
-      return undefined;
+    const toRaw = resolveMessageToolTargets(args);
+    if (toRaw.length === 0) {
+      return [];
     }
     const providerRaw = typeof args.provider === "string" ? args.provider.trim() : "";
     const channelRaw = typeof args.channel === "string" ? args.channel.trim() : "";
     const providerHint = providerRaw || channelRaw;
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
     const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : undefined);
-    const to = provider ? normalizeTargetForProvider(provider, toRaw) : toRaw.trim() || undefined;
-    return to ? { tool: toolName, ...(provider ? { provider } : {}), accountId, to } : undefined;
+    return toRaw
+      .map((target) => (provider ? normalizeTargetForProvider(provider, target) : target))
+      .filter((to): to is string => Boolean(to))
+      .map((to) => ({
+        tool: toolName,
+        ...(provider ? { provider } : {}),
+        ...(accountId ? { accountId } : {}),
+        ...(threadId ? { threadId } : {}),
+        to,
+      }));
   }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {
-    return undefined;
+    return [];
   }
   const plugin = getChannelPlugin(providerId);
   const extracted = plugin?.actions?.extractToolSend?.({ args });
   if (!extracted?.to) {
-    return undefined;
+    return [];
   }
   const to = normalizeTargetForProvider(providerId, extracted.to);
   return to
-    ? {
-        tool: toolName,
-        provider: providerId,
-        accountId: extracted.accountId ?? accountId,
-        to,
-      }
-    : undefined;
+    ? [
+        {
+          tool: toolName,
+          provider: providerId,
+          accountId: extracted.accountId ?? accountId,
+          ...(threadId ? { threadId } : {}),
+          to,
+        },
+      ]
+    : [];
+}
+
+export function extractMessagingToolSend(
+  toolName: string,
+  args: Record<string, unknown>,
+): MessagingToolSend | undefined {
+  return extractMessagingToolSends(toolName, args)[0];
 }

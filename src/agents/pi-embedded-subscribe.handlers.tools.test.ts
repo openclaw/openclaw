@@ -37,7 +37,7 @@ function createTestContext(): {
       toolMetaById: new Map<string, ToolCallSummary>(),
       toolMetas: [],
       toolSummaryById: new Set<string>(),
-      pendingMessagingTargets: new Map<string, MessagingToolSend>(),
+      pendingMessagingTargets: new Map<string, MessagingToolSend[]>(),
       pendingMessagingTexts: new Map<string, string>(),
       pendingMessagingMediaUrls: new Map<string, string[]>(),
       pendingToolMediaUrls: [],

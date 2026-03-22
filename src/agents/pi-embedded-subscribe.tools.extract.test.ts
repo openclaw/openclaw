@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { normalizeTelegramMessagingTarget } from "../../extensions/telegram/src/normalize.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { extractMessagingToolSend } from "./pi-embedded-subscribe.tools.js";
+import {
+  extractMessagingToolSend,
+  extractMessagingToolSends,
+} from "./pi-embedded-subscribe.tools.js";
 
 describe("extractMessagingToolSend", () => {
   beforeEach(() => {
@@ -66,5 +69,32 @@ describe("extractMessagingToolSend", () => {
     expect(result?.tool).toBe("message");
     expect(result?.provider).toBeUndefined();
     expect(result?.to).toBe("268300329");
+  });
+
+  it("records threadId for route-scoped message sends", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      channel: "telegram",
+      to: "123",
+      threadId: 42,
+    });
+
+    expect(result?.threadId).toBe("42");
+  });
+
+  it("tracks channelId and targets aliases for suppression matching", () => {
+    const result = extractMessagingToolSends("message", {
+      action: "send",
+      channel: "telegram",
+      channelId: "555",
+      targets: ["123", "456"],
+      threadId: "99",
+    });
+
+    expect(result).toEqual([
+      { tool: "message", provider: "telegram", to: "telegram:555", threadId: "99" },
+      { tool: "message", provider: "telegram", to: "telegram:123", threadId: "99" },
+      { tool: "message", provider: "telegram", to: "telegram:456", threadId: "99" },
+    ]);
   });
 });
