@@ -8,7 +8,7 @@ import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.
 function normalizeContentItemType(type: unknown): MessageContentItem["type"] {
   return type === "input_text" || type === "output_text"
     ? "text"
-    : ((type as MessageContentItem["type"]) || "text");
+    : (type as MessageContentItem["type"]) || "text";
 }
 
 /**

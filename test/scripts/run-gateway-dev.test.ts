@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  resolveGatewayDevArgs,
-  runGatewayDevMain,
-} from "../../scripts/run-gateway-dev.mjs";
+import { resolveGatewayDevArgs, runGatewayDevMain } from "../../scripts/run-gateway-dev.mjs";
 
 describe("scripts/run-gateway-dev", () => {
   it("adds dev gateway args and preserves extra flags", () => {
