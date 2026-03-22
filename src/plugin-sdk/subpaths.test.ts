@@ -71,9 +71,9 @@ function resolvePluginSdkSourceModulePath(specifier: string): string | null {
   return resolve(PLUGIN_SDK_DIR, `${subpath}.ts`);
 }
 
-function resolvePluginSdkDistModulePath(specifier: string): string | null {
+function resolvePluginSdkDistModuleSuffix(specifier: string): string | null {
   if (specifier === "openclaw/plugin-sdk") {
-    return resolve(ROOT_DIR, "dist", "plugin-sdk", "index.js");
+    return "/dist/plugin-sdk/index.js";
   }
   const prefix = "openclaw/plugin-sdk/";
   if (!specifier.startsWith(prefix)) {
@@ -83,7 +83,7 @@ function resolvePluginSdkDistModulePath(specifier: string): string | null {
   if (!subpath) {
     return null;
   }
-  return resolve(ROOT_DIR, "dist", "plugin-sdk", `${subpath}.js`);
+  return `/dist/plugin-sdk/${subpath}.js`;
 }
 
 function normalizeModuleNotFoundPath(value: string): string {
@@ -98,11 +98,13 @@ function isPackageSelfResolutionFailure(specifier: string, message: string): boo
 }
 
 function isRequestedDistSubpathMissing(specifier: string, message: string): boolean {
-  const distPath = resolvePluginSdkDistModulePath(specifier);
-  if (!distPath) {
+  const distSuffix = resolvePluginSdkDistModuleSuffix(specifier);
+  if (!distSuffix) {
     return false;
   }
-  return normalizeModuleNotFoundPath(message).includes(normalizeModuleNotFoundPath(distPath));
+  return normalizeModuleNotFoundPath(message).includes(
+    normalizeModuleNotFoundPath(distSuffix),
+  );
 }
 
 function shouldFallbackToPluginSdkSource(specifier: string, err: unknown): boolean {
