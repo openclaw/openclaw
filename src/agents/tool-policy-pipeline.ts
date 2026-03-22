@@ -26,11 +26,14 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
   agentProviderPolicy?: ToolPolicyLike;
   groupPolicy?: ToolPolicyLike;
   agentId?: string;
+  shieldPolicy?: ToolPolicyLike;
 }): ToolPolicyPipelineStep[] {
   const agentId = params.agentId?.trim();
   const profile = params.profile?.trim();
   const providerProfile = params.providerProfile?.trim();
   return [
+    // SHIELD.md deny rules are hard — applied first so per-agent allows cannot override them.
+    { policy: params.shieldPolicy, label: "SHIELD.md" },
     {
       policy: params.profilePolicy,
       label: profile ? `tools.profile (${profile})` : "tools.profile",

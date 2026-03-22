@@ -46,6 +46,7 @@ import {
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
+import type { ShieldPolicy } from "./shield-policy.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import {
   applyToolPolicyPipeline,
@@ -274,6 +275,8 @@ export function createOpenClawCodingTools(options?: {
   senderIsOwner?: boolean;
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
+  /** Parsed SHIELD.md policy — hard deny rules not overridable by per-agent config. */
+  shieldPolicy?: ShieldPolicy;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -591,6 +594,7 @@ export function createOpenClawCodingTools(options?: {
         agentProviderPolicy,
         groupPolicy,
         agentId,
+        shieldPolicy: options?.shieldPolicy ? { deny: options.shieldPolicy.deny } : undefined,
       }),
       { policy: sandbox?.tools, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
