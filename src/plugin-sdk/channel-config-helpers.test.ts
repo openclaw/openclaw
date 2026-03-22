@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  adaptScopedAccountAccessor,
   createScopedAccountConfigAccessors,
   createScopedChannelConfigAdapter,
   createScopedChannelConfigBase,
@@ -34,6 +35,33 @@ describe("resolveOptionalConfigString", () => {
   it("returns undefined for empty values", () => {
     expect(resolveOptionalConfigString("   ")).toBeUndefined();
     expect(resolveOptionalConfigString(undefined)).toBeUndefined();
+  });
+});
+
+describe("adaptScopedAccountAccessor", () => {
+  it("binds positional callback args into the shared account context object", () => {
+    const accessor = adaptScopedAccountAccessor(({ cfg, accountId }) => ({
+      channel: cfg.channels?.demo,
+      accountId: accountId ?? "default",
+    }));
+
+    expect(
+      accessor(
+        {
+          channels: {
+            demo: {
+              enabled: true,
+            },
+          },
+        },
+        "alt",
+      ),
+    ).toEqual({
+      channel: {
+        enabled: true,
+      },
+      accountId: "alt",
+    });
   });
 });
 

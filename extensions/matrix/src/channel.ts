@@ -1,4 +1,5 @@
 import {
+  adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -77,7 +78,7 @@ const matrixConfigAdapter = createScopedChannelConfigAdapter<
 >({
   sectionKey: "matrix",
   listAccountIds: listMatrixAccountIds,
-  resolveAccount: (cfg, accountId) => resolveMatrixAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
   resolveAccessorAccount: ({ cfg, accountId }) =>
     resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId }),
   defaultAccountId: resolveDefaultMatrixAccountId,
@@ -238,9 +239,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     resolveToolPolicy: resolveMatrixGroupToolPolicy,
   },
   threading: {
-    resolveReplyToMode: createScopedAccountReplyToModeResolver({
-      resolveAccount: (cfg, accountId) =>
-        resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId }),
+    resolveReplyToMode: createScopedAccountReplyToModeResolver<
+      ReturnType<typeof resolveMatrixAccountConfig>
+    >({
+      resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccountConfig),
       resolveReplyToMode: (account) => account.replyToMode,
     }),
     buildToolContext: ({ context, hasRepliedRef }) => {
@@ -277,11 +279,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   },
   directory: createChannelDirectoryAdapter({
     listPeers: async (params) => {
-      const entries = listResolvedDirectoryEntriesFromSources({
+      const entries = listResolvedDirectoryEntriesFromSources<ResolvedMatrixAccount>({
         ...params,
         kind: "user",
-        resolveAccount: (cfg, accountId) =>
-          resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId }),
+        resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
         resolveSources: (account) => [
           account.config.dm?.allowFrom ?? [],
           account.config.groupAllowFrom ?? [],
@@ -306,11 +307,10 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       });
     },
     listGroups: async (params) =>
-      listResolvedDirectoryEntriesFromSources({
+      listResolvedDirectoryEntriesFromSources<ResolvedMatrixAccount>({
         ...params,
         kind: "group",
-        resolveAccount: (cfg, accountId) =>
-          resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId }),
+        resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
         resolveSources: (account) => [
           Object.keys(account.config.groups ?? account.config.rooms ?? {}),
         ],
