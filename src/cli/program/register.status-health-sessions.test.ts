@@ -6,6 +6,8 @@ const statusCommand = vi.fn();
 const healthCommand = vi.fn();
 const sessionsCommand = vi.fn();
 const sessionsCleanupCommand = vi.fn();
+const tasksListCommand = vi.fn();
+const tasksShowCommand = vi.fn();
 const setVerbose = vi.fn();
 
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -24,6 +26,11 @@ vi.mock("../../commands/sessions.js", () => ({
 
 vi.mock("../../commands/sessions-cleanup.js", () => ({
   sessionsCleanupCommand,
+}));
+
+vi.mock("../../commands/tasks.js", () => ({
+  tasksListCommand,
+  tasksShowCommand,
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -55,6 +62,8 @@ describe("registerStatusHealthSessionsCommands", () => {
     healthCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
+    tasksListCommand.mockResolvedValue(undefined);
+    tasksShowCommand.mockResolvedValue(undefined);
   });
 
   it("runs status command with timeout and debug-derived verbose", async () => {
@@ -197,6 +206,31 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(sessionsCleanupCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         allAgents: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs tasks list from the parent command", async () => {
+    await runCli(["tasks", "--json", "--runtime", "acp", "--status", "running"]);
+
+    expect(tasksListCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: true,
+        runtime: "acp",
+        status: "running",
+      }),
+      runtime,
+    );
+  });
+
+  it("runs tasks show subcommand with lookup forwarding", async () => {
+    await runCli(["tasks", "show", "run-123", "--json"]);
+
+    expect(tasksShowCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: "run-123",
+        json: true,
       }),
       runtime,
     );

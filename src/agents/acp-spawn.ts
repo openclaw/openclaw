@@ -41,6 +41,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { createTaskRecord } from "../tasks/task-registry.js";
 import {
   deliveryContextFromSession,
   formatConversationTarget,
@@ -912,6 +913,29 @@ export async function spawnAcpDirect(
       });
     }
     parentRelay?.notifyStarted();
+    try {
+      createTaskRecord({
+        source: "sessions_spawn",
+        runtime: "acp",
+        requesterSessionKey: requesterInternalKey,
+        requesterOrigin: requesterState.origin,
+        childSessionKey: sessionKey,
+        runId: childRunId,
+        bindingTargetKind: "session",
+        label: params.label,
+        task: params.task,
+        status: "running",
+        deliveryStatus: requesterInternalKey.trim() ? "pending" : "parent_missing",
+        startedAt: Date.now(),
+        streamLogPath,
+      });
+    } catch (error) {
+      log.warn("Failed to create background task for ACP spawn", {
+        sessionKey,
+        runId: childRunId,
+        error,
+      });
+    }
     return {
       status: "accepted",
       childSessionKey: sessionKey,
@@ -920,6 +944,29 @@ export async function spawnAcpDirect(
       ...(streamLogPath ? { streamLogPath } : {}),
       note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
     };
+  }
+
+  try {
+    createTaskRecord({
+      source: "sessions_spawn",
+      runtime: "acp",
+      requesterSessionKey: requesterInternalKey,
+      requesterOrigin: requesterState.origin,
+      childSessionKey: sessionKey,
+      runId: childRunId,
+      bindingTargetKind: "session",
+      label: params.label,
+      task: params.task,
+      status: "running",
+      deliveryStatus: requesterInternalKey.trim() ? "pending" : "parent_missing",
+      startedAt: Date.now(),
+    });
+  } catch (error) {
+    log.warn("Failed to create background task for ACP spawn", {
+      sessionKey,
+      runId: childRunId,
+      error,
+    });
   }
 
   return {

@@ -133,6 +133,11 @@ export async function runCli(argv: string[] = process.argv) {
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
 
+  const { ensureTaskRegistryReady } = await import("../tasks/task-registry.js");
+  ensureTaskRegistryReady();
+  const { startTaskRegistryMaintenance } = await import("../tasks/task-registry.maintenance.js");
+  startTaskRegistryMaintenance();
+
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
       const { outputRootHelp } = await import("./program/root-help.js");
