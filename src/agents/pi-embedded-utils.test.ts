@@ -376,6 +376,23 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     expect(toolCall).toBeDefined();
   });
 
+  it("excludes backticked <invoke> samples from closing-tag recovery", () => {
+    // Codex P1: A valid wrapper with code can trigger Case B. We must not reclaim the sample.
+    const text = `<minimax:tool_call>Example \`<invoke name="read" />\` <invoke name="Bash" /></minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
+    expect(calls.length).toBe(1);
+    const call0 =
+      calls[0] && typeof calls[0] === "object" && "name" in calls[0] ? calls[0].name : "";
+    expect(call0).toBe("exec"); // Only bash is promoted, read is ignored
+  });
+
   it("skips literal inline <think> examples without promotion", () => {
     // Codex P2: Don't treat literal inline <think> examples as hidden reasoning.
     const text = "Use <think>hidden</think> in docs.";

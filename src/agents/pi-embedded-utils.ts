@@ -666,7 +666,15 @@ export function splitMinimaxToolCalls(
         }
 
         if (searchSource && /<invoke\b/i.test(searchSource)) {
-          const matchedInvokes = Array.from(searchSource.matchAll(MINIMAX_INVOKE_RE));
+          const searchOffset = targetBlock ? cursor : 0;
+          const matchedInvokes = Array.from(searchSource.matchAll(MINIMAX_INVOKE_RE)).filter(
+            (match) => {
+              const mStart = (match.index ?? 0) + searchOffset;
+              const mEnd = mStart + match[0].length;
+              // Codex P1: Exclude backticked/fenced samples from recovery.
+              return !regions.some((r) => r.masked && mStart < r.end && mEnd > r.start);
+            },
+          );
 
           if (matchedInvokes.length > 0) {
             const lastInvoke = matchedInvokes[matchedInvokes.length - 1];
