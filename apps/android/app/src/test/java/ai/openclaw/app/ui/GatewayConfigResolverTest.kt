@@ -70,6 +70,21 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun parseGatewayEndpointKeepsExplicitCleartextPort80InDisplayUrl() {
+    val parsed = parseGatewayEndpoint("http://gateway.example:80")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "gateway.example",
+        port = 80,
+        tls = false,
+        displayUrl = "http://gateway.example:80",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
   fun resolveScannedSetupCodeAcceptsRawSetupCode() {
     val setupCode =
       encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
