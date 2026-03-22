@@ -11,4 +11,9 @@ export {
   normalizeWhatsAppMessagingTarget,
 } from "../channels/plugins/normalize/whatsapp.js";
 export { resolveWhatsAppHeartbeatRecipients } from "../channels/plugins/whatsapp-heartbeat.js";
-export { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../whatsapp/normalize.js";
+export {
+  areEquivalentWhatsAppDirectTargets,
+  expandWhatsAppDirectTargetVariants,
+  isWhatsAppGroupJid,
+  normalizeWhatsAppTarget,
+} from "../whatsapp/normalize.js";

@@ -350,6 +350,41 @@ describe("web processMessage inbound context", () => {
     expect(updateLastRouteMock).toHaveBeenCalledTimes(1);
   });
 
+  it("authorizes control commands when BR ninth-digit variants differ", async () => {
+    capturedCtx = undefined;
+
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:direct:+5535998627740",
+        groupHistoryKey: "+5535998627740",
+        cfg: {
+          channels: {
+            whatsapp: {
+              dmPolicy: "allowlist",
+              allowFrom: ["+553598627740"],
+            },
+          },
+          commands: { useAccessGroups: true },
+          messages: {},
+          session: { store: sessionStorePath },
+        } as unknown as ReturnType<typeof import("../../../../../src/config/config.js").loadConfig>,
+        msg: {
+          id: "msg-command-br-variant",
+          from: "+5535998627740",
+          to: "+2000",
+          chatType: "direct",
+          body: "/status",
+          senderE164: "+5535998627740",
+          selfE164: "+5519999835286",
+          accountId: "default",
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    expect((capturedCtx as { CommandAuthorized?: boolean }).CommandAuthorized).toBe(true);
+  });
+
   it("does not update main last route for isolated DM scope sessions", async () => {
     const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
     updateLastRouteMock.mockClear();
@@ -439,5 +474,46 @@ describe("web processMessage inbound context", () => {
     await processMessage(args);
 
     expect(updateLastRouteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates main last route when pinned owner and sender differ only by BR ninth digit", async () => {
+    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
+    updateLastRouteMock.mockClear();
+
+    const args = makeProcessMessageArgs({
+      routeSessionKey: "agent:main:main",
+      groupHistoryKey: "+5535998627740",
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+553598627740"],
+          },
+        },
+        messages: {},
+        session: { store: sessionStorePath, dmScope: "main" },
+      } as unknown as ReturnType<typeof import("../../../../../src/config/config.js").loadConfig>,
+      msg: {
+        id: "msg-last-route-br-variant",
+        from: "+5535998627740",
+        to: "+2000",
+        chatType: "direct",
+        body: "hello",
+        senderE164: "+5535998627740",
+      },
+    });
+    args.route = {
+      ...args.route,
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+    };
+
+    await processMessage(args);
+
+    expect(updateLastRouteMock).toHaveBeenCalledTimes(1);
+    expect(updateLastRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "+553598627740",
+      }),
+    );
   });
 });

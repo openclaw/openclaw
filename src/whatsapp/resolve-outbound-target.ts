@@ -1,5 +1,9 @@
 import { missingTargetError } from "../infra/outbound/target-errors.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize.js";
+import {
+  areEquivalentWhatsAppDirectTargets,
+  isWhatsAppGroupJid,
+  normalizeWhatsAppTarget,
+} from "./normalize.js";
 
 export type WhatsAppOutboundTargetResolution =
   | { ok: true; to: string }
@@ -36,8 +40,14 @@ export function resolveWhatsAppOutboundTarget(params: {
     if (hasWildcard || allowList.length === 0) {
       return { ok: true, to: normalizedTo };
     }
-    if (allowList.includes(normalizedTo)) {
-      return { ok: true, to: normalizedTo };
+    const matchedAllowTarget = allowList.find(
+      (entry) => entry === normalizedTo || areEquivalentWhatsAppDirectTargets(entry, normalizedTo),
+    );
+    if (matchedAllowTarget) {
+      // Prefer the allowlist's canonical entry so outbound sends reuse the exact JID/E.164 form
+      // that the operator previously authorized (important for BR contacts that surface without
+      // the mobile ninth digit on WhatsApp).
+      return { ok: true, to: matchedAllowTarget };
     }
     return {
       ok: false,

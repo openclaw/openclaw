@@ -78,3 +78,39 @@ export function normalizeWhatsAppTarget(value: string): string | null {
   const normalized = normalizeE164(candidate);
   return normalized.length > 1 ? normalized : null;
 }
+
+/**
+ * Expand direct-target variants that WhatsApp may surface differently from the human-facing phone.
+ *
+ * Brazil is the main footgun here: some chats/contacts resolve with the mobile ninth digit removed,
+ * while humans/config entries often keep the full E.164 with the extra 9. Treat both forms as
+ * equivalent for WhatsApp matching.
+ */
+export function expandWhatsAppDirectTargetVariants(value: string): string[] {
+  const normalized = normalizeWhatsAppTarget(value);
+  if (!normalized || isWhatsAppGroupJid(normalized)) {
+    return normalized ? [normalized] : [];
+  }
+  const variants = new Set<string>([normalized]);
+  const digits = normalized.replace(/\D/g, "");
+
+  // BR mobile with ninth digit: +55 AA 9 XXXXXXXX -> +55 AA XXXXXXXX
+  const withNinthDigit = digits.match(/^55(\d{2})9([6-9]\d{7})$/);
+  if (withNinthDigit) {
+    variants.add(`+55${withNinthDigit[1]}${withNinthDigit[2]}`);
+  }
+
+  // BR mobile without ninth digit: +55 AA XXXXXXXX -> +55 AA 9 XXXXXXXX
+  const withoutNinthDigit = digits.match(/^55(\d{2})([6-9]\d{7})$/);
+  if (withoutNinthDigit) {
+    variants.add(`+55${withoutNinthDigit[1]}9${withoutNinthDigit[2]}`);
+  }
+
+  return [...variants];
+}
+
+export function areEquivalentWhatsAppDirectTargets(a: string, b: string): boolean {
+  const left = expandWhatsAppDirectTargetVariants(a);
+  const right = new Set(expandWhatsAppDirectTargetVariants(b));
+  return left.some((candidate) => right.has(candidate));
+}

@@ -32,6 +32,7 @@ import {
   resolveDmGroupAccessWithCommandGate,
 } from "openclaw/plugin-sdk/security-runtime";
 import { jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { areEquivalentWhatsAppDirectTargets } from "openclaw/plugin-sdk/whatsapp-shared";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
@@ -103,7 +104,9 @@ async function resolveWhatsAppCommandAuthorized(params: {
       const normalizedEntries = allowEntries
         .map((entry) => normalizeE164(String(entry)))
         .filter((entry): entry is string => Boolean(entry));
-      return normalizedEntries.includes(senderE164);
+      return normalizedEntries.some((entry) =>
+        areEquivalentWhatsAppDirectTargets(entry, senderE164),
+      );
     },
     command: {
       useAccessGroups,
@@ -343,14 +346,18 @@ export async function processMessage(params: {
     cfg: params.cfg,
     msg: params.msg,
   });
-  const shouldUpdateMainLastRoute =
-    !pinnedMainDmRecipient || pinnedMainDmRecipient === dmRouteTarget;
+  const canonicalMainLastRouteTarget = pinnedMainDmRecipient
+    ? dmRouteTarget && areEquivalentWhatsAppDirectTargets(pinnedMainDmRecipient, dmRouteTarget)
+      ? pinnedMainDmRecipient
+      : null
+    : dmRouteTarget;
+  const shouldUpdateMainLastRoute = Boolean(canonicalMainLastRouteTarget);
   const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
     route: params.route,
     sessionKey: params.route.sessionKey,
   });
   if (
-    dmRouteTarget &&
+    canonicalMainLastRouteTarget &&
     inboundLastRouteSessionKey === params.route.mainSessionKey &&
     shouldUpdateMainLastRoute
   ) {
@@ -360,7 +367,7 @@ export async function processMessage(params: {
       storeAgentId: params.route.agentId,
       sessionKey: params.route.mainSessionKey,
       channel: "whatsapp",
-      to: dmRouteTarget,
+      to: canonicalMainLastRouteTarget,
       accountId: params.route.accountId,
       ctx: ctxPayload,
       warn: params.replyLogger.warn.bind(params.replyLogger),

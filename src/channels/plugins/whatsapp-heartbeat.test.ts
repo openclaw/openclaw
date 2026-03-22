@@ -68,6 +68,17 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
     expect(result).toEqual({ recipients: ["+15550000001"], source: "session-single" });
   });
 
+  it("treats BR ninth-digit variants as authorized session recipients", () => {
+    setSessionStore({
+      a: { lastChannel: "whatsapp", lastTo: "+5535998627740", updatedAt: 2, sessionId: "a" },
+    });
+    setAllowFromStore(["+553598627740"]);
+
+    const result = resolveWith();
+
+    expect(result).toEqual({ recipients: ["+5535998627740"], source: "session-single" });
+  });
+
   it("falls back to allowFrom when no session recipient is authorized", () => {
     setSingleUnauthorizedSessionWithAllowFrom();
 

@@ -12,6 +12,7 @@ import {
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/security-runtime";
 import { isSelfChatMode, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { areEquivalentWhatsAppDirectTargets } from "openclaw/plugin-sdk/whatsapp-shared";
 import { resolveWhatsAppAccount } from "../accounts.js";
 
 export type InboundAccessControlResult = {
@@ -72,7 +73,9 @@ export async function checkInboundAccessControl(params: {
   const dmAllowFrom = configuredAllowFrom.length > 0 ? configuredAllowFrom : defaultAllowFrom;
   const groupAllowFrom =
     account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
-  const isSamePhone = params.from === params.selfE164;
+  const isSamePhone = params.selfE164
+    ? areEquivalentWhatsAppDirectTargets(params.from, params.selfE164)
+    : false;
   const isSelfChat = account.selfChatMode ?? isSelfChatMode(params.selfE164, configuredAllowFrom);
   const pairingGraceMs =
     typeof params.pairingGraceMs === "number" && params.pairingGraceMs > 0
@@ -115,17 +118,22 @@ export async function checkInboundAccessControl(params: {
       if (hasWildcard) {
         return true;
       }
-      const normalizedEntrySet = new Set(
-        allowEntries
-          .map((entry) => normalizeE164(String(entry)))
-          .filter((entry): entry is string => Boolean(entry)),
-      );
+      const normalizedEntries = allowEntries
+        .map((entry) => normalizeE164(String(entry)))
+        .filter((entry): entry is string => Boolean(entry));
       if (!params.group && isSamePhone) {
         return true;
       }
       return params.group
-        ? Boolean(normalizedGroupSender && normalizedEntrySet.has(normalizedGroupSender))
-        : normalizedEntrySet.has(normalizedDmSender);
+        ? Boolean(
+            normalizedGroupSender &&
+            normalizedEntries.some((entry) =>
+              areEquivalentWhatsAppDirectTargets(entry, normalizedGroupSender),
+            ),
+          )
+        : normalizedEntries.some((entry) =>
+            areEquivalentWhatsAppDirectTargets(entry, normalizedDmSender),
+          );
     },
   });
   if (params.group && access.decision !== "allow") {

@@ -40,7 +40,12 @@ export {
 } from "../channels/plugins/group-policy-warnings.js";
 export { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 export { resolveWhatsAppOutboundTarget } from "../whatsapp/resolve-outbound-target.js";
-export { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../whatsapp/normalize.js";
+export {
+  areEquivalentWhatsAppDirectTargets,
+  expandWhatsAppDirectTargetVariants,
+  isWhatsAppGroupJid,
+  normalizeWhatsAppTarget,
+} from "../whatsapp/normalize.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
