@@ -170,13 +170,27 @@ function resolveTransport(
       // Apply headers to POST requests (tool calls, listTools, etc.).
       requestInit: hasHeaders ? { headers } : undefined,
       // Apply headers to the initial SSE GET handshake (required for auth).
+      // Apply headers to the initial SSE GET handshake (required for auth).
+      // Note: init?.headers may be a Headers instance; convert to plain object
+      // so SDK defaults are preserved and user-configured headers take precedence.
       eventSourceInit: hasHeaders
         ? {
-            fetch: (url, init) =>
-              fetch(url, {
+            fetch: (url, init) => {
+              const sdkHeaders: Record<string, string> = {};
+              if (init?.headers) {
+                if (init.headers instanceof Headers) {
+                  init.headers.forEach((v, k) => {
+                    sdkHeaders[k] = v;
+                  });
+                } else {
+                  Object.assign(sdkHeaders, init.headers);
+                }
+              }
+              return fetch(url, {
                 ...init,
-                headers: { ...(init?.headers as Record<string, string>), ...headers },
-              }),
+                headers: { ...sdkHeaders, ...headers },
+              });
+            },
           }
         : undefined,
     });
