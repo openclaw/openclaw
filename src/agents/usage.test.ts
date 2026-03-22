@@ -119,6 +119,37 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it("handles Google Gemini usageMetadata field names", () => {
+    const usage = normalizeUsage({
+      promptTokenCount: 100,
+      candidatesTokenCount: 50,
+      totalTokenCount: 150,
+    });
+    expect(usage).toEqual({
+      input: 100,
+      output: 50,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 150,
+    });
+  });
+
+  it("handles Google Gemini usageMetadata with cached content", () => {
+    const usage = normalizeUsage({
+      promptTokenCount: 200,
+      candidatesTokenCount: 80,
+      totalTokenCount: 280,
+      cachedContentTokenCount: 150,
+    });
+    expect(usage).toEqual({
+      input: 200,
+      output: 80,
+      cacheRead: 150,
+      cacheWrite: undefined,
+      total: 280,
+    });
+  });
+
   it("returns undefined when no valid fields are provided", () => {
     const usage = normalizeUsage(null);
     expect(usage).toBeUndefined();

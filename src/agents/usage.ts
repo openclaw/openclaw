@@ -24,6 +24,12 @@ export type UsageLike = {
   total_tokens?: number;
   cache_read?: number;
   cache_write?: number;
+  // Google Gemini native usageMetadata field names.
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+  cachedContentTokenCount?: number;
+  thoughtsTokenCount?: number;
 };
 
 export type NormalizedUsage = {
@@ -94,7 +100,12 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
   // negative, which is nonsensical.  Clamp to 0.
   const rawInput = asFiniteNumber(
-    raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
+    raw.input ??
+      raw.inputTokens ??
+      raw.input_tokens ??
+      raw.promptTokens ??
+      raw.prompt_tokens ??
+      raw.promptTokenCount,
   );
   const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
   const output = asFiniteNumber(
@@ -102,19 +113,23 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.outputTokens ??
       raw.output_tokens ??
       raw.completionTokens ??
-      raw.completion_tokens,
+      raw.completion_tokens ??
+      raw.candidatesTokenCount,
   );
   const cacheRead = asFiniteNumber(
     raw.cacheRead ??
       raw.cache_read ??
       raw.cache_read_input_tokens ??
       raw.cached_tokens ??
-      raw.prompt_tokens_details?.cached_tokens,
+      raw.prompt_tokens_details?.cached_tokens ??
+      raw.cachedContentTokenCount,
   );
   const cacheWrite = asFiniteNumber(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
-  const total = asFiniteNumber(raw.total ?? raw.totalTokens ?? raw.total_tokens);
+  const total = asFiniteNumber(
+    raw.total ?? raw.totalTokens ?? raw.total_tokens ?? raw.totalTokenCount,
+  );
 
   if (
     input === undefined &&
