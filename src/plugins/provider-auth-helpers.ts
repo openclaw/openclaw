@@ -124,8 +124,9 @@ export function applyAuthProfileConfig(
     .filter(([, profile]) => normalizeProviderIdForAuth(profile.provider) === normalizedProvider)
     .map(([profileId, profile]) => ({ profileId, mode: profile.mode }));
 
-  // Maintain `auth.order` when it already exists. Additionally, if we detect
-  // mixed auth modes for the same provider, keep the newly selected profile first.
+  // Maintain `auth.order` when it already exists. Additionally, if another
+  // profile for the same provider is already configured, keep the newly
+  // selected profile first even when the auth modes match.
   const existingProviderOrder = cfg.auth?.order?.[params.provider];
   const preferProfileFirst = params.preferProfileFirst ?? true;
   const reorderedProviderOrder =
@@ -135,11 +136,11 @@ export function applyAuthProfileConfig(
           ...existingProviderOrder.filter((profileId) => profileId !== params.profileId),
         ]
       : existingProviderOrder;
-  const hasMixedConfiguredModes = configuredProviderProfiles.some(
-    ({ profileId, mode }) => profileId !== params.profileId && mode !== params.mode,
+  const hasOtherConfiguredProfiles = configuredProviderProfiles.some(
+    ({ profileId }) => profileId !== params.profileId,
   );
   const derivedProviderOrder =
-    existingProviderOrder === undefined && preferProfileFirst && hasMixedConfiguredModes
+    existingProviderOrder === undefined && preferProfileFirst && hasOtherConfiguredProfiles
       ? [
           params.profileId,
           ...configuredProviderProfiles

@@ -8,8 +8,19 @@ import { applySimpleNonInteractiveApiKeyChoice } from "./auth-choice.api-key-pro
 const loadAuthProfileStoreForSecretsRuntime = vi.hoisted(() =>
   vi.fn<() => AuthProfileStore>(() => ({ version: 1, profiles: {} })),
 );
+const resolveAuthProfileOrder = vi.hoisted(() =>
+  vi.fn<
+    (params: {
+      cfg?: OpenClawConfig;
+      store: AuthProfileStore;
+      provider: string;
+      preferredProfile?: string;
+    }) => string[]
+  >(() => []),
+);
 vi.mock("../../../agents/auth-profiles.js", () => ({
   loadAuthProfileStoreForSecretsRuntime,
+  resolveAuthProfileOrder,
 }));
 
 const applyAuthProfileConfig = vi.hoisted(() => vi.fn((cfg: OpenClawConfig) => cfg));
@@ -38,6 +49,23 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     loadAuthProfileStoreForSecretsRuntime.mockReturnValue({ version: 1, profiles: {} });
+    resolveAuthProfileOrder.mockImplementation(({ cfg, store, provider }) => {
+      const configuredOrder =
+        cfg &&
+        typeof cfg === "object" &&
+        "auth" in cfg &&
+        cfg.auth &&
+        typeof cfg.auth === "object" &&
+        "order" in cfg.auth
+          ? (cfg.auth.order?.[provider] ?? [])
+          : [];
+      if (configuredOrder.length > 0) {
+        return [...configuredOrder];
+      }
+      return (Object.entries(store.profiles) as Array<[string, { provider: string }]>)
+        .filter(([, profile]) => profile.provider === provider)
+        .map(([profileId]) => profileId);
+    });
     applyAuthProfileConfig.mockImplementation((cfg: OpenClawConfig) => cfg);
     applyGigachatConfig.mockImplementation((cfg: OpenClawConfig) => cfg);
     applyLitellmConfig.mockImplementation((cfg: OpenClawConfig) => cfg);
@@ -335,6 +363,74 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
     });
 
     expect(loadAuthProfileStoreForSecretsRuntime).toHaveBeenCalledWith(agentDir);
+    expect(applyGigachatConfig).toHaveBeenCalledWith(expect.any(Object), {
+      baseUrl: GIGACHAT_BASE_URL,
+    });
+  });
+
+  it("resets the GigaChat provider base URL when the active ordered profile is Basic", async () => {
+    const agentDir = "/tmp/openclaw-agents/work/agent";
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
+      version: 1,
+      profiles: {
+        "gigachat:work": {
+          type: "api_key",
+          provider: "gigachat",
+          key: "basic-user:basic-pass",
+          metadata: {
+            authMode: "basic",
+          },
+        },
+        "gigachat:default": {
+          type: "api_key",
+          provider: "gigachat",
+          key: "gigachat-oauth-credentials",
+          metadata: {
+            authMode: "oauth",
+            scope: "GIGACHAT_API_PERS",
+          },
+        },
+      },
+    });
+    const resolveApiKey = vi.fn(async () => ({
+      key: "gigachat-oauth-credentials",
+      source: "flag" as const,
+    }));
+    const maybeSetResolvedApiKey = vi.fn(async (resolved, setter) => {
+      await setter(resolved.key);
+      return true;
+    });
+
+    await applySimpleNonInteractiveApiKeyChoice({
+      authChoice: "gigachat-oauth",
+      nextConfig,
+      baseConfig: {
+        auth: {
+          profiles: {
+            "gigachat:work": { provider: "gigachat", mode: "api_key" },
+            "gigachat:default": { provider: "gigachat", mode: "api_key" },
+          },
+          order: { gigachat: ["gigachat:work", "gigachat:default"] },
+        },
+        models: {
+          providers: {
+            gigachat: {
+              baseUrl: "https://preview-basic.gigachat.example/api/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      opts: { token: "gigachat-oauth-credentials" } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() } as never,
+      agentDir,
+      apiKeyStorageOptions: undefined,
+      resolveApiKey,
+      maybeSetResolvedApiKey,
+    });
+
     expect(applyGigachatConfig).toHaveBeenCalledWith(expect.any(Object), {
       baseUrl: GIGACHAT_BASE_URL,
     });

@@ -1,4 +1,7 @@
-import { loadAuthProfileStoreForSecretsRuntime } from "../../../agents/auth-profiles.js";
+import {
+  loadAuthProfileStoreForSecretsRuntime,
+  resolveAuthProfileOrder,
+} from "../../../agents/auth-profiles.js";
 import { resolveGigachatAuthMode } from "../../../agents/gigachat-auth.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
@@ -21,8 +24,10 @@ type ResolvedNonInteractiveApiKey = {
   metadata?: Record<string, string>;
 };
 
-function hadStoredGigachatBasicProfile(agentDir?: string): boolean {
-  const profile = loadAuthProfileStoreForSecretsRuntime(agentDir).profiles["gigachat:default"];
+function hasActiveGigachatBasicProfile(cfg: OpenClawConfig, agentDir?: string): boolean {
+  const store = loadAuthProfileStoreForSecretsRuntime(agentDir);
+  const activeProfileId = resolveAuthProfileOrder({ cfg, store, provider: "gigachat" })[0];
+  const profile = activeProfileId ? store.profiles[activeProfileId] : undefined;
   return (
     profile?.type === "api_key" &&
     profile.provider === "gigachat" &&
@@ -52,7 +57,7 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
     setter: (value: SecretInput) => Promise<void> | void,
   ) => Promise<boolean>;
 }): Promise<OpenClawConfig | null> {
-  const resetGigachatBaseUrl = hadStoredGigachatBasicProfile(params.agentDir);
+  const resetGigachatBaseUrl = hasActiveGigachatBasicProfile(params.baseConfig, params.agentDir);
   const resolved = await params.resolveApiKey({
     provider: "gigachat",
     cfg: params.baseConfig,

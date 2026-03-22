@@ -1,4 +1,7 @@
-import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles.js";
+import {
+  loadAuthProfileStoreForSecretsRuntime,
+  resolveAuthProfileOrder,
+} from "../agents/auth-profiles.js";
 import { resolveGigachatAuthMode } from "../agents/gigachat-auth.js";
 import { resolveManifestProviderApiKeyChoice } from "../plugins/provider-auth-choices.js";
 import { ensureApiKeyFromOptionEnvOrPrompt } from "./auth-choice.apply-helpers.js";
@@ -24,8 +27,13 @@ const CORE_API_KEY_TOKEN_PROVIDER_AUTH_CHOICES: Partial<Record<string, AuthChoic
   litellm: "litellm-api-key",
 };
 
-function hadStoredGigachatBasicProfile(agentDir?: string): boolean {
-  const profile = loadAuthProfileStoreForSecretsRuntime(agentDir).profiles["gigachat:default"];
+function hasActiveGigachatBasicProfile(
+  cfg: ApplyAuthChoiceParams["config"],
+  agentDir?: string,
+): boolean {
+  const store = loadAuthProfileStoreForSecretsRuntime(agentDir);
+  const activeProfileId = resolveAuthProfileOrder({ cfg, store, provider: "gigachat" })[0];
+  const profile = activeProfileId ? store.profiles[activeProfileId] : undefined;
   return (
     profile?.type === "api_key" &&
     profile.provider === "gigachat" &&
@@ -134,7 +142,7 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "gigachat-basic";
       gigachatBasicScope = gigachatScope;
     } else {
-      const resetGigachatBaseUrl = hadStoredGigachatBasicProfile(params.agentDir);
+      const resetGigachatBaseUrl = hasActiveGigachatBasicProfile(nextConfig, params.agentDir);
       await ensureApiKeyFromOptionEnvOrPrompt({
         token: params.opts?.gigachatApiKey ?? params.opts?.token,
         provider: "gigachat",

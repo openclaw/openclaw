@@ -1,3 +1,4 @@
+import { normalizeProviderIdForAuth } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 export function applyAuthProfileConfig(
@@ -10,7 +11,7 @@ export function applyAuthProfileConfig(
     preferProfileFirst?: boolean;
   },
 ): OpenClawConfig {
-  const normalizedProvider = params.provider.toLowerCase();
+  const normalizedProvider = normalizeProviderIdForAuth(params.provider);
   const profiles = {
     ...cfg.auth?.profiles,
     [params.profileId]: {
@@ -24,9 +25,9 @@ export function applyAuthProfileConfig(
     .filter(([, profile]) => profile.provider.toLowerCase() === normalizedProvider)
     .map(([profileId, profile]) => ({ profileId, mode: profile.mode }));
 
-  // Maintain `auth.order` when it already exists. Additionally, if we detect
-  // mixed auth modes for the same provider (e.g. legacy oauth + newly selected
-  // api_key), create an explicit order to keep the newly selected profile first.
+  // Maintain `auth.order` when it already exists. Additionally, if another
+  // profile for the same provider is already configured, create an explicit
+  // order so the newly selected profile wins even when the auth modes match.
   const existingProviderOrder = cfg.auth?.order?.[params.provider];
   const preferProfileFirst = params.preferProfileFirst ?? true;
   const reorderedProviderOrder =
@@ -36,11 +37,11 @@ export function applyAuthProfileConfig(
           ...existingProviderOrder.filter((profileId) => profileId !== params.profileId),
         ]
       : existingProviderOrder;
-  const hasMixedConfiguredModes = configuredProviderProfiles.some(
-    ({ profileId, mode }) => profileId !== params.profileId && mode !== params.mode,
+  const hasOtherConfiguredProfiles = configuredProviderProfiles.some(
+    ({ profileId }) => profileId !== params.profileId,
   );
   const derivedProviderOrder =
-    existingProviderOrder === undefined && preferProfileFirst && hasMixedConfiguredModes
+    existingProviderOrder === undefined && preferProfileFirst && hasOtherConfiguredProfiles
       ? [
           params.profileId,
           ...configuredProviderProfiles

@@ -357,12 +357,31 @@ describe("applyAuthProfileConfig", () => {
     expect(next.auth?.order?.kilocode).toEqual(["kilocode:default", "kilocode:legacy"]);
   });
 
-  it("keeps implicit round-robin when no mixed provider modes are present", () => {
+  it("creates provider order when switching between same-mode profiles without explicit order", () => {
     const next = applyAuthProfileConfig(
       {
         auth: {
           profiles: {
             "kilocode:legacy": { provider: "kilocode", mode: "api_key" },
+          },
+        },
+      },
+      {
+        profileId: "kilocode:default",
+        provider: "kilocode",
+        mode: "api_key",
+      },
+    );
+
+    expect(next.auth?.order?.kilocode).toEqual(["kilocode:default", "kilocode:legacy"]);
+  });
+
+  it("keeps implicit round-robin when reapplying the same provider profile", () => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            "kilocode:default": { provider: "kilocode", mode: "api_key" },
           },
         },
       },
