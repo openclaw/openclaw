@@ -480,7 +480,8 @@ export const dispatchTelegramMessage = async ({
     const result = await deliverReplies({
       ...deliveryBaseOptions,
       replies: [payload],
-      abortSignal: opts.fetchAbortSignal,
+      // Keep primary/final reply delivery independent from poll-cycle aborts.
+      // If polling restarts mid-send, dropping this reply can lose user-visible output.
       onVoiceRecording: sendRecordVoice,
       silent: silentErrorReplies && payload.isError === true,
     });

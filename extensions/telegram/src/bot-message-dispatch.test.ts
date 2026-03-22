@@ -2338,9 +2338,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     // Pre-connect errors are retried for idempotent preview edits.
     expect(editMessageTelegram).toHaveBeenCalled();
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({ abortSignal: abortController.signal }),
-    );
     const deliverCalls = deliverReplies.mock.calls;
     const finalTextSentViaDeliverReplies = deliverCalls.some((call: unknown[]) =>
       (call[0] as { replies?: Array<{ text?: string }> })?.replies?.some(
