@@ -128,6 +128,35 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
+  it("does not rewrite unchanged stores during startup", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T11:00:00.000Z");
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "startup-stable",
+        name: "startup stable",
+        createdAtMs: scheduledAt - 60_000,
+        updatedAtMs: scheduledAt - 60_000,
+        enabled: true,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "stable" },
+        state: { nextRunAtMs: scheduledAt },
+      },
+    ]);
+    const before = await fs.readFile(store.storePath, "utf8");
+
+    const cron = await startCronForStore({
+      storePath: store.storePath,
+      cronEnabled: true,
+    });
+    const after = await fs.readFile(store.storePath, "utf8");
+
+    expect(after).toBe(before);
+    cron.stop();
+  });
+
   it("repairs missing nextRunAtMs on non-schedule updates without touching other jobs", async () => {
     const store = makeStorePath();
     const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
