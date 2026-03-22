@@ -178,6 +178,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       logVerboseMessage(
         `matrix: room.message recv room=${roomId} type=${eventType} id=${event.event_id ?? "unknown"}`,
       );
+      const debugContent = event.content as Record<string, unknown> | undefined;
+      const debugBody = typeof debugContent?.body === "string" ? debugContent.body : "";
+      const debugFormattedBody =
+        typeof debugContent?.formatted_body === "string" ? debugContent.formatted_body : "";
+      logVerboseMessage(
+        `matrix: inbound detail room=${roomId} id=${event.event_id ?? "unknown"} sender=${event.sender ?? "unknown"} msgtype=${typeof debugContent?.msgtype === "string" ? debugContent.msgtype : "unknown"} bodyLen=${debugBody.length} formattedLen=${debugFormattedBody.length} body=${JSON.stringify(debugBody.slice(0, 160))}`,
+      );
       if (event.unsigned?.redacted_because) {
         return;
       }

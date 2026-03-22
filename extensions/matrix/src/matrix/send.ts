@@ -31,6 +31,12 @@ import {
 const MATRIX_TEXT_LIMIT = 4000;
 const getCore = () => getMatrixRuntime();
 
+function logMatrixSendDebug(message: string): void {
+  if (getCore().logging.shouldLogVerbose()) {
+    getCore().logging.getChildLogger({ module: "matrix-send" }).debug?.(message);
+  }
+}
+
 export type { MatrixSendOpts, MatrixSendResult } from "./send/types.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
 
@@ -74,9 +80,18 @@ export async function sendMessageMatrix(
       const relation = threadId
         ? buildThreadRelation(threadId, opts.replyToId)
         : buildReplyRelation(opts.replyToId);
-      const sendContent = async (content: MatrixOutboundContent) => {
+      const sendContent = async (content: MatrixOutboundContent, phase = "send") => {
+        const body = typeof content.body === "string" ? content.body : "";
+        const formattedBody =
+          typeof content.formatted_body === "string" ? content.formatted_body : "";
+        logMatrixSendDebug(
+          `phase=${phase} room=${roomId} msgtype=${typeof content.msgtype === "string" ? content.msgtype : "unknown"} bodyLen=${body.length} formattedLen=${formattedBody.length} relates=${content["m.relates_to"] ? "yes" : "no"} body=${JSON.stringify(body.slice(0, 160))}`,
+        );
         // @vector-im/matrix-bot-sdk uses sendMessage differently
         const eventId = await client.sendMessage(roomId, content);
+        logMatrixSendDebug(
+          `phase=${phase}:sent room=${roomId} eventId=${eventId ?? "unknown"} msgtype=${typeof content.msgtype === "string" ? content.msgtype : "unknown"} bodyLen=${body.length}`,
+        );
         return eventId;
       };
 
@@ -120,7 +135,7 @@ export async function sendMessageMatrix(
           isVoice: useVoice,
           imageInfo,
         });
-        const eventId = await sendContent(content);
+        const eventId = await sendContent(content, useVoice ? "media.voice" : "media.primary");
         lastMessageId = eventId ?? lastMessageId;
         const textChunks = useVoice ? chunks : rest;
         const followupRelation = threadId ? relation : undefined;
