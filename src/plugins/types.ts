@@ -1669,7 +1669,11 @@ export type PluginHookMessageReceivedEvent = {
 export type PluginHookBeforeMessageProcessEvent = {
   /** Sender identifier (e.g. phone number, user ID) */
   from: string;
-  /** Normalised message content (text the agent would see) */
+  /**
+   * Command-oriented text derived from BodyForCommands.
+   * May be a placeholder like `<media:audio>` for transcribed voice turns.
+   * For reliable intent detection, prefer `bodyForAgent ?? transcript ?? content`.
+   */
   content: string;
   /** Raw message body from the channel, if available */
   body?: string;
