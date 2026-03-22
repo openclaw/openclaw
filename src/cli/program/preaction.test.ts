@@ -5,6 +5,7 @@ const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
 const ensureConfigReadyMock = vi.fn(async () => {});
 const ensurePluginRegistryLoadedMock = vi.fn();
+const routeLogsToStderrMock = vi.fn();
 
 const runtimeMock = {
   log: vi.fn(),
@@ -26,6 +27,10 @@ vi.mock("../banner.js", () => ({
 
 vi.mock("../cli-name.js", () => ({
   resolveCliName: () => "openclaw",
+}));
+
+vi.mock("../../logging/console.js", () => ({
+  routeLogsToStderr: routeLogsToStderrMock,
 }));
 
 vi.mock("./config-guard.js", () => ({
@@ -279,6 +284,33 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+  });
+
+  it("calls routeLogsToStderr for --json output commands", async () => {
+    await runPreAction({
+      parseArgv: ["agents"],
+      processArgv: ["node", "openclaw", "agents", "--json"],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call routeLogsToStderr for non-json commands", async () => {
+    await runPreAction({
+      parseArgv: ["agents"],
+      processArgv: ["node", "openclaw", "agents"],
+    });
+
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+  });
+
+  it("does not call routeLogsToStderr for config set --json (parse-only)", async () => {
+    await runPreAction({
+      parseArgv: ["config", "set", "gateway.auth.mode", "{bad", "--json"],
+      processArgv: ["node", "openclaw", "config", "set", "gateway.auth.mode", "{bad", "--json"],
+    });
+
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
   });
 
   beforeAll(() => {

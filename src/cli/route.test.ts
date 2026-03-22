@@ -5,6 +5,11 @@ const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
 const findRoutedCommandMock = vi.hoisted(() => vi.fn());
 const runRouteMock = vi.hoisted(() => vi.fn(async () => true));
+const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../logging/console.js", () => ({
+  routeLogsToStderr: routeLogsToStderrMock,
+}));
 
 vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
@@ -83,5 +88,17 @@ describe("tryRouteCli", () => {
       commandPath: ["status"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
+  });
+
+  it("calls routeLogsToStderr for routed --json commands", async () => {
+    await expect(tryRouteCli(["node", "openclaw", "status", "--json"])).resolves.toBe(true);
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call routeLogsToStderr for routed non-json commands", async () => {
+    await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
+
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
   });
 });
