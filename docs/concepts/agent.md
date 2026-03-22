@@ -81,10 +81,10 @@ Legacy session folders from other tools are not read.
 ## Steering while streaming
 
 When queue mode is `steer`, inbound messages are injected into the current run.
-The queue is checked **after each tool call**; if a queued message is present,
-remaining tool calls from the current assistant message are skipped (error tool
-results with "Skipped due to queued user message."), then the queued user
-message is injected before the next assistant response.
+Queued steering is delivered **after the current assistant turn finishes
+executing its tool calls**, before the next LLM call. Steering no longer skips
+remaining tool calls from the current assistant message; it injects the queued
+message at the next model boundary instead.
 
 When queue mode is `followup` or `collect`, inbound messages are held until the
 current turn ends, then a new agent turn starts with the queued payloads. See
