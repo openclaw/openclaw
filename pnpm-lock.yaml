@@ -553,6 +553,8 @@ importers:
 
   extensions/perplexity: {}
 
+  extensions/pitcrew: {}
+
   extensions/qianfan: {}
 
   extensions/sglang: {}

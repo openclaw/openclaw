@@ -570,6 +570,125 @@ describe("resolveOllamaBaseUrlForRun", () => {
 });
 
 describe("createConfiguredOllamaStreamFn", () => {
+  it("uses contextTokensOverride for num_ctx when provided", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createConfiguredOllamaStreamFn({
+          model: {},
+          contextTokensOverride: 8192,
+        });
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "qwen3:32b",
+              api: "ollama",
+              provider: "ollama",
+              contextWindow: 262144, // model advertises 262k
+            } as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          options: { num_ctx?: number };
+        };
+        // Should use the override (8192), not the model's advertised 262144
+        expect(requestBody.options.num_ctx).toBe(8192);
+      },
+    );
+  });
+
+  it("uses model.contextWindow when no contextTokensOverride is provided", async () => {
+    // Simulates the global registration path (compact, simple-completion)
+    // where no contextTokensOverride is provided.
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createConfiguredOllamaStreamFn({
+          model: {},
+          // NO contextTokensOverride — global registration path
+        });
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "qwen3:32b",
+              api: "ollama",
+              provider: "ollama",
+              contextWindow: 262144, // model advertises 262k
+            } as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          options: { num_ctx?: number };
+        };
+        // Should use model.contextWindow (262144), NOT a session override
+        expect(requestBody.options.num_ctx).toBe(262144);
+      },
+    );
+  });
+
+  it("falls back to 65536 when both contextTokensOverride and model.contextWindow are undefined", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createConfiguredOllamaStreamFn({ model: {} });
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "qwen3:32b",
+              api: "ollama",
+              provider: "ollama",
+              // no contextWindow
+            } as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          options: { num_ctx?: number };
+        };
+        // Should fall back to 65536 default
+        expect(requestBody.options.num_ctx).toBe(65536);
+      },
+    );
+  });
+
   it("uses provider-level baseUrl when model baseUrl is absent", async () => {
     await withMockNdjsonFetch(
       [

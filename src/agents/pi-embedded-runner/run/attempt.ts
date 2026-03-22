@@ -50,6 +50,7 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import { resolveContextWindowInfo } from "../../context-window-guard.js";
 import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
@@ -2230,12 +2231,31 @@ export async function runEmbeddedAttempt(
         const providerConfig = params.config?.models?.providers?.[params.model.provider];
         const providerBaseUrl =
           typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined;
-        const ollamaStreamFn = createConfiguredOllamaStreamFn({
+        // Resolve context window respecting user config (models.providers.ollama.models[].contextWindow
+        // and agents.defaults.contextTokens) so we don't send the model's raw advertised max (e.g. 262k)
+        // to Ollama, which would blow VRAM. See #52206.
+        const ctxInfo = resolveContextWindowInfo({
+          cfg: params.config,
+          provider: params.model.provider,
+          modelId: params.model.id,
+          modelContextWindow: params.model.contextWindow,
+          defaultTokens: params.model.contextWindow ?? 65536,
+        });
+        const contextTokensOverride =
+          ctxInfo.source === "modelsConfig" || ctxInfo.source === "agentContextTokens"
+            ? ctxInfo.tokens
+            : undefined;
+        activeSession.agent.streamFn = createConfiguredOllamaStreamFn({
           model: params.model,
           providerBaseUrl,
+          contextTokensOverride,
         });
-        activeSession.agent.streamFn = ollamaStreamFn;
-        ensureCustomApiRegistered(params.model.api, ollamaStreamFn);
+        // Global registration uses default context (no override) so compact
+        // and simple-completion don't inherit a session-specific num_ctx.
+        ensureCustomApiRegistered(
+          params.model.api,
+          createConfiguredOllamaStreamFn({ model: params.model, providerBaseUrl }),
+        );
       } else if (params.model.api === "openai-responses" && params.provider === "openai") {
         const wsApiKey = await params.authStorage.getApiKey(params.provider);
         if (wsApiKey) {
