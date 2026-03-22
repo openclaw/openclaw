@@ -64430,6 +64430,31 @@
       "hasChildren": false
     },
     {
+      "path": "tools.web.urlAllowlist",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "tools"
+      ],
+      "label": "Web URL Allowlist",
+      "help": "Optional URL/domain allowlist shared by web_search and web_fetch. Accepts domain patterns like 'example.com', '*.github.com'. When configured, only matching URLs are allowed.",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.urlAllowlist.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "ui",
       "kind": "core",
       "type": "object",
