@@ -5,9 +5,9 @@ import {
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
+  composeAccountWarningCollectors,
   composeWarningCollectors,
   createAllowlistProviderGroupPolicyWarningCollector,
-  createConditionalWarningCollector,
   createAllowlistProviderOpenWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
@@ -116,16 +116,17 @@ const collectGoogleChatGroupPolicyWarnings =
     },
   });
 
-const collectGoogleChatSecurityWarnings = composeWarningCollectors<{
-  cfg: OpenClawConfig;
-  account: ResolvedGoogleChatAccount;
-}>(
+const collectGoogleChatSecurityWarnings = composeAccountWarningCollectors<
+  ResolvedGoogleChatAccount,
+  {
+    cfg: OpenClawConfig;
+    account: ResolvedGoogleChatAccount;
+  }
+>(
   collectGoogleChatGroupPolicyWarnings,
-  createConditionalWarningCollector(
-    ({ account }) =>
-      account.config.dm?.policy === "open" &&
-      '- Google Chat DMs are open to anyone. Set channels.googlechat.dm.policy="pairing" or "allowlist".',
-  ),
+  (account) =>
+    account.config.dm?.policy === "open" &&
+    '- Google Chat DMs are open to anyone. Set channels.googlechat.dm.policy="pairing" or "allowlist".',
 );
 
 export const googlechatPlugin = createChatChannelPlugin({
