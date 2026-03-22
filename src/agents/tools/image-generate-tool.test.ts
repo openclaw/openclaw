@@ -43,6 +43,7 @@ function stubImageGenerationProviders() {
         generate: {
           maxCount: 4,
           supportsSize: true,
+          supportsAspectRatio: true,
         },
         edit: {
           enabled: false,
@@ -50,6 +51,7 @@ function stubImageGenerationProviders() {
         },
         geometry: {
           sizes: ["1024x1024", "1024x1536", "1536x1024"],
+          aspectRatios: ["1:1", "16:9"],
         },
       },
       generateImage: vi.fn(async () => {
