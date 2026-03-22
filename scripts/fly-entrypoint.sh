@@ -206,12 +206,18 @@ path = sys.argv[1]
 with open(path) as f:
     c = json.load(f)
 ui = c.setdefault('gateway', {}).setdefault('controlUi', {})
+changed = False
 if 'allowedOrigins' not in ui and not ui.get('dangerouslyAllowHostHeaderOriginFallback'):
     ui['allowedOrigins'] = [
         'https://openclaw-jhs.fly.dev',
         'https://larry.jhsconsulting.net',
         'https://od.jhsconsulting.net'
     ]
+    changed = True
+if not ui.get('dangerouslyDisableDeviceAuth'):
+    ui['dangerouslyDisableDeviceAuth'] = True
+    changed = True
+if changed:
     with open(path, 'w') as f:
         json.dump(c, f, indent=2)
 PYEOF
