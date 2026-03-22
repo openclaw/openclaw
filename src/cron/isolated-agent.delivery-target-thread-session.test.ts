@@ -1,22 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 // Mock session store so we can control what entries exist.
 const mockStore: Record<string, Record<string, unknown>> = {};
 type DeliveryTargetModule = typeof import("./isolated-agent/delivery-target.js");
+let resolveDeliveryTarget: DeliveryTargetModule["resolveDeliveryTarget"];
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  for (const key of Object.keys(mockStore)) {
-    delete mockStore[key];
-  }
-});
-
-async function withResolveDeliveryTarget<T>(
-  run: (resolveDeliveryTarget: DeliveryTargetModule["resolveDeliveryTarget"]) => Promise<T>,
-): Promise<T> {
-  vi.resetModules();
+beforeAll(async () => {
   vi.doMock("../config/sessions.js", () => ({
     loadSessionStore: vi.fn((storePath: string) => mockStore[storePath] ?? {}),
     resolveAgentMainSessionKey: vi.fn(
@@ -48,17 +39,22 @@ async function withResolveDeliveryTarget<T>(
     })),
     normalizeChannelId: vi.fn((id: string) => id),
   }));
-  try {
-    const { resolveDeliveryTarget } = await import("./isolated-agent/delivery-target.js");
-    return await run(resolveDeliveryTarget);
-  } finally {
-    vi.restoreAllMocks();
-    vi.doUnmock("../config/sessions.js");
-    vi.doUnmock("../infra/outbound/channel-selection.js");
-    vi.doUnmock("../channels/plugins/index.js");
-    vi.resetModules();
+  ({ resolveDeliveryTarget } = await import("./isolated-agent/delivery-target.js"));
+});
+
+afterAll(() => {
+  vi.doUnmock("../config/sessions.js");
+  vi.doUnmock("../infra/outbound/channel-selection.js");
+  vi.doUnmock("../channels/plugins/index.js");
+  vi.resetModules();
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  for (const key of Object.keys(mockStore)) {
+    delete mockStore[key];
   }
-}
+});
 
 describe("resolveDeliveryTarget thread session lookup", () => {
   const cfg: OpenClawConfig = {};
@@ -80,13 +76,10 @@ describe("resolveDeliveryTarget thread session lookup", () => {
       },
     };
 
-    const result = await withResolveDeliveryTarget(
-      async (resolveDeliveryTarget) =>
-        await resolveDeliveryTarget(cfg, "main", {
-          channel: "last",
-          sessionKey: "agent:main:main:thread:9999",
-        }),
-    );
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "last",
+      sessionKey: "agent:main:main:thread:9999",
+    });
 
     expect(result.to).toBe("-100111");
     expect(result.threadId).toBe(9999);
@@ -103,13 +96,10 @@ describe("resolveDeliveryTarget thread session lookup", () => {
       },
     };
 
-    const result = await withResolveDeliveryTarget(
-      async (resolveDeliveryTarget) =>
-        await resolveDeliveryTarget(cfg, "main", {
-          channel: "last",
-          sessionKey: "agent:main:main:thread:nonexistent",
-        }),
-    );
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "last",
+      sessionKey: "agent:main:main:thread:nonexistent",
+    });
 
     expect(result.to).toBe("-100222");
     expect(result.threadId).toBeUndefined();
@@ -126,12 +116,9 @@ describe("resolveDeliveryTarget thread session lookup", () => {
       },
     };
 
-    const result = await withResolveDeliveryTarget(
-      async (resolveDeliveryTarget) =>
-        await resolveDeliveryTarget(cfg, "main", {
-          channel: "last",
-        }),
-    );
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "last",
+    });
 
     expect(result.to).toBe("-100333");
     expect(result.threadId).toBeUndefined();
@@ -140,13 +127,10 @@ describe("resolveDeliveryTarget thread session lookup", () => {
   it("preserves threadId from :topic: in delivery.to on first run (no session history)", async () => {
     mockStore["/mock/store.json"] = {};
 
-    const result = await withResolveDeliveryTarget(
-      async (resolveDeliveryTarget) =>
-        await resolveDeliveryTarget(cfg, "main", {
-          channel: "telegram",
-          to: "63448508:topic:1008013",
-        }),
-    );
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "telegram",
+      to: "63448508:topic:1008013",
+    });
 
     expect(result.to).toBe("63448508");
     expect(result.threadId).toBe(1008013);
@@ -164,14 +148,11 @@ describe("resolveDeliveryTarget thread session lookup", () => {
       },
     };
 
-    const result = await withResolveDeliveryTarget(
-      async (resolveDeliveryTarget) =>
-        await resolveDeliveryTarget(cfg, "main", {
-          channel: "telegram",
-          to: "-100444",
-          accountId: "explicit-account",
-        }),
-    );
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "telegram",
+      to: "-100444",
+      accountId: "explicit-account",
+    });
 
     expect(result.accountId).toBe("explicit-account");
     expect(result.to).toBe("-100444");
@@ -187,13 +168,10 @@ describe("resolveDeliveryTarget thread session lookup", () => {
       },
     };
 
-    const result = await withResolveDeliveryTarget(
-      async (resolveDeliveryTarget) =>
-        await resolveDeliveryTarget(cfg, "main", {
-          channel: "telegram",
-          to: "63448508:topic:1008013",
-        }),
-    );
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "telegram",
+      to: "63448508:topic:1008013",
+    });
 
     expect(result.to).toBe("63448508");
     expect(result.threadId).toBe(1008013);
