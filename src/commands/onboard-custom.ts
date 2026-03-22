@@ -53,6 +53,30 @@ function isAzureUrl(baseUrl: string): boolean {
   return isAzureFoundryUrl(baseUrl) || isAzureOpenAiUrl(baseUrl);
 }
 
+function isClaude45OrHigher(id: string): boolean {
+  // Match claude-*-4-5+, claude-*-45+, claude-*4.5+, or future 5.x+ majors.
+  return /\bclaude-[^\s/]*?(?:-4-?(?:[5-9]|[1-9]\d)\b|4\.(?:[5-9]|[1-9]\d)\b|-[5-9](?:\b|[.-]))/i.test(
+    id,
+  );
+}
+
+/** Heuristic for ids that typically accept image input on non-Azure custom endpoints. */
+function isLikelyVisionCapableNonAzureModel(modelId: string): boolean {
+  if (/\b(gpt-4o|gpt-4\.1|gpt-4-turbo|gpt-([5-9]|\d{2,}))\b/i.test(modelId)) {
+    return true;
+  }
+  if (/\b(o3|o4)\b/i.test(modelId)) {
+    return true;
+  }
+  if (/\bclaude-3\b/i.test(modelId) || isClaude45OrHigher(modelId)) {
+    return true;
+  }
+  if (/\bgemini/i.test(modelId)) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Transforms an Azure AI Foundry/OpenAI URL to include the deployment path.
  * Azure requires: https://host/openai/deployments/<model-id>/chat/completions?api-version=2024-xx-xx-preview
@@ -663,7 +687,9 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         name: `${modelId} (Custom Provider)`,
         contextWindow: DEFAULT_CONTEXT_WINDOW,
         maxTokens: DEFAULT_MAX_TOKENS,
-        input: ["text"] as ["text"],
+        input: isLikelyVisionCapableNonAzureModel(modelId)
+          ? (["text", "image"] as Array<"text" | "image">)
+          : (["text"] as ["text"]),
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         reasoning: false,
       };

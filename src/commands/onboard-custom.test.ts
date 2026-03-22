@@ -594,6 +594,20 @@ describe("applyCustomApiConfig", () => {
     ).toBeUndefined();
   });
 
+  it("sets image input for likely vision non-Azure OpenAI-compatible models", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "gpt-4o-mini",
+      compatibility: "openai",
+      apiKey: "key123",
+      providerId: "custom",
+    });
+    const model = result.config.models?.providers?.custom?.models?.[0];
+    expect(model?.input).toEqual(["text", "image"]);
+    expect(model?.reasoning).toBe(false);
+  });
+
   it("re-onboard preserves user-customized fields for non-azure models", () => {
     const result = applyCustomApiConfig({
       config: {
