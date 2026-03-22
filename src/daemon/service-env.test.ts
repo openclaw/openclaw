@@ -521,9 +521,19 @@ describe("resolveGatewayStateDir", () => {
     expect(resolveGatewayStateDir(env)).toBe(path.resolve("/var/lib/openclaw"));
   });
 
+  it("uses legacy CLAWDBOT_STATE_DIR when provided", () => {
+    const env = { HOME: "/Users/test", CLAWDBOT_STATE_DIR: "/var/lib/clawdbot" };
+    expect(resolveGatewayStateDir(env)).toBe(path.resolve("/var/lib/clawdbot"));
+  });
+
   it("expands ~ in OPENCLAW_STATE_DIR", () => {
     const env = { HOME: "/Users/test", OPENCLAW_STATE_DIR: "~/openclaw-state" };
     expect(resolveGatewayStateDir(env)).toBe(path.resolve("/Users/test/openclaw-state"));
+  });
+
+  it("uses OPENCLAW_HOME for the default state dir", () => {
+    const env = { OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/Users/test" };
+    expect(resolveGatewayStateDir(env)).toBe(path.join("/srv/openclaw-home", ".openclaw"));
   });
 
   it("preserves Windows absolute paths without HOME", () => {
