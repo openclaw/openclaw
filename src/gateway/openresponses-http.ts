@@ -62,21 +62,45 @@ const DEFAULT_MAX_URL_PARTS = 8;
 // In-memory map from responseId -> sessionKey for previous_response_id continuity.
 // Entries are evicted after 30 minutes to bound memory usage.
 const RESPONSE_SESSION_TTL_MS = 30 * 60 * 1000;
+const MAX_RESPONSE_SESSION_ENTRIES = 500;
 const responseSessionMap = new Map<string, { sessionKey: string; ts: number }>();
 
-function storeResponseSession(responseId: string, sessionKey: string) {
-  responseSessionMap.set(responseId, { sessionKey, ts: Date.now() });
-  if (responseSessionMap.size > 500) {
-    const now = Date.now();
-    for (const [key, value] of responseSessionMap) {
-      if (now - value.ts > RESPONSE_SESSION_TTL_MS) {
-        responseSessionMap.delete(key);
-      }
+function pruneExpiredResponseSessions(now: number) {
+  while (responseSessionMap.size > 0) {
+    const oldest = responseSessionMap.entries().next().value;
+    if (!oldest) {
+      return;
     }
+    const [oldestKey, oldestValue] = oldest;
+    if (now - oldestValue.ts <= RESPONSE_SESSION_TTL_MS) {
+      return;
+    }
+    responseSessionMap.delete(oldestKey);
   }
 }
 
-function lookupResponseSession(responseId: string | undefined): string | undefined {
+function evictOverflowResponseSessions() {
+  while (responseSessionMap.size > MAX_RESPONSE_SESSION_ENTRIES) {
+    const oldestKey = responseSessionMap.keys().next().value;
+    if (!oldestKey) {
+      return;
+    }
+    responseSessionMap.delete(oldestKey);
+  }
+}
+
+function storeResponseSession(responseId: string, sessionKey: string, now = Date.now()) {
+  // Reinsert existing keys so the map stays ordered by freshest timestamp.
+  responseSessionMap.delete(responseId);
+  responseSessionMap.set(responseId, { sessionKey, ts: now });
+  pruneExpiredResponseSessions(now);
+  evictOverflowResponseSessions();
+}
+
+function lookupResponseSession(
+  responseId: string | undefined,
+  now = Date.now(),
+): string | undefined {
   if (!responseId) {
     return undefined;
   }
@@ -84,12 +108,27 @@ function lookupResponseSession(responseId: string | undefined): string | undefin
   if (!entry) {
     return undefined;
   }
-  if (Date.now() - entry.ts > RESPONSE_SESSION_TTL_MS) {
+  if (now - entry.ts > RESPONSE_SESSION_TTL_MS) {
     responseSessionMap.delete(responseId);
     return undefined;
   }
   return entry.sessionKey;
 }
+
+export const __testing = {
+  resetResponseSessionState() {
+    responseSessionMap.clear();
+  },
+  storeResponseSessionAt(responseId: string, sessionKey: string, now: number) {
+    storeResponseSession(responseId, sessionKey, now);
+  },
+  lookupResponseSessionAt(responseId: string | undefined, now: number) {
+    return lookupResponseSession(responseId, now);
+  },
+  getResponseSessionIds() {
+    return [...responseSessionMap.keys()];
+  },
+};
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);

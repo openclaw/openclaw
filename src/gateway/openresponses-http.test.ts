@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -11,14 +11,25 @@ installGatewayTestHooks({ scope: "suite" });
 
 let enabledServer: Awaited<ReturnType<typeof startServer>>;
 let enabledPort: number;
+let openResponsesTesting: {
+  resetResponseSessionState(): void;
+  storeResponseSessionAt(responseId: string, sessionKey: string, now: number): void;
+  lookupResponseSessionAt(responseId: string | undefined, now: number): string | undefined;
+  getResponseSessionIds(): string[];
+};
 
 beforeAll(async () => {
+  ({ __testing: openResponsesTesting } = await import("./openresponses-http.js"));
   enabledPort = await getFreePort();
   enabledServer = await startServer(enabledPort, { openResponsesEnabled: true });
 });
 
 afterAll(async () => {
   await enabledServer.close({ reason: "openresponses enabled suite done" });
+});
+
+beforeEach(() => {
+  openResponsesTesting.resetResponseSessionState();
 });
 
 async function startServer(port: number, opts?: { openResponsesEnabled?: boolean }) {
@@ -755,6 +766,18 @@ describe("OpenResponses HTTP API (e2e)", () => {
       | undefined;
     expect(secondOpts?.sessionKey).toBe(firstOpts?.sessionKey);
     await ensureResponseConsumed(secondResponse);
+  });
+
+  it("caps response session cache by evicting the oldest entries", () => {
+    for (let i = 0; i < 505; i += 1) {
+      openResponsesTesting.storeResponseSessionAt(`resp_${i}`, `session_${i}`, i);
+    }
+
+    expect(openResponsesTesting.getResponseSessionIds()).toHaveLength(500);
+    expect(openResponsesTesting.lookupResponseSessionAt("resp_0", 505)).toBeUndefined();
+    expect(openResponsesTesting.lookupResponseSessionAt("resp_4", 505)).toBeUndefined();
+    expect(openResponsesTesting.lookupResponseSessionAt("resp_5", 505)).toBe("session_5");
+    expect(openResponsesTesting.lookupResponseSessionAt("resp_504", 505)).toBe("session_504");
   });
 
   it("blocks unsafe URL-based file/image inputs", async () => {
