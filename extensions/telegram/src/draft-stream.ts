@@ -125,7 +125,7 @@ export function createTelegramDraftStream(params: {
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyParams =
     params.replyToMessageId != null
-      ? { ...threadParams, reply_to_message_id: params.replyToMessageId }
+      ? { ...threadParams, reply_to_message_id: params.replyToMessageId, allow_sending_without_reply: true }
       : threadParams;
   const resolvedDraftApi = prefersDraftTransport
     ? resolveSendMessageDraftApi(params.api)

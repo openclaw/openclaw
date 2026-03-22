@@ -394,9 +394,11 @@ function buildTelegramThreadReplyParams(params: {
       threadParams.reply_parameters = {
         message_id: replyToMessageId,
         quote: params.quoteText.trim(),
+        allow_sending_without_reply: true,
       };
     } else {
       threadParams.reply_to_message_id = replyToMessageId;
+      threadParams.allow_sending_without_reply = true;
     }
   }
   return threadParams;
