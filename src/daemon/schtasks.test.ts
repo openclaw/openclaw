@@ -456,6 +456,60 @@ describe("readScheduledTaskCommand", () => {
     );
   });
 
+  it("prefers an explicit OPENCLAW_TASK_SCRIPT over a stale startup launcher when the query omits Task To Run", async () => {
+    await withScheduledTaskScript(
+      {
+        env: (tmpDir) => ({
+          APPDATA: path.join(tmpDir, "AppData", "Roaming"),
+          OPENCLAW_TASK_SCRIPT: path.join(tmpDir, "task-scripts", "gateway.cmd"),
+        }),
+        scriptLines: ["@echo off", "node gateway.js --from-explicit-task-script"],
+      },
+      async (env) => {
+        const staleEnv = {
+          ...env,
+          OPENCLAW_HOME: path.join(env.USERPROFILE!, "stale-startup-home"),
+        };
+        const staleScriptPath = resolveTaskScriptPath(staleEnv);
+        const startupEntryPath = path.join(
+          env.APPDATA!,
+          "Microsoft",
+          "Windows",
+          "Start Menu",
+          "Programs",
+          "Startup",
+          "OpenClaw Gateway.cmd",
+        );
+
+        await fs.mkdir(path.dirname(staleScriptPath), { recursive: true });
+        await fs.writeFile(
+          staleScriptPath,
+          ["@echo off", "node gateway.js --from-stale-startup-backup"].join("\r\n"),
+          "utf8",
+        );
+        await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
+        await fs.writeFile(
+          startupEntryPath,
+          ["@echo off", `cmd.exe /d /c "${staleScriptPath}"`].join("\r\n"),
+          "utf8",
+        );
+
+        schtasksResponses.push({
+          code: 0,
+          stdout: "TaskName: OpenClaw Gateway\r\nStatus: Ready\r\n",
+          stderr: "",
+        });
+
+        const result = await readScheduledTaskCommand(env);
+
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--from-explicit-task-script"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
   it("parses quoted set assignments with escaped metacharacters", async () => {
     await withScheduledTaskScript(
       {

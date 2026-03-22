@@ -120,8 +120,8 @@ async function queryInstalledTaskScriptPath(env: GatewayServiceEnv): Promise<str
 async function resolveTaskScriptCandidates(env: GatewayServiceEnv): Promise<string[]> {
   const candidates = [
     await queryInstalledTaskScriptPath(env),
-    await readStartupEntryTaskScriptPath(env),
     resolveTaskScriptPath(env),
+    await readStartupEntryTaskScriptPath(env),
     resolveLegacyOsHomeTaskScriptPath(env),
   ].filter((value): value is string => Boolean(value));
   return Array.from(new Set(candidates.map((value) => path.normalize(value))));
@@ -456,6 +456,8 @@ const TASK_CONFIG_ROOT_ENV_KEYS = [
   "OPENCLAW_STATE_DIR",
   "CLAWDBOT_STATE_DIR",
   "OPENCLAW_HOME",
+  "HOME",
+  "USERPROFILE",
 ] as const;
 
 function resolveTaskConfigEnvironment(
