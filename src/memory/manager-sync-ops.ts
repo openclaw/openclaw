@@ -777,7 +777,7 @@ export abstract class MemoryManagerSyncOps {
           .run(stale.path, "memory");
       } catch {}
       this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(stale.path, "memory");
-      if (this.fts.enabled && this.fts.available) {
+      if (this.fts.enabled && this.fts.available && this.provider) {
         try {
           this.db
             .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
@@ -900,7 +900,7 @@ export abstract class MemoryManagerSyncOps {
       this.db
         .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
         .run(stale.path, "sessions");
-      if (this.fts.enabled && this.fts.available) {
+      if (this.fts.enabled && this.fts.available && this.provider) {
         try {
           this.db
             .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)

@@ -43,3 +43,18 @@ export function resolveMemoryCacheState(cache: { enabled: boolean }): {
 } {
   return cache.enabled ? { tone: "ok", state: "enabled" } : { tone: "muted", state: "disabled" };
 }
+
+export function resolveMemoryModeState(provider: string): {
+  tone: Tone;
+  state: "hybrid" | "keyword-only";
+  hint?: string;
+} {
+  if (provider === "keyword-only") {
+    return {
+      tone: "warn",
+      state: "keyword-only",
+      hint: "Set OPENAI_API_KEY or GEMINI_API_KEY for semantic search",
+    };
+  }
+  return { tone: "ok", state: "hybrid" };
+}

@@ -195,11 +195,17 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return manager;
     }
     const createPromise = (async () => {
-      const providerResult = await MemoryIndexManager.loadProviderResult({
-        cfg,
-        agentId,
-        settings,
-      });
+      let providerResult: EmbeddingProviderResult | undefined;
+      try {
+        providerResult = await MemoryIndexManager.loadProviderResult({
+          cfg,
+          agentId,
+          settings,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`embedding provider unavailable; falling back to FTS-only mode: ${message}`);
+      }
       const refreshed = INDEX_CACHE.get(key);
       if (refreshed) {
         return refreshed;
@@ -293,12 +299,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     if (!this.providerInitPromise) {
       this.providerInitPromise = (async () => {
-        const providerResult = await MemoryIndexManager.loadProviderResult({
-          cfg: this.cfg,
-          agentId: this.agentId,
-          settings: this.settings,
-        });
-        this.applyProviderResult(providerResult);
+        try {
+          const providerResult = await MemoryIndexManager.loadProviderResult({
+            cfg: this.cfg,
+            agentId: this.agentId,
+            settings: this.settings,
+          });
+          this.applyProviderResult(providerResult);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          log.warn(`embedding provider unavailable; falling back to FTS-only mode: ${message}`);
+          this.providerUnavailableReason = message;
+          this.providerInitialized = true;
+        }
         this.providerKey = this.computeProviderKey();
         this.batch = this.resolveBatchConfig();
       })();
