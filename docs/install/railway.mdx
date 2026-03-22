@@ -2,21 +2,20 @@
 summary: "Deploy OpenClaw on Railway with one-click template"
 read_when:
   - Deploying OpenClaw to Railway
-  - You want a one-click cloud deploy with browser-based setup
+  - You want a one-click cloud deploy with browser-based Control UI
 title: "Railway"
 ---
 
-Deploy OpenClaw on Railway with a one-click template and finish setup in your browser.
-This is the easiest “no terminal on the server” path: Railway runs the Gateway for you,
-and you configure everything via the `/setup` web wizard.
+Deploy OpenClaw on Railway with a one-click template and access it through the web Control UI.
+This is the easiest "no terminal on the server" path: Railway runs the Gateway for you.
 
 ## Quick checklist (new users)
 
 1. Click **Deploy on Railway** (below).
 2. Add a **Volume** mounted at `/data`.
-3. Set the required **Variables** (at least `SETUP_PASSWORD`).
+3. Set the required **Variables** (at least `OPENCLAW_GATEWAY_PORT` and `OPENCLAW_GATEWAY_TOKEN`).
 4. Enable **HTTP Proxy** on port `8080`.
-5. Open `https://<your-railway-domain>/setup` and finish the wizard.
+5. Open `https://<your-railway-domain>/openclaw` and connect using your `OPENCLAW_GATEWAY_TOKEN`.
 
 ## One-click deploy
 
@@ -33,15 +32,12 @@ Railway will either:
 
 Then open:
 
-- `https://<your-railway-domain>/setup` — web setup (password protected)
 - `https://<your-railway-domain>/openclaw` — Control UI
 
 ## What you get
 
 - Hosted OpenClaw Gateway + Control UI
-- Web setup at `/setup` (no terminal commands)
 - Persistent storage via Railway Volume (`/data`) so config/credentials/workspace survive redeploys
-- Backup export at `/setup/export` to migrate off Railway later
 
 ## Required Railway settings
 
@@ -61,25 +57,14 @@ Attach a volume mounted at:
 
 Set these variables on the service:
 
-- `SETUP_PASSWORD` (required)
-- `PORT=8080` (required — must match the port in Public Networking)
+- `OPENCLAW_GATEWAY_PORT=8080` (required — must match the port in Public Networking)
+- `OPENCLAW_GATEWAY_TOKEN` (required; treat as an admin secret)
 - `OPENCLAW_STATE_DIR=/data/.openclaw` (recommended)
 - `OPENCLAW_WORKSPACE_DIR=/data/workspace` (recommended)
-- `OPENCLAW_GATEWAY_TOKEN` (recommended; treat as an admin secret)
-
-## Setup flow
-
-1. Visit `https://<your-railway-domain>/setup` and enter your `SETUP_PASSWORD`.
-2. Choose a model/auth provider and paste your key.
-3. (Optional) Add Telegram/Discord/Slack tokens.
-4. Click **Run setup**.
-
-If Telegram DMs are set to pairing, web setup can approve the pairing code.
 
 ## Connect a channel
 
-Paste your Telegram or Discord token into the `/setup` wizard. For setup
-instructions, see the channel docs:
+Use the Control UI at `/openclaw` or run `openclaw onboard` via Railway's shell for channel setup instructions:
 
 - [Telegram](/channels/telegram) (fastest — just a bot token)
 - [Discord](/channels/discord)
@@ -87,11 +72,13 @@ instructions, see the channel docs:
 
 ## Backups & migration
 
-Download a backup at:
+Export your configuration and workspace:
 
-- `https://<your-railway-domain>/setup/export`
+```bash
+openclaw backup create
+```
 
-This exports your OpenClaw state + workspace so you can migrate to another host without losing config or memory.
+This creates a portable backup archive you can restore on any OpenClaw host. See [Backup](/cli/backup) for details.
 
 ## Next steps
 
