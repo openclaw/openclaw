@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockServerResponse } from "../../../../test/helpers/extensions/mock-http-response.js";
-import { createCampfireWebhookHandler } from "./index.js";
+import { __testing, createCampfireWebhookHandler, registerCampfireWebhookRoute } from "./index.js";
 
 function createJsonRequest(params: {
   method?: string;
@@ -68,6 +68,10 @@ const validPayload = {
 };
 
 describe("createCampfireWebhookHandler", () => {
+  afterEach(() => {
+    __testing.resetCampfireWebhookPathReservations();
+  });
+
   it("rejects non-POST requests", async () => {
     const handler = createCampfireWebhookHandler({ onInbound: vi.fn() });
     const req = createJsonRequest({ method: "GET" });
@@ -119,5 +123,49 @@ describe("createCampfireWebhookHandler", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(onInbound).toHaveBeenCalledWith(validPayload);
+  });
+
+  it("rejects duplicate webhook paths across different accounts", () => {
+    const registerRoute = vi.fn().mockReturnValue(() => {});
+
+    const unregister = registerCampfireWebhookRoute({
+      accountId: "default",
+      path: "/channels/campfire/webhook/shared",
+      onInbound: vi.fn(),
+      registerRoute,
+    } as never);
+
+    expect(() =>
+      registerCampfireWebhookRoute({
+        accountId: "support",
+        path: "/channels/campfire/webhook/shared/",
+        onInbound: vi.fn(),
+        registerRoute,
+      } as never),
+    ).toThrow(/already assigned to account "default"/);
+
+    unregister();
+  });
+
+  it("allows reusing the same webhook path for one account", () => {
+    const registerRoute = vi.fn().mockReturnValue(() => {});
+
+    const unregisterFirst = registerCampfireWebhookRoute({
+      accountId: "default",
+      path: "/channels/campfire/webhook/shared",
+      onInbound: vi.fn(),
+      registerRoute,
+    } as never);
+    const unregisterSecond = registerCampfireWebhookRoute({
+      accountId: "default",
+      path: "/channels/campfire/webhook/shared/",
+      onInbound: vi.fn(),
+      registerRoute,
+    } as never);
+
+    expect(registerRoute).toHaveBeenCalledTimes(2);
+
+    unregisterSecond();
+    unregisterFirst();
   });
 });

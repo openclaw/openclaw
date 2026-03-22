@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  normalizeWebhookPath,
   readJsonWebhookBodyOrReject,
   registerPluginHttpRoute,
 } from "openclaw/plugin-sdk/webhook-ingress";
@@ -13,6 +14,43 @@ type CampfireWebhookLog = {
 };
 
 export type CampfireInboundHandler = (payload: CampfireWebhookPayload) => Promise<void> | void;
+
+const activeCampfireWebhookPathReservations = new Map<
+  string,
+  {
+    accountId: string;
+    tokens: Set<symbol>;
+  }
+>();
+
+function reserveCampfireWebhookPath(params: { accountId: string; path: string }): () => void {
+  const reservationPath = normalizeWebhookPath(params.path);
+  const existing = activeCampfireWebhookPathReservations.get(reservationPath);
+  if (existing && existing.accountId !== params.accountId) {
+    throw new Error(
+      `Campfire webhook path "${reservationPath}" is already assigned to account "${existing.accountId}"`,
+    );
+  }
+
+  const token = Symbol(params.accountId);
+  const reservation = existing ?? {
+    accountId: params.accountId,
+    tokens: new Set<symbol>(),
+  };
+  reservation.tokens.add(token);
+  activeCampfireWebhookPathReservations.set(reservationPath, reservation);
+
+  return () => {
+    const current = activeCampfireWebhookPathReservations.get(reservationPath);
+    if (!current || current.accountId !== params.accountId) {
+      return;
+    }
+    current.tokens.delete(token);
+    if (current.tokens.size === 0) {
+      activeCampfireWebhookPathReservations.delete(reservationPath);
+    }
+  };
+}
 
 function resolveRequestSecret(req: IncomingMessage): string | null {
   try {
@@ -79,20 +117,47 @@ export function registerCampfireWebhookRoute(params: {
   webhookSecret?: string;
   onInbound: CampfireInboundHandler;
   log?: CampfireWebhookLog;
+  registerRoute?: typeof registerPluginHttpRoute;
 }): () => void {
-  return registerPluginHttpRoute({
-    path: params.path ?? `/channels/campfire/webhook/${params.accountId}`,
-    auth: "plugin",
-    match: "exact",
-    replaceExisting: true,
-    pluginId: "campfire",
+  const path = normalizeWebhookPath(
+    params.path ?? `/channels/campfire/webhook/${params.accountId}`,
+  );
+  const releaseReservation = reserveCampfireWebhookPath({
     accountId: params.accountId,
-    source: "campfire-webhook",
-    log: (message) => params.log?.info?.(message),
-    handler: createCampfireWebhookHandler({
-      webhookSecret: params.webhookSecret,
-      onInbound: params.onInbound,
-      log: params.log,
-    }),
+    path,
   });
+  const registerRoute = params.registerRoute ?? registerPluginHttpRoute;
+
+  let unregister: (() => void) | undefined;
+  try {
+    unregister = registerRoute({
+      path,
+      auth: "plugin",
+      match: "exact",
+      replaceExisting: true,
+      pluginId: "campfire",
+      accountId: params.accountId,
+      source: "campfire-webhook",
+      log: (message) => params.log?.info?.(message),
+      handler: createCampfireWebhookHandler({
+        webhookSecret: params.webhookSecret,
+        onInbound: params.onInbound,
+        log: params.log,
+      }),
+    });
+  } catch (err) {
+    releaseReservation();
+    throw err;
+  }
+
+  return () => {
+    unregister?.();
+    releaseReservation();
+  };
 }
+
+export const __testing = {
+  resetCampfireWebhookPathReservations: () => {
+    activeCampfireWebhookPathReservations.clear();
+  },
+};
