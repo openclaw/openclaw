@@ -21,6 +21,7 @@ const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set([
   "session-key-api.js",
   "setup-api.js",
   "setup-entry.js",
+  "timeouts.js",
 ]);
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "bluebubbles",
