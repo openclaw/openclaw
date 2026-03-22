@@ -9,6 +9,10 @@ import {
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
+import {
+  pickMatchingExternalInterfaceAddress,
+  safeNetworkInterfaces,
+} from "../infra/network-interfaces.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import { isCarrierGradeNatIpv4Address, isRfc1918Ipv4Address } from "../shared/net/ip.js";
 import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
@@ -118,32 +122,12 @@ function pickIPv4Matching(
   networkInterfaces: () => ReturnType<typeof os.networkInterfaces>,
   matches: (address: string) => boolean,
 ): string | null {
-  let nets: ReturnType<typeof os.networkInterfaces>;
-  try {
-    nets = networkInterfaces();
-  } catch {
-    return null;
-  }
-  for (const entries of Object.values(nets)) {
-    if (!entries) {
-      continue;
-    }
-    for (const entry of entries) {
-      const family = entry?.family;
-      const isIpv4 = family === "IPv4";
-      if (!entry || entry.internal || !isIpv4) {
-        continue;
-      }
-      const address = entry.address?.trim() ?? "";
-      if (!address) {
-        continue;
-      }
-      if (matches(address)) {
-        return address;
-      }
-    }
-  }
-  return null;
+  return (
+    pickMatchingExternalInterfaceAddress(safeNetworkInterfaces(networkInterfaces), {
+      family: "IPv4",
+      matches,
+    }) ?? null
+  );
 }
 
 function pickLanIPv4(
