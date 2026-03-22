@@ -32,7 +32,14 @@ struct OpenClawChatComposer: View {
                     if self.viewModel.showsModelPicker {
                         self.modelPicker
                     }
-                    self.thinkingPicker
+                    if self.viewModel.showsImageResolutionPicker {
+                        self.imageResolutionPicker
+                        self.imageAspectRatioPicker
+                        self.imageVariationsPicker
+                    }
+                    if !self.viewModel.showsImageResolutionPicker {
+                        self.thinkingPicker
+                    }
                     Spacer()
                     self.refreshButton
                     self.attachmentPicker
@@ -85,6 +92,26 @@ struct OpenClawChatComposer: View {
         .onAppear {
             self.shouldFocusTextView = true
         }
+        .alert("Large File",
+               isPresented: Binding(
+                   get: { self.viewModel.pendingLargeFile != nil },
+                   set: { if !$0 { self.viewModel.pendingLargeFile = nil } }))
+        {
+            Button("Upload via File API") {
+                if let file = self.viewModel.pendingLargeFile {
+                    // TODO: Implement Google File API upload
+                    self.viewModel.errorText = "Google File API upload not yet implemented — file too large (\(file.sizeMB) MB)"
+                    self.viewModel.pendingLargeFile = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                self.viewModel.pendingLargeFile = nil
+            }
+        } message: {
+            if let file = self.viewModel.pendingLargeFile {
+                Text("\(file.fileName) is \(file.sizeMB) MB — exceeds the 20 MB inline limit.\nUpload via Google File API?")
+            }
+        }
         #endif
     }
 
@@ -106,7 +133,7 @@ struct OpenClawChatComposer: View {
         .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
-        .frame(maxWidth: 140, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var modelPicker: some View {
@@ -117,15 +144,78 @@ struct OpenClawChatComposer: View {
                 set: { next in self.viewModel.selectModel(next) }))
         {
             Text(self.viewModel.defaultModelLabel).tag(OpenClawChatViewModel.defaultModelSelectionID)
-            ForEach(self.viewModel.modelChoices) { model in
-                Text(model.displayLabel).tag(model.selectionID)
+            ForEach(self.viewModel.filteredModelChoices) { model in
+                Text(self.viewModel.friendlyName(for: model)).tag(model.selectionID)
             }
         }
         .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
-        .frame(maxWidth: 240, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .help("Model")
+    }
+
+    private var imageResolutionPicker: some View {
+        Picker(
+            "Resolution",
+            selection: Binding(
+                get: { self.viewModel.imageResolution },
+                set: { next in self.viewModel.imageResolution = next }))
+        {
+            Text("0.5K").tag("0.5K")
+            Text("1K").tag("1K")
+            Text("2K").tag("2K")
+            Text("4K").tag("4K")
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help("Output resolution")
+    }
+
+    private var imageAspectRatioPicker: some View {
+        Picker(
+            "Aspect Ratio",
+            selection: Binding(
+                get: { self.viewModel.imageAspectRatio },
+                set: { next in self.viewModel.imageAspectRatio = next }))
+        {
+            Text("1:1").tag("1:1")
+            Text("3:2").tag("3:2")
+            Text("2:3").tag("2:3")
+            Text("3:4").tag("3:4")
+            Text("4:3").tag("4:3")
+            Text("4:5").tag("4:5")
+            Text("5:4").tag("5:4")
+            Text("9:16").tag("9:16")
+            Text("16:9").tag("16:9")
+            Text("21:9").tag("21:9")
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help("Aspect ratio")
+    }
+
+    private var imageVariationsPicker: some View {
+        Picker(
+            "Variations",
+            selection: Binding(
+                get: { self.viewModel.imageVariations },
+                set: { next in self.viewModel.imageVariations = next }))
+        {
+            Text("1 Image").tag(1)
+            Text("2 Images").tag(2)
+            Text("3 Images").tag(3)
+            Text("4 Images").tag(4)
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help("Number of image variations to generate")
     }
 
     private var sessionPicker: some View {
@@ -144,7 +234,7 @@ struct OpenClawChatComposer: View {
         .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
-        .frame(maxWidth: 160, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .help("Session")
     }
 

@@ -4,6 +4,31 @@ import Observation
 import OSLog
 import UniformTypeIdentifiers
 
+/// Protocol for direct image generation (bypasses gateway).
+@MainActor
+public protocol DirectImageGenHandler: AnyObject {
+    func generateImage(
+        prompt: String,
+        model: String,
+        inputImage: Data?,
+        inputMimeType: String,
+        resolution: String,
+        aspectRatio: String
+    ) async throws -> DirectImageGenResult
+}
+
+public struct DirectImageGenResult: Sendable {
+    public let imageData: Data
+    public let mimeType: String
+    public let text: String?
+
+    public init(imageData: Data, mimeType: String, text: String?) {
+        self.imageData = imageData
+        self.mimeType = mimeType
+        self.text = text
+    }
+}
+
 #if canImport(AppKit)
 import AppKit
 #elseif canImport(UIKit)
@@ -20,6 +45,23 @@ public final class OpenClawChatViewModel {
     public private(set) var messages: [OpenClawChatMessage] = []
     public var input: String = ""
     public private(set) var thinkingLevel: String
+    public var imageResolution: String = "1K"
+    public var imageAspectRatio: String = "1:1"
+    public var imageVariations: Int = 1
+    public weak var directImageGenHandler: DirectImageGenHandler?
+    public private(set) var imageGenPhase: String?
+    public var pendingLargeFile: PendingLargeFile?
+
+    public struct PendingLargeFile {
+        public let data: Data
+        public let fileName: String
+        public let mimeType: String
+        public let url: URL?
+
+        public var sizeMB: String {
+            String(format: "%.1f", Double(self.data.count) / 1_000_000)
+        }
+    }
     public private(set) var modelSelectionID: String = "__default__"
     public private(set) var modelChoices: [OpenClawChatModelChoice] = []
     public private(set) var isLoading = false
@@ -185,6 +227,90 @@ public final class OpenClawChatViewModel {
 
     public var showsModelPicker: Bool {
         !self.modelChoices.isEmpty
+    }
+
+    /// Show resolution picker when an image generation model is selected.
+    public var showsImageResolutionPicker: Bool {
+        Self.isImageGenModel(self.modelSelectionID)
+    }
+
+    /// Known image generation model ID patterns.
+    private static let imageGenModelPatterns = ["image", "imagen"]
+
+    /// Nano Banana model IDs to keep in the dropdown.
+    private static let allowedImageGenModels = [
+        "gemini-3-pro-image-preview",
+        "gemini-3.1-flash-image-preview",
+    ]
+
+    static func friendlyModelName(_ model: OpenClawChatModelChoice) -> String {
+        let lower = model.modelID.lowercased()
+        // Image gen models: Nano Banana names
+        if lower.contains("gemini-3.1-flash-image-preview") || lower.contains("3.1-flash-image") {
+            return "🍌 Nano Banana 2 (Image)"
+        }
+        if lower.contains("gemini-3-pro-image-preview") || lower.contains("3-pro-image") {
+            return "🍌 Nano Banana Pro (Image)"
+        }
+        // Tag LLMs with provider
+        let provider = model.provider.lowercased()
+        if provider.contains("openai") {
+            return "💬 \(model.name.isEmpty ? model.modelID : model.name) (LLM)"
+        }
+        if provider.contains("anthropic") {
+            return "💬 \(model.name.isEmpty ? model.modelID : model.name) (LLM)"
+        }
+        if provider.contains("google") {
+            return "💬 \(model.name.isEmpty ? model.modelID : model.name) (LLM)"
+        }
+        return "💬 \(model.name.isEmpty ? model.modelID : model.name) (LLM)"
+    }
+
+    /// Build a descriptive image filename from a timestamp and a prompt excerpt.
+    /// Example: `20260322_143012_a_sunset_over_mountains.jpg`
+    private static func imageFileName(prompt: String, ext: String) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd_HHmmss"
+        let timestamp = formatter.string(from: Date())
+
+        // Sanitize prompt: lowercase, keep only alphanumerics/spaces, collapse whitespace, truncate
+        let slug = prompt
+            .lowercased()
+            .unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == " " }
+            .map { String($0) }.joined()
+            .split(separator: " ")
+            .prefix(8)
+            .joined(separator: "_")
+
+        if slug.isEmpty {
+            return "\(timestamp)_generated.\(ext)"
+        }
+        return "\(timestamp)_\(slug).\(ext)"
+    }
+
+    private static func isImageGenModel(_ modelID: String) -> Bool {
+        let lower = modelID.lowercased()
+        return self.imageGenModelPatterns.contains(where: { lower.contains($0) })
+    }
+
+    private static func isAllowedImageGenModel(_ modelID: String) -> Bool {
+        let lower = modelID.lowercased()
+        return self.allowedImageGenModels.contains(where: { lower.contains($0) })
+    }
+
+    /// Filtered model choices: keep all LLMs + only Nano Banana image gen models.
+    public func friendlyName(for model: OpenClawChatModelChoice) -> String {
+        Self.friendlyModelName(model)
+    }
+
+    public var filteredModelChoices: [OpenClawChatModelChoice] {
+        self.modelChoices.filter { model in
+            let isImageGen = Self.isImageGenModel(model.modelID)
+            if isImageGen {
+                return Self.isAllowedImageGenModel(model.modelID)
+            }
+            return true  // Keep all non-image-gen models (LLMs)
+        }
     }
 
     public var defaultModelLabel: String {
@@ -392,6 +518,18 @@ public final class OpenClawChatViewModel {
             return
         }
 
+        // Direct image generation: bypass gateway when an image gen model is selected
+        let debugMsg = "[APRICOT-DEBUG] Send check: modelSelectionID=\(self.modelSelectionID) isImageGen=\(Self.isImageGenModel(self.modelSelectionID)) hasHandler=\(self.directImageGenHandler != nil)"
+        NSLog("%@", debugMsg)
+        try? debugMsg.appending("\n").write(toFile: "/tmp/openclaw-debug.log", atomically: false, encoding: .utf8)
+        if Self.isImageGenModel(self.modelSelectionID), let handler = self.directImageGenHandler {
+            NSLog("[APRICOT-DEBUG] >>> Routing to DIRECT image gen!")
+            try? "[APRICOT-DEBUG] >>> Routing to DIRECT image gen!\n".write(toFile: "/tmp/openclaw-debug.log", atomically: false, encoding: .utf8)
+            await self.performDirectImageGen(prompt: trimmed, handler: handler)
+            return
+        }
+        try? "[APRICOT-DEBUG] >>> NOT routing to direct image gen, falling through to gateway\n".write(toFile: "/tmp/openclaw-debug.log", atomically: false, encoding: .utf8)
+
         let sessionKey = self.sessionKey
 
         guard self.healthOK else {
@@ -472,6 +610,156 @@ public final class OpenClawChatViewModel {
             self.clearPendingRun(runId)
             self.errorText = error.localizedDescription
             chatUILogger.error("chat.send failed \(error.localizedDescription, privacy: .public)")
+        }
+
+        self.isSending = false
+    }
+
+    private func performDirectImageGen(prompt: String, handler: DirectImageGenHandler) async {
+        self.isSending = true
+        self.errorText = nil
+        let messageText = prompt.isEmpty && !self.attachments.isEmpty ? "Generate image" : prompt
+        let resolution = self.imageResolution
+        let aspectRatio = self.imageAspectRatio
+
+        // Append user message to UI
+        var userContent: [OpenClawChatMessageContent] = [
+            OpenClawChatMessageContent(
+                type: "text", text: messageText,
+                thinking: nil, thinkingSignature: nil,
+                mimeType: nil, fileName: nil, content: nil,
+                id: nil, name: nil, arguments: nil),
+        ]
+        for att in self.attachments {
+            userContent.append(
+                OpenClawChatMessageContent(
+                    type: att.type, text: nil,
+                    thinking: nil, thinkingSignature: nil,
+                    mimeType: att.mimeType, fileName: att.fileName,
+                    content: AnyCodable(att.data.base64EncodedString()),
+                    id: nil, name: nil, arguments: nil))
+        }
+        self.messages.append(
+            OpenClawChatMessage(
+                id: UUID(), role: "user", content: userContent,
+                timestamp: Date().timeIntervalSince1970 * 1000))
+
+        // Get first image attachment
+        let inputImage = self.attachments.first?.data
+        let inputMimeType = self.attachments.first?.mimeType ?? "image/jpeg"
+
+        self.input = ""
+        let sentAttachments = self.attachments
+        self.attachments = []
+
+        // Show thinking indicator
+        self.pendingRuns.insert("imagegen")
+        self.imageGenPhase = "Preparing request…"
+
+        let dbg = { (msg: String) in
+            let line = "[performDirectImageGen] \(msg)\n"
+            if let data = line.data(using: .utf8),
+               let handle = FileHandle(forWritingAtPath: "/tmp/openclaw-debug.log") {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                handle.closeFile()
+            }
+        }
+
+        let totalVariations = max(1, min(4, self.imageVariations))
+        var successCount = 0
+        var lastError: Error?
+
+        for i in 1...totalVariations {
+            if totalVariations > 1 {
+                self.imageGenPhase = "Generating image \(i) of \(totalVariations)…"
+            } else {
+                self.imageGenPhase = "Generating image…"
+            }
+
+            do {
+                let result = try await handler.generateImage(
+                    prompt: messageText,
+                    model: self.modelSelectionID,
+                    inputImage: inputImage,
+                    inputMimeType: inputMimeType,
+                    resolution: resolution,
+                    aspectRatio: aspectRatio)
+
+                dbg("Variation \(i)/\(totalVariations): imageData=\(result.imageData.count) bytes, mimeType=\(result.mimeType)")
+
+                // Create assistant message with the generated image
+                var assistantContent: [OpenClawChatMessageContent] = []
+                let displayText: String
+                if totalVariations > 1 {
+                    displayText = (result.text?.isEmpty == false) ? result.text! : "Variation \(i) of \(totalVariations):"
+                } else {
+                    displayText = (result.text?.isEmpty == false) ? result.text! : "Generated image:"
+                }
+                assistantContent.append(
+                    OpenClawChatMessageContent(
+                        type: "text", text: displayText,
+                        thinking: nil, thinkingSignature: nil,
+                        mimeType: nil, fileName: nil, content: nil,
+                        id: nil, name: nil, arguments: nil))
+
+                // Build descriptive filename with variation index
+                let ext = result.mimeType == "image/png" ? "png" : "jpg"
+                let imageFileName: String
+                if totalVariations > 1 {
+                    let baseName = Self.imageFileName(prompt: messageText, ext: ext)
+                    imageFileName = baseName.replacingOccurrences(of: ".\(ext)", with: "_v\(i).\(ext)")
+                } else {
+                    imageFileName = Self.imageFileName(prompt: messageText, ext: ext)
+                }
+
+                let base64Str = result.imageData.base64EncodedString()
+                assistantContent.append(
+                    OpenClawChatMessageContent(
+                        type: "image", text: nil,
+                        thinking: nil, thinkingSignature: nil,
+                        mimeType: result.mimeType,
+                        fileName: imageFileName,
+                        content: AnyCodable(base64Str),
+                        id: nil, name: nil, arguments: nil))
+
+                self.messages.append(
+                    OpenClawChatMessage(
+                        id: UUID(), role: "assistant", content: assistantContent,
+                        timestamp: Date().timeIntervalSince1970 * 1000))
+
+                // Auto-save to configured folder
+                if let saveFolder = UserDefaults.standard.string(forKey: "openclaw.imageGenSaveFolder"),
+                   !saveFolder.isEmpty
+                {
+                    let url = URL(fileURLWithPath: saveFolder).appendingPathComponent(imageFileName)
+                    do {
+                        try result.imageData.write(to: url)
+                        dbg("Auto-saved variation \(i) to \(url.path)")
+                    } catch {
+                        dbg("Auto-save failed for variation \(i): \(error.localizedDescription)")
+                    }
+                }
+
+                successCount += 1
+            } catch {
+                dbg("Variation \(i)/\(totalVariations) FAILED: \(error.localizedDescription)")
+                lastError = error
+                // Continue to next variation on safety filter blocks; stop on hard errors like rate limits
+                let desc = error.localizedDescription.lowercased()
+                if desc.contains("rate limit") || desc.contains("rate_limit") {
+                    break  // No point retrying more variations if rate limited
+                }
+            }
+        }
+
+        self.pendingRuns.remove("imagegen")
+        self.imageGenPhase = nil
+
+        if successCount == 0, let error = lastError {
+            self.errorText = error.localizedDescription
+        } else if successCount < totalVariations, let error = lastError {
+            self.errorText = "\(successCount) of \(totalVariations) images generated. Last error: \(error.localizedDescription)"
         }
 
         self.isSending = false
@@ -999,8 +1287,8 @@ public final class OpenClawChatViewModel {
     }
 
     private func addImageAttachment(url: URL?, data: Data, fileName: String, mimeType: String) async {
-        if data.count > 5_000_000 {
-            self.errorText = "Attachment \(fileName) exceeds 5 MB limit"
+        if data.count > 20_000_000 {
+            self.pendingLargeFile = PendingLargeFile(data: data, fileName: fileName, mimeType: mimeType, url: url)
             return
         }
 

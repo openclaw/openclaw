@@ -250,7 +250,13 @@ public struct OpenClawChatView: View {
                     alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
         }
 
-        if self.viewModel.pendingRunCount > 0 {
+        if let phase = self.viewModel.imageGenPhase {
+            HStack {
+                ChatImageGenProgressBubble(phase: phase, style: self.style)
+                    .equatable()
+                Spacer(minLength: 0)
+            }
+        } else if self.viewModel.pendingRunCount > 0 {
             HStack {
                 ChatTypingIndicatorBubble(style: self.style)
                     .equatable()

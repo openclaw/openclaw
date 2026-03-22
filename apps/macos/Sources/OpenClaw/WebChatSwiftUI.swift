@@ -232,6 +232,7 @@ final class WebChatSwiftUIWindowController {
             onThinkingLevelChanged: { level in
                 UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
             })
+        vm.directImageGenHandler = GoogleImageGenService.shared
         let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)
         self.hosting = NSHostingController(rootView: OpenClawChatView(
             viewModel: vm,
@@ -588,5 +589,31 @@ extension ChatWindowToolbarDelegate: NSMenuDelegate {
             talkItem.state = enabled ? .on : .off
         }
 
+    }
+}
+
+
+// MARK: - Direct Image Generation Bridge
+
+extension GoogleImageGenService: DirectImageGenHandler {
+    public func generateImage(
+        prompt: String,
+        model: String,
+        inputImage: Data?,
+        inputMimeType: String,
+        resolution: String,
+        aspectRatio: String
+    ) async throws -> DirectImageGenResult {
+        let result = try await self.generate(
+            prompt: prompt,
+            model: model,
+            inputImage: inputImage,
+            inputMimeType: inputMimeType,
+            resolution: resolution,
+            aspectRatio: aspectRatio)
+        return DirectImageGenResult(
+            imageData: result.imageData,
+            mimeType: result.mimeType,
+            text: result.text)
     }
 }

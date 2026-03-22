@@ -296,7 +296,7 @@ private struct ChatMessageBody: View {
     private var inlineAttachments: [OpenClawChatMessageContent] {
         self.message.content.filter { content in
             switch content.type ?? "text" {
-            case "file", "attachment":
+            case "file", "attachment", "image":
                 true
             default:
                 false
@@ -406,19 +406,113 @@ private struct AttachmentRow: View {
     let att: OpenClawChatMessageContent
     let isUser: Bool
 
+    @State private var isHovered = false
+
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "paperclip")
-            Text(self.att.fileName ?? "Attachment")
-                .font(.system(size: 11, design: .monospaced))
-                .lineLimit(1)
-                .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
-            Spacer()
+        if let image = self.decodedImage {
+            #if os(macOS)
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxHeight: 400)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+                .overlay(alignment: .bottomTrailing) {
+                    if self.isHovered {
+                        HStack(spacing: 6) {
+                            Button {
+                                let pb = NSPasteboard.general
+                                pb.clearContents()
+                                pb.writeObjects([image])
+                            } label: {
+                                Image(systemName: "doc.on.doc")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Copy Image")
+
+                            Button {
+                                self.saveImage(image)
+                            } label: {
+                                Image(systemName: "square.and.arrow.down")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Save Image…")
+                        }
+                        .foregroundStyle(.white)
+                        .padding(6)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .padding(8)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    }
+                }
+                .onHover { hovering in
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        self.isHovered = hovering
+                    }
+                }
+                .contextMenu {
+                    Button("Copy Image") {
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.writeObjects([image])
+                    }
+                    Button("Save Image…") {
+                        self.saveImage(image)
+                    }
+                }
+            #else
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxHeight: 400)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            #endif
+        } else {
+            HStack(spacing: 8) {
+                Image(systemName: "paperclip")
+                Text(self.att.fileName ?? "Attachment")
+                    .font(.system(size: 11, design: .monospaced))
+                    .lineLimit(1)
+                    .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
+                Spacer()
+            }
+            .padding(10)
+            .background(self.isUser ? Color.white.opacity(0.2) : Color.black.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
-        .padding(10)
-        .background(self.isUser ? Color.white.opacity(0.2) : Color.black.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
+
+    private var decodedImage: OpenClawPlatformImage? {
+        guard let base64 = self.att.content?.value as? String,
+              let data = Data(base64Encoded: base64)
+        else { return nil }
+        #if os(macOS)
+        return NSImage(data: data)
+        #else
+        return UIImage(data: data)
+        #endif
+    }
+
+    #if os(macOS)
+    private func saveImage(_ image: NSImage) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.jpeg, .png]
+        panel.nameFieldStringValue = self.att.fileName ?? "generated_image.jpg"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            if let tiff = image.tiffRepresentation,
+               let rep = NSBitmapImageRep(data: tiff),
+               let data = rep.representation(using: url.pathExtension == "png" ? .png : .jpeg, properties: [:])
+            {
+                try? data.write(to: url)
+            }
+        }
+    }
+    #endif
 }
 
 private struct ToolCallCard: View {
@@ -553,6 +647,64 @@ struct ChatTypingIndicatorBubble: View {
 extension ChatTypingIndicatorBubble: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.style == rhs.style
+    }
+}
+
+// MARK: - Image Generation Progress Bubble
+
+@MainActor
+struct ChatImageGenProgressBubble: View {
+    let phase: String
+    let style: OpenClawChatView.Style
+
+    @State private var shimmerOffset: CGFloat = -1
+
+    private static let accentColor = Color(red: 0.6, green: 0.4, blue: 1.0) // purple tint for image gen
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(Self.accentColor)
+            Text("🎨 \(self.phase)")
+                .font(.custom("Courier New Bold", size: 10))
+                .foregroundStyle(Self.accentColor)
+            ElapsedTimerView()
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, self.style == .standard ? 8 : 6)
+        .padding(.horizontal, self.style == .standard ? 12 : 14)
+        .background(
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(OpenClawChatTheme.assistantBubble)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Self.accentColor.opacity(0),
+                                Self.accentColor.opacity(0.08),
+                                Self.accentColor.opacity(0),
+                            ],
+                            startPoint: UnitPoint(x: self.shimmerOffset, y: 0.5),
+                            endPoint: UnitPoint(x: self.shimmerOffset + 0.4, y: 0.5)))
+            })
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Self.accentColor.opacity(0.15), lineWidth: 1))
+        .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+        .focusable(false)
+        .onAppear {
+            withAnimation(.linear(duration: 1.8).repeatForever(autoreverses: false)) {
+                self.shimmerOffset = 1.4
+            }
+        }
+    }
+}
+
+extension ChatImageGenProgressBubble: @MainActor Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.phase == rhs.phase && lhs.style == rhs.style
     }
 }
 
