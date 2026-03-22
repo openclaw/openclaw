@@ -117,22 +117,27 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
   if (!webhookId) {
     return false;
   }
+  const threadId = params.threadId?.trim() || "";
+  if (!threadId) {
+    return false;
+  }
   const boundWebhookId =
     typeof params.threadBinding?.metadata?.webhookId === "string"
       ? params.threadBinding.metadata.webhookId.trim()
       : "";
   if (!boundWebhookId) {
-    const threadId = params.threadId?.trim() || "";
-    if (!threadId) {
-      return false;
-    }
-    return isRecentlyUnboundThreadWebhookMessage({
-      accountId: params.accountId,
-      threadId,
-      webhookId,
-    });
+    return (
+      isRecentlyUnboundThreadWebhookMessage({
+        accountId: params.accountId,
+        threadId,
+        webhookId,
+      }) || Boolean(params.threadBinding)
+    );
   }
-  return webhookId === boundWebhookId;
+  if (webhookId === boundWebhookId) {
+    return true;
+  }
+  return Boolean(params.threadBinding);
 }
 
 function mergeFetchedDiscordMessage(base: Message, fetched: APIMessage): Message {

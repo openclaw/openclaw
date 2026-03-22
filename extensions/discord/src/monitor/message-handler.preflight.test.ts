@@ -777,24 +777,27 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
   it("returns true when inbound webhook id matches the bound thread webhook", () => {
     expect(
       shouldIgnoreBoundThreadWebhookMessage({
+        threadId: "thread-1",
         webhookId: "wh-1",
         threadBinding: createThreadBinding(),
       }),
     ).toBe(true);
   });
 
-  it("returns false when webhook ids differ", () => {
+  it("returns true when a bound thread receives a different webhook id", () => {
     expect(
       shouldIgnoreBoundThreadWebhookMessage({
+        threadId: "thread-1",
         webhookId: "wh-other",
         threadBinding: createThreadBinding(),
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("returns false when there is no bound thread webhook", () => {
+  it("returns true when there is a bound thread but no recorded bound webhook id", () => {
     expect(
       shouldIgnoreBoundThreadWebhookMessage({
+        threadId: "thread-1",
         webhookId: "wh-1",
         threadBinding: createThreadBinding({
           metadata: {
@@ -802,7 +805,7 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
           },
         }),
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("returns true for recently unbound thread webhook echoes", async () => {

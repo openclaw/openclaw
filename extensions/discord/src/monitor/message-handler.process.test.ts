@@ -52,6 +52,9 @@ const dispatchInboundMessage = vi.hoisted(() =>
   })),
 );
 const recordInboundSession = vi.hoisted(() => vi.fn(async () => {}));
+const typingMocks = vi.hoisted(() => ({
+  sendTyping: vi.fn(async () => {}),
+}));
 const configSessionsMocks = vi.hoisted(() => ({
   readSessionUpdatedAt: vi.fn(() => undefined),
   resolveStorePath: vi.fn(() => "/tmp/openclaw-discord-process-test-sessions.json"),
@@ -84,6 +87,10 @@ vi.mock("../draft-stream.js", () => ({
 
 vi.mock("./reply-delivery.js", () => ({
   deliverDiscordReply: deliveryMocks.deliverDiscordReply,
+}));
+
+vi.mock("./typing.js", () => ({
+  sendTyping: typingMocks.sendTyping,
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {

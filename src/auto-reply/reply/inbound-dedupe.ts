@@ -5,6 +5,8 @@ import type { MsgContext } from "../templating.js";
 
 const DEFAULT_INBOUND_DEDUPE_TTL_MS = 20 * 60_000;
 const DEFAULT_INBOUND_DEDUPE_MAX = 5000;
+const DISCORD_THREAD_CONTENT_CLONE_DEDUPE_TTL_MS = 15_000;
+const DISCORD_THREAD_CONTENT_CLONE_DEDUPE_MAX = 2000;
 
 /**
  * Keep inbound dedupe shared across bundled chunks so the same provider
@@ -16,6 +18,16 @@ const inboundDedupeCache: DedupeCache = resolveGlobalDedupeCache(INBOUND_DEDUPE_
   ttlMs: DEFAULT_INBOUND_DEDUPE_TTL_MS,
   maxSize: DEFAULT_INBOUND_DEDUPE_MAX,
 });
+const DISCORD_THREAD_CONTENT_CLONE_CACHE_KEY = Symbol.for(
+  "openclaw.inboundDiscordThreadContentCloneCache",
+);
+const inboundDiscordThreadContentCloneCache: DedupeCache = resolveGlobalDedupeCache(
+  DISCORD_THREAD_CONTENT_CLONE_CACHE_KEY,
+  {
+    ttlMs: DISCORD_THREAD_CONTENT_CLONE_DEDUPE_TTL_MS,
+    maxSize: DISCORD_THREAD_CONTENT_CLONE_DEDUPE_MAX,
+  },
+);
 
 const normalizeProvider = (value?: string | null) => value?.trim().toLowerCase() || "";
 
@@ -58,22 +70,83 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
   return [provider, accountId, sessionScope, peerId, threadId, messageId].filter(Boolean).join("|");
 }
 
+function normalizeInboundContentCloneText(value: string): string {
+  return value
+    .replace(/<@!?\d+>/g, "@")
+    .replace(/<@&\d+>/g, "@role")
+    .replace(/<#\d+>/g, "#channel")
+    .replace(/https?:\/\/\S+/g, (match) => match.toLowerCase())
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function buildDiscordThreadContentCloneDedupeKey(ctx: MsgContext): string | null {
+  const provider = normalizeProvider(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface);
+  if (provider !== "discord") {
+    return null;
+  }
+  const threadId =
+    ctx.MessageThreadId !== undefined && ctx.MessageThreadId !== null
+      ? String(ctx.MessageThreadId).trim()
+      : "";
+  if (!threadId) {
+    return null;
+  }
+  const sessionScope = resolveInboundDedupeSessionScope(ctx);
+  if (!sessionScope.startsWith("agent:")) {
+    return null;
+  }
+  const peerId = resolveInboundPeerId(ctx);
+  if (!peerId) {
+    return null;
+  }
+  const body =
+    typeof ctx.BodyForCommands === "string"
+      ? ctx.BodyForCommands
+      : typeof ctx.CommandBody === "string"
+        ? ctx.CommandBody
+        : typeof ctx.RawBody === "string"
+          ? ctx.RawBody
+          : typeof ctx.Body === "string"
+            ? ctx.Body
+            : "";
+  const normalizedBody = normalizeInboundContentCloneText(body);
+  if (!normalizedBody) {
+    return null;
+  }
+  return [provider, ctx.AccountId?.trim() ?? "", sessionScope, peerId, threadId, normalizedBody].join(
+    "|",
+  );
+}
+
 export function shouldSkipDuplicateInbound(
   ctx: MsgContext,
   opts?: { cache?: DedupeCache; now?: number },
 ): boolean {
   const key = buildInboundDedupeKey(ctx);
-  if (!key) {
+  if (key) {
+    const cache = opts?.cache ?? inboundDedupeCache;
+    const skipped = cache.check(key, opts?.now);
+    if (skipped) {
+      if (shouldLogVerbose()) {
+        logVerbose(`inbound dedupe: skipped ${key}`);
+      }
+      return true;
+    }
+  }
+  const contentCloneKey = buildDiscordThreadContentCloneDedupeKey(ctx);
+  if (!contentCloneKey) {
     return false;
   }
-  const cache = opts?.cache ?? inboundDedupeCache;
-  const skipped = cache.check(key, opts?.now);
-  if (skipped && shouldLogVerbose()) {
-    logVerbose(`inbound dedupe: skipped ${key}`);
+  const skippedClone = inboundDiscordThreadContentCloneCache.check(contentCloneKey, opts?.now);
+  if (skippedClone && shouldLogVerbose()) {
+    logVerbose(`inbound dedupe: skipped discord thread content clone ${contentCloneKey}`);
   }
-  return skipped;
+  return skippedClone;
 }
 
 export function resetInboundDedupe(): void {
   inboundDedupeCache.clear();
+  inboundDiscordThreadContentCloneCache.clear();
 }

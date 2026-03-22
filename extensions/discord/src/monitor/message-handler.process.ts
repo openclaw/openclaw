@@ -436,6 +436,7 @@ export async function processDiscordMessage(
   const typingChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
+  const suppressDiscordTyping = Boolean(sender.isPluralKit && boundSessionKey);
 
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg,
@@ -443,8 +444,16 @@ export async function processDiscordMessage(
     channel: "discord",
     accountId: route.accountId,
     typing: {
-      start: () => sendTyping({ client, channelId: typingChannelId }),
+      start: () => {
+        if (suppressDiscordTyping) {
+          return Promise.resolve();
+        }
+        return sendTyping({ client, channelId: typingChannelId });
+      },
       onStartError: (err) => {
+        if (suppressDiscordTyping) {
+          return;
+        }
         logTypingFailure({
           log: logVerbose,
           channel: "discord",
