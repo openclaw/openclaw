@@ -288,8 +288,9 @@ export function enableConsoleCapture(): void {
       } catch {
         // never block console output on logging failures
       }
-      if (loggingState.forceConsoleToStderr) {
-        // in RPC/JSON mode, keep stdout clean
+      if (loggingState.forceConsoleToStderr && !isJsonPayload(trimmed)) {
+        // In --json mode, route diagnostic logs to stderr but let JSON
+        // payloads (the actual command output) through to stdout via orig().
         try {
           const line = timestamp ? `${timestamp} ${formatted}` : formatted;
           process.stderr.write(`${line}\n`);
