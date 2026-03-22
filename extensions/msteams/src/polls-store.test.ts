@@ -33,6 +33,9 @@ describe.each([
       selections: ["0", "1"],
     });
 
-    expect(poll?.votes["user-1"]).toEqual(["0"]);
+    if (!poll) {
+      throw new Error("poll store did not return the updated poll");
+    }
+    expect(poll.votes["user-1"]).toEqual(["0"]);
   });
 });
