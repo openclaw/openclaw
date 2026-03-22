@@ -7,6 +7,14 @@ import { registerBlueBubblesWebhookTarget } from "./monitor.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
 
+export type WebhookRequestParams = {
+  method?: string;
+  url?: string;
+  body?: unknown;
+  headers?: Record<string, string>;
+  remoteAddress?: string;
+};
+
 export function createMockAccount(
   overrides: Partial<ResolvedBlueBubblesAccount["config"]> = {},
 ): ResolvedBlueBubblesAccount {
@@ -63,6 +71,30 @@ export function createMockRequest(
   return req;
 }
 
+export function createMockRequestForTest(params: WebhookRequestParams = {}): IncomingMessage {
+  return createMockRequest(
+    params.method ?? "POST",
+    params.url ?? "/bluebubbles-webhook",
+    params.body ?? {},
+    params.headers,
+    params.remoteAddress,
+  );
+}
+
+export function createHangingWebhookRequestForTest(
+  url = "/bluebubbles-webhook?password=test-password",
+  remoteAddress = "127.0.0.1",
+) {
+  const req = new EventEmitter() as IncomingMessage;
+  const destroyMock = vi.fn();
+  req.method = "POST";
+  req.url = url;
+  req.headers = {};
+  req.destroy = destroyMock as unknown as IncomingMessage["destroy"];
+  (req as unknown as { socket: { remoteAddress: string } }).socket = { remoteAddress };
+  return { req, destroyMock };
+}
+
 export function createMockResponse(): ServerResponse & { body: string; statusCode: number } {
   const res = {
     statusCode: 200,
@@ -81,20 +113,8 @@ export async function flushAsync() {
   }
 }
 
-export async function dispatchWebhookPayloadForTest(params?: {
-  method?: string;
-  url?: string;
-  body?: unknown;
-  headers?: Record<string, string>;
-  remoteAddress?: string;
-}) {
-  const req = createMockRequest(
-    params?.method ?? "POST",
-    params?.url ?? "/bluebubbles-webhook",
-    params?.body ?? {},
-    params?.headers,
-    params?.remoteAddress,
-  );
+export async function dispatchWebhookPayloadForTest(params: WebhookRequestParams = {}) {
+  const req = createMockRequestForTest(params);
   const res = createMockResponse();
   const handled = await handleBlueBubblesWebhookRequest(req, res);
   await flushAsync();
@@ -147,4 +167,60 @@ export function registerWebhookTargetsForTest(params: {
       statusSink,
     }),
   );
+}
+
+export function setupWebhookTargetForTest(params: {
+  createCore: () => PluginRuntime;
+  core?: PluginRuntime;
+  account?: ResolvedBlueBubblesAccount;
+  config?: OpenClawConfig;
+  path?: string;
+  statusSink?: (event: unknown) => void;
+  runtime?: {
+    log: (...args: unknown[]) => unknown;
+    error: (...args: unknown[]) => unknown;
+  };
+}) {
+  const account = params.account ?? createMockAccount();
+  const config = params.config ?? {};
+  const core = params.core ?? params.createCore();
+  const unregister = registerWebhookTargetForTest({
+    core,
+    account,
+    config,
+    path: params.path,
+    statusSink: params.statusSink,
+    runtime: params.runtime,
+  });
+  return { account, config, core, unregister };
+}
+
+export function setupWebhookTargetsForTest(params: {
+  createCore: () => PluginRuntime;
+  core?: PluginRuntime;
+  accounts: Array<{
+    account: ResolvedBlueBubblesAccount;
+    statusSink?: (event: unknown) => void;
+  }>;
+  config?: OpenClawConfig;
+  path?: string;
+  runtime?: {
+    log: (...args: unknown[]) => unknown;
+    error: (...args: unknown[]) => unknown;
+  };
+}) {
+  const core = params.core ?? params.createCore();
+  const unregisterFns = registerWebhookTargetsForTest({
+    core,
+    accounts: params.accounts,
+    config: params.config,
+    path: params.path,
+    runtime: params.runtime,
+  });
+  const unregister = () => {
+    for (const unregisterFn of unregisterFns) {
+      unregisterFn();
+    }
+  };
+  return { core, unregister };
 }
