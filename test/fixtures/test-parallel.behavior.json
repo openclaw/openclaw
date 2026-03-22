@@ -1,6 +1,6 @@
 {
   "base": {
-    "threadSingleton": [
+    "threadPinned": [
       {
         "file": "src/commands/backup.test.ts",
         "reason": "Measured ~16% faster under threads than forks on base config after removing process.chdir() from the test."
@@ -23,10 +23,10 @@
       },
       {
         "file": "src/secrets/runtime.integration.test.ts",
-        "reason": "Passes alone but flakes in the batched singleton fork lane; keep it in a dedicated fork worker."
+        "reason": "Passes alone but flakes in the shared fork lane; keep it in a dedicated fork worker."
       }
     ],
-    "singletonIsolated": [
+    "forkBatched": [
       {
         "file": "src/plugins/provider-wizard.test.ts",
         "reason": "Retained ~318 MiB in an isolated memory trace and is safer outside the shared unit-fast lane."
@@ -76,48 +76,8 @@
         "reason": "Plugin contract registry coverage retained a large cross-plugin graph in both failing unit-fast shards."
       },
       {
-        "file": "src/acp/persistent-bindings.test.ts",
-        "reason": "Persistent bindings coverage retained a large unit-fast heap spike on Linux CI and is safer outside the shared lane."
-      },
-      {
-        "file": "src/channels/plugins/setup-wizard-helpers.test.ts",
-        "reason": "Setup wizard helper coverage retained the largest shared unit-fast heap spike on Linux Node 24 CI."
-      },
-      {
-        "file": "src/cli/config-cli.integration.test.ts",
-        "reason": "Config CLI integration coverage retained a large shared unit-fast heap spike on Linux CI."
-      },
-      {
-        "file": "src/config/plugin-auto-enable.test.ts",
-        "reason": "Plugin auto-enable coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
-      },
-      {
-        "file": "src/cron/service.runs-one-shot-main-job-disables-it.test.ts",
-        "reason": "Passes alone on shared threads, but flakes in the full shared unit stream and stays safer on the singleton lane."
-      },
-      {
-        "file": "src/cron/service.issue-regressions.test.ts",
-        "reason": "Issue regression cron coverage retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 22 and Node 24 OOM lanes."
-      },
-      {
-        "file": "src/memory/qmd-manager.test.ts",
-        "reason": "QMD manager coverage retained recurring shared unit-fast heap spikes across Linux CI lanes."
-      },
-      {
-        "file": "src/secrets/apply.test.ts",
-        "reason": "Secrets apply coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
-      },
-      {
         "file": "src/tui/tui-command-handlers.test.ts",
         "reason": "TUI command handler coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
-      },
-      {
-        "file": "src/node-host/invoke-system-run.test.ts",
-        "reason": "Missing from unit timings and retained the largest shared unit-fast heap spike across the March 20, 2026 Linux Node 22 and Node 24 OOM lanes."
-      },
-      {
-        "file": "src/media-understanding/apply.test.ts",
-        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike across the March 20, 2026 Linux Node 22 and Node 24 OOM lanes."
       },
       {
         "file": "src/tui/tui-event-handlers.test.ts",
@@ -132,7 +92,7 @@
         "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
       }
     ],
-    "threadSingleton": [
+    "threadPinned": [
       {
         "file": "test/git-hooks-pre-commit.test.ts",
         "reason": "Measured ~12% faster under threads than forks on base config while keeping the file green."
@@ -790,10 +750,10 @@
         "reason": "Terminates cleanly under threads, but not process forks on this host."
       }
     ],
-    "vmForkSingleton": []
+    "vmForkPinned": []
   },
   "extensions": {
-    "singletonIsolated": [
+    "isolated": [
       {
         "file": "extensions/bluebubbles/src/setup-surface.test.ts",
         "reason": "Loads the setup-wizard/plugin-sdk graph and retained ~576 MiB in an isolated memory trace."
