@@ -1,0 +1,73 @@
+{
+  "id": "openbrain-native",
+  "name": "OpenBrain Native",
+  "description": "First-class OpenBrain MCP tools without shell wrappers",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "OpenBrain MCP HTTP endpoint URL"
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "Optional bearer token if endpoint expects Authorization header"
+      },
+      "headers": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "searchToolName": {
+        "type": "string",
+        "default": "search_thoughts"
+      },
+      "captureToolName": {
+        "type": "string",
+        "default": "capture_thought"
+      },
+      "listToolName": {
+        "type": "string",
+        "default": "list_thoughts"
+      },
+      "defaultLimit": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 100,
+        "default": 8
+      },
+      "timeoutMs": {
+        "type": "number",
+        "minimum": 1000,
+        "maximum": 120000,
+        "default": 25000
+      },
+      "envelopeMode": {
+        "type": "boolean",
+        "default": true,
+        "description": "When true, embeds category/tags/source metadata in a stable OBMETA v1 text envelope for MCP servers that only accept content"
+      }
+    },
+    "required": [
+      "url"
+    ]
+  },
+  "uiHints": {
+    "url": {
+      "label": "OpenBrain MCP URL",
+      "help": "HTTP MCP endpoint for OpenBrain (can include ?key=... if your deployment uses URL keys)",
+      "placeholder": "https://.../open-brain-mcp?key=..."
+    },
+    "apiKey": {
+      "label": "API Key",
+      "sensitive": true,
+      "help": "Optional bearer token for Authorization header"
+    },
+    "envelopeMode": {
+      "label": "Metadata envelope mode",
+      "help": "Enable OBMETA v1 text envelope fallback for servers without structured capture metadata"
+    }
+  }
+}

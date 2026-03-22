@@ -1,0 +1,11 @@
+{
+  "name": "@openclaw/openbrain-native",
+  "version": "1.0.0",
+  "description": "Native OpenBrain MCP bridge tools for OpenClaw",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
