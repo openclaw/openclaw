@@ -3,13 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import "./test-helpers/fast-core-tools.js";
 import {
   getCallGatewayMock,
   getSessionsSpawnTool,
   resetSessionsSpawnConfigOverride,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
+import "./test-helpers/fast-core-tools.js";
+import { SESSIONS_SPAWN_FAILURE_BUDGET_LIMIT } from "./sessions-spawn-failure-guard.js";
 
 const callGatewayMock = getCallGatewayMock();
 
@@ -84,6 +85,15 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       requesterAgentIdOverride: "main",
     });
     return tool.execute(callId, { task: "do thing", agentId, sandbox });
+  }
+
+  async function executeSpawnRaw(callId: string, args: Record<string, unknown>) {
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+      requesterAgentIdOverride: "main",
+    });
+    return tool.execute(callId, args);
   }
 
   async function executeSpawnFromRequester(params: {
@@ -203,6 +213,35 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("returns a validation error when task is missing", async () => {
+    const result = await executeSpawnRaw("call-missing-task", {});
+    const details = result.details as { status?: string; error?: string };
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("task required");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks repeated schema-shape failures via the global failure budget", async () => {
+    for (let idx = 0; idx < SESSIONS_SPAWN_FAILURE_BUDGET_LIMIT - 1; idx += 1) {
+      const result = await executeSpawnRaw(`call-invalid-mode-${idx}`, {
+        task: "do thing",
+        mode: "invalid-mode",
+      });
+      const details = result.details as { status?: string; error?: string };
+      expect(details.status).toBe("error");
+      expect(details.error).toContain('mode must be "run" or "session"');
+    }
+
+    const blocked = await executeSpawnRaw("call-invalid-mode-blocked", {
+      task: "do thing",
+      mode: "invalid-mode",
+    });
+    const blockedDetails = blocked.details as { status?: string; error?: string };
+    expect(blockedDetails.status).toBe("forbidden");
+    expect(blockedDetails.error).toContain("temporarily blocked for this session");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("allows Scout from an unconfigured specialist requester only", async () => {
     const workspaces = await createReadyWorkspaces(["scout"]);
     setSessionsSpawnConfigOverride({
@@ -274,6 +313,58 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("surfaces unavailable allowed helpers and suppresses repeated allowlist retry churn", async () => {
+    const workspaces = await createReadyWorkspaces(["main", "scout"]);
+    await fs.rm(path.join(workspaces.scout, "AGENTS.md"));
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            workspace: workspaces.main,
+            subagents: {
+              allowAgents: ["scout"],
+            },
+          },
+          {
+            id: "scout",
+            workspace: workspaces.scout,
+          },
+        ],
+      },
+    });
+
+    const first = await executeSpawn("call9a", "reverend-run");
+    const firstDetails = first.details as { status?: string; error?: string };
+    expect(firstDetails.status).toBe("forbidden");
+    expect(firstDetails.error).toContain(
+      "agentId is not allowed for sessions_spawn (allowed: scout)",
+    );
+    expect(firstDetails.error).toContain('Do not retry variants for "reverend-run"');
+    expect(firstDetails.error).toContain("Allowed ready fallback agents: none.");
+    expect(firstDetails.error).toContain("Allowed but unavailable targets: scout");
+    expect(firstDetails.error).toContain("workspace is missing AGENTS.md");
+
+    const second = await executeSpawn("call9b", "reverend-run");
+    const secondDetails = second.details as { status?: string; error?: string };
+    expect(secondDetails.status).toBe("forbidden");
+    expect(secondDetails.error).toContain(
+      'Skipping repeated sessions_spawn retry for "reverend-run"',
+    );
+    expect(secondDetails.error).toContain(
+      "agentId is not allowed for sessions_spawn (allowed: scout)",
+    );
+    expect(
+      callGatewayMock.mock.calls.some(
+        ([request]) => (request as { method?: string })?.method === "agent",
+      ),
+    ).toBe(false);
+  });
+
   it("sessions_spawn allows cross-agent spawning when configured", async () => {
     await expectAllowedSpawn({
       allowAgents: ["beta"],
@@ -299,6 +390,44 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       callId: "call10",
       acceptedAt: 5200,
     });
+  });
+
+  it("includes ready fallback agents when the requested helper workspace is not ready", async () => {
+    const workspaces = await createReadyWorkspaces(["main", "scout", "reverend-run"]);
+    await fs.rm(path.join(workspaces.scout, "AGENTS.md"));
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            workspace: workspaces.main,
+            subagents: {
+              allowAgents: ["scout", "reverend-run"],
+            },
+          },
+          {
+            id: "scout",
+            workspace: workspaces.scout,
+          },
+          {
+            id: "reverend-run",
+            workspace: workspaces["reverend-run"],
+          },
+        ],
+      },
+    });
+
+    const result = await executeSpawn("call10a", "scout");
+    const details = result.details as { status?: string; error?: string };
+    expect(details.status).toBe("error");
+    expect(details.error).toContain('agentId "scout" is not workspace-backed');
+    expect(details.error).toContain("workspace is missing AGENTS.md");
+    expect(details.error).toContain('Do not retry variants for "scout"');
+    expect(details.error).toContain("Allowed ready fallback agents: reverend-run.");
   });
 
   it("forbids sandboxed cross-agent spawns that would unsandbox the child", async () => {

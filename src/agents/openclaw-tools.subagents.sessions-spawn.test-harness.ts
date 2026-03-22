@@ -1,4 +1,6 @@
 import { vi, type Mock } from "vitest";
+import { resetSessionsSpawnDedupForTests } from "./sessions-spawn-dedup.js";
+import { resetSessionsSpawnFailureGuardForTests } from "./sessions-spawn-failure-guard.js";
 
 type SessionsSpawnTestConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
 type CreateSessionsSpawnTool =
@@ -46,6 +48,8 @@ export function findGatewayRequest(method: string): GatewayRequest | undefined {
 
 export function resetSessionsSpawnConfigOverride(): void {
   hoisted.state.configOverride = hoisted.defaultConfigOverride;
+  resetSessionsSpawnDedupForTests();
+  resetSessionsSpawnFailureGuardForTests();
 }
 
 export function setSessionsSpawnConfigOverride(next: SessionsSpawnTestConfig): void {

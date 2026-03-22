@@ -1,11 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
+import {
+  compact as runPiCompaction,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type FileOperations,
+} from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory/query-expansion.js";
+import {
+  runTargetBudgetCompaction,
+  type CompactionPreparationLike,
+  type CompactionResultLike,
+} from "../compaction-target-budget.js";
 import {
   BASE_CHUNK_RATIO,
   type CompactionSummarizationInstructions,
@@ -699,6 +709,240 @@ async function readWorkspaceContextForSummary(): Promise<string> {
   }
 }
 
+async function buildSafeguardCompactionResult(params: {
+  preparation: CompactionPreparationLike;
+  signal: AbortSignal;
+  model: NonNullable<ExtensionContext["model"]>;
+  apiKey: string;
+  runtime: ReturnType<typeof getCompactionSafeguardRuntime>;
+  customInstructions?: string;
+}): Promise<CompactionResultLike<{ readFiles: string[]; modifiedFiles: string[] }>> {
+  const { preparation, signal, model, apiKey, runtime, customInstructions } = params;
+  const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
+  const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
+  const toolFailures = collectToolFailures([
+    ...preparation.messagesToSummarize,
+    ...preparation.turnPrefixMessages,
+  ]);
+  const toolFailureSection = formatToolFailuresSection(toolFailures);
+  const summarizationInstructions = {
+    identifierPolicy: runtime?.identifierPolicy,
+    identifierInstructions: runtime?.identifierInstructions,
+  };
+  const identifierPolicy = runtime?.identifierPolicy ?? "strict";
+  const modelContextWindow = resolveContextWindowTokens(model);
+  const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
+  const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
+  let messagesToSummarize = preparation.messagesToSummarize;
+  const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
+  const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
+  const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
+  const structuredInstructions = buildCompactionStructureInstructions(
+    customInstructions,
+    summarizationInstructions,
+  );
+  const maxHistoryShare = runtime?.maxHistoryShare ?? 0.5;
+  const tokensBefore =
+    typeof preparation.tokensBefore === "number" && Number.isFinite(preparation.tokensBefore)
+      ? preparation.tokensBefore
+      : undefined;
+
+  let droppedSummary: string | undefined;
+
+  if (tokensBefore !== undefined) {
+    const summarizableTokens =
+      estimateMessagesTokens(messagesToSummarize) + estimateMessagesTokens(turnPrefixMessages);
+    const newContentTokens = Math.max(0, Math.floor(tokensBefore - summarizableTokens));
+    const maxHistoryTokens = Math.floor(contextWindowTokens * maxHistoryShare * SAFETY_MARGIN);
+
+    if (newContentTokens > maxHistoryTokens) {
+      const pruned = pruneHistoryForContextShare({
+        messages: messagesToSummarize,
+        maxContextTokens: contextWindowTokens,
+        maxHistoryShare,
+        parts: 2,
+      });
+      if (pruned.droppedChunks > 0) {
+        const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
+        log.warn(
+          `Compaction safeguard: new content uses ${newContentRatio.toFixed(
+            1,
+          )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
+            `(${pruned.droppedMessages} messages) to fit history budget.`,
+        );
+        messagesToSummarize = pruned.messages;
+
+        if (pruned.droppedMessagesList.length > 0) {
+          try {
+            const droppedChunkRatio = computeAdaptiveChunkRatio(
+              pruned.droppedMessagesList,
+              contextWindowTokens,
+            );
+            const droppedMaxChunkTokens = Math.max(
+              1,
+              Math.floor(contextWindowTokens * droppedChunkRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
+            );
+            droppedSummary = await summarizeInStages({
+              messages: pruned.droppedMessagesList,
+              model,
+              apiKey,
+              signal,
+              reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
+              maxChunkTokens: droppedMaxChunkTokens,
+              contextWindow: contextWindowTokens,
+              customInstructions: structuredInstructions,
+              summarizationInstructions,
+              previousSummary: preparation.previousSummary,
+            });
+          } catch (droppedError) {
+            log.warn(
+              `Compaction safeguard: failed to summarize dropped messages, continuing without: ${
+                droppedError instanceof Error ? droppedError.message : String(droppedError)
+              }`,
+            );
+          }
+        }
+      }
+    }
+  }
+
+  const {
+    summarizableMessages: summaryTargetMessages,
+    preservedMessages: preservedRecentMessages,
+  } = splitPreservedRecentTurns({
+    messages: messagesToSummarize,
+    recentTurnsPreserve,
+  });
+  messagesToSummarize = summaryTargetMessages;
+  const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
+  const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
+  const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
+    .slice(-10)
+    .map((message) => extractMessageText(message))
+    .filter(Boolean)
+    .join("\n");
+  const identifiers = extractOpaqueIdentifiers(identifierSeedText);
+  const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
+  const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
+  const maxChunkTokens = Math.max(
+    1,
+    Math.floor(contextWindowTokens * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
+  );
+  const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens));
+  const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
+
+  let summary = "";
+  let currentInstructions = structuredInstructions;
+  const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
+  let lastSuccessfulSummary: string | null = null;
+
+  for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
+    let summaryWithoutPreservedTurns = "";
+    let summaryWithPreservedTurns = "";
+    try {
+      const historySummary =
+        messagesToSummarize.length > 0
+          ? await summarizeInStages({
+              messages: messagesToSummarize,
+              model,
+              apiKey,
+              signal,
+              reserveTokens,
+              maxChunkTokens,
+              contextWindow: contextWindowTokens,
+              customInstructions: currentInstructions,
+              summarizationInstructions,
+              previousSummary: effectivePreviousSummary,
+            })
+          : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
+
+      summaryWithoutPreservedTurns = historySummary;
+      if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
+        const prefixSummary = await summarizeInStages({
+          messages: turnPrefixMessages,
+          model,
+          apiKey,
+          signal,
+          reserveTokens,
+          maxChunkTokens,
+          contextWindow: contextWindowTokens,
+          customInstructions: composeSplitTurnInstructions(
+            TURN_PREFIX_INSTRUCTIONS,
+            currentInstructions,
+          ),
+          summarizationInstructions,
+          previousSummary: undefined,
+        });
+        const splitTurnSection = `**Turn Context (split turn):**\n\n${prefixSummary}`;
+        summaryWithoutPreservedTurns = historySummary.trim()
+          ? `${historySummary}\n\n---\n\n${splitTurnSection}`
+          : splitTurnSection;
+      }
+      summaryWithPreservedTurns = appendSummarySection(
+        summaryWithoutPreservedTurns,
+        preservedTurnsSection,
+      );
+    } catch (attemptError) {
+      if (lastSuccessfulSummary && attempt > 0) {
+        log.warn(
+          `Compaction safeguard: quality retry failed on attempt ${attempt + 1}; ` +
+            `keeping last successful summary: ${
+              attemptError instanceof Error ? attemptError.message : String(attemptError)
+            }`,
+        );
+        summary = lastSuccessfulSummary;
+        break;
+      }
+      throw attemptError;
+    }
+    lastSuccessfulSummary = summaryWithPreservedTurns;
+
+    const canRegenerate =
+      messagesToSummarize.length > 0 || (preparation.isSplitTurn && turnPrefixMessages.length > 0);
+    if (!qualityGuardEnabled || !canRegenerate) {
+      summary = summaryWithPreservedTurns;
+      break;
+    }
+    const quality = auditSummaryQuality({
+      summary: summaryWithoutPreservedTurns,
+      identifiers,
+      latestAsk: latestUserAsk,
+      identifierPolicy,
+    });
+    summary = summaryWithPreservedTurns;
+    if (quality.ok || attempt >= totalAttempts - 1) {
+      break;
+    }
+    const reasons = quality.reasons.join(", ");
+    const qualityFeedbackInstruction =
+      identifierPolicy === "strict"
+        ? "Fix all issues and include every required section with exact identifiers preserved."
+        : "Fix all issues and include every required section while following the configured identifier policy.";
+    const qualityFeedbackReasons = wrapUntrustedInstructionBlock(
+      "Quality check feedback",
+      `Previous summary failed quality checks (${reasons}).`,
+    );
+    currentInstructions = qualityFeedbackReasons
+      ? `${structuredInstructions}\n\n${qualityFeedbackInstruction}\n\n${qualityFeedbackReasons}`
+      : `${structuredInstructions}\n\n${qualityFeedbackInstruction}`;
+  }
+
+  summary = appendSummarySection(summary, toolFailureSection);
+  summary = appendSummarySection(summary, fileOpsSummary);
+
+  const workspaceContext = await readWorkspaceContextForSummary();
+  if (workspaceContext) {
+    summary = appendSummarySection(summary, workspaceContext);
+  }
+
+  return {
+    summary,
+    firstKeptEntryId: preparation.firstKeptEntryId,
+    tokensBefore: preparation.tokensBefore,
+    details: { readFiles, modifiedFiles },
+  };
+}
+
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
@@ -708,13 +952,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       );
       return { cancel: true };
     }
-    const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
-    const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
-    const toolFailures = collectToolFailures([
-      ...preparation.messagesToSummarize,
-      ...preparation.turnPrefixMessages,
-    ]);
-    const toolFailureSection = formatToolFailuresSection(toolFailures);
 
     // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
     // Fall back to runtime.model which is explicitly passed when building extension paths.
@@ -723,11 +960,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       eventInstructions,
       runtime?.customInstructions,
     );
-    const summarizationInstructions = {
-      identifierPolicy: runtime?.identifierPolicy,
-      identifierInstructions: runtime?.identifierInstructions,
-    };
-    const identifierPolicy = runtime?.identifierPolicy ?? "strict";
     const model = ctx.model ?? runtime?.model;
     if (!model) {
       // Log warning once per session when both models are missing (diagnostic for future issues).
@@ -752,232 +984,46 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     }
 
     try {
-      const modelContextWindow = resolveContextWindowTokens(model);
-      const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
-      const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
-      let messagesToSummarize = preparation.messagesToSummarize;
-      const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
-      const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
-      const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
-      const structuredInstructions = buildCompactionStructureInstructions(
-        customInstructions,
-        summarizationInstructions,
-      );
-
-      const maxHistoryShare = runtime?.maxHistoryShare ?? 0.5;
-
-      const tokensBefore =
-        typeof preparation.tokensBefore === "number" && Number.isFinite(preparation.tokensBefore)
-          ? preparation.tokensBefore
+      const execute =
+        runtime?.compactionMode === "default"
+          ? (candidatePreparation: CompactionPreparationLike) =>
+              runPiCompaction(candidatePreparation, model, apiKey, customInstructions, signal)
+          : (candidatePreparation: CompactionPreparationLike) =>
+              buildSafeguardCompactionResult({
+                preparation: candidatePreparation,
+                signal,
+                model,
+                apiKey,
+                runtime,
+                customInstructions,
+              });
+      const targetTokens =
+        typeof runtime?.targetTokens === "number" &&
+        Number.isFinite(runtime.targetTokens) &&
+        runtime.targetTokens > 0
+          ? Math.floor(runtime.targetTokens)
           : undefined;
 
-      let droppedSummary: string | undefined;
+      const result =
+        targetTokens !== undefined
+          ? await runTargetBudgetCompaction({
+              branchEntries: event.branchEntries,
+              basePreparation: preparation,
+              targetTokens,
+              liveContextTokens: ctx.getContextUsage?.()?.tokens,
+              execute,
+            })
+          : {
+              result: await execute(preparation),
+              warnings: [],
+            };
 
-      if (tokensBefore !== undefined) {
-        const summarizableTokens =
-          estimateMessagesTokens(messagesToSummarize) + estimateMessagesTokens(turnPrefixMessages);
-        const newContentTokens = Math.max(0, Math.floor(tokensBefore - summarizableTokens));
-        // Apply SAFETY_MARGIN so token underestimates don't trigger unnecessary pruning
-        const maxHistoryTokens = Math.floor(contextWindowTokens * maxHistoryShare * SAFETY_MARGIN);
-
-        if (newContentTokens > maxHistoryTokens) {
-          const pruned = pruneHistoryForContextShare({
-            messages: messagesToSummarize,
-            maxContextTokens: contextWindowTokens,
-            maxHistoryShare,
-            parts: 2,
-          });
-          if (pruned.droppedChunks > 0) {
-            const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
-            log.warn(
-              `Compaction safeguard: new content uses ${newContentRatio.toFixed(
-                1,
-              )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
-                `(${pruned.droppedMessages} messages) to fit history budget.`,
-            );
-            messagesToSummarize = pruned.messages;
-
-            // Summarize dropped messages so context isn't lost
-            if (pruned.droppedMessagesList.length > 0) {
-              try {
-                const droppedChunkRatio = computeAdaptiveChunkRatio(
-                  pruned.droppedMessagesList,
-                  contextWindowTokens,
-                );
-                const droppedMaxChunkTokens = Math.max(
-                  1,
-                  Math.floor(contextWindowTokens * droppedChunkRatio) -
-                    SUMMARIZATION_OVERHEAD_TOKENS,
-                );
-                droppedSummary = await summarizeInStages({
-                  messages: pruned.droppedMessagesList,
-                  model,
-                  apiKey,
-                  signal,
-                  reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
-                  maxChunkTokens: droppedMaxChunkTokens,
-                  contextWindow: contextWindowTokens,
-                  customInstructions: structuredInstructions,
-                  summarizationInstructions,
-                  previousSummary: preparation.previousSummary,
-                });
-              } catch (droppedError) {
-                log.warn(
-                  `Compaction safeguard: failed to summarize dropped messages, continuing without: ${
-                    droppedError instanceof Error ? droppedError.message : String(droppedError)
-                  }`,
-                );
-              }
-            }
-          }
-        }
-      }
-
-      const {
-        summarizableMessages: summaryTargetMessages,
-        preservedMessages: preservedRecentMessages,
-      } = splitPreservedRecentTurns({
-        messages: messagesToSummarize,
-        recentTurnsPreserve,
-      });
-      messagesToSummarize = summaryTargetMessages;
-      const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
-      const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
-      const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
-        .slice(-10)
-        .map((message) => extractMessageText(message))
-        .filter(Boolean)
-        .join("\n");
-      const identifiers = extractOpaqueIdentifiers(identifierSeedText);
-
-      // Use adaptive chunk ratio based on message sizes, reserving headroom for
-      // the summarization prompt, system prompt, previous summary, and reasoning budget
-      // that generateSummary adds on top of the serialized conversation chunk.
-      const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
-      const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
-      const maxChunkTokens = Math.max(
-        1,
-        Math.floor(contextWindowTokens * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
-      );
-      const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens));
-
-      // Feed dropped-messages summary as previousSummary so the main summarization
-      // incorporates context from pruned messages instead of losing it entirely.
-      const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
-
-      let summary = "";
-      let currentInstructions = structuredInstructions;
-      const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
-      let lastSuccessfulSummary: string | null = null;
-
-      for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
-        let summaryWithoutPreservedTurns = "";
-        let summaryWithPreservedTurns = "";
-        try {
-          const historySummary =
-            messagesToSummarize.length > 0
-              ? await summarizeInStages({
-                  messages: messagesToSummarize,
-                  model,
-                  apiKey,
-                  signal,
-                  reserveTokens,
-                  maxChunkTokens,
-                  contextWindow: contextWindowTokens,
-                  customInstructions: currentInstructions,
-                  summarizationInstructions,
-                  previousSummary: effectivePreviousSummary,
-                })
-              : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
-
-          summaryWithoutPreservedTurns = historySummary;
-          if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
-            const prefixSummary = await summarizeInStages({
-              messages: turnPrefixMessages,
-              model,
-              apiKey,
-              signal,
-              reserveTokens,
-              maxChunkTokens,
-              contextWindow: contextWindowTokens,
-              customInstructions: composeSplitTurnInstructions(
-                TURN_PREFIX_INSTRUCTIONS,
-                currentInstructions,
-              ),
-              summarizationInstructions,
-              previousSummary: undefined,
-            });
-            const splitTurnSection = `**Turn Context (split turn):**\n\n${prefixSummary}`;
-            summaryWithoutPreservedTurns = historySummary.trim()
-              ? `${historySummary}\n\n---\n\n${splitTurnSection}`
-              : splitTurnSection;
-          }
-          summaryWithPreservedTurns = appendSummarySection(
-            summaryWithoutPreservedTurns,
-            preservedTurnsSection,
-          );
-        } catch (attemptError) {
-          if (lastSuccessfulSummary && attempt > 0) {
-            log.warn(
-              `Compaction safeguard: quality retry failed on attempt ${attempt + 1}; ` +
-                `keeping last successful summary: ${
-                  attemptError instanceof Error ? attemptError.message : String(attemptError)
-                }`,
-            );
-            summary = lastSuccessfulSummary;
-            break;
-          }
-          throw attemptError;
-        }
-        lastSuccessfulSummary = summaryWithPreservedTurns;
-
-        const canRegenerate =
-          messagesToSummarize.length > 0 ||
-          (preparation.isSplitTurn && turnPrefixMessages.length > 0);
-        if (!qualityGuardEnabled || !canRegenerate) {
-          summary = summaryWithPreservedTurns;
-          break;
-        }
-        const quality = auditSummaryQuality({
-          summary: summaryWithoutPreservedTurns,
-          identifiers,
-          latestAsk: latestUserAsk,
-          identifierPolicy,
-        });
-        summary = summaryWithPreservedTurns;
-        if (quality.ok || attempt >= totalAttempts - 1) {
-          break;
-        }
-        const reasons = quality.reasons.join(", ");
-        const qualityFeedbackInstruction =
-          identifierPolicy === "strict"
-            ? "Fix all issues and include every required section with exact identifiers preserved."
-            : "Fix all issues and include every required section while following the configured identifier policy.";
-        const qualityFeedbackReasons = wrapUntrustedInstructionBlock(
-          "Quality check feedback",
-          `Previous summary failed quality checks (${reasons}).`,
-        );
-        currentInstructions = qualityFeedbackReasons
-          ? `${structuredInstructions}\n\n${qualityFeedbackInstruction}\n\n${qualityFeedbackReasons}`
-          : `${structuredInstructions}\n\n${qualityFeedbackInstruction}`;
-      }
-
-      summary = appendSummarySection(summary, toolFailureSection);
-      summary = appendSummarySection(summary, fileOpsSummary);
-
-      // Append workspace critical context (Session Startup + Red Lines from AGENTS.md)
-      const workspaceContext = await readWorkspaceContextForSummary();
-      if (workspaceContext) {
-        summary = appendSummarySection(summary, workspaceContext);
+      for (const warning of result.warnings) {
+        log.warn(`Compaction safeguard: ${warning}`);
       }
 
       return {
-        compaction: {
-          summary,
-          firstKeptEntryId: preparation.firstKeptEntryId,
-          tokensBefore: preparation.tokensBefore,
-          details: { readFiles, modifiedFiles },
-        },
+        compaction: result.result,
       };
     } catch (error) {
       log.warn(

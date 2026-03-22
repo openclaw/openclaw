@@ -3,8 +3,10 @@ import type { AgentCompactionIdentifierPolicy } from "../../config/types.agent-d
 import { createSessionManagerRuntimeRegistry } from "./session-manager-runtime-registry.js";
 
 export type CompactionSafeguardRuntimeValue = {
+  compactionMode?: "default" | "safeguard";
   maxHistoryShare?: number;
   contextWindowTokens?: number;
+  targetTokens?: number;
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   identifierInstructions?: string;
   customInstructions?: string;

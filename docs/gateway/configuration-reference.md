@@ -1011,6 +1011,8 @@ Periodic heartbeat runs.
     defaults: {
       compaction: {
         mode: "safeguard", // default | safeguard
+        triggerTokens: 80000, // optional full-context trigger after successful turns
+        targetTokens: 40000, // optional strict-best-effort post-compaction full-context target
         timeoutSeconds: 900,
         reserveTokensFloor: 24000,
         identifierPolicy: "strict", // strict | off | custom
@@ -1030,6 +1032,11 @@ Periodic heartbeat runs.
 ```
 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
+- `triggerTokens`: optional full live-context threshold for threshold-based auto-compaction after successful turns. Overrides legacy `reserveTokens` by deriving `reserveTokens = contextWindow - triggerTokens` from the active model window, then still applies `reserveTokensFloor`.
+- `targetTokens`: optional strict-best-effort full live-context target after compaction. Overrides legacy `keepRecentTokens` by recomputing the retained-history budget from live usage when possible; OpenClaw may retry with a smaller kept suffix if the first compaction still exceeds the target.
+- `reserveTokens`: legacy Pi headroom setting for threshold-based auto-compaction. Use this only when you want to tune Pi directly; ignored when `triggerTokens` is set.
+- `keepRecentTokens`: legacy Pi recent-history retention budget used for cut-point selection. Ignored when `targetTokens` is set.
+- `reserveTokensFloor`: minimum reserve enforced for embedded Pi runs. If this is higher than the reserve derived from `triggerTokens`, the floor wins and compaction will happen earlier than the requested trigger.
 - `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `900`.
 - `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
@@ -2099,10 +2106,15 @@ Notes:
   agents: {
     defaults: {
       subagents: {
-        model: "minimax/MiniMax-M2.5",
+        model: "anthropic/claude-haiku-4-5",
         maxConcurrent: 1,
         runTimeoutSeconds: 900,
         archiveAfterMinutes: 60,
+        escalation: {
+          enabled: true,
+          moderateModel: "anthropic/claude-sonnet-4-6",
+          complexModel: "anthropic/claude-opus-4-1",
+        },
       },
     },
   },
@@ -2110,6 +2122,8 @@ Notes:
 ```
 
 - `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
+- `escalation.enabled`: enable triage-first escalation for run-mode `sessions_spawn` calls that do not pin `model`. The initial child uses `subagents.model`, and a hard escalation respawns a stronger worker privately.
+- `escalation.moderateModel` / `escalation.complexModel`: stronger worker models used when triage requests `moderate` or `complex` escalation.
 - `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
 

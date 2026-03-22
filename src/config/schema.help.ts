@@ -1051,10 +1051,30 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
+  "agents.defaults.subagents.escalation":
+    "Optional triage-first model escalation ladder for run-mode subagent spawns. Enable this when most delegated work can start cheap but a subset should be re-routed to stronger models after a hard triage decision.",
+  "agents.defaults.subagents.escalation.enabled":
+    "Enables the triage-first subagent escalation ladder for run-mode sessions_spawn calls that do not pin a model explicitly. Keep this off unless you want cheap-first routing with an automatic respawn handoff path.",
+  "agents.defaults.subagents.escalation.moderateModel":
+    "Model used for the moderate escalation tier after triage requests a stronger worker. This should be a clear step up from agents.defaults.subagents.model and is required when escalation.enabled is true.",
+  "agents.defaults.subagents.escalation.complexModel":
+    "Model used for the complex escalation tier after triage classifies the task as hardest-tier work. Pick your strongest worker model here and keep it distinct from the cheap triage default.",
+  "agents.list[].subagents.escalation":
+    "Per-agent override for the subagent triage escalation ladder. Use this when a specific target agent needs a different cheap-to-strong routing ladder than the global defaults.",
+  "agents.list[].subagents.escalation.enabled":
+    "Per-agent enable switch for the subagent triage escalation ladder. When set, this agent's run-mode subagent spawns use its own escalation ladder instead of only the shared default behavior.",
+  "agents.list[].subagents.escalation.moderateModel":
+    "Per-agent moderate-tier worker model for escalated subagent tasks. Use this when one agent's medium-complex delegation needs a different stronger model than the defaults ladder.",
+  "agents.list[].subagents.escalation.complexModel":
+    "Per-agent complex-tier worker model for escalated subagent tasks. Use this when one agent's hardest delegated work should route to a different top-tier model than the defaults ladder.",
   "agents.defaults.compaction":
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
   "agents.defaults.compaction.mode":
     'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
+  "agents.defaults.compaction.triggerTokens":
+    "Model-aware full-context token threshold that should trigger auto-compaction after a successful turn. Use this when you want a literal token trigger instead of setting reserveTokens per model; OpenClaw derives Pi reserveTokens from the active model window and still enforces reserveTokensFloor.",
+  "agents.defaults.compaction.targetTokens":
+    "Strict-best-effort full-context token budget OpenClaw targets after compaction. Use this when you want post-compaction context to stay near a literal token budget; it overrides keepRecentTokens by recomputing the retained-history budget from live context usage when possible.",
   "agents.defaults.compaction.reserveTokens":
     "Token headroom reserved for reply generation and tool output after compaction runs. Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more.",
   "agents.defaults.compaction.keepRecentTokens":

@@ -39,6 +39,7 @@ import {
 } from "../routing/default-account-warnings.js";
 import {
   DEFAULT_ACCOUNT_ID,
+  normalizeAgentId,
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../routing/session-key.js";
@@ -125,6 +126,15 @@ function toolExplicitlyAllowed(agent: Record<string, unknown> | null, toolName: 
   return listPolicyEntries(agent?.tools, "alsoAllow").includes(toolName);
 }
 
+function listSubagentAllowAgents(agent: Record<string, unknown> | null): string[] {
+  const subagents = asObjectRecord(agent?.subagents);
+  const allowAgents = subagents?.allowAgents;
+  if (!Array.isArray(allowAgents)) {
+    return [];
+  }
+  return allowAgents.map((entry) => String(entry ?? "").trim()).filter((entry) => entry.length > 0);
+}
+
 async function pathExists(pathname: string): Promise<boolean> {
   try {
     await fs.access(pathname);
@@ -144,6 +154,18 @@ async function collectHappyPathTopologyWarnings(cfg: OpenClawConfig): Promise<st
     warnings.push(
       "- tony: front-door flow still blocks direct Scout dispatch; allow sessions_spawn without granting direct web/browser.",
     );
+  }
+  if (tony) {
+    const tonyAllowAgents = listSubagentAllowAgents(tony);
+    const tonyAllowsAny = tonyAllowAgents.some((entry) => entry === "*");
+    const tonyAllowsReverendRun = tonyAllowAgents.some(
+      (entry) => normalizeAgentId(entry) === "reverend-run",
+    );
+    if (!tonyAllowsAny && !tonyAllowsReverendRun) {
+      warnings.push(
+        "- tony: front-door flow has no Reverend Run fallback when Scout is unavailable; add reverend-run to subagents.allowAgents.",
+      );
+    }
   }
 
   const angelaSpecialists = ["salt", "pepper", "kit", "kat", "mariah"];

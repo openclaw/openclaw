@@ -309,6 +309,32 @@ describe("doctor config flow", () => {
     ).toBe(true);
   });
 
+  it("warns when Tony has no Reverend Run fallback path", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      agents: {
+        list: [
+          {
+            id: "tony",
+            subagents: {
+              allowAgents: ["scout"],
+            },
+            tools: {
+              alsoAllow: ["sessions_spawn"],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(
+      doctorWarnings.some((line) =>
+        line.includes(
+          "tony: front-door flow has no Reverend Run fallback when Scout is unavailable",
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("drops unknown keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,

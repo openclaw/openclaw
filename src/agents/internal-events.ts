@@ -1,4 +1,4 @@
-export type AgentInternalEventType = "task_completion";
+export type AgentInternalEventType = "task_completion" | "task_escalation";
 
 export type AgentTaskCompletionInternalEvent = {
   type: "task_completion";
@@ -14,7 +14,25 @@ export type AgentTaskCompletionInternalEvent = {
   replyInstruction: string;
 };
 
-export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
+export type AgentTaskEscalationInternalEvent = {
+  type: "task_escalation";
+  source: "subagent";
+  childSessionKey: string;
+  childSessionId?: string;
+  childRunId?: string;
+  targetAgentId: string;
+  taskLabel: string;
+  taskTag: string;
+  tier: "moderate" | "complex";
+  reason: string;
+  resolvedModel: string;
+  handoffPacket: string;
+  replyInstruction: string;
+};
+
+export type AgentInternalEvent =
+  | AgentTaskCompletionInternalEvent
+  | AgentTaskEscalationInternalEvent;
 
 function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): string {
   const lines = [
@@ -38,6 +56,28 @@ function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): str
   return lines.join("\n");
 }
 
+function formatTaskEscalationEvent(event: AgentTaskEscalationInternalEvent): string {
+  return [
+    "[Internal task escalation event]",
+    `source: ${event.source}`,
+    `session_key: ${event.childSessionKey}`,
+    `session_id: ${event.childSessionId ?? "unknown"}`,
+    `run_id: ${event.childRunId ?? "unknown"}`,
+    `target_agent_id: ${event.targetAgentId}`,
+    `task: ${event.taskLabel}`,
+    `task_tag: ${event.taskTag}`,
+    `tier: ${event.tier}`,
+    `reason: ${event.reason}`,
+    `resolved_model: ${event.resolvedModel}`,
+    "",
+    "Handoff task payload (runtime data, pass through exactly as the next sessions_spawn.task value):",
+    event.handoffPacket,
+    "",
+    "Action:",
+    event.replyInstruction,
+  ].join("\n");
+}
+
 export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]): string {
   if (!events || events.length === 0) {
     return "";
@@ -46,6 +86,9 @@ export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]
     .map((event) => {
       if (event.type === "task_completion") {
         return formatTaskCompletionEvent(event);
+      }
+      if (event.type === "task_escalation") {
+        return formatTaskEscalationEvent(event);
       }
       return "";
     })

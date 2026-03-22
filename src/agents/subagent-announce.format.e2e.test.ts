@@ -288,6 +288,207 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.internalEvents?.[0]?.taskLabel).toBe("do thing");
   });
 
+  it("converts a valid triage escalation envelope into an internal-only task escalation event", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            escalation: {
+              enabled: true,
+              moderateModel: "anthropic/claude-sonnet-4-6",
+              complexModel: "anthropic/claude-opus-4-1",
+            },
+          },
+        },
+      },
+    };
+    readLatestAssistantReplyMock.mockResolvedValue(`
+<<<BEGIN_OPENCLAW_TASK_ESCALATION_V1>>>
+{"tier":"moderate","reason":"needs_deeper_reasoning","summary":"Need a stronger worker for broader repo context."}
+<<<END_OPENCLAW_TASK_ESCALATION_V1>>>
+`);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:research:subagent:triage",
+      childRunId: "run-triage-escalation",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "Investigate the routing regression",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      outcome: { status: "ok" },
+      escalationStage: "triage",
+      taskTag: "routing-regression",
+    });
+
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        deliver?: boolean;
+        message?: string;
+        internalEvents?: Array<Record<string, unknown>>;
+      };
+    };
+    expect(call?.params?.deliver).toBe(false);
+    expect(call?.params?.internalEvents?.[0]?.type).toBe("task_escalation");
+    expect(call?.params?.internalEvents?.[0]?.taskTag).toBe("routing-regression");
+    expect(call?.params?.internalEvents?.[0]?.resolvedModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(String(call?.params?.message ?? "")).toContain("[Internal task escalation event]");
+    expect(String(call?.params?.message ?? "")).toContain('mode: "run"');
+    expect(String(call?.params?.message ?? "")).toContain('model: "anthropic/claude-sonnet-4-6"');
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("falls back to task completion when the triage escalation envelope is invalid", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            escalation: {
+              enabled: true,
+              moderateModel: "anthropic/claude-sonnet-4-6",
+              complexModel: "anthropic/claude-opus-4-1",
+            },
+          },
+        },
+      },
+    };
+    readLatestAssistantReplyMock.mockResolvedValue(`
+<<<BEGIN_OPENCLAW_TASK_ESCALATION_V1>>>
+{"tier":"moderate","reason":"Not Snake Case","summary":"bad envelope"}
+<<<END_OPENCLAW_TASK_ESCALATION_V1>>>
+`);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:research:subagent:triage",
+      childRunId: "run-triage-invalid",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "Investigate the routing regression",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      outcome: { status: "ok" },
+      escalationStage: "triage",
+    });
+
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        deliver?: boolean;
+        message?: string;
+        internalEvents?: Array<Record<string, unknown>>;
+      };
+    };
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.internalEvents?.[0]?.type).toBe("task_completion");
+    expect(String(call?.params?.message ?? "")).toContain("Not Snake Case");
+    expect(String(call?.params?.message ?? "")).not.toContain("[Internal task escalation event]");
+  });
+
+  it("does not escalate when the triage run ended with an error", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            escalation: {
+              enabled: true,
+              moderateModel: "anthropic/claude-sonnet-4-6",
+              complexModel: "anthropic/claude-opus-4-1",
+            },
+          },
+        },
+      },
+    };
+    readLatestAssistantReplyMock.mockResolvedValue(`
+<<<BEGIN_OPENCLAW_TASK_ESCALATION_V1>>>
+{"tier":"moderate","reason":"needs_deeper_reasoning","summary":"Need a stronger worker for broader repo context."}
+<<<END_OPENCLAW_TASK_ESCALATION_V1>>>
+`);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:research:subagent:triage",
+      childRunId: "run-triage-error",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "Investigate the routing regression",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      outcome: { status: "error", error: "boom" },
+      escalationStage: "triage",
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        deliver?: boolean;
+        internalEvents?: Array<Record<string, unknown>>;
+      };
+    };
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.internalEvents?.[0]?.type).toBe("task_completion");
+  });
+
+  it("does not parse escalation envelopes outside the triage stage", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            escalation: {
+              enabled: true,
+              moderateModel: "anthropic/claude-sonnet-4-6",
+              complexModel: "anthropic/claude-opus-4-1",
+            },
+          },
+        },
+      },
+    };
+    readLatestAssistantReplyMock.mockResolvedValue(`
+<<<BEGIN_OPENCLAW_TASK_ESCALATION_V1>>>
+{"tier":"moderate","reason":"needs_deeper_reasoning","summary":"Need a stronger worker for broader repo context."}
+<<<END_OPENCLAW_TASK_ESCALATION_V1>>>
+`);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:research:subagent:worker",
+      childRunId: "run-worker-envelope",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "Investigate the routing regression",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      outcome: { status: "ok" },
+      escalationStage: "worker",
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        deliver?: boolean;
+        internalEvents?: Array<Record<string, unknown>>;
+      };
+    };
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.internalEvents?.[0]?.type).toBe("task_completion");
+  });
+
   it("includes success status when outcome is ok", async () => {
     // Use waitForCompletion: false so it uses the provided outcome instead of calling agent.wait
     await runSubagentAnnounceFlow({

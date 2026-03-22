@@ -44,6 +44,15 @@ export type AgentContextPruningConfig = {
   };
 };
 
+export type AgentSubagentEscalationConfig = {
+  /** Enable triage-first model escalation for run-mode subagent spawns. */
+  enabled?: boolean;
+  /** Model selection for the moderate escalation tier. */
+  moderateModel?: AgentModelConfig;
+  /** Model selection for the complex escalation tier. */
+  complexModel?: AgentModelConfig;
+};
+
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -282,6 +291,8 @@ export type AgentDefaultsConfig = {
     archiveAfterMinutes?: number;
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
+    /** Optional triage escalation ladder for spawned sub-agents. */
+    escalation?: AgentSubagentEscalationConfig;
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
@@ -306,6 +317,10 @@ export type AgentCompactionQualityGuardConfig = {
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
+  /** Full live-context token threshold that triggers post-turn auto-compaction when exceeded. */
+  triggerTokens?: number;
+  /** Full live-context target OpenClaw compaction should reduce to when feasible. */
+  targetTokens?: number;
   /** Pi reserve tokens target before floor enforcement. */
   reserveTokens?: number;
   /** Pi keepRecentTokens budget used for cut-point selection. */

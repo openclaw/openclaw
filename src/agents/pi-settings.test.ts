@@ -63,6 +63,89 @@ describe("applyPiCompactionSettingsFromConfig", () => {
     });
   });
 
+  it("derives reserveTokens from triggerTokens and context window", () => {
+    const settingsManager = {
+      getCompactionReserveTokens: () => 16_384,
+      getCompactionKeepRecentTokens: () => 20_000,
+      applyOverrides: vi.fn(),
+    };
+
+    const result = applyPiCompactionSettingsFromConfig({
+      settingsManager,
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              triggerTokens: 80_000,
+            },
+          },
+        },
+      },
+      contextWindowTokens: 200_000,
+    });
+
+    expect(result.compaction.reserveTokens).toBe(120_000);
+    expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
+      compaction: { reserveTokens: 120_000 },
+    });
+  });
+
+  it("lets targetTokens override keepRecentTokens on the Pi settings path", () => {
+    const settingsManager = {
+      getCompactionReserveTokens: () => 20_000,
+      getCompactionKeepRecentTokens: () => 20_000,
+      applyOverrides: vi.fn(),
+    };
+
+    const result = applyPiCompactionSettingsFromConfig({
+      settingsManager,
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              targetTokens: 64_000,
+              keepRecentTokens: 15_000,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.compaction.keepRecentTokens).toBe(64_000);
+    expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
+      compaction: { keepRecentTokens: 64_000 },
+    });
+  });
+
+  it("lets triggerTokens override legacy reserveTokens while still enforcing the floor", () => {
+    const settingsManager = {
+      getCompactionReserveTokens: () => 10_000,
+      getCompactionKeepRecentTokens: () => 20_000,
+      applyOverrides: vi.fn(),
+    };
+
+    const result = applyPiCompactionSettingsFromConfig({
+      settingsManager,
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              triggerTokens: 195_000,
+              reserveTokens: 40_000,
+              reserveTokensFloor: 20_000,
+            },
+          },
+        },
+      },
+      contextWindowTokens: 200_000,
+    });
+
+    expect(result.compaction.reserveTokens).toBe(20_000);
+    expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
+      compaction: { reserveTokens: 20_000 },
+    });
+  });
+
   it("applies keepRecentTokens when explicitly configured", () => {
     const settingsManager = {
       getCompactionReserveTokens: () => 20_000,

@@ -56,6 +56,8 @@ describe("config compaction settings", () => {
         agents: {
           defaults: {
             compaction: {
+              triggerTokens: 80_000,
+              targetTokens: 64_000,
               reserveTokens: 15_000,
               keepRecentTokens: 12_000,
             },
@@ -64,6 +66,8 @@ describe("config compaction settings", () => {
       },
       async () => {
         const cfg = loadConfig();
+        expect(cfg.agents?.defaults?.compaction?.triggerTokens).toBe(80_000);
+        expect(cfg.agents?.defaults?.compaction?.targetTokens).toBe(64_000);
         expect(cfg.agents?.defaults?.compaction?.reserveTokens).toBe(15_000);
         expect(cfg.agents?.defaults?.compaction?.keepRecentTokens).toBe(12_000);
       },

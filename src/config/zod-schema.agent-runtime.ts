@@ -12,6 +12,44 @@ import {
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+function hasConfiguredAgentModel(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const primary = (value as { primary?: unknown }).primary;
+  return typeof primary === "string" && primary.trim().length > 0;
+}
+
+const SubagentEscalationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    moderateModel: AgentModelSchema.optional(),
+    complexModel: AgentModelSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.enabled !== true) {
+      return;
+    }
+    if (!hasConfiguredAgentModel(value.moderateModel)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "moderateModel is required when subagent escalation is enabled",
+        path: ["moderateModel"],
+      });
+    }
+    if (!hasConfiguredAgentModel(value.complexModel)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "complexModel is required when subagent escalation is enabled",
+        path: ["complexModel"],
+      });
+    }
+  });
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -819,6 +857,7 @@ export const AgentEntrySchema = z
               .strict(),
           ])
           .optional(),
+        escalation: SubagentEscalationSchema.optional(),
         thinking: z.string().optional(),
       })
       .strict()

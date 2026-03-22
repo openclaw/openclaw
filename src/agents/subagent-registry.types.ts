@@ -1,5 +1,6 @@
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
+import type { SubagentEscalationStage, SubagentEscalationTier } from "./subagent-escalation.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn-modes.js";
 
@@ -59,4 +60,7 @@ export type SubagentRunRecord = {
   resolvedTeamId?: string | null;
   resolvedCapability?: string | null;
   roleAliasUsed?: boolean;
+  escalationStage?: SubagentEscalationStage;
+  escalationTier?: SubagentEscalationTier;
+  taskTag?: string;
 };

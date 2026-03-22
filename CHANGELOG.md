@@ -30,6 +30,8 @@ Docs: <https://docs.openclaw.ai>
 - secrets: harden read-only SecretRef command paths and diagnostics. (#47794) Thanks @joshavant.
 - Browser/existing-session: support `browser.profiles.<name>.userDataDir` so Chrome DevTools MCP can attach to Brave, Edge, and other Chromium-based browsers through their own user data directories. (#48170) Thanks @velvet-shark.
 - Skills/prompt budget: preserve all registered skills via a compact catalog fallback before dropping entries when the full prompt format exceeds `maxSkillsPromptChars`. (#47553) Thanks @snese.
+- Agents/compaction: add model-aware `triggerTokens` and strict-best-effort `targetTokens` config overrides, deriving Pi thresholds from the active model window while recomputing retained-history budgets and retrying compaction when the first pass still exceeds the requested target.
+- Agents/subagents: add an optional triage-first escalation ladder for run-mode `sessions_spawn`, so subagents can start on `subagents.model` and privately respawn a stronger worker on configured moderate/complex tiers when the cheap pass emits a hard escalation.
 
 ### Breaking
 

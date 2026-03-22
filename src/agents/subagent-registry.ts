@@ -23,6 +23,7 @@ import {
   runSubagentAnnounceFlow,
   type SubagentRunOutcome,
 } from "./subagent-announce.js";
+import type { SubagentEscalationStage, SubagentEscalationTier } from "./subagent-escalation.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -566,6 +567,9 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     spawnMode: entry.spawnMode,
     expectsCompletionMessage: entry.expectsCompletionMessage,
     wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
+    escalationStage: entry.escalationStage,
+    escalationTier: entry.escalationTier,
+    taskTag: entry.taskTag,
   })
     .then((didAnnounce) => {
       finalizeAnnounceCleanup(didAnnounce);
@@ -1192,6 +1196,9 @@ export function registerSubagentRun(params: {
   resolvedTeamId?: string | null;
   resolvedCapability?: string | null;
   roleAliasUsed?: boolean;
+  escalationStage?: SubagentEscalationStage;
+  escalationTier?: SubagentEscalationTier;
+  taskTag?: string;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -1229,6 +1236,9 @@ export function registerSubagentRun(params: {
     resolvedTeamId: params.resolvedTeamId,
     resolvedCapability: params.resolvedCapability,
     roleAliasUsed: params.roleAliasUsed,
+    escalationStage: params.escalationStage,
+    escalationTier: params.escalationTier,
+    taskTag: params.taskTag,
   });
   ensureListener();
   persistSubagentRuns();

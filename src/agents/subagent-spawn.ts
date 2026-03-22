@@ -26,6 +26,17 @@ import {
   SESSIONS_SPAWN_DEDUP_TTL_MS,
 } from "./sessions-spawn-dedup.js";
 import {
+  buildSessionsSpawnFailureBudgetKey,
+  buildSessionsSpawnFailureGuardKey,
+  logSessionsSpawnFailureBudgetHit,
+  logSessionsSpawnFailureGuardHit,
+  peekSessionsSpawnFailureBudget,
+  peekSessionsSpawnFailureGuard,
+  recordSessionsSpawnFailureBudget,
+  recordSessionsSpawnFailureGuard,
+  type SessionsSpawnFailureCode,
+} from "./sessions-spawn-failure-guard.js";
+import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
@@ -38,6 +49,17 @@ import {
 } from "./subagent-attachments.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import {
+  buildSubagentEscalationWorkerTask,
+  buildSubagentTriagePromptAddon,
+  buildSubagentWorkerPromptAddon,
+  logSubagentEscalationDecision,
+  parseSubagentEscalationHandoff,
+  resolveSubagentEscalationConfig,
+  resolveSubagentEscalationTaskTag,
+  resolveSubagentEscalationTierModel,
+  type SubagentEscalationStage,
+} from "./subagent-escalation.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import {
   SUBAGENT_SPAWN_MODES,
@@ -144,6 +166,160 @@ export function splitModelRef(ref?: string) {
     return { provider, model };
   }
   return { provider: undefined, model: trimmed };
+}
+
+type ResolvedSpawnFallbackOptions = {
+  readyAgentIds: string[];
+  unavailableTargets: Array<{ agentId: string; reason: string }>;
+};
+
+const MAX_FALLBACK_HINT_TARGETS = 5;
+
+function listConfiguredSubagentTargetIds(cfg: OpenClawConfig): string[] {
+  const configuredIds = new Set<string>();
+  for (const entry of cfg.agents?.list ?? []) {
+    const normalized = normalizeAgentId(entry?.id);
+    if (normalized) {
+      configuredIds.add(normalized);
+    }
+  }
+  return Array.from(configuredIds).toSorted((a, b) => a.localeCompare(b));
+}
+
+function formatFallbackTargetList(values: string[]): string {
+  if (values.length === 0) {
+    return "none";
+  }
+  if (values.length <= MAX_FALLBACK_HINT_TARGETS) {
+    return values.join(", ");
+  }
+  return `${values.slice(0, MAX_FALLBACK_HINT_TARGETS).join(", ")} (+${values.length - MAX_FALLBACK_HINT_TARGETS} more)`;
+}
+
+function formatUnavailableFallbacks(
+  entries: Array<{ agentId: string; reason: string }>,
+): string | undefined {
+  if (entries.length === 0) {
+    return undefined;
+  }
+  const limited = entries.slice(0, MAX_FALLBACK_HINT_TARGETS);
+  const base = limited.map((entry) => `${entry.agentId} (${entry.reason})`).join("; ");
+  if (entries.length === limited.length) {
+    return base;
+  }
+  return `${base}; +${entries.length - limited.length} more`;
+}
+
+function resolveSpawnFallbackOptions(params: {
+  cfg: OpenClawConfig;
+  requesterAgentId: string;
+  excludeAgentId: string;
+  allowAny: boolean;
+  allowSet: Set<string>;
+  explicitAllowSet: Set<string>;
+}): ResolvedSpawnFallbackOptions {
+  const candidateIds = new Set<string>();
+  if (params.allowAny) {
+    for (const configuredAgentId of listConfiguredSubagentTargetIds(params.cfg)) {
+      if (configuredAgentId !== params.requesterAgentId) {
+        candidateIds.add(configuredAgentId);
+      }
+    }
+  } else {
+    for (const allowedAgentId of params.allowSet) {
+      candidateIds.add(allowedAgentId);
+    }
+  }
+  candidateIds.delete(params.excludeAgentId);
+  candidateIds.delete(params.requesterAgentId);
+
+  const readyAgentIds: string[] = [];
+  const unavailableTargets: Array<{ agentId: string; reason: string }> = [];
+  for (const agentId of Array.from(candidateIds).toSorted((a, b) => a.localeCompare(b))) {
+    const readiness = resolveSubagentTargetReadiness({
+      cfg: params.cfg,
+      requesterAgentId: params.requesterAgentId,
+      targetAgentId: agentId,
+      classifyStaleAllowlist: params.explicitAllowSet.has(agentId),
+    });
+    if (readiness.status === "ready") {
+      readyAgentIds.push(agentId);
+      continue;
+    }
+    unavailableTargets.push({
+      agentId,
+      reason: readiness.reasons[0] ?? readiness.status,
+    });
+  }
+  return { readyAgentIds, unavailableTargets };
+}
+
+function buildSpawnFallbackGuidance(params: {
+  targetAgentId: string;
+  readyAgentIds: string[];
+  unavailableTargets: Array<{ agentId: string; reason: string }>;
+  fixHint: string;
+}): string {
+  const parts = [
+    `Do not retry variants for "${params.targetAgentId}" until this cooldown expires unless ${params.fixHint}.`,
+    `Allowed ready fallback agents: ${formatFallbackTargetList(params.readyAgentIds)}.`,
+  ];
+  const unavailableText = formatUnavailableFallbacks(params.unavailableTargets);
+  if (unavailableText) {
+    parts.push(`Allowed but unavailable targets: ${unavailableText}.`);
+  }
+  return parts.join(" ");
+}
+
+function buildUnrecoverableSpawnError(params: {
+  code: SessionsSpawnFailureCode;
+  targetAgentId: string;
+  readyAgentIds: string[];
+  unavailableTargets: Array<{ agentId: string; reason: string }>;
+  allowedText?: string;
+  reason?: string;
+}): string {
+  const guidanceFor = (fixHint: string) =>
+    buildSpawnFallbackGuidance({
+      targetAgentId: params.targetAgentId,
+      readyAgentIds: params.readyAgentIds,
+      unavailableTargets: params.unavailableTargets,
+      fixHint,
+    });
+
+  if (params.code === "allowlist_denied") {
+    return [
+      `agentId is not allowed for sessions_spawn (allowed: ${params.allowedText ?? "none"})`,
+      guidanceFor("allowAgents is updated or you choose a listed ready fallback"),
+    ].join(". ");
+  }
+  if (params.code === "missing_config") {
+    return [
+      `agentId "${params.targetAgentId}" is not configured as a runtime agent with an explicit workspace. ${params.reason ?? "target agent is not ready"}.`,
+      guidanceFor("its agents.list runtime entry is added"),
+    ].join(" ");
+  }
+  if (params.code === "missing_workspace") {
+    return [
+      `agentId "${params.targetAgentId}" is not workspace-backed for sessions_spawn. ${params.reason ?? "target agent is not ready"}.`,
+      guidanceFor("its workspace readiness issue is fixed"),
+    ].join(" ");
+  }
+  return [
+    `agentId "${params.targetAgentId}" is a stale allowlist entry. ${params.reason ?? "target agent is not ready"}.`,
+    guidanceFor("allowAgents or the target runtime config is fixed"),
+  ].join(" ");
+}
+
+function formatRetrySeconds(ms: number): number {
+  return Math.max(1, Math.ceil(ms / 1000));
+}
+
+function buildSessionsSpawnFailureBudgetError(params: { retryAfterMs: number }): string {
+  return [
+    "sessions_spawn is temporarily blocked for this session after repeated failures across targets.",
+    `Wait about ${formatRetrySeconds(params.retryAfterMs)}s before retrying, and fix task/config input first.`,
+  ].join(" ");
 }
 
 function sanitizeMountPathHint(value?: string): string | undefined {
@@ -295,40 +471,6 @@ export async function spawnSubagentDirect(
   const requestedTeamId = params.teamId?.trim();
   const requestedCapability = params.capability?.trim();
   const requestedRole = params.role?.trim();
-
-  if (requestedAgentId && (requestedTeamId || requestedCapability || requestedRole)) {
-    return {
-      status: "error",
-      error: "agentId cannot be combined with teamId, capability, or role",
-    };
-  }
-  if ((requestedCapability || requestedRole) && !requestedTeamId) {
-    return {
-      status: "error",
-      error: "capability/role requires teamId",
-    };
-  }
-  if (
-    requestedCapability &&
-    requestedRole &&
-    requestedCapability.toLowerCase() !== requestedRole.toLowerCase()
-  ) {
-    return {
-      status: "error",
-      error: "capability and role must match when both are provided",
-    };
-  }
-
-  // Reject malformed agentId before normalizeAgentId can mangle it.
-  // Without this gate, error-message strings like "Agent not found: xyz" pass
-  // through normalizeAgentId and become "agent-not-found--xyz", which later
-  // creates ghost workspace directories and triggers cascading cron loops (#31311).
-  if (requestedAgentId && !isValidAgentId(requestedAgentId)) {
-    return {
-      status: "error",
-      error: `Invalid agentId "${requestedAgentId}". Agent IDs must match [a-z0-9][a-z0-9_-]{0,63}. Use agents_list to discover valid targets.`,
-    };
-  }
   const modelOverride = params.model;
   const thinkingOverrideRaw = params.thinking;
   const requestThreadBinding = params.thread === true;
@@ -337,12 +479,6 @@ export async function spawnSubagentDirect(
     requestedMode: params.mode,
     threadRequested: requestThreadBinding,
   });
-  if (spawnMode === "session" && !requestThreadBinding) {
-    return {
-      status: "error",
-      error: 'mode="session" requires thread=true so the subagent can stay bound to a thread.',
-    };
-  }
   const cleanup =
     spawnMode === "session"
       ? "keep"
@@ -358,6 +494,74 @@ export async function spawnSubagentDirect(
   });
   const hookRunner = getGlobalHookRunner();
   const cfg = ctx.cfg ?? loadConfig();
+  const { mainKey, alias } = resolveMainSessionAlias(cfg);
+  const requesterSessionKey = ctx.agentSessionKey;
+  const requesterInternalKey = requesterSessionKey
+    ? resolveInternalSessionKey({
+        key: requesterSessionKey,
+        alias,
+        mainKey,
+      })
+    : alias;
+  const requesterDisplayKey = resolveDisplaySessionKey({
+    key: requesterInternalKey,
+    alias,
+    mainKey,
+  });
+  const failureBudgetKey = buildSessionsSpawnFailureBudgetKey({ requesterInternalKey });
+  const recordFailureBudget = (): void => {
+    recordSessionsSpawnFailureBudget({ budgetKey: failureBudgetKey });
+  };
+
+  const budgetHit = peekSessionsSpawnFailureBudget({ budgetKey: failureBudgetKey });
+  if (budgetHit) {
+    logSessionsSpawnFailureBudgetHit({
+      requesterInternalKey,
+      retryAfterMs: budgetHit.retryAfterMs,
+      blockStrikeCount: budgetHit.blockStrikeCount,
+      recentFailureCount: budgetHit.recentFailureCount,
+    });
+    return {
+      status: "forbidden",
+      error: buildSessionsSpawnFailureBudgetError({
+        retryAfterMs: budgetHit.retryAfterMs,
+      }),
+    };
+  }
+
+  const validationError = (message: string): SpawnSubagentResult => {
+    recordFailureBudget();
+    return { status: "error", error: message };
+  };
+
+  if (requestedAgentId && (requestedTeamId || requestedCapability || requestedRole)) {
+    return validationError("agentId cannot be combined with teamId, capability, or role");
+  }
+  if ((requestedCapability || requestedRole) && !requestedTeamId) {
+    return validationError("capability/role requires teamId");
+  }
+  if (
+    requestedCapability &&
+    requestedRole &&
+    requestedCapability.toLowerCase() !== requestedRole.toLowerCase()
+  ) {
+    return validationError("capability and role must match when both are provided");
+  }
+
+  // Reject malformed agentId before normalizeAgentId can mangle it.
+  // Without this gate, error-message strings like "Agent not found: xyz" pass
+  // through normalizeAgentId and become "agent-not-found--xyz", which later
+  // creates ghost workspace directories and triggers cascading cron loops (#31311).
+  if (requestedAgentId && !isValidAgentId(requestedAgentId)) {
+    return validationError(
+      `Invalid agentId "${requestedAgentId}". Agent IDs must match [a-z0-9][a-z0-9_-]{0,63}. Use agents_list to discover valid targets.`,
+    );
+  }
+  if (spawnMode === "session" && !requestThreadBinding) {
+    return validationError(
+      'mode="session" requires thread=true so the subagent can stay bound to a thread.',
+    );
+  }
 
   // When agent omits runTimeoutSeconds, use the config default.
   // Falls back to 0 (no timeout) if config key is also unset,
@@ -373,20 +577,6 @@ export async function spawnSubagentDirect(
       : cfgSubagentTimeout;
   let modelApplied = false;
   let threadBindingReady = false;
-  const { mainKey, alias } = resolveMainSessionAlias(cfg);
-  const requesterSessionKey = ctx.agentSessionKey;
-  const requesterInternalKey = requesterSessionKey
-    ? resolveInternalSessionKey({
-        key: requesterSessionKey,
-        alias,
-        mainKey,
-      })
-    : alias;
-  const requesterDisplayKey = resolveDisplaySessionKey({
-    key: requesterInternalKey,
-    alias,
-    mainKey,
-  });
 
   const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
   const maxSpawnDepth =
@@ -423,6 +613,7 @@ export async function spawnSubagentDirect(
   const universalTarget =
     targetAgentId !== requesterAgentId && isUniversalSubagentTarget(targetAgentId);
   if (callerDepth >= maxSpawnDepth && !universalTarget) {
+    recordFailureBudget();
     return {
       status: "forbidden",
       error: `sessions_spawn is not allowed at this depth (current depth: ${callerDepth}, max: ${maxSpawnDepth})`,
@@ -432,6 +623,7 @@ export async function spawnSubagentDirect(
   const maxChildren = cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? 5;
   const activeChildren = countActiveRunsForSession(requesterInternalKey);
   if (activeChildren >= maxChildren) {
+    recordFailureBudget();
     return {
       status: "forbidden",
       error: `sessions_spawn has reached max active children for this session (${activeChildren}/${maxChildren})`,
@@ -439,18 +631,81 @@ export async function spawnSubagentDirect(
   }
 
   if (targetAgentId !== requesterAgentId) {
+    const failureGuardKey = buildSessionsSpawnFailureGuardKey({
+      requesterInternalKey,
+      targetAgentId,
+    });
+    const failureGuardHit = peekSessionsSpawnFailureGuard({ guardKey: failureGuardKey });
+    if (failureGuardHit) {
+      const escalatedFailure = recordSessionsSpawnFailureGuard({
+        guardKey: failureGuardKey,
+        code: failureGuardHit.code,
+        status: failureGuardHit.status,
+        error: failureGuardHit.error,
+      });
+      const budgetState = recordSessionsSpawnFailureBudget({
+        budgetKey: failureBudgetKey,
+      });
+      logSessionsSpawnFailureGuardHit({
+        targetAgentId,
+        requesterInternalKey,
+        code: escalatedFailure.code,
+        ttlMs: escalatedFailure.ttlMs,
+        strikeCount: escalatedFailure.strikeCount,
+      });
+      if (budgetState.retryAfterMs && budgetState.retryAfterMs > 0) {
+        logSessionsSpawnFailureBudgetHit({
+          requesterInternalKey,
+          retryAfterMs: budgetState.retryAfterMs,
+          blockStrikeCount: budgetState.blockStrikeCount,
+          recentFailureCount: budgetState.recentFailureCount,
+        });
+        return {
+          status: "forbidden",
+          error: buildSessionsSpawnFailureBudgetError({
+            retryAfterMs: budgetState.retryAfterMs,
+          }),
+        };
+      }
+      return {
+        status: escalatedFailure.status,
+        error: `Skipping repeated sessions_spawn retry for "${targetAgentId}" after a recent unrecoverable failure (backoff ${formatRetrySeconds(escalatedFailure.ttlMs)}s). ${escalatedFailure.error}`,
+      };
+    }
     const { allowAny, allowSet, explicitAllowSet } = resolveRequesterSubagentAllowlist({
       cfg,
       requesterAgentId,
     });
     const normalizedTargetId = targetAgentId.toLowerCase();
     const normalizedAllowSet = new Set(Array.from(allowSet, (value) => value.toLowerCase()));
+    const fallbackOptions = resolveSpawnFallbackOptions({
+      cfg,
+      requesterAgentId,
+      excludeAgentId: normalizedTargetId,
+      allowAny,
+      allowSet: normalizedAllowSet,
+      explicitAllowSet,
+    });
     if (!allowAny && !normalizedAllowSet.has(normalizedTargetId)) {
       const allowedText =
         normalizedAllowSet.size > 0 ? Array.from(normalizedAllowSet).join(", ") : "none";
+      const error = buildUnrecoverableSpawnError({
+        code: "allowlist_denied",
+        targetAgentId,
+        allowedText,
+        readyAgentIds: fallbackOptions.readyAgentIds,
+        unavailableTargets: fallbackOptions.unavailableTargets,
+      });
+      recordSessionsSpawnFailureGuard({
+        guardKey: failureGuardKey,
+        code: "allowlist_denied",
+        status: "forbidden",
+        error,
+      });
+      recordFailureBudget();
       return {
         status: "forbidden",
-        error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
+        error,
       };
     }
     const readiness = resolveSubagentTargetReadiness({
@@ -462,25 +717,102 @@ export async function spawnSubagentDirect(
     if (readiness.status !== "ready") {
       const reason = readiness.reasons[0] ?? "target agent is not ready";
       if (readiness.status === "missing_config") {
+        const error = buildUnrecoverableSpawnError({
+          code: "missing_config",
+          targetAgentId,
+          reason,
+          readyAgentIds: fallbackOptions.readyAgentIds,
+          unavailableTargets: fallbackOptions.unavailableTargets,
+        });
+        recordSessionsSpawnFailureGuard({
+          guardKey: failureGuardKey,
+          code: "missing_config",
+          status: "error",
+          error,
+        });
+        recordFailureBudget();
         return {
           status: "error",
-          error: `agentId "${targetAgentId}" is not configured as a runtime agent with an explicit workspace. ${reason}.`,
+          error,
         };
       }
       if (readiness.status === "missing_workspace") {
+        const error = buildUnrecoverableSpawnError({
+          code: "missing_workspace",
+          targetAgentId,
+          reason,
+          readyAgentIds: fallbackOptions.readyAgentIds,
+          unavailableTargets: fallbackOptions.unavailableTargets,
+        });
+        recordSessionsSpawnFailureGuard({
+          guardKey: failureGuardKey,
+          code: "missing_workspace",
+          status: "error",
+          error,
+        });
+        recordFailureBudget();
         return {
           status: "error",
-          error: `agentId "${targetAgentId}" is not workspace-backed for sessions_spawn. ${reason}.`,
+          error,
         };
       }
+      const error = buildUnrecoverableSpawnError({
+        code: "stale_allowlist",
+        targetAgentId,
+        reason,
+        readyAgentIds: fallbackOptions.readyAgentIds,
+        unavailableTargets: fallbackOptions.unavailableTargets,
+      });
+      recordSessionsSpawnFailureGuard({
+        guardKey: failureGuardKey,
+        code: "stale_allowlist",
+        status: "error",
+        error,
+      });
+      recordFailureBudget();
       return {
         status: "error",
-        error: `agentId "${targetAgentId}" is a stale allowlist entry. ${reason}.`,
+        error,
       };
     }
   }
 
-  const trimmedTask = task.trim();
+  const parsedEscalationHandoff = spawnMode === "run" ? parseSubagentEscalationHandoff(task) : null;
+  const resolvedEscalationConfig = resolveSubagentEscalationConfig({
+    cfg,
+    agentId: targetAgentId,
+  });
+  const taskTag =
+    parsedEscalationHandoff?.taskTag ??
+    resolveSubagentEscalationTaskTag({
+      label,
+      capability: resolvedCapability,
+      role: requestedRole,
+      agentId: targetAgentId,
+    });
+  const escalationStage: SubagentEscalationStage | undefined = parsedEscalationHandoff
+    ? "worker"
+    : resolvedEscalationConfig.enabled && spawnMode === "run" && !modelOverride
+      ? "triage"
+      : undefined;
+  const resolvedModel = resolveSubagentSpawnModelSelection({
+    cfg,
+    agentId: targetAgentId,
+    modelOverride: parsedEscalationHandoff
+      ? (modelOverride ??
+        resolveSubagentEscalationTierModel({
+          cfg,
+          agentId: targetAgentId,
+          tier: parsedEscalationHandoff.tier,
+        }))
+      : modelOverride,
+  });
+  const effectiveTask =
+    parsedEscalationHandoff != null
+      ? buildSubagentEscalationWorkerTask(parsedEscalationHandoff)
+      : task;
+  const registryTask = parsedEscalationHandoff?.originalTask ?? task;
+  const trimmedTask = effectiveTask.trim();
   const shouldAttemptSpawnDedup =
     trimmedTask.length > 0 &&
     !(params.attachments && params.attachments.length > 0) &&
@@ -546,12 +878,14 @@ export async function spawnSubagentDirect(
   });
   if (!childRuntime.sandboxed && (requesterRuntime.sandboxed || sandboxMode === "require")) {
     if (requesterRuntime.sandboxed) {
+      recordFailureBudget();
       return {
         status: "forbidden",
         error:
           "Sandboxed sessions cannot spawn unsandboxed subagents. Set a sandboxed target agent or use the same agent runtime.",
       };
     }
+    recordFailureBudget();
     return {
       status: "forbidden",
       error:
@@ -565,11 +899,6 @@ export async function spawnSubagentDirect(
     maxSpawnDepth,
   });
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
-  const resolvedModel = resolveSubagentSpawnModelSelection({
-    cfg,
-    agentId: targetAgentId,
-    modelOverride,
-  });
 
   const resolvedThinkingDefaultRaw =
     readStringParam(targetAgentConfig?.subagents ?? {}, "thinking") ??
@@ -582,6 +911,7 @@ export async function spawnSubagentDirect(
     if (!normalized) {
       const { provider, model } = splitModelRef(resolvedModel);
       const hint = formatThinkingLevels(provider, model);
+      recordFailureBudget();
       return {
         status: "error",
         error: `Invalid thinking level "${thinkingCandidateRaw}". Use one of: ${hint}.`,
@@ -678,11 +1008,16 @@ export async function spawnSubagentDirect(
     requesterOrigin,
     childSessionKey,
     label: label || undefined,
-    task,
+    task: parsedEscalationHandoff?.originalTask ?? task,
     acpEnabled: cfg.acp?.enabled !== false && !childRuntime.sandboxed,
     childDepth,
     maxSpawnDepth,
   });
+  if (escalationStage === "triage") {
+    childSystemPrompt = `${childSystemPrompt}\n\n${buildSubagentTriagePromptAddon()}`;
+  } else if (escalationStage === "worker") {
+    childSystemPrompt = `${childSystemPrompt}\n\n${buildSubagentWorkerPromptAddon()}`;
+  }
 
   let retainOnSessionKeep = false;
   let attachmentsReceipt:
@@ -724,7 +1059,7 @@ export async function spawnSubagentDirect(
     spawnMode === "session"
       ? "[Subagent Context] This subagent session is persistent and remains available for thread follow-up messages."
       : undefined,
-    `[Subagent Task]: ${task}`,
+    `[Subagent Task]: ${effectiveTask}`,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n\n");
@@ -864,7 +1199,7 @@ export async function spawnSubagentDirect(
       requesterSessionKey: requesterInternalKey,
       requesterOrigin,
       requesterDisplayKey,
-      task,
+      task: registryTask,
       cleanup,
       label: label || undefined,
       model: resolvedModel,
@@ -879,6 +1214,9 @@ export async function spawnSubagentDirect(
       resolvedTeamId: resolvedTeamId,
       resolvedCapability: resolvedCapability,
       roleAliasUsed,
+      escalationStage,
+      escalationTier: parsedEscalationHandoff?.tier,
+      taskTag,
     });
   } catch (err) {
     if (attachmentAbsDir) {
@@ -903,6 +1241,17 @@ export async function spawnSubagentDirect(
       childSessionKey,
       runId: childRunId,
     };
+  }
+
+  if (escalationStage === "worker" && parsedEscalationHandoff) {
+    logSubagentEscalationDecision({
+      agentId: targetAgentId,
+      stage: "worker",
+      ladderTier: parsedEscalationHandoff.tier,
+      taskTag,
+      resolvedModel,
+      reason: parsedEscalationHandoff.reason,
+    });
   }
 
   if (hookRunner?.hasHooks("subagent_spawned")) {

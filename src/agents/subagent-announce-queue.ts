@@ -33,6 +33,7 @@ export type AnnounceQueueItem = {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  forceInternalOnly?: boolean;
 };
 
 export type AnnounceQueueSettings = {

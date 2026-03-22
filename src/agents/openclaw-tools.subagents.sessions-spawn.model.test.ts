@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import "./test-helpers/fast-core-tools.js";
 import {
@@ -7,8 +7,25 @@ import {
   resetSessionsSpawnConfigOverride,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
+import { resetSessionsSpawnDedupForTests } from "./sessions-spawn-dedup.js";
+import { buildSubagentEscalationHandoffPacket } from "./subagent-escalation.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 import { SUBAGENT_SPAWN_ACCEPTED_NOTE } from "./subagent-spawn.js";
+
+const hookState = vi.hoisted(() => ({
+  runSubagentSpawning: vi.fn(async () => ({
+    status: "ok" as const,
+    threadBindingReady: true,
+  })),
+}));
+
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => ({
+    hasHooks: (hookName: string) => hookName === "subagent_spawning",
+    runSubagentSpawning: (...args: unknown[]) => hookState.runSubagentSpawning(...args),
+    runSubagentSpawned: vi.fn(async () => undefined),
+  }),
+}));
 
 const callGatewayMock = getCallGatewayMock();
 type GatewayCall = { method?: string; params?: unknown };
@@ -100,7 +117,12 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   beforeEach(() => {
     resetSessionsSpawnConfigOverride();
     resetSubagentRegistryForTests();
+    resetSessionsSpawnDedupForTests();
     callGatewayMock.mockClear();
+    hookState.runSubagentSpawning.mockClear().mockResolvedValue({
+      status: "ok",
+      threadBindingReady: true,
+    });
   });
 
   it("sessions_spawn applies a model to the child session", async () => {
@@ -303,5 +325,244 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       runId: "run-1",
     });
     expect(spawnedTimeout).toBe(2);
+  });
+
+  it("sessions_spawn uses the triage model and prompt addon when escalation is enabled", async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          subagents: {
+            model: "anthropic/claude-haiku-4-5",
+            escalation: {
+              enabled: true,
+              moderateModel: "anthropic/claude-sonnet-4-6",
+              complexModel: "anthropic/claude-opus-4-1",
+            },
+          },
+        },
+      },
+    });
+
+    const calls: GatewayCall[] = [];
+    mockPatchAndSingleAgentRun({ calls, runId: "run-triage" });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-triage", {
+      task: "triage this task",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    const patchCall = calls.find(
+      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
+    );
+    expect(patchCall?.params).toMatchObject({
+      model: "anthropic/claude-haiku-4-5",
+    });
+
+    const agentCall = calls.find((call) => call.method === "agent");
+    expect(
+      (agentCall?.params as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt,
+    ).toContain("## Escalation Ladder");
+  });
+
+  it("sessions_spawn bypasses triage when the caller pins a model", async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          subagents: {
+            model: "anthropic/claude-haiku-4-5",
+            escalation: {
+              enabled: true,
+              moderateModel: "anthropic/claude-sonnet-4-6",
+              complexModel: "anthropic/claude-opus-4-1",
+            },
+          },
+        },
+      },
+    });
+
+    const calls: GatewayCall[] = [];
+    mockPatchAndSingleAgentRun({ calls, runId: "run-pinned" });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-pinned", {
+      task: "do the task directly",
+      model: "openai/gpt-5.4",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    const patchCall = calls.find(
+      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
+    );
+    expect(patchCall?.params).toMatchObject({
+      model: "openai/gpt-5.4",
+    });
+
+    const agentCall = calls.find((call) => call.method === "agent");
+    expect(
+      (agentCall?.params as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "",
+    ).not.toContain("## Escalation Ladder");
+  });
+
+  it('sessions_spawn bypasses triage for mode "session"', async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          subagents: {
+            model: "anthropic/claude-haiku-4-5",
+            escalation: {
+              enabled: true,
+              moderateModel: "anthropic/claude-sonnet-4-6",
+              complexModel: "anthropic/claude-opus-4-1",
+            },
+          },
+        },
+      },
+    });
+
+    const calls: GatewayCall[] = [];
+    mockPatchAndSingleAgentRun({ calls, runId: "run-session" });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-session", {
+      task: "persistent follow-up task",
+      mode: "session",
+      thread: true,
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      mode: "session",
+    });
+
+    const agentCall = calls.find((call) => call.method === "agent");
+    expect(
+      (agentCall?.params as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "",
+    ).not.toContain("## Escalation Ladder");
+  });
+
+  it("sessions_spawn routes worker handoffs to the requested escalation tier model", async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          subagents: {
+            model: "anthropic/claude-haiku-4-5",
+            escalation: {
+              enabled: true,
+              moderateModel: "anthropic/claude-sonnet-4-6",
+              complexModel: "anthropic/claude-opus-4-1",
+            },
+          },
+        },
+      },
+    });
+
+    const calls: GatewayCall[] = [];
+    mockPatchAndSingleAgentRun({ calls, runId: "run-worker" });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-worker", {
+      task: buildSubagentEscalationHandoffPacket({
+        version: 1,
+        stage: "worker",
+        tier: "moderate",
+        taskTag: "dispatch-ticket",
+        reason: "needs_deeper_reasoning",
+        originalTask: "Analyze the orchestration bug.",
+        triageSummary: "Need stronger reasoning and broader codebase context.",
+      }),
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    const patchCall = calls.find(
+      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
+    );
+    expect(patchCall?.params).toMatchObject({
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    const agentCall = calls.find((call) => call.method === "agent");
+    const extraSystemPrompt =
+      (agentCall?.params as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
+    expect(extraSystemPrompt).toContain("## Escalation Handoff");
+    expect(extraSystemPrompt).not.toContain("## Escalation Ladder");
+  });
+
+  it("sessions_spawn lets an explicit model override win over the handoff tier model", async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          subagents: {
+            model: "anthropic/claude-haiku-4-5",
+            escalation: {
+              enabled: true,
+              moderateModel: "anthropic/claude-sonnet-4-6",
+              complexModel: "anthropic/claude-opus-4-1",
+            },
+          },
+        },
+      },
+    });
+
+    const calls: GatewayCall[] = [];
+    mockPatchAndSingleAgentRun({ calls, runId: "run-worker-override" });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-worker-override", {
+      task: buildSubagentEscalationHandoffPacket({
+        version: 1,
+        stage: "worker",
+        tier: "complex",
+        taskTag: "dispatch-ticket",
+        reason: "needs_stronger_model",
+        originalTask: "Analyze the orchestration bug.",
+        triageSummary: "Need stronger reasoning and broader codebase context.",
+      }),
+      model: "openai/gpt-5.4",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    const patchCall = calls.find(
+      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
+    );
+    expect(patchCall?.params).toMatchObject({
+      model: "openai/gpt-5.4",
+    });
   });
 });

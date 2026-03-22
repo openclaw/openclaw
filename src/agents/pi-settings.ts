@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export const DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
+const log = createSubsystemLogger("agents/pi-settings");
 
 type PiSettingsManagerLike = {
   getCompactionReserveTokens: () => number;
@@ -58,6 +60,7 @@ function toPositiveInt(value: unknown): number | undefined {
 export function applyPiCompactionSettingsFromConfig(params: {
   settingsManager: PiSettingsManagerLike;
   cfg?: OpenClawConfig;
+  contextWindowTokens?: number;
 }): {
   didOverride: boolean;
   compaction: { reserveTokens: number; keepRecentTokens: number };
@@ -66,12 +69,42 @@ export function applyPiCompactionSettingsFromConfig(params: {
   const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
   const compactionCfg = params.cfg?.agents?.defaults?.compaction;
 
+  const configuredTriggerTokens = toPositiveInt(compactionCfg?.triggerTokens);
+  const configuredTargetTokens = toPositiveInt(compactionCfg?.targetTokens);
   const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
-  const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
+  const configuredKeepRecentTokens =
+    configuredTargetTokens ?? toPositiveInt(compactionCfg?.keepRecentTokens);
   const reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
 
+  let targetReserveTokensFromTrigger: number | undefined;
+  if (configuredTriggerTokens !== undefined) {
+    const contextWindowTokens = toPositiveInt(params.contextWindowTokens);
+    if (contextWindowTokens === undefined) {
+      log.warn(
+        "compaction.triggerTokens configured without resolved contextWindowTokens; " +
+          "falling back to reserveTokens/current Pi settings for this run.",
+      );
+    } else {
+      const derivedReserveTokens = Math.max(0, contextWindowTokens - configuredTriggerTokens);
+      targetReserveTokensFromTrigger = derivedReserveTokens;
+
+      if (derivedReserveTokens <= 0) {
+        log.warn(
+          `compaction.triggerTokens=${configuredTriggerTokens} exceeds or matches ` +
+            `context window ${contextWindowTokens}; reserveTokensFloor/current reserve will clamp ` +
+            "the effective threshold for this run.",
+        );
+      } else if (derivedReserveTokens < reserveTokensFloor) {
+        log.warn(
+          `compaction.triggerTokens=${configuredTriggerTokens} derives reserveTokens=${derivedReserveTokens}, ` +
+            `but reserveTokensFloor=${reserveTokensFloor} raises the effective reserve for this run.`,
+        );
+      }
+    }
+  }
+
   const targetReserveTokens = Math.max(
-    configuredReserveTokens ?? currentReserveTokens,
+    targetReserveTokensFromTrigger ?? configuredReserveTokens ?? currentReserveTokens,
     reserveTokensFloor,
   );
   const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;

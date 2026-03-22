@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
-export const AgentInternalEventSchema = Type.Object(
+const AgentTaskCompletionInternalEventSchema = Type.Object(
   {
     type: Type.Literal("task_completion"),
     source: Type.String({ enum: ["subagent", "cron"] }),
@@ -17,6 +17,30 @@ export const AgentInternalEventSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+const AgentTaskEscalationInternalEventSchema = Type.Object(
+  {
+    type: Type.Literal("task_escalation"),
+    source: Type.Literal("subagent"),
+    childSessionKey: Type.String(),
+    childSessionId: Type.Optional(Type.String()),
+    childRunId: Type.Optional(Type.String()),
+    targetAgentId: Type.String(),
+    taskLabel: Type.String(),
+    taskTag: Type.String(),
+    tier: Type.String({ enum: ["moderate", "complex"] }),
+    reason: Type.String(),
+    resolvedModel: Type.String(),
+    handoffPacket: Type.String(),
+    replyInstruction: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentInternalEventSchema = Type.Union([
+  AgentTaskCompletionInternalEventSchema,
+  AgentTaskEscalationInternalEventSchema,
+]);
 
 export const AgentEventSchema = Type.Object(
   {

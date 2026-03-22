@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import {
+  compact as piCompact,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as compactionModule from "../compaction.js";
@@ -15,6 +19,19 @@ import {
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
 
+vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mariozechner/pi-coding-agent")>();
+  return {
+    ...actual,
+    compact: vi.fn(async (preparation) => ({
+      summary: "pi-default-summary",
+      firstKeptEntryId: preparation.firstKeptEntryId,
+      tokensBefore: preparation.tokensBefore,
+      details: { readFiles: [], modifiedFiles: [] },
+    })),
+  };
+});
+
 vi.mock("../compaction.js", async (importOriginal) => {
   const actual = await importOriginal<typeof compactionModule>();
   return {
@@ -23,6 +40,7 @@ vi.mock("../compaction.js", async (importOriginal) => {
   };
 });
 
+const mockPiCompact = vi.mocked(piCompact);
 const mockSummarizeInStages = vi.mocked(compactionModule.summarizeInStages);
 
 const {
@@ -116,6 +134,7 @@ const createCompactionEvent = (params: { messageText: string; tokensBefore: numb
 const createCompactionContext = (params: {
   sessionManager: ExtensionContext["sessionManager"];
   getApiKeyMock: ReturnType<typeof vi.fn>;
+  contextUsageTokens?: number | null;
 }) =>
   ({
     model: undefined,
@@ -123,7 +142,52 @@ const createCompactionContext = (params: {
     modelRegistry: {
       getApiKey: params.getApiKeyMock,
     },
+    getContextUsage:
+      params.contextUsageTokens === undefined
+        ? undefined
+        : () => ({
+            tokens: params.contextUsageTokens,
+            contextWindow: 200_000,
+            percent: null,
+          }),
   }) as unknown as Partial<ExtensionContext>;
+
+function createBranchEntriesForTargetTests() {
+  return [
+    {
+      id: "entry-1",
+      type: "message",
+      message: { role: "user", content: "older ask", timestamp: 1 },
+      timestamp: 1,
+    },
+    {
+      id: "entry-2",
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "a".repeat(120) }],
+        timestamp: 2,
+      },
+      timestamp: 2,
+    },
+    {
+      id: "entry-3",
+      type: "message",
+      message: { role: "user", content: "recent ask", timestamp: 3 },
+      timestamp: 3,
+    },
+    {
+      id: "entry-4",
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "b".repeat(120) }],
+        timestamp: 4,
+      },
+      timestamp: 4,
+    },
+  ];
+}
 
 async function runCompactionScenario(params: {
   sessionManager: ExtensionContext["sessionManager"];
@@ -437,6 +501,62 @@ describe("compaction-safeguard runtime registry", () => {
     expect(runtime?.recentTurnsPreserve).toBe(99);
     expect(resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries)).toBe(3);
     expect(resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve)).toBe(12);
+  });
+});
+
+describe("compaction-safeguard target tokens", () => {
+  it("uses Pi native compaction in default mode when strict targetTokens are configured", async () => {
+    mockPiCompact.mockClear();
+    mockSummarizeInStages.mockReset();
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      compactionMode: "default",
+      contextWindowTokens: 200_000,
+      model,
+      targetTokens: 60,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+      contextUsageTokens: 140,
+    });
+    const branchEntries = createBranchEntriesForTargetTests();
+    const event = {
+      preparation: {
+        messagesToSummarize: branchEntries
+          .slice(0, 2)
+          .map((entry) => (entry as { message: AgentMessage }).message),
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-3",
+        tokensBefore: 120,
+        fileOps: {
+          read: new Set<string>(),
+          edited: new Set<string>(),
+          written: new Set<string>(),
+        },
+        previousSummary: undefined,
+        settings: { enabled: true, reserveTokens: 4_000, keepRecentTokens: 40 },
+        isSplitTurn: false,
+      },
+      branchEntries,
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(result.compaction?.summary).toBe("pi-default-summary");
+    expect(mockPiCompact).toHaveBeenCalled();
+    expect(mockSummarizeInStages).not.toHaveBeenCalled();
   });
 });
 

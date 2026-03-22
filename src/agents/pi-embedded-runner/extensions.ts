@@ -69,8 +69,13 @@ export function buildEmbeddedExtensionFactories(params: {
   model: Model<Api> | undefined;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
-  if (resolveCompactionMode(params.cfg) === "safeguard") {
-    const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  const compactionMode = resolveCompactionMode(params.cfg);
+  const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  const hasStrictTargetTokens =
+    typeof compactionCfg?.targetTokens === "number" &&
+    Number.isFinite(compactionCfg.targetTokens) &&
+    compactionCfg.targetTokens > 0;
+  if (compactionMode === "safeguard" || hasStrictTargetTokens) {
     const qualityGuardCfg = compactionCfg?.qualityGuard;
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
@@ -80,8 +85,10 @@ export function buildEmbeddedExtensionFactories(params: {
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
     setCompactionSafeguardRuntime(params.sessionManager, {
+      compactionMode,
       maxHistoryShare: compactionCfg?.maxHistoryShare,
       contextWindowTokens: contextWindowInfo.tokens,
+      targetTokens: compactionCfg?.targetTokens,
       identifierPolicy: compactionCfg?.identifierPolicy,
       identifierInstructions: compactionCfg?.identifierInstructions,
       customInstructions: compactionCfg?.customInstructions,

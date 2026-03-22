@@ -73,6 +73,7 @@ Use `sessions_spawn`:
 - Starts a sub-agent run (`deliver: false`, global lane: `subagent`)
 - Then runs an announce step and posts the announce reply to the requester chat channel
 - Default model: inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
+- Optional escalation ladder: set `agents.defaults.subagents.escalation.enabled` plus `moderateModel` / `complexModel` to start run-mode subagents on the cheap `subagents.model` tier and privately respawn a stronger worker only when triage classifies the task as `moderate` or `complex`.
 - Default thinking: inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
 - Default run timeout: if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
 
@@ -126,6 +127,8 @@ See [Configuration Reference](/gateway/configuration-reference) and [Slash comma
 Allowlist:
 
 - `agents.list[].subagents.allowAgents`: list of agent ids that can be targeted via `agentId` (`["*"]` to allow any). Default: only the requester agent.
+- `agents.defaults.subagents.escalation.enabled`: turn on triage-first escalation for run-mode subagent spawns without an explicit `sessions_spawn.model`.
+- `agents.defaults.subagents.escalation.moderateModel` / `complexModel`: stronger worker tiers used when the cheap triage pass requests escalation.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 
 Discovery:
@@ -152,10 +155,16 @@ By default, sub-agents cannot spawn their own sub-agents (`maxSpawnDepth: 1`). Y
   agents: {
     defaults: {
       subagents: {
+        model: "anthropic/claude-haiku-4-5", // cheap default / triage model
         maxSpawnDepth: 2, // allow sub-agents to spawn children (default: 1)
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn when omitted (0 = no timeout)
+        escalation: {
+          enabled: true,
+          moderateModel: "anthropic/claude-sonnet-4-6",
+          complexModel: "anthropic/claude-opus-4-1",
+        },
       },
     },
   },

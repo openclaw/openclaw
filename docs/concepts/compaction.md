@@ -21,7 +21,13 @@ Compaction **persists** in the session’s JSONL history.
 
 ## Configuration
 
-Use the `agents.defaults.compaction` setting in your `openclaw.json` to configure compaction behavior (mode, target tokens, etc.).
+Use the `agents.defaults.compaction` setting in your `openclaw.json` to configure compaction behavior, including:
+
+- `triggerTokens`: model-aware full-context threshold for auto-compaction after a successful turn
+- `targetTokens`: strict-best-effort full-context target after compaction
+- legacy Pi-native `reserveTokens` / `keepRecentTokens` overrides
+- safeguard behavior and compaction-only model selection
+
 Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). You can override this with `identifierPolicy: "off"` or provide custom text with `identifierPolicy: "custom"` and `identifierInstructions`.
 
 You can optionally specify a different model for compaction summarization via `agents.defaults.compaction.model`. This is useful when your primary model is a local or small model and you want compaction summaries produced by a more capable model. The override accepts any `provider/model-id` string:
@@ -56,7 +62,14 @@ When unset, compaction uses the agent's primary model.
 
 ## Auto-compaction (default on)
 
-When a session nears or exceeds the model’s context window, OpenClaw triggers auto-compaction and may retry the original request using the compacted context.
+Pi auto-compaction triggers in two cases:
+
+- Overflow recovery: the model returns a context overflow error, so Pi compacts and retries.
+- Threshold maintenance: after a successful turn, when `contextTokens > contextWindow - reserveTokens`.
+
+`triggerTokens` is an OpenClaw convenience layer on top of that Pi behavior. OpenClaw resolves the active model window, derives `reserveTokens = contextWindow - triggerTokens`, then still applies `reserveTokensFloor`.
+
+`targetTokens` is separate from the trigger. It is a strict-best-effort post-compaction budget that can recompute the cut point and retry compaction to reduce the resulting full context size.
 
 You’ll see:
 

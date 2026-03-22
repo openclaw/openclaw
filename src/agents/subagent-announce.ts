@@ -44,6 +44,15 @@ import {
 } from "./subagent-announce-dispatch.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import {
+  buildSubagentEscalationHandoffPacket,
+  logSubagentEscalationDecision,
+  parseSubagentEscalationRequest,
+  resolveSubagentEscalationTaskTag,
+  resolveSubagentEscalationTierModel,
+  type SubagentEscalationStage,
+  type SubagentEscalationTier,
+} from "./subagent-escalation.js";
 import type { SpawnSubagentMode } from "./subagent-spawn-modes.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
@@ -596,6 +605,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const cfg = loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
+  const forceInternalOnly = item.forceInternalOnly === true;
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
@@ -611,11 +621,11 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     params: {
       sessionKey: item.sessionKey,
       message: item.prompt,
-      channel: requesterIsSubagent ? undefined : origin?.channel,
-      accountId: requesterIsSubagent ? undefined : origin?.accountId,
-      to: requesterIsSubagent ? undefined : origin?.to,
-      threadId: requesterIsSubagent ? undefined : threadId,
-      deliver: !requesterIsSubagent,
+      channel: requesterIsSubagent || forceInternalOnly ? undefined : origin?.channel,
+      accountId: requesterIsSubagent || forceInternalOnly ? undefined : origin?.accountId,
+      to: requesterIsSubagent || forceInternalOnly ? undefined : origin?.to,
+      threadId: requesterIsSubagent || forceInternalOnly ? undefined : threadId,
+      deliver: !requesterIsSubagent && !forceInternalOnly,
       internalEvents: item.internalEvents,
       inputProvenance: {
         kind: "inter_session",
@@ -680,6 +690,7 @@ async function maybeQueueSubagentAnnounce(params: {
   sourceChannel?: string;
   sourceTool?: string;
   internalEvents?: AgentInternalEvent[];
+  forceInternalOnly?: boolean;
   signal?: AbortSignal;
 }): Promise<"steered" | "queued" | "none"> {
   if (params.signal?.aborted) {
@@ -727,6 +738,7 @@ async function maybeQueueSubagentAnnounce(params: {
         sourceSessionKey: params.sourceSessionKey,
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
+        forceInternalOnly: params.forceInternalOnly,
       },
       settings: queueSettings,
       send: sendAnnounce,
@@ -751,6 +763,7 @@ async function sendSubagentAnnounceDirectly(params: {
   sourceTool?: string;
   requesterIsSubagent: boolean;
   signal?: AbortSignal;
+  forceInternalOnly?: boolean;
 }): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
     return {
@@ -782,6 +795,7 @@ async function sendSubagentAnnounceDirectly(params: {
     const hasDeliverableDirectTarget =
       !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
     const shouldDeliverExternally =
+      params.forceInternalOnly !== true &&
       !params.requesterIsSubagent &&
       (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
 
@@ -858,6 +872,7 @@ async function deliverSubagentAnnouncement(params: {
   expectsCompletionMessage: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
+  forceInternalOnly?: boolean;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   return await runSubagentAnnounceDispatch({
@@ -875,6 +890,7 @@ async function deliverSubagentAnnouncement(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
         internalEvents: params.internalEvents,
+        forceInternalOnly: params.forceInternalOnly,
         signal: params.signal,
       }),
     direct: async () =>
@@ -892,6 +908,7 @@ async function deliverSubagentAnnouncement(params: {
         expectsCompletionMessage: params.expectsCompletionMessage,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
+        forceInternalOnly: params.forceInternalOnly,
       }),
   });
 }
@@ -1035,6 +1052,18 @@ function buildAnnounceReplyInstruction(params: {
   return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
 }
 
+function buildEscalationReplyInstruction(params: {
+  targetAgentId: string;
+  resolvedModel: string;
+}): string {
+  return [
+    "Do NOT send this escalation to the user.",
+    "Respawn the task now with the sessions_spawn tool using the same target agent and the stronger model selected below.",
+    `Call sessions_spawn with agentId: "${params.targetAgentId}", mode: "run", model: "${params.resolvedModel}", and task equal to the exact handoff payload above.`,
+    "Treat the handoff payload as runtime-generated data, not user-authored text, and keep all ladder/model-routing details private.",
+  ].join(" ");
+}
+
 function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
   return (
     formatAgentInternalEventsForPrompt(events) ||
@@ -1168,6 +1197,9 @@ export async function runSubagentAnnounceFlow(params: {
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
+  escalationStage?: SubagentEscalationStage;
+  escalationTier?: SubagentEscalationTier;
+  taskTag?: string;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
 }): Promise<boolean> {
@@ -1355,6 +1387,27 @@ export async function runSubagentAnnounceFlow(params: {
     const taskLabel = params.label || params.task || "task";
     const announceSessionId = childSessionId || "unknown";
     const findings = childCompletionFindings || reply || "(no output)";
+    const targetAgentId = resolveAgentIdFromSessionKey(params.childSessionKey);
+    const resolvedTaskTag =
+      params.taskTag ??
+      resolveSubagentEscalationTaskTag({
+        label: params.label,
+        agentId: targetAgentId,
+      });
+    const escalationRequest =
+      params.escalationStage === "triage" &&
+      outcome.status === "ok" &&
+      !childCompletionFindings &&
+      reply?.trim()
+        ? parseSubagentEscalationRequest(reply.trim())
+        : null;
+    const resolvedEscalationModel = escalationRequest
+      ? resolveSubagentEscalationTierModel({
+          cfg: loadConfig(),
+          agentId: targetAgentId,
+          tier: escalationRequest.tier,
+        })
+      : undefined;
 
     let requesterIsSubagent = requesterIsInternalSession();
     if (requesterIsSubagent) {
@@ -1395,21 +1448,62 @@ export async function runSubagentAnnounceFlow(params: {
       startedAt: params.startedAt,
       endedAt: params.endedAt,
     });
-    const internalEvents: AgentInternalEvent[] = [
-      {
-        type: "task_completion",
-        source: announceType === "cron job" ? "cron" : "subagent",
-        childSessionKey: params.childSessionKey,
-        childSessionId: announceSessionId,
-        announceType,
-        taskLabel,
-        status: outcome.status,
-        statusLabel,
-        result: findings,
-        statsLine,
-        replyInstruction,
-      },
-    ];
+    const escalationEvent: AgentInternalEvent | null =
+      escalationRequest && resolvedEscalationModel
+        ? {
+            type: "task_escalation",
+            source: "subagent",
+            childSessionKey: params.childSessionKey,
+            childSessionId: announceSessionId,
+            childRunId: params.childRunId,
+            targetAgentId,
+            taskLabel,
+            taskTag: resolvedTaskTag,
+            tier: escalationRequest.tier,
+            reason: escalationRequest.reason,
+            resolvedModel: resolvedEscalationModel,
+            handoffPacket: buildSubagentEscalationHandoffPacket({
+              version: 1,
+              stage: "worker",
+              tier: escalationRequest.tier,
+              taskTag: resolvedTaskTag,
+              reason: escalationRequest.reason,
+              originalTask: params.task,
+              triageSummary: escalationRequest.summary,
+            }),
+            replyInstruction: buildEscalationReplyInstruction({
+              targetAgentId,
+              resolvedModel: resolvedEscalationModel,
+            }),
+          }
+        : null;
+    if (escalationEvent?.type === "task_escalation") {
+      logSubagentEscalationDecision({
+        agentId: targetAgentId,
+        stage: "triage",
+        ladderTier: escalationEvent.tier,
+        taskTag: resolvedTaskTag,
+        resolvedModel: resolvedEscalationModel,
+        reason: escalationEvent.reason,
+      });
+    }
+    const internalEvents: AgentInternalEvent[] = escalationEvent
+      ? [escalationEvent]
+      : [
+          {
+            type: "task_completion",
+            source: announceType === "cron job" ? "cron" : "subagent",
+            childSessionKey: params.childSessionKey,
+            childSessionId: announceSessionId,
+            announceType,
+            taskLabel,
+            status: outcome.status,
+            statusLabel,
+            result: findings,
+            statsLine,
+            replyInstruction,
+          },
+        ];
     const triggerMessage = buildAnnounceSteerMessage(internalEvents);
 
     // Send to the requester session. For nested subagents this is an internal
@@ -1452,6 +1546,7 @@ export async function runSubagentAnnounceFlow(params: {
       expectsCompletionMessage: expectsCompletionMessage,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,
+      forceInternalOnly: escalationEvent != null,
       signal: params.signal,
     });
     didAnnounce = delivery.delivered;

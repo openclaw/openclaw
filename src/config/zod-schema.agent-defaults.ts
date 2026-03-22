@@ -14,6 +14,44 @@ import {
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
+function hasConfiguredAgentModel(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const primary = (value as { primary?: unknown }).primary;
+  return typeof primary === "string" && primary.trim().length > 0;
+}
+
+const SubagentEscalationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    moderateModel: AgentModelSchema.optional(),
+    complexModel: AgentModelSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.enabled !== true) {
+      return;
+    }
+    if (!hasConfiguredAgentModel(value.moderateModel)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "moderateModel is required when subagent escalation is enabled",
+        path: ["moderateModel"],
+      });
+    }
+    if (!hasConfiguredAgentModel(value.complexModel)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "complexModel is required when subagent escalation is enabled",
+        path: ["complexModel"],
+      });
+    }
+  });
+
 export const AgentDefaultsSchema = z
   .object({
     model: AgentModelSchema.optional(),
@@ -87,6 +125,8 @@ export const AgentDefaultsSchema = z
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
+        triggerTokens: z.number().int().positive().optional(),
+        targetTokens: z.number().int().positive().optional(),
         reserveTokens: z.number().int().nonnegative().optional(),
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
@@ -186,6 +226,7 @@ export const AgentDefaultsSchema = z
           ),
         archiveAfterMinutes: z.number().int().positive().optional(),
         model: AgentModelSchema.optional(),
+        escalation: SubagentEscalationSchema.optional(),
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),

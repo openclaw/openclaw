@@ -228,7 +228,7 @@ These are Pi runtime semantics (OpenClaw consumes the events, but Pi decides whe
 
 ---
 
-## Compaction settings (`reserveTokens`, `keepRecentTokens`)
+## Compaction settings (`triggerTokens`, `targetTokens`, `reserveTokens`, `keepRecentTokens`)
 
 Pi’s compaction settings live in Pi settings:
 
@@ -242,17 +242,45 @@ Pi’s compaction settings live in Pi settings:
 }
 ```
 
+OpenClaw adds two higher-level config fields on top of those Pi settings:
+
+- `triggerTokens`: full live-context token threshold after a successful turn.
+  OpenClaw resolves the active model window and derives:
+
+  `reserveTokens = contextWindow - triggerTokens`
+
+  Example: `contextWindow=200000` and `triggerTokens=80000` derive
+  `reserveTokens=120000`.
+
+- `targetTokens`: strict-best-effort full live-context budget after compaction.
+  OpenClaw recomputes the retained-history budget from live context usage when
+  possible, adjusts the cut point, and retries compaction with a smaller kept
+  suffix when the first pass still exceeds the target.
+
+Precedence:
+
+- `triggerTokens` overrides legacy `reserveTokens`.
+- `targetTokens` overrides legacy `keepRecentTokens`.
+- Legacy `reserveTokens` / `keepRecentTokens` still work when the new fields are unset.
+
 OpenClaw also enforces a safety floor for embedded runs:
 
 - If `compaction.reserveTokens < reserveTokensFloor`, OpenClaw bumps it.
 - Default floor is `20000` tokens.
 - Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor.
 - If it’s already higher, OpenClaw leaves it alone.
+- If `triggerTokens` derives a lower reserve than the floor, the floor wins and the effective trigger becomes earlier than requested.
 
 Why: leave enough headroom for multi-turn “housekeeping” (like memory writes) before compaction becomes unavoidable.
 
-Implementation: `ensurePiCompactionReserveTokens()` in `src/agents/pi-settings.ts`
-(called from `src/agents/pi-embedded-runner.ts`).
+`targetTokens` is strict-best-effort, not an exact mathematical guarantee. Summary
+size and token estimation are variable, so OpenClaw compacts as aggressively as
+possible and warns if the target is impossible because fixed prompt/bootstrap
+overhead already consumes the budget.
+
+Implementation: `applyPiCompactionSettingsFromConfig()` in `src/agents/pi-settings.ts`
+for model-aware `triggerTokens`, plus the embedded compaction extension runtime
+for strict-best-effort `targetTokens`.
 
 ---
 
