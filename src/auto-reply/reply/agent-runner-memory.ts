@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
+import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
@@ -41,6 +42,76 @@ import {
 } from "./memory-flush.js";
 import type { FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
+
+const CONTEXT_TRIGGERS =
+  /\b(remember|last time|before|earlier|yesterday|previous|we discussed|you said|I told you|what was|did we|pending|todo|remind me|what happened)\b/i;
+
+export function matchesContextTrigger(message: string): boolean {
+  return CONTEXT_TRIGGERS.test(message);
+}
+
+export type MemoryPrefetchResult = {
+  results: Array<{ path: string; line?: number; content: string; score: number }>;
+  query: string;
+};
+
+export async function prefetchMemoryIfNeeded(params: {
+  message: string;
+  agentId: string;
+  config: OpenClawConfig;
+}): Promise<MemoryPrefetchResult | null> {
+  if (!matchesContextTrigger(params.message)) {
+    return null;
+  }
+  const memConfig = resolveMemorySearchConfig(params.config, params.agentId);
+  if (!memConfig) {
+    return null;
+  }
+
+  try {
+    // Dynamic import avoids a static circular dependency; memory/index is not
+    // imported anywhere else in the auto-reply module tree.
+    const { getMemorySearchManager } = await import("../../memory/index.js");
+    const { manager } = await getMemorySearchManager({
+      cfg: params.config,
+      agentId: params.agentId,
+    });
+    if (!manager) {
+      return null;
+    }
+
+    const query = params.message.slice(0, 100);
+    const results = await Promise.race([
+      manager.search(query, { maxResults: 3 }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("memory prefetch timeout")), 5000),
+      ),
+    ]);
+    if (!results || results.length === 0) {
+      return null;
+    }
+    return {
+      results: results.map((r) => ({
+        path: r.path,
+        line: r.startLine,
+        content: r.snippet.slice(0, 200),
+        score: r.score,
+      })),
+      query,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function formatPrefetchAsSystemMessage(prefetch: MemoryPrefetchResult): string {
+  const lines = ["[Memory context — auto-retrieved, may be relevant:]"];
+  for (const r of prefetch.results) {
+    const loc = r.line ? `${r.path}#L${r.line}` : r.path;
+    lines.push(`- From ${loc}: "${r.content.trim()}"`);
+  }
+  return lines.join("\n");
+}
 
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
   const trimmed = prompt?.trim();

@@ -37,7 +37,11 @@ import {
   isAudioPayload,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
-import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
+import {
+  formatPrefetchAsSystemMessage,
+  prefetchMemoryIfNeeded,
+  runMemoryFlushIfNeeded,
+} from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import {
   appendUnscheduledReminderNote,
@@ -239,6 +243,20 @@ export async function runReplyAgent(params: {
     storePath,
     isHeartbeat,
   });
+
+  // Pre-fetch memory when the user message references prior context, injecting
+  // results as a system event so the agent sees them even if it skips memory_search.
+  const prefetchAgentId = sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined;
+  if (prefetchAgentId && !isHeartbeat && sessionKey) {
+    const prefetch = await prefetchMemoryIfNeeded({
+      message: commandBody,
+      agentId: prefetchAgentId,
+      config: cfg,
+    });
+    if (prefetch) {
+      enqueueSystemEvent(formatPrefetchAsSystemMessage(prefetch), { sessionKey });
+    }
+  }
 
   const runFollowupTurn = createFollowupRunner({
     opts,
