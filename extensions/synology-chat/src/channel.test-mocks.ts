@@ -15,6 +15,19 @@ export const registerPluginHttpRouteMock: Mock<(params: RegisteredRoute) => () =
 export const dispatchReplyWithBufferedBlockDispatcher: Mock<
   () => Promise<{ counts: Record<string, number> }>
 > = vi.fn().mockResolvedValue({ counts: {} });
+export const finalizeInboundContextMock: Mock<
+  (ctx: Record<string, unknown>) => Record<string, unknown>
+> = vi.fn((ctx) => ctx);
+export const resolveAgentRouteMock: Mock<
+  (params: { accountId?: string }) => { agentId: string; sessionKey: string; accountId: string }
+> = vi.fn((params) => {
+  const accountId = params.accountId?.trim() || "default";
+  return {
+    agentId: `agent-${accountId}`,
+    sessionKey: `agent:agent-${accountId}:main`,
+    accountId,
+  };
+});
 
 async function readRequestBodyWithLimitForTest(req: IncomingMessage): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
@@ -62,13 +75,18 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
 vi.mock("./client.js", () => ({
   sendMessage: vi.fn().mockResolvedValue(true),
   sendFileUrl: vi.fn().mockResolvedValue(true),
+  resolveChatUserId: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./runtime.js", () => ({
   getSynologyRuntime: vi.fn(() => ({
     config: { loadConfig: vi.fn().mockResolvedValue({}) },
     channel: {
+      routing: {
+        resolveAgentRoute: resolveAgentRouteMock,
+      },
       reply: {
+        finalizeInboundContext: finalizeInboundContextMock,
         dispatchReplyWithBufferedBlockDispatcher,
       },
     },
