@@ -66,16 +66,12 @@ describe("memory plugin e2e", () => {
     }) as MemoryPluginTestConfig | undefined;
   }
 
-  test("memory plugin registers and initializes correctly", async () => {
-    // Dynamic import to avoid loading LanceDB when not testing
+  test("memory plugin exports stable metadata", async () => {
     const { default: memoryPlugin } = await import("./index.js");
 
     expect(memoryPlugin.id).toBe("memory-lancedb");
     expect(memoryPlugin.name).toBe("Memory (LanceDB)");
     expect(memoryPlugin.kind).toBe("memory");
-    expect(memoryPlugin.configSchema).toBeDefined();
-    // oxlint-disable-next-line typescript/unbound-method
-    expect(memoryPlugin.register).toBeInstanceOf(Function);
   });
 
   test("config schema parses valid config", async () => {
@@ -84,7 +80,6 @@ describe("memory plugin e2e", () => {
       autoRecall: true,
     });
 
-    expect(config).toBeDefined();
     expect(config?.embedding?.apiKey).toBe(OPENAI_API_KEY);
     expect(config?.dbPath).toBe(getDbPath());
     expect(config?.captureMaxChars).toBe(500);
@@ -214,7 +209,9 @@ describe("memory plugin e2e", () => {
       // oxlint-disable-next-line typescript/no-explicit-any
       memoryPlugin.register(mockApi as any);
       const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
-      expect(recallTool).toBeDefined();
+      if (!recallTool) {
+        throw new Error("memory_recall tool was not registered");
+      }
       await recallTool.execute("test-call-dims", { query: "hello dimensions" });
 
       expect(embeddingsCreate).toHaveBeenCalledWith({
@@ -375,8 +372,8 @@ describeLive("memory plugin live tests", () => {
     });
 
     expect(storeResult.details?.action).toBe("created");
-    expect(storeResult.details?.id).toBeDefined();
     const storedId = storeResult.details?.id;
+    expect(storedId).toMatch(/.+/);
 
     // Test recall
     const recallResult = await recallTool.execute("test-call-2", {

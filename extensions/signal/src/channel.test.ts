@@ -11,7 +11,7 @@ describe("signalPlugin outbound sendMedia", () => {
       throw new Error("signal outbound sendMedia is unavailable");
     }
 
-    await sendMedia({
+    const result = await sendMedia({
       cfg: {} as never,
       to: "signal:+15551234567",
       text: "photo",
@@ -30,6 +30,7 @@ describe("signalPlugin outbound sendMedia", () => {
         accountId: "default",
       }),
     );
+    expect(result).toEqual({ channel: "signal", messageId: "m1" });
   });
 });
 

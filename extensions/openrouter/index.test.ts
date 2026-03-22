@@ -65,8 +65,9 @@ describeLive("openrouter plugin live", () => {
     const provider =
       // oxlint-disable-next-line typescript/no-explicit-any
       providers.find((entry) => (entry as any).id === "openrouter");
-
-    expect(provider).toBeDefined();
+    if (!provider) {
+      throw new Error("openrouter provider was not registered");
+    }
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const resolved = (provider as any).resolveDynamicModel?.({
