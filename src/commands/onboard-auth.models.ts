@@ -22,6 +22,9 @@ const MINIMAX_API_COST = { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite:
 const MINIMAX_HOSTED_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const MINIMAX_LM_STUDIO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const MINIMAX_MODEL_CATALOG = {
+  "MiniMax-M2": { name: "MiniMax M2", reasoning: true },
+  "MiniMax-M2.1": { name: "MiniMax M2.1", reasoning: true },
+  "MiniMax-M2.1-highspeed": { name: "MiniMax M2.1 Highspeed", reasoning: true },
   "MiniMax-M2.7": { name: "MiniMax M2.7", reasoning: true },
   "MiniMax-M2.7-highspeed": { name: "MiniMax M2.7 Highspeed", reasoning: true },
   "MiniMax-M2.5": { name: "MiniMax M2.5", reasoning: true },
