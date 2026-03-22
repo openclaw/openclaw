@@ -347,6 +347,15 @@ describe("runMessageAction context isolation", () => {
         poll_public: "true",
       },
     },
+    {
+      name: "negative poll duration params",
+      actionParams: {
+        channel: "slack",
+        target: "#C12345678",
+        message: "hi",
+        pollDurationSeconds: -5,
+      },
+    },
   ])("rejects send actions that include $name", async ({ actionParams }) => {
     await expect(
       runDrySend({
