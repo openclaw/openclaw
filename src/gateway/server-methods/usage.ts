@@ -615,8 +615,11 @@ export const usageHandlers: GatewayRequestHandlers = {
         aggregateTotals.missingCostEntries += usage.missingCostEntries;
       }
 
-      const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
-      const chatType = merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;
+      // Origin provider is the channel that *originated* the message; storeEntry.channel
+      // is the delivery/group channel set by deriveGroupSessionPatch. For usage attribution
+      // the originating channel is the correct bucket key (#52436).
+      const channel = merged.storeEntry?.origin?.provider ?? merged.storeEntry?.channel;
+      const chatType = merged.storeEntry?.origin?.chatType ?? merged.storeEntry?.chatType;
 
       if (usage) {
         if (usage.messageCounts) {
