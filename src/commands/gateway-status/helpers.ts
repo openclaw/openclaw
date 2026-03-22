@@ -5,7 +5,7 @@ import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../../gateway/credentials.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
-import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
+import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { pickGatewaySelfPresence } from "../gateway-presence.js";
 
@@ -79,14 +79,6 @@ function normalizeWsUrl(value: string): string | null {
     return null;
   }
   return trimmed;
-}
-
-function pickPrimaryTailnetIPv4ForStatus(): string | undefined {
-  try {
-    return pickPrimaryTailnetIPv4();
-  } catch {
-    return undefined;
-  }
 }
 
 export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): GatewayStatusTarget[] {
@@ -318,7 +310,7 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
 }
 
 export function buildNetworkHints(cfg: OpenClawConfig) {
-  const tailnetIPv4 = pickPrimaryTailnetIPv4ForStatus();
+  const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
   const port = resolveGatewayPort(cfg);
   return {
     localLoopbackUrl: `ws://127.0.0.1:${port}`,
