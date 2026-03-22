@@ -355,6 +355,8 @@ const SSRF_ALWAYS_BLOCKED_SUFFIXES = [".localhost", ".local", ".internal"];
 
 // Bare hostnames the SSRF guard unconditionally blocks. Rejecting at schema time avoids
 // confusing SsrFBlockedError at request time when operators follow documented examples.
+// Note: single-label hostnames like `localhost` are blocked here because the SSRF guard
+// blocks them unconditionally at the network level; the allowlist cannot override that.
 const SSRF_ALWAYS_BLOCKED_BARE = new Set([
   "localhost",
   "localhost.localdomain",
