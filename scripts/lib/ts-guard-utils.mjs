@@ -7,7 +7,15 @@ const require = createRequire(import.meta.url);
 let tsCache;
 
 function getTypeScript() {
-  tsCache ??= require("typescript");
+  if (!tsCache) {
+    try {
+      tsCache = require("typescript");
+    } catch {
+      // Some lightweight CI jobs intentionally do not install full JS deps.
+      // AST helpers should fail lazily only when invoked.
+      throw new Error("typescript dependency is required for AST guard helpers but is not installed");
+    }
+  }
   return tsCache;
 }
 
@@ -121,26 +129,26 @@ export function toLine(sourceFile, node) {
 }
 
 export function getPropertyNameText(name) {
-  const ts = getTypeScript();
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+  const tsApi = getTypeScript();
+  if (tsApi.isIdentifier(name) || tsApi.isStringLiteral(name) || tsApi.isNumericLiteral(name)) {
     return name.text;
   }
   return null;
 }
 
 export function unwrapExpression(expression) {
-  const ts = getTypeScript();
+  const tsApi = getTypeScript();
   let current = expression;
   while (true) {
-    if (ts.isParenthesizedExpression(current)) {
+    if (tsApi.isParenthesizedExpression(current)) {
       current = current.expression;
       continue;
     }
-    if (ts.isAsExpression(current) || ts.isTypeAssertionExpression(current)) {
+    if (tsApi.isAsExpression(current) || tsApi.isTypeAssertionExpression(current)) {
       current = current.expression;
       continue;
     }
-    if (ts.isNonNullExpression(current)) {
+    if (tsApi.isNonNullExpression(current)) {
       current = current.expression;
       continue;
     }
