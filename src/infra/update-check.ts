@@ -341,6 +341,37 @@ export async function resolveNpmChannelTag(params: {
   return { tag: channelTag, version: channelStatus.version };
 }
 
+/**
+ * OpenClaw publishes CalVer builds like `2026.3.13-1`. Semver ordering treats any prerelease
+ * as older than a plain release, so `compareSemverStrings("2026.3.13-1", "2026.3.13")` is `< 0`
+ * even when the install is already on the same published line. Use this helper to suppress
+ * false "update available" when the only difference is a numeric build suffix on the install.
+ */
+export function shouldTreatCalVerBuildAsUpToDate(
+  installedVersion: string,
+  latestVersion: string | null | undefined,
+): boolean {
+  if (!latestVersion) {
+    return false;
+  }
+  const inst = parseComparableSemver(installedVersion);
+  const latest = parseComparableSemver(latestVersion);
+  if (!inst || !latest) {
+    return false;
+  }
+  if (inst.major !== latest.major || inst.minor !== latest.minor || inst.patch !== latest.patch) {
+    return false;
+  }
+  if (latest.prerelease != null && latest.prerelease.length > 0) {
+    return false;
+  }
+  if (!inst.prerelease || inst.prerelease.length !== 1) {
+    return false;
+  }
+  const token = inst.prerelease[0] ?? "";
+  return /^[0-9]+$/.test(token);
+}
+
 export function compareSemverStrings(a: string | null, b: string | null): number | null {
   const pa = parseComparableSemver(a);
   const pb = parseComparableSemver(b);

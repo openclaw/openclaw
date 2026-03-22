@@ -3,6 +3,7 @@ import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
+  shouldTreatCalVerBuildAsUpToDate,
   type UpdateCheckResult,
 } from "../infra/update-check.js";
 import { VERSION } from "../version.js";
@@ -35,7 +36,15 @@ export type UpdateAvailability = {
 
 export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvailability {
   const latestVersion = update.registry?.latestVersion ?? null;
-  const registryCmp = latestVersion ? compareSemverStrings(VERSION, latestVersion) : null;
+  let registryCmp = latestVersion ? compareSemverStrings(VERSION, latestVersion) : null;
+  if (
+    registryCmp != null &&
+    registryCmp < 0 &&
+    latestVersion &&
+    shouldTreatCalVerBuildAsUpToDate(VERSION, latestVersion)
+  ) {
+    registryCmp = 0;
+  }
   const hasRegistryUpdate = registryCmp != null && registryCmp < 0;
   const gitBehind =
     update.installKind === "git" && typeof update.git?.behind === "number"

@@ -10,7 +10,27 @@ import {
   fetchNpmTagVersion,
   formatGitInstallLabel,
   resolveNpmChannelTag,
+  shouldTreatCalVerBuildAsUpToDate,
 } from "./update-check.js";
+
+describe("shouldTreatCalVerBuildAsUpToDate", () => {
+  it("treats numeric calver build suffix as up to date vs plain release", () => {
+    expect(shouldTreatCalVerBuildAsUpToDate("2026.3.13-1", "2026.3.13")).toBe(true);
+    expect(compareSemverStrings("2026.3.13-1", "2026.3.13")).toBe(-1);
+  });
+
+  it("returns false when latest is itself a prerelease", () => {
+    expect(shouldTreatCalVerBuildAsUpToDate("2026.3.13-1", "2026.3.13-beta.1")).toBe(false);
+  });
+
+  it("returns false when patch line differs", () => {
+    expect(shouldTreatCalVerBuildAsUpToDate("2026.3.13-1", "2026.3.14")).toBe(false);
+  });
+
+  it("returns false when install has no numeric-only build suffix", () => {
+    expect(shouldTreatCalVerBuildAsUpToDate("2026.3.13-beta.1", "2026.3.13")).toBe(false);
+  });
+});
 
 describe("compareSemverStrings", () => {
   it("handles stable and prerelease precedence for both legacy and beta formats", () => {
