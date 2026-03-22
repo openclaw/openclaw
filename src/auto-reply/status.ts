@@ -488,7 +488,10 @@ export function buildStatusMessage(args: StatusArgs): string {
           }
         } else {
           activeModel = logUsage.model;
-          contextLookupProvider = undefined;
+          // Bare transcript model IDs should keep provider-aware lookup when the
+          // active provider is already known so shared model names still resolve
+          // to the correct provider-specific window.
+          contextLookupProvider = activeProvider;
           contextLookupModel = logUsage.model;
         }
       }

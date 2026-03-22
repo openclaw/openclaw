@@ -913,6 +913,51 @@ describe("buildStatusMessage", () => {
       { prefix: "openclaw-status-" },
     );
   });
+
+  it("keeps provider-aware lookup for bare transcript model ids", async () => {
+    await withTempHome(
+      async (dir) => {
+        MODEL_CONTEXT_TOKEN_CACHE.set("gemini-2.5-pro", 128_000);
+        MODEL_CONTEXT_TOKEN_CACHE.set("google-gemini-cli/gemini-2.5-pro", 1_000_000);
+
+        const sessionId = "sess-google-bare-model";
+        writeTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+          model: "gemini-2.5-pro",
+          usage: {
+            input: 2,
+            output: 3,
+            cacheRead: 1200,
+            cacheWrite: 0,
+            totalTokens: 1205,
+          },
+        });
+
+        const text = buildStatusMessage({
+          agent: {
+            model: "google-gemini-cli/gemini-2.5-pro",
+          },
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            totalTokens: 5,
+          },
+          sessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "api-key",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Context: 1.2k/1.0m");
+        expect(normalized).not.toContain("Context: 1.2k/128k");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
 });
 
 describe("buildCommandsMessage", () => {
