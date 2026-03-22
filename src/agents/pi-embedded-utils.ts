@@ -337,7 +337,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (!Array.isArray(originalContent)) {
     return;
   }
-  const hasThinkingBlock = message.content.some(
+  const hasThinkingBlock = originalContent.some(
     (block) => block && typeof block === "object" && block.type === "thinking",
   );
   if (hasThinkingBlock) {
@@ -347,7 +347,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   const next: AssistantMessage["content"] = [];
   let changed = false;
 
-  for (const block of message.content) {
+  for (const block of originalContent) {
     if (block?.type !== "text") {
       next.push(block);
       continue;
@@ -363,114 +363,6 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
         next.push({ type: "thinking", thinking: part.thinking });
       } else {
         next.push(part);
-      }
-    }
-  }
-
-  if (changed) {
-    message.content = next;
-  }
-}
-
-/**
- * Scan assistant message content for MiniMax-specific XML tool calls.
- */
-export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void {
-  if (!message) {
-    return;
-  }
-
-  const messageContent: unknown = message.content;
-
-  // Handle string-form assistant content by converting it to a block array first.
-  if (typeof messageContent === "string") {
-    if (!messageContent.toLowerCase().includes("minimax:tool_call")) {
-      return;
-    }
-
-    // IMPORTANT: First promote thinking tags while it's still a single string.
-    // This handles cases where XML is nested inside <think> tags.
-    promoteThinkingTagsToBlocks(message);
-
-    // If it was promoted to blocks, we continue with the array-based logic below.
-    // If it's still a string (e.g. no think tags), we split it manually here.
-    if (typeof message.content !== "string") {
-      promoteMinimaxToolCallsToBlocks(message);
-      return;
-    }
-
-    const split = splitMinimaxToolCalls(messageContent);
-    if (!split) {
-      return;
-    }
-    const next: AssistantMessage["content"] = [];
-    for (const part of split) {
-      if (part.type === "toolCall") {
-        next.push({
-          type: "toolCall",
-          id: part.id,
-          name: part.name,
-          arguments: part.arguments,
-        } as unknown as AssistantMessage["content"][number]);
-      } else {
-        next.push({ type: "text", text: part.text });
-      }
-    }
-    message.content = next;
-    return;
-  }
-
-  if (!Array.isArray(messageContent)) {
-    return;
-  }
-
-  const next: AssistantMessage["content"] = [];
-  let changed = false;
-
-  for (const block of messageContent) {
-    if (!block || typeof block !== "object") {
-      next.push(block);
-      continue;
-    }
-
-    const type = block.type as string;
-    // Handle both text and thinking blocks as sources for XML tool calls.
-    const textValue =
-      type === "text"
-        ? (block as { text: string }).text
-        : type === "thinking"
-          ? (block as { thinking: string }).thinking
-          : null;
-
-    if (typeof textValue !== "string") {
-      next.push(block);
-      continue;
-    }
-
-    const split = splitMinimaxToolCalls(textValue);
-    if (!split) {
-      next.push(block);
-      continue;
-    }
-
-    changed = true;
-    for (const part of split) {
-      if (part.type === "toolCall") {
-        next.push({
-          type: "toolCall",
-          id: part.id,
-          name: part.name,
-          arguments: part.arguments,
-        } as unknown as AssistantMessage["content"][number]);
-      } else {
-        if (type === "thinking") {
-          next.push({
-            type: "thinking",
-            thinking: part.text,
-          } as unknown as AssistantMessage["content"][number]);
-        } else {
-          next.push({ type: "text", text: part.text });
-        }
       }
     }
   }
@@ -593,19 +485,18 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
     return null;
   }
 
-  const combinedRe = new RegExp(
-    `(${MINIMAX_INVOKE_RE.source})|(${MINIMAX_MARKER_RE.source})`,
-    "gi",
-  );
+  // Find all MiniMax wrapper tags to determine valid promotion ranges.
+  const wrapperRe = /<minimax:tool_call>([\s\S]*?)<\/minimax:tool_call>|<\/minimax:tool_call>/gi;
 
   const blocks: MinimaxToolCallSplitBlock[] = [];
   let cursor = 0;
   let hasToolCall = false;
 
-  for (const match of text.matchAll(combinedRe)) {
+  for (const match of text.matchAll(wrapperRe)) {
     const index = match.index ?? 0;
-    const [fullMatch, invokeMatch, attributes, invokeBody] = match;
+    const [fullMatch, innerContent] = match;
 
+    // Push preceding text prose (this is safely outside any wrapper)
     if (index > cursor) {
       const prose = text.slice(cursor, index);
       if (prose) {
@@ -613,7 +504,23 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
       }
     }
 
-    if (invokeMatch) {
+    // Determine the content to parse for <invoke> tags.
+    const contentToParse = innerContent !== undefined ? innerContent : text.slice(cursor, index);
+
+    // Parse the inner content, extracting <invoke> blocks AND keeping prose in between.
+    let innerCursor = 0;
+    for (const iMatch of contentToParse.matchAll(MINIMAX_INVOKE_RE)) {
+      const iIndex = iMatch.index ?? 0;
+      const [iFullMatch, attributes, invokeBody] = iMatch;
+
+      // Preserve prose before this <invoke>
+      if (iIndex > innerCursor) {
+        const innerProse = contentToParse.slice(innerCursor, iIndex);
+        if (innerProse) {
+          blocks.push({ type: "text", text: innerProse });
+        }
+      }
+
       const nameMatch = /\bname=["']([^"']+)["']/i.exec(attributes);
       const toolName = nameMatch ? nameMatch[1] : undefined;
 
@@ -632,6 +539,16 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
         });
         hasToolCall = true;
       }
+
+      innerCursor = iIndex + iFullMatch.length;
+    }
+
+    // Preserve prose after the last <invoke> inside the wrapper
+    if (innerCursor < contentToParse.length) {
+      const remainingInnerProse = contentToParse.slice(innerCursor);
+      if (remainingInnerProse) {
+        blocks.push({ type: "text", text: remainingInnerProse });
+      }
     }
 
     cursor = index + fullMatch.length;
@@ -645,4 +562,112 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
   }
 
   return blocks;
+}
+
+/**
+ * Scan assistant message content for MiniMax-specific XML tool calls.
+ */
+export function promoteMinimaxToolCallsToBlocks(message: AssistantMessage): void {
+  if (!message) {
+    return;
+  }
+
+  const messageContent: unknown = message.content;
+
+  // Handle string-form assistant content by converting it to a block array first.
+  if (typeof messageContent === "string") {
+    if (!messageContent.toLowerCase().includes("minimax:tool_call")) {
+      return;
+    }
+
+    // IMPORTANT: First promote thinking tags while it's still a single string.
+    // This handles cases where XML is nested inside <think> tags.
+    promoteThinkingTagsToBlocks(message);
+
+    // If it was promoted to blocks, we continue with the array-based logic below.
+    // If it's still a string (e.g. no think tags), we split it manually here.
+    if (typeof message.content !== "string") {
+      promoteMinimaxToolCallsToBlocks(message);
+      return;
+    }
+
+    const split = splitMinimaxToolCalls(messageContent);
+    if (!split) {
+      return;
+    }
+    const next: AssistantMessage["content"] = [];
+    for (const part of split) {
+      if (part.type === "toolCall") {
+        next.push({
+          type: "toolCall",
+          id: part.id,
+          name: part.name,
+          arguments: part.arguments,
+        } as unknown as AssistantMessage["content"][number]);
+      } else {
+        next.push({ type: "text", text: part.text });
+      }
+    }
+    message.content = next;
+    return;
+  }
+
+  if (!Array.isArray(messageContent)) {
+    return;
+  }
+
+  const next: AssistantMessage["content"] = [];
+  let changed = false;
+
+  for (const block of messageContent) {
+    if (!block || typeof block !== "object") {
+      next.push(block);
+      continue;
+    }
+
+    const type = block.type as string;
+    // Handle both text and thinking blocks as sources for XML tool calls.
+    const textValue =
+      type === "text"
+        ? (block as { text: string }).text
+        : type === "thinking"
+          ? (block as { thinking: string }).thinking
+          : null;
+
+    if (typeof textValue !== "string") {
+      next.push(block);
+      continue;
+    }
+
+    const split = splitMinimaxToolCalls(textValue);
+    if (!split) {
+      next.push(block);
+      continue;
+    }
+
+    changed = true;
+    for (const part of split) {
+      if (part.type === "toolCall") {
+        next.push({
+          type: "toolCall",
+          id: part.id,
+          name: part.name,
+          arguments: part.arguments,
+        } as unknown as AssistantMessage["content"][number]);
+      } else {
+        if (type === "thinking") {
+          next.push({
+            type: "thinking",
+            thinking: part.text,
+          } as unknown as AssistantMessage["content"][number]);
+        } else {
+          next.push({ type: "text", text: part.text });
+        }
+      }
+    }
+  }
+
+  if (changed) {
+    message.content = next;
+  }
 }

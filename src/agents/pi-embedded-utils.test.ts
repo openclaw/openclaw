@@ -355,6 +355,33 @@ All done.`;
     expect(msg.content[2]).toMatchObject({ type: "thinking", thinking: " End of thoughts." });
   });
 
+  it("restricts XML promotion to <invoke> blocks inside MiniMax wrappers", () => {
+    const text = `Here is an example: <invoke name="Evil">...</invoke>. 
+<minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const calls = msg.content.filter((c) => c && typeof c === "object" && c.type === "toolCall");
+    // Only the one inside <minimax:tool_call> should be promoted.
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toMatchObject({
+      type: "toolCall",
+      name: "exec",
+      arguments: { command: "ls" },
+    });
+
+    // The example one should remain as part of text.
+    const prose = msg.content.find((c) => c && typeof c === "object" && c.type === "text");
+    expect(prose && typeof prose === "object" && "text" in prose ? prose.text : "").toContain(
+      'Here is an example: <invoke name="Evil">...</invoke>.',
+    );
+  });
+
   it("preserves leading/trailing whitespace in arguments", () => {
     const text = `<minimax:tool_call>
   <invoke name="Message">

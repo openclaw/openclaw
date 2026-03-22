@@ -34,14 +34,21 @@ describe("scripts/check-file-utils isCodeFile", () => {
 describe("scripts/check-file-utils collectFilesSync", () => {
   it("collects matching files while skipping common generated dirs", () => {
     const rootDir = makeTempDir();
-    fs.mkdirSync(path.join(rootDir, "src", "nested"), { recursive: true });
+    fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
     fs.mkdirSync(path.join(rootDir, "dist"), { recursive: true });
+    fs.mkdirSync(path.join(rootDir, "node_modules"), { recursive: true });
+    fs.mkdirSync(path.join(rootDir, "src", "nested"), { recursive: true });
+    fs.mkdirSync(path.join(rootDir, "ignored"), { recursive: true });
+
     fs.writeFileSync(path.join(rootDir, "src", "keep.ts"), "");
+    fs.writeFileSync(path.join(rootDir, "dist", "skip.js"), "");
+    fs.writeFileSync(path.join(rootDir, "node_modules", "skip.ts"), "");
     fs.writeFileSync(path.join(rootDir, "src", "nested", "keep.test.ts"), "");
-    fs.writeFileSync(path.join(rootDir, "dist", "skip.ts"), "");
+    fs.writeFileSync(path.join(rootDir, "ignored", "skip.ts"), "");
 
     const files = collectFilesSync(rootDir, {
-      includeFile: (filePath) => filePath.endsWith(".ts"),
+      includeFile: isCodeFile,
+      skipDirNames: new Set(["node_modules", "dist", "ignored"]),
     }).map((filePath) => toPosixPath(path.relative(rootDir, filePath)));
 
     expect(files.toSorted()).toEqual(["src/keep.ts", "src/nested/keep.test.ts"]);
@@ -49,14 +56,14 @@ describe("scripts/check-file-utils collectFilesSync", () => {
 
   it("supports custom skipped directories", () => {
     const rootDir = makeTempDir();
-    fs.mkdirSync(path.join(rootDir, "fixtures"), { recursive: true });
     fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
-    fs.writeFileSync(path.join(rootDir, "fixtures", "skip.ts"), "");
+    fs.mkdirSync(path.join(rootDir, "src", "nested"), { recursive: true });
     fs.writeFileSync(path.join(rootDir, "src", "keep.ts"), "");
+    fs.writeFileSync(path.join(rootDir, "src", "nested", "skip.ts"), "");
 
     const files = collectFilesSync(rootDir, {
-      includeFile: (filePath) => filePath.endsWith(".ts"),
-      skipDirNames: new Set(["fixtures"]),
+      includeFile: isCodeFile,
+      skipDirNames: new Set(["nested"]),
     }).map((filePath) => toPosixPath(path.relative(rootDir, filePath)));
 
     expect(files).toEqual(["src/keep.ts"]);
@@ -65,8 +72,8 @@ describe("scripts/check-file-utils collectFilesSync", () => {
 
 describe("scripts/check-file-utils relativeToCwd", () => {
   it("renders repo-relative paths when possible", () => {
-    expect(relativeToCwd(path.join(process.cwd(), "scripts", "check-file-utils.ts"))).toBe(
-      "scripts/check-file-utils.ts",
-    );
+    const repoRelative = "scripts/check-file-utils.ts";
+    const absolutePath = path.join(process.cwd(), "scripts", "check-file-utils.ts");
+    expect(toPosixPath(relativeToCwd(absolutePath))).toBe(repoRelative);
   });
 });
