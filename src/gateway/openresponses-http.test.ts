@@ -594,6 +594,52 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({
+        payloads: [],
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call_123",
+              name: "get_weather",
+              arguments: '{"city":"Paris"}',
+            },
+          ],
+        },
+      } as never);
+
+      const resIncomplete = await postResponses(port, {
+        stream: true,
+        model: "openclaw",
+        input: "hi",
+      });
+      expect(resIncomplete.status).toBe(200);
+
+      const incompleteText = await resIncomplete.text();
+      const incompleteEvents = parseSseEvents(incompleteText);
+      const incompleteEventTypes = incompleteEvents.map((e) => e.event).filter(Boolean);
+      expect(incompleteEventTypes).toContain("response.incomplete");
+      expect(incompleteEventTypes).not.toContain("response.completed");
+
+      const incompleteEvent = incompleteEvents.find((e) => e.event === "response.incomplete");
+      expect(incompleteEvent).toBeDefined();
+      const incompleteJson = JSON.parse(incompleteEvent?.data ?? "{}") as {
+        response?: {
+          status?: string;
+          output?: Array<Record<string, unknown>>;
+        };
+      };
+      expect(incompleteJson.response?.status).toBe("incomplete");
+      const incompleteOutput = incompleteJson.response?.output ?? [];
+      expect(incompleteOutput).toHaveLength(2);
+      expect(incompleteOutput[0]?.type).toBe("message");
+      expect(incompleteOutput[1]?.type).toBe("function_call");
+      expect(incompleteOutput[1]?.call_id).toBe("call_123");
+      expect(incompleteOutput[1]?.name).toBe("get_weather");
+      expect(incompleteOutput[1]?.arguments).toBe('{"city":"Paris"}');
+      expect(incompleteEvents.some((e) => e.data === "[DONE]")).toBe(true);
+
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
         payloads: [{ text: "hello" }],
       } as never);
 

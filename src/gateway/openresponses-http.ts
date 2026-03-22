@@ -3,7 +3,7 @@
  *
  * Implements the OpenResponses `/v1/responses` endpoint for OpenClaw Gateway.
  *
- * @see https://www.open-responses.com/
+ * @see https://www.openresponses.org/
  */
 
 import { randomUUID } from "node:crypto";
@@ -794,7 +794,7 @@ export async function handleOpenResponsesHttpRequest(
           });
           closed = true;
           unsubscribe();
-          writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
+          writeSseEvent(res, { type: "response.incomplete", response: incompleteResponse });
           writeDone(res);
           res.end();
           return;

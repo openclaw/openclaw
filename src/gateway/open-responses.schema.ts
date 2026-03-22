@@ -4,7 +4,7 @@
  * Zod schemas for the OpenResponses `/v1/responses` endpoint.
  * This module is isolated from gateway imports to enable future codegen and prevent drift.
  *
- * @see https://www.open-responses.com/
+ * @see https://www.openresponses.org/
  */
 
 import { z } from "zod";
@@ -299,6 +299,11 @@ export const ResponseCompletedEventSchema = z.object({
   response: ResponseResourceSchema,
 });
 
+export const ResponseIncompleteEventSchema = z.object({
+  type: z.literal("response.incomplete"),
+  response: ResponseResourceSchema,
+});
+
 export const ResponseFailedEventSchema = z.object({
   type: z.literal("response.failed"),
   response: ResponseResourceSchema,
@@ -352,6 +357,7 @@ export type StreamingEvent =
   | z.infer<typeof ResponseCreatedEventSchema>
   | z.infer<typeof ResponseInProgressEventSchema>
   | z.infer<typeof ResponseCompletedEventSchema>
+  | z.infer<typeof ResponseIncompleteEventSchema>
   | z.infer<typeof ResponseFailedEventSchema>
   | z.infer<typeof OutputItemAddedEventSchema>
   | z.infer<typeof OutputItemDoneEventSchema>
