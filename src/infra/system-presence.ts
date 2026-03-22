@@ -45,7 +45,12 @@ function normalizePresenceKey(key: string | undefined): string | undefined {
 }
 
 function resolvePrimaryIPv4(): string | undefined {
-  return pickPrimaryLanIPv4() ?? os.hostname();
+  const host = os.hostname();
+  try {
+    return pickPrimaryLanIPv4() ?? host;
+  } catch {
+    return host;
+  }
 }
 
 function initSelfPresence() {
