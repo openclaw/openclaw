@@ -87,15 +87,6 @@ function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-
   return model.api === "anthropic-messages";
 }
 
-function shouldKeepStreamingUsageOptInDisabled(model: Model<"openai-completions">): boolean {
-  const provider = normalizeProviderId(model.provider);
-  return (
-    provider === "moonshot" ||
-    provider === "modelstudio" ||
-    usesLegacyAzureChatCompletionsApiVersion(model.baseUrl)
-  );
-}
-
 function usesLegacyAzureChatCompletionsApiVersion(baseUrl: string | undefined): boolean {
   if (!baseUrl) {
     return false;
@@ -112,6 +103,28 @@ function usesLegacyAzureChatCompletionsApiVersion(baseUrl: string | undefined): 
     }
     const date = /^(\d{4}-\d{2}-\d{2})/.exec(apiVersion)?.[1];
     return !!date && date < "2024-09-01";
+  } catch {
+    return false;
+  }
+}
+
+function shouldEnableStreamingUsageByDefault(model: Model<"openai-completions">): boolean {
+  const provider = normalizeProviderId(model.provider);
+  if (provider === "azure-openai") {
+    return !usesLegacyAzureChatCompletionsApiVersion(model.baseUrl);
+  }
+  if (!model.baseUrl) {
+    return false;
+  }
+  try {
+    const url = new URL(model.baseUrl);
+    const host = url.hostname.toLowerCase();
+    const path = url.pathname.toLowerCase();
+    return (
+      host === "api.scaleway.ai" ||
+      ((host === "dashscope.aliyuncs.com" || host === "dashscope-intl.aliyuncs.com") &&
+        path.includes("/compatible-mode/"))
+    );
   } catch {
     return false;
   }
@@ -150,10 +163,10 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   // openai-completions endpoints, default those flags off unless explicitly
   // opted in.
   //
-  // Streaming usage stays enabled by default because pi-ai already requests
-  // `stream_options: { include_usage: true }` and correctly handles the final
-  // usage-only SSE chunk. Providers that reject that chunk can still opt out
-  // with `compat.supportsUsageInStreaming: false`.
+  // Keep streaming usage opt-in conservative for generic custom backends.
+  // Only endpoints with known-good compatibility evidence are auto-enabled;
+  // all other non-native backends still require an explicit
+  // `compat.supportsUsageInStreaming: true` override.
   const compat = model.compat ?? undefined;
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
   // leave compat unchanged and let default native behavior apply.
@@ -163,7 +176,7 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   }
   const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
   const hasStreamingUsageOverride = compat?.supportsUsageInStreaming !== undefined;
-  const defaultStreamingUsage = shouldKeepStreamingUsageOptInDisabled(model) ? false : true;
+  const defaultStreamingUsage = shouldEnableStreamingUsageByDefault(model);
   const targetStrictMode = compat?.supportsStrictMode ?? false;
   if (
     compat?.supportsDeveloperRole !== undefined &&

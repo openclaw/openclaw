@@ -54,6 +54,13 @@ function expectSupportsUsageInStreamingForcedOn(overrides?: Partial<Model<Api>>)
   expect(supportsUsageInStreaming(normalized)).toBe(true);
 }
 
+function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>): void {
+  const model = { ...baseModel(), ...overrides };
+  delete (model as { compat?: unknown }).compat;
+  const normalized = normalizeModelCompat(model as Model<Api>);
+  expect(supportsUsageInStreaming(normalized)).toBe(false);
+}
+
 function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
@@ -291,72 +298,77 @@ describe("normalizeModelCompat", () => {
     });
   });
 
-  it("defaults supportsUsageInStreaming on for generic custom openai-completions provider", () => {
-    expectSupportsUsageInStreamingForcedOn({
+  it("keeps supportsUsageInStreaming off for generic custom openai-completions provider", () => {
+    expectSupportsUsageInStreamingForcedOff({
       provider: "custom-cpa",
       baseUrl: "https://cpa.example.com/v1",
     });
   });
 
-  it("keeps supportsUsageInStreaming off for non-native moonshot endpoints", () => {
-    const model = {
-      ...baseModel(),
+  it("defaults supportsUsageInStreaming on for Scaleway AI compatible endpoints", () => {
+    expectSupportsUsageInStreamingForcedOn({
+      provider: "custom-scaleway",
+      baseUrl: "https://api.scaleway.ai/v1",
+    });
+  });
+
+  it("defaults supportsUsageInStreaming on for DashScope compatible-mode endpoints", () => {
+    expectSupportsUsageInStreamingForcedOn({
+      provider: "custom-bailian",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    });
+  });
+
+  it.each([
+    {
+      label: "LM Studio",
+      provider: "custom-lmstudio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+    },
+    {
+      label: "LocalAI",
+      provider: "localai",
+      baseUrl: "http://localhost:8080/v1",
+    },
+    {
+      label: "TGI",
+      provider: "custom-tgi",
+      baseUrl: "http://localhost:3000/v1",
+    },
+    {
+      label: "Ollama /v1",
+      provider: "custom-ollama",
+      baseUrl: "http://localhost:11434/v1",
+    },
+    {
+      label: "Mistral API",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+    },
+    {
+      label: "non-native moonshot endpoint",
       provider: "moonshot",
       baseUrl: "https://proxy.example.com/v1",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model as Model<Api>);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
-  });
-
-  it("keeps supportsUsageInStreaming off for non-native modelstudio endpoints", () => {
-    const model = {
-      ...baseModel(),
+    },
+    {
+      label: "non-native modelstudio endpoint",
       provider: "modelstudio",
       baseUrl: "https://proxy.example.com/v1",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model as Model<Api>);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
-  });
-
-  it("keeps supportsUsageInStreaming off for case-variant bundled proxy provider ids", () => {
-    const moonshotModel = {
-      ...baseModel(),
+    },
+    {
+      label: "case-variant moonshot provider id",
       provider: "Moonshot",
       baseUrl: "https://proxy.example.com/v1",
-    };
-    delete (moonshotModel as { compat?: unknown }).compat;
-    const normalizedMoonshot = normalizeModelCompat(moonshotModel as Model<Api>);
-    expect(supportsUsageInStreaming(normalizedMoonshot)).toBe(false);
-
-    const modelStudioModel = {
-      ...baseModel(),
+    },
+    {
+      label: "case-variant modelstudio provider id",
       provider: "ModelStudio",
       baseUrl: "https://proxy.example.com/v1",
-    };
-    delete (modelStudioModel as { compat?: unknown }).compat;
-    const normalizedModelStudio = normalizeModelCompat(modelStudioModel as Model<Api>);
-    expect(supportsUsageInStreaming(normalizedModelStudio)).toBe(false);
-  });
-
-  it("keeps supportsUsageInStreaming off for Azure OpenAI legacy api-version endpoints", () => {
-    const model = {
-      ...baseModel(),
-      provider: "azure-openai",
-      baseUrl:
-        "https://my-deployment.openai.azure.com/openai/deployments/gpt-4o?api-version=2024-08-01-preview",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model as Model<Api>);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
-  });
-
-  it("defaults supportsUsageInStreaming on for Azure OpenAI modern api-version endpoints", () => {
-    expectSupportsUsageInStreamingForcedOn({
-      provider: "azure-openai",
-      baseUrl:
-        "https://my-deployment.openai.azure.com/openai/deployments/gpt-4o?api-version=2024-10-21",
+    },
+  ])("keeps supportsUsageInStreaming off for %s", ({ provider, baseUrl }) => {
+    expectSupportsUsageInStreamingForcedOff({
+      provider,
+      baseUrl,
     });
   });
 
@@ -449,11 +461,24 @@ describe("normalizeModelCompat", () => {
     expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 
-  it("still forces developer role and strict mode off while defaulting stream usage on", () => {
+  it("still forces developer role and strict mode off for generic custom providers", () => {
     const model = {
       ...baseModel(),
       provider: "custom-cpa",
       baseUrl: "https://proxy.example.com/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
+  it("still forces developer role and strict mode off while auto-enabling usage for allowlisted endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-scaleway",
+      baseUrl: "https://api.scaleway.ai/v1",
     };
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);
@@ -486,7 +511,7 @@ describe("normalizeModelCompat", () => {
     expect(supportsUsageInStreaming(model)).toBeUndefined();
     expect(supportsStrictMode(model)).toBeUndefined();
     expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
     expect(supportsStrictMode(normalized)).toBe(false);
   });
 
@@ -529,10 +554,10 @@ describe("normalizeModelCompat", () => {
     expect(supportsStrictMode(normalized)).toBe(true);
   });
 
-  it("requests streaming usage and records the final usage-only chunk for custom providers", async () => {
+  it("requests streaming usage and records the final usage-only chunk for allowlisted endpoints", async () => {
     let requestBody: Record<string, unknown> | undefined;
     restoreFetch = installOpenAiCompletionsStreamMock({
-      baseUrl: "https://proxy.example.com/v1",
+      baseUrl: "https://api.scaleway.ai/v1",
       onRequest: (body) => {
         requestBody = body;
       },
@@ -542,8 +567,8 @@ describe("normalizeModelCompat", () => {
       ...baseModel(),
       id: "custom-model",
       name: "custom-model",
-      provider: "custom-cpa",
-      baseUrl: "https://proxy.example.com/v1",
+      provider: "custom-scaleway",
+      baseUrl: "https://api.scaleway.ai/v1",
     } as Model<Api>);
 
     const message = await collectDoneMessage(
