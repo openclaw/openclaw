@@ -961,7 +961,9 @@ async function applyStartupCatchupOutcomes(
 ): Promise<void> {
   const staggerMs = Math.max(0, state.deps.missedJobStaggerMs ?? DEFAULT_MISSED_JOB_STAGGER_MS);
   await locked(state, async () => {
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    // Startup catch-up runs during service bootstrap, before the timer loop is
+    // armed. Reuse the in-memory store instead of forcing a second reload.
+    await ensureLoaded(state, { skipRecompute: true });
     if (!state.store) {
       return;
     }
