@@ -50,6 +50,14 @@ export function collectFilesSync(
   return files;
 }
 
+export function toPosixPath(filePath: string): string {
+  if (path.sep === "/") {
+    return filePath;
+  }
+  return filePath.replaceAll("\\", "/");
+}
+
 export function relativeToCwd(filePath: string): string {
-  return path.relative(process.cwd(), filePath) || filePath;
+  const relativePath = path.relative(process.cwd(), filePath) || filePath;
+  return toPosixPath(relativePath);
 }
