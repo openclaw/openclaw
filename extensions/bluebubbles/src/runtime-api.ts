@@ -1,1 +1,1 @@
-export * from "../../../src/plugin-sdk/bluebubbles.js";
+export * from "openclaw/plugin-sdk/bluebubbles";
