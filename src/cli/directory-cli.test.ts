@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   resolveChannelDefaultAccountId: vi.fn(),
   log: vi.fn(),
+  writeJson: vi.fn(),
   error: vi.fn(),
   exit: vi.fn(),
 }));
@@ -38,6 +39,8 @@ vi.mock("../channels/plugins/helpers.js", () => ({
 vi.mock("../runtime.js", () => ({
   defaultRuntime: {
     log: (...args: unknown[]) => mocks.log(...args),
+    writeJson: (value: unknown, space = 2) =>
+      mocks.writeJson(JSON.stringify(value, null, space > 0 ? space : undefined)),
     error: (...args: unknown[]) => mocks.error(...args),
     writeStdout: (value: string) => mocks.log(value.endsWith("\n") ? value.slice(0, -1) : value),
     writeJson: (value: unknown, space = 2) =>
@@ -100,7 +103,7 @@ describe("registerDirectoryCli", () => {
         accountId: "default",
       }),
     );
-    expect(mocks.log).toHaveBeenCalledWith(
+    expect(mocks.writeJson).toHaveBeenCalledWith(
       JSON.stringify({ id: "self-1", name: "Family Phone" }, null, 2),
     );
     expect(mocks.error).not.toHaveBeenCalled();

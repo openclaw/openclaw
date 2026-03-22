@@ -28,6 +28,7 @@ vi.mock("./gateway-rpc.js", async () => {
 vi.mock("../runtime.js", () => ({
   defaultRuntime: {
     log: vi.fn(),
+    writeJson: vi.fn(),
     error: vi.fn(),
     writeStdout: vi.fn(),
     writeJson: vi.fn(),
