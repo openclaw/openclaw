@@ -138,8 +138,14 @@ export function createFollowupRunner(params: {
           sessionEntry.lastTo
         ) {
           try {
+            // Strip webchat-specific replyToId — it's a webchat message ID
+            // that would be meaningless (or target the wrong thread) on the
+            // external channel.
+            const mirrorPayload = payload.replyToId
+              ? { ...payload, replyToId: undefined }
+              : payload;
             const mirrorResult = await routeReply({
-              payload,
+              payload: mirrorPayload,
               channel: sessionEntry.lastChannel,
               to: sessionEntry.lastTo,
               sessionKey: queued.run.sessionKey,
