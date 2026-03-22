@@ -224,4 +224,24 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("coerces boolean retry.jitter to number (#52130)", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          retry: { jitter: true as unknown as number },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+
+    const resFalse = validateConfigObject({
+      channels: {
+        telegram: {
+          retry: { jitter: false as unknown as number },
+        },
+      },
+    });
+    expect(resFalse.ok).toBe(true);
+  });
 });

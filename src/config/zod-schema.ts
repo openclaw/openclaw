@@ -613,7 +613,12 @@ export const OpenClawSchema = z
             initialMs: z.number().positive().optional(),
             maxMs: z.number().positive().optional(),
             factor: z.number().positive().optional(),
-            jitter: z.number().min(0).max(1).optional(),
+            jitter: z
+              .preprocess(
+                (v) => (typeof v === "boolean" ? (v ? 0.1 : 0) : v),
+                z.number().min(0).max(1),
+              )
+              .optional(),
             maxAttempts: z.number().int().min(0).optional(),
           })
           .strict()
