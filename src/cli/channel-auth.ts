@@ -31,30 +31,36 @@ async function resolveChannelPluginForMode(
   const channelInput = explicitChannel
     ? explicitChannel
     : (await resolveMessageChannelSelection({ cfg })).channel;
-  const channelId = normalizeChannelId(channelInput);
-  if (!channelId) {
-    throw new Error(`Unsupported channel: ${channelInput}`);
-  }
+  const channelId = normalizeChannelId(channelInput) ?? undefined;
 
+  // Pass rawChannel so the catalog can resolve channels not yet in the
+  // active plugin registry (e.g. WhatsApp on a fresh install).
   const resolved = await resolveInstallableChannelPlugin({
     cfg,
     runtime,
+    rawChannel: channelInput,
     channelId,
     allowInstall: true,
     supports: (candidate) =>
       mode === "login" ? Boolean(candidate.auth?.login) : Boolean(candidate.gateway?.logoutAccount),
   });
+
+  const resolvedChannelId = channelId ?? resolved.channelId;
+  if (!resolvedChannelId) {
+    throw new Error(`Unsupported channel: ${channelInput}`);
+  }
+
   const plugin = resolved.plugin;
   const supportsMode =
     mode === "login" ? Boolean(plugin?.auth?.login) : Boolean(plugin?.gateway?.logoutAccount);
   if (!supportsMode) {
-    throw new Error(`Channel ${channelId} does not support ${mode}`);
+    throw new Error(`Channel ${resolvedChannelId} does not support ${mode}`);
   }
   return {
     cfg: resolved.cfg,
     configChanged: resolved.configChanged,
     channelInput,
-    channelId,
+    channelId: resolvedChannelId,
     plugin: plugin as ChannelPlugin,
   };
 }
