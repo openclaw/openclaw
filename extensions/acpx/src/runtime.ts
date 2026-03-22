@@ -4,13 +4,13 @@ import type {
   AcpRuntimeDoctorReport,
   AcpRuntime,
   AcpRuntimeEnsureInput,
-  AcpRuntimeErrorCode,
   AcpRuntimeEvent,
   AcpRuntimeHandle,
   AcpRuntimeStatus,
   AcpRuntimeTurnInput,
   PluginLogger,
 } from "openclaw/plugin-sdk/acpx";
+import type { AcpRuntimeErrorCode } from "openclaw/plugin-sdk/acpx";
 import { AcpRuntimeError } from "openclaw/plugin-sdk/acpx";
 import { toAcpMcpServers, type ResolvedAcpxPluginConfig } from "./config.js";
 import { checkAcpxVersion, type AcpxVersionCheckResult } from "./ensure.js";

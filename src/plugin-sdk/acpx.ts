@@ -28,10 +28,11 @@ export type {
   AcpRuntimeStatus,
   AcpRuntimeDoctorReport,
   AcpRuntimeEvent,
-  AcpRuntimeErrorCode,
 } from "../acp/runtime/types.js";
 
 // ACP runtime errors
+export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
+
 export {
   ACP_ERROR_CODES,
   AcpRuntimeError,
@@ -46,7 +47,6 @@ export {
   unregisterAcpRuntimeBackend,
   getAcpRuntimeBackend,
   requireAcpRuntimeBackend,
-  listAcpRuntimeBackends,
 } from "../acp/runtime/registry.js";
 
 export type { AcpRuntimeBackend } from "../acp/runtime/registry.js";
@@ -68,7 +68,7 @@ export {
 } from "./windows-spawn.js";
 
 // Auth env var helpers
-export { listKnownProviderAuthEnvVarNames } from "../agents/model-auth-env-vars.js";
+export { listKnownProviderEnvApiKeyNames } from "../agents/model-auth-env-vars.js";
 
 // Env helpers
 export { omitEnvKeysCaseInsensitive } from "../secrets/provider-env-vars.js";
