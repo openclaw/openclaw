@@ -248,38 +248,59 @@ Plugins can register two types of hooks:
 
 ### Internal Hooks (command and gateway events)
 
-Use `api.registerHook()` for command and gateway events:
+Use `api.registerHook()` for command and gateway events. Requires `hooks.internal.enabled: true`
+in your config, and a `name` option to identify the hook:
 
 ```typescript
-export default function register(api) {
-  api.registerHook("command:new", async () => {
-    // Triggered when user issues /new command
-    api.logger.info("New session started");
-  });
-}
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+export default definePluginEntry({
+  id: "my-plugin",
+  name: "My Plugin",
+  register(api) {
+    api.registerHook("command:new", async () => {
+      // Triggered when user issues /new command
+      api.logger.info("New session started");
+    }, { name: "my-plugin.command-new" });
+  },
+});
 ```
 
 Common internal hook events: `command:new`, `command:reset`, `command:stop`, `gateway:startup`
 
+Config prerequisite:
+
+```json5
+{
+  hooks: { internal: { enabled: true } },
+}
+```
+
 ### Plugin Lifecycle Hooks (agent and tool events)
 
-Use `api.on()` for agent lifecycle and tool execution events:
+Use `api.on()` for agent lifecycle and tool execution events. No extra config required:
 
 ```typescript
-export default function register(api) {
-  // Tool execution hook
-  api.on("after_tool_call", async (event, ctx) => {
-    api.logger.info(`Tool called: ${event.toolName}`);
-    api.logger.info(`Duration: ${event.durationMs}ms`);
-  });
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
-  // Prompt injection hook
-  api.on("before_prompt_build", async (event, ctx) => {
-    return {
-      prependContext: "Additional context for this turn",
-    };
-  });
-}
+export default definePluginEntry({
+  id: "my-plugin",
+  name: "My Plugin",
+  register(api) {
+    // Tool execution hook
+    api.on("after_tool_call", async (event, ctx) => {
+      api.logger.info(`Tool called: ${event.toolName}`);
+      api.logger.info(`Duration: ${event.durationMs}ms`);
+    });
+
+    // Prompt injection hook
+    api.on("before_prompt_build", async (event, ctx) => {
+      return {
+        prependContext: "Additional context for this turn",
+      };
+    });
+  },
+});
 ```
 
 Common lifecycle hooks:
@@ -296,7 +317,7 @@ See [Plugin Internals](/plugins/architecture#provider-runtime-hooks) for the com
 
 ```typescript
 // ❌ Wrong: using registerHook for lifecycle events
-api.registerHook("after_tool_call", handler);
+api.registerHook("after_tool_call", handler, { name: "my-plugin.after-tool" });
 
 // ✅ Correct: use api.on() for lifecycle events
 api.on("after_tool_call", async (event, ctx) => {
