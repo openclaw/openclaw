@@ -3,6 +3,7 @@ import {
   type ReplyPrefixContextBundle,
   type ReplyPrefixOptions,
 } from "../channels/reply-prefix.js";
+export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import {
   createTypingCallbacks,
   type CreateTypingCallbacksParams,

@@ -51,7 +51,7 @@ export type {
   ChannelMessageActionName,
 } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
+export { createChannelReplyPipeline, createReplyPrefixOptions } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { DmPolicy, GroupPolicy } from "../config/types.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
@@ -79,7 +79,7 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export { isAllowedParsedChatSender } from "./allow-from.js";
 export { readBooleanParam } from "./boolean-param.js";
 export { mapAllowFromEntries } from "./channel-config-helpers.js";
-export { createChannelPairingController } from "./channel-pairing.js";
+export { createChannelPairingController, createScopedPairingAccess } from "./channel-pairing.js";
 export { resolveRequestUrl } from "./request-url.js";
 export {
   buildComputedAccountStatusSnapshot,
@@ -89,6 +89,7 @@ export { extractToolSend } from "./tool-send.js";
 export {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createFixedWindowRateLimiter,
+  beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
   normalizeWebhookPath,
   readWebhookBodyOrReject,
