@@ -165,5 +165,6 @@ This is a temporary escape hatch, not a permanent solution.
 ## Related
 
 - [Building Plugins](/plugins/building-plugins)
+- [Plugin SDK Overview](/plugins/sdk-overview)
 - [Plugin Internals](/plugins/architecture)
 - [Plugin Manifest](/plugins/manifest)
