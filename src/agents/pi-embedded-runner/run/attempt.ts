@@ -2236,6 +2236,10 @@ export async function runEmbeddedAttempt(
       let aborted = initialAbortedState?.aborted ?? Boolean(params.abortSignal?.aborted);
       let yieldAborted = false;
       let timedOut = initialAbortedState?.timedOut ?? false;
+      // Tracks whether the deferred cleanup was successfully handed off to the caller.
+      // If the function throws before the return is reached, this stays false,
+      // and the finally block will clean up as a safety net.
+      let deferredHookHandedOff = false;
       let timedOutDuringCompaction = false;
       const getAbortReason = (signal: AbortSignal): unknown =>
         "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
@@ -2902,9 +2906,12 @@ export async function runEmbeddedAttempt(
         }
         // When deferActiveRunCleanup is true, the outer run handles cleanup via the
         // stable queueHandle. When false, clean up immediately (backward compat).
-        // In both cases: if cleanup throws, log but don't rethrow so the outer
+        // Safety net: if deferActiveRunCleanup is true but the function threw before
+        // reaching the return (so deferredHookHandedOff is still false), also clean up
+        // here to avoid leaking the active-run entry.
+        // In all cases: if cleanup throws, log but don't rethrow so the outer
         // finally can still run.
-        if (!params.deferActiveRunCleanup) {
+        if (!params.deferActiveRunCleanup || !deferredHookHandedOff) {
           try {
             clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
           } catch (err) {
@@ -2986,6 +2993,8 @@ export async function runEmbeddedAttempt(
         // forward queueMessage/isStreaming/isCompacting to the current attempt.
         queueHandle,
       };
+      // Return was reached — the caller now holds the deferred cleanup responsibility.
+      deferredHookHandedOff = true;
     } finally {
       // Always tear down the session (and release the lock) before we leave this attempt.
       //
