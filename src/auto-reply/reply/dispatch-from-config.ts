@@ -45,6 +45,7 @@ import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
+import { normalizeVerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
@@ -480,7 +481,17 @@ export async function dispatchReplyFromConfig(params: {
       return { queuedFinal: false, counts };
     }
 
-    const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
+    // Tool summaries are normally suppressed in group chat flows to reduce noise.
+    // However, when the user has explicitly enabled verbose mode (/verbose on or /verbose full),
+    // we honour their intent and deliver tool results even in group chats.
+    // Native command-source sessions remain suppressed regardless of verbose level.
+    const resolvedVerboseLevel = normalizeVerboseLevel(
+      String(sessionStoreEntry.entry?.verboseLevel ?? ""),
+    );
+    const verboseToolsEnabled = resolvedVerboseLevel === "on" || resolvedVerboseLevel === "full";
+    const isGroupSuppressed = ctx.ChatType === "group" && !verboseToolsEnabled;
+    const isNativeSuppressed = ctx.CommandSource === "native";
+    const shouldSendToolSummaries = !isGroupSuppressed && !isNativeSuppressed;
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
       cfg,
