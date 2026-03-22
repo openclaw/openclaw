@@ -1619,34 +1619,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                   };
                 }
               }
-              // Mirror webchat reply to last external channel if configured.
-              if (combinedReply && cfg.session?.mirrorWebchatToLastExternalChannel === true) {
-                const { entry: mirrorEntry } = loadSessionEntry(sessionKey);
-                const lastCh = mirrorEntry?.lastChannel;
-                const lastTo = mirrorEntry?.lastTo;
-                if (lastCh && lastTo && !isInternalMessageChannel(lastCh)) {
-                  try {
-                    const { routeReply } = await import("../../auto-reply/reply/route-reply.js");
-                    const mirrorResult = await routeReply({
-                      payload: { text: combinedReply },
-                      channel: lastCh,
-                      to: lastTo,
-                      sessionKey,
-                      accountId: mirrorEntry?.lastAccountId ?? undefined,
-                      threadId: mirrorEntry?.lastThreadId ?? undefined,
-                      cfg,
-                      mirror: false,
-                    });
-                    if (!mirrorResult.ok) {
-                      context.logGateway.warn(
-                        `webchat mirror to ${lastCh} failed: ${mirrorResult.error ?? "unknown"}`,
-                      );
-                    }
-                  } catch (err: unknown) {
-                    context.logGateway.warn(`webchat mirror to ${lastCh} failed: ${String(err)}`);
-                  }
-                }
-              }
               broadcastChatFinal({
                 context,
                 runId: clientRunId,
@@ -1656,6 +1628,48 @@ export const chatHandlers: GatewayRequestHandlers = {
             }
           } else {
             void emitUserTranscriptUpdate();
+          }
+          // Mirror webchat replies to last external channel if configured.
+          // Runs for both agent-started and non-agent paths so the common
+          // "ask the agent in webchat" case is covered.
+          if (
+            cfg.session?.mirrorWebchatToLastExternalChannel === true &&
+            deliveredReplies.length > 0
+          ) {
+            const { entry: mirrorEntry } = loadSessionEntry(sessionKey);
+            const lastCh = mirrorEntry?.lastChannel;
+            const lastTo = mirrorEntry?.lastTo;
+            if (lastCh && lastTo && !isInternalMessageChannel(lastCh)) {
+              try {
+                const { routeReply } = await import("../../auto-reply/reply/route-reply.js");
+                const finals = deliveredReplies
+                  .filter((e) => e.kind === "final")
+                  .map((e) => e.payload);
+                for (const payload of finals) {
+                  // Strip webchat-specific replyToId before mirroring.
+                  const mirrorPayload = payload.replyToId
+                    ? { ...payload, replyToId: undefined }
+                    : payload;
+                  const result = await routeReply({
+                    payload: mirrorPayload,
+                    channel: lastCh,
+                    to: lastTo,
+                    sessionKey,
+                    accountId: mirrorEntry?.lastAccountId ?? undefined,
+                    threadId: mirrorEntry?.lastThreadId ?? undefined,
+                    cfg,
+                    mirror: false,
+                  });
+                  if (!result.ok) {
+                    context.logGateway.warn(
+                      `webchat mirror to ${lastCh} failed: ${result.error ?? "unknown"}`,
+                    );
+                  }
+                }
+              } catch (err: unknown) {
+                context.logGateway.warn(`webchat mirror to ${lastCh} failed: ${String(err)}`);
+              }
+            }
           }
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
