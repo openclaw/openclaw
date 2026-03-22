@@ -31,7 +31,6 @@ vi.mock("../runtime.js", () => ({
     writeJson: vi.fn(),
     error: vi.fn(),
     writeStdout: vi.fn(),
-    writeJson: vi.fn(),
     exit: (code: number) => {
       throw new Error(`__exit__:${code}`);
     },
