@@ -947,6 +947,112 @@ async function insertDoc(
   };
 }
 
+async function listComments(client: Lark.Client, docToken: string, blockId?: string) {
+  const params: Record<string, string> = {};
+  if (blockId) {
+    params.block_id = blockId;
+  }
+
+  const res = await (client.docx as any).documentComment.list({
+    path: { document_id: docToken },
+    params,
+  });
+
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+
+  return {
+    comments: res.data?.items ?? [],
+    total: res.data?.items?.length ?? 0,
+  };
+}
+
+async function getComment(client: Lark.Client, docToken: string, commentId: string) {
+  const res = await (client.docx as any).documentComment.get({
+    path: { document_id: docToken, comment_id: commentId },
+  });
+
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+
+  return {
+    comment: res.data?.comment,
+  };
+}
+
+async function createComment(
+  client: Lark.Client,
+  docToken: string,
+  content: string,
+  blockId?: string,
+  replyToCommentId?: string,
+) {
+  const data: Record<string, unknown> = {
+    content,
+  };
+
+  if (blockId) {
+    data.block_id = blockId;
+  }
+
+  if (replyToCommentId) {
+    data.reply_to_comment_id = replyToCommentId;
+  }
+
+  const res = await (client.docx as any).documentComment.create({
+    path: { document_id: docToken },
+    data,
+  });
+
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+
+  return {
+    success: true,
+    comment: res.data?.comment,
+  };
+}
+
+async function updateComment(
+  client: Lark.Client,
+  docToken: string,
+  commentId: string,
+  content: string,
+) {
+  const res = await (client.docx as any).documentComment.update({
+    path: { document_id: docToken, comment_id: commentId },
+    data: {
+      content,
+    },
+  });
+
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+
+  return {
+    success: true,
+    comment: res.data?.comment,
+  };
+}
+
+async function deleteComment(client: Lark.Client, docToken: string, commentId: string) {
+  const res = await (client.docx as any).documentComment.delete({
+    path: { document_id: docToken, comment_id: commentId },
+  });
+
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+
+  return {
+    success: true,
+  };
+}
+
 async function createTable(
   client: Lark.Client,
   docToken: string,
@@ -1268,7 +1374,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           name: "feishu_doc",
           label: "Feishu Doc",
           description:
-            "Feishu document operations. Actions: read, write, append, insert, create, list_blocks, get_block, update_block, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file, color_text",
+            "Feishu document operations. Actions: read, write, append, insert, create, list_blocks, get_block, update_block, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file, color_text, list_comments, get_comment, create_comment, update_comment, delete_comment",
           parameters: FeishuDocSchema,
           async execute(_toolCallId, params) {
             const p = params as FeishuDocExecuteParams;
@@ -1416,6 +1522,24 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       p.column_end,
                     ),
                   );
+                case "list_comments":
+                  return json(await listComments(client, p.doc_token, p.block_id));
+                case "get_comment":
+                  return json(await getComment(client, p.doc_token, p.comment_id));
+                case "create_comment":
+                  return json(
+                    await createComment(
+                      client,
+                      p.doc_token,
+                      p.content,
+                      p.block_id,
+                      p.reply_to_comment_id,
+                    ),
+                  );
+                case "update_comment":
+                  return json(await updateComment(client, p.doc_token, p.comment_id, p.content));
+                case "delete_comment":
+                  return json(await deleteComment(client, p.doc_token, p.comment_id));
                 default:
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
                   return json({ error: `Unknown action: ${(p as any).action}` });

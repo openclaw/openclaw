@@ -177,6 +177,43 @@ export const FeishuDocSchema = Type.Union([
         'Text with color markup. Tags: [red], [green], [blue], [orange], [yellow], [purple], [grey], [bold], [bg:yellow]. Example: "Revenue [green]+15%[/green] YoY"',
     }),
   }),
+  // Comment operations
+  Type.Object({
+    action: Type.Literal("list_comments"),
+    doc_token: Type.String({ description: "Document token" }),
+    block_id: Type.Optional(
+      Type.String({
+        description: "Block ID to list comments for (optional, default: document-level)",
+      }),
+    ),
+  }),
+  Type.Object({
+    action: Type.Literal("get_comment"),
+    doc_token: Type.String({ description: "Document token" }),
+    comment_id: Type.String({ description: "Comment ID to retrieve" }),
+  }),
+  Type.Object({
+    action: Type.Literal("create_comment"),
+    doc_token: Type.String({ description: "Document token" }),
+    content: Type.String({ description: "Comment content (text)" }),
+    block_id: Type.Optional(
+      Type.String({ description: "Block ID to comment on (optional, default: document-level)" }),
+    ),
+    reply_to_comment_id: Type.Optional(
+      Type.String({ description: "Comment ID to reply to (optional, for nested comments)" }),
+    ),
+  }),
+  Type.Object({
+    action: Type.Literal("update_comment"),
+    doc_token: Type.String({ description: "Document token" }),
+    comment_id: Type.String({ description: "Comment ID to update" }),
+    content: Type.String({ description: "New comment content (text)" }),
+  }),
+  Type.Object({
+    action: Type.Literal("delete_comment"),
+    doc_token: Type.String({ description: "Document token" }),
+    comment_id: Type.String({ description: "Comment ID to delete" }),
+  }),
 ]);
 
 export type FeishuDocParams = Static<typeof FeishuDocSchema>;
