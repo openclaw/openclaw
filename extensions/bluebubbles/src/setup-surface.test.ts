@@ -1,3 +1,4 @@
+import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import {
@@ -23,7 +24,7 @@ async function createBlueBubblesConfigureAdapter() {
     config: {
       listAccountIds: () => [DEFAULT_ACCOUNT_ID],
       defaultAccountId: () => DEFAULT_ACCOUNT_ID,
-      resolveAccount: (cfg, accountId) => resolveBlueBubblesAccount({ cfg, accountId }),
+      resolveAccount: adaptScopedAccountAccessor(resolveBlueBubblesAccount),
       resolveAllowFrom: ({ cfg, accountId }: { cfg: unknown; accountId: string }) =>
         resolveBlueBubblesAccount({
           cfg: cfg as Parameters<typeof resolveBlueBubblesAccount>[0]["cfg"],
