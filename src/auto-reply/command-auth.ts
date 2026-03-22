@@ -345,7 +345,7 @@ export function resolveCommandAuthorization(params: {
     : undefined;
   const senderId = matchedSender ?? senderCandidates[0];
 
-  const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
+  const enforceOwner = false; // dock.commands.enforceOwnerForCommands removed in simplified implementation
   const senderIsOwnerByIdentity = Boolean(matchedSender);
   const senderIsOwnerByScope =
     isInternalMessageChannel(ctx.Provider) &&

@@ -33,9 +33,7 @@ function resolveProviderChunkContext(
 ) {
   const providerKey = normalizeChunkProvider(provider);
   const providerId = providerKey ? normalizeChannelId(providerKey) : null;
-  const providerChunkLimit = providerId
-    ? getChannelDock(providerId)?.outbound?.textChunkLimit
-    : undefined;
+  const providerChunkLimit = undefined; // dock.outbound.textChunkLimit removed in simplified implementation
   const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId, {
     fallbackLimit: providerChunkLimit,
   });
@@ -208,9 +206,8 @@ export function resolveBlockStreamingCoalescing(
   // Resolve the outbound chunkMode so the coalescer can flush on paragraph boundaries
   // when chunkMode="newline", matching the delivery-time splitting behavior.
   const chunkMode = opts?.chunkMode ?? resolveChunkMode(cfg, providerKey, accountId);
-  const providerDefaults = providerId
-    ? getChannelDock(providerId)?.streaming?.blockStreamingCoalesceDefaults
-    : undefined;
+  const dock = providerId ? getChannelDock(providerId) : undefined;
+  const providerDefaults = dock?.streaming?.blockStreamingCoalesceDefaults;
   const providerCfg = resolveProviderBlockStreamingCoalesce({
     cfg,
     providerKey,

@@ -69,19 +69,8 @@ export function resolveChannelMessageToolHints(params: {
   channel?: string | null;
   accountId?: string | null;
 }): string[] {
-  const channelId = normalizeAnyChannelId(params.channel);
-  if (!channelId) {
-    return [];
-  }
-  const dock = getChannelDock(channelId);
-  const resolve = dock?.agentPrompt?.messageToolHints;
-  if (!resolve) {
-    return [];
-  }
-  const cfg = params.cfg ?? ({} as OpenClawConfig);
-  return (resolve({ cfg, accountId: params.accountId }) ?? [])
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  // Message tool hints via dock.agentPrompt removed in simplified channel implementation
+  return [];
 }
 
 const loggedListActionErrors = new Set<string>();

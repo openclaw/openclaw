@@ -1,7 +1,7 @@
-import {
-  DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
-  DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-} from "../discord/monitor/timeouts.js";
+// Discord channel support removed - defaults defined inline
+const DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS = 30_000;
+const DISCORD_DEFAULT_LISTENER_TIMEOUT_MS = 5_000;
+
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { IRC_FIELD_HELP } from "./schema.irc.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";

@@ -734,6 +734,18 @@ export function setTelegramThreadBindingMaxAgeBySessionKey(params: {
   });
 }
 
+/**
+ * Resolve the effective idle timeout for Telegram thread bindings.
+ * Returns the default idle timeout if no manager is found.
+ */
+export function resolveTelegramThreadBindingIdleTimeoutMs(accountId?: string): number {
+  const manager = getTelegramThreadBindingManager(accountId);
+  if (!manager) {
+    return DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS;
+  }
+  return manager.getIdleTimeoutMs();
+}
+
 export const __testing = {
   resetTelegramThreadBindingsForTests() {
     for (const manager of MANAGERS_BY_ACCOUNT_ID.values()) {

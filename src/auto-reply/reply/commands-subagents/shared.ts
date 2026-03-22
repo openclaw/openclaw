@@ -16,12 +16,11 @@ import type {
   loadSessionStore as loadSessionStoreFn,
   resolveStorePath as resolveStorePathFn,
 } from "../../../config/sessions.js";
-import { parseDiscordTarget } from "../../../discord/targets.js";
-import { callGateway } from "../../../gateway/call.js";
-import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { looksLikeSessionId } from "../../../sessions/session-id.js";
+import { callGateway } from "../../../gateway/call.js";
+import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import {
   formatDurationCompact,
@@ -29,10 +28,7 @@ import {
   truncateLine,
 } from "../../../shared/subagents-format.js";
 import {
-  isDiscordSurface,
   isTelegramSurface,
-  resolveCommandSurfaceChannel,
-  resolveDiscordAccountId,
   resolveChannelAccountId,
 } from "../channel-context.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
@@ -45,14 +41,12 @@ import {
 import { resolveTelegramConversationId } from "../telegram-context.js";
 
 export { extractAssistantText, stripToolMessages };
-export {
-  isDiscordSurface,
-  isTelegramSurface,
-  resolveCommandSurfaceChannel,
-  resolveDiscordAccountId,
-  resolveChannelAccountId,
-  resolveTelegramConversationId,
-};
+export { isTelegramSurface, resolveChannelAccountId, resolveTelegramConversationId };
+
+// Surface channel resolver for retained channels (telegram, feishu)
+export function resolveCommandSurfaceChannel(params: { channel?: string | null }): string {
+  return params.channel ?? "telegram";
+}
 
 export const COMMAND = "/subagents";
 export const COMMAND_KILL = "/kill";
@@ -325,27 +319,6 @@ export type FocusTargetResolution = {
   agentId: string;
   label?: string;
 };
-
-export function resolveDiscordChannelIdForFocus(
-  params: SubagentsCommandParams,
-): string | undefined {
-  const toCandidates = [
-    typeof params.ctx.OriginatingTo === "string" ? params.ctx.OriginatingTo.trim() : "",
-    typeof params.command.to === "string" ? params.command.to.trim() : "",
-    typeof params.ctx.To === "string" ? params.ctx.To.trim() : "",
-  ].filter(Boolean);
-  for (const candidate of toCandidates) {
-    try {
-      const target = parseDiscordTarget(candidate, { defaultKind: "channel" });
-      if (target?.kind === "channel" && target.id) {
-        return target.id;
-      }
-    } catch {
-      // Ignore parse failures and try the next candidate.
-    }
-  }
-  return undefined;
-}
 
 export async function resolveFocusTargetSession(params: {
   runs: SubagentRunRecord[];

@@ -391,9 +391,7 @@ export async function handleInlineActions(params: {
   }
 
   const isEmptyConfig = Object.keys(cfg).length === 0;
-  const skipWhenConfigEmpty = command.channelId
-    ? Boolean(getChannelDock(command.channelId)?.commands?.skipWhenConfigEmpty)
-    : false;
+  const skipWhenConfigEmpty = false; // dock.commands.skipWhenConfigEmpty removed in simplified implementation
   if (
     skipWhenConfigEmpty &&
     isEmptyConfig &&

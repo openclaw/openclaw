@@ -51,50 +51,6 @@
       "types": "./dist/plugin-sdk/telegram.d.ts",
       "default": "./dist/plugin-sdk/telegram.js"
     },
-    "./plugin-sdk/discord": {
-      "types": "./dist/plugin-sdk/discord.d.ts",
-      "default": "./dist/plugin-sdk/discord.js"
-    },
-    "./plugin-sdk/slack": {
-      "types": "./dist/plugin-sdk/slack.d.ts",
-      "default": "./dist/plugin-sdk/slack.js"
-    },
-    "./plugin-sdk/signal": {
-      "types": "./dist/plugin-sdk/signal.d.ts",
-      "default": "./dist/plugin-sdk/signal.js"
-    },
-    "./plugin-sdk/imessage": {
-      "types": "./dist/plugin-sdk/imessage.d.ts",
-      "default": "./dist/plugin-sdk/imessage.js"
-    },
-    "./plugin-sdk/whatsapp": {
-      "types": "./dist/plugin-sdk/whatsapp.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp.js"
-    },
-    "./plugin-sdk/line": {
-      "types": "./dist/plugin-sdk/line.d.ts",
-      "default": "./dist/plugin-sdk/line.js"
-    },
-    "./plugin-sdk/msteams": {
-      "types": "./dist/plugin-sdk/msteams.d.ts",
-      "default": "./dist/plugin-sdk/msteams.js"
-    },
-    "./plugin-sdk/acpx": {
-      "types": "./dist/plugin-sdk/acpx.d.ts",
-      "default": "./dist/plugin-sdk/acpx.js"
-    },
-    "./plugin-sdk/bluebubbles": {
-      "types": "./dist/plugin-sdk/bluebubbles.d.ts",
-      "default": "./dist/plugin-sdk/bluebubbles.js"
-    },
-    "./plugin-sdk/copilot-proxy": {
-      "types": "./dist/plugin-sdk/copilot-proxy.d.ts",
-      "default": "./dist/plugin-sdk/copilot-proxy.js"
-    },
-    "./plugin-sdk/device-pair": {
-      "types": "./dist/plugin-sdk/device-pair.d.ts",
-      "default": "./dist/plugin-sdk/device-pair.js"
-    },
     "./plugin-sdk/diagnostics-otel": {
       "types": "./dist/plugin-sdk/diagnostics-otel.d.ts",
       "default": "./dist/plugin-sdk/diagnostics-otel.js"
@@ -107,18 +63,6 @@
       "types": "./dist/plugin-sdk/feishu.d.ts",
       "default": "./dist/plugin-sdk/feishu.js"
     },
-    "./plugin-sdk/google-gemini-cli-auth": {
-      "types": "./dist/plugin-sdk/google-gemini-cli-auth.d.ts",
-      "default": "./dist/plugin-sdk/google-gemini-cli-auth.js"
-    },
-    "./plugin-sdk/googlechat": {
-      "types": "./dist/plugin-sdk/googlechat.d.ts",
-      "default": "./dist/plugin-sdk/googlechat.js"
-    },
-    "./plugin-sdk/irc": {
-      "types": "./dist/plugin-sdk/irc.d.ts",
-      "default": "./dist/plugin-sdk/irc.js"
-    },
     "./plugin-sdk/llm-task": {
       "types": "./dist/plugin-sdk/llm-task.d.ts",
       "default": "./dist/plugin-sdk/llm-task.js"
@@ -126,14 +70,6 @@
     "./plugin-sdk/lobster": {
       "types": "./dist/plugin-sdk/lobster.d.ts",
       "default": "./dist/plugin-sdk/lobster.js"
-    },
-    "./plugin-sdk/matrix": {
-      "types": "./dist/plugin-sdk/matrix.d.ts",
-      "default": "./dist/plugin-sdk/matrix.js"
-    },
-    "./plugin-sdk/mattermost": {
-      "types": "./dist/plugin-sdk/mattermost.d.ts",
-      "default": "./dist/plugin-sdk/mattermost.js"
     },
     "./plugin-sdk/memory-core": {
       "types": "./dist/plugin-sdk/memory-core.d.ts",
@@ -143,61 +79,9 @@
       "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
       "default": "./dist/plugin-sdk/memory-lancedb.js"
     },
-    "./plugin-sdk/minimax-portal-auth": {
-      "types": "./dist/plugin-sdk/minimax-portal-auth.d.ts",
-      "default": "./dist/plugin-sdk/minimax-portal-auth.js"
-    },
-    "./plugin-sdk/nextcloud-talk": {
-      "types": "./dist/plugin-sdk/nextcloud-talk.d.ts",
-      "default": "./dist/plugin-sdk/nextcloud-talk.js"
-    },
-    "./plugin-sdk/nostr": {
-      "types": "./dist/plugin-sdk/nostr.d.ts",
-      "default": "./dist/plugin-sdk/nostr.js"
-    },
-    "./plugin-sdk/open-prose": {
-      "types": "./dist/plugin-sdk/open-prose.d.ts",
-      "default": "./dist/plugin-sdk/open-prose.js"
-    },
-    "./plugin-sdk/phone-control": {
-      "types": "./dist/plugin-sdk/phone-control.d.ts",
-      "default": "./dist/plugin-sdk/phone-control.js"
-    },
-    "./plugin-sdk/qwen-portal-auth": {
-      "types": "./dist/plugin-sdk/qwen-portal-auth.d.ts",
-      "default": "./dist/plugin-sdk/qwen-portal-auth.js"
-    },
-    "./plugin-sdk/synology-chat": {
-      "types": "./dist/plugin-sdk/synology-chat.d.ts",
-      "default": "./dist/plugin-sdk/synology-chat.js"
-    },
-    "./plugin-sdk/talk-voice": {
-      "types": "./dist/plugin-sdk/talk-voice.d.ts",
-      "default": "./dist/plugin-sdk/talk-voice.js"
-    },
     "./plugin-sdk/thread-ownership": {
       "types": "./dist/plugin-sdk/thread-ownership.d.ts",
       "default": "./dist/plugin-sdk/thread-ownership.js"
-    },
-    "./plugin-sdk/tlon": {
-      "types": "./dist/plugin-sdk/tlon.d.ts",
-      "default": "./dist/plugin-sdk/tlon.js"
-    },
-    "./plugin-sdk/twitch": {
-      "types": "./dist/plugin-sdk/twitch.d.ts",
-      "default": "./dist/plugin-sdk/twitch.js"
-    },
-    "./plugin-sdk/voice-call": {
-      "types": "./dist/plugin-sdk/voice-call.d.ts",
-      "default": "./dist/plugin-sdk/voice-call.js"
-    },
-    "./plugin-sdk/zalo": {
-      "types": "./dist/plugin-sdk/zalo.d.ts",
-      "default": "./dist/plugin-sdk/zalo.js"
-    },
-    "./plugin-sdk/zalouser": {
-      "types": "./dist/plugin-sdk/zalouser.d.ts",
-      "default": "./dist/plugin-sdk/zalouser.js"
     },
     "./plugin-sdk/account-id": {
       "types": "./dist/plugin-sdk/account-id.d.ts",
@@ -260,12 +144,10 @@
     "@aws-sdk/client-bedrock": "^3.1009.0",
     "@buape/carbon": "0.0.0-beta-20260216184201",
     "@clack/prompts": "^1.1.0",
-    "@discordjs/voice": "^0.19.1",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.5",
     "@larksuiteoapi/node-sdk": "^1.59.0",
-    "@line/bot-sdk": "^10.6.0",
     "@lydell/node-pty": "1.2.0-beta.3",
     "@mariozechner/pi-agent-core": "0.58.0",
     "@mariozechner/pi-ai": "0.58.0",
@@ -274,16 +156,12 @@
     "@modelcontextprotocol/sdk": "1.27.1",
     "@mozilla/readability": "^0.6.0",
     "@sinclair/typebox": "0.34.48",
-    "@slack/bolt": "^4.6.0",
-    "@slack/web-api": "^7.15.0",
-    "@whiskeysockets/baileys": "7.0.0-rc.9",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
     "cli-highlight": "^2.1.11",
     "commander": "^14.0.3",
     "croner": "^10.0.1",
-    "discord-api-types": "^0.38.42",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "file-type": "^21.3.2",
@@ -361,10 +239,7 @@
     },
     "onlyBuiltDependencies": [
       "@lydell/node-pty",
-      "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",
-      "@tloncorp/api",
-      "@whiskeysockets/baileys",
       "authenticate-pam",
       "esbuild",
       "koffi",

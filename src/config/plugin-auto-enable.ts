@@ -13,7 +13,6 @@ import {
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
 import { isRecord } from "../utils.js";
-import { hasAnyWhatsAppAuth } from "../web/accounts.js";
 import type { OpenClawConfig } from "./config.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
 
@@ -162,15 +161,8 @@ function isStructuredChannelConfigured(
   return recordHasKeys(entry);
 }
 
-function isWhatsAppConfigured(cfg: OpenClawConfig): boolean {
-  if (hasAnyWhatsAppAuth(cfg)) {
-    return true;
-  }
-  const entry = resolveChannelConfig(cfg, "whatsapp");
-  if (!entry) {
-    return false;
-  }
-  return recordHasKeys(entry);
+function isWhatsAppConfigured(_cfg: OpenClawConfig): boolean {
+  return false;
 }
 
 function isGenericChannelConfigured(cfg: OpenClawConfig, channelId: string): boolean {

@@ -192,11 +192,7 @@ export function resolveElevatedPermissions(params: {
   }
 
   const normalizedProvider = normalizeChannelId(params.provider);
-  const dock = normalizedProvider ? getChannelDock(normalizedProvider) : undefined;
-  const fallbackAllowFrom = dock?.elevated?.allowFromFallback?.({
-    cfg: params.cfg,
-    accountId: params.ctx.AccountId,
-  });
+  const fallbackAllowFrom = undefined; // dock.elevated.allowFromFallback removed in simplified implementation
   const formatAllowFrom = resolveAllowFromFormatter({
     cfg: params.cfg,
     provider: params.provider,

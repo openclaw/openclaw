@@ -1,12 +1,12 @@
 import type { Command } from "commander";
 import {
   channelsAddCommand,
-  channelsCapabilitiesCommand,
   channelsListCommand,
   channelsLogsCommand,
   channelsRemoveCommand,
   channelsResolveCommand,
   channelsStatusCommand,
+  runChannelsCapabilities,
 } from "../commands/channels.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
@@ -122,7 +122,8 @@ export function registerChannelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runChannelsCommand(async () => {
-        await channelsCapabilitiesCommand(opts, defaultRuntime);
+        const result = await runChannelsCapabilities(opts, defaultRuntime);
+        console.log(result);
       });
     });
 

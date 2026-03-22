@@ -1,4 +1,4 @@
-type DiscordSurfaceParams = {
+type SurfaceParams = {
   ctx: {
     OriginatingChannel?: string;
     Surface?: string;
@@ -10,21 +10,17 @@ type DiscordSurfaceParams = {
   };
 };
 
-type DiscordAccountParams = {
+type AccountParams = {
   ctx: {
     AccountId?: string;
   };
 };
 
-export function isDiscordSurface(params: DiscordSurfaceParams): boolean {
-  return resolveCommandSurfaceChannel(params) === "discord";
-}
-
-export function isTelegramSurface(params: DiscordSurfaceParams): boolean {
+export function isTelegramSurface(params: SurfaceParams): boolean {
   return resolveCommandSurfaceChannel(params) === "telegram";
 }
 
-export function resolveCommandSurfaceChannel(params: DiscordSurfaceParams): string {
+export function resolveCommandSurfaceChannel(params: SurfaceParams): string {
   const channel =
     params.ctx.OriginatingChannel ??
     params.command.channel ??
@@ -35,11 +31,7 @@ export function resolveCommandSurfaceChannel(params: DiscordSurfaceParams): stri
     .toLowerCase();
 }
 
-export function resolveDiscordAccountId(params: DiscordAccountParams): string {
-  return resolveChannelAccountId(params);
-}
-
-export function resolveChannelAccountId(params: DiscordAccountParams): string {
+export function resolveChannelAccountId(params: AccountParams): string {
   const accountId = typeof params.ctx.AccountId === "string" ? params.ctx.AccountId.trim() : "";
   return accountId || "default";
 }
