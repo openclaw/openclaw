@@ -519,6 +519,7 @@ describe("recoverOrphanedUserMessagesForPrompt", () => {
     expect(result.recoveredCount).toBe(1);
     expect(result.mergedCount).toBe(1);
     expect(result.prompt).toContain("[user attached an image]");
+    expect(result.recoveredImages).toEqual([{ type: "image", data: "abc", mimeType: "image/png" }]);
     expect(replaceMessages).toHaveBeenCalledTimes(1);
   });
 
@@ -548,6 +549,7 @@ describe("recoverOrphanedUserMessagesForPrompt", () => {
       prompt: "hello",
       recoveredCount: 0,
       mergedCount: 0,
+      recoveredImages: [],
     });
     expect(replaceMessages).not.toHaveBeenCalled();
   });
@@ -587,6 +589,7 @@ describe("recoverOrphanedUserMessagesForPrompt", () => {
       prompt: "retry me",
       recoveredCount: 1,
       mergedCount: 0,
+      recoveredImages: [],
     });
     expect(replaceMessages).toHaveBeenCalledTimes(1);
   });
@@ -673,6 +676,7 @@ describe("recoverOrphanedUserMessagesForPrompt", () => {
       prompt: "[context from before_prompt_build]\n\nretry me",
       recoveredCount: 1,
       mergedCount: 0,
+      recoveredImages: [],
     });
     expect(replaceMessages).toHaveBeenCalledTimes(1);
   });

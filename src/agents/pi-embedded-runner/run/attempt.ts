@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
+import { streamSimple, type ImageContent } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -303,6 +303,24 @@ function stringifyUserMessageContentForPrompt(message: AgentMessage): string {
   return chunks.join("\n").trim();
 }
 
+function extractUserMessageImages(message: AgentMessage): ImageContent[] {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.filter((block): block is ImageContent => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const typedBlock = block as { type?: unknown; data?: unknown; mimeType?: unknown };
+    return (
+      typedBlock.type === "image" &&
+      typeof typedBlock.data === "string" &&
+      typeof typedBlock.mimeType === "string"
+    );
+  });
+}
+
 type SessionLeafEntryLike = {
   type?: unknown;
   parentId?: string | null;
@@ -321,13 +339,20 @@ export function recoverOrphanedUserMessagesForPrompt(params: {
   prompt: string;
   rawPrompt?: string;
   replaceMessages: (messages: AgentMessage[]) => void;
-}): { prompt: string; recoveredCount: number; mergedCount: number } {
+}): {
+  prompt: string;
+  recoveredCount: number;
+  mergedCount: number;
+  recoveredImages: ImageContent[];
+} {
   const orphanedUserCarryForward: string[] = [];
+  const recoveredImages: ImageContent[] = [];
   let orphanedUserCount = 0;
   let leafEntry = params.sessionManager.getLeafEntry();
   while (leafEntry?.type === "message" && leafEntry.message?.role === "user") {
     orphanedUserCount++;
     const carryForwardText = stringifyUserMessageContentForPrompt(leafEntry.message);
+    recoveredImages.push(...extractUserMessageImages(leafEntry.message));
     if (carryForwardText.length > 0) {
       orphanedUserCarryForward.push(carryForwardText);
     }
@@ -339,7 +364,7 @@ export function recoverOrphanedUserMessagesForPrompt(params: {
     leafEntry = params.sessionManager.getLeafEntry();
   }
   if (orphanedUserCount === 0) {
-    return { prompt: params.prompt, recoveredCount: 0, mergedCount: 0 };
+    return { prompt: params.prompt, recoveredCount: 0, mergedCount: 0, recoveredImages: [] };
   }
 
   const sessionContext = params.sessionManager.buildSessionContext();
@@ -349,6 +374,7 @@ export function recoverOrphanedUserMessagesForPrompt(params: {
       prompt: params.prompt,
       recoveredCount: orphanedUserCount,
       mergedCount: 0,
+      recoveredImages,
     };
   }
 
@@ -379,6 +405,7 @@ export function recoverOrphanedUserMessagesForPrompt(params: {
       prompt: params.prompt,
       recoveredCount: orphanedUserCount,
       mergedCount: 0,
+      recoveredImages,
     };
   }
   const carryForwardPrompt = carryForwardEntries.join("\n\n");
@@ -386,6 +413,7 @@ export function recoverOrphanedUserMessagesForPrompt(params: {
     prompt: `${carryForwardPrompt}\n\n${params.prompt}`,
     recoveredCount: orphanedUserCount,
     mergedCount: carryForwardEntries.length,
+    recoveredImages,
   };
 }
 
@@ -1454,7 +1482,7 @@ export async function runEmbeddedAttempt(
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
-      const prePromptMessageCount = activeSession.messages.length;
+      let prePromptMessageCount = activeSession.messages.length;
       try {
         const promptStartedAt = Date.now();
 
@@ -1527,6 +1555,8 @@ export async function runEmbeddedAttempt(
           replaceMessages: (messages) => activeSession.agent.replaceMessages(messages),
         });
         effectivePrompt = orphanRecovery.prompt;
+        const recoveredPromptImages = orphanRecovery.recoveredImages;
+        prePromptMessageCount = activeSession.messages.length;
         if (orphanRecovery.recoveredCount > 0) {
           log.warn(
             `Recovered orphaned user message(s) by carrying context forward. ` +
@@ -1551,7 +1581,10 @@ export async function runEmbeddedAttempt(
             prompt: effectivePrompt,
             workspaceDir: effectiveWorkspace,
             model: params.model,
-            existingImages: params.images,
+            existingImages:
+              recoveredPromptImages.length > 0
+                ? [...(params.images ?? []), ...recoveredPromptImages]
+                : params.images,
             maxBytes: MAX_IMAGE_BYTES,
             maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
             workspaceOnly: effectiveFsWorkspaceOnly,
