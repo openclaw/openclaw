@@ -360,11 +360,11 @@ describe("pickPrimaryLanIPv4", () => {
     }
   });
 
-  it("returns undefined when interface discovery throws", () => {
+  it("throws when interface discovery throws", () => {
     vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
       throw new Error("uv_interface_addresses failed");
     });
-    expect(pickPrimaryLanIPv4()).toBeUndefined();
+    expect(() => pickPrimaryLanIPv4()).toThrow("uv_interface_addresses failed");
   });
 });
 
