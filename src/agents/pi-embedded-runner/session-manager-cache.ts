@@ -9,6 +9,10 @@ type SessionManagerCacheEntry = {
 
 const SESSION_MANAGER_CACHE = new Map<string, SessionManagerCacheEntry>();
 const DEFAULT_SESSION_MANAGER_TTL_MS = 45_000; // 45 seconds
+const MIN_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS = 1_000;
+const MAX_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS = 30_000;
+
+let lastSessionManagerCachePruneAt = 0;
 
 function getSessionManagerTtl(): number {
   return resolveCacheTtlMs({
@@ -21,11 +25,32 @@ function isSessionManagerCacheEnabled(): boolean {
   return isCacheEnabled(getSessionManagerTtl());
 }
 
+function resolveSessionManagerCachePruneInterval(ttlMs: number): number {
+  return Math.min(
+    Math.max(ttlMs, MIN_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS),
+    MAX_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS,
+  );
+}
+
+function maybePruneExpiredSessionManagerCache(now: number, ttlMs: number): void {
+  if (now - lastSessionManagerCachePruneAt < resolveSessionManagerCachePruneInterval(ttlMs)) {
+    return;
+  }
+  for (const [sessionFile, entry] of SESSION_MANAGER_CACHE.entries()) {
+    if (now - entry.loadedAt > ttlMs) {
+      SESSION_MANAGER_CACHE.delete(sessionFile);
+    }
+  }
+  lastSessionManagerCachePruneAt = now;
+}
+
 export function trackSessionManagerAccess(sessionFile: string): void {
-  if (!isSessionManagerCacheEnabled()) {
+  const ttl = getSessionManagerTtl();
+  if (!isCacheEnabled(ttl)) {
     return;
   }
   const now = Date.now();
+  maybePruneExpiredSessionManagerCache(now, ttl);
   SESSION_MANAGER_CACHE.set(sessionFile, {
     sessionFile,
     loadedAt: now,
@@ -33,20 +58,17 @@ export function trackSessionManagerAccess(sessionFile: string): void {
 }
 
 function isSessionManagerCached(sessionFile: string): boolean {
-  if (!isSessionManagerCacheEnabled()) {
+  const ttl = getSessionManagerTtl();
+  if (!isCacheEnabled(ttl)) {
     return false;
   }
+  const now = Date.now();
+  maybePruneExpiredSessionManagerCache(now, ttl);
   const entry = SESSION_MANAGER_CACHE.get(sessionFile);
   if (!entry) {
     return false;
   }
-  const now = Date.now();
-  const ttl = getSessionManagerTtl();
-  if (now - entry.loadedAt > ttl) {
-    SESSION_MANAGER_CACHE.delete(sessionFile);
-    return false;
-  }
-  return true;
+  return now - entry.loadedAt <= ttl;
 }
 
 export async function prewarmSessionFile(sessionFile: string): Promise<void> {
@@ -71,3 +93,13 @@ export async function prewarmSessionFile(sessionFile: string): Promise<void> {
     // File doesn't exist yet, SessionManager will create it
   }
 }
+
+export const __testing = {
+  getSessionManagerCacheKeys(): string[] {
+    return [...SESSION_MANAGER_CACHE.keys()];
+  },
+  resetSessionManagerCache(): void {
+    SESSION_MANAGER_CACHE.clear();
+    lastSessionManagerCachePruneAt = 0;
+  },
+};
