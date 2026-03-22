@@ -1,4 +1,8 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  DEFAULT_ACCOUNT_ID,
+  mergeAccountConfig,
+  normalizeAccountId,
+} from "openclaw/plugin-sdk/account-resolution";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type {
@@ -88,15 +92,11 @@ function resolveAccountConfig(
  */
 function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-
-  // Extract base config (exclude accounts field to avoid recursion)
-  const { accounts: _ignored, defaultAccount: _ignoredDefaultAccount, ...base } = feishuCfg ?? {};
-
-  // Get account-specific overrides
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-
-  // Merge: account config overrides base config
-  return { ...base, ...account } as FeishuConfig;
+  return mergeAccountConfig<FeishuConfig>({
+    channelConfig: feishuCfg,
+    accountConfig: resolveAccountConfig(cfg, accountId),
+    omitKeys: ["defaultAccount"],
+  });
 }
 
 /**

@@ -1,6 +1,7 @@
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
+  mergeAccountConfig,
   normalizeAccountId,
   resolveAccountEntry,
 } from "openclaw/plugin-sdk/account-resolution";
@@ -27,10 +28,11 @@ function resolveAccountConfig(
 }
 
 function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): ZalouserAccountConfig {
-  const raw = (cfg.channels?.zalouser ?? {}) as ZalouserConfig;
-  const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  const merged = { ...base, ...account };
+  const merged = mergeAccountConfig<ZalouserAccountConfig>({
+    channelConfig: cfg.channels?.zalouser as ZalouserAccountConfig | undefined,
+    accountConfig: resolveAccountConfig(cfg, accountId),
+    omitKeys: ["defaultAccount"],
+  });
   return {
     ...merged,
     // Match Telegram's safe default: groups stay allowlisted unless explicitly opened.
