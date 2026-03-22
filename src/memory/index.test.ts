@@ -205,7 +205,7 @@ describe("memory index", () => {
     extraPaths?: string[];
     sources?: Array<"memory" | "sessions">;
     sessionMemory?: boolean;
-    provider?: "openai" | "gemini";
+    provider?: "openai" | "gemini" | "voyage";
     model?: string;
     outputDimensionality?: number;
     multimodal?: {
@@ -941,6 +941,22 @@ describe("memory index", () => {
           call.model === "gemini-embedding-2-preview" &&
           call.outputDimensionality === 1536,
       ),
+    ).toBe(true);
+    await manager.close?.();
+  });
+
+  it("passes Voyage provider config into the provider", async () => {
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      provider: "voyage",
+      model: "voyage-4-large",
+    });
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+
+    expect(
+      providerCalls.some((call) => call.provider === "voyage" && call.model === "voyage-4-large"),
     ).toBe(true);
     await manager.close?.();
   });
