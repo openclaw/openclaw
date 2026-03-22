@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { buildMemoryPromptSection, registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { withEnv } from "../test-utils/env.js";
@@ -18,6 +19,130 @@ import {
 
 type TempPlugin = { dir: string; file: string; id: string };
 type PluginLoadConfig = NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>["config"];
+type CreateJiti = typeof import("jiti").createJiti;
+
+let createJitiPromise: Promise<CreateJiti> | undefined;
+
+async function getCreateJiti() {
+  createJitiPromise ??= import("jiti").then(({ createJiti }) => createJiti);
+  return createJitiPromise;
+}
+
+function withCwd<T>(cwd: string, run: () => T): T {
+  const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+  const previousPwd = process.env.PWD;
+  process.env.PWD = cwd;
+  try {
+    return run();
+  } finally {
+    cwdSpy.mockRestore();
+    if (previousPwd === undefined) {
+      delete process.env.PWD;
+    } else {
+      process.env.PWD = previousPwd;
+    }
+  }
+}
+
+function createPluginSdkAliasFixture(params?: {
+  srcFile?: string;
+  distFile?: string;
+  srcBody?: string;
+  distBody?: string;
+  packageName?: string;
+  packageExports?: Record<string, unknown>;
+  trustedRootIndicators?: boolean;
+  trustedRootIndicatorMode?: "bin+marker" | "cli-entry-only" | "none";
+}) {
+  const root = makeTempDir();
+  const srcFile = path.join(root, "src", "plugin-sdk", params?.srcFile ?? "index.ts");
+  const distFile = path.join(root, "dist", "plugin-sdk", params?.distFile ?? "index.js");
+  mkdirSafe(path.dirname(srcFile));
+  mkdirSafe(path.dirname(distFile));
+  const trustedRootIndicatorMode =
+    params?.trustedRootIndicatorMode ??
+    (params?.trustedRootIndicators === false ? "none" : "bin+marker");
+  const packageJson: Record<string, unknown> = {
+    name: params?.packageName ?? "openclaw",
+    type: "module",
+  };
+  if (trustedRootIndicatorMode === "bin+marker") {
+    packageJson.bin = {
+      openclaw: "openclaw.mjs",
+    };
+  }
+  if (params?.packageExports || trustedRootIndicatorMode === "cli-entry-only") {
+    const trustedExports: Record<string, unknown> =
+      trustedRootIndicatorMode === "cli-entry-only"
+        ? { "./cli-entry": { default: "./dist/cli-entry.js" } }
+        : {};
+    packageJson.exports = {
+      "./plugin-sdk": { default: "./dist/plugin-sdk/index.js" },
+      ...trustedExports,
+      ...params?.packageExports,
+    };
+  }
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(packageJson, null, 2), "utf-8");
+  if (trustedRootIndicatorMode === "bin+marker") {
+    fs.writeFileSync(path.join(root, "openclaw.mjs"), "export {};\n", "utf-8");
+  }
+  fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
+  fs.writeFileSync(distFile, params?.distBody ?? "export {};\n", "utf-8");
+  return { root, srcFile, distFile };
+}
+
+function createExtensionApiAliasFixture(params?: { srcBody?: string; distBody?: string }) {
+  const root = makeTempDir();
+  const srcFile = path.join(root, "src", "extensionAPI.ts");
+  const distFile = path.join(root, "dist", "extensionAPI.js");
+  mkdirSafe(path.dirname(srcFile));
+  mkdirSafe(path.dirname(distFile));
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+    "utf-8",
+  );
+  fs.writeFileSync(path.join(root, "openclaw.mjs"), "export {};\n", "utf-8");
+  fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
+  fs.writeFileSync(distFile, params?.distBody ?? "export {};\n", "utf-8");
+  return { root, srcFile, distFile };
+}
+
+function resolvePluginSdkAlias(params: {
+  root: string;
+  srcFile: string;
+  distFile: string;
+  modulePath: string;
+  argv1?: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const run = () =>
+    __testing.resolvePluginSdkAliasFile({
+      srcFile: params.srcFile,
+      distFile: params.distFile,
+      modulePath: params.modulePath,
+      argv1: params.argv1,
+    });
+  return params.env ? withEnv(params.env, run) : run();
+}
+
+function listPluginSdkAliasCandidates(params: {
+  root: string;
+  srcFile: string;
+  distFile: string;
+  modulePath: string;
+  argv1?: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const run = () =>
+    __testing.listPluginSdkAliasCandidates({
+      srcFile: params.srcFile,
+      distFile: params.distFile,
+      modulePath: params.modulePath,
+      argv1: params.argv1,
+    });
+  return params.env ? withEnv(params.env, run) : run();
+}
 
 function chmodSafeDir(dir: string) {
   if (process.platform === "win32") {

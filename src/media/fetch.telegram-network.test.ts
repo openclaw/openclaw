@@ -30,8 +30,6 @@ vi.mock("undici", () => ({
 
 describe("fetchRemoteMedia telegram network policy", () => {
   type LookupFn = NonNullable<Parameters<typeof fetchRemoteMedia>[0]["lookupFn"]>;
-
-<<<<<<< HEAD
   beforeEach(() => {
     undiciMocks.fetch.mockReset();
     undiciMocks.agentCtor.mockClear();
