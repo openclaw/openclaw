@@ -13,6 +13,11 @@
       "label": "SearXNG Base URL",
       "help": "The URL of your SearXNG instance (e.g., http://localhost:8080).",
       "placeholder": "http://localhost:8080"
+    },
+    "webSearch.allowPrivateNetwork": {
+      "label": "Allow Local Network Access",
+      "help": "Set this to true if your SearXNG server is on a local or private IP network.",
+      "placeholder": "false"
     }
   },
   "configSchema": {
@@ -28,6 +33,9 @@
           },
           "baseUrl": {
             "type": "string"
+          },
+          "allowPrivateNetwork": {
+            "type": "boolean"
           }
         }
       }

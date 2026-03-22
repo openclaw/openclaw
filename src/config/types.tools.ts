@@ -498,10 +498,10 @@ export type ToolsConfig = {
       tavily?: {
         apiKey?: SecretInput;
       };
-      /** SearXNG configuration. */
       searxng?: {
         baseUrl?: string;
         apiKey?: SecretInput;
+        allowPrivateNetwork?: boolean;
       };
     } & Record<string, unknown>;
     fetch?: {
