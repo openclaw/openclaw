@@ -77,6 +77,18 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   }
 }
 
+/** `file-type` may return `image/apng` for PNG payloads; normalize when PNG is clearly intended. */
+export function coerceApngSniffToPng(
+  sniffed: string | undefined,
+  ext: string | undefined,
+  headerMime: string | undefined,
+): string | undefined {
+  if (sniffed === "image/apng" && (ext === ".png" || headerMime === "image/png")) {
+    return "image/png";
+  }
+  return sniffed;
+}
+
 export function getFileExtension(filePath?: string | null): string | undefined {
   if (!filePath) {
     return undefined;
@@ -126,7 +138,7 @@ async function detectMimeImpl(opts: {
   const extMime = ext ? MIME_BY_EXT[ext] : undefined;
 
   const headerMime = normalizeMimeType(opts.headerMime);
-  const sniffed = await sniffMime(opts.buffer);
+  let sniffed = coerceApngSniffToPng(await sniffMime(opts.buffer), ext, headerMime);
 
   // Prefer sniffed types, but don't let generic container types override a more
   // specific extension mapping (e.g. XLSX vs ZIP).

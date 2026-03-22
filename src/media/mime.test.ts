@@ -2,6 +2,7 @@ import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import { mediaKindFromMime } from "./constants.js";
 import {
+  coerceApngSniffToPng,
   detectMime,
   extensionForMime,
   imageMimeFromFormat,
@@ -67,6 +68,13 @@ describe("mime detection", () => {
       filePath: "/tmp/a2ui.bundle.js",
     });
     expect(mime).toBe("text/javascript");
+  });
+
+  it("coerces apng sniff to png when path or header says png", () => {
+    expect(coerceApngSniffToPng("image/apng", ".png", undefined)).toBe("image/png");
+    expect(coerceApngSniffToPng("image/apng", ".jpg", "image/png")).toBe("image/png");
+    expect(coerceApngSniffToPng("image/apng", ".jpg", undefined)).toBe("image/apng");
+    expect(coerceApngSniffToPng("image/png", ".png", undefined)).toBe("image/png");
   });
 });
 
