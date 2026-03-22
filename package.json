@@ -821,6 +821,9 @@
           "strip-ansi": "^7.2.0"
         }
       }
+    },
+    "patchedDependencies": {
+      "qrcode-terminal@0.12.0": "patches/qrcode-terminal@0.12.0.patch"
     }
   }
 }

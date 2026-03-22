@@ -22,6 +22,11 @@ overrides:
 
 packageExtensionsChecksum: sha256-n+P/SQo4Pf+dHYpYn1Y6wL4cJEVoVzZ835N0OEp4TM8=
 
+patchedDependencies:
+  qrcode-terminal@0.12.0:
+    hash: 68024eba5b12e002fd49ff4978670cfa0f4fea3db213c0f3d6ccd3cadf8d6d4e
+    path: patches/qrcode-terminal@0.12.0.patch
+
 importers:
 
   .:
@@ -142,7 +147,7 @@ importers:
         version: 1.58.2
       qrcode-terminal:
         specifier: ^0.12.0
-        version: 0.12.0
+        version: 0.12.0(patch_hash=68024eba5b12e002fd49ff4978670cfa0f4fea3db213c0f3d6ccd3cadf8d6d4e)
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
@@ -12165,7 +12170,7 @@ snapshots:
       osc-progress: 0.3.0
       pdfjs-dist: 5.5.207
       playwright-core: 1.58.2
-      qrcode-terminal: 0.12.0
+      qrcode-terminal: 0.12.0(patch_hash=68024eba5b12e002fd49ff4978670cfa0f4fea3db213c0f3d6ccd3cadf8d6d4e)
       sharp: 0.34.5
       sqlite-vec: 0.1.7-alpha.2
       tar: 7.5.11
@@ -12598,7 +12603,7 @@ snapshots:
       '@thi.ng/bitstream': 2.4.43
     optional: true
 
-  qrcode-terminal@0.12.0: {}
+  qrcode-terminal@0.12.0(patch_hash=68024eba5b12e002fd49ff4978670cfa0f4fea3db213c0f3d6ccd3cadf8d6d4e): {}
 
   qs@6.14.2:
     dependencies:
