@@ -42,7 +42,11 @@ function isSessionManagerCached(sessionFile: string): boolean {
   }
   const now = Date.now();
   const ttl = getSessionManagerTtl();
-  return now - entry.loadedAt <= ttl;
+  if (now - entry.loadedAt > ttl) {
+    SESSION_MANAGER_CACHE.delete(sessionFile);
+    return false;
+  }
+  return true;
 }
 
 export async function prewarmSessionFile(sessionFile: string): Promise<void> {
