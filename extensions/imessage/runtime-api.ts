@@ -13,7 +13,7 @@ export {
   IMessageConfigSchema,
   type ChannelPlugin,
   type IMessageAccountConfig,
-} from "../../src/plugin-sdk/imessage.js";
+} from "openclaw/plugin-sdk/imessage";
 export {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
