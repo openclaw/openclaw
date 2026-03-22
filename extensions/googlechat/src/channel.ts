@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -146,13 +147,14 @@ export const googlechatPlugin = createChatChannelPlugin({
     config: {
       ...googleChatConfigAdapter,
       isConfigured: (account) => account.credentialSource !== "none",
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: account.credentialSource !== "none",
-        credentialSource: account.credentialSource,
-      }),
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: account.credentialSource !== "none",
+          extra: {
+            credentialSource: account.credentialSource,
+          },
+        }),
     },
     groups: {
       resolveRequireMention: resolveGoogleChatGroupRequireMention,

@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -156,17 +157,18 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
   config: {
     ...ircConfigAdapter,
     isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      host: account.host,
-      port: account.port,
-      tls: account.tls,
-      nick: account.nick,
-      passwordSource: account.passwordSource,
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: account.configured,
+        extra: {
+          host: account.host,
+          port: account.port,
+          tls: account.tls,
+          nick: account.nick,
+          passwordSource: account.passwordSource,
+        },
+      }),
   },
   security: {
     resolveDmPolicy: resolveIrcDmPolicy,

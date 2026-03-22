@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
@@ -79,14 +80,15 @@ export const tlonPlugin: ChannelPlugin = {
   config: {
     ...tlonConfigAdapter,
     isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      ship: account.ship,
-      url: account.url,
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: account.configured,
+        extra: {
+          ship: account.ship,
+          url: account.url,
+        },
+      }),
   },
   messaging: {
     normalizeTarget: (target) => {

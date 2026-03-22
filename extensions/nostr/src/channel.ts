@@ -1,3 +1,4 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   createScopedDmSecurityResolver,
   createTopLevelChannelConfigAdapter,
@@ -164,13 +165,14 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   config: {
     ...nostrConfigAdapter,
     isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      publicKey: account.publicKey,
-    }),
+    describeAccount: (account) =>
+      describeAccountSnapshot({
+        account,
+        configured: account.configured,
+        extra: {
+          publicKey: account.publicKey,
+        },
+      }),
   },
 
   pairing: {
