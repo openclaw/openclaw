@@ -6,6 +6,7 @@ import android.media.AudioManager
 import android.media.AudioTrack
 import android.util.Base64
 import android.util.Log
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -58,7 +59,7 @@ class ElevenLabsStreamingTts(
   val isPlaying: StateFlow<Boolean> = _isPlaying
 
   private var webSocket: WebSocket? = null
-  private var audioTrack: AudioTrack? = null
+  private val audioTrack = AtomicReference<AudioTrack?>(null)
   private var trackStarted = false
   private var client: OkHttpClient? = null
   @Volatile private var stopped = false
@@ -112,7 +113,7 @@ class ElevenLabsStreamingTts(
       Log.e(TAG, "AudioTrack init failed")
       return
     }
-    audioTrack = track
+    audioTrack.set(track)
     _isPlaying.value = true
 
     // Open WebSocket
@@ -268,8 +269,8 @@ class ElevenLabsStreamingTts(
     drainJob = null
     webSocket?.cancel()
     webSocket = null
-    val track = audioTrack
-    audioTrack = null
+    // Atomically take ownership so only one of stop()/cleanup() releases the track
+    val track = audioTrack.getAndSet(null)
     if (track != null) {
       try {
         track.pause()
@@ -283,12 +284,17 @@ class ElevenLabsStreamingTts(
   }
 
   private fun writeToTrack(pcmBytes: ByteArray) {
-    val track = audioTrack ?: return
+    val track = audioTrack.get() ?: return
     if (stopped) return
 
     // Start playback on first audio chunk — avoids underrun
     if (!trackStarted) {
-      track.play()
+      try {
+        track.play()
+      } catch (_: IllegalStateException) {
+        // Track was released between get() and play() — discard
+        return
+      }
       trackStarted = true
       hasReceivedAudio = true
       Log.d(TAG, "AudioTrack started on first chunk")
@@ -296,7 +302,12 @@ class ElevenLabsStreamingTts(
 
     var offset = 0
     while (offset < pcmBytes.size && !stopped) {
-      val wrote = track.write(pcmBytes, offset, pcmBytes.size - offset)
+      val wrote = try {
+        track.write(pcmBytes, offset, pcmBytes.size - offset)
+      } catch (_: IllegalStateException) {
+        // Track released concurrently — stop writing
+        return
+      }
       if (wrote <= 0) {
         if (stopped) return
         Log.w(TAG, "AudioTrack write returned $wrote")
@@ -311,9 +322,13 @@ class ElevenLabsStreamingTts(
     // Wait up to 10s for audio to finish playing
     val deadline = System.currentTimeMillis() + 10_000
     while (!stopped && System.currentTimeMillis() < deadline) {
-      // Check if track is still playing
-      val track = audioTrack ?: return
-      if (track.playState != AudioTrack.PLAYSTATE_PLAYING) return
+      val track = audioTrack.get() ?: return
+      val playState = try {
+        track.playState
+      } catch (_: IllegalStateException) {
+        return
+      }
+      if (playState != AudioTrack.PLAYSTATE_PLAYING) return
       try {
         Thread.sleep(100)
       } catch (_: InterruptedException) {
@@ -323,8 +338,8 @@ class ElevenLabsStreamingTts(
   }
 
   private fun cleanup() {
-    val track = audioTrack
-    audioTrack = null
+    // Atomically take ownership so only one of stop()/cleanup() releases the track
+    val track = audioTrack.getAndSet(null)
     if (track != null) {
       try {
         track.stop()
