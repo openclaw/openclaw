@@ -30,11 +30,32 @@ export function normalizeSpeechProviderId(
 
 function resolveSpeechProviderPluginEntries(cfg?: OpenClawConfig): SpeechProviderPlugin[] {
   const active = getActivePluginRegistry();
-  const registry =
-    (active?.speechProviders?.length ?? 0) > 0 || !cfg
-      ? active
-      : loadOpenClawPlugins({ config: cfg });
-  return registry?.speechProviders?.map((entry) => entry.provider) ?? [];
+  const activeEntries = active?.speechProviders?.map((entry) => entry.provider) ?? [];
+  if (activeEntries.length > 0 || !cfg) {
+    return activeEntries;
+  }
+  return loadOpenClawPlugins({ config: cfg }).speechProviders.map((entry) => entry.provider);
+}
+
+function registerSpeechProvider(
+  maps: {
+    canonical: Map<string, SpeechProviderPlugin>;
+    aliases: Map<string, SpeechProviderPlugin>;
+  },
+  provider: SpeechProviderPlugin,
+): void {
+  const id = normalizeSpeechProviderId(provider.id);
+  if (!id) {
+    return;
+  }
+  maps.canonical.set(id, provider);
+  maps.aliases.set(id, provider);
+  for (const alias of provider.aliases ?? []) {
+    const normalizedAlias = normalizeSpeechProviderId(alias);
+    if (normalizedAlias) {
+      maps.aliases.set(normalizedAlias, provider);
+    }
+  }
 }
 
 function buildProviderMaps(cfg?: OpenClawConfig): {
@@ -43,29 +64,16 @@ function buildProviderMaps(cfg?: OpenClawConfig): {
 } {
   const canonical = new Map<string, SpeechProviderPlugin>();
   const aliases = new Map<string, SpeechProviderPlugin>();
-  const register = (provider: SpeechProviderPlugin) => {
-    const id = normalizeSpeechProviderId(provider.id);
-    if (!id) {
-      return;
-    }
-    canonical.set(id, provider);
-    aliases.set(id, provider);
-    for (const alias of provider.aliases ?? []) {
-      const normalizedAlias = normalizeSpeechProviderId(alias);
-      if (normalizedAlias) {
-        aliases.set(normalizedAlias, provider);
-      }
-    }
-  };
+  const maps = { canonical, aliases };
 
   for (const buildProvider of BUILTIN_SPEECH_PROVIDER_BUILDERS) {
-    register(buildProvider());
+    registerSpeechProvider(maps, buildProvider());
   }
   for (const provider of resolveSpeechProviderPluginEntries(cfg)) {
-    register(provider);
+    registerSpeechProvider(maps, provider);
   }
 
-  return { canonical, aliases };
+  return maps;
 }
 
 export function listSpeechProviders(cfg?: OpenClawConfig): SpeechProviderPlugin[] {
@@ -79,6 +87,11 @@ export function getSpeechProvider(
   const normalized = normalizeSpeechProviderId(providerId);
   if (!normalized) {
     return undefined;
+  }
+
+  const local = buildProviderMaps().aliases.get(normalized);
+  if (local || !cfg) {
+    return local;
   }
   return buildProviderMaps(cfg).aliases.get(normalized);
 }
