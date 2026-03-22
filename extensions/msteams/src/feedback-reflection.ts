@@ -154,15 +154,10 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     userComment: params.userComment,
   });
 
-  // Build a synthetic inbound context for the reflection
-  const route = core.channel.routing.resolveAgentRoute({
-    cfg,
-    channel: "msteams",
-    peer: { kind: "direct", id: params.conversationId },
-  });
-
+  // Use the agentId from the feedback handler (already resolved with correct routing)
+  // instead of re-resolving, which could yield a different agent in peer-specific setups.
   const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-    agentId: route.agentId,
+    agentId: params.agentId,
   });
 
   const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);

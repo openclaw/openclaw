@@ -194,11 +194,20 @@ async function handleFeedbackInvoke(
   const messageId = value.replyToId ?? activity.replyToId ?? "unknown";
   const isNegative = reaction === "dislike";
 
+  // Route feedback using the same chat-type logic as normal messages
+  // so session keys, agent IDs, and transcript paths match.
+  const convType = activity.conversation?.conversationType?.toLowerCase();
+  const isDirectMessage = convType === "personal" || (!convType && !activity.conversation?.isGroup);
+  const isChannel = convType === "channel";
+
   const core = getMSTeamsRuntime();
   const route = core.channel.routing.resolveAgentRoute({
     cfg: deps.cfg,
     channel: "msteams",
-    peer: { kind: "direct", id: senderId },
+    peer: {
+      kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
+      id: isDirectMessage ? senderId : conversationId,
+    },
   });
 
   // Log feedback event to session JSONL
