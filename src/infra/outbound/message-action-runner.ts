@@ -16,7 +16,7 @@ import type {
 import type { OpenClawConfig } from "../../config/config.js";
 import { hasInteractiveReplyBlocks, hasReplyPayloadContent } from "../../interactive/payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { hasPollCreationParams } from "../../poll-params.js";
+import { hasPollCreationParams, stripInertPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -716,6 +716,9 @@ export async function runMessageAction(
 ): Promise<MessageActionRunResult> {
   const cfg = input.cfg;
   let params = { ...input.params };
+  if (input.action !== "poll") {
+    stripInertPollCreationParams(params);
+  }
   const resolvedAgentId =
     input.agentId ??
     (input.sessionKey

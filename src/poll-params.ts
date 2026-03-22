@@ -1,4 +1,4 @@
-import { readSnakeCaseParamRaw } from "./param-key.js";
+import { readSnakeCaseParamRaw, toSnakeCaseKey } from "./param-key.js";
 
 export type PollCreationParamKind = "string" | "stringArray" | "number" | "boolean";
 
@@ -48,6 +48,53 @@ export function resolveTelegramPollVisibility(params: {
     throw new Error("pollAnonymous and pollPublic are mutually exclusive");
   }
   return params.pollAnonymous ? true : params.pollPublic ? false : undefined;
+}
+
+/**
+ * Removes poll-creation fields that are empty defaults (often injected by tool wrappers)
+ * so non-poll actions are not rejected by `hasPollCreationParams` guards.
+ */
+export function stripInertPollCreationParams(params: Record<string, unknown>): void {
+  for (const key of POLL_CREATION_PARAM_NAMES) {
+    const def = POLL_CREATION_PARAM_DEFS[key];
+    if (!def) {
+      continue;
+    }
+    const raw = readPollParamRaw(params, key);
+    const snakeKey = toSnakeCaseKey(key);
+    let remove = false;
+
+    if (def.kind === "string") {
+      remove = typeof raw === "string" && raw.trim().length === 0;
+    } else if (def.kind === "stringArray") {
+      if (raw === undefined) {
+        continue;
+      }
+      if (Array.isArray(raw)) {
+        remove = !raw.some((entry) => typeof entry === "string" && entry.trim().length > 0);
+      } else if (typeof raw === "string") {
+        remove = raw.trim().length === 0;
+      }
+    } else if (def.kind === "number") {
+      if (typeof raw === "number" && Number.isFinite(raw)) {
+        remove = raw === 0;
+      } else if (typeof raw === "string") {
+        const trimmed = raw.trim();
+        if (trimmed.length > 0 && Number.isFinite(Number(trimmed))) {
+          remove = Number(trimmed) === 0;
+        }
+      }
+    } else if (def.kind === "boolean") {
+      remove = raw === false;
+    }
+
+    if (remove) {
+      delete params[key];
+      if (snakeKey !== key) {
+        delete params[snakeKey];
+      }
+    }
+  }
 }
 
 export function hasPollCreationParams(params: Record<string, unknown>): boolean {

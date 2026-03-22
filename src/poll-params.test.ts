@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { hasPollCreationParams, resolveTelegramPollVisibility } from "./poll-params.js";
+import {
+  hasPollCreationParams,
+  resolveTelegramPollVisibility,
+  stripInertPollCreationParams,
+} from "./poll-params.js";
 
 describe("poll params", () => {
   it("does not treat explicit false booleans as poll creation params", () => {
@@ -47,6 +51,30 @@ describe("poll params", () => {
     expect(hasPollCreationParams({ poll_option: ["Pizza", "Sushi"] })).toBe(true);
     expect(hasPollCreationParams({ poll_duration_seconds: "60" })).toBe(true);
     expect(hasPollCreationParams({ poll_public: "true" })).toBe(true);
+  });
+
+  it("stripInertPollCreationParams removes empty defaults without affecting real poll intent", () => {
+    const cleared: Record<string, unknown> = {
+      pollQuestion: "",
+      pollOption: [],
+      pollDurationHours: 0,
+      pollDurationSeconds: "0",
+      pollMulti: false,
+    };
+    stripInertPollCreationParams(cleared);
+    expect(cleared).toEqual({});
+
+    const intact: Record<string, unknown> = {
+      pollQuestion: "Snack?",
+      pollOption: ["A", "B"],
+      pollDurationSeconds: 60,
+    };
+    stripInertPollCreationParams(intact);
+    expect(intact).toEqual({
+      pollQuestion: "Snack?",
+      pollOption: ["A", "B"],
+      pollDurationSeconds: 60,
+    });
   });
 
   it("resolves telegram poll visibility flags", () => {

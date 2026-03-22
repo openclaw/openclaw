@@ -252,6 +252,19 @@ describe("runMessageAction context isolation", () => {
       },
       toolContext: { currentChannelId: "C12345678" },
     },
+    {
+      name: "allows send when wrapper injects inert poll defaults (empty question, zero duration)",
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        target: "#C12345678",
+        message: "hi",
+        pollQuestion: "",
+        pollOption: [],
+        pollDurationHours: 0,
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    },
   ])("$name", async ({ cfg, actionParams, toolContext }) => {
     const result = await runDrySend({
       cfg,
