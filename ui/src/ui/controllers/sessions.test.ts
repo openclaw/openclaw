@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteSessionsAndRefresh, subscribeSessions, type SessionsState } from "./sessions.ts";
+import {
+  deleteSessionsAndRefresh,
+  loadSessions,
+  subscribeSessions,
+  type SessionsState,
+} from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -39,6 +44,43 @@ describe("subscribeSessions", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.subscribe", {});
     expect(state.sessionsError).toBeNull();
+  });
+});
+
+describe("loadSessions", () => {
+  it("queues one refresh when called again while a sessions.list request is already in flight", async () => {
+    const resolvers: Array<(value: unknown) => void> = [];
+    const request = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const state = createState(request);
+
+    const firstLoad = loadSessions(state, { includeGlobal: true, includeUnknown: true });
+    expect(state.sessionsLoading).toBe(true);
+
+    const queuedLoad = loadSessions(state, {
+      activeMinutes: 0,
+      limit: 0,
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+
+    resolvers[0]?.({ ts: 1, path: "", count: 0, defaults: null, sessions: [] });
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledTimes(2);
+    resolvers[1]?.({ ts: 2, path: "", count: 1, defaults: null, sessions: [] });
+    await Promise.all([firstLoad, queuedLoad]);
+
+    expect(state.sessionsLoading).toBe(false);
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
   });
 });
 

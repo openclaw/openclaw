@@ -4,11 +4,13 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { renderChatSessionSelect } from "../app-render.helpers.ts";
+import { renderChatMobileToggle, renderChatSessionSelect } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
+import { loadSessions } from "../controllers/sessions.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
+import type { ChatAttachment } from "../ui-types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
 
@@ -30,6 +32,7 @@ function createChatHeaderState(
     createResult?: { ok: boolean; key?: string };
     createRequest?: (params: Record<string, unknown>) => Promise<{ ok: boolean; key?: string }>;
     sessionsResult?: SessionsListResult;
+    sessionsListRequest?: () => Promise<SessionsListResult>;
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
   let currentModel = overrides.model ?? null;
@@ -96,6 +99,9 @@ function createChatHeaderState(
       return createResult;
     }
     if (method === "sessions.list") {
+      if (overrides.sessionsListRequest) {
+        return overrides.sessionsListRequest();
+      }
       return sessionsResult;
     }
     if (method === "models.list") {
@@ -139,6 +145,7 @@ function createChatHeaderState(
     chatLoading: false,
     chatThinkingLevel: null,
     lastError: null,
+    sessionsError: null,
     chatAvatarUrl: null,
     basePath: "",
     hello: null,
@@ -167,6 +174,14 @@ async function withPromptStub(run: () => Promise<void>) {
   } finally {
     vi.unstubAllGlobals();
   }
+}
+
+function createAttachment(id: string): ChatAttachment {
+  return {
+    id,
+    dataUrl: `data:text/plain;base64,${id}`,
+    mimeType: "text/plain",
+  };
 }
 
 function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
@@ -912,9 +927,8 @@ describe("chat view", () => {
   it("switches to the created session and clears pending state on success", async () => {
     await withPromptStub(async () => {
       const { state, request } = createChatHeaderState();
-      state.chatAttachments = [
-        { id: "a1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA=" },
-      ];
+      state.chatMessage = "Draft carried forward";
+      state.chatAttachments = [createAttachment("draft-1")];
       const container = document.createElement("div");
       render(renderChatSessionSelect(state), container);
 
@@ -928,7 +942,8 @@ describe("chat view", () => {
       expect(state.settings.sessionKey).toBe("new-session");
       expect(state.settings.lastActiveSessionKey).toBe("new-session");
       expect(state.newChatSessionPending).toBe(false);
-      expect(state.chatAttachments).toEqual([]);
+      expect(state.chatMessage).toBe("Draft carried forward");
+      expect(state.chatAttachments).toEqual([createAttachment("draft-1")]);
       expect(request).toHaveBeenCalledWith("sessions.create", {
         agentId: "main",
         label: "Session label",
@@ -1079,10 +1094,24 @@ describe("chat view", () => {
 
   it("retries the session refresh after create if a session list load is already in flight", async () => {
     await withPromptStub(async () => {
-      const { state, request } = createChatHeaderState();
-      state.sessionsLoading = true;
+      const listResolvers: Array<(value: SessionsListResult) => void> = [];
+      const sessionsListRequest = vi.fn(
+        async () =>
+          new Promise<SessionsListResult>((resolve) => {
+            listResolvers.push(resolve);
+          }),
+      );
+      const { state, request } = createChatHeaderState({ sessionsListRequest });
       const container = document.createElement("div");
       render(renderChatSessionSelect(state), container);
+
+      const inFlightList = loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
+        activeMinutes: 0,
+        limit: 0,
+        includeGlobal: true,
+        includeUnknown: true,
+      });
+      await flushTasks();
 
       const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
       expect(newChatButton).not.toBeNull();
@@ -1090,13 +1119,81 @@ describe("chat view", () => {
       newChatButton!.click();
       await flushTasks();
 
-      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(0);
+      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(1);
 
-      state.sessionsLoading = false;
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      listResolvers[0]?.({
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [{ key: "main", kind: "direct", updatedAt: null }],
+      });
+      await flushTasks();
+
+      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
+
+      listResolvers[1]?.({
+        ts: 0,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          { key: "main", kind: "direct", updatedAt: null },
+          { key: "new-session", kind: "direct", updatedAt: null },
+        ],
+      });
+      await inFlightList;
+      await flushTasks();
 
       expect(state.sessionKey).toBe("new-session");
-      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(1);
+      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
+    });
+  });
+
+  it("renders a new session action in mobile chat controls", () => {
+    const { state } = createChatHeaderState();
+    const container = document.createElement("div");
+    render(renderChatMobileToggle(state), container);
+
+    const newChatButton = container.querySelector<HTMLButtonElement>(
+      ".chat-controls-dropdown .chat-controls__new-chat",
+    );
+    expect(newChatButton).not.toBeNull();
+    expect(newChatButton?.disabled).toBe(false);
+  });
+
+  it("disables the mobile new session action while a run is active", () => {
+    const { state } = createChatHeaderState();
+    state.chatRunId = "run-123";
+    const container = document.createElement("div");
+    render(renderChatMobileToggle(state), container);
+
+    const newChatButton = container.querySelector<HTMLButtonElement>(
+      ".chat-controls-dropdown .chat-controls__new-chat",
+    );
+    expect(newChatButton).not.toBeNull();
+    expect(newChatButton?.disabled).toBe(true);
+  });
+
+  it("creates a new session from mobile chat controls", async () => {
+    await withPromptStub(async () => {
+      const { state, request } = createChatHeaderState();
+      const container = document.createElement("div");
+      render(renderChatMobileToggle(state), container);
+
+      const newChatButton = container.querySelector<HTMLButtonElement>(
+        ".chat-controls-dropdown .chat-controls__new-chat",
+      );
+      expect(newChatButton).not.toBeNull();
+
+      newChatButton!.click();
+      await flushTasks();
+
+      expect(state.sessionKey).toBe("new-session");
+      expect(request).toHaveBeenCalledWith("sessions.create", {
+        agentId: "main",
+        label: "Session label",
+      });
     });
   });
 
