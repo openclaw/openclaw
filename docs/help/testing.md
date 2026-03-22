@@ -132,6 +132,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 - API key rotation (provider-specific): set `*_API_KEYS` with comma/semicolon format or `*_API_KEY_1`, `*_API_KEY_2` (for example `OPENAI_API_KEYS`, `ANTHROPIC_API_KEYS`, `GEMINI_API_KEYS`) or per-live override via `OPENCLAW_LIVE_*_KEY`; tests retry on rate limit responses.
 - Progress/heartbeat output:
   - Live suites now emit progress lines to stderr so long provider calls are visibly active even when Vitest console capture is quiet.
+  - `vitest.live.config.ts` disables Vitest console interception so provider/gateway progress lines stream immediately during live runs.
   - Tune direct-model heartbeats with `OPENCLAW_LIVE_HEARTBEAT_MS`.
   - Tune gateway/probe heartbeats with `OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS`.
 
