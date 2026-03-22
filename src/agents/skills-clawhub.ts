@@ -267,6 +267,7 @@ export async function installSkillFromClawHub(params: {
         archivePath: archive.archivePath,
         tempDirPrefix: "openclaw-skill-clawhub-",
         timeoutMs: 120_000,
+        rootMarkers: ["SKILL.md"],
         onExtracted: async (rootDir) =>
           await installExtractedSkill({
             workspaceDir: params.workspaceDir,
