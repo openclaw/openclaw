@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 
 // Avoid importing the full chat command registry for reserved-name calculation.
 vi.mock("./commands-registry.js", () => ({
@@ -41,22 +42,70 @@ vi.mock("../agents/skills.js", () => {
     return [];
   }
 
+  function normalizeSkillName(value: string): string {
+    return value.trim().toLowerCase();
+  }
+
+  function applyMockPolicy(
+    entries: Array<{ skillName: string; description: string }>,
+    opts?: { config?: OpenClawConfig; agentId?: string },
+  ): Array<{ skillName: string; description: string }> {
+    const policy = opts?.config?.skills?.policy;
+    if (!policy || typeof policy !== "object" || !opts?.agentId) {
+      return entries;
+    }
+    const override =
+      policy.agentOverrides && typeof policy.agentOverrides === "object"
+        ? (policy.agentOverrides[opts.agentId] as
+            | { enabled?: string[]; disabled?: string[] }
+            | undefined)
+        : undefined;
+    const globalEnabled = Array.isArray(policy.globalEnabled)
+      ? policy.globalEnabled.map(normalizeSkillName)
+      : [];
+    const enabled = Array.isArray(override?.enabled)
+      ? override.enabled.map(normalizeSkillName)
+      : [];
+    const disabled = Array.isArray(override?.disabled)
+      ? override.disabled.map(normalizeSkillName)
+      : [];
+
+    const effective = new Set<string>(
+      globalEnabled.length > 0
+        ? globalEnabled
+        : entries.map((entry) => normalizeSkillName(entry.skillName)),
+    );
+    for (const name of disabled) {
+      effective.delete(name);
+    }
+    for (const name of enabled) {
+      effective.add(name);
+    }
+    return entries.filter((entry) => effective.has(normalizeSkillName(entry.skillName)));
+  }
+
   return {
     buildWorkspaceSkillCommandSpecs: (
       workspaceDir: string,
-      opts?: { reservedNames?: Set<string>; skillFilter?: string[] },
+      opts?: {
+        config?: OpenClawConfig;
+        agentId?: string;
+        reservedNames?: Set<string>;
+        skillFilter?: string[];
+      },
     ) => {
       const used = new Set<string>();
       for (const reserved of opts?.reservedNames ?? []) {
         used.add(String(reserved).toLowerCase());
       }
       const filter = opts?.skillFilter;
-      const entries =
+      const filtered =
         filter === undefined
           ? resolveWorkspaceSkills(workspaceDir)
           : resolveWorkspaceSkills(workspaceDir).filter((entry) =>
               filter.some((skillName) => skillName === entry.skillName),
             );
+      const entries = applyMockPolicy(filtered, opts);
 
       return entries.map((entry) => {
         const base = entry.skillName.replace(/-/g, "_");
@@ -337,6 +386,35 @@ describe("listSkillCommandsForAgents", () => {
         },
       },
       agentIds: ["locked", "partial"],
+    });
+
+    expect(commands.map((entry) => entry.skillName)).toEqual(["extra-skill"]);
+  });
+
+  it("does not leak skills blocked for all co-tenant agents in a shared workspace", async () => {
+    const baseDir = await makeTempDir("openclaw-skills-policy-shared-");
+    const sharedWorkspace = path.join(baseDir, "research");
+    await fs.mkdir(sharedWorkspace, { recursive: true });
+
+    const commands = listSkillCommandsForAgents({
+      cfg: {
+        agents: {
+          list: [
+            { id: "agent-a", workspace: sharedWorkspace },
+            { id: "agent-b", workspace: sharedWorkspace },
+          ],
+        },
+        skills: {
+          policy: {
+            globalEnabled: ["demo-skill", "extra-skill"],
+            agentOverrides: {
+              "agent-a": { disabled: ["demo-skill"] },
+              "agent-b": { disabled: ["demo-skill"] },
+            },
+          },
+        },
+      },
+      agentIds: ["agent-a", "agent-b"],
     });
 
     expect(commands.map((entry) => entry.skillName)).toEqual(["extra-skill"]);

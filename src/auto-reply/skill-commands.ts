@@ -72,7 +72,11 @@ export function listSkillCommandsForAgents(params: {
   // agents share the same directory (#5717), while still honoring per-agent filters.
   const workspaceFilters = new Map<
     string,
-    { workspaceDir: string; skillFilter?: string[]; agentId?: string }
+    {
+      workspaceDir: string;
+      skillFilter?: string[];
+      scopes: Array<{ agentId: string; skillFilter?: string[] }>;
+    }
   >();
   for (const agentId of agentIds) {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
@@ -91,26 +95,58 @@ export function listSkillCommandsForAgents(params: {
     const existing = workspaceFilters.get(canonicalDir);
     if (existing) {
       existing.skillFilter = mergeSkillFilters(existing.skillFilter, skillFilter);
-      if (existing.agentId !== agentId) {
-        existing.agentId = undefined;
+      if (!existing.scopes.some((scope) => scope.agentId === agentId)) {
+        existing.scopes.push({ agentId, skillFilter });
       }
       continue;
     }
     workspaceFilters.set(canonicalDir, {
       workspaceDir,
       skillFilter,
-      agentId,
+      scopes: [{ agentId, skillFilter }],
     });
   }
 
-  for (const { workspaceDir, skillFilter, agentId } of workspaceFilters.values()) {
-    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
-      config: params.cfg,
-      agentId,
-      skillFilter,
-      eligibility: { remote: getRemoteSkillEligibility() },
-      reservedNames: used,
-    });
+  for (const { workspaceDir, skillFilter, scopes } of workspaceFilters.values()) {
+    const commands =
+      scopes.length <= 1
+        ? buildWorkspaceSkillCommandSpecs(workspaceDir, {
+            config: params.cfg,
+            agentId: scopes[0]?.agentId,
+            skillFilter,
+            eligibility: { remote: getRemoteSkillEligibility() },
+            reservedNames: used,
+          })
+        : (() => {
+            // Shared workspaces: collect visibility from each scoped agent first
+            // so policy-restricted commands are not leaked by merged discovery.
+            const visibleSkillNames = new Set<string>();
+            for (const scope of scopes) {
+              const scoped = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+                config: params.cfg,
+                agentId: scope.agentId,
+                skillFilter: scope.skillFilter,
+                eligibility: { remote: getRemoteSkillEligibility() },
+                reservedNames: used,
+              });
+              for (const command of scoped) {
+                const key = command.skillName.trim().toLowerCase();
+                if (key) {
+                  visibleSkillNames.add(key);
+                }
+              }
+            }
+
+            const merged = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+              config: params.cfg,
+              skillFilter,
+              eligibility: { remote: getRemoteSkillEligibility() },
+              reservedNames: used,
+            });
+            return merged.filter((command) =>
+              visibleSkillNames.has(command.skillName.trim().toLowerCase()),
+            );
+          })();
     for (const command of commands) {
       used.add(command.name.toLowerCase());
       entries.push(command);
