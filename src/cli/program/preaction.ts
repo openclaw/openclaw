@@ -160,10 +160,13 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       if (isJsonMode) {
         routeLogsToStderr();
       }
-      const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-      ensurePluginRegistryLoaded({ scope: resolvePluginRegistryScope(commandPath) });
-      if (isJsonMode) {
-        restoreLogsToStdout();
+      try {
+        const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
+        ensurePluginRegistryLoaded({ scope: resolvePluginRegistryScope(commandPath) });
+      } finally {
+        if (isJsonMode) {
+          restoreLogsToStdout();
+        }
       }
     }
   });

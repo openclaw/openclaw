@@ -25,16 +25,19 @@ async function prepareRoutedCommand(params: {
       const { routeLogsToStderr } = await import("../logging/console.js");
       routeLogsToStderr();
     }
-    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
-    ensurePluginRegistryLoaded({
-      scope:
-        params.commandPath[0] === "status" || params.commandPath[0] === "health"
-          ? "channels"
-          : "all",
-    });
-    if (suppressDoctorStdout) {
-      const { restoreLogsToStdout } = await import("../logging/console.js");
-      restoreLogsToStdout();
+    try {
+      const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
+      ensurePluginRegistryLoaded({
+        scope:
+          params.commandPath[0] === "status" || params.commandPath[0] === "health"
+            ? "channels"
+            : "all",
+      });
+    } finally {
+      if (suppressDoctorStdout) {
+        const { restoreLogsToStdout } = await import("../logging/console.js");
+        restoreLogsToStdout();
+      }
     }
   }
 }
