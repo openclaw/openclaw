@@ -82,8 +82,8 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
-import { GATEWAY_CLIENT_IDS } from "./protocol/client-info.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
+import { GATEWAY_CLIENT_IDS } from "./protocol/client-info.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
