@@ -1624,6 +1624,122 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
+function stringifyUserMessageContentForPrompt(message: AgentMessage): string {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  const chunks: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; text?: unknown };
+    if (typeof typedBlock.text === "string") {
+      const trimmed = typedBlock.text.trim();
+      if (trimmed.length > 0) {
+        chunks.push(trimmed);
+      }
+      continue;
+    }
+    if (typedBlock.type === "image") {
+      chunks.push("[user attached an image]");
+    }
+  }
+
+  return chunks.join("\n").trim();
+}
+
+type SessionLeafEntryLike = {
+  type?: unknown;
+  parentId?: string | null;
+  message?: AgentMessage;
+};
+
+type OrphanRecoverySessionManager = {
+  getLeafEntry: () => SessionLeafEntryLike | undefined;
+  branch: (parentId: string) => void;
+  resetLeaf: () => void;
+  buildSessionContext: () => { messages: AgentMessage[] };
+};
+
+export function recoverOrphanedUserMessagesForPrompt(params: {
+  sessionManager: OrphanRecoverySessionManager;
+  prompt: string;
+  rawPrompt?: string;
+  replaceMessages: (messages: AgentMessage[]) => void;
+}): { prompt: string; recoveredCount: number; mergedCount: number } {
+  const orphanedUserCarryForward: string[] = [];
+  let orphanedUserCount = 0;
+  let leafEntry = params.sessionManager.getLeafEntry();
+  while (leafEntry?.type === "message" && leafEntry.message?.role === "user") {
+    orphanedUserCount++;
+    const carryForwardText = stringifyUserMessageContentForPrompt(leafEntry.message);
+    if (carryForwardText.length > 0) {
+      orphanedUserCarryForward.push(carryForwardText);
+    }
+    if (leafEntry.parentId) {
+      params.sessionManager.branch(leafEntry.parentId);
+    } else {
+      params.sessionManager.resetLeaf();
+    }
+    leafEntry = params.sessionManager.getLeafEntry();
+  }
+  if (orphanedUserCount === 0) {
+    return { prompt: params.prompt, recoveredCount: 0, mergedCount: 0 };
+  }
+
+  const sessionContext = params.sessionManager.buildSessionContext();
+  params.replaceMessages(sessionContext.messages);
+  if (orphanedUserCarryForward.length === 0) {
+    return {
+      prompt: params.prompt,
+      recoveredCount: orphanedUserCount,
+      mergedCount: 0,
+    };
+  }
+
+  const normalizedPromptCandidates = new Set<string>();
+  const normalizedPrompt = params.prompt.trim();
+  if (normalizedPrompt) {
+    normalizedPromptCandidates.add(normalizedPrompt);
+  }
+  const normalizedRawPrompt = params.rawPrompt?.trim();
+  if (normalizedRawPrompt) {
+    normalizedPromptCandidates.add(normalizedRawPrompt);
+  }
+  const carryForwardEntries = orphanedUserCarryForward
+    .toReversed()
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (normalizedPromptCandidates.size > 0) {
+    // Drop only one prompt-echo entry so repeated identical user turns still survive recovery.
+    const promptEchoIndex = carryForwardEntries.findLastIndex((entry) =>
+      normalizedPromptCandidates.has(entry),
+    );
+    if (promptEchoIndex >= 0) {
+      carryForwardEntries.splice(promptEchoIndex, 1);
+    }
+  }
+  if (carryForwardEntries.length === 0) {
+    return {
+      prompt: params.prompt,
+      recoveredCount: orphanedUserCount,
+      mergedCount: 0,
+    };
+  }
+  const carryForwardPrompt = carryForwardEntries.join("\n\n");
+  return {
+    prompt: `${carryForwardPrompt}\n\n${params.prompt}`,
+    recoveredCount: orphanedUserCount,
+    mergedCount: carryForwardEntries.length,
+  };
+}
+
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -2733,19 +2849,19 @@ export async function runEmbeddedAttempt(
           messages: activeSession.messages,
         });
 
-        // Repair orphaned trailing user messages so new prompts don't violate role ordering.
-        const leafEntry = sessionManager.getLeafEntry();
-        if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
-          if (leafEntry.parentId) {
-            sessionManager.branch(leafEntry.parentId);
-          } else {
-            sessionManager.resetLeaf();
-          }
-          const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.replaceMessages(sessionContext.messages);
+        // Preserve orphaned trailing user content by carrying it into the next prompt.
+        const orphanRecovery = recoverOrphanedUserMessagesForPrompt({
+          sessionManager,
+          prompt: effectivePrompt,
+          rawPrompt: params.prompt,
+          replaceMessages: (messages) => activeSession.agent.replaceMessages(messages),
+        });
+        effectivePrompt = orphanRecovery.prompt;
+        if (orphanRecovery.recoveredCount > 0) {
           log.warn(
-            `Removed orphaned user message to prevent consecutive user turns. ` +
-              `runId=${params.runId} sessionId=${params.sessionId}`,
+            `Recovered orphaned user message(s) by carrying context forward. ` +
+              `runId=${params.runId} sessionId=${params.sessionId} ` +
+              `recovered=${orphanRecovery.recoveredCount} merged=${orphanRecovery.mergedCount}`,
           );
         }
         const transcriptLeafId =
