@@ -22,6 +22,7 @@ import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const CHAT_RESPONSE_TIMEOUT_MS = 4_000;
+type GetReplyOptions = Parameters<typeof getReplyFromConfig>[1];
 
 let ws: WebSocket;
 let port: number;
