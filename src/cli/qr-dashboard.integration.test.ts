@@ -2,20 +2,38 @@ import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 
-const loadConfigMock = vi.fn();
-const readConfigFileSnapshotMock = vi.fn();
-const resolveGatewayPortMock = vi.fn(() => 18789);
-const copyToClipboardMock = vi.fn(async () => false);
+const loadConfigMock = vi.hoisted(() => vi.fn());
+const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
+const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
+const copyToClipboardMock = vi.hoisted(() => vi.fn(async () => false));
 
 const runtimeLogs: string[] = [];
 const runtimeErrors: string[] = [];
-const runtime = {
+const runtime = vi.hoisted(() => ({
   log: (message: string) => runtimeLogs.push(message),
   error: (message: string) => runtimeErrors.push(message),
   exit: (code: number) => {
     throw new Error(`__exit__:${code}`);
   },
-};
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: loadConfigMock,
+    readConfigFileSnapshot: readConfigFileSnapshotMock,
+    resolveGatewayPort: resolveGatewayPortMock,
+  };
+});
+
+vi.mock("../infra/clipboard.js", () => ({
+  copyToClipboard: copyToClipboardMock,
+}));
+
+vi.mock("../runtime.js", () => ({
+  defaultRuntime: runtime,
+}));
 
 function createGatewayTokenRefFixture() {
   return {
@@ -75,29 +93,12 @@ async function withCliModules<T>(
   }) => Promise<T>,
 ): Promise<T> {
   vi.resetModules();
-  vi.doMock("../config/config.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../config/config.js")>();
-    return {
-      ...actual,
-      loadConfig: loadConfigMock,
-      readConfigFileSnapshot: readConfigFileSnapshotMock,
-      resolveGatewayPort: resolveGatewayPortMock,
-    };
-  });
-  vi.doMock("../infra/clipboard.js", () => ({
-    copyToClipboard: copyToClipboardMock,
-  }));
-  vi.doMock("../runtime.js", () => ({
-    defaultRuntime: runtime,
-  }));
   try {
     const { registerQrCli } = await import("./qr-cli.js");
     const { registerMaintenanceCommands } = await import("./program/register.maintenance.js");
     return await run({ registerQrCli, registerMaintenanceCommands });
   } finally {
-    vi.doUnmock("../config/config.js");
-    vi.doUnmock("../infra/clipboard.js");
-    vi.doUnmock("../runtime.js");
+    vi.restoreAllMocks();
   }
 }
 
