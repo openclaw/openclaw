@@ -41,12 +41,14 @@ export function buildMediaUnderstandingRegistry(
     mergeProviderIntoRegistry(registry, provider);
   }
   const active = getActivePluginRegistry();
-  const pluginRegistry =
-    (active?.mediaUnderstandingProviders?.length ?? 0) > 0
-      ? active
-      : loadOpenClawPlugins({ config: cfg });
-  for (const entry of pluginRegistry?.mediaUnderstandingProviders ?? []) {
+  const activeEntries = active?.mediaUnderstandingProviders ?? [];
+  for (const entry of activeEntries) {
     mergeProviderIntoRegistry(registry, entry.provider);
+  }
+  if (activeEntries.length === 0 && cfg) {
+    for (const entry of loadOpenClawPlugins({ config: cfg }).mediaUnderstandingProviders) {
+      mergeProviderIntoRegistry(registry, entry.provider);
+    }
   }
   if (overrides) {
     for (const [key, provider] of Object.entries(overrides)) {
