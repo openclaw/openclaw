@@ -413,6 +413,34 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     expect(msg.content[1]).toMatchObject({ type: "toolCall", name: "exec" });
     expect(msg.content[2]).toMatchObject({ type: "thinking", thinking: " End of thoughts." });
   });
+
+  it("generates deterministic tool-call IDs", () => {
+    const text = `<minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call>`;
+    const msg1 = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+    const msg2 = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg1);
+    promoteMinimaxToolCallsToBlocks(msg2);
+
+    const call1 = msg1.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
+    const call2 = msg2.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
+
+    expect(call1).toBeDefined();
+    expect(call2).toBeDefined();
+    // They should have the exact same ID because input is identical
+    const id1 = call1 && typeof call1 === "object" && "id" in call1 ? call1.id : "1";
+    const id2 = call2 && typeof call2 === "object" && "id" in call2 ? call2.id : "2";
+    expect(id1).toBe(id2);
+    expect(id1).toContain("mc_mm_");
+  });
 });
 
 describe("formatReasoningMessage", () => {

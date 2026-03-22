@@ -569,7 +569,7 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
                 }
                 blocks.push({
                   type: "toolCall",
-                  id: `mc_${Math.random().toString(36).slice(2, 11)}`,
+                  id: `mc_mm_fb_${blocks.length}_${normalizeToolName(toolName)}`,
                   name: normalizeToolName(toolName),
                   arguments: args,
                 });
@@ -615,7 +615,7 @@ export function splitMinimaxToolCalls(text: string): MinimaxToolCallSplitBlock[]
           }
           blocks.push({
             type: "toolCall",
-            id: `mc_${Math.random().toString(36).slice(2, 11)}`,
+            id: `mc_mm_${blocks.length}_${normalizeToolName(toolName)}`,
             name: normalizeToolName(toolName),
             arguments: args,
           });
