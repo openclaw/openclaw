@@ -6,8 +6,8 @@
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "fake-indexeddb": "^6.2.5",
-    "markdown-it": "14.1.0",
-    "matrix-js-sdk": "^40.1.0",
+    "markdown-it": "14.1.1",
+    "matrix-js-sdk": "41.2.0-rc.0",
     "music-metadata": "^11.11.2",
     "zod": "^4.3.6"
   },
