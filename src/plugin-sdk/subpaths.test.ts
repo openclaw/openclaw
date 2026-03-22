@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -580,7 +580,9 @@ describe("plugin-sdk subpath exports", () => {
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<SharedChannelMessageActionContext>();
   });
 
-  it("keeps runtime entry subpaths importable", async () => {
+  it.skipIf(
+    !existsSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../dist/plugin-sdk/core.js")),
+  )("keeps runtime entry subpaths importable", async () => {
     const [
       coreSdk,
       pluginEntrySdk,
