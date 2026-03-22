@@ -150,7 +150,7 @@ Telegram/WhatsApp/Signal/iMessage/Microsoft Teams/Discord/Google Chat/Slack 上�
 
 ### 渠道
 
-- [渠道](../channels/index.md)：[WhatsApp](../channels/whatsapp.md) (Baileys)、[Telegram](../channels/telegram.md) (grammY)、[Slack](../channels/slack.md) (Bolt)、[Discord](../channels/discord.md) (discord.js)、[Google Chat](../channels/googlechat.md) (Chat API)、[Signal](../channels/signal.md) (signal-cli)、[BlueBubbles](../channels/bluebubbles.md) (iMessage，推荐)、[iMessage](../channels/imessage.md) (旧版 imsg)、[IRC](https://docs.openclaw.ai/channels/irc)、[Microsoft Teams](../channels/msteams.md)、[Matrix](../channels/matrix.md)、[飞书](../channels/feishu.md)、[LINE](../channels/line.md)、[Mattermost](../channels/mattermost.md)、[Nextcloud Talk](../channels/nextcloud-talk.md)、[Nostr](../channels/nostr.md)、[Synology Chat](../channels/synology-chat.md)、[Tlon](../channels/tlon.md)、[Twitch](../channels/twitch.md)、[Zalo](../channels/zalo.md)、[Zalo Personal](../channels/zalouser.md)、[WebChat](../web/webchat.md)。
+- [渠道](../channels/index.md)：[WhatsApp](../channels/whatsapp.md) (Baileys)、[Telegram](../channels/telegram.md) (grammY)、[Slack](../channels/slack.md) (Bolt)、[Discord](../channels/discord.md) (discord.js)、[Google Chat](../channels/googlechat.md) (Chat API)、[Signal](../channels/signal.md) (signal-cli)、[BlueBubbles](../channels/bluebubbles.md) (iMessage，推荐)、[iMessage](../channels/imessage.md) (旧版 imsg)、[IRC](../../docs/channels/irc.md)、[Microsoft Teams](../channels/msteams.md)、[Matrix](../channels/matrix.md)、[飞书](../channels/feishu.md)、[LINE](../channels/line.md)、[Mattermost](../channels/mattermost.md)、[Nextcloud Talk](../channels/nextcloud-talk.md)、[Nostr](../channels/nostr.md)、[Synology Chat](../channels/synology-chat.md)、[Tlon](../channels/tlon.md)、[Twitch](../channels/twitch.md)、[Zalo](../channels/zalo.md)、[Zalo Personal](../channels/zalouser.md)、[WebChat](../web/webchat.md)。
 - [群组路由](../channels/group-messages.md)：提及门控、回复标签、每渠道分块和路由。渠道规则：[渠道](../channels/index.md)。
 
 ### 应用 + 节点
@@ -416,7 +416,7 @@ ClawHub 是一个最小化的 skill 注册表。启用 ClawHub 后，智能体�
 
 当你完成新手引导流程并想要更深入的参考时，使用这些。
 
-- [从文档索引开始导航和了解"内容在哪里"。](https://docs.openclaw.ai)
+- [从文档索引开始导航和了解"内容在哪里"。](../index.md)
 - [阅读架构概述了解 gateway + 协议模型。](../concepts/architecture.md)
 - [需要每个键和示例时使用完整配置参考。](../gateway/configuration.md)
 - [按照操作手册运行 Gateway。](../gateway/index.md)
