@@ -261,7 +261,9 @@ function resolveCronAwarenessSessionKey(params: {
   }
   const requestedSessionKey = params.sessionKey?.trim();
   const requestedSessionStoreKey = requestedSessionKey
-    ? resolveCronAgentSessionKey({ sessionKey: requestedSessionKey, agentId })
+    ? requestedSessionKey.toLowerCase() === "global"
+      ? requestedSessionKey
+      : resolveCronAgentSessionKey({ sessionKey: requestedSessionKey, agentId })
     : undefined;
   const canonicalRequestedSessionKey = requestedSessionStoreKey
     ? canonicalizeMainSessionAlias({

@@ -62,7 +62,9 @@ export async function resolveDeliveryTarget(
   const sessionCfg = cfg.session;
   const threadSessionKeyRaw = jobPayload.sessionKey?.trim();
   const requestedSessionStoreKey = threadSessionKeyRaw
-    ? resolveCronAgentSessionKey({ sessionKey: threadSessionKeyRaw, agentId })
+    ? threadSessionKeyRaw.toLowerCase() === "global"
+      ? threadSessionKeyRaw
+      : resolveCronAgentSessionKey({ sessionKey: threadSessionKeyRaw, agentId })
     : undefined;
   const threadSessionKey = requestedSessionStoreKey
     ? canonicalizeMainSessionAlias({
@@ -75,7 +77,13 @@ export async function resolveDeliveryTarget(
   // store before looking up "last" delivery context so session-bound crons
   // follow the actual target transcript instead of the current agent's store.
   const storeAgentId = threadSessionKey ? resolveAgentIdFromSessionKey(threadSessionKey) : agentId;
-  const bindingAgentId = normalizeAgentId(storeAgentId);
+  // For global-scope sessions the key is bare "global" with no embedded agent,
+  // so resolveAgentIdFromSessionKey falls back to "main". Use the runner's
+  // agentId for binding resolution in that case to keep the correct account.
+  const bindingAgentId =
+    threadSessionKey?.toLowerCase() === "global"
+      ? normalizeAgentId(agentId)
+      : normalizeAgentId(storeAgentId);
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: storeAgentId });
   const storePath = resolveStorePath(sessionCfg?.store, { agentId: storeAgentId });
   const store = loadSessionStore(storePath);
