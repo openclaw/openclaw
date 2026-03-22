@@ -270,7 +270,7 @@ function collectUsageCandidates(root: Record<string, unknown>): Record<string, u
 function deriveWindowLabelFromTimestamps(record: Record<string, unknown>): string | undefined {
   const startTime = parseEpoch(record.start_time ?? record.startTime);
   const endTime = parseEpoch(record.end_time ?? record.endTime);
-  if (startTime && endTime && endTime > startTime) {
+  if (startTime !== undefined && endTime !== undefined && endTime > startTime) {
     const durationHours = (endTime - startTime) / 3_600_000;
     if (durationHours >= 1 && Number.isFinite(durationHours)) {
       const rounded = Math.round(durationHours);
@@ -336,15 +336,10 @@ function deriveUsedPercent(payload: Record<string, unknown>): number | null {
   return null;
 }
 
-/**
- * When the API returns a `model_remains` array, prefer the entry whose
- * `model_name` matches a chat/text model (e.g. "MiniMax-M*") and that has
- * a non-zero `current_interval_total_count`.  Models with total_count === 0
- * (speech, video, image) are not relevant to the coding-plan budget.
- */
-function pickChatModelRemains(
-  modelRemains: unknown[],
-): Record<string, unknown> | undefined {
+// Prefer the entry whose model_name matches a chat/text model (e.g. "MiniMax-M*")
+// and that has a non-zero current_interval_total_count.  Models with total_count === 0
+// (speech, video, image) are not relevant to the coding-plan budget.
+function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> | undefined {
   const records = modelRemains.filter(isRecord);
   if (records.length === 0) {
     return undefined;
@@ -354,7 +349,7 @@ function pickChatModelRemains(
     const name = typeof r.model_name === "string" ? r.model_name : "";
     const total = parseFiniteNumber(r.current_interval_total_count);
     return (
-      (name.toLowerCase().startsWith("minimax-m") || name === "MiniMax-M*") &&
+      name.toLowerCase().startsWith("minimax-m") &&
       total !== undefined &&
       total > 0
     );
@@ -424,8 +419,9 @@ export async function fetchMinimaxUsage(
   const modelRemains = Array.isArray(payload.model_remains) ? payload.model_remains : null;
   const chatRemains = modelRemains ? pickChatModelRemains(modelRemains) : undefined;
 
-  const candidates = collectUsageCandidates(chatRemains ?? payload);
-  let usageRecord: Record<string, unknown> = chatRemains ?? payload;
+  const usageSource = chatRemains ?? payload;
+  const candidates = collectUsageCandidates(usageSource);
+  let usageRecord: Record<string, unknown> = usageSource;
   let usedPercent: number | null = null;
   for (const candidate of candidates) {
     const candidatePercent = deriveUsedPercent(candidate);
@@ -436,7 +432,7 @@ export async function fetchMinimaxUsage(
     }
   }
   if (usedPercent === null) {
-    usedPercent = deriveUsedPercent(chatRemains ?? payload);
+    usedPercent = deriveUsedPercent(usageSource);
   }
   if (usedPercent === null) {
     return {
@@ -452,9 +448,12 @@ export async function fetchMinimaxUsage(
     parseEpoch(pickNumber(usageRecord, RESET_KEYS)) ??
     parseEpoch(pickString(payload, RESET_KEYS)) ??
     parseEpoch(pickNumber(payload, RESET_KEYS));
+  const windowLabel = chatRemains
+    ? deriveWindowLabel(chatRemains)
+    : deriveWindowLabel(usageRecord);
   const windows: UsageWindow[] = [
     {
-      label: deriveWindowLabel(usageRecord),
+      label: windowLabel,
       usedPercent,
       resetAt,
     },
