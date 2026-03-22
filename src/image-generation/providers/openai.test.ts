@@ -106,9 +106,14 @@ describe("OpenAI image-generation provider", () => {
 
   it("advertises only exact aspect ratios supported by OpenAI size presets", () => {
     const provider = buildOpenAIImageGenerationProvider();
+    const geometry = provider.capabilities.geometry;
 
     expect(provider.capabilities.generate.supportsAspectRatio).toBe(true);
-    expect(provider.capabilities.geometry.aspectRatios).toEqual(["1:1", "2:3", "3:2"]);
+    expect(geometry).toBeDefined();
+    if (!geometry) {
+      throw new Error("expected OpenAI image generation geometry capabilities");
+    }
+    expect(geometry.aspectRatios).toEqual(["1:1", "2:3", "3:2"]);
   });
 
   it("prefers an explicit size over aspect ratio mapping", async () => {
