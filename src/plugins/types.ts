@@ -1347,6 +1347,10 @@ export type OpenClawPluginApi = {
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
   ) => void;
+  /** Register the system prompt section builder for this memory plugin (exclusive slot). */
+  registerMemoryPromptSection: (
+    builder: import("../memory/prompt-section.js").MemoryPromptSectionBuilder,
+  ) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
