@@ -160,7 +160,7 @@ Important trust notes:
 
 ## Safe bins (stdin-only)
 
-`tools.exec.safeBins` defines a small list of **stdin-only** binaries (for example `jq`)
+`tools.exec.safeBins` defines a small list of **stdin-only** binaries (for example `cut`)
 that can run in allowlist mode **without** explicit allowlist entries. Safe bins reject
 positional file args and path-like tokens, so they can only operate on the incoming stream.
 Treat this as a narrow fast-path for stream filters, not a general trust list.
@@ -215,7 +215,7 @@ etc.) so inner executables are persisted instead of multiplexer binaries. If a w
 multiplexer cannot be safely unwrapped, no allowlist entry is persisted automatically.
 If you allowlist interpreters like `python3` or `node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval.
 
-Default safe bins: `jq`, `cut`, `uniq`, `head`, `tail`, `tr`, `wc`.
+Default safe bins: `cut`, `uniq`, `head`, `tail`, `tr`, `wc`.
 
 `grep` and `sort` are not in the default list. If you opt in, keep explicit allowlist entries for
 their non-stdin workflows.
@@ -229,7 +229,7 @@ rejected so file operands cannot be smuggled as ambiguous positionals.
 | Goal             | Auto-allow narrow stdin filters                        | Explicitly trust specific executables                        |
 | Match type       | Executable name + safe-bin argv policy                 | Resolved executable path glob pattern                        |
 | Argument scope   | Restricted by safe-bin profile and literal-token rules | Path match only; arguments are otherwise your responsibility |
-| Typical examples | `jq`, `head`, `tail`, `wc`                             | `python3`, `node`, `ffmpeg`, custom CLIs                     |
+| Typical examples | `head`, `tail`, `tr`, `wc`                             | `jq`, `python3`, `node`, `ffmpeg`, custom CLIs               |
 | Best use         | Low-risk text transforms in pipelines                  | Any tool with broader behavior or side effects               |
 
 Configuration location:
@@ -260,6 +260,10 @@ Custom profile example:
   },
 }
 ```
+
+If you explicitly opt `jq` into `safeBins`, OpenClaw still rejects the `env` builtin in safe-bin
+mode so `jq -n env` cannot dump the host process environment without an explicit allowlist path
+or approval prompt.
 
 ## Control UI editing
 
