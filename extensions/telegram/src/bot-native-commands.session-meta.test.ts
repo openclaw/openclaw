@@ -62,6 +62,10 @@ const sessionBindingMocks = vi.hoisted(() => ({
   >(() => null),
   touch: vi.fn(),
 }));
+const conversationStoreMocks = vi.hoisted(() => ({
+  readChannelAllowFromStore: vi.fn(async () => []),
+  upsertChannelPairingRequest: vi.fn(async () => ({ code: "PAIRCODE", created: true })),
+}));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
@@ -69,21 +73,6 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
     ...actual,
     resolveConfiguredBindingRoute: persistentBindingMocks.resolveConfiguredBindingRoute,
     ensureConfiguredBindingRouteReady: persistentBindingMocks.ensureConfiguredBindingRouteReady,
-    getSessionBindingService: () => ({
-      bind: vi.fn(),
-      getCapabilities: vi.fn(),
-      listBySession: vi.fn(),
-      resolveByConversation: (ref: unknown) => sessionBindingMocks.resolveByConversation(ref),
-      touch: (bindingId: string, at?: number) => sessionBindingMocks.touch(bindingId, at),
-      unbind: vi.fn(),
-    }),
-  };
-});
-vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
-  return {
-    ...actual,
-    createReplyPrefixOptions: vi.fn(() => ({ onModelSelected: () => {} })),
     recordInboundSessionMetaSafe: vi.fn(
       async (params: {
         cfg: OpenClawConfig;
@@ -106,6 +95,23 @@ vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
         }
       },
     ),
+    readChannelAllowFromStore: conversationStoreMocks.readChannelAllowFromStore,
+    upsertChannelPairingRequest: conversationStoreMocks.upsertChannelPairingRequest,
+    getSessionBindingService: () => ({
+      bind: vi.fn(),
+      getCapabilities: vi.fn(),
+      listBySession: vi.fn(),
+      resolveByConversation: (ref: unknown) => sessionBindingMocks.resolveByConversation(ref),
+      touch: (bindingId: string, at?: number) => sessionBindingMocks.touch(bindingId, at),
+      unbind: vi.fn(),
+    }),
+  };
+});
+vi.mock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/command-auth")>();
+  return {
+    ...actual,
+    listSkillCommandsForAgents: vi.fn(() => []),
   };
 });
 vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
@@ -114,7 +120,6 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
     ...actual,
     finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
     dispatchReplyWithBufferedBlockDispatcher: replyMocks.dispatchReplyWithBufferedBlockDispatcher,
-    listSkillCommandsForAgents: vi.fn(() => []),
   };
 });
 vi.mock("../../../src/config/sessions.js", () => ({
@@ -194,9 +199,15 @@ function registerAndResolveCommandHandlerBase(params: {
     loadConfig: vi.fn(() => cfg),
     resolveStorePath: sessionMocks.resolveStorePath as TelegramBotDeps["resolveStorePath"],
     readChannelAllowFromStore: vi.fn(async () => []),
+    upsertChannelPairingRequest: vi.fn(async () => ({ code: "PAIRCODE", created: true })),
     enqueueSystemEvent: vi.fn(),
     dispatchReplyWithBufferedBlockDispatcher:
       replyMocks.dispatchReplyWithBufferedBlockDispatcher as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
+    buildModelsProviderData: vi.fn(async () => ({
+      byProvider: new Map<string, Set<string>>(),
+      providers: [],
+      resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+    })),
     listSkillCommandsForAgents: vi.fn(() => []),
     wasSentByBot: vi.fn(() => false),
   };
@@ -512,7 +523,13 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
 
     const { handler } = registerAndResolveStatusHandler({
-      cfg: {},
+      cfg: {
+        channels: {
+          telegram: {
+            silentErrorReplies: true,
+          },
+        },
+      },
       telegramCfg: { silentErrorReplies: true },
     });
     await handler(createTelegramPrivateCommandContext());

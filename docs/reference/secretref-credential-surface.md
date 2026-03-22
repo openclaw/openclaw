@@ -38,6 +38,12 @@ Scope intent:
 - `plugins.entries.moonshot.config.webSearch.apiKey`
 - `plugins.entries.perplexity.config.webSearch.apiKey`
 - `plugins.entries.firecrawl.config.webSearch.apiKey`
+- `plugins.entries.tavily.config.webSearch.apiKey`
+- `tools.web.search.apiKey`
+- `tools.web.search.gemini.apiKey`
+- `tools.web.search.grok.apiKey`
+- `tools.web.search.kimi.apiKey`
+- `tools.web.search.perplexity.apiKey`
 - `gateway.auth.password`
 - `gateway.auth.token`
 - `gateway.remote.token`

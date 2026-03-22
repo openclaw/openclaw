@@ -1,7 +1,9 @@
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
   DEFAULT_DIFFS_TOOL_DEFAULTS,
+  diffsPluginConfigSchema,
   resolveDiffImageRenderOptions,
   resolveDiffsPluginDefaults,
   resolveDiffsPluginSecurity,
@@ -163,5 +165,15 @@ describe("resolveDiffsPluginSecurity", () => {
     expect(resolveDiffsPluginSecurity({ security: { allowRemoteViewer: true } })).toEqual({
       allowRemoteViewer: true,
     });
+  });
+});
+
+describe("diffs plugin schema surfaces", () => {
+  it("keeps the runtime json schema in sync with the manifest config schema", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as { configSchema?: unknown };
+
+    expect(diffsPluginConfigSchema.jsonSchema).toEqual(manifest.configSchema);
   });
 });

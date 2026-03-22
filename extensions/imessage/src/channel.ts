@@ -1,9 +1,9 @@
-import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
-import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
+import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { type RoutePeer } from "openclaw/plugin-sdk/routing";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
+import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
@@ -21,6 +21,7 @@ import { imessageSetupAdapter } from "./setup-core.js";
 import {
   collectIMessageSecurityWarnings,
   createIMessagePluginBase,
+  imessageConfigAdapter,
   imessageResolveDmPolicy,
   imessageSetupWizard,
 } from "./shared.js";
@@ -113,26 +114,15 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     notifyApproval: async ({ id }) =>
       await (await loadIMessageChannelRuntime()).notifyIMessageApproval(id),
   },
-  allowlist: {
-    supportsScope: ({ scope }) => scope === "dm" || scope === "group" || scope === "all",
-    readConfig: ({ cfg, accountId }) => {
-      const account = resolveIMessageAccount({ cfg, accountId });
-      return {
-        dmAllowFrom: (account.config.allowFrom ?? []).map(String),
-        groupAllowFrom: (account.config.groupAllowFrom ?? []).map(String),
-        dmPolicy: account.config.dmPolicy,
-        groupPolicy: account.config.groupPolicy,
-      };
-    },
-    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
-      channelId: "imessage",
-      normalize: ({ values }) => formatTrimmedAllowFromEntries(values),
-      resolvePaths: (scope) => ({
-        readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
-        writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
-      }),
-    }),
-  },
+  allowlist: buildDmGroupAccountAllowlistAdapter({
+    channelId: "imessage",
+    resolveAccount: ({ cfg, accountId }) => resolveIMessageAccount({ cfg, accountId }),
+    normalize: ({ values }) => formatTrimmedAllowFromEntries(values),
+    resolveDmAllowFrom: (account) => account.config.allowFrom,
+    resolveGroupAllowFrom: (account) => account.config.groupAllowFrom,
+    resolveDmPolicy: (account) => account.config.dmPolicy,
+    resolveGroupPolicy: (account) => account.config.groupPolicy,
+  }),
   security: {
     resolveDmPolicy: imessageResolveDmPolicy,
     collectWarnings: collectIMessageSecurityWarnings,
@@ -170,34 +160,33 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
-    sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
-      const result = await (
-        await loadIMessageChannelRuntime()
-      ).sendIMessageOutbound({
-        cfg,
-        to,
-        text,
-        accountId: accountId ?? undefined,
-        deps,
-        replyToId: replyToId ?? undefined,
-      });
-      return { channel: "imessage", ...result };
-    },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, replyToId }) => {
-      const result = await (
-        await loadIMessageChannelRuntime()
-      ).sendIMessageOutbound({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaLocalRoots,
-        accountId: accountId ?? undefined,
-        deps,
-        replyToId: replyToId ?? undefined,
-      });
-      return { channel: "imessage", ...result };
-    },
+    ...createAttachedChannelResultAdapter({
+      channel: "imessage",
+      sendText: async ({ cfg, to, text, accountId, deps, replyToId }) =>
+        await (
+          await loadIMessageChannelRuntime()
+        ).sendIMessageOutbound({
+          cfg,
+          to,
+          text,
+          accountId: accountId ?? undefined,
+          deps,
+          replyToId: replyToId ?? undefined,
+        }),
+      sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, replyToId }) =>
+        await (
+          await loadIMessageChannelRuntime()
+        ).sendIMessageOutbound({
+          cfg,
+          to,
+          text,
+          mediaUrl,
+          mediaLocalRoots,
+          accountId: accountId ?? undefined,
+          deps,
+          replyToId: replyToId ?? undefined,
+        }),
+    }),
   },
   status: {
     defaultRuntime: {

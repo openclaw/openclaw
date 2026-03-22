@@ -8,10 +8,28 @@ import {
 describe("provider env vars", () => {
   it("keeps the auth scrub list broader than the global secret env list", () => {
     expect(listKnownProviderAuthEnvVarNames()).toEqual(
-      expect.arrayContaining(["GITHUB_TOKEN", "GH_TOKEN", "ANTHROPIC_OAUTH_TOKEN"]),
+      expect.arrayContaining([
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "ANTHROPIC_OAUTH_TOKEN",
+        "BRAVE_API_KEY",
+        "FIRECRAWL_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "OPENROUTER_API_KEY",
+        "TAVILY_API_KEY",
+      ]),
     );
     expect(listKnownSecretEnvVarNames()).toEqual(
-      expect.arrayContaining(["GITHUB_TOKEN", "GH_TOKEN", "ANTHROPIC_OAUTH_TOKEN"]),
+      expect.arrayContaining([
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "ANTHROPIC_OAUTH_TOKEN",
+        "BRAVE_API_KEY",
+        "FIRECRAWL_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "OPENROUTER_API_KEY",
+        "TAVILY_API_KEY",
+      ]),
     );
     expect(listKnownProviderAuthEnvVarNames()).toEqual(
       expect.arrayContaining(["MINIMAX_CODE_PLAN_KEY"]),

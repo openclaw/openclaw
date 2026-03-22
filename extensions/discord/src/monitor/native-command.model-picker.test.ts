@@ -246,7 +246,12 @@ describe("Discord model picker interactions", () => {
     const select = createDiscordModelPickerFallbackSelect(context);
 
     expect(button.customId).not.toBe(select.customId);
-    expect(button.customId.split(":")[0]).toBe(select.customId.split(":")[0]);
+    expect(button.customId.split(":")[0]).toBe(
+      modelPickerModule.DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
+    );
+    expect(select.customId.split(":")[0]).toBe(
+      modelPickerModule.DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
+    );
   });
 
   it("ignores interactions from users other than the picker owner", async () => {

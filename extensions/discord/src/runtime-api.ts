@@ -12,16 +12,22 @@ export {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
+  resolvePollMaxSelections,
   type ActionGate,
   type ChannelPlugin,
+  type DiscordAccountConfig,
+  type DiscordActionConfig,
+  type DiscordConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/discord-core";
 export { DiscordConfigSchema } from "openclaw/plugin-sdk/discord-core";
 export { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 export {
-  listDiscordDirectoryGroupsFromConfig,
-  listDiscordDirectoryPeersFromConfig,
-} from "./directory-config.js";
+  assertMediaNotDataUrl,
+  parseAvailableTags,
+  readReactionParams,
+  withNormalizedTimestamp,
+} from "openclaw/plugin-sdk/discord-core";
 export {
   createHybridChannelConfigAdapter,
   createScopedChannelConfigAdapter,
@@ -32,25 +38,15 @@ export {
 export {
   createAccountActionGate,
   createAccountListHelpers,
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  resolveAccountEntry,
-} from "openclaw/plugin-sdk/account-resolution";
+} from "openclaw/plugin-sdk/account-helpers";
+export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+export { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-} from "openclaw/plugin-sdk/channel-runtime";
-export type { DiscordConfig } from "openclaw/plugin-sdk/discord";
-export {
-  assertMediaNotDataUrl,
-  parseAvailableTags,
-  readReactionParams,
-  resolvePollMaxSelections,
-  withNormalizedTimestamp,
-} from "openclaw/plugin-sdk/discord-core";
-export type { DiscordAccountConfig, DiscordActionConfig } from "openclaw/plugin-sdk/discord";
+} from "openclaw/plugin-sdk/channel-contract";
 export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/secret-input";

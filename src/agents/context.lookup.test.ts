@@ -6,25 +6,27 @@ function mockContextDeps(params: {
   loadConfig: () => unknown;
   discoveredModels?: DiscoveredModel[];
 }) {
+  const ensureOpenClawModelsJson = vi.fn(async () => {});
   vi.doMock("../config/config.js", () => ({
     loadConfig: params.loadConfig,
   }));
   vi.doMock("./models-config.js", () => ({
-    ensureOpenClawModelsJson: vi.fn(async () => {}),
+    ensureOpenClawModelsJson,
   }));
   vi.doMock("./agent-paths.js", () => ({
     resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
   }));
-  vi.doMock("./pi-model-discovery.js", () => ({
+  vi.doMock("./pi-model-discovery-runtime.js", () => ({
     discoverAuthStorage: vi.fn(() => ({})),
     discoverModels: vi.fn(() => ({
       getAll: () => params.discoveredModels ?? [],
     })),
   }));
+  return { ensureOpenClawModelsJson };
 }
 
 function mockContextModuleDeps(loadConfigImpl: () => unknown) {
-  mockContextDeps({ loadConfig: loadConfigImpl });
+  return mockContextDeps({ loadConfig: loadConfigImpl });
 }
 
 // Shared mock setup used by multiple tests.
@@ -80,13 +82,36 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
   });
 
-  it("only warms eagerly for startup commands that need model metadata", async () => {
+  it("can skip async warmup for read-only callers", async () => {
+    const { ensureOpenClawModelsJson } = mockContextModuleDeps(() => ({
+      models: {
+        providers: {
+          openrouter: {
+            models: [{ id: "openrouter/claude-sonnet", contextWindow: 321_000 }],
+          },
+        },
+      },
+    }));
+
+    const { lookupContextTokens } = await import("./context.js");
+    expect(
+      lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false }),
+    ).toBeUndefined();
+    await flushAsyncWarmup();
+    expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
+  });
+
+  it("only warms eagerly for real openclaw startup commands that need model metadata", async () => {
     const argvSnapshot = process.argv;
     try {
       for (const scenario of [
         {
-          argv: ["node", "openclaw", "--profile", "--", "config", "validate"],
+          argv: ["node", "openclaw", "chat"],
           expectedCalls: 1,
+        },
+        {
+          argv: ["node", "openclaw", "--profile", "--", "config", "validate"],
+          expectedCalls: 0,
         },
         {
           argv: ["node", "openclaw", "logs", "--limit", "5"],
@@ -97,16 +122,18 @@ describe("lookupContextTokens", () => {
           expectedCalls: 0,
         },
         {
-          argv: ["node", "openclaw", "gateway", "status", "--json"],
+          argv: ["node", "scripts/test-built-plugin-singleton.mjs"],
           expectedCalls: 0,
         },
       ]) {
         vi.resetModules();
         const loadConfigMock = vi.fn(() => ({ models: {} }));
-        mockContextModuleDeps(loadConfigMock);
+        const { ensureOpenClawModelsJson } = mockContextModuleDeps(loadConfigMock);
         process.argv = scenario.argv;
         await import("./context.js");
+        await flushAsyncWarmup();
         expect(loadConfigMock).toHaveBeenCalledTimes(scenario.expectedCalls);
+        expect(ensureOpenClawModelsJson).toHaveBeenCalledTimes(scenario.expectedCalls);
       }
     } finally {
       process.argv = argvSnapshot;
@@ -132,8 +159,6 @@ describe("lookupContextTokens", () => {
 
     mockContextModuleDeps(loadConfigMock);
 
-    const argvSnapshot = process.argv;
-    process.argv = ["node", "openclaw", "config", "validate"];
     try {
       const { lookupContextTokens } = await import("./context.js");
       expect(lookupContextTokens("openrouter/claude-sonnet")).toBeUndefined();
@@ -144,7 +169,6 @@ describe("lookupContextTokens", () => {
       expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(654_321);
       expect(loadConfigMock).toHaveBeenCalledTimes(2);
     } finally {
-      process.argv = argvSnapshot;
       vi.useRealTimers();
     }
   });
@@ -156,7 +180,7 @@ describe("lookupContextTokens", () => {
     ]);
 
     const { lookupContextTokens } = await import("./context.js");
-    // Trigger async cache population.
+    lookupContextTokens("gemini-3.1-pro-preview");
     await flushAsyncWarmup();
     // Conservative minimum: bare-id cache feeds runtime flush/compaction paths.
     expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(128_000);
@@ -171,7 +195,8 @@ describe("lookupContextTokens", () => {
       { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
     ]);
 
-    const { resolveContextTokensForModel } = await import("./context.js");
+    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    lookupContextTokens("google-gemini-cli/gemini-3.1-pro-preview");
     await flushAsyncWarmup();
 
     // With provider specified and no config override, bare lookup finds the
@@ -224,7 +249,9 @@ describe("lookupContextTokens", () => {
     mockDiscoveryDeps([{ id: "google/gemini-2.5-pro", contextWindow: 999_000 }]);
 
     const cfg = createContextOverrideConfig("google", "gemini-2.5-pro", 2_000_000);
-    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    lookupContextTokens("google/gemini-2.5-pro");
+    await flushAsyncWarmup();
 
     // Google with explicit cfg: config direct scan wins before any cache lookup.
     const googleResult = resolveContextTokensForModel({
@@ -286,7 +313,9 @@ describe("lookupContextTokens", () => {
     mockDiscoveryDeps([{ id: "google/gemini-2.5-pro", contextWindow: 999_000 }]);
 
     const cfg = createContextOverrideConfig("google", "gemini-2.5-pro", 2_000_000);
-    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    lookupContextTokens("google/gemini-2.5-pro");
+    await flushAsyncWarmup();
 
     // model-only call (no explicit provider) must NOT apply config direct scan.
     // Falls through to bare cache lookup: "google/gemini-2.5-pro" → 999k ✓.
@@ -317,8 +346,9 @@ describe("lookupContextTokens", () => {
       { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
     ]);
 
-    const { resolveContextTokensForModel } = await import("./context.js");
-    await new Promise((r) => setTimeout(r, 0));
+    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    lookupContextTokens("google-gemini-cli/gemini-3.1-pro-preview");
+    await flushAsyncWarmup();
 
     // Qualified "google-gemini-cli/gemini-3.1-pro-preview" → 1M wins over
     // bare "gemini-3.1-pro-preview" → 128k (cross-provider minimum).

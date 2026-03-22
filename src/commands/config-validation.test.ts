@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 
 const readConfigFileSnapshot = vi.fn();
-const buildPluginCompatibilityNotices = vi.fn((): PluginCompatibilityNotice[] => []);
+const buildPluginCompatibilityNotices = vi.fn<(_params?: unknown) => PluginCompatibilityNotice[]>(
+  () => [],
+);
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot,

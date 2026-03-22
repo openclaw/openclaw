@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { discordPlugin } from "../../../extensions/discord/src/channel.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -44,9 +43,7 @@ import {
 import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
 
 beforeEach(() => {
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
-  );
+  setActivePluginRegistry(createTestRegistry([]));
 });
 
 describe("delivery-queue", () => {
@@ -1196,6 +1193,30 @@ describe("resolveOutboundSessionRoute", () => {
           chatType: "direct",
         },
       },
+      {
+        name: "Slack user DM target",
+        cfg: perChannelPeerCfg,
+        channel: "slack",
+        target: "user:U12345ABC",
+        expected: {
+          sessionKey: "agent:main:slack:direct:u12345abc",
+          from: "slack:U12345ABC",
+          to: "user:U12345ABC",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Slack channel target without thread",
+        cfg: baseConfig,
+        channel: "slack",
+        target: "channel:C999XYZ",
+        expected: {
+          sessionKey: "agent:main:slack:channel:c999xyz",
+          from: "slack:channel:C999XYZ",
+          to: "channel:C999XYZ",
+          chatType: "channel",
+        },
+      },
     ];
 
     for (const testCase of cases) {
@@ -1287,21 +1308,29 @@ describe("normalizeOutboundPayloadsForJson", () => {
       {
         input: [
           { text: "hi" },
-          { text: "photo", mediaUrl: "https://x.test/a.jpg" },
+          { text: "photo", mediaUrl: "https://x.test/a.jpg", audioAsVoice: true },
           { text: "multi", mediaUrls: ["https://x.test/1.png"] },
         ],
         expected: [
-          { text: "hi", mediaUrl: null, mediaUrls: undefined, channelData: undefined },
+          {
+            text: "hi",
+            mediaUrl: null,
+            mediaUrls: undefined,
+            audioAsVoice: undefined,
+            channelData: undefined,
+          },
           {
             text: "photo",
             mediaUrl: "https://x.test/a.jpg",
             mediaUrls: ["https://x.test/a.jpg"],
+            audioAsVoice: true,
             channelData: undefined,
           },
           {
             text: "multi",
             mediaUrl: null,
             mediaUrls: ["https://x.test/1.png"],
+            audioAsVoice: undefined,
             channelData: undefined,
           },
         ],
@@ -1317,6 +1346,7 @@ describe("normalizeOutboundPayloadsForJson", () => {
             text: "",
             mediaUrl: null,
             mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
+            audioAsVoice: undefined,
             channelData: undefined,
           },
         ],
@@ -1341,7 +1371,9 @@ describe("normalizeOutboundPayloadsForJson", () => {
       { text: "Reasoning:\n_step_", isReasoning: true },
       { text: "final answer" },
     ]);
-    expect(normalized).toEqual([{ text: "final answer", mediaUrl: null, mediaUrls: undefined }]);
+    expect(normalized).toEqual([
+      { text: "final answer", mediaUrl: null, mediaUrls: undefined, audioAsVoice: undefined },
+    ]);
   });
 });
 

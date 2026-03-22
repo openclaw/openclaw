@@ -5,16 +5,11 @@ export type { SecretInput } from "../config/types.secrets.js";
 export type { ProviderAuthResult } from "../plugins/types.js";
 export type { ProviderAuthContext } from "../plugins/types.js";
 export type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
-export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 
-export {
-  CLAUDE_CLI_PROFILE_ID,
-  CODEX_CLI_PROFILE_ID,
-  ensureAuthProfileStore,
-  listProfilesForProvider,
-  suggestOAuthProfileIdForLegacyDefault,
-  upsertAuthProfile,
-} from "../agents/auth-profiles.js";
+export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
+export { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
+export { listProfilesForProvider, upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
+export { suggestOAuthProfileIdForLegacyDefault } from "../agents/auth-profiles/repair.js";
 export {
   MINIMAX_OAUTH_MARKER,
   resolveOAuthApiKeyMarker,
@@ -44,3 +39,9 @@ export {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
 } from "../utils/normalize-secret-input.js";
+export {
+  listKnownProviderAuthEnvVarNames,
+  omitEnvKeysCaseInsensitive,
+} from "../secrets/provider-env-vars.js";
+export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
+export { generatePkceVerifierChallenge, toFormUrlEncoded } from "./oauth-utils.js";

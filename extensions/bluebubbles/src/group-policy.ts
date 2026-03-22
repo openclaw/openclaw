@@ -3,7 +3,7 @@ import {
   resolveChannelGroupToolsPolicy,
   type GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/channel-policy";
-import type { OpenClawConfig } from "./runtime-api.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 
 type BlueBubblesGroupContext = {
   cfg: OpenClawConfig;

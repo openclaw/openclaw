@@ -5,10 +5,12 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import {
-  collectAllowlistProviderGroupPolicyWarnings,
-  collectOpenGroupPolicyRouteAllowlistWarnings,
-} from "openclaw/plugin-sdk/channel-policy";
-import { runStoppablePassiveMonitor } from "../../shared/passive-monitor.js";
+  createLoggedPairingApprovalNotifier,
+  createPairingPrefixStripper,
+} from "openclaw/plugin-sdk/channel-pairing";
+import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
@@ -76,17 +78,40 @@ const resolveNextcloudTalkDmPolicy = createScopedDmSecurityResolver<ResolvedNext
   normalizeEntry: (raw) => raw.replace(/^(nextcloud-talk|nc-talk|nc):/i, "").toLowerCase(),
 });
 
+const collectNextcloudTalkSecurityWarnings =
+  createAllowlistProviderRouteAllowlistWarningCollector<ResolvedNextcloudTalkAccount>({
+    providerConfigPresent: (cfg) =>
+      (cfg.channels as Record<string, unknown> | undefined)?.["nextcloud-talk"] !== undefined,
+    resolveGroupPolicy: (account) => account.config.groupPolicy,
+    resolveRouteAllowlistConfigured: (account) =>
+      Boolean(account.config.rooms) && Object.keys(account.config.rooms ?? {}).length > 0,
+    restrictSenders: {
+      surface: "Nextcloud Talk rooms",
+      openScope: "any member in allowed rooms",
+      groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
+      groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
+    },
+    noRouteAllowlist: {
+      surface: "Nextcloud Talk rooms",
+      routeAllowlistPath: "channels.nextcloud-talk.rooms",
+      routeScope: "room",
+      groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
+      groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
+    },
+  });
+
 export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = {
   id: "nextcloud-talk",
   meta,
   setupWizard: nextcloudTalkSetupWizard,
   pairing: {
     idLabel: "nextcloudUserId",
-    normalizeAllowEntry: (entry) =>
-      entry.replace(/^(nextcloud-talk|nc-talk|nc):/i, "").toLowerCase(),
-    notifyApproval: async ({ id }) => {
-      console.log(`[nextcloud-talk] User ${id} approved for pairing`);
-    },
+    normalizeAllowEntry: createPairingPrefixStripper(/^(nextcloud-talk|nc-talk|nc):/i, (entry) =>
+      entry.toLowerCase(),
+    ),
+    notifyApproval: createLoggedPairingApprovalNotifier(
+      ({ id }) => `[nextcloud-talk] User ${id} approved for pairing`,
+    ),
   },
   capabilities: {
     chatTypes: ["direct", "group"],
@@ -112,34 +137,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
   },
   security: {
     resolveDmPolicy: resolveNextcloudTalkDmPolicy,
-    collectWarnings: ({ account, cfg }) => {
-      const roomAllowlistConfigured =
-        account.config.rooms && Object.keys(account.config.rooms).length > 0;
-      return collectAllowlistProviderGroupPolicyWarnings({
-        cfg,
-        providerConfigPresent:
-          (cfg.channels as Record<string, unknown> | undefined)?.["nextcloud-talk"] !== undefined,
-        configuredGroupPolicy: account.config.groupPolicy,
-        collect: (groupPolicy) =>
-          collectOpenGroupPolicyRouteAllowlistWarnings({
-            groupPolicy,
-            routeAllowlistConfigured: Boolean(roomAllowlistConfigured),
-            restrictSenders: {
-              surface: "Nextcloud Talk rooms",
-              openScope: "any member in allowed rooms",
-              groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
-              groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
-            },
-            noRouteAllowlist: {
-              surface: "Nextcloud Talk rooms",
-              routeAllowlistPath: "channels.nextcloud-talk.rooms",
-              routeScope: "room",
-              groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
-              groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
-            },
-          }),
-      });
-    },
+    collectWarnings: collectNextcloudTalkSecurityWarnings,
   },
   groups: {
     resolveRequireMention: ({ cfg, accountId, groupId }) => {
@@ -177,23 +175,21 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
     chunker: (text, limit) => getNextcloudTalkRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
-    sendText: async ({ cfg, to, text, accountId, replyToId }) => {
-      const result = await sendMessageNextcloudTalk(to, text, {
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-        cfg: cfg as CoreConfig,
-      });
-      return { channel: "nextcloud-talk", ...result };
-    },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) => {
-      const messageWithMedia = mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text;
-      const result = await sendMessageNextcloudTalk(to, messageWithMedia, {
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-        cfg: cfg as CoreConfig,
-      });
-      return { channel: "nextcloud-talk", ...result };
-    },
+    ...createAttachedChannelResultAdapter({
+      channel: "nextcloud-talk",
+      sendText: async ({ cfg, to, text, accountId, replyToId }) =>
+        await sendMessageNextcloudTalk(to, text, {
+          accountId: accountId ?? undefined,
+          replyTo: replyToId ?? undefined,
+          cfg: cfg as CoreConfig,
+        }),
+      sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
+        await sendMessageNextcloudTalk(to, mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text, {
+          accountId: accountId ?? undefined,
+          replyTo: replyToId ?? undefined,
+          cfg: cfg as CoreConfig,
+        }),
+    }),
   },
   status: {
     defaultRuntime: {

@@ -70,4 +70,4 @@ export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
   return createOutboundSendDepsFromCliSource(deps);
 }
 
-export { logWebSelfId } from "../plugin-sdk/whatsapp.js";
+export { logWebSelfId } from "../plugins/runtime/runtime-whatsapp-boundary.js";

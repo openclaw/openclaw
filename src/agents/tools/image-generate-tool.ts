@@ -12,7 +12,7 @@ import type {
 } from "../../image-generation/types.js";
 import { getImageMetadata } from "../../media/image-ops.js";
 import { saveMediaBuffer } from "../../media/store.js";
-import { loadWebMedia } from "../../plugin-sdk/web-media.js";
+import { loadWebMedia } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";

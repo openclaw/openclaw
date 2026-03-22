@@ -2,6 +2,31 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as modelAuth from "../../agents/model-auth.js";
 import { buildFalImageGenerationProvider } from "./fal.js";
 
+function expectFalJsonPost(
+  fetchMock: ReturnType<typeof vi.fn>,
+  params: {
+    call: number;
+    url: string;
+    body: Record<string, unknown>;
+  },
+) {
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    params.call,
+    params.url,
+    expect.objectContaining({
+      method: "POST",
+      headers: expect.objectContaining({
+        Authorization: "Key fal-test-key",
+        "Content-Type": "application/json",
+      }),
+    }),
+  );
+
+  const request = fetchMock.mock.calls[params.call - 1]?.[1];
+  expect(request).toBeTruthy();
+  expect(JSON.parse(String(request?.body))).toEqual(params.body);
+}
+
 describe("fal image-generation provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -44,19 +69,16 @@ describe("fal image-generation provider", () => {
       size: "1536x1024",
     });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://fal.run/fal-ai/flux/dev",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          prompt: "draw a cat",
-          image_size: { width: 1536, height: 1024 },
-          num_images: 2,
-          output_format: "png",
-        }),
-      }),
-    );
+    expectFalJsonPost(fetchMock, {
+      call: 1,
+      url: "https://fal.run/fal-ai/flux/dev",
+      body: {
+        prompt: "draw a cat",
+        image_size: { width: 1536, height: 1024 },
+        num_images: 2,
+        output_format: "png",
+      },
+    });
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "https://v3.fal.media/files/example/generated.png",
@@ -111,20 +133,17 @@ describe("fal image-generation provider", () => {
       ],
     });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://fal.run/fal-ai/flux/dev/image-to-image",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          prompt: "turn this into a noir poster",
-          image_size: { width: 2048, height: 2048 },
-          num_images: 1,
-          output_format: "png",
-          image_url: `data:image/jpeg;base64,${Buffer.from("source-image").toString("base64")}`,
-        }),
-      }),
-    );
+    expectFalJsonPost(fetchMock, {
+      call: 1,
+      url: "https://fal.run/fal-ai/flux/dev/image-to-image",
+      body: {
+        prompt: "turn this into a noir poster",
+        image_size: { width: 2048, height: 2048 },
+        num_images: 1,
+        output_format: "png",
+        image_url: `data:image/jpeg;base64,${Buffer.from("source-image").toString("base64")}`,
+      },
+    });
   });
 
   it("maps aspect ratio for text generation without forcing a square default", async () => {
@@ -157,19 +176,16 @@ describe("fal image-generation provider", () => {
       aspectRatio: "16:9",
     });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://fal.run/fal-ai/flux/dev",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          prompt: "wide cinematic shot",
-          image_size: "landscape_16_9",
-          num_images: 1,
-          output_format: "png",
-        }),
-      }),
-    );
+    expectFalJsonPost(fetchMock, {
+      call: 1,
+      url: "https://fal.run/fal-ai/flux/dev",
+      body: {
+        prompt: "wide cinematic shot",
+        image_size: "landscape_16_9",
+        num_images: 1,
+        output_format: "png",
+      },
+    });
   });
 
   it("combines resolution and aspect ratio for text generation", async () => {
@@ -203,19 +219,16 @@ describe("fal image-generation provider", () => {
       aspectRatio: "9:16",
     });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://fal.run/fal-ai/flux/dev",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          prompt: "portrait poster",
-          image_size: { width: 1152, height: 2048 },
-          num_images: 1,
-          output_format: "png",
-        }),
-      }),
-    );
+    expectFalJsonPost(fetchMock, {
+      call: 1,
+      url: "https://fal.run/fal-ai/flux/dev",
+      body: {
+        prompt: "portrait poster",
+        image_size: { width: 1152, height: 2048 },
+        num_images: 1,
+        output_format: "png",
+      },
+    });
   });
 
   it("rejects multi-image edit requests for now", async () => {

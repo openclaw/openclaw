@@ -467,14 +467,14 @@ export type ToolsConfig = {
       enabled?: boolean;
       /** Search provider id. */
       provider?: string;
+      /** Shared API key slot used by providers that do not need nested config. */
+      apiKey?: SecretInput;
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
-      /** @deprecated Legacy Brave credential path. */
-      apiKey?: SecretInput;
       /** @deprecated Legacy Brave scoped config. */
       brave?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Firecrawl scoped config. */
@@ -487,7 +487,7 @@ export type ToolsConfig = {
       kimi?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Perplexity scoped config. */
       perplexity?: WebSearchLegacyProviderConfig;
-    };
+    } & Record<string, unknown>;
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;
