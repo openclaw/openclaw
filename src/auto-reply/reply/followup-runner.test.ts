@@ -701,6 +701,47 @@ describe("createFollowupRunner session resets", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
   });
 
+  it("tracks compaction counts on the rebound session entry", async () => {
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "session-new",
+        sessionFile: "/tmp/session-new.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+
+    mockCompactionRun({
+      willRetry: true,
+      result: { payloads: [{ text: "ok" }], meta: {} },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: {
+        sessionId: "session-old",
+        sessionFile: "/tmp/session-old.jsonl",
+        updatedAt: Date.now(),
+      },
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-old",
+          sessionFile: "/tmp/session-old.jsonl",
+          verboseLevel: "on",
+        },
+      }),
+    );
+
+    expect(sessionStore.main.compactionCount).toBe(1);
+  });
+
   it("preserves topic transcript suffixes when rebinding to a reset session without sessionFile", async () => {
     const sessionStore: Record<string, SessionEntry> = {
       main: {

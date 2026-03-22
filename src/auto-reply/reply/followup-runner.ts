@@ -448,7 +448,7 @@ export function createFollowupRunner(params: {
       if (autoCompactionCount > 0) {
         const previousSessionId = queued.run.sessionId;
         const count = await incrementRunCompactionCount({
-          sessionEntry: activeSessionEntry,
+          sessionEntry: activeSessionEntry ?? sessionEntry,
           sessionStore,
           sessionKey,
           storePath,
