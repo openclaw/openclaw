@@ -5,7 +5,6 @@ import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles.js";
 import {
   hasUsableCustomProviderApiKey,
-  resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
 import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
@@ -28,9 +27,6 @@ const hasAuthForProvider = (
     return false;
   }
   if (listProfilesForProvider(authStore, provider).length > 0) {
-    return true;
-  }
-  if (provider === "amazon-bedrock" && resolveAwsSdkEnvVarName()) {
     return true;
   }
   if (resolveEnvApiKey(provider)) {

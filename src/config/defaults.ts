@@ -38,6 +38,19 @@ function isPositiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
+// Stub for removed function - defaults to openai-completions for all providers
+function resolveDefaultProviderApi(
+  _providerId: string,
+  existingApi?: string,
+): string | undefined {
+  return existingApi ?? "openai-completions";
+}
+
+// Stub for removed function - no auth mode needed for simplified provider model
+function resolveAnthropicDefaultAuthMode(_cfg: OpenClawConfig): undefined {
+  return undefined;
+}
+
 function resolveModelCost(
   raw?: Partial<ModelDefinitionConfig["cost"]>,
 ): ModelDefinitionConfig["cost"] {

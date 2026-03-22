@@ -120,7 +120,6 @@ function applyConfiguredProviderOverrides(params: {
             ...configuredHeaders,
           }
         : undefined,
-    compat: configuredModel?.compat ?? discoveredModel.compat,
   };
 }
 

@@ -3,7 +3,6 @@ import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.j
 import {
   fetchClaudeUsage,
   fetchCodexUsage,
-  fetchCopilotUsage,
   fetchGeminiUsage,
   fetchMinimaxUsage,
   fetchZaiUsage,
@@ -55,8 +54,6 @@ export async function loadProviderUsageSummary(
         switch (auth.provider) {
           case "anthropic":
             return await fetchClaudeUsage(auth.token, timeoutMs, fetchFn);
-          case "github-copilot":
-            return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn);
           case "google-gemini-cli":
             return await fetchGeminiUsage(auth.token, timeoutMs, fetchFn, auth.provider);
           case "openai-codex":

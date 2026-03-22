@@ -75,16 +75,6 @@ import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
-type CopilotTokenState = {
-  githubToken: string;
-  expiresAt: number;
-  refreshTimer?: ReturnType<typeof setTimeout>;
-  refreshInFlight?: Promise<void>;
-};
-
-const COPILOT_REFRESH_MARGIN_MS = 5 * 60 * 1000;
-const COPILOT_REFRESH_RETRY_MS = 60 * 1000;
-const COPILOT_REFRESH_MIN_DELAY_MS = 5 * 1000;
 // Keep overload pacing noticeable enough to avoid tight retry bursts, but short
 // enough that fallback still feels responsive within a single turn.
 const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
@@ -442,105 +432,6 @@ export async function runEmbeddedPiAgent(
       const attemptedThinking = new Set<ThinkLevel>();
       let apiKeyInfo: ApiKeyInfo | null = null;
       let lastProfileId: string | undefined;
-      const copilotTokenState: CopilotTokenState | null =
-        model.provider === "github-copilot" ? { githubToken: "", expiresAt: 0 } : null;
-      let copilotRefreshCancelled = false;
-      const hasCopilotGithubToken = () => Boolean(copilotTokenState?.githubToken.trim());
-
-      const clearCopilotRefreshTimer = () => {
-        if (!copilotTokenState?.refreshTimer) {
-          return;
-        }
-        clearTimeout(copilotTokenState.refreshTimer);
-        copilotTokenState.refreshTimer = undefined;
-      };
-
-      const stopCopilotRefreshTimer = () => {
-        if (!copilotTokenState) {
-          return;
-        }
-        copilotRefreshCancelled = true;
-        clearCopilotRefreshTimer();
-      };
-
-      const refreshCopilotToken = async (reason: string): Promise<void> => {
-        if (!copilotTokenState) {
-          return;
-        }
-        if (copilotTokenState.refreshInFlight) {
-          await copilotTokenState.refreshInFlight;
-          return;
-        }
-        const { resolveCopilotApiToken } = await import("../../providers/github-copilot-token.js");
-        copilotTokenState.refreshInFlight = (async () => {
-          const githubToken = copilotTokenState.githubToken.trim();
-          if (!githubToken) {
-            throw new Error("Copilot refresh requires a GitHub token.");
-          }
-          log.debug(`Refreshing GitHub Copilot token (${reason})...`);
-          const copilotToken = await resolveCopilotApiToken({
-            githubToken,
-          });
-          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
-          copilotTokenState.expiresAt = copilotToken.expiresAt;
-          const remaining = copilotToken.expiresAt - Date.now();
-          log.debug(
-            `Copilot token refreshed; expires in ${Math.max(0, Math.floor(remaining / 1000))}s.`,
-          );
-        })()
-          .catch((err) => {
-            log.warn(`Copilot token refresh failed: ${describeUnknownError(err)}`);
-            throw err;
-          })
-          .finally(() => {
-            copilotTokenState.refreshInFlight = undefined;
-          });
-        await copilotTokenState.refreshInFlight;
-      };
-
-      const scheduleCopilotRefresh = (): void => {
-        if (!copilotTokenState || copilotRefreshCancelled) {
-          return;
-        }
-        if (!hasCopilotGithubToken()) {
-          log.warn("Skipping Copilot refresh scheduling; GitHub token missing.");
-          return;
-        }
-        clearCopilotRefreshTimer();
-        const now = Date.now();
-        const refreshAt = copilotTokenState.expiresAt - COPILOT_REFRESH_MARGIN_MS;
-        const delayMs = Math.max(COPILOT_REFRESH_MIN_DELAY_MS, refreshAt - now);
-        const timer = setTimeout(() => {
-          if (copilotRefreshCancelled) {
-            return;
-          }
-          refreshCopilotToken("scheduled")
-            .then(() => scheduleCopilotRefresh())
-            .catch(() => {
-              if (copilotRefreshCancelled) {
-                return;
-              }
-              const retryTimer = setTimeout(() => {
-                if (copilotRefreshCancelled) {
-                  return;
-                }
-                refreshCopilotToken("scheduled-retry")
-                  .then(() => scheduleCopilotRefresh())
-                  .catch(() => undefined);
-              }, COPILOT_REFRESH_RETRY_MS);
-              copilotTokenState.refreshTimer = retryTimer;
-              if (copilotRefreshCancelled) {
-                clearTimeout(retryTimer);
-                copilotTokenState.refreshTimer = undefined;
-              }
-            });
-        }, delayMs);
-        copilotTokenState.refreshTimer = timer;
-        if (copilotRefreshCancelled) {
-          clearTimeout(timer);
-          copilotTokenState.refreshTimer = undefined;
-        }
-      };
 
       const resolveAuthProfileFailoverReason = (params: {
         allInCooldown: boolean;
@@ -605,28 +496,7 @@ export async function runEmbeddedPiAgent(
       const applyApiKeyInfo = async (candidate?: string): Promise<void> => {
         apiKeyInfo = await resolveApiKeyForCandidate(candidate);
         const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
-        if (!apiKeyInfo.apiKey) {
-          if (apiKeyInfo.mode !== "aws-sdk") {
-            throw new Error(
-              `No API key resolved for provider "${model.provider}" (auth mode: ${apiKeyInfo.mode}).`,
-            );
-          }
-          lastProfileId = resolvedProfileId;
-          return;
-        }
-        if (model.provider === "github-copilot") {
-          const { resolveCopilotApiToken } =
-            await import("../../providers/github-copilot-token.js");
-          const copilotToken = await resolveCopilotApiToken({
-            githubToken: apiKeyInfo.apiKey,
-          });
-          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
-          if (copilotTokenState) {
-            copilotTokenState.githubToken = apiKeyInfo.apiKey;
-            copilotTokenState.expiresAt = copilotToken.expiresAt;
-            scheduleCopilotRefresh();
-          }
-        } else {
+        if (apiKeyInfo.apiKey) {
           authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
         }
         lastProfileId = apiKeyInfo.profileId;
@@ -716,28 +586,6 @@ export async function runEmbeddedPiAgent(
         }
       }
 
-      const maybeRefreshCopilotForAuthError = async (
-        errorText: string,
-        retried: boolean,
-      ): Promise<boolean> => {
-        if (!copilotTokenState || retried) {
-          return false;
-        }
-        if (!isFailoverErrorMessage(errorText)) {
-          return false;
-        }
-        if (classifyFailoverReason(errorText) !== "auth") {
-          return false;
-        }
-        try {
-          await refreshCopilotToken("auth-error");
-          scheduleCopilotRefresh();
-          return true;
-        } catch {
-          return false;
-        }
-      };
-
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
@@ -804,7 +652,6 @@ export async function runEmbeddedPiAgent(
       ensureContextEnginesInitialized();
       const contextEngine = await resolveContextEngine(params.config);
       try {
-        let authRetryPending = false;
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
         while (true) {
@@ -841,8 +688,6 @@ export async function runEmbeddedPiAgent(
             };
           }
           runLoopIterations += 1;
-          const copilotAuthRetry = authRetryPending;
-          authRetryPending = false;
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
@@ -1218,10 +1063,6 @@ export async function runEmbeddedPiAgent(
 
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
-            if (await maybeRefreshCopilotForAuthError(errorText, copilotAuthRetry)) {
-              authRetryPending = true;
-              continue;
-            }
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
               return {
@@ -1381,16 +1222,6 @@ export async function runEmbeddedPiAgent(
             aborted,
           });
 
-          if (
-            authFailure &&
-            (await maybeRefreshCopilotForAuthError(
-              lastAssistant?.errorMessage ?? "",
-              copilotAuthRetry,
-            ))
-          ) {
-            authRetryPending = true;
-            continue;
-          }
           if (imageDimensionError && lastProfileId) {
             const details = [
               imageDimensionError.messageIndex !== undefined
@@ -1600,7 +1431,6 @@ export async function runEmbeddedPiAgent(
         }
       } finally {
         await contextEngine.dispose?.();
-        stopCopilotRefreshTimer();
         process.chdir(prevCwd);
       }
     }),

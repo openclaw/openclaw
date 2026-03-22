@@ -3,16 +3,6 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  createAnthropicBetaHeadersWrapper,
-  createAnthropicFastModeWrapper,
-  createAnthropicToolPayloadCompatibilityWrapper,
-  createBedrockNoCacheWrapper,
-  isAnthropicBedrockModel,
-  resolveAnthropicFastMode,
-  resolveAnthropicBetas,
-  resolveCacheRetention,
-} from "./anthropic-stream-wrappers.js";
 import { log } from "./logger.js";
 import {
   createMoonshotThinkingWrapper,
@@ -105,10 +95,6 @@ function createStreamFnWithExtraParams(
   }
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
-  }
-  const cacheRetention = resolveCacheRetention(extraParams, provider);
-  if (cacheRetention) {
-    streamParams.cacheRetention = cacheRetention;
   }
 
   // Extract OpenRouter provider routing preferences from extraParams.provider.
@@ -363,14 +349,6 @@ export function applyExtraParamsToAgent(
     agent.streamFn = wrappedStreamFn;
   }
 
-  const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
-  if (anthropicBetas?.length) {
-    log.debug(
-      `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
-    );
-    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
-  }
-
   if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
     log.debug(
       `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
@@ -390,8 +368,6 @@ export function applyExtraParamsToAgent(
     }
     agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, moonshotThinkingType);
   }
-
-  agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn);
 
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
@@ -422,11 +398,6 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
   }
 
-  if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
-    log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
-    agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
-  }
-
   // Enable Z.AI tool_stream for real-time tool call streaming.
   // Enabled by default for Z.AI provider, can be disabled via params.tool_stream: false
   if (provider === "zai" || provider === "z-ai") {
@@ -435,16 +406,6 @@ export function applyExtraParamsToAgent(
       log.debug(`enabling Z.AI tool_stream for ${provider}/${modelId}`);
       agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
     }
-  }
-
-  // Guard Google payloads against invalid negative thinking budgets emitted by
-  // upstream model-ID heuristics for Gemini 3.1 variants.
-  agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
-
-  const anthropicFastMode = resolveAnthropicFastMode(merged);
-  if (anthropicFastMode !== undefined) {
-    log.debug(`applying Anthropic fast mode=${anthropicFastMode} for ${provider}/${modelId}`);
-    agent.streamFn = createAnthropicFastModeWrapper(agent.streamFn, anthropicFastMode);
   }
 
   const openAIFastMode = resolveOpenAIFastMode(merged);

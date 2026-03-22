@@ -15,7 +15,6 @@ import {
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-import { normalizeGoogleModelId } from "./models-config.providers.js";
 
 const log = createSubsystemLogger("model-selection");
 
@@ -170,9 +169,6 @@ function normalizeProviderModelId(provider: string, model: string): string {
     if (normalizedAnthropicModel.startsWith("claude-")) {
       return `anthropic/${normalizedAnthropicModel}`;
     }
-  }
-  if (provider === "google" || provider === "google-vertex") {
-    return normalizeGoogleModelId(model);
   }
   // OpenRouter-native models (e.g. "openrouter/aurora-alpha") need the full
   // "openrouter/<name>" as the model ID sent to the API. Models from external

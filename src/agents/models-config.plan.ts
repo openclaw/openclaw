@@ -5,12 +5,7 @@ import {
   mergeWithExistingProviderSecrets,
   type ExistingProviderConfig,
 } from "./models-config.merge.js";
-import {
-  enforceSourceManagedProviderSecrets,
-  normalizeProviders,
-  resolveImplicitProviders,
-  type ProviderConfig,
-} from "./models-config.providers.js";
+import { normalizeProviderConfig, type ProviderConfig } from "./models-config.providers.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
@@ -31,18 +26,8 @@ async function resolveProvidersForModelsJson(params: {
   agentDir: string;
   env: NodeJS.ProcessEnv;
 }): Promise<Record<string, ProviderConfig>> {
-  const { cfg, agentDir, env } = params;
-  const explicitProviders = cfg.models?.providers ?? {};
-  const implicitProviders = await resolveImplicitProviders({
-    agentDir,
-    config: cfg,
-    env,
-    explicitProviders,
-  });
-  return mergeProviders({
-    implicit: implicitProviders,
-    explicit: explicitProviders,
-  });
+  const { cfg, env } = params;
+  return cfg.models?.providers ?? {};
 }
 
 function resolveExplicitBaseUrlProviders(
@@ -93,8 +78,8 @@ export async function planOpenClawModelsJson(params: {
   existingRaw: string;
   existingParsed: unknown;
 }): Promise<ModelsJsonPlan> {
-  const { cfg, agentDir, env } = params;
-  const providers = await resolveProvidersForModelsJson({ cfg, agentDir, env });
+  const { cfg, env } = params;
+  const providers = await resolveProvidersForModelsJson({ cfg, agentDir: params.agentDir, env });
 
   if (Object.keys(providers).length === 0) {
     return { action: "skip" };
@@ -102,16 +87,17 @@ export async function planOpenClawModelsJson(params: {
 
   const mode = cfg.models?.mode ?? "merge";
   const secretRefManagedProviders = new Set<string>();
-  const normalizedProviders =
-    normalizeProviders({
-      providers,
-      agentDir,
-      env,
+
+  const normalizedProviders: Record<string, ProviderConfig> = {};
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    normalizedProviders[providerId] = normalizeProviderConfig({
+      provider: providerId,
+      providerConfig,
       secretDefaults: cfg.secrets?.defaults,
-      sourceProviders: params.sourceConfigForSecrets?.models?.providers,
-      sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
-      secretRefManagedProviders,
-    }) ?? providers;
+      env,
+    });
+  }
+
   const mergedProviders = await resolveProvidersForMode({
     mode,
     existingParsed: params.existingParsed,
@@ -119,14 +105,8 @@ export async function planOpenClawModelsJson(params: {
     secretRefManagedProviders,
     explicitBaseUrlProviders: resolveExplicitBaseUrlProviders(cfg.models),
   });
-  const secretEnforcedProviders =
-    enforceSourceManagedProviderSecrets({
-      providers: mergedProviders,
-      sourceProviders: params.sourceConfigForSecrets?.models?.providers,
-      sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
-      secretRefManagedProviders,
-    }) ?? mergedProviders;
-  const nextContents = `${JSON.stringify({ providers: secretEnforcedProviders }, null, 2)}\n`;
+
+  const nextContents = `${JSON.stringify({ providers: mergedProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {
     return { action: "noop" };

@@ -470,12 +470,6 @@ export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefi
     cost: VENICE_DEFAULT_COST,
     contextWindow: entry.contextWindow,
     maxTokens: entry.maxTokens,
-    // Avoid usage-only streaming chunks that can break OpenAI-compatible parsers.
-    // See: https://github.com/openclaw/openclaw/issues/15819
-    compat: {
-      supportsUsageInStreaming: false,
-      ...("supportsTools" in entry && !entry.supportsTools ? { supportsTools: false } : {}),
-    },
   };
 }
 
@@ -662,10 +656,7 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
         // requires a catalog update so a transient/bad /models response cannot
         // silently expand the tool execution surface for known models.
         if (apiSupportsTools === false) {
-          definition.compat = {
-            ...definition.compat,
-            supportsTools: false,
-          };
+          // compat property removed from ModelDefinitionConfig
         }
         models.push(definition);
       } else {
@@ -688,11 +679,6 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
           contextWindow:
             normalizePositiveInt(apiSpec?.availableContextTokens) ?? VENICE_DEFAULT_CONTEXT_WINDOW,
           maxTokens: apiMaxTokens ?? VENICE_DEFAULT_MAX_TOKENS,
-          // Avoid usage-only streaming chunks that can break OpenAI-compatible parsers.
-          compat: {
-            supportsUsageInStreaming: false,
-            ...(apiSupportsTools === false ? { supportsTools: false } : {}),
-          },
         });
       }
     }

@@ -19,6 +19,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ❯   pnpm gateway:dev    
 
+llm 集成：
+1 只支持openai和ollama
+2 简单直接主流
+
 
 ## Build, Test, and Run Commands
 
