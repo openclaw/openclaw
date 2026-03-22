@@ -215,7 +215,10 @@ etc.) so inner executables are persisted instead of multiplexer binaries. If a w
 multiplexer cannot be safely unwrapped, no allowlist entry is persisted automatically.
 If you allowlist interpreters like `python3` or `node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval.
 
-Default safe bins: `cut`, `uniq`, `head`, `tail`, `tr`, `wc`.
+Default safe bins:
+[//]: # "SAFE_BIN_DEFAULTS:START"
+`cut`, `uniq`, `head`, `tail`, `tr`, `wc`
+[//]: # "SAFE_BIN_DEFAULTS:END"
 
 `grep` and `sort` are not in the default list. If you opt in, keep explicit allowlist entries for
 their non-stdin workflows.

@@ -686,6 +686,46 @@ description: test skill
     );
   });
 
+  it("warns when risky broad-behavior bins are explicitly added to safeBins", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expected: boolean;
+    }> = [
+      {
+        name: "jq configured globally",
+        cfg: {
+          tools: {
+            exec: {
+              safeBins: ["jq"],
+            },
+          },
+        },
+        expected: true,
+      },
+      {
+        name: "jq not configured",
+        cfg: {
+          tools: {
+            exec: {
+              safeBins: ["cut"],
+            },
+          },
+        },
+        expected: false,
+      },
+    ];
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        expect(
+          hasFinding(res, "tools.exec.safe_bins_broad_behavior", "warn"),
+          testCase.name,
+        ).toBe(testCase.expected);
+      }),
+    );
+  });
+
   it("evaluates safeBinTrustedDirs risk findings", async () => {
     const riskyGlobalTrustedDirs =
       process.platform === "win32"
