@@ -18,6 +18,7 @@ title: "VirtualBox VM"
 Use a VirtualBox VM when you want strict isolation on your existing machine without switching to a cloud provider, or when you want a portable, reproducible environment that works on both macOS and Linux.
 
 ## Why VirtualBox
+
 - VirtualBox is free, open-source virtualization software
 - Works on **macOS** (Intel + Apple Silicon) and **Linux** (Debian, Fedora, Arch)
 - Full VM boundary — **no shared folders**, hardened **UFW firewall**
@@ -27,7 +28,7 @@ Use a VirtualBox VM when you want strict isolation on your existing machine with
 
 ## Quick path (experienced users)
 
-1. `curl -sSL https://clawvm.xyz | bash`
+1. `curl -sSL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/virtualbox/install.sh | bash`
 2. `openclaw-vm start`
 3. `openclaw-vm ssh`
 4. `openclaw onboard`
@@ -49,13 +50,15 @@ VirtualBox and Vagrant are installed automatically by the installer.
 ## 1) Install
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/DaevMithran/openclaw-vm/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/virtualbox/install.sh | bash
 ```
 
-or 
+or
 
 ```bash
-curl -sSL https://clawvm.xyz | bash
+git clone https://github.com/openclaw/openclaw
+cd scripts/virtualbox
+bash install.sh
 ```
 
 This detects your OS and installs VirtualBox and Vagrant using the appropriate package manager (Homebrew on macOS, apt/dnf/pacman on Linux), clones the repo, and adds `openclaw-vm` to your PATH.
@@ -205,14 +208,14 @@ openclaw-vm destroy     # Delete the VM and all data
 
 ## Troubleshooting
 
-| Problem                       | Solution                                                          |
-| ----------------------------- | ----------------------------------------------------------------- |
-| `VBoxManage not found`        | Run the installer again, or install VirtualBox manually           |
-| `vagrant not found`           | Run the installer again, or install Vagrant manually              |
-| VM stuck on "Booting"         | Check VirtualBox settings; ensure virtualization is enabled in BIOS |
-| Can't reach WebChat           | Verify the VM is running (`openclaw-vm status`) and gateway is up (`openclaw status`) |
-| Provision fails               | Run `openclaw-vm provision` again; check `openclaw-vm logs`       |
-| SSH password not working      | Set a password with `openclaw-vm config --password` then `openclaw-vm provision` |
+| Problem                  | Solution                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------- |
+| `VBoxManage not found`   | Run the installer again, or install VirtualBox manually                               |
+| `vagrant not found`      | Run the installer again, or install Vagrant manually                                  |
+| VM stuck on "Booting"    | Check VirtualBox settings; ensure virtualization is enabled in BIOS                   |
+| Can't reach WebChat      | Verify the VM is running (`openclaw-vm status`) and gateway is up (`openclaw status`) |
+| Provision fails          | Run `openclaw-vm provision` again; check `openclaw-vm logs`                           |
+| SSH password not working | Set a password with `openclaw-vm config --password` then `openclaw-vm provision`      |
 
 ---
 

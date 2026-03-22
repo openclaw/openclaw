@@ -1,0 +1,567 @@
+#!/usr/bin/env bash
+# openclaw-vm — friendly CLI wrapper for the OpenClaw VM
+# Replaces raw vagrant commands with a clean, interactive interface.
+# Supports macOS (Intel + Apple Silicon) and Linux.
+set -euo pipefail
+
+# Resolve symlinks so this works when installed to /usr/local/bin
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/config/.env"
+
+# ── Colours & symbols ─────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m';
+ORANGE='\033[38;5;209m'; DORANGE='\033[38;5;166m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
+CHECK="${GREEN}✓${NC}"
+CROSS="${ORANGE}✗${NC}"
+ARROW="${CYAN}→${NC}"
+
+# ── Helpers ───────────────────────────────────────────────────
+VERSION="0.1.0"
+
+banner() {
+  echo ""
+  echo -e "${ORANGE}  ╔═══╗ ╔═══╗ ╔═══╗ ╔═╗ ╔╗${ORANGE} ╔═══╗ ╔╗   ╔═══╗ ╔╗   ╔╗${NC}"
+  echo -e "${ORANGE}  ║╔═╗║ ║╔═╗║ ║╔══╝ ║║╚╗║║${ORANGE} ║╔══╝ ║║   ║╔═╗║ ║║   ║║${NC}"
+  echo -e "${ORANGE}  ║║ ║║ ║╚═╝║ ║╚══╗ ║╔╗╚╝║${ORANGE} ║║    ║║   ║╚═╝║ ║║ ╔╗║║${NC}"
+  echo -e "${ORANGE}  ║║ ║║ ║╔══╝ ║╔══╝ ║║╚╗║║${ORANGE} ║║    ║║   ║╔═╗║ ║║╔╝╚╝║${NC}"
+  echo -e "${ORANGE}  ║╚═╝║ ║║    ║╚══╗ ║║ ║║║${ORANGE} ║╚══╗ ║╚═╗ ║║ ║║ ║╚╝╔╗╔╝${NC}"
+  echo -e "${ORANGE}  ╚═══╝ ╚╝    ╚═══╝ ╚╝ ╚═╝${ORANGE} ╚═══╝ ╚══╝ ╚╝ ╚╝ ╚══╝╚╝${NC}"
+  echo -e "  🦞${ORANGE}                                              VM v${VERSION}${NC}"
+}
+
+header() {
+  banner
+  echo ""
+}
+
+log()  { echo -e "  ${ARROW} $1"; }
+ok()   { echo -e "  ${CHECK} $1"; }
+fail() { echo -e "  ${CROSS} $1"; }
+
+# ── Progress bar ─────────────────────────────────────────────
+BAR_WIDTH=30
+
+progress() {
+  # Usage: progress <percent> <message>
+  local pct=$1 msg="$2"
+  local filled=$(( BAR_WIDTH * pct / 100 ))
+  local empty=$(( BAR_WIDTH - filled ))
+  local bar=""
+  for ((i=0; i<filled; i++)); do bar+="█"; done
+  for ((i=0; i<empty; i++)); do bar+="░"; done
+  printf "\r  ${ORANGE}${bar}${NC} %3d%%  ${DIM}%s${NC}\033[K" "$pct" "$msg"
+}
+
+progress_done() {
+  printf "\r\033[K"
+}
+
+# Maps vagrant/provisioner output to progress steps
+track_provision_progress() {
+  while IFS= read -r line; do
+    case "$line" in
+      *"Importing base box"*)           progress 5  "Importing base box..." ;;
+      *"Matching MAC address"*)         progress 8  "Configuring VM..." ;;
+      *"Setting the name"*)             progress 10 "Setting up VirtualBox..." ;;
+      *"Booting VM"*|*"Waiting for machine to boot"*)
+                                        progress 15 "Booting VM..." ;;
+      *"Machine booted"*|*"Machine already booted"*)
+                                        progress 20 "VM booted" ;;
+      *"Setting hostname"*)             progress 22 "Setting hostname..." ;;
+      *"Configuring and enabling network"*)
+                                        progress 25 "Configuring network..." ;;
+      *"apt-get update"*|*"System packages"*)
+                                        progress 32 "Installing system packages..." ;;
+      *"Installing Node.js"*)           progress 40 "Installing Node.js..." ;;
+      *"Node v"*)                       progress 50 "Node.js installed" ;;
+      *"Firewall enabled"*)             progress 58 "Firewall configured" ;;
+      *"Installing Ollama"*)            progress 62 "Installing Ollama..." ;;
+      *"Pulling"*"model"*)              progress 68 "Downloading model..." ;;
+      *"Skipping Ollama"*)              progress 70 "Skipping Ollama" ;;
+      *"SSH password auth"*)            progress 75 "Configuring SSH..." ;;
+      *"System provisioning complete"*) progress 80 "System ready" ;;
+      *"Installing OpenClaw"*)          progress 85 "Installing OpenClaw..." ;;
+      *"OpenClaw"*"installed"*)         progress 92 "OpenClaw installed" ;;
+      *"Setup complete"*)               progress 100 "Setup complete" ;;
+    esac
+  done
+}
+
+detect_os() {
+  case "$(uname -s)" in
+    Darwin) echo "macos" ;;
+    Linux)  echo "linux" ;;
+    *)      echo "unknown" ;;
+  esac
+}
+
+detect_arch() {
+  case "$(uname -m)" in
+    arm64|aarch64) echo "arm64" ;;
+    x86_64|amd64)  echo "amd64" ;;
+    *)             echo "unknown" ;;
+  esac
+}
+
+detect_total_ram_mb() {
+  local os
+  os=$(detect_os)
+  if [[ "$os" == "macos" ]]; then
+    sysctl -n hw.memsize 2>/dev/null | awk '{print int($1/1024/1024)}'
+  elif [[ "$os" == "linux" ]]; then
+    awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null
+  else
+    echo "16384"
+  fi
+}
+
+detect_total_cpus() {
+  local os
+  os=$(detect_os)
+  if [[ "$os" == "macos" ]]; then
+    sysctl -n hw.ncpu 2>/dev/null || echo "4"
+  elif [[ "$os" == "linux" ]]; then
+    nproc 2>/dev/null || echo "4"
+  else
+    echo "4"
+  fi
+}
+
+ensure_vagrant() {
+  if ! command -v vagrant &>/dev/null; then
+    fail "Vagrant is not installed."
+    echo -e "  Install with: ${BOLD}curl -sSL https://raw.githubusercontent.com/openclaw/openclaw-vm/main/install.sh | bash${NC}"
+    exit 1
+  fi
+}
+
+ensure_virtualbox() {
+  if ! command -v VBoxManage &>/dev/null; then
+    fail "VirtualBox is not installed."
+    echo -e "  Install with: ${BOLD}curl -sSL https://raw.githubusercontent.com/openclaw/openclaw-vm/main/install.sh | bash${NC}"
+    exit 1
+  fi
+}
+
+vm_state() {
+  cd "$SCRIPT_DIR"
+  vagrant status --machine-readable 2>/dev/null | grep ",state," | cut -d',' -f4 || echo "not_created"
+}
+
+# ── Config file helpers ──────────────────────────────────────
+# Only VM-level config (.env) is managed on the host.
+# OpenClaw config (models, keys, gateway) is handled by `openclaw onboard`
+# inside the VM — we don't generate or push it.
+
+write_vm_env() {
+  # Args: ram cpus password install_ollama
+  mkdir -p "$SCRIPT_DIR/config"
+  cat > "$ENV_FILE" <<EOF
+# .env — VM-level configuration (auto-generated by openclaw-vm)
+VM_MEMORY=${1}
+VM_CPUS=${2}
+VM_PASSWORD="${3}"
+INSTALL_OLLAMA=${4}
+EOF
+}
+
+read_env_var() {
+  local var_name="$1"
+  if [[ -f "$ENV_FILE" ]]; then
+    grep "^${var_name}=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d '"' || true
+  fi
+}
+
+push_openclaw_config() {
+  # Push an openclaw config file into the running VM.
+  # Usage: push_openclaw_config <path-to-config.json>
+  local config_file="$1"
+  cd "$SCRIPT_DIR"
+  { vagrant ssh -c "mkdir -p ~/.openclaw && cat > ~/.openclaw/openclaw.json" < "$config_file" 2>/dev/null || true; }
+  return 0
+}
+
+# ── Interactive first-run config ──────────────────────────────
+run_setup() {
+  header
+  echo -e "  ${BOLD}First-time setup${NC}"
+  echo ""
+
+  # ── VM Resources ──────────────────────────────────────────
+  local total_ram_mb
+  total_ram_mb=$(detect_total_ram_mb)
+  local total_cpus
+  total_cpus=$(detect_total_cpus)
+  local default_ram=$(( total_ram_mb / 2 ))
+  [[ $default_ram -gt 16384 ]] && default_ram=16384
+  local default_cpus=$(( total_cpus / 2 ))
+  [[ $default_cpus -lt 2 ]] && default_cpus=2
+
+  echo -e "  ${BOLD}VM Resources${NC} ${DIM}(detected ${total_ram_mb}MB RAM, ${total_cpus} cores)${NC}"
+  echo ""
+  read -rp "  RAM in MB [$default_ram]: " input_ram
+  local ram="${input_ram:-$default_ram}"
+  read -rp "  CPU cores [$default_cpus]: " input_cpus
+  local cpus="${input_cpus:-$default_cpus}"
+  echo ""
+
+  # ── Local models via Ollama ─────────────────────────────────
+  echo -e "  ${BOLD}Local Models${NC}"
+  echo -e "  ${DIM}Ollama runs models locally on the VM. Uses ~2-4GB disk + RAM.${NC}"
+  echo -e "  ${DIM}Skip this if you only want to use cloud providers.${NC}"
+  echo ""
+  read -rp "  Install Ollama for local models? [y/N]: " install_ollama_input
+  local install_ollama="false"
+  if [[ "${install_ollama_input:-}" =~ ^[Yy]$ ]]; then
+    install_ollama="true"
+  fi
+  echo ""
+
+  # ── SSH Access ────────────────────────────────────────────
+  echo -e "  ${BOLD}Remote SSH Access${NC} ${DIM}(for connecting from other devices)${NC}"
+  echo ""
+  read -rp "  VM password (leave empty to disable): " vm_password
+  echo ""
+
+  # ── Write VM config ──────────────────────────────────────────
+  write_vm_env "$ram" "$cpus" "$vm_password" "$install_ollama"
+  ok "VM config saved"
+  echo ""
+}
+
+# ── Commands ──────────────────────────────────────────────────
+cmd_start() {
+  local config_file=""
+
+  # Parse start flags
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --config)
+        config_file="$2"
+        if [[ ! -f "$config_file" ]]; then
+          fail "Config file not found: $config_file"
+          exit 1
+        fi
+        shift 2
+        ;;
+      *)
+        fail "Unknown option: $1"
+        echo -e "  ${BOLD}Usage:${NC} openclaw-vm start [--config <openclaw.json>]"
+        exit 1
+        ;;
+    esac
+  done
+
+  ensure_vagrant
+  ensure_virtualbox
+  cd "$SCRIPT_DIR"
+
+  local state
+  state=$(vm_state)
+
+  # First-run setup (only VM-level config)
+  if [[ ! -f "$ENV_FILE" ]]; then
+    run_setup
+  fi
+
+  header
+
+  case "$state" in
+    running)
+      ok "VM is already running"
+      # Still push config if provided
+      if [[ -n "$config_file" ]]; then
+        log "Importing config to VM..."
+        push_openclaw_config "$config_file"
+        ok "Config imported"
+      fi
+      echo ""
+      echo -e "  ${BOLD}Next steps:${NC}"
+      echo -e "    ${BOLD}openclaw-vm ssh${NC}           SSH into the VM"
+      if [[ -z "$config_file" ]]; then
+        echo -e "    ${BOLD}openclaw onboard${NC}          Configure OpenClaw (first time)"
+      fi
+      echo -e "    ${BOLD}openclaw gateway${NC}          Start the gateway"
+      echo -e "    ${BOLD}http://localhost:18789${NC}     Open WebChat"
+      echo ""
+      return
+      ;;
+    poweroff|aborted|saved)
+      log "Resuming OpenClaw VM..."
+      echo ""
+      progress 10 "Booting VM..."
+      { vagrant up --no-provision 2>&1 || true; } | while IFS= read -r line; do
+        case "$line" in
+          *"Booting VM"*|*"Waiting for machine"*) progress 30 "Booting VM..." ;;
+          *"Machine booted"*)                     progress 60 "VM booted" ;;
+          *"Machine already booted"*)             progress 80 "VM ready" ;;
+        esac
+      done
+      progress 100 "Done"
+      progress_done
+      ;;
+    *)
+      log "Creating and provisioning OpenClaw VM..."
+      echo ""
+      progress 0 "Starting..."
+      { vagrant up 2>&1 || true; } | track_provision_progress
+      progress_done
+      ;;
+  esac
+
+  # Push config file if provided
+  if [[ -n "$config_file" ]]; then
+    log "Importing config to VM..."
+    push_openclaw_config "$config_file"
+    ok "Config imported from $(basename "$config_file")"
+  fi
+
+  ok "VM is running"
+  echo ""
+  echo -e "  ${BOLD}Next steps:${NC}"
+  echo -e "    ${BOLD}openclaw-vm ssh${NC}           SSH into the VM"
+  if [[ -z "$config_file" ]]; then
+    echo -e "    ${BOLD}openclaw onboard${NC}          Configure OpenClaw (first time)"
+  fi
+  echo -e "    ${BOLD}openclaw gateway${NC}          Start the gateway"
+  echo -e "    ${BOLD}http://localhost:18789${NC}     Open WebChat"
+  echo ""
+}
+
+cmd_stop() {
+  ensure_vagrant
+  cd "$SCRIPT_DIR"
+  header
+  log "Stopping VM..."
+  { vagrant halt 2>&1 || true; } | grep -v "^$" | head -5
+  ok "VM stopped"
+  echo ""
+}
+
+cmd_ssh() {
+  ensure_vagrant
+  cd "$SCRIPT_DIR"
+  local state
+  state=$(vm_state)
+  if [[ "$state" != "running" ]]; then
+    fail "VM is not running. Start it with: openclaw-vm start"
+    exit 1
+  fi
+  vagrant ssh
+}
+
+cmd_status() {
+  ensure_vagrant
+  cd "$SCRIPT_DIR"
+  header
+
+  local state
+  state=$(vm_state)
+  local os
+  os=$(detect_os)
+  local arch
+  arch=$(detect_arch)
+
+  echo -e "  ${DIM}Host: ${os} / ${arch}${NC}"
+
+  case "$state" in
+    running)
+      echo -e "  VM:       ${GREEN}running${NC}"
+      if [[ -f "$ENV_FILE" ]]; then
+        source "$ENV_FILE"
+        echo -e "  Memory:   ${VM_MEMORY:-?} MB"
+        echo -e "  CPUs:     ${VM_CPUS:-?}"
+      fi
+      echo -e "  SSH:      ${BOLD}openclaw-vm ssh${NC} or ${BOLD}ssh vagrant@localhost -p 2222${NC}"
+      echo -e "  WebChat:  ${BOLD}http://localhost:18789${NC}"
+      ;;
+    poweroff|aborted)
+      echo -e "  VM:       ${ORANGE}stopped${NC}"
+      echo -e "  Start:    ${BOLD}openclaw-vm start${NC}"
+      ;;
+    not_created)
+      echo -e "  VM:       ${DIM}not created${NC}"
+      echo -e "  Create:   ${BOLD}openclaw-vm start${NC}"
+      ;;
+    *)
+      echo -e "  VM:       ${DIM}${state}${NC}"
+      ;;
+  esac
+  echo ""
+}
+
+cmd_destroy() {
+  ensure_vagrant
+  cd "$SCRIPT_DIR"
+  header
+  echo -e "  ${ORANGE}This will delete the VM and all data inside it.${NC}"
+  read -rp "  Are you sure? [y/N] " confirm
+  if [[ "$confirm" =~ ^[Yy]$ ]]; then
+    log "Destroying VM..."
+    { vagrant destroy -f 2>&1 || true; } | grep -v "^$" | head -5
+    rm -rf "$SCRIPT_DIR/config"
+    ok "VM destroyed (config cleaned up)"
+  else
+    log "Cancelled."
+  fi
+  echo ""
+}
+
+cmd_provision() {
+  ensure_vagrant
+  cd "$SCRIPT_DIR"
+  header
+  log "Re-provisioning VM..."
+  echo ""
+  progress 0 "Starting..."
+  { vagrant provision 2>&1 || true; } | track_provision_progress
+  progress_done
+
+  ok "Re-provisioning complete"
+  echo ""
+}
+
+cmd_config() {
+  local arg_ram="" arg_cpus="" arg_password="" arg_ollama=""
+  local has_args=false
+
+  while [[ $# -gt 0 ]]; do
+    has_args=true
+    case "$1" in
+      --ram)        arg_ram="$2"; shift 2 ;;
+      --cpus)       arg_cpus="$2"; shift 2 ;;
+      --password)   arg_password="$2"; shift 2 ;;
+      --ollama)     arg_ollama="true"; shift ;;
+      --no-ollama)  arg_ollama="false"; shift ;;
+      *)
+        fail "Unknown config option: $1"
+        echo ""
+        echo -e "  ${BOLD}Usage:${NC} openclaw-vm config [options]"
+        echo ""
+        echo -e "  ${BOLD}VM options:${NC}"
+        echo "    --ram <MB>          VM memory in MB (e.g. 8192)"
+        echo "    --cpus <N>          VM CPU cores (e.g. 4)"
+        echo "    --password <pw>     SSH password for remote access"
+        echo "    --ollama            Enable local models via Ollama"
+        echo "    --no-ollama         Disable Ollama"
+        echo ""
+        echo -e "  ${DIM}Run without options for interactive setup.${NC}"
+        echo -e "  ${DIM}For OpenClaw config (models, keys, gateway): openclaw-vm ssh → openclaw onboard${NC}"
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ "$has_args" == "false" ]]; then
+    run_setup
+    echo -e "  ${ORANGE}Run 'openclaw-vm provision' to apply changes to a running VM.${NC}"
+    echo ""
+    return
+  fi
+
+  # ── Apply CLI args to config ──────────────────────────────
+  header
+
+  local cur_ram cur_cpus cur_password cur_ollama
+  cur_ram=$(read_env_var "VM_MEMORY")
+  cur_cpus=$(read_env_var "VM_CPUS")
+  cur_password=$(read_env_var "VM_PASSWORD")
+  cur_ollama=$(read_env_var "INSTALL_OLLAMA")
+
+  local new_ram="${arg_ram:-${cur_ram:-8192}}"
+  local new_cpus="${arg_cpus:-${cur_cpus:-4}}"
+  local new_password="${arg_password:-${cur_password:-}}"
+  local new_ollama="${arg_ollama:-${cur_ollama:-false}}"
+
+  write_vm_env "$new_ram" "$new_cpus" "$new_password" "$new_ollama"
+  ok "VM config updated"
+
+  # Show what changed
+  if [[ -n "$arg_ram" ]]; then log "RAM: ${new_ram} MB"; fi
+  if [[ -n "$arg_cpus" ]]; then log "CPUs: ${new_cpus}"; fi
+  if [[ -n "$arg_password" ]]; then log "SSH password: set"; fi
+  if [[ -n "$arg_ollama" ]]; then log "Ollama: ${new_ollama}"; fi
+
+  echo ""
+  echo -e "  ${ORANGE}Run 'openclaw-vm provision' to apply changes to a running VM.${NC}"
+  echo ""
+}
+
+cmd_logs() {
+  ensure_vagrant
+  cd "$SCRIPT_DIR"
+  local state
+  state=$(vm_state)
+  if [[ "$state" != "running" ]]; then
+    fail "VM is not running."
+    exit 1
+  fi
+  vagrant ssh -c "journalctl -u ollama --no-pager -n 50 2>/dev/null; echo ''; openclaw status 2>/dev/null || echo 'OpenClaw gateway not running'"
+}
+
+usage() {
+  header
+  echo -e "
+  ${BOLD}Usage:${NC} openclaw-vm <command> [options]
+
+  ${BOLD}Commands:${NC}
+    start       Start the VM (interactive setup on first run)
+                  --config <file>   Import an openclaw.json config file
+    stop        Stop the VM
+    ssh         SSH into the VM
+    status      Show VM status and connection info
+    config      Configure VM resources (interactive or via flags)
+    provision   Re-provision the VM (apply config changes)
+    logs        Show OpenClaw and Ollama logs
+    destroy     Delete the VM entirely
+
+  ${BOLD}Config flags:${NC} ${DIM}(use with 'openclaw-vm config')${NC}
+    --ram <MB>          VM memory (e.g. 8192)
+    --cpus <N>          CPU cores (e.g. 4)
+    --password <pw>     SSH password for LAN access
+    --ollama            Enable local models via Ollama
+    --no-ollama         Disable Ollama
+
+  ${BOLD}Inside the VM:${NC}
+    openclaw onboard    Configure OpenClaw (models, keys, gateway)
+    openclaw gateway    Start the gateway
+    openclaw status     Check gateway status
+    openclaw tui        Terminal chat interface
+
+  ${BOLD}Examples:${NC}
+    openclaw-vm start
+    openclaw-vm start --config ~/openclaw.json
+    openclaw-vm config --ram 16384 --cpus 8 --ollama
+    openclaw-vm provision
+"
+}
+
+# ── Main dispatch ─────────────────────────────────────────────
+main() {
+  local cmd="${1:-help}"; shift || true
+  case "$cmd" in
+    start)     cmd_start "$@" ;;
+    stop)      cmd_stop ;;
+    ssh)       cmd_ssh ;;
+    status)    cmd_status ;;
+    config)    cmd_config "$@" ;;
+    provision) cmd_provision ;;
+    logs)      cmd_logs ;;
+    destroy)   cmd_destroy ;;
+    help|-h|--help) usage ;;
+    *)
+      echo -e "${ORANGE}Unknown command: ${cmd}${NC}"
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
