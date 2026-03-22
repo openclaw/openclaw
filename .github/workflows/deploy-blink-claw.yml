@@ -75,8 +75,7 @@ jobs:
             OPENCLAW_EXTENSIONS=telegram discord slack whatsapp
             OPENCLAW_DOCKER_APT_PACKAGES=gh jq python3 python3-pip ffmpeg tmux ripgrep sqlite3 unzip zip wget fzf fd-find bat
             OPENCLAW_INSTALL_BLINK_TOOLS=1
-          cache-from: type=registry,ref=registry.fly.io/blink-claw:buildcache
-          cache-to: type=registry,ref=registry.fly.io/blink-claw:buildcache,mode=max
+          no-cache: true
 
   smoke-test:
     name: Fly smoke test (pre-release only)

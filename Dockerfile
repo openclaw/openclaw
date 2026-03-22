@@ -277,6 +277,7 @@ ENV PATH="/data/npm-global/bin:${PATH}"
 # compiles all TypeScript extensions during Docker build (not at runtime).
 # Without this, WhatsApp/Baileys Jiti compilation takes 90-300s on shared CPUs.
 # The compiled cache at node_modules/.cache/jiti/ bakes into the image layer.
+# CACHE_BUST: v1 — change this comment to force layer rebuild after cache wipe.
 RUN mkdir -p /tmp/oc-warmup/workspace/.whatsapp /tmp/oc-warmup/agents/main/agent && \
     printf '%s' '{"agents":{"defaults":{"workspace":"/tmp/oc-warmup/workspace"}},"gateway":{"auth":{"mode":"token"}},"browser":{"noSandbox":true},"channels":{"whatsapp":{"accounts":{"default":{"authDir":"/tmp/oc-warmup/workspace/.whatsapp"}}}}}' \
       > /tmp/oc-warmup/openclaw.json && \
