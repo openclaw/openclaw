@@ -107,6 +107,25 @@ If a prompt is required but no UI is reachable, fallback decides:
 - **allowlist**: allow only if allowlist matches.
 - **full**: allow.
 
+### Inline interpreter eval hardening (`tools.exec.strictInlineEval`)
+
+When `tools.exec.strictInlineEval=true`, OpenClaw treats inline code-eval forms as approval-only even if the interpreter binary itself is allowlisted.
+
+Examples:
+
+- `python -c`
+- `node -e`, `node --eval`, `node -p`
+- `ruby -e`
+- `perl -e`, `perl -E`
+- `php -r`
+- `lua -e`
+- `osascript -e`
+
+This is defense-in-depth for interpreter loaders that do not map cleanly to one stable file operand. In strict mode:
+
+- these commands still need explicit approval;
+- `allow-always` does not persist new allowlist entries for them automatically.
+
 ## Allowlist (per agent)
 
 Allowlists are **per agent**. If multiple agents exist, switch which agent you’re
@@ -194,6 +213,7 @@ For allow-always decisions in allowlist mode, known dispatch wrappers
 paths. Shell multiplexers (`busybox`, `toybox`) are also unwrapped for shell applets (`sh`, `ash`,
 etc.) so inner executables are persisted instead of multiplexer binaries. If a wrapper or
 multiplexer cannot be safely unwrapped, no allowlist entry is persisted automatically.
+If you allowlist interpreters like `python3` or `node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval.
 
 Default safe bins: `jq`, `cut`, `uniq`, `head`, `tail`, `tr`, `wc`.
 

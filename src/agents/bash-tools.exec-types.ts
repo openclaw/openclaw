@@ -11,6 +11,7 @@ export type ExecToolDefaults = {
   windowStyle?: PowerShellWindowStyle;
   pathPrepend?: string[];
   safeBins?: string[];
+  strictInlineEval?: boolean;
   safeBinTrustedDirs?: string[];
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   agentId?: string;
