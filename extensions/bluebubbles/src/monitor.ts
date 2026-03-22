@@ -2,7 +2,6 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   beginWebhookRequestPipelineOrReject,
-  createDedupeCache,
   resolveWebhookTargets,
 } from "openclaw/plugin-sdk/bluebubbles";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
@@ -39,15 +38,14 @@ const webhookInFlightLimiter = createWebhookInFlightLimiter();
 const debounceRegistry = createBlueBubblesDebounceRegistry({ processMessage });
 const BLUEBUBBLES_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
 const BLUEBUBBLES_WEBHOOK_REPLAY_CACHE_MAX_SIZE = 10_000;
-const recentInboundWebhookEvents = createDedupeCache({
-  ttlMs: BLUEBUBBLES_WEBHOOK_REPLAY_WINDOW_MS,
-  maxSize: BLUEBUBBLES_WEBHOOK_REPLAY_CACHE_MAX_SIZE,
-});
+const recentInboundWebhookReplayScopes = new Map<string, { replayKey: string; seenAt: number }>();
+const pendingInboundWebhookReplayScopes = new Map<string, string>();
 const pendingInboundWebhookReplayKeys = new Set<string>();
 type PendingWebhookReplayRetryEntry = {
   message: NormalizedWebhookMessage;
   target: WebhookTarget;
   eventType: string;
+  replayScopeKey?: string;
 };
 const pendingInboundWebhookReplayRetries = new Map<string, PendingWebhookReplayRetryEntry>();
 
@@ -293,6 +291,69 @@ function buildInboundReplayKey(params: {
   ].join("|");
 }
 
+function buildInboundReplayScopeKey(params: {
+  target: WebhookTarget;
+  message: NormalizedWebhookMessage;
+}): string | undefined {
+  const { target, message } = params;
+  const messageId = message.messageId?.trim();
+  if (!messageId) {
+    return undefined;
+  }
+  const chatKey =
+    message.chatGuid?.trim() ??
+    message.chatIdentifier?.trim() ??
+    (typeof message.chatId === "number" && Number.isFinite(message.chatId)
+      ? String(message.chatId)
+      : "");
+  return ["bluebubbles", target.account.accountId, message.senderId, chatKey, messageId].join("|");
+}
+
+function pruneRecentInboundWebhookReplayScopes(now: number): void {
+  for (const [scopeKey, entry] of recentInboundWebhookReplayScopes) {
+    if (now - entry.seenAt <= BLUEBUBBLES_WEBHOOK_REPLAY_WINDOW_MS) {
+      break;
+    }
+    recentInboundWebhookReplayScopes.delete(scopeKey);
+  }
+  while (recentInboundWebhookReplayScopes.size > BLUEBUBBLES_WEBHOOK_REPLAY_CACHE_MAX_SIZE) {
+    const oldestKey = recentInboundWebhookReplayScopes.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    recentInboundWebhookReplayScopes.delete(oldestKey);
+  }
+}
+
+function rememberRecentInboundWebhookReplay(scopeKey: string, replayKey: string): void {
+  const now = Date.now();
+  recentInboundWebhookReplayScopes.delete(scopeKey);
+  recentInboundWebhookReplayScopes.set(scopeKey, { replayKey, seenAt: now });
+  pruneRecentInboundWebhookReplayScopes(now);
+}
+
+function resolveRecentInboundWebhookReplayKey(scopeKey: string): string | undefined {
+  const now = Date.now();
+  pruneRecentInboundWebhookReplayScopes(now);
+  const recent = recentInboundWebhookReplayScopes.get(scopeKey);
+  if (!recent) {
+    return undefined;
+  }
+  if (now - recent.seenAt > BLUEBUBBLES_WEBHOOK_REPLAY_WINDOW_MS) {
+    recentInboundWebhookReplayScopes.delete(scopeKey);
+    return undefined;
+  }
+  return recent.replayKey;
+}
+
+function resolveCurrentInboundWebhookReplayKey(scopeKey: string): string | undefined {
+  const pendingReplayKey = pendingInboundWebhookReplayScopes.get(scopeKey);
+  if (pendingReplayKey) {
+    return pendingReplayKey;
+  }
+  return resolveRecentInboundWebhookReplayKey(scopeKey);
+}
+
 export async function handleBlueBubblesWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -455,6 +516,9 @@ export async function handleBlueBubblesWebhookRequest(
         const debouncer = debounceRegistry.getOrCreateDebouncer(params.entry.target);
         let retryReenqueuedFromFlushFailure = false;
         pendingInboundWebhookReplayKeys.add(params.replayKey);
+        if (params.entry.replayScopeKey) {
+          pendingInboundWebhookReplayScopes.set(params.entry.replayScopeKey, params.replayKey);
+        }
         void debouncer
           .enqueue({
             message: params.entry.message,
@@ -462,11 +526,26 @@ export async function handleBlueBubblesWebhookRequest(
             eventType: params.entry.eventType,
             replayLifecycle: {
               onFlushSuccess: () => {
-                recentInboundWebhookEvents.check(params.replayKey);
+                if (params.entry.replayScopeKey) {
+                  rememberRecentInboundWebhookReplay(params.entry.replayScopeKey, params.replayKey);
+                  if (
+                    pendingInboundWebhookReplayScopes.get(params.entry.replayScopeKey) ===
+                    params.replayKey
+                  ) {
+                    pendingInboundWebhookReplayScopes.delete(params.entry.replayScopeKey);
+                  }
+                }
                 pendingInboundWebhookReplayKeys.delete(params.replayKey);
                 pendingInboundWebhookReplayRetries.delete(params.replayKey);
               },
               onFlushFailure: () => {
+                if (
+                  params.entry.replayScopeKey &&
+                  pendingInboundWebhookReplayScopes.get(params.entry.replayScopeKey) ===
+                    params.replayKey
+                ) {
+                  pendingInboundWebhookReplayScopes.delete(params.entry.replayScopeKey);
+                }
                 pendingInboundWebhookReplayKeys.delete(params.replayKey);
                 const deferredRetry = pendingInboundWebhookReplayRetries.get(params.replayKey);
                 pendingInboundWebhookReplayRetries.delete(params.replayKey);
@@ -490,9 +569,14 @@ export async function handleBlueBubblesWebhookRequest(
             );
           });
       };
-      const entry = { message, target, eventType };
+      const replayScopeKey = buildInboundReplayScopeKey({ target, message });
+      const entry = { message, target, eventType, replayScopeKey };
       const replayKey = buildInboundReplayKey({ target, eventType, message });
-      if (replayKey && recentInboundWebhookEvents.peek(replayKey)) {
+      if (
+        replayKey &&
+        replayScopeKey &&
+        resolveCurrentInboundWebhookReplayKey(replayScopeKey) === replayKey
+      ) {
         logVerbose(
           target.core,
           target.runtime,
@@ -598,7 +682,8 @@ export async function monitorBlueBubblesProvider(
 }
 
 function _resetBlueBubblesWebhookReplayState(): void {
-  recentInboundWebhookEvents.clear();
+  recentInboundWebhookReplayScopes.clear();
+  pendingInboundWebhookReplayScopes.clear();
   pendingInboundWebhookReplayKeys.clear();
   pendingInboundWebhookReplayRetries.clear();
 }

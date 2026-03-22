@@ -124,7 +124,13 @@ function resolveBlueBubblesFallbackDebounceKey(
   accountId: string,
   message: NormalizedWebhookMessage,
 ): string {
-  return `bluebubbles:${accountId}:${resolveBlueBubblesFallbackChatKey(message)}:${message.senderId}`;
+  const timestamp =
+    typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
+      ? String(message.timestamp)
+      : "";
+  return timestamp
+    ? `bluebubbles:${accountId}:${resolveBlueBubblesFallbackChatKey(message)}:${message.senderId}:ts:${timestamp}`
+    : `bluebubbles:${accountId}:${resolveBlueBubblesFallbackChatKey(message)}:${message.senderId}`;
 }
 
 export function createBlueBubblesDebounceRegistry(params: {
