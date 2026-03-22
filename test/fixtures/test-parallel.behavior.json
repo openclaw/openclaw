@@ -18,27 +18,11 @@
   "unit": {
     "isolated": [
       {
-        "file": "src/plugins/contracts/runtime.contract.test.ts",
-        "reason": "Async runtime imports + provider refresh seams; keep out of the shared lane."
-      },
-      {
-        "file": "src/security/temp-path-guard.test.ts",
-        "reason": "Filesystem guard scans are sensitive to contention."
-      },
-      {
-        "file": "src/config/doc-baseline.integration.test.ts",
-        "reason": "Rebuilds bundled config baselines through many channel schema subprocesses; keep out of the shared lane."
-      },
-      {
         "file": "extensions/imessage/src/monitor.shutdown.unhandled-rejection.test.ts",
         "reason": "Touches process-level unhandledRejection listeners."
       }
     ],
     "singletonIsolated": [
-      {
-        "file": "src/cli/command-secret-gateway.test.ts",
-        "reason": "Clean in isolation, but can hang after sharing the broad lane."
-      },
       {
         "file": "src/plugins/provider-wizard.test.ts",
         "reason": "Retained ~318 MiB in an isolated memory trace and is safer outside the shared unit-fast lane."
@@ -144,10 +128,6 @@
         "reason": "Config CLI coverage retained a large shared unit-fast heap spike on Linux Node 24 CI."
       },
       {
-        "file": "src/cli/plugins-cli.test.ts",
-        "reason": "Plugins CLI coverage retained a broad plugin graph in shared unit-fast forks on Linux CI."
-      },
-      {
         "file": "src/config/plugin-auto-enable.test.ts",
         "reason": "Plugin auto-enable coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
       },
@@ -194,26 +174,6 @@
       {
         "file": "src/infra/heartbeat-runner.returns-default-unset.test.ts",
         "reason": "Heartbeat default-unset coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
-      },
-      {
-        "file": "src/infra/heartbeat-runner.ghost-reminder.test.ts",
-        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
-      },
-      {
-        "file": "src/infra/heartbeat-runner.transcript-prune.test.ts",
-        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
-      },
-      {
-        "file": "src/infra/heartbeat-runner.sender-prefers-delivery-target.test.ts",
-        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
-      },
-      {
-        "file": "src/infra/heartbeat-runner.model-override.test.ts",
-        "reason": "Mocks jiti at file scope, so it is safer outside shared Vitest workers."
-      },
-      {
-        "file": "src/plugins/loader.git-path-regression.test.ts",
-        "reason": "Constructs a real Jiti boundary and is safer outside shared workers that may have mocked jiti earlier."
       },
       {
         "file": "src/infra/outbound/outbound-session.test.ts",
@@ -982,12 +942,7 @@
         "reason": "Terminates cleanly under threads, but not process forks on this host."
       }
     ],
-    "vmForkSingleton": [
-      {
-        "file": "src/channels/plugins/contracts/inbound.telegram.contract.test.ts",
-        "reason": "Needs the vmForks lane when targeted."
-      }
-    ]
+    "vmForkSingleton": []
   },
   "extensions": {
     "singletonIsolated": [
