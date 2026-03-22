@@ -46,7 +46,7 @@ describe("doctor finalize config flow", () => {
   it("writes automatically in repair mode when changes exist", async () => {
     const result = await finalizeDoctorConfigFlow({
       cfg: { channels: { signal: { enabled: true } } },
-      candidate: { channels: { signal: { enabled: true } } },
+      candidate: { channels: { signal: { enabled: false } } },
       pendingChanges: true,
       shouldRepair: true,
       fixHints: [],
