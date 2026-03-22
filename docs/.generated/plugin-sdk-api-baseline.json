@@ -1024,7 +1024,7 @@
           "exportName": "ToolPolicySchema",
           "kind": "const",
           "source": {
-            "line": 253,
+            "line": 254,
             "path": "src/config/zod-schema.agent-runtime.ts"
           }
         }
@@ -2557,12 +2557,12 @@
           "exportName": "listSkillCommandsForAgents",
           "kind": "function",
           "source": {
-            "line": 46,
+            "line": 48,
             "path": "src/auto-reply/skill-commands.ts"
           }
         },
         {
-          "declaration": "export function listSkillCommandsForWorkspace(params: { workspaceDir: string; cfg: OpenClawConfig; skillFilter?: string[] | undefined; }): SkillCommandSpec[];",
+          "declaration": "export function listSkillCommandsForWorkspace(params: { workspaceDir: string; cfg: OpenClawConfig; agentId?: string | undefined; skillFilter?: string[] | undefined; }): SkillCommandSpec[];",
           "exportName": "listSkillCommandsForWorkspace",
           "kind": "function",
           "source": {
