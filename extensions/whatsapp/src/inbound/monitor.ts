@@ -31,6 +31,10 @@ export async function monitorWebInbox(options: {
   sendReadReceipts?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
+  /** Extend the debounce window (ms) while the sender is typing (default: 0 — disabled).
+   *  Recommended value: 15000. WhatsApp emits composing indicators roughly every 10 s,
+   *  so the configured value should exceed that interval. */
+  composingDebounceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
 }) {
@@ -66,6 +70,12 @@ export async function monitorWebInbox(options: {
 
   const selfJid = sock.user?.id;
   const selfE164 = selfJid ? jidToE164(selfJid) : null;
+
+  // WhatsApp presence events use internal LID format instead of phone-number JIDs.
+  // Cache the LID→E164 mapping from inbound messages so composing events can be
+  // matched to the correct debounce buffer.
+  const jidToE164Cache = new Map<string, string>();
+
   const debouncer = createInboundDebouncer<WebInboundMessage>({
     debounceMs: options.debounceMs ?? 0,
     buildKey: (msg) => {
@@ -381,6 +391,18 @@ export async function monitorWebInbox(options: {
       mediaType: enriched.mediaType,
       mediaFileName: enriched.mediaFileName,
     };
+    // Subscribe to presence events for this chat so we receive "composing"
+    // indicators that can extend the debounce window while the sender types.
+    if (composingExtendMs > 0 && typeof sock.presenceSubscribe === "function") {
+      const { remoteJid } = inbound;
+      if (inbound.from && remoteJid && remoteJid !== inbound.from) {
+        jidToE164Cache.set(remoteJid, inbound.from);
+      }
+      sock.presenceSubscribe(remoteJid).catch((err) => {
+        logVerbose(`presenceSubscribe failed for ${remoteJid}: ${String(err)}`);
+      });
+    }
+
     try {
       const task = Promise.resolve(debouncer.enqueue(inboundMessage));
       void task.catch((err) => {
@@ -431,6 +453,51 @@ export async function monitorWebInbox(options: {
   };
   sock.ev.on("messages.upsert", handleMessagesUpsert);
 
+  // Extend the inbound debounce window while the sender is actively typing.
+  // WhatsApp emits "composing" presence events roughly every 10 seconds, so the
+  // default of 15 s bridges the gap between consecutive events.
+  // Set composingDebounceMs to 0 to disable this feature entirely.
+  const composingExtendMs = options.composingDebounceMs ?? 0;
+
+  const handlePresenceUpdate = (update: {
+    id: string;
+    presences: Record<string, { lastKnownPresence?: string } | undefined>;
+  }) => {
+    try {
+      if (!update?.id) {
+        return;
+      }
+      const { presences } = update;
+      if (!presences) {
+        return;
+      }
+      for (const [jid, presence] of Object.entries(presences)) {
+        if (presence?.lastKnownPresence !== "composing") {
+          continue;
+        }
+        const e164 =
+          jidToE164(jid, { authDir: options.authDir }) ??
+          jidToE164Cache.get(jid) ??
+          jidToE164Cache.get(update.id);
+        if (!e164) {
+          continue;
+        }
+        const chatJid = update.id;
+        const group = isJidGroup(chatJid) === true;
+        const conversationKey = group ? chatJid : e164;
+        const prefix = `${options.accountId}:${conversationKey}:${e164}`;
+        debouncer.touchByPrefix(prefix, composingExtendMs);
+      }
+    } catch (err) {
+      logVerbose(`presence.update handler error: ${String(err)}`);
+    }
+  };
+
+  // Only subscribe to presence events when both debounce and composing extension are enabled.
+  if (composingExtendMs > 0 && (options.debounceMs ?? 0) > 0) {
+    sock.ev.on("presence.update", handlePresenceUpdate);
+  }
+
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
   ) => {
@@ -477,6 +544,17 @@ export async function monitorWebInbox(options: {
         } else if (typeof ev.removeListener === "function") {
           ev.removeListener("messages.upsert", messagesUpsertHandler);
           ev.removeListener("connection.update", connectionUpdateHandler);
+        }
+        // Remove presence listener only if it was registered.
+        if (composingExtendMs > 0 && (options.debounceMs ?? 0) > 0) {
+          const presenceUpdateHandler = handlePresenceUpdate as unknown as (
+            ...args: unknown[]
+          ) => void;
+          if (typeof ev.off === "function") {
+            ev.off("presence.update", presenceUpdateHandler);
+          } else if (typeof ev.removeListener === "function") {
+            ev.removeListener("presence.update", presenceUpdateHandler);
+          }
         }
         sock.ws?.close();
       } catch (err) {
