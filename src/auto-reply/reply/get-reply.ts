@@ -144,53 +144,8 @@ export async function getReplyFromConfig(
       cfg,
     });
 
-    // If the model supports vision natively, read image attachments and pass them directly
-    // to the agent instead of relying on OCR text extraction.
-    if (!resolvedOpts?.images) {
-      const attachments = normalizeAttachments(finalized);
-      const imageAttachments = attachments.filter(isImageAttachment);
-      if (imageAttachments.length > 0) {
-        // Check if the model supports vision before loading images
-        const catalog = await import("../../agents/model-catalog.js").then((m) =>
-          m.loadModelCatalog({ config: cfg }),
-        );
-        const modelEntry = catalog.find(
-          (entry) =>
-            entry.provider.toLowerCase() === provider.toLowerCase() &&
-            entry.id.toLowerCase() === model.toLowerCase(),
-        );
-        if (modelSupportsVision(modelEntry)) {
-          const images: ImageContent[] = [];
-          const cache = createMediaAttachmentCache(attachments, {
-            localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx: finalized }),
-          });
-          for (const attachment of imageAttachments) {
-            if (attachment.index === undefined) {
-              continue;
-            }
-            try {
-              const pathResult = await cache.getPath({
-                attachmentIndex: attachment.index,
-                timeoutMs: 10000,
-              });
-              const fs = await import("node:fs/promises");
-              const buffer = await fs.readFile(pathResult.path);
-              // Use bare base64 without data: URI prefix (chat-attachments.ts strips the prefix)
-              images.push({
-                type: "image",
-                data: buffer.toString("base64"),
-                mimeType: attachment.mime ?? "image/jpeg",
-              });
-            } catch {
-              // Skip images that can't be read
-            }
-          }
-          if (images.length > 0) {
-            resolvedOpts = { ...resolvedOpts, images };
-          }
-        }
-      }
-    }
+    // Vision check is deferred until after all model overrides are resolved (P2-1).
+    // The final provider/model values are available only after resolveReplyDirectives.
   }
   emitPreAgentMessageHooks({
     ctx: finalized,
@@ -458,4 +413,74 @@ export async function getReplyFromConfig(
     workspaceDir,
     abortedLastRun,
   });
+
+  // After all model overrides are resolved, check if we should send images directly to vision-capable models.
+  // This runs after applyMediaUnderstanding (which skips OCR for vision models) and after all model/channel/directive overrides.
+  // We intentionally only populate opts.images for non-CLI, non-embedded runs here because:
+  // - CLI runs forward opts.images unconditionally to CLI backends that may not support images (P2-4)
+  // - Embedded runs handle images through detectAndLoadPromptImages separately (P2-3)
+  if (
+    !resolvedOpts?.images &&
+    !isFastTestEnv &&
+    !execOverrides?.isDirectCli &&
+    !directives?.piEmbedded
+  ) {
+    const attachments = normalizeAttachments(finalized);
+    const imageAttachments = attachments.filter(isImageAttachment);
+    if (imageAttachments.length > 0) {
+      // Check scope policy before loading images (P1)
+      const { resolveScopeDecision } = await import("../../media-understanding/resolve.js");
+      const scopeDecision = resolveScopeDecision({
+        scope: cfg.tools?.media?.image?.scope,
+        ctx: finalized,
+      });
+      if (scopeDecision === "deny") {
+        // Scope policy denies image handling; do not send images
+      } else {
+        // Check if the final resolved model supports vision (P2-1: after all overrides)
+        const catalog = await import("../../agents/model-catalog.js").then((m) =>
+          m.loadModelCatalog({ config: cfg }),
+        );
+        const modelEntry = catalog.find(
+          (entry) =>
+            entry.provider.toLowerCase() === provider.toLowerCase() &&
+            entry.id.toLowerCase() === model.toLowerCase(),
+        );
+        if (modelSupportsVision(modelEntry)) {
+          const images: ImageContent[] = [];
+          const cache = createMediaAttachmentCache(attachments, {
+            localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx: finalized }),
+          });
+          try {
+            for (const attachment of imageAttachments) {
+              if (attachment.index === undefined) {
+                continue;
+              }
+              try {
+                const pathResult = await cache.getPath({
+                  attachmentIndex: attachment.index,
+                  timeoutMs: 10000,
+                });
+                const fs = await import("node:fs/promises");
+                const buffer = await fs.readFile(pathResult.path);
+                images.push({
+                  type: "image",
+                  data: buffer.toString("base64"),
+                  mimeType: attachment.mime ?? "image/jpeg",
+                });
+              } catch {
+                // Skip images that can't be read
+              }
+            }
+          } finally {
+            // Clean up temp files created for URL-backed attachments (P2-2)
+            void cache.cleanup();
+          }
+          if (images.length > 0) {
+            resolvedOpts = { ...resolvedOpts, images };
+          }
+        }
+      }
+    }
+  }
 }
