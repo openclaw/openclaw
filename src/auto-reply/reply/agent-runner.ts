@@ -64,6 +64,20 @@ import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
+function checkDelegationMissed(
+  toolMetas: Array<{ toolName: string; meta?: string }>,
+): string | null {
+  const directWorkTools = new Set(["exec", "mcp_search", "web_search", "web_fetch"]);
+  const delegationTools = new Set(["sessions_spawn", "message"]);
+  const directWork = toolMetas.filter((t) => directWorkTools.has(t.toolName));
+  const delegated = toolMetas.filter((t) => delegationTools.has(t.toolName));
+
+  if (directWork.length > 3 && delegated.length === 0) {
+    return `SYSTEM NOTE: You made ${directWork.length} direct tool calls this turn without delegating. Review your routing rules in AGENTS.md. Should this task go to Neo, Morpheus, or Trinity?`;
+  }
+  return null;
+}
+
 export async function runReplyAgent(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -399,6 +413,12 @@ export async function runReplyAgent(params: {
       directlySentBlockKeys,
     } = runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
+
+    // Nudge the agent when it used many direct tool calls without delegating.
+    const delegationNudge = checkDelegationMissed(runResult.toolMetas ?? []);
+    if (delegationNudge && sessionKey) {
+      enqueueSystemEvent(delegationNudge, { sessionKey });
+    }
 
     if (
       shouldInjectGroupIntro &&
