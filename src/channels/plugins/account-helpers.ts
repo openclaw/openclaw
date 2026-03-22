@@ -60,3 +60,20 @@ export function createAccountListHelpers(
 
   return { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId };
 }
+
+export function mergeAccountConfig<TConfig extends Record<string, unknown>>(params: {
+  channelConfig: TConfig | undefined;
+  accountConfig: Partial<TConfig> | undefined;
+  omitKeys?: string[];
+}): TConfig {
+  const omitKeys = new Set(["accounts", ...(params.omitKeys ?? [])]);
+  const base = Object.fromEntries(
+    Object.entries((params.channelConfig ?? {}) as Record<string, unknown>).filter(
+      ([key]) => !omitKeys.has(key),
+    ),
+  ) as TConfig;
+  return {
+    ...base,
+    ...params.accountConfig,
+  };
+}
