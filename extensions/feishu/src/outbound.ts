@@ -46,14 +46,25 @@ const MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\((https?:\/\/(?:[^)(]|\((?:[^)(]*)\))*)
 /**
  * Extract markdown image URLs from text and return cleaned text with
  * image references removed. Only extracts HTTP(S) URLs.
+ * Skips images inside fenced code blocks to avoid mangling code examples.
  */
 function extractMarkdownImageUrls(text: string): { imageUrls: string[]; cleanedText: string } {
   const imageUrls: string[] = [];
-  const cleanedText = text.replace(MARKDOWN_IMAGE_RE, (_match, _alt: string, url: string) => {
-    imageUrls.push(url);
-    return "";
+  // Split on fenced code blocks to avoid extracting images from code examples.
+  const parts = text.split(/(```[\s\S]*?```)/g);
+  const processed = parts.map((part, i) => {
+    // Odd-indexed parts are fenced code blocks — leave them intact.
+    if (i % 2 === 1) return part;
+    return part.replace(MARKDOWN_IMAGE_RE, (_match, _alt: string, url: string) => {
+      imageUrls.push(url);
+      return "";
+    });
   });
-  return { imageUrls, cleanedText: cleanedText.replace(/\n{3,}/g, "\n\n").trim() };
+  const cleanedText = processed
+    .join("")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { imageUrls, cleanedText };
 }
 
 function shouldUseCard(text: string): boolean {
@@ -80,14 +91,32 @@ async function sendOutboundText(params: {
   to: string;
   text: string;
   replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
+  identity?: { name?: string; emoji?: string };
 }) {
-  const { cfg, to, text, accountId, replyToMessageId } = params;
+  const { cfg, to, text, accountId, replyToMessageId, replyInThread, identity } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
   if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
-    return sendMarkdownCardFeishu({ cfg, to, text, accountId, replyToMessageId });
+    const header = identity
+      ? {
+          title: identity.emoji
+            ? `${identity.emoji} ${identity.name ?? ""}`.trim()
+            : (identity.name ?? ""),
+          template: "blue" as const,
+        }
+      : undefined;
+    return sendStructuredCardFeishu({
+      cfg,
+      to,
+      text,
+      accountId,
+      replyToMessageId,
+      replyInThread,
+      header: header?.title ? header : undefined,
+    });
   }
 
   return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId });
@@ -162,6 +191,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             text: remainingText,
             accountId: accountId ?? undefined,
             replyToMessageId,
+            replyInThread: threadId != null && !replyToId,
+            identity,
           });
         }
         // Only images, no remaining text.

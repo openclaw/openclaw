@@ -311,7 +311,7 @@ describe("feishuOutbound.sendMedia renderMode", () => {
       accountId: "main",
     });
 
-    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "chat_1",
         text: "| a | b |\n| - | - |",
@@ -482,6 +482,25 @@ describe("feishuOutbound.sendText markdown image extraction", () => {
     expect(sendMessageFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         replyToMessageId: "om_reply_1",
+      }),
+    );
+  });
+
+  it("does not extract images inside fenced code blocks", async () => {
+    const codeExample =
+      "Here is how to write markdown:\n\n```\n![example](https://example.com/demo.png)\n```";
+    await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: codeExample,
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    // Text contains code block, so it should use card rendering
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: codeExample,
       }),
     );
   });
