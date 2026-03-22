@@ -311,7 +311,10 @@ async function dispatchSlashCommand(
   try {
     result = await executeSlashCommand(host.client, targetSessionKey, name, args);
   } catch (err) {
-    injectCommandResult(host, `Command \`/${name}\` failed: ${String(err)}`);
+    injectCommandResult(
+      host,
+      `Command \`/${name}\` failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
     scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
     return;
   }
