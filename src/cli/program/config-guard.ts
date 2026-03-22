@@ -39,22 +39,25 @@ export async function ensureConfigReady(params: {
   suppressDoctorStdout?: boolean;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
+  let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
   if (!didRunDoctorConfigFlow && shouldMigrateStateFromPath(commandPath)) {
     didRunDoctorConfigFlow = true;
-    const runDoctorConfigFlow = async () =>
-      (await import("../../commands/doctor-config-flow.js")).loadAndMaybeMigrateDoctorConfig({
-        options: { nonInteractive: true },
-        confirm: async () => false,
+    const runDoctorConfigPreflight = async () =>
+      (await import("../../commands/doctor-config-preflight.js")).runDoctorConfigPreflight({
+        // Keep ordinary CLI startup on the lightweight validation path.
+        migrateState: false,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
       });
     if (!params.suppressDoctorStdout) {
-      await runDoctorConfigFlow();
+      preflightSnapshot = (await runDoctorConfigPreflight()).snapshot;
     } else {
       const originalStdoutWrite = process.stdout.write.bind(process.stdout);
       const originalSuppressNotes = process.env.OPENCLAW_SUPPRESS_NOTES;
       process.stdout.write = (() => true) as unknown as typeof process.stdout.write;
       process.env.OPENCLAW_SUPPRESS_NOTES = "1";
       try {
-        await runDoctorConfigFlow();
+        preflightSnapshot = (await runDoctorConfigPreflight()).snapshot;
       } finally {
         process.stdout.write = originalStdoutWrite;
         if (originalSuppressNotes === undefined) {
@@ -66,7 +69,7 @@ export async function ensureConfigReady(params: {
     }
   }
 
-  const snapshot = await getConfigSnapshot();
+  const snapshot = preflightSnapshot ?? (await getConfigSnapshot());
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
   const allowInvalid = commandName

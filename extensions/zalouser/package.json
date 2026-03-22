@@ -8,6 +8,17 @@
     "zca-js": "2.1.2",
     "zod": "^4.3.6"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.14"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
@@ -31,10 +42,8 @@
       "localPath": "extensions/zalouser",
       "defaultChoice": "npm"
     },
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "zca-js"
-      ]
+    "release": {
+      "publishToNpm": true
     }
   }
 }

@@ -15230,7 +15230,7 @@
         "network"
       ],
       "label": "Feishu",
-      "help": "飞书/Lark enterprise messaging.",
+      "help": "飞书/Lark enterprise messaging with doc/wiki/drive tools.",
       "hasChildren": true
     },
     {
@@ -17232,7 +17232,7 @@
         "network"
       ],
       "label": "Google Chat",
-      "help": "Google Workspace Chat app with HTTP webhook.",
+      "help": "Google Workspace Chat app via HTTP webhooks.",
       "hasChildren": true
     },
     {
@@ -22069,7 +22069,7 @@
         "network"
       ],
       "label": "Matrix",
-      "help": "open protocol; configure a homeserver + access token.",
+      "help": "open protocol; install the plugin to enable.",
       "hasChildren": true
     },
     {
@@ -22096,6 +22096,34 @@
       "path": "channels.matrix.accounts.*",
       "kind": "channel",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.ackReaction",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.ackReactionScope",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "group-mentions",
+        "group-all",
+        "direct",
+        "all",
+        "none",
+        "off"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -22152,6 +22180,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.actions.profile",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.actions.reactions",
       "kind": "channel",
       "type": "boolean",
@@ -22162,7 +22200,46 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.actions.verification",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.allowBots",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "channels",
+        "network"
+      ],
+      "label": "Matrix Allow Bot Messages",
+      "help": "Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set \"mentions\" to only accept bot messages that visibly mention this bot.",
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.allowlistOnly",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.allowPrivateNetwork",
       "kind": "channel",
       "type": "boolean",
       "required": false,
@@ -22210,6 +22287,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.avatarUrl",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.chunkMode",
       "kind": "channel",
       "type": "string",
@@ -22225,6 +22312,16 @@
     },
     {
       "path": "channels.matrix.defaultAccount",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.deviceId",
       "kind": "channel",
       "type": "string",
       "required": false,
@@ -22384,6 +22481,19 @@
       "path": "channels.matrix.groups.*.allow",
       "kind": "channel",
       "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.groups.*.allowBots",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "string"
+      ],
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -22652,6 +22762,20 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.reactionNotifications",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "own"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.replyToMode",
       "kind": "channel",
       "type": "string",
@@ -22700,6 +22824,19 @@
       "path": "channels.matrix.rooms.*.allow",
       "kind": "channel",
       "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.rooms.*.allowBots",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "string"
+      ],
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -22860,9 +22997,93 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.startupVerification",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "off",
+        "if-unverified"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.startupVerificationCooldownHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.textChunkLimit",
       "kind": "channel",
       "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.threadBindings.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings.idleHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings.maxAgeHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings.spawnAcpSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.threadBindings.spawnSubagentSessions",
+      "kind": "channel",
+      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -26190,7 +26411,7 @@
         "network"
       ],
       "label": "Nostr",
-      "help": "Decentralized DMs via Nostr relays (NIP-04)",
+      "help": "Decentralized protocol; encrypted DMs via NIP-04.",
       "hasChildren": true
     },
     {
@@ -30798,7 +31019,7 @@
         "network"
       ],
       "label": "Synology Chat",
-      "help": "Connect your Synology NAS Chat to OpenClaw",
+      "help": "Connect your Synology NAS Chat to OpenClaw with full agent capabilities.",
       "hasChildren": true
     },
     {
@@ -30962,6 +31183,49 @@
         "number",
         "string"
       ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.apiRoot",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.accounts.*.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -31256,6 +31520,39 @@
         "number",
         "string"
       ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -32872,6 +33169,69 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.apiRoot",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram API Root URL",
+      "help": "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram Auto Topic Label",
+      "help": "Auto-rename DM forum topics on first message using LLM. Default: true. Set to false to disable, or use object form { enabled: true, prompt: '...' } for custom prompt.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram Auto Topic Label Enabled",
+      "help": "Whether auto topic labeling is enabled. Default: true.",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram Auto Topic Label Prompt",
+      "help": "Custom prompt for LLM-based topic naming. The user message is appended after the prompt.",
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.blockStreaming",
       "kind": "channel",
       "type": "boolean",
@@ -33196,6 +33556,39 @@
         "number",
         "string"
       ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.direct.*.autoTopicLabel",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "object"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.direct.*.autoTopicLabel.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.direct.*.autoTopicLabel.prompt",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -34814,7 +35207,7 @@
         "network"
       ],
       "label": "Tlon",
-      "help": "Decentralized messaging on Urbit",
+      "help": "decentralized messaging on Urbit; install the plugin to enable.",
       "hasChildren": true
     },
     {
@@ -44904,6 +45297,16 @@
       "hasChildren": false
     },
     {
+      "path": "models.providers.*.models.*.compat.nativeWebSearchTool",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "models.providers.*.models.*.compat.requiresAssistantAfterToolResult",
       "kind": "core",
       "type": "boolean",
@@ -45015,6 +45418,26 @@
     },
     {
       "path": "models.providers.*.models.*.compat.thinkingFormat",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.models.*.compat.toolCallArgumentsEncoding",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.models.*.compat.toolSchemaProfile",
       "kind": "core",
       "type": "string",
       "required": false,
@@ -46155,6 +46578,52 @@
       ],
       "label": "@openclaw/brave-plugin Config",
       "help": "Plugin-defined config payload for brave.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.brave.config.webSearch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.brave.config.webSearch.apiKey",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
+      "label": "Brave Search API Key",
+      "help": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.brave.config.webSearch.mode",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "web",
+        "llm-context"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Brave Search Mode",
+      "help": "Brave Search mode: web or llm-context.",
       "hasChildren": false
     },
     {
@@ -47691,6 +48160,127 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.fal",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/fal-provider",
+      "help": "OpenClaw fal provider plugin (plugin: fal)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.fal.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/fal-provider Config",
+      "help": "Plugin-defined config payload for fal.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.fal.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/fal-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.fal.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.fal.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.fal.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.fal.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.fal.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.fal.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.feishu",
       "kind": "plugin",
       "type": "object",
@@ -47837,6 +48427,48 @@
       ],
       "label": "@openclaw/firecrawl-plugin Config",
       "help": "Plugin-defined config payload for firecrawl.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webSearch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webSearch.apiKey",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
+      "label": "Firecrawl Search API Key",
+      "help": "Firecrawl API key for web search (fallback: FIRECRAWL_API_KEY env var).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webSearch.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Firecrawl Search Base URL",
+      "help": "Firecrawl Search base URL override.",
       "hasChildren": false
     },
     {
@@ -48079,6 +48711,48 @@
       ],
       "label": "@openclaw/google-plugin Config",
       "help": "Plugin-defined config payload for google.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.google.config.webSearch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.google.config.webSearch.apiKey",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
+      "label": "Gemini Search API Key",
+      "help": "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.google.config.webSearch.model",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Gemini Search Model",
+      "help": "Gemini model override for web search grounding.",
       "hasChildren": false
     },
     {
@@ -50456,6 +51130,62 @@
       ],
       "label": "@openclaw/moonshot-provider Config",
       "help": "Plugin-defined config payload for moonshot.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.moonshot.config.webSearch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.moonshot.config.webSearch.apiKey",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
+      "label": "Kimi Search API Key",
+      "help": "Moonshot/Kimi API key (fallback: KIMI_API_KEY or MOONSHOT_API_KEY env var).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.moonshot.config.webSearch.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Kimi Search Base URL",
+      "help": "Kimi base URL override.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.moonshot.config.webSearch.model",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Kimi Search Model",
+      "help": "Kimi model override.",
       "hasChildren": false
     },
     {
@@ -52075,6 +52805,62 @@
       ],
       "label": "@openclaw/perplexity-plugin Config",
       "help": "Plugin-defined config payload for perplexity.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.perplexity.config.webSearch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.perplexity.config.webSearch.apiKey",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
+      "label": "Perplexity API Key",
+      "help": "Perplexity or OpenRouter API key for web search.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.perplexity.config.webSearch.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Perplexity Base URL",
+      "help": "Optional Perplexity/OpenRouter chat-completions base URL override.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.perplexity.config.webSearch.model",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Perplexity Model",
+      "help": "Optional Sonar/OpenRouter model override.",
       "hasChildren": false
     },
     {
@@ -53247,6 +54033,169 @@
     },
     {
       "path": "plugins.entries.talk-voice.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.tavily",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/tavily-plugin",
+      "help": "OpenClaw Tavily plugin (plugin: tavily)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.tavily.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/tavily-plugin Config",
+      "help": "Plugin-defined config payload for tavily.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.tavily.config.webSearch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.tavily.config.webSearch.apiKey",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
+      "label": "Tavily API Key",
+      "help": "Tavily API key for web search and extraction (fallback: TAVILY_API_KEY env var).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.tavily.config.webSearch.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Tavily Base URL",
+      "help": "Tavily API base URL override.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.tavily.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/tavily-plugin",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.tavily.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.tavily.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.tavily.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.tavily.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.tavily.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.tavily.subagent.allowModelOverride",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -56010,6 +56959,62 @@
       ],
       "label": "@openclaw/xai-plugin Config",
       "help": "Plugin-defined config payload for xai.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xai.config.webSearch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xai.config.webSearch.apiKey",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
+      "label": "Grok Search API Key",
+      "help": "xAI API key for Grok web search (fallback: XAI_API_KEY env var).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.webSearch.inlineCitations",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Inline Citations",
+      "help": "Include inline markdown citations in Grok responses.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.webSearch.model",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Grok Search Model",
+      "help": "Grok model override for web search.",
       "hasChildren": false
     },
     {
@@ -62780,8 +63785,6 @@
         "security",
         "tools"
       ],
-      "label": "Brave Search API Key",
-      "help": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
       "hasChildren": true
     },
     {
@@ -62825,17 +63828,80 @@
       "hasChildren": true
     },
     {
+      "path": "tools.web.search.brave.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.brave.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.brave.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.brave.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.brave.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "tools.web.search.brave.mode",
       "kind": "core",
       "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Brave Search Mode",
-      "help": "Brave Search mode: \"web\" (URL results) or \"llm-context\" (pre-extracted page content for LLM grounding).",
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.brave.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -62893,8 +63959,6 @@
         "security",
         "tools"
       ],
-      "label": "Firecrawl Search API Key",
-      "help": "Firecrawl API key for web search (fallback: FIRECRAWL_API_KEY env var).",
       "hasChildren": true
     },
     {
@@ -62934,11 +63998,17 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Firecrawl Search Base URL",
-      "help": "Firecrawl Search base URL override (default: \"https://api.firecrawl.dev\").",
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.firecrawl.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -62966,8 +64036,6 @@
         "security",
         "tools"
       ],
-      "label": "Gemini Search API Key",
-      "help": "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
       "hasChildren": true
     },
     {
@@ -63001,18 +64069,23 @@
       "hasChildren": false
     },
     {
+      "path": "tools.web.search.gemini.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "tools.web.search.gemini.model",
       "kind": "core",
       "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "models",
-        "tools"
-      ],
-      "label": "Gemini Search Model",
-      "help": "Gemini model override (default: \"gemini-2.5-flash\").",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -63040,8 +64113,6 @@
         "security",
         "tools"
       ],
-      "label": "Grok Search API Key",
-      "help": "Grok (xAI) API key (fallback: XAI_API_KEY env var).",
       "hasChildren": true
     },
     {
@@ -63075,6 +64146,16 @@
       "hasChildren": false
     },
     {
+      "path": "tools.web.search.grok.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "tools.web.search.grok.inlineCitations",
       "kind": "core",
       "type": "boolean",
@@ -63091,12 +64172,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "models",
-        "tools"
-      ],
-      "label": "Grok Search Model",
-      "help": "Grok model override (default: \"grok-4-1-fast\").",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -63124,8 +64200,6 @@
         "security",
         "tools"
       ],
-      "label": "Kimi Search API Key",
-      "help": "Moonshot/Kimi API key (fallback: KIMI_API_KEY or MOONSHOT_API_KEY env var).",
       "hasChildren": true
     },
     {
@@ -63165,11 +64239,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Kimi Search Base URL",
-      "help": "Kimi base URL override (default: \"https://api.moonshot.ai/v1\").",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -63179,12 +64249,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "models",
-        "tools"
-      ],
-      "label": "Kimi Search Model",
-      "help": "Kimi model override (default: \"moonshot-v1-128k\").",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -63227,8 +64292,6 @@
         "security",
         "tools"
       ],
-      "label": "Perplexity API Key",
-      "help": "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). Direct Perplexity keys default to the Search API; OpenRouter keys use Sonar chat completions.",
       "hasChildren": true
     },
     {
@@ -63268,11 +64331,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Perplexity Base URL",
-      "help": "Optional Perplexity/OpenRouter chat-completions base URL override. Setting this opts Perplexity into the legacy Sonar/OpenRouter compatibility path.",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -63282,12 +64341,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "models",
-        "tools"
-      ],
-      "label": "Perplexity Model",
-      "help": "Optional Sonar/OpenRouter model override (default: \"perplexity/sonar-pro\"). Setting this opts Perplexity into the legacy chat-completions compatibility path.",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -63301,7 +64355,7 @@
         "tools"
       ],
       "label": "Web Search Provider",
-      "help": "Search provider (\"brave\", \"firecrawl\", \"gemini\", \"grok\", \"kimi\", or \"perplexity\"). Auto-detected from available API keys if omitted.",
+      "help": "Search provider id. Auto-detected from available API keys if omitted.",
       "hasChildren": false
     },
     {
@@ -63386,7 +64440,7 @@
         "advanced"
       ],
       "label": "Accent Color",
-      "help": "Primary accent/seam color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
+      "help": "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
       "hasChildren": false
     },
     {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryIndexManager } from "./index.js";
+import { closeAllMemorySearchManagers } from "./index.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
 import { createMemoryManagerOrThrow } from "./test-manager.js";
 
@@ -42,6 +43,7 @@ describe("memory search async sync", () => {
     }) as OpenClawConfig;
 
   beforeEach(async () => {
+    await closeAllMemorySearchManagers();
     embedBatch.mockClear();
     embedBatch.mockImplementation(async (input: string[]) => input.map(() => [0.2, 0.2, 0.2]));
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-async-"));
@@ -56,6 +58,7 @@ describe("memory search async sync", () => {
       await manager.close();
       manager = null;
     }
+    await closeAllMemorySearchManagers();
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
@@ -77,20 +80,23 @@ describe("memory search async sync", () => {
 
   it("waits for in-flight search sync during close", async () => {
     const cfg = buildConfig();
-    let releaseSync = () => {};
-    const syncGate = new Promise<void>((resolve) => {
-      releaseSync = () => resolve();
-    });
-    embedBatch.mockImplementation(async (input: string[]) => {
-      await syncGate;
-      return input.map(() => [0.3, 0.2, 0.1]);
-    });
-
     manager = await createMemoryManagerOrThrow(cfg);
+    let releaseSync = () => {};
+    const pendingSync = new Promise<void>((resolve) => {
+      releaseSync = () => resolve();
+    }).finally(() => {
+      (manager as unknown as { syncing: Promise<void> | null }).syncing = null;
+    });
+    const syncMock = vi.fn(async () => {
+      (manager as unknown as { syncing: Promise<void> | null }).syncing = pendingSync;
+      return pendingSync;
+    });
     (manager as unknown as { dirty: boolean }).dirty = true;
+    (manager as unknown as { sync: () => Promise<void> }).sync = syncMock;
+
     await manager.search("hello");
     await vi.waitFor(() => {
-      expect((manager as unknown as { syncing: Promise<void> | null }).syncing).toBeTruthy();
+      expect((manager as unknown as { syncing: Promise<void> | null }).syncing).toBe(pendingSync);
     });
 
     let closed = false;

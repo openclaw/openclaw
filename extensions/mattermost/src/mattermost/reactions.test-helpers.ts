@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { expect, vi } from "vitest";
+import type { OpenClawConfig } from "../../runtime-api.js";
 
 export function createMattermostTestConfig(): OpenClawConfig {
   return {

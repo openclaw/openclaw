@@ -28,9 +28,13 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
 vi.mock("../sticker-cache.js", () => ({
   cacheSticker: () => {},
   getCachedSticker: () => null,
+  getCacheStats: () => ({ count: 0 }),
+  searchStickers: () => [],
+  getAllCachedStickers: () => [],
+  describeStickerImage: async () => null,
 }));
 
-let resolveMedia: typeof import("./delivery.js").resolveMedia;
+import { resolveMedia } from "./delivery.js";
 
 const MAX_MEDIA_BYTES = 10_000_000;
 const BOT_TOKEN = "tok123";
@@ -165,9 +169,7 @@ async function flushRetryTimers() {
 }
 
 describe("resolveMedia getFile retry", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveMedia } = await import("./delivery.js"));
+  beforeEach(() => {
     vi.useFakeTimers();
     fetchRemoteMedia.mockReset();
     saveMediaBuffer.mockReset();
@@ -355,6 +357,38 @@ describe("resolveMedia getFile retry", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         fetchImpl: callerFetch,
+      }),
+    );
+  });
+
+  it("uses local absolute file paths directly for media downloads", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
+
+    const result = await resolveMedia(makeCtx("document", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        path: "/var/lib/telegram-bot-api/file.pdf",
+        placeholder: "<media:document>",
+      }),
+    );
+  });
+
+  it("uses local absolute file paths directly for sticker downloads", async () => {
+    const getFile = vi
+      .fn()
+      .mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/sticker.webp" });
+
+    const result = await resolveMedia(makeCtx("sticker", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        path: "/var/lib/telegram-bot-api/sticker.webp",
+        placeholder: "<media:sticker>",
       }),
     );
   });

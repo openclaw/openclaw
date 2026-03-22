@@ -1,13 +1,36 @@
-import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/msteams";
 import { describe, expect, it } from "vitest";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
 } from "../../../test/helpers/extensions/directory.js";
+import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { msteamsPlugin } from "./channel.js";
 
 describe("msteams directory", () => {
   const runtimeEnv = createDirectoryTestRuntime() as RuntimeEnv;
+
+  describe("self()", () => {
+    it("returns bot identity when credentials are configured", async () => {
+      const cfg = {
+        channels: {
+          msteams: {
+            appId: "test-app-id-1234",
+            appPassword: "secret",
+            tenantId: "tenant-id-5678",
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = await msteamsPlugin.directory?.self?.({ cfg, runtime: runtimeEnv });
+      expect(result).toEqual({ kind: "user", id: "test-app-id-1234", name: "test-app-id-1234" });
+    });
+
+    it("returns null when credentials are not configured", async () => {
+      const cfg = { channels: {} } as unknown as OpenClawConfig;
+      const result = await msteamsPlugin.directory?.self?.({ cfg, runtime: runtimeEnv });
+      expect(result).toBeNull();
+    });
+  });
 
   it("lists peers and groups from config", async () => {
     const cfg = {

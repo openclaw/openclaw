@@ -99,6 +99,7 @@ describe("plugin shape compatibility matrix", () => {
           envVars: ["HYBRID_SEARCH_KEY"],
           placeholder: "hsk_...",
           signupUrl: "https://example.com/signup",
+          credentialPath: "tools.web.search.hybrid-search.apiKey",
           getCredentialValue: () => "hsk-test",
           setCredentialValue(searchConfigTarget, value) {
             searchConfigTarget.apiKey = value;

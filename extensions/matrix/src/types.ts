@@ -1,4 +1,4 @@
-import type { DmPolicy, GroupPolicy, SecretInput } from "../runtime-api.js";
+import type { DmPolicy, GroupPolicy, SecretInput } from "./runtime-api.js";
 export type { DmPolicy, GroupPolicy };
 
 export type ReplyToMode = "off" | "first" | "all";
@@ -19,6 +19,11 @@ export type MatrixRoomConfig = {
   allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
+  /**
+   * Allow messages from other configured Matrix bot accounts.
+   * true accepts all configured bot senders; "mentions" requires they mention this bot.
+   */
+  allowBots?: boolean | "mentions";
   /** Optional tool policy overrides for this room. */
   tools?: { allow?: string[]; deny?: string[] };
   /** If true, reply without mention requirements. */
@@ -35,8 +40,18 @@ export type MatrixActionConfig = {
   reactions?: boolean;
   messages?: boolean;
   pins?: boolean;
+  profile?: boolean;
   memberInfo?: boolean;
   channelInfo?: boolean;
+  verification?: boolean;
+};
+
+export type MatrixThreadBindingsConfig = {
+  enabled?: boolean;
+  idleHours?: number;
+  maxAgeHours?: number;
+  spawnSubagentSessions?: boolean;
+  spawnAcpSessions?: boolean;
 };
 
 /** Per-account Matrix config (excludes the accounts field to prevent recursion). */
@@ -53,20 +68,31 @@ export type MatrixConfig = {
   defaultAccount?: string;
   /** Matrix homeserver URL (https://matrix.example.org). */
   homeserver?: string;
+  /** Allow Matrix homeserver traffic to private/internal hosts. */
+  allowPrivateNetwork?: boolean;
   /** Matrix user id (@user:server). */
   userId?: string;
   /** Matrix access token. */
   accessToken?: string;
   /** Matrix password (used only to fetch access token). */
   password?: SecretInput;
+  /** Optional Matrix device id (recommended when using access tokens + E2EE). */
+  deviceId?: string;
   /** Optional device name when logging in via password. */
   deviceName?: string;
-  /** Initial sync limit for startup (default: @vector-im/matrix-bot-sdk default). */
+  /** Optional desired Matrix avatar source (mxc:// or http(s) URL). */
+  avatarUrl?: string;
+  /** Initial sync limit for startup (defaults to matrix-js-sdk behavior). */
   initialSyncLimit?: number;
   /** Enable end-to-end encryption (E2EE). Default: false. */
   encryption?: boolean;
   /** If true, enforce allowlists for groups + DMs regardless of policy. */
   allowlistOnly?: boolean;
+  /**
+   * Allow messages from other configured Matrix bot accounts.
+   * true accepts all configured bot senders; "mentions" requires they mention this bot.
+   */
+  allowBots?: boolean | "mentions";
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
   /** Allowlist for group senders (matrix user IDs). */
@@ -81,9 +107,21 @@ export type MatrixConfig = {
   chunkMode?: "length" | "newline";
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Ack reaction emoji override for this channel/account. */
+  ackReaction?: string;
+  /** Ack reaction scope override for this channel/account. */
+  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "none" | "off";
+  /** Inbound reaction notifications for bot-authored Matrix messages. */
+  reactionNotifications?: "off" | "own";
+  /** Thread/session binding behavior for Matrix room threads. */
+  threadBindings?: MatrixThreadBindingsConfig;
+  /** Whether Matrix should auto-request self verification on startup when unverified. */
+  startupVerification?: "off" | "if-unverified";
+  /** Cooldown window for automatic startup verification requests. Default: 24 hours. */
+  startupVerificationCooldownHours?: number;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
-  /** Auto-join invites (always|allowlist|off). Default: always. */
+  /** Auto-join invites (always|allowlist|off). Default: off. */
   autoJoin?: "always" | "allowlist" | "off";
   /** Allowlist for auto-join invites (room IDs, aliases). */
   autoJoinAllowlist?: Array<string | number>;
@@ -112,7 +150,7 @@ export type CoreConfig = {
   };
   messages?: {
     ackReaction?: string;
-    ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
+    ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "none" | "off";
   };
   [key: string]: unknown;
 };

@@ -224,6 +224,7 @@ Notes:
 
 - **Microsoft speech is ignored for voice calls** (telephony audio needs PCM; the current Microsoft transport does not expose telephony PCM output).
 - Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
+- If a Twilio media stream is already active, Voice Call does not fall back to TwiML `<Say>`. If telephony TTS is unavailable in that state, the playback request fails instead of mixing two playback paths.
 
 ### More examples
 
@@ -308,17 +309,53 @@ Auto-responses use the agent system. Tune with:
 - `responseSystemPrompt`
 - `responseTimeoutMs`
 
+### Spoken output contract
+
+For auto-responses, Voice Call appends a strict spoken-output contract to the system prompt:
+
+- `{"spoken":"..."}`
+
+Voice Call then extracts speech text defensively:
+
+- Ignores payloads marked as reasoning/error content.
+- Parses direct JSON, fenced JSON, or inline `"spoken"` keys.
+- Falls back to plain text and removes likely planning/meta lead-in paragraphs.
+
+This keeps spoken playback focused on caller-facing text and avoids leaking planning text into audio.
+
+### Conversation startup behavior
+
+For outbound `conversation` calls, first-message handling is tied to live playback state:
+
+- Barge-in queue clear and auto-response are suppressed only while the initial greeting is actively speaking.
+- If initial playback fails, the call returns to `listening` and the initial message remains queued for retry.
+- Initial playback for Twilio streaming starts on stream connect without extra delay.
+
+### Twilio stream disconnect grace
+
+When a Twilio media stream disconnects, Voice Call waits `2000ms` before auto-ending the call:
+
+- If the stream reconnects during that window, auto-end is canceled.
+- If no stream is re-registered after the grace period, the call is ended to prevent stuck active calls.
+
 ## CLI
 
 ```bash
 openclaw voicecall call --to "+15555550123" --message "Hello from OpenClaw"
+openclaw voicecall start --to "+15555550123"   # alias for call
 openclaw voicecall continue --call-id <id> --message "Any questions?"
 openclaw voicecall speak --call-id <id> --message "One moment"
 openclaw voicecall end --call-id <id>
 openclaw voicecall status --call-id <id>
 openclaw voicecall tail
+openclaw voicecall latency                     # summarize turn latency from logs
 openclaw voicecall expose --mode funnel
 ```
+
+`latency` reads `calls.jsonl` from the default voice-call storage path. Use
+`--file <path>` to point at a different log and `--last <n>` to limit analysis
+to the last N records (default 200). Output includes p50/p90/p99 for turn
+latency and listen-wait times.
 
 ## Agent tool
 

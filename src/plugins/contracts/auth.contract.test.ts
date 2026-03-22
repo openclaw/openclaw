@@ -1,8 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots,
-} from "../../agents/auth-profiles/store.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createNonExitingRuntime } from "../../runtime.js";
 import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import type {
@@ -14,20 +12,26 @@ import type {
 import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
 
 type LoginOpenAICodexOAuth =
-  (typeof import("openclaw/plugin-sdk/provider-auth"))["loginOpenAICodexOAuth"];
+  (typeof import("openclaw/plugin-sdk/provider-auth-login"))["loginOpenAICodexOAuth"];
 type LoginQwenPortalOAuth =
   (typeof import("../../../extensions/qwen-portal-auth/oauth.js"))["loginQwenPortalOAuth"];
 type GithubCopilotLoginCommand =
-  (typeof import("openclaw/plugin-sdk/provider-auth"))["githubCopilotLoginCommand"];
+  (typeof import("openclaw/plugin-sdk/provider-auth-login"))["githubCopilotLoginCommand"];
 type CreateVpsAwareHandlers =
   (typeof import("../provider-oauth-flow.js"))["createVpsAwareOAuthHandlers"];
+type EnsureAuthProfileStore =
+  typeof import("openclaw/plugin-sdk/agent-runtime").ensureAuthProfileStore;
+type ListProfilesForProvider =
+  typeof import("openclaw/plugin-sdk/agent-runtime").listProfilesForProvider;
 
 const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn<LoginOpenAICodexOAuth>());
 const loginQwenPortalOAuthMock = vi.hoisted(() => vi.fn<LoginQwenPortalOAuth>());
 const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn<GithubCopilotLoginCommand>());
+const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn<EnsureAuthProfileStore>());
+const listProfilesForProviderMock = vi.hoisted(() => vi.fn<ListProfilesForProvider>());
 
-vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
+vi.mock("openclaw/plugin-sdk/provider-auth-login", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-login")>();
   return {
     ...actual,
     loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
@@ -35,13 +39,22 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+  return {
+    ...actual,
+    ensureAuthProfileStore: ensureAuthProfileStoreMock,
+    listProfilesForProvider: listProfilesForProviderMock,
+  };
+});
+
 vi.mock("../../../extensions/qwen-portal-auth/oauth.js", () => ({
   loginQwenPortalOAuth: loginQwenPortalOAuthMock,
 }));
 
-const openAIPlugin = (await import("../../../extensions/openai/index.js")).default;
-const qwenPortalPlugin = (await import("../../../extensions/qwen-portal-auth/index.js")).default;
-const githubCopilotPlugin = (await import("../../../extensions/github-copilot/index.js")).default;
+import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
+import openAIPlugin from "../../../extensions/openai/index.js";
+import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
 
 function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
   const captured = createCapturedPluginRegistration();
@@ -96,10 +109,26 @@ function buildAuthContext() {
 }
 
 describe("provider auth contract", () => {
+  let authStore: AuthProfileStore;
+
+  beforeEach(() => {
+    authStore = { version: 1, profiles: {} };
+    ensureAuthProfileStoreMock.mockReset();
+    ensureAuthProfileStoreMock.mockImplementation(() => authStore);
+    listProfilesForProviderMock.mockReset();
+    listProfilesForProviderMock.mockImplementation((store, providerId) =>
+      Object.entries(store.profiles)
+        .filter(([, credential]) => credential?.provider === providerId)
+        .map(([profileId]) => profileId),
+    );
+  });
+
   afterEach(() => {
     loginOpenAICodexOAuthMock.mockReset();
     loginQwenPortalOAuthMock.mockReset();
     githubCopilotLoginCommandMock.mockReset();
+    ensureAuthProfileStoreMock.mockReset();
+    listProfilesForProviderMock.mockReset();
     clearRuntimeAuthProfileStoreSnapshots();
   });
 
@@ -197,20 +226,11 @@ describe("provider auth contract", () => {
 
   it("keeps GitHub Copilot device auth results provider-owned", async () => {
     const provider = requireProvider(registerProviders(githubCopilotPlugin), "github-copilot");
-    replaceRuntimeAuthProfileStoreSnapshots([
-      {
-        store: {
-          version: 1,
-          profiles: {
-            "github-copilot:github": {
-              type: "token",
-              provider: "github-copilot",
-              token: "github-device-token",
-            },
-          },
-        },
-      },
-    ]);
+    authStore.profiles["github-copilot:github"] = {
+      type: "token" as const,
+      provider: "github-copilot",
+      token: "github-device-token",
+    };
 
     const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
     const hadOwnIsTTY = Object.prototype.hasOwnProperty.call(stdin, "isTTY");

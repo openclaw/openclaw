@@ -16,7 +16,7 @@ import {
 } from "openclaw/plugin-sdk/routing";
 import { formatSetExplicitDefaultInstruction } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import type { TelegramAccountConfig, TelegramActionConfig } from "openclaw/plugin-sdk/telegram";
+import type { TelegramAccountConfig, TelegramActionConfig } from "../runtime-api.js";
 import { resolveTelegramToken } from "./token.js";
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;

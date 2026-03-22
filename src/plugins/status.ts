@@ -2,6 +2,8 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
+import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
@@ -33,6 +35,11 @@ export type PluginCompatibilityNotice = {
   message: string;
 };
 
+export type PluginCompatibilitySummary = {
+  noticeCount: number;
+  pluginCount: number;
+};
+
 export type PluginInspectReport = {
   workspaceDir?: string;
   plugin: PluginRegistry["plugins"][number];
@@ -59,7 +66,16 @@ export type PluginInspectReport = {
   cliCommands: string[];
   services: string[];
   gatewayMethods: string[];
+  mcpServers: Array<{
+    name: string;
+    hasStdioTransport: boolean;
+  }>;
+  lspServers: Array<{
+    name: string;
+    hasStdioTransport: boolean;
+  }>;
   httpRouteCount: number;
+  bundleCapabilities: string[];
   diagnostics: PluginDiagnostic[];
   policy: {
     allowPromptInjection?: boolean;
@@ -81,7 +97,7 @@ function buildCompatibilityNoticesForInspect(
       code: "legacy-before-agent-start",
       severity: "warn",
       message:
-        "still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+        "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
     });
   }
   if (inspect.shape === "hook-only") {
@@ -90,7 +106,7 @@ function buildCompatibilityNoticesForInspect(
       code: "hook-only",
       severity: "info",
       message:
-        "is hook-only; this remains supported for compatibility, but it has not migrated to explicit capability registration.",
+        "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
     });
   }
   return warnings;
@@ -221,6 +237,46 @@ export function buildPluginInspectReport(params: {
     httpRouteCount: plugin.httpRoutes,
   });
 
+  // Populate MCP server info for bundle-format plugins with a known rootDir.
+  let mcpServers: PluginInspectReport["mcpServers"] = [];
+  if (plugin.format === "bundle" && plugin.bundleFormat && plugin.rootDir) {
+    const mcpSupport = inspectBundleMcpRuntimeSupport({
+      pluginId: plugin.id,
+      rootDir: plugin.rootDir,
+      bundleFormat: plugin.bundleFormat,
+    });
+    mcpServers = [
+      ...mcpSupport.supportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: true,
+      })),
+      ...mcpSupport.unsupportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: false,
+      })),
+    ];
+  }
+
+  // Populate LSP server info for bundle-format plugins with a known rootDir.
+  let lspServers: PluginInspectReport["lspServers"] = [];
+  if (plugin.format === "bundle" && plugin.bundleFormat && plugin.rootDir) {
+    const lspSupport = inspectBundleLspRuntimeSupport({
+      pluginId: plugin.id,
+      rootDir: plugin.rootDir,
+      bundleFormat: plugin.bundleFormat,
+    });
+    lspServers = [
+      ...lspSupport.supportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: true,
+      })),
+      ...lspSupport.unsupportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: false,
+      })),
+    ];
+  }
+
   const usesLegacyBeforeAgentStart = typedHooks.some(
     (entry) => entry.name === "before_agent_start",
   );
@@ -243,7 +299,10 @@ export function buildPluginInspectReport(params: {
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
     gatewayMethods: [...plugin.gatewayMethods],
+    mcpServers,
+    lspServers,
     httpRouteCount: plugin.httpRoutes,
+    bundleCapabilities: plugin.bundleCapabilities ?? [],
     diagnostics,
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,
@@ -288,9 +347,7 @@ export function buildPluginCompatibilityWarnings(params?: {
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
 }): string[] {
-  return buildAllPluginInspectReports(params).flatMap((inspect) =>
-    inspect.compatibility.map((warning) => `${warning.pluginId} ${warning.message}`),
-  );
+  return buildPluginCompatibilityNotices(params).map(formatPluginCompatibilityNotice);
 }
 
 export function buildPluginCompatibilityNotices(params?: {
@@ -300,4 +357,17 @@ export function buildPluginCompatibilityNotices(params?: {
   report?: PluginStatusReport;
 }): PluginCompatibilityNotice[] {
   return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
+}
+
+export function formatPluginCompatibilityNotice(notice: PluginCompatibilityNotice): string {
+  return `${notice.pluginId} ${notice.message}`;
+}
+
+export function summarizePluginCompatibility(
+  notices: PluginCompatibilityNotice[],
+): PluginCompatibilitySummary {
+  return {
+    noticeCount: notices.length,
+    pluginCount: new Set(notices.map((notice) => notice.pluginId)).size,
+  };
 }

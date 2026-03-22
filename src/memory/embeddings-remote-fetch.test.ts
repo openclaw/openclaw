@@ -13,7 +13,6 @@ describe("fetchRemoteEmbeddingVectors", () => {
   const postJsonMock = vi.mocked(postJson);
 
   beforeEach(async () => {
-    vi.resetModules();
     ({ fetchRemoteEmbeddingVectors } = await import("./embeddings-remote-fetch.js"));
     vi.clearAllMocks();
   });

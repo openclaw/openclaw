@@ -5,14 +5,14 @@ import type {
   WindowsSpawnProgram,
   WindowsSpawnProgramCandidate,
   WindowsSpawnResolution,
-} from "openclaw/plugin-sdk/acpx";
+} from "../../runtime-api.js";
 import {
   applyWindowsSpawnProgramPolicy,
   listKnownProviderAuthEnvVarNames,
   materializeWindowsSpawnProgram,
   omitEnvKeysCaseInsensitive,
   resolveWindowsSpawnProgramCandidate,
-} from "openclaw/plugin-sdk/acpx";
+} from "../../runtime-api.js";
 
 export type SpawnExit = {
   code: number | null;

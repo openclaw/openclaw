@@ -8,12 +8,14 @@ import type {
 } from "../gateway/server-methods/types.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import { registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey } from "./slots.js";
@@ -240,28 +242,7 @@ const constrainLegacyPromptInjectionHook = (
   };
 };
 
-export function createEmptyPluginRegistry(): PluginRegistry {
-  return {
-    plugins: [],
-    tools: [],
-    hooks: [],
-    typedHooks: [],
-    channels: [],
-    channelSetups: [],
-    providers: [],
-    speechProviders: [],
-    mediaUnderstandingProviders: [],
-    imageGenerationProviders: [],
-    webSearchProviders: [],
-    gatewayHandlers: {},
-    httpRoutes: [],
-    cliRegistrars: [],
-    services: [],
-    commands: [],
-    conversationBindingResolvedHandlers: [],
-    diagnostics: [],
-  };
-}
+export { createEmptyPluginRegistry } from "./registry-empty.js";
 
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
@@ -998,6 +979,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             message: `context engine already registered: ${id} (${result.existingOwner})`,
           });
         }
+      },
+      registerMemoryPromptSection: (builder) => {
+        if (registrationMode !== "full") {
+          return;
+        }
+        if (record.kind !== "memory") {
+          pushDiagnostic({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: "only memory plugins can register a memory prompt section",
+          });
+          return;
+        }
+        registerMemoryPromptSection(builder);
       },
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>

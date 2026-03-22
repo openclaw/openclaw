@@ -4,7 +4,7 @@ import {
   jsonResult,
   readStringParam,
   type DiscordActionConfig,
-} from "openclaw/plugin-sdk/discord-core";
+} from "../runtime-api.js";
 import {
   banMemberDiscord,
   hasAnyGuildPermissionDiscord,

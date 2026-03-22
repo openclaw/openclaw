@@ -123,6 +123,7 @@ function createChatHeaderState(
       splitRatio: 0.6,
       navCollapsed: false,
       navGroupsCollapsed: {},
+      borderRadius: 50,
       chatFocusMode: false,
       chatShowThinking: false,
     },
@@ -215,6 +216,7 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
       navCollapsed: false,
       navWidth: 220,
       navGroupsCollapsed: {},
+      borderRadius: 50,
       locale: "en",
     },
     password: "",
@@ -249,6 +251,125 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
 }
 
 describe("chat view", () => {
+  it("hides the context notice when only cumulative inputTokens exceed the limit", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                inputTokens: 757_300,
+                totalTokens: 46_000,
+                contextTokens: 200_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("context used");
+    expect(container.textContent).not.toContain("757.3k / 200k");
+  });
+
+  it("uses totalTokens for the context notice detail when current usage is high", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                inputTokens: 757_300,
+                totalTokens: 190_000,
+                contextTokens: 200_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("95% context used");
+    expect(container.textContent).toContain("190k / 200k");
+    expect(container.textContent).not.toContain("757.3k / 200k");
+  });
+
+  it("hides the context notice when totalTokens is missing even if inputTokens is high", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                inputTokens: 500_000,
+                contextTokens: 200_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("context used");
+  });
+
+  it("hides the context notice when totalTokens is marked stale", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                totalTokens: 190_000,
+                totalTokensFresh: false,
+                contextTokens: 200_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("context used");
+    expect(container.textContent).not.toContain("190k / 200k");
+  });
+
   it("uses the assistant avatar URL for the welcome state when the identity avatar is only initials", () => {
     const container = document.createElement("div");
     render(
@@ -913,5 +1034,99 @@ describe("chat view", () => {
       "Subagent: cron-config-check · subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
     );
     expect(labels).not.toContain("Subagent: cron-config-check");
+  });
+
+  it("prefixes duplicate agent session labels with the agent name", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "agent:alpha:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.agentsList = {
+      defaultId: "alpha",
+      mainKey: "agent:alpha:main",
+      scope: "all",
+      agents: [
+        { id: "alpha", name: "Deep Chat" },
+        { id: "beta", name: "Coding" },
+      ],
+    };
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 2,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "agent:alpha:main",
+          kind: "direct",
+          updatedAt: null,
+        },
+        {
+          key: "agent:beta:main",
+          kind: "direct",
+          updatedAt: null,
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
+    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.textContent?.trim(),
+    );
+
+    expect(labels).toContain("Deep Chat (alpha) / main");
+    expect(labels).toContain("Coding (beta) / main");
+    expect(labels).not.toContain("main");
+  });
+
+  it("keeps agent-prefixed labels unique when a custom label already matches the prefix", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "agent:alpha:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.agentsList = {
+      defaultId: "alpha",
+      mainKey: "agent:alpha:main",
+      scope: "all",
+      agents: [
+        { id: "alpha", name: "Deep Chat" },
+        { id: "beta", name: "Coding" },
+      ],
+    };
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 3,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "agent:alpha:main",
+          kind: "direct",
+          updatedAt: null,
+        },
+        {
+          key: "agent:beta:main",
+          kind: "direct",
+          updatedAt: null,
+        },
+        {
+          key: "agent:alpha:named-main",
+          kind: "direct",
+          updatedAt: null,
+          label: "Deep Chat (alpha) / main",
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
+    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.textContent?.trim(),
+    );
+
+    expect(labels.filter((label) => label === "Deep Chat (alpha) / main")).toHaveLength(1);
+    expect(labels).toContain("Deep Chat (alpha) / main · named-main");
+    expect(labels).toContain("Coding (beta) / main");
   });
 });

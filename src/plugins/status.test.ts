@@ -7,6 +7,8 @@ let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectRep
 let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
 let buildPluginCompatibilityNotices: typeof import("./status.js").buildPluginCompatibilityNotices;
 let buildPluginCompatibilityWarnings: typeof import("./status.js").buildPluginCompatibilityWarnings;
+let formatPluginCompatibilityNotice: typeof import("./status.js").formatPluginCompatibilityNotice;
+let summarizePluginCompatibility: typeof import("./status.js").summarizePluginCompatibility;
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () => loadConfigMock(),
@@ -56,6 +58,8 @@ describe("buildPluginStatusReport", () => {
       buildPluginCompatibilityWarnings,
       buildPluginInspectReport,
       buildPluginStatusReport,
+      formatPluginCompatibilityNotice,
+      summarizePluginCompatibility,
     } = await import("./status.js"));
   });
 
@@ -118,7 +122,7 @@ describe("buildPluginStatusReport", () => {
           configSchema: false,
         },
       ],
-      diagnostics: [{ level: "warn", pluginId: "google", message: "watch this seam" }],
+      diagnostics: [{ level: "warn", pluginId: "google", message: "watch this surface" }],
       channels: [],
       channelSetups: [],
       providers: [],
@@ -161,7 +165,7 @@ describe("buildPluginStatusReport", () => {
         code: "legacy-before-agent-start",
         severity: "warn",
         message:
-          "still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
       },
     ]);
     expect(inspect?.policy).toEqual({
@@ -171,7 +175,7 @@ describe("buildPluginStatusReport", () => {
       hasAllowedModelsConfig: true,
     });
     expect(inspect?.diagnostics).toEqual([
-      { level: "warn", pluginId: "google", message: "watch this seam" },
+      { level: "warn", pluginId: "google", message: "watch this surface" },
     ]);
   });
 
@@ -328,8 +332,8 @@ describe("buildPluginStatusReport", () => {
     });
 
     expect(buildPluginCompatibilityWarnings()).toEqual([
-      "lca still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
-      "lca is hook-only; this remains supported for compatibility, but it has not migrated to explicit capability registration.",
+      "lca still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+      "lca is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
     ]);
   });
 
@@ -427,14 +431,14 @@ describe("buildPluginStatusReport", () => {
         code: "hook-only",
         severity: "info",
         message:
-          "is hook-only; this remains supported for compatibility, but it has not migrated to explicit capability registration.",
+          "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
       },
       {
         pluginId: "legacy-only",
         code: "legacy-before-agent-start",
         severity: "warn",
         message:
-          "still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
       },
     ]);
   });
@@ -487,5 +491,145 @@ describe("buildPluginStatusReport", () => {
 
     expect(buildPluginCompatibilityNotices()).toEqual([]);
     expect(buildPluginCompatibilityWarnings()).toEqual([]);
+  });
+
+  it("populates bundleCapabilities from plugin record", () => {
+    loadOpenClawPluginsMock.mockReturnValue({
+      plugins: [
+        {
+          id: "claude-bundle",
+          name: "Claude Bundle",
+          description: "A bundle plugin with skills and commands",
+          source: "/tmp/claude-bundle/.claude-plugin/plugin.json",
+          origin: "workspace",
+          enabled: true,
+          status: "loaded",
+          format: "bundle",
+          bundleFormat: "claude",
+          bundleCapabilities: ["skills", "commands", "agents", "settings"],
+          rootDir: "/tmp/claude-bundle",
+          toolNames: [],
+          hookNames: [],
+          channelIds: [],
+          providerIds: [],
+          speechProviderIds: [],
+          mediaUnderstandingProviderIds: [],
+          imageGenerationProviderIds: [],
+          webSearchProviderIds: [],
+          gatewayMethods: [],
+          cliCommands: [],
+          services: [],
+          commands: [],
+          httpRoutes: 0,
+          hookCount: 0,
+          configSchema: false,
+        },
+      ],
+      diagnostics: [],
+      channels: [],
+      channelSetups: [],
+      providers: [],
+      speechProviders: [],
+      mediaUnderstandingProviders: [],
+      imageGenerationProviders: [],
+      webSearchProviders: [],
+      tools: [],
+      hooks: [],
+      typedHooks: [],
+      httpRoutes: [],
+      gatewayHandlers: {},
+      cliRegistrars: [],
+      services: [],
+      commands: [],
+    });
+
+    const inspect = buildPluginInspectReport({ id: "claude-bundle" });
+
+    expect(inspect).not.toBeNull();
+    expect(inspect?.bundleCapabilities).toEqual(["skills", "commands", "agents", "settings"]);
+    expect(inspect?.mcpServers).toEqual([]);
+    expect(inspect?.shape).toBe("non-capability");
+  });
+
+  it("returns empty bundleCapabilities and mcpServers for non-bundle plugins", () => {
+    loadOpenClawPluginsMock.mockReturnValue({
+      plugins: [
+        {
+          id: "plain-plugin",
+          name: "Plain Plugin",
+          description: "A regular plugin",
+          source: "/tmp/plain-plugin/index.ts",
+          origin: "workspace",
+          enabled: true,
+          status: "loaded",
+          toolNames: [],
+          hookNames: [],
+          channelIds: [],
+          providerIds: ["plain"],
+          speechProviderIds: [],
+          mediaUnderstandingProviderIds: [],
+          imageGenerationProviderIds: [],
+          webSearchProviderIds: [],
+          gatewayMethods: [],
+          cliCommands: [],
+          services: [],
+          commands: [],
+          httpRoutes: 0,
+          hookCount: 0,
+          configSchema: false,
+        },
+      ],
+      diagnostics: [],
+      channels: [],
+      channelSetups: [],
+      providers: [],
+      speechProviders: [],
+      mediaUnderstandingProviders: [],
+      imageGenerationProviders: [],
+      webSearchProviders: [],
+      tools: [],
+      hooks: [],
+      typedHooks: [],
+      httpRoutes: [],
+      gatewayHandlers: {},
+      cliRegistrars: [],
+      services: [],
+      commands: [],
+    });
+
+    const inspect = buildPluginInspectReport({ id: "plain-plugin" });
+
+    expect(inspect).not.toBeNull();
+    expect(inspect?.bundleCapabilities).toEqual([]);
+    expect(inspect?.mcpServers).toEqual([]);
+  });
+
+  it("formats and summarizes compatibility notices", () => {
+    const notice = {
+      pluginId: "legacy-plugin",
+      code: "legacy-before-agent-start" as const,
+      severity: "warn" as const,
+      message:
+        "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+    };
+
+    expect(formatPluginCompatibilityNotice(notice)).toBe(
+      "legacy-plugin still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+    );
+    expect(
+      summarizePluginCompatibility([
+        notice,
+        {
+          pluginId: "legacy-plugin",
+          code: "hook-only",
+          severity: "info",
+          message:
+            "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
+        },
+      ]),
+    ).toEqual({
+      noticeCount: 2,
+      pluginCount: 1,
+    });
   });
 });

@@ -1,4 +1,4 @@
-import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/open-prose";
+import { definePluginEntry, type OpenClawPluginApi } from "./runtime-api.js";
 
 export default definePluginEntry({
   id: "open-prose",

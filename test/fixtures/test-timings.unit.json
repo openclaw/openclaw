@@ -1,0 +1,1031 @@
+{
+  "config": "vitest.unit.config.ts",
+  "generatedAt": "2026-03-22T05:00:22.373Z",
+  "defaultDurationMs": 250,
+  "files": {
+    "src/plugin-sdk/subpaths.test.ts": {
+      "durationMs": 7072.7880859375,
+      "testCount": 50
+    },
+    "src/plugin-sdk/index.bundle.test.ts": {
+      "durationMs": 4042.846435546875,
+      "testCount": 1
+    },
+    "src/plugins/install.test.ts": {
+      "durationMs": 1504.605224609375,
+      "testCount": 34
+    },
+    "test/extension-plugin-sdk-boundary.test.ts": {
+      "durationMs": 1133.110595703125,
+      "testCount": 7
+    },
+    "src/hooks/install.test.ts": {
+      "durationMs": 842.180419921875,
+      "testCount": 15
+    },
+    "src/infra/fs-safe.test.ts": {
+      "durationMs": 635.9736328125,
+      "testCount": 27
+    },
+    "src/plugins/loader.test.ts": {
+      "durationMs": 570.1123046875,
+      "testCount": 56
+    },
+    "test/scripts/committer.test.ts": {
+      "durationMs": 513.894287109375,
+      "testCount": 3
+    },
+    "src/plugin-sdk/channel-import-guardrails.test.ts": {
+      "durationMs": 513.55615234375,
+      "testCount": 9
+    },
+    "src/cron/isolated-agent.uses-last-non-empty-agent-text-as.test.ts": {
+      "durationMs": 509.0029296875,
+      "testCount": 18
+    },
+    "src/cron/isolated-agent.skips-delivery-without-whatsapp-recipient-besteffortdeliver-true.test.ts": {
+      "durationMs": 477.562744140625,
+      "testCount": 15
+    },
+    "src/secrets/audit.test.ts": {
+      "durationMs": 472.600341796875,
+      "testCount": 18
+    },
+    "src/infra/provider-usage.test.ts": {
+      "durationMs": 471.775634765625,
+      "testCount": 11
+    },
+    "src/security/temp-path-guard.test.ts": {
+      "durationMs": 463.265625,
+      "testCount": 3
+    },
+    "test/web-search-provider-boundary.test.ts": {
+      "durationMs": 441.54833984375,
+      "testCount": 4
+    },
+    "src/infra/provider-usage.load.plugin.test.ts": {
+      "durationMs": 424.585205078125,
+      "testCount": 1
+    },
+    "src/infra/provider-usage.auth.normalizes-keys.test.ts": {
+      "durationMs": 415.70166015625,
+      "testCount": 19
+    },
+    "src/cron/service.issue-regressions.test.ts": {
+      "durationMs": 404.217529296875,
+      "testCount": 38
+    },
+    "src/hooks/bundled/session-memory/handler.test.ts": {
+      "durationMs": 386.910400390625,
+      "testCount": 17
+    },
+    "src/infra/provider-usage.auth.plugin.test.ts": {
+      "durationMs": 376.526611328125,
+      "testCount": 1
+    },
+    "src/infra/host-env-security.test.ts": {
+      "durationMs": 365.109619140625,
+      "testCount": 18
+    },
+    "src/hooks/loader.test.ts": {
+      "durationMs": 359.239501953125,
+      "testCount": 14
+    },
+    "test/architecture-smells.test.ts": {
+      "durationMs": 355.120361328125,
+      "testCount": 2
+    },
+    "src/config/config.plugin-validation.test.ts": {
+      "durationMs": 328.872314453125,
+      "testCount": 15
+    },
+    "src/security/audit.test.ts": {
+      "durationMs": 327.4951171875,
+      "testCount": 65
+    },
+    "src/memory/index.test.ts": {
+      "durationMs": 308.1826171875,
+      "testCount": 21
+    },
+    "src/memory/manager.get-concurrency.test.ts": {
+      "durationMs": 299.020263671875,
+      "testCount": 3
+    },
+    "src/infra/fs-pinned-write-helper.test.ts": {
+      "durationMs": 279.913818359375,
+      "testCount": 3
+    },
+    "src/memory/qmd-manager.test.ts": {
+      "durationMs": 278.58056640625,
+      "testCount": 57
+    },
+    "src/cli/program/preaction.test.ts": {
+      "durationMs": 270.19970703125,
+      "testCount": 7
+    },
+    "src/infra/archive-staging.test.ts": {
+      "durationMs": 247.2822265625,
+      "testCount": 7
+    },
+    "src/memory/embeddings.test.ts": {
+      "durationMs": 237.804931640625,
+      "testCount": 19
+    },
+    "src/infra/archive.test.ts": {
+      "durationMs": 237.624755859375,
+      "testCount": 15
+    },
+    "src/secrets/runtime.integration.test.ts": {
+      "durationMs": 223.545166015625,
+      "testCount": 5
+    },
+    "src/entry.version-fast-path.test.ts": {
+      "durationMs": 222.15966796875,
+      "testCount": 2
+    },
+    "src/infra/git-commit.test.ts": {
+      "durationMs": 221.61474609375,
+      "testCount": 13
+    },
+    "test/scripts/test-extension.test.ts": {
+      "durationMs": 214.688720703125,
+      "testCount": 8
+    },
+    "src/acp/control-plane/manager.test.ts": {
+      "durationMs": 214.149169921875,
+      "testCount": 35
+    },
+    "src/secrets/apply.test.ts": {
+      "durationMs": 207.264892578125,
+      "testCount": 15
+    },
+    "src/tui/gateway-chat.test.ts": {
+      "durationMs": 206.832275390625,
+      "testCount": 14
+    },
+    "src/hooks/plugin-hooks.test.ts": {
+      "durationMs": 199.76416015625,
+      "testCount": 4
+    },
+    "src/cron/isolated-agent.delivers-response-has-heartbeat-ok-but-includes.test.ts": {
+      "durationMs": 195.479736328125,
+      "testCount": 6
+    },
+    "src/plugins/loader.git-path-regression.test.ts": {
+      "durationMs": 182.822021484375,
+      "testCount": 1
+    },
+    "src/config/plugin-auto-enable.test.ts": {
+      "durationMs": 180.41650390625,
+      "testCount": 25
+    },
+    "src/channels/plugins/plugins-core.test.ts": {
+      "durationMs": 171.641845703125,
+      "testCount": 39
+    },
+    "src/cli/daemon-cli/install.integration.test.ts": {
+      "durationMs": 169.806640625,
+      "testCount": 2
+    },
+    "src/install-sh-version.test.ts": {
+      "durationMs": 169.08740234375,
+      "testCount": 3
+    },
+    "test/plugin-extension-import-boundary.test.ts": {
+      "durationMs": 168.609619140625,
+      "testCount": 5
+    },
+    "ui/src/ui/views/chat.test.ts": {
+      "durationMs": 163.8369140625,
+      "testCount": 32
+    },
+    "src/acp/server.startup.test.ts": {
+      "durationMs": 158.829345703125,
+      "testCount": 4
+    },
+    "src/plugins/sdk-alias.test.ts": {
+      "durationMs": 155.05908203125,
+      "testCount": 24
+    },
+    "src/cron/isolated-agent.direct-delivery-core-channels.test.ts": {
+      "durationMs": 151.12109375,
+      "testCount": 4
+    },
+    "src/plugins/bundle-mcp.test.ts": {
+      "durationMs": 150.912841796875,
+      "testCount": 3
+    },
+    "src/cron/isolated-agent.subagent-model.test.ts": {
+      "durationMs": 141.753173828125,
+      "testCount": 4
+    },
+    "src/daemon/schtasks.startup-fallback.test.ts": {
+      "durationMs": 135.785888671875,
+      "testCount": 6
+    },
+    "src/plugins/manifest-registry.test.ts": {
+      "durationMs": 134.2001953125,
+      "testCount": 21
+    },
+    "src/config/config.nix-integration-u3-u5-u9.test.ts": {
+      "durationMs": 130.742919921875,
+      "testCount": 19
+    },
+    "src/node-host/invoke-system-run-plan.test.ts": {
+      "durationMs": 124.284423828125,
+      "testCount": 41
+    },
+    "src/secrets/resolve.test.ts": {
+      "durationMs": 123.7431640625,
+      "testCount": 17
+    },
+    "src/infra/run-node.test.ts": {
+      "durationMs": 120.904052734375,
+      "testCount": 12
+    },
+    "src/media/store.outside-workspace.test.ts": {
+      "durationMs": 117.561767578125,
+      "testCount": 1
+    },
+    "src/infra/heartbeat-runner.returns-default-unset.test.ts": {
+      "durationMs": 116.7060546875,
+      "testCount": 25
+    },
+    "src/cron/isolated-agent.lane.test.ts": {
+      "durationMs": 114.517578125,
+      "testCount": 3
+    },
+    "src/media-understanding/apply.test.ts": {
+      "durationMs": 109.72509765625,
+      "testCount": 32
+    },
+    "test/scripts/ios-team-id.test.ts": {
+      "durationMs": 108.153564453125,
+      "testCount": 3
+    },
+    "src/memory/manager.batch.test.ts": {
+      "durationMs": 107.263916015625,
+      "testCount": 3
+    },
+    "src/hooks/hooks-install.test.ts": {
+      "durationMs": 100.990478515625,
+      "testCount": 1
+    },
+    "src/infra/gateway-lock.test.ts": {
+      "durationMs": 99.45947265625,
+      "testCount": 9
+    },
+    "src/security/windows-acl.test.ts": {
+      "durationMs": 99.385986328125,
+      "testCount": 48
+    },
+    "src/media/read-response-with-limit.test.ts": {
+      "durationMs": 98.685546875,
+      "testCount": 5
+    },
+    "src/infra/system-presence.version.test.ts": {
+      "durationMs": 97.593017578125,
+      "testCount": 5
+    },
+    "src/config/config.web-search-provider.test.ts": {
+      "durationMs": 97.080810546875,
+      "testCount": 24
+    },
+    "test/git-hooks-pre-commit.test.ts": {
+      "durationMs": 94.548828125,
+      "testCount": 1
+    },
+    "src/plugins/status.test.ts": {
+      "durationMs": 94.482177734375,
+      "testCount": 9
+    },
+    "src/cli/config-cli.integration.test.ts": {
+      "durationMs": 94.2724609375,
+      "testCount": 4
+    },
+    "src/media-understanding/runner.skip-tiny-audio.test.ts": {
+      "durationMs": 94.045166015625,
+      "testCount": 3
+    },
+    "src/infra/heartbeat-runner.respects-ackmaxchars-heartbeat-acks.test.ts": {
+      "durationMs": 93.603271484375,
+      "testCount": 12
+    },
+    "src/config/sessions/sessions.test.ts": {
+      "durationMs": 93.204345703125,
+      "testCount": 23
+    },
+    "src/pairing/pairing-store.test.ts": {
+      "durationMs": 91.714599609375,
+      "testCount": 17
+    },
+    "src/cron/isolated-agent/run.owner-auth.test.ts": {
+      "durationMs": 91.58935546875,
+      "testCount": 1
+    },
+    "src/plugins/marketplace.test.ts": {
+      "durationMs": 89.8408203125,
+      "testCount": 3
+    },
+    "src/plugins/contracts/auth-choice.contract.test.ts": {
+      "durationMs": 89.519775390625,
+      "testCount": 3
+    },
+    "src/config/sessions/store.pruning.integration.test.ts": {
+      "durationMs": 89.431396484375,
+      "testCount": 10
+    },
+    "src/cron/isolated-agent.direct-delivery-forum-topics.test.ts": {
+      "durationMs": 89.093994140625,
+      "testCount": 2
+    },
+    "src/infra/device-pairing.test.ts": {
+      "durationMs": 88.157470703125,
+      "testCount": 19
+    },
+    "src/pairing/setup-code.test.ts": {
+      "durationMs": 87.978515625,
+      "testCount": 15
+    },
+    "src/node-host/invoke-system-run.test.ts": {
+      "durationMs": 87.875732421875,
+      "testCount": 37
+    },
+    "src/config/io.write-config.test.ts": {
+      "durationMs": 86.088623046875,
+      "testCount": 16
+    },
+    "src/memory/manager.embedding-batches.test.ts": {
+      "durationMs": 85.197509765625,
+      "testCount": 5
+    },
+    "src/plugins/bundle-commands.test.ts": {
+      "durationMs": 83.75048828125,
+      "testCount": 1
+    },
+    "src/media-understanding/apply.echo-transcript.test.ts": {
+      "durationMs": 83.599609375,
+      "testCount": 10
+    },
+    "src/media/input-files.fetch-guard.test.ts": {
+      "durationMs": 82.113525390625,
+      "testCount": 10
+    },
+    "src/plugin-sdk/channel-lifecycle.test.ts": {
+      "durationMs": 81.3046875,
+      "testCount": 6
+    },
+    "src/infra/outbound/outbound.test.ts": {
+      "durationMs": 81.140869140625,
+      "testCount": 65
+    },
+    "src/infra/matrix-legacy-crypto.test.ts": {
+      "durationMs": 79.809326171875,
+      "testCount": 8
+    },
+    "src/plugins/stage-bundled-plugin-runtime.test.ts": {
+      "durationMs": 77.088134765625,
+      "testCount": 7
+    },
+    "src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts": {
+      "durationMs": 76.576171875,
+      "testCount": 15
+    },
+    "src/process/command-queue.test.ts": {
+      "durationMs": 75.912841796875,
+      "testCount": 17
+    },
+    "src/cron/service.restart-catchup.test.ts": {
+      "durationMs": 75.5458984375,
+      "testCount": 8
+    },
+    "src/media-understanding/runner.auto-audio.test.ts": {
+      "durationMs": 73.001708984375,
+      "testCount": 4
+    },
+    "src/canvas-host/server.test.ts": {
+      "durationMs": 70.552978515625,
+      "testCount": 6
+    },
+    "src/tts/tts.test.ts": {
+      "durationMs": 70.513671875,
+      "testCount": 27
+    },
+    "src/context-engine/context-engine.test.ts": {
+      "durationMs": 70.476318359375,
+      "testCount": 30
+    },
+    "src/plugins/contracts/registry.contract.test.ts": {
+      "durationMs": 70.21240234375,
+      "testCount": 19
+    },
+    "src/infra/outbound/outbound-send-service.test.ts": {
+      "durationMs": 69.37255859375,
+      "testCount": 9
+    },
+    "src/wizard/setup.gateway-config.test.ts": {
+      "durationMs": 69.34130859375,
+      "testCount": 7
+    },
+    "src/plugins/discovery.test.ts": {
+      "durationMs": 69.057861328125,
+      "testCount": 24
+    },
+    "src/media-understanding/runner.deepgram.test.ts": {
+      "durationMs": 68.954345703125,
+      "testCount": 1
+    },
+    "src/cli/program.smoke.test.ts": {
+      "durationMs": 67.916259765625,
+      "testCount": 4
+    },
+    "src/infra/session-maintenance-warning.test.ts": {
+      "durationMs": 66.479248046875,
+      "testCount": 5
+    },
+    "src/infra/heartbeat-runner.ghost-reminder.test.ts": {
+      "durationMs": 66.085693359375,
+      "testCount": 6
+    },
+    "src/cli/pairing-cli.test.ts": {
+      "durationMs": 65.786865234375,
+      "testCount": 12
+    },
+    "src/config/sessions.test.ts": {
+      "durationMs": 65.177490234375,
+      "testCount": 37
+    },
+    "src/plugins/web-search-providers.test.ts": {
+      "durationMs": 64.750244140625,
+      "testCount": 7
+    },
+    "src/secrets/runtime.test.ts": {
+      "durationMs": 64.432861328125,
+      "testCount": 55
+    },
+    "src/config/sessions/targets.test.ts": {
+      "durationMs": 63.12255859375,
+      "testCount": 13
+    },
+    "src/media-understanding/runner.proxy.test.ts": {
+      "durationMs": 61.60205078125,
+      "testCount": 3
+    },
+    "src/media-understanding/runtime.test.ts": {
+      "durationMs": 60.680419921875,
+      "testCount": 2
+    },
+    "src/config/config.legacy-config-detection.accepts-imessage-dmpolicy.test.ts": {
+      "durationMs": 60.473388671875,
+      "testCount": 30
+    },
+    "src/channels/plugins/acp-bindings.test.ts": {
+      "durationMs": 59.765625,
+      "testCount": 6
+    },
+    "src/cron/service.failure-alert.test.ts": {
+      "durationMs": 59.154052734375,
+      "testCount": 4
+    },
+    "src/cron/isolated-agent.auth-profile-propagation.test.ts": {
+      "durationMs": 58.26318359375,
+      "testCount": 1
+    },
+    "src/infra/jsonl-socket.test.ts": {
+      "durationMs": 57.384765625,
+      "testCount": 2
+    },
+    "src/plugins/web-search-providers.runtime.test.ts": {
+      "durationMs": 56.70654296875,
+      "testCount": 2
+    },
+    "src/media/store.test.ts": {
+      "durationMs": 56.58349609375,
+      "testCount": 24
+    },
+    "src/media-understanding/runner.vision-skip.test.ts": {
+      "durationMs": 56.3515625,
+      "testCount": 1
+    },
+    "src/infra/update-runner.test.ts": {
+      "durationMs": 56.3203125,
+      "testCount": 20
+    },
+    "src/plugins/copy-bundled-plugin-metadata.test.ts": {
+      "durationMs": 55.919189453125,
+      "testCount": 8
+    },
+    "src/plugin-sdk/keyed-async-queue.test.ts": {
+      "durationMs": 55.37158203125,
+      "testCount": 4
+    },
+    "src/plugins/conversation-binding.test.ts": {
+      "durationMs": 55.24853515625,
+      "testCount": 15
+    },
+    "src/config/schema.test.ts": {
+      "durationMs": 55.169921875,
+      "testCount": 22
+    },
+    "src/infra/device-bootstrap.test.ts": {
+      "durationMs": 53.451904296875,
+      "testCount": 10
+    },
+    "src/infra/outbound/delivery-queue.test.ts": {
+      "durationMs": 53.427978515625,
+      "testCount": 36
+    },
+    "src/media-understanding/providers/index.test.ts": {
+      "durationMs": 52.11328125,
+      "testCount": 3
+    },
+    "src/security/fix.test.ts": {
+      "durationMs": 51.745849609375,
+      "testCount": 5
+    },
+    "src/infra/heartbeat-runner.model-override.test.ts": {
+      "durationMs": 50.60107421875,
+      "testCount": 8
+    },
+    "src/plugins/tools.optional.test.ts": {
+      "durationMs": 50.413818359375,
+      "testCount": 8
+    },
+    "src/cron/service.persists-delivered-status.test.ts": {
+      "durationMs": 50.260498046875,
+      "testCount": 6
+    },
+    "src/config/doc-baseline.integration.test.ts": {
+      "durationMs": 49.740234375,
+      "testCount": 8
+    },
+    "src/memory/embeddings-voyage.test.ts": {
+      "durationMs": 49.14404296875,
+      "testCount": 4
+    },
+    "src/plugins/bundled-web-search.test.ts": {
+      "durationMs": 49.07177734375,
+      "testCount": 3
+    },
+    "src/cli/plugin-registry.test.ts": {
+      "durationMs": 47.695068359375,
+      "testCount": 2
+    },
+    "src/cron/service.every-jobs-fire.test.ts": {
+      "durationMs": 47.502685546875,
+      "testCount": 3
+    },
+    "src/config/env-preserve-io.test.ts": {
+      "durationMs": 46.263671875,
+      "testCount": 4
+    },
+    "src/infra/boundary-path.test.ts": {
+      "durationMs": 46.00732421875,
+      "testCount": 5
+    },
+    "src/routing/resolve-route.test.ts": {
+      "durationMs": 45.74267578125,
+      "testCount": 41
+    },
+    "src/plugins/providers.test.ts": {
+      "durationMs": 45.5654296875,
+      "testCount": 7
+    },
+    "src/infra/ports.test.ts": {
+      "durationMs": 44.76708984375,
+      "testCount": 5
+    },
+    "src/logging/log-file-size-cap.test.ts": {
+      "durationMs": 44.386474609375,
+      "testCount": 3
+    },
+    "src/cron/run-log.test.ts": {
+      "durationMs": 44.06005859375,
+      "testCount": 11
+    },
+    "src/process/supervisor/supervisor.pty-command.test.ts": {
+      "durationMs": 43.718505859375,
+      "testCount": 2
+    },
+    "src/cron/service.store.migration.test.ts": {
+      "durationMs": 43.58349609375,
+      "testCount": 7
+    },
+    "src/cli/route.test.ts": {
+      "durationMs": 43.51171875,
+      "testCount": 3
+    },
+    "src/infra/install-package-dir.test.ts": {
+      "durationMs": 42.698974609375,
+      "testCount": 5
+    },
+    "src/infra/matrix-migration-snapshot.test.ts": {
+      "durationMs": 42.578857421875,
+      "testCount": 7
+    },
+    "src/cron/service.issue-16156-list-skips-cron.test.ts": {
+      "durationMs": 42.529541015625,
+      "testCount": 3
+    },
+    "src/memory/internal.test.ts": {
+      "durationMs": 42.3681640625,
+      "testCount": 18
+    },
+    "src/infra/matrix-plugin-helper.test.ts": {
+      "durationMs": 41.13818359375,
+      "testCount": 4
+    },
+    "src/plugins/hook-runner-global.test.ts": {
+      "durationMs": 41.009521484375,
+      "testCount": 2
+    },
+    "src/cron/service.runs-one-shot-main-job-disables-it.test.ts": {
+      "durationMs": 40.69921875,
+      "testCount": 11
+    },
+    "src/config/schema.hints.test.ts": {
+      "durationMs": 40.434326171875,
+      "testCount": 7
+    },
+    "src/config/config.pruning-defaults.test.ts": {
+      "durationMs": 40.28076171875,
+      "testCount": 7
+    },
+    "src/infra/update-startup.test.ts": {
+      "durationMs": 39.52587890625,
+      "testCount": 10
+    },
+    "src/infra/matrix-migration-config.test.ts": {
+      "durationMs": 39.2294921875,
+      "testCount": 7
+    },
+    "src/infra/net/proxy-fetch.test.ts": {
+      "durationMs": 39.122802734375,
+      "testCount": 10
+    },
+    "src/channels/plugins/whatsapp-heartbeat.test.ts": {
+      "durationMs": 39.1171875,
+      "testCount": 8
+    },
+    "src/infra/matrix-legacy-state.test.ts": {
+      "durationMs": 38.87890625,
+      "testCount": 6
+    },
+    "src/process/exec.no-output-timer.test.ts": {
+      "durationMs": 38.0546875,
+      "testCount": 1
+    },
+    "src/plugins/contracts/discovery.contract.test.ts": {
+      "durationMs": 37.16064453125,
+      "testCount": 15
+    },
+    "src/process/exec.windows.test.ts": {
+      "durationMs": 36.990478515625,
+      "testCount": 2
+    },
+    "src/infra/heartbeat-runner.sender-prefers-delivery-target.test.ts": {
+      "durationMs": 36.8525390625,
+      "testCount": 1
+    },
+    "src/config/plugins-runtime-boundary.test.ts": {
+      "durationMs": 35.71728515625,
+      "testCount": 3
+    },
+    "src/infra/outbound/targets.channel-resolution.test.ts": {
+      "durationMs": 35.55908203125,
+      "testCount": 2
+    },
+    "src/config/io.runtime-snapshot-write.test.ts": {
+      "durationMs": 35.29833984375,
+      "testCount": 6
+    },
+    "src/config/config.identity-defaults.test.ts": {
+      "durationMs": 35.183837890625,
+      "testCount": 7
+    },
+    "src/media/fetch.test.ts": {
+      "durationMs": 34.93798828125,
+      "testCount": 6
+    },
+    "src/cron/service.store-migration.test.ts": {
+      "durationMs": 34.64697265625,
+      "testCount": 5
+    },
+    "src/plugins/schema-validator.test.ts": {
+      "durationMs": 34.488525390625,
+      "testCount": 7
+    },
+    "src/cron/isolated-agent/run.skill-filter.test.ts": {
+      "durationMs": 34.291015625,
+      "testCount": 13
+    },
+    "src/daemon/service-audit.test.ts": {
+      "durationMs": 34.05078125,
+      "testCount": 16
+    },
+    "src/memory/manager.vector-dedupe.test.ts": {
+      "durationMs": 33.891357421875,
+      "testCount": 1
+    },
+    "src/infra/outbound/message-action-runner.media.test.ts": {
+      "durationMs": 33.396240234375,
+      "testCount": 7
+    },
+    "src/infra/secret-file.test.ts": {
+      "durationMs": 33.39404296875,
+      "testCount": 11
+    },
+    "src/infra/json-files.test.ts": {
+      "durationMs": 33.26025390625,
+      "testCount": 5
+    },
+    "src/cli/config-cli.test.ts": {
+      "durationMs": 33.232666015625,
+      "testCount": 48
+    },
+    "src/security/skill-scanner.test.ts": {
+      "durationMs": 33.070556640625,
+      "testCount": 27
+    },
+    "src/config/config.legacy-config-detection.rejects-routing-allowfrom.test.ts": {
+      "durationMs": 32.973876953125,
+      "testCount": 28
+    },
+    "src/infra/transport-ready.test.ts": {
+      "durationMs": 32.79931640625,
+      "testCount": 6
+    },
+    "src/config/config-misc.test.ts": {
+      "durationMs": 32.676025390625,
+      "testCount": 38
+    },
+    "src/media/server.test.ts": {
+      "durationMs": 32.6376953125,
+      "testCount": 9
+    },
+    "src/config/mcp-config.test.ts": {
+      "durationMs": 32.572021484375,
+      "testCount": 2
+    },
+    "src/config/io.compat.test.ts": {
+      "durationMs": 32.266357421875,
+      "testCount": 7
+    },
+    "src/cron/service.read-ops-nonblocking.test.ts": {
+      "durationMs": 32.1083984375,
+      "testCount": 3
+    },
+    "src/memory/manager.async-search.test.ts": {
+      "durationMs": 31.927978515625,
+      "testCount": 2
+    },
+    "src/infra/exec-approvals-store.test.ts": {
+      "durationMs": 31.478759765625,
+      "testCount": 8
+    },
+    "src/acp/persistent-bindings.lifecycle.test.ts": {
+      "durationMs": 31.341796875,
+      "testCount": 1
+    },
+    "src/infra/state-migrations.test.ts": {
+      "durationMs": 31.2236328125,
+      "testCount": 2
+    },
+    "src/infra/outbound/channel-resolution.test.ts": {
+      "durationMs": 31.204833984375,
+      "testCount": 6
+    },
+    "src/cli/program/config-guard.test.ts": {
+      "durationMs": 31.150390625,
+      "testCount": 8
+    },
+    "src/infra/provider-usage.fetch.claude.test.ts": {
+      "durationMs": 30.919921875,
+      "testCount": 13
+    },
+    "src/cron/isolated-agent/run.fast-mode.test.ts": {
+      "durationMs": 30.422607421875,
+      "testCount": 3
+    },
+    "src/cron/isolated-agent/run.payload-fallbacks.test.ts": {
+      "durationMs": 30.37890625,
+      "testCount": 3
+    },
+    "src/cron/service.session-reaper-in-finally.test.ts": {
+      "durationMs": 30.364501953125,
+      "testCount": 3
+    },
+    "src/cron/isolated-agent/run.cron-model-override.test.ts": {
+      "durationMs": 30.3642578125,
+      "testCount": 6
+    },
+    "src/infra/provider-usage.fetch.shared.test.ts": {
+      "durationMs": 30.104248046875,
+      "testCount": 9
+    },
+    "src/cron/isolated-agent/run.interim-retry.test.ts": {
+      "durationMs": 29.495849609375,
+      "testCount": 3
+    },
+    "src/cron/isolated-agent/run.message-tool-policy.test.ts": {
+      "durationMs": 29.431884765625,
+      "testCount": 3
+    },
+    "src/memory/manager.atomic-reindex.test.ts": {
+      "durationMs": 29.085693359375,
+      "testCount": 1
+    },
+    "src/config/config.talk-validation.test.ts": {
+      "durationMs": 29.06640625,
+      "testCount": 5
+    },
+    "src/infra/infra-runtime.test.ts": {
+      "durationMs": 28.755615234375,
+      "testCount": 11
+    },
+    "src/cli/daemon-cli.coverage.test.ts": {
+      "durationMs": 28.56201171875,
+      "testCount": 5
+    },
+    "src/infra/provider-usage.fetch.zai.test.ts": {
+      "durationMs": 28.48974609375,
+      "testCount": 5
+    },
+    "src/infra/outbound/deliver.test.ts": {
+      "durationMs": 28.302978515625,
+      "testCount": 44
+    },
+    "src/infra/provider-usage.fetch.minimax.test.ts": {
+      "durationMs": 28.293701171875,
+      "testCount": 10
+    },
+    "src/infra/fetch.test.ts": {
+      "durationMs": 28.05615234375,
+      "testCount": 16
+    },
+    "src/config/config.compaction-settings.test.ts": {
+      "durationMs": 27.6884765625,
+      "testCount": 5
+    },
+    "src/cron/session-reaper.test.ts": {
+      "durationMs": 27.5029296875,
+      "testCount": 16
+    },
+    "src/infra/heartbeat-runner.transcript-prune.test.ts": {
+      "durationMs": 27.2421875,
+      "testCount": 2
+    },
+    "src/infra/provider-usage.fetch.codex.test.ts": {
+      "durationMs": 27.190673828125,
+      "testCount": 8
+    },
+    "src/infra/push-apns.store.test.ts": {
+      "durationMs": 26.99267578125,
+      "testCount": 7
+    },
+    "src/config/sessions/store.session-key-normalization.test.ts": {
+      "durationMs": 26.93896484375,
+      "testCount": 4
+    },
+    "src/memory/post-json.test.ts": {
+      "durationMs": 26.911376953125,
+      "testCount": 2
+    },
+    "src/config/config.backup-rotation.test.ts": {
+      "durationMs": 26.7548828125,
+      "testCount": 4
+    },
+    "src/plugin-sdk/fetch-auth.test.ts": {
+      "durationMs": 26.3603515625,
+      "testCount": 5
+    },
+    "src/memory/manager.mistral-provider.test.ts": {
+      "durationMs": 26.35546875,
+      "testCount": 3
+    },
+    "src/memory/batch-gemini.test.ts": {
+      "durationMs": 26.331787109375,
+      "testCount": 1
+    },
+    "src/infra/provider-usage.fetch.gemini.test.ts": {
+      "durationMs": 26.230712890625,
+      "testCount": 4
+    },
+    "src/infra/session-cost-usage.test.ts": {
+      "durationMs": 25.966064453125,
+      "testCount": 9
+    },
+    "src/cron/store.test.ts": {
+      "durationMs": 25.829345703125,
+      "testCount": 11
+    },
+    "src/config/logging.test.ts": {
+      "durationMs": 25.685546875,
+      "testCount": 2
+    },
+    "src/config/sessions.cache.test.ts": {
+      "durationMs": 25.68359375,
+      "testCount": 9
+    },
+    "src/infra/outbound/message-action-runner.plugin-dispatch.test.ts": {
+      "durationMs": 25.17431640625,
+      "testCount": 10
+    },
+    "src/cli/mcp-cli.test.ts": {
+      "durationMs": 24.999267578125,
+      "testCount": 2
+    },
+    "src/channels/plugins/contracts/session-binding.contract.test.ts": {
+      "durationMs": 24.273193359375,
+      "testCount": 16
+    },
+    "src/channels/plugins/contracts/inbound.contract.test.ts": {
+      "durationMs": 24.263916015625,
+      "testCount": 5
+    },
+    "src/daemon/schtasks.test.ts": {
+      "durationMs": 23.58984375,
+      "testCount": 23
+    },
+    "src/daemon/schtasks.stop.test.ts": {
+      "durationMs": 23.494140625,
+      "testCount": 4
+    },
+    "src/cron/service.skips-main-jobs-empty-systemevent-text.test.ts": {
+      "durationMs": 23.45703125,
+      "testCount": 3
+    },
+    "src/cli/memory-cli.test.ts": {
+      "durationMs": 23.390869140625,
+      "testCount": 24
+    },
+    "src/node-host/invoke-browser.test.ts": {
+      "durationMs": 23.259521484375,
+      "testCount": 4
+    },
+    "src/plugins/bundle-manifest.test.ts": {
+      "durationMs": 23.01025390625,
+      "testCount": 8
+    },
+    "src/cli/run-main.profile-env.test.ts": {
+      "durationMs": 22.941650390625,
+      "testCount": 1
+    },
+    "src/config/includes.test.ts": {
+      "durationMs": 22.760009765625,
+      "testCount": 26
+    },
+    "src/infra/install-source-utils.test.ts": {
+      "durationMs": 22.56591796875,
+      "testCount": 16
+    },
+    "src/plugin-sdk/runtime-api-guardrails.test.ts": {
+      "durationMs": 22.320556640625,
+      "testCount": 1
+    },
+    "src/cron/service.delivery-plan.test.ts": {
+      "durationMs": 22.0009765625,
+      "testCount": 3
+    },
+    "src/process/supervisor/supervisor.test.ts": {
+      "durationMs": 21.83642578125,
+      "testCount": 5
+    },
+    "src/plugin-sdk/persistent-dedupe.test.ts": {
+      "durationMs": 21.31005859375,
+      "testCount": 6
+    },
+    "src/cli/daemon-cli/restart-health.test.ts": {
+      "durationMs": 21.211669921875,
+      "testCount": 10
+    },
+    "src/plugins/uninstall.test.ts": {
+      "durationMs": 21.104736328125,
+      "testCount": 23
+    },
+    "src/infra/system-presence.test.ts": {
+      "durationMs": 20.78662109375,
+      "testCount": 5
+    },
+    "src/memory/manager.readonly-recovery.test.ts": {
+      "durationMs": 20.703369140625,
+      "testCount": 4
+    },
+    "src/cron/service/jobs.schedule-error-isolation.test.ts": {
+      "durationMs": 20.352783203125,
+      "testCount": 8
+    },
+    "src/plugins/commands.test.ts": {
+      "durationMs": 20.340576171875,
+      "testCount": 12
+    },
+    "src/cli/cron-cli.test.ts": {
+      "durationMs": 20.26171875,
+      "testCount": 35
+    },
+    "src/cron/schedule.test.ts": {
+      "durationMs": 20.260498046875,
+      "testCount": 22
+    }
+  }
+}

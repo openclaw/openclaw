@@ -1,18 +1,15 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/irc";
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import {
+  createPluginSetupWizardAdapter,
   createTestWizardPrompter,
+  promptSetupWizardAllowFrom,
+  runSetupWizardConfigure,
   type WizardPrompter,
 } from "../../../test/helpers/extensions/setup-wizard.js";
 import { ircPlugin } from "./channel.js";
 import type { CoreConfig } from "./types.js";
 
-const ircConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
-  plugin: ircPlugin,
-  wizard: ircPlugin.setupWizard!,
-});
+const ircConfigureAdapter = createPluginSetupWizardAdapter(ircPlugin);
 
 describe("irc setup wizard", () => {
   it("configures host and nick via setup prompts", async () => {
@@ -52,16 +49,11 @@ describe("irc setup wizard", () => {
       }),
     });
 
-    const runtime: RuntimeEnv = createRuntimeEnv();
-
-    const result = await ircConfigureAdapter.configure({
+    const result = await runSetupWizardConfigure({
+      configure: ircConfigureAdapter.configure,
       cfg: {} as CoreConfig,
-      runtime,
       prompter,
       options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.accountId).toBe("default");
@@ -101,7 +93,8 @@ describe("irc setup wizard", () => {
       },
     };
 
-    const updated = (await promptAllowFrom?.({
+    const updated = (await promptSetupWizardAllowFrom({
+      promptAllowFrom,
       cfg,
       prompter,
       accountId: "work",

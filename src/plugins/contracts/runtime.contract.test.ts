@@ -2,10 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import openAIPlugin from "../../../extensions/openai/index.js";
+import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
 import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
 import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
 import type { ProviderRuntimeModel } from "../types.js";
+import { requireProviderContractProvider as requireBundledProviderContractProvider } from "./registry.js";
+
+const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
 const getOAuthApiKeyMock = vi.hoisted(() => vi.fn());
 const refreshQwenPortalCredentialsMock = vi.hoisted(() => vi.fn());
@@ -18,17 +23,13 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/qwen-portal-auth", async () => {
-  const actual = await vi.importActual<object>("openclaw/plugin-sdk/qwen-portal-auth");
+vi.mock("../../../extensions/qwen-portal-auth/refresh.js", async () => {
+  const actual = await vi.importActual<object>("../../../extensions/qwen-portal-auth/refresh.js");
   return {
     ...actual,
     refreshQwenPortalCredentials: refreshQwenPortalCredentialsMock,
   };
 });
-
-let requireBundledProviderContractProvider: typeof import("./registry.js").requireProviderContractProvider;
-let openAIPlugin: (typeof import("../../../extensions/openai/index.js"))["default"];
-let qwenPortalPlugin: (typeof import("../../../extensions/qwen-portal-auth/index.js"))["default"];
 
 function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRuntimeModel, "id">) {
   return {
@@ -72,15 +73,10 @@ function requireProviderContractProvider(providerId: string): ProviderPlugin {
 }
 
 describe("provider runtime contract", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ requireProviderContractProvider: requireBundledProviderContractProvider } =
-      await import("./registry.js"));
-    openAIPlugin = (await import("../../../extensions/openai/index.js")).default;
-    qwenPortalPlugin = (await import("../../../extensions/qwen-portal-auth/index.js")).default;
+  beforeEach(() => {
     getOAuthApiKeyMock.mockReset();
     refreshQwenPortalCredentialsMock.mockReset();
-  });
+  }, CONTRACT_SETUP_TIMEOUT_MS);
 
   describe("anthropic", () => {
     it("owns anthropic 4.6 forward-compat resolution", () => {
@@ -425,6 +421,120 @@ describe("provider runtime contract", () => {
         }),
       ).toMatchObject({
         api: "openai-responses",
+      });
+    });
+  });
+
+  describe("xai", () => {
+    it("owns Grok forward-compat resolution for newer fast models", () => {
+      const provider = requireProviderContractProvider("xai");
+      const model = provider.resolveDynamicModel?.({
+        provider: "xai",
+        modelId: "grok-4-1-fast-reasoning",
+        modelRegistry: {
+          find: () => null,
+        } as never,
+        providerConfig: {
+          api: "openai-completions",
+          baseUrl: "https://api.x.ai/v1",
+        },
+      });
+
+      expect(model).toMatchObject({
+        id: "grok-4-1-fast-reasoning",
+        provider: "xai",
+        api: "openai-completions",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+        contextWindow: 2_000_000,
+      });
+    });
+
+    it("owns xai modern-model matching without accepting multi-agent ids", () => {
+      const provider = requireProviderContractProvider("xai");
+
+      expect(
+        provider.isModernModelRef?.({
+          provider: "xai",
+          modelId: "grok-4-1-fast-reasoning",
+        } as never),
+      ).toBe(true);
+      expect(
+        provider.isModernModelRef?.({
+          provider: "xai",
+          modelId: "grok-4.20-multi-agent-experimental-beta-0304",
+        } as never),
+      ).toBe(false);
+    });
+
+    it("owns direct xai compat flags on resolved models", () => {
+      const provider = requireProviderContractProvider("xai");
+
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: "xai",
+          modelId: "grok-4-1-fast",
+          model: createModel({
+            id: "grok-4-1-fast",
+            provider: "xai",
+            api: "openai-completions",
+            baseUrl: "https://api.x.ai/v1",
+          }),
+        } as never),
+      ).toMatchObject({
+        compat: {
+          toolSchemaProfile: "xai",
+          nativeWebSearchTool: true,
+          toolCallArgumentsEncoding: "html-entities",
+        },
+      });
+    });
+  });
+
+  describe("openrouter", () => {
+    it("owns xai downstream compat flags for x-ai routed models", () => {
+      const provider = requireProviderContractProvider("openrouter");
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: "openrouter",
+          modelId: "x-ai/grok-4-1-fast",
+          model: createModel({
+            id: "x-ai/grok-4-1-fast",
+            provider: "openrouter",
+            api: "openai-completions",
+            baseUrl: "https://openrouter.ai/api/v1",
+          }),
+        }),
+      ).toMatchObject({
+        compat: {
+          toolSchemaProfile: "xai",
+          nativeWebSearchTool: true,
+          toolCallArgumentsEncoding: "html-entities",
+        },
+      });
+    });
+  });
+
+  describe("venice", () => {
+    it("owns xai downstream compat flags for grok-backed Venice models", () => {
+      const provider = requireProviderContractProvider("venice");
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: "venice",
+          modelId: "grok-41-fast",
+          model: createModel({
+            id: "grok-41-fast",
+            provider: "venice",
+            api: "openai-completions",
+            baseUrl: "https://api.venice.ai/api/v1",
+          }),
+        }),
+      ).toMatchObject({
+        compat: {
+          toolSchemaProfile: "xai",
+          nativeWebSearchTool: true,
+          toolCallArgumentsEncoding: "html-entities",
+        },
       });
     });
   });

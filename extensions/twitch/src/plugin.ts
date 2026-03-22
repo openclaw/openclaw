@@ -5,9 +5,9 @@
  * This is the primary entry point for the Twitch channel integration.
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk/twitch";
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/twitch";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import type { OpenClawConfig } from "../api.js";
+import { buildChannelConfigSchema } from "../api.js";
 import { twitchMessageActions } from "./actions.js";
 import { removeClientManager } from "./client-manager-registry.js";
 import { TwitchConfigSchema } from "./config-schema.js";

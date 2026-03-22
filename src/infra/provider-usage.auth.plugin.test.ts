@@ -9,7 +9,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
 
-describe("resolveProviderAuths plugin seam", () => {
+describe("resolveProviderAuths plugin boundary", () => {
   beforeEach(async () => {
     vi.resetModules();
     resolveProviderUsageAuthWithPluginMock.mockReset();

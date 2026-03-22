@@ -4,7 +4,7 @@ import {
   resolveAccountEntry,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import type { IMessageAccountConfig } from "openclaw/plugin-sdk/imessage";
+import type { IMessageAccountConfig } from "../runtime-api.js";
 
 export type ResolvedIMessageAccount = {
   accountId: string;

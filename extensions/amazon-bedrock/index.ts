@@ -1,4 +1,8 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createBedrockNoCacheWrapper,
+  isAnthropicBedrockModel,
+} from "openclaw/plugin-sdk/provider-stream";
 
 const PROVIDER_ID = "amazon-bedrock";
 const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
@@ -13,6 +17,8 @@ export default definePluginEntry({
       label: "Amazon Bedrock",
       docsPath: "/providers/models",
       auth: [],
+      wrapStreamFn: ({ modelId, streamFn }) =>
+        isAnthropicBedrockModel(modelId) ? streamFn : createBedrockNoCacheWrapper(streamFn),
       resolveDefaultThinkingLevel: ({ modelId }) =>
         CLAUDE_46_MODEL_RE.test(modelId.trim()) ? "adaptive" : undefined,
     });

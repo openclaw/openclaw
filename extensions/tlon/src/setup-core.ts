@@ -14,7 +14,9 @@ import { normalizeShip } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
 import { validateUrbitBaseUrl } from "./urbit/base-url.js";
 
-const channel = "tlon" as const;
+function tlonChannelId() {
+  return "tlon" as const;
+}
 
 export type TlonSetupInput = ChannelSetupInput & {
   ship?: string;
@@ -42,7 +44,7 @@ type TlonSetupWizardBaseParams = {
 
 export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): ChannelSetupWizard {
   return {
-    channel,
+    channel: tlonChannelId(),
     status: {
       configuredLabel: "configured",
       unconfiguredLabel: "needs setup",
@@ -140,7 +142,7 @@ export function applyTlonSetupConfig(params: {
   const useDefault = accountId === DEFAULT_ACCOUNT_ID;
   const namedConfig = prepareScopedSetupConfig({
     cfg,
-    channelKey: channel,
+    channelKey: tlonChannelId(),
     accountId,
     name: input.name,
   });
@@ -163,7 +165,7 @@ export function applyTlonSetupConfig(params: {
 
   return patchScopedAccountConfig({
     cfg: namedConfig,
-    channelKey: channel,
+    channelKey: tlonChannelId(),
     accountId,
     patch: { enabled: base.enabled ?? true },
     accountPatch: {
@@ -180,7 +182,7 @@ export const tlonSetupAdapter: ChannelSetupAdapter = {
   applyAccountName: ({ cfg, accountId, name }) =>
     prepareScopedSetupConfig({
       cfg,
-      channelKey: channel,
+      channelKey: tlonChannelId(),
       accountId,
       name,
     }),

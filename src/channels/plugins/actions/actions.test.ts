@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { ChannelMessageActionAdapter } from "../types.js";
 
@@ -21,15 +21,15 @@ vi.mock("../../../../extensions/signal/src/send-reactions.js", () => ({
   removeReactionSignal,
 }));
 
-vi.mock("../../../../extensions/slack/runtime-api.js", () => ({
+vi.mock("../../../../extensions/slack/src/action-runtime.js", () => ({
   handleSlackAction,
 }));
 
-let discordMessageActions: typeof import("./discord.js").discordMessageActions;
+let discordMessageActions: typeof import("../../../../extensions/discord/runtime-api.js").discordMessageActions;
 let handleDiscordMessageAction: typeof import("./discord/handle-action.js").handleDiscordMessageAction;
-let telegramMessageActions: typeof import("./telegram.js").telegramMessageActions;
-let signalMessageActions: typeof import("./signal.js").signalMessageActions;
-let createSlackActions: typeof import("../slack.actions.js").createSlackActions;
+let telegramMessageActions: typeof import("../../../../extensions/telegram/runtime-api.js").telegramMessageActions;
+let signalMessageActions: typeof import("../../../../extensions/signal/src/message-actions.js").signalMessageActions;
+let createSlackActions: typeof import("../../../../extensions/slack/src/channel-actions.js").createSlackActions;
 
 function getDescribedActions(params: {
   describeMessageTool?: ChannelMessageActionAdapter["describeMessageTool"];
@@ -199,13 +199,15 @@ async function expectSlackSendRejected(params: Record<string, unknown>, error: R
   expect(handleSlackAction).not.toHaveBeenCalled();
 }
 
-beforeEach(async () => {
-  vi.resetModules();
-  ({ discordMessageActions } = await import("./discord.js"));
+beforeAll(async () => {
+  ({ discordMessageActions } = await import("../../../../extensions/discord/runtime-api.js"));
   ({ handleDiscordMessageAction } = await import("./discord/handle-action.js"));
-  ({ telegramMessageActions } = await import("./telegram.js"));
-  ({ signalMessageActions } = await import("./signal.js"));
-  ({ createSlackActions } = await import("../slack.actions.js"));
+  ({ telegramMessageActions } = await import("../../../../extensions/telegram/runtime-api.js"));
+  ({ signalMessageActions } = await import("../../../../extensions/signal/src/message-actions.js"));
+  ({ createSlackActions } = await import("../../../../extensions/slack/src/channel-actions.js"));
+});
+
+beforeEach(() => {
   vi.clearAllMocks();
 });
 
@@ -708,7 +710,7 @@ describe("telegramMessageActions", () => {
     }
   });
 
-  it("maps action params into telegram actions", async () => {
+  it("forwards telegram action aliases into the runtime interface", async () => {
     const cases = [
       {
         name: "media-only send preserves asVoice",
@@ -721,8 +723,7 @@ describe("telegramMessageActions", () => {
         expectedPayload: expect.objectContaining({
           action: "sendMessage",
           to: "123",
-          content: "",
-          mediaUrl: "https://example.com/voice.ogg",
+          media: "https://example.com/voice.ogg",
           asVoice: true,
         }),
       },
@@ -737,7 +738,7 @@ describe("telegramMessageActions", () => {
         expectedPayload: expect.objectContaining({
           action: "sendMessage",
           to: "456",
-          content: "Silent notification test",
+          message: "Silent notification test",
           silent: true,
         }),
       },
@@ -754,7 +755,7 @@ describe("telegramMessageActions", () => {
           action: "editMessage",
           chatId: "123",
           messageId: 42,
-          content: "Updated",
+          message: "Updated",
           buttons: [],
           accountId: undefined,
         },
@@ -776,20 +777,19 @@ describe("telegramMessageActions", () => {
         expectedPayload: {
           action: "poll",
           to: "123",
-          question: "Ready?",
-          answers: ["Yes", "No"],
-          allowMultiselect: true,
-          durationHours: undefined,
-          durationSeconds: 60,
-          replyToMessageId: 55,
-          messageThreadId: 77,
-          isAnonymous: false,
+          pollQuestion: "Ready?",
+          pollOption: ["Yes", "No"],
+          pollMulti: true,
+          pollDurationSeconds: 60,
+          pollPublic: true,
+          replyTo: 55,
+          threadId: 77,
           silent: true,
           accountId: undefined,
         },
       },
       {
-        name: "poll parses string booleans before telegram action handoff",
+        name: "poll forwards raw alias flags to telegram runtime",
         action: "poll" as const,
         params: {
           to: "123",
@@ -802,20 +802,16 @@ describe("telegramMessageActions", () => {
         expectedPayload: {
           action: "poll",
           to: "123",
-          question: "Ready?",
-          answers: ["Yes", "No"],
-          allowMultiselect: true,
-          durationHours: undefined,
-          durationSeconds: undefined,
-          replyToMessageId: undefined,
-          messageThreadId: undefined,
-          isAnonymous: false,
-          silent: true,
+          pollQuestion: "Ready?",
+          pollOption: ["Yes", "No"],
+          pollMulti: "true",
+          pollPublic: "true",
+          silent: "true",
           accountId: undefined,
         },
       },
       {
-        name: "poll rejects partially numeric duration strings before telegram action handoff",
+        name: "poll forwards duration strings for runtime validation",
         action: "poll" as const,
         params: {
           to: "123",
@@ -826,15 +822,9 @@ describe("telegramMessageActions", () => {
         expectedPayload: {
           action: "poll",
           to: "123",
-          question: "Ready?",
-          answers: ["Yes", "No"],
-          allowMultiselect: undefined,
-          durationHours: undefined,
-          durationSeconds: undefined,
-          replyToMessageId: undefined,
-          messageThreadId: undefined,
-          isAnonymous: undefined,
-          silent: undefined,
+          pollQuestion: "Ready?",
+          pollOption: ["Yes", "No"],
+          pollDurationSeconds: "60s",
           accountId: undefined,
         },
       },
@@ -847,10 +837,8 @@ describe("telegramMessageActions", () => {
         },
         expectedPayload: {
           action: "createForumTopic",
-          chatId: "telegram:group:-1001234567890:topic:271",
+          to: "telegram:group:-1001234567890:topic:271",
           name: "Build Updates",
-          iconColor: undefined,
-          iconCustomEmojiId: undefined,
           accountId: undefined,
         },
       },
@@ -865,8 +853,8 @@ describe("telegramMessageActions", () => {
         },
         expectedPayload: {
           action: "editForumTopic",
-          chatId: "telegram:group:-1001234567890:topic:271",
-          messageThreadId: 271,
+          to: "telegram:group:-1001234567890:topic:271",
+          threadId: 271,
           name: "Build Updates",
           iconCustomEmojiId: "emoji-123",
           accountId: undefined,
@@ -883,30 +871,6 @@ describe("telegramMessageActions", () => {
         expect.objectContaining({ mediaLocalRoots: undefined }),
       );
     }
-  });
-
-  it("rejects non-integer messageId for edit before reaching telegram-actions", async () => {
-    const cfg = telegramCfg();
-    const handleAction = telegramMessageActions.handleAction;
-    if (!handleAction) {
-      throw new Error("telegram handleAction unavailable");
-    }
-
-    await expect(
-      handleAction({
-        channel: "telegram",
-        action: "edit",
-        params: {
-          chatId: "123",
-          messageId: "nope",
-          message: "Updated",
-        },
-        cfg,
-        accountId: undefined,
-      }),
-    ).rejects.toThrow();
-
-    expect(handleTelegramAction).not.toHaveBeenCalled();
   });
 
   it("inherits top-level reaction gate when account overrides sticker only", () => {
@@ -941,7 +905,8 @@ describe("telegramMessageActions", () => {
           emoji: "ok",
         },
         toolContext: undefined,
-        expectedChatId: "123",
+        expectedChannelField: "channelId",
+        expectedChannelValue: "123",
         expectedMessageId: "456",
       },
       {
@@ -952,7 +917,8 @@ describe("telegramMessageActions", () => {
           emoji: "ok",
         },
         toolContext: undefined,
-        expectedChatId: "123",
+        expectedChannelField: "channelId",
+        expectedChannelValue: "123",
         expectedMessageId: "456",
       },
       {
@@ -962,7 +928,8 @@ describe("telegramMessageActions", () => {
           emoji: "ok",
         },
         toolContext: { currentMessageId: "9001" },
-        expectedChatId: "123",
+        expectedChannelField: "chatId",
+        expectedChannelValue: "123",
         expectedMessageId: "9001",
       },
       {
@@ -972,7 +939,8 @@ describe("telegramMessageActions", () => {
           emoji: "ok",
         },
         toolContext: undefined,
-        expectedChatId: "123",
+        expectedChannelField: "chatId",
+        expectedChannelValue: "123",
         expectedMessageId: undefined,
       },
     ] as const) {
@@ -995,7 +963,9 @@ describe("telegramMessageActions", () => {
       }
       const callPayload = call as Record<string, unknown>;
       expect(callPayload.action, testCase.name).toBe("react");
-      expect(String(callPayload.chatId), testCase.name).toBe(testCase.expectedChatId);
+      expect(String(callPayload[testCase.expectedChannelField]), testCase.name).toBe(
+        testCase.expectedChannelValue,
+      );
       if (testCase.expectedMessageId === undefined) {
         expect(callPayload.messageId, testCase.name).toBeUndefined();
       } else {
@@ -1048,7 +1018,7 @@ it("forwards trusted mediaLocalRoots for send actions", async () => {
         expect(handleTelegramAction).toHaveBeenCalledWith(
           expect.objectContaining({
             action: "sendMessage",
-            mediaUrl: "/tmp/voice.ogg",
+            media: "/tmp/voice.ogg",
           }),
           expect.any(Object),
           expect.objectContaining({ mediaLocalRoots: ["/tmp/agent-root"] }),
