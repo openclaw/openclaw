@@ -2118,21 +2118,7 @@ export const registerTelegramHandlers = ({
 
     const queryText = query.query?.trim() ?? "";
     if (!queryText) {
-      await bot.api
-        .answerInlineQuery(
-          query.id,
-          [
-            {
-              type: "article",
-              id: "ask",
-              title: "Type a question to ask the assistant...",
-              description: "Start typing after the bot name",
-              input_message_content: { message_text: "..." },
-            },
-          ],
-          { cache_time: 0 },
-        )
-        .catch(() => {});
+      await bot.api.answerInlineQuery(query.id, [], { cache_time: 0 }).catch(() => {});
       return;
     }
 
