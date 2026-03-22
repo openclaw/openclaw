@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+1999" })),
@@ -14,6 +14,10 @@ vi.mock("./targets.js", async () => {
 
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentDeliveryPlan, resolveAgentOutboundTarget } from "./agent-delivery.js";
+
+beforeEach(() => {
+  mocks.resolveOutboundTarget.mockClear();
+});
 
 describe("agent delivery helpers", () => {
   it("builds a delivery plan from session delivery context", () => {

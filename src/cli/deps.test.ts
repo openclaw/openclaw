@@ -19,34 +19,34 @@ const sendFns = vi.hoisted(() => ({
   imessage: vi.fn(async () => ({ messageId: "i1", chatId: "imessage:1" })),
 }));
 
-vi.mock("../plugin-sdk-internal/whatsapp.js", () => {
+vi.mock("./send-runtime/whatsapp.js", () => {
   moduleLoads.whatsapp();
-  return { sendMessageWhatsApp: sendFns.whatsapp };
+  return { runtimeSend: { sendMessage: sendFns.whatsapp } };
 });
 
-vi.mock("../plugin-sdk-internal/telegram.js", () => {
+vi.mock("./send-runtime/telegram.js", () => {
   moduleLoads.telegram();
-  return { sendMessageTelegram: sendFns.telegram };
+  return { runtimeSend: { sendMessage: sendFns.telegram } };
 });
 
-vi.mock("../plugin-sdk-internal/discord.js", () => {
+vi.mock("./send-runtime/discord.js", () => {
   moduleLoads.discord();
-  return { sendMessageDiscord: sendFns.discord };
+  return { runtimeSend: { sendMessage: sendFns.discord } };
 });
 
-vi.mock("../plugin-sdk-internal/slack.js", () => {
+vi.mock("./send-runtime/slack.js", () => {
   moduleLoads.slack();
-  return { sendMessageSlack: sendFns.slack };
+  return { runtimeSend: { sendMessage: sendFns.slack } };
 });
 
-vi.mock("../plugin-sdk-internal/signal.js", () => {
+vi.mock("./send-runtime/signal.js", () => {
   moduleLoads.signal();
-  return { sendMessageSignal: sendFns.signal };
+  return { runtimeSend: { sendMessage: sendFns.signal } };
 });
 
-vi.mock("../plugin-sdk-internal/imessage.js", () => {
+vi.mock("./send-runtime/imessage.js", () => {
   moduleLoads.imessage();
-  return { sendMessageIMessage: sendFns.imessage };
+  return { runtimeSend: { sendMessage: sendFns.imessage } };
 });
 
 describe("createDefaultDeps", () => {

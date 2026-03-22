@@ -1,25 +1,53 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { build } from "tsdown";
 import { describe, expect, it } from "vitest";
-import {
-  buildPluginSdkEntrySources,
-  buildPluginSdkPackageExports,
-  buildPluginSdkSpecifiers,
-  pluginSdkEntrypoints,
-} from "./entrypoints.js";
-import * as sdk from "./index.js";
+import { buildPluginSdkPackageExports } from "./entrypoints.js";
 
-const pluginSdkSpecifiers = buildPluginSdkSpecifiers();
+async function collectRuntimeExports(filePath: string, seen = new Set<string>()) {
+  const normalizedPath = path.resolve(filePath);
+  if (seen.has(normalizedPath)) {
+    return new Set<string>();
+  }
+  seen.add(normalizedPath);
+
+  const source = await fs.readFile(normalizedPath, "utf8");
+  const exportNames = new Set<string>();
+
+  for (const match of source.matchAll(/export\s+(?!type\b)\{([\s\S]*?)\}\s+from\s+"([^"]+)";/g)) {
+    const names = match[1]
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => part.split(/\s+as\s+/).at(-1) ?? part);
+    for (const name of names) {
+      exportNames.add(name);
+    }
+  }
+
+  for (const match of source.matchAll(/export\s+\*\s+from\s+"([^"]+)";/g)) {
+    const specifier = match[1];
+    if (!specifier.startsWith(".")) {
+      continue;
+    }
+    const nestedPath = path.resolve(
+      path.dirname(normalizedPath),
+      specifier.replace(/\.js$/, ".ts"),
+    );
+    const nestedExports = await collectRuntimeExports(nestedPath, seen);
+    for (const name of nestedExports) {
+      exportNames.add(name);
+    }
+  }
+
+  return exportNames;
+}
 
 describe("plugin-sdk exports", () => {
-  it("does not expose runtime modules", () => {
+  it("does not expose runtime modules", async () => {
+    const runtimeExports = await collectRuntimeExports(path.join(import.meta.dirname, "index.ts"));
     const forbidden = [
       "chunkMarkdownText",
       "chunkText",
-      "resolveTextChunkLimit",
       "hasControlCommand",
       "isControlCommandMessage",
       "shouldComputeCommandAuthorized",
@@ -27,9 +55,7 @@ describe("plugin-sdk exports", () => {
       "buildMentionRegexes",
       "matchesMentionPatterns",
       "resolveStateDir",
-      "loadConfig",
       "writeConfigFile",
-      "runCommandWithTimeout",
       "enqueueSystemEvent",
       "fetchRemoteMedia",
       "saveMediaBuffer",
@@ -56,34 +82,17 @@ describe("plugin-sdk exports", () => {
     ];
 
     for (const key of forbidden) {
-      expect(Object.prototype.hasOwnProperty.call(sdk, key)).toBe(false);
+      expect(runtimeExports.has(key)).toBe(false);
     }
   });
 
-  // Verify critical functions that extensions depend on are exported and callable.
-  // Regression guard for #27569 where isDangerousNameMatchingEnabled was missing
-  // from the compiled output, breaking mattermost/googlechat/msteams/irc plugins.
-  it("exports critical functions used by channel extensions", () => {
-    const requiredFunctions = [
-      "isDangerousNameMatchingEnabled",
-      "createAccountListHelpers",
-      "buildAgentMediaPayload",
-      "createReplyPrefixOptions",
-      "createTypingCallbacks",
-      "logInboundDrop",
-      "logTypingFailure",
-      "buildPendingHistoryContextFromMap",
-      "clearHistoryEntriesIfEnabled",
-      "recordPendingHistoryEntryIfEnabled",
-      "resolveControlCommandGate",
-      "resolveDmGroupAccessWithLists",
-      "resolveAllowlistProviderRuntimeGroupPolicy",
-      "resolveDefaultGroupPolicy",
-      "resolveChannelMediaMaxBytes",
-      "warnMissingProviderGroupPolicyFallbackOnce",
-      "createDedupeCache",
-      "formatInboundFromLabel",
-      "resolveRuntimeGroupPolicy",
+  it("keeps the root runtime surface intentionally small", async () => {
+    const runtimeExports = await collectRuntimeExports(path.join(import.meta.dirname, "index.ts"));
+    expect([...runtimeExports].toSorted()).toEqual([
+      "buildFalImageGenerationProvider",
+      "buildGoogleImageGenerationProvider",
+      "buildOpenAIImageGenerationProvider",
+      "delegateCompactionToRuntime",
       "emptyPluginConfigSchema",
       "normalizePluginHttpPath",
       "registerPluginHttpRoute",

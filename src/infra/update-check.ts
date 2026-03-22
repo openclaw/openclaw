@@ -107,36 +107,37 @@ export async function checkGitUpdateStatus(params: {
     fetchOk: null,
   };
 
-  const branchRes = await runCommandWithTimeout(
-    ["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"],
-    { timeoutMs },
-  ).catch(() => null);
+  const [branchRes, shaRes, tagRes, upstreamRes, dirtyRes] = await Promise.all([
+    runCommandWithTimeout(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"], {
+      timeoutMs,
+    }).catch(() => null),
+    runCommandWithTimeout(["git", "-C", root, "rev-parse", "HEAD"], {
+      timeoutMs,
+    }).catch(() => null),
+    runCommandWithTimeout(["git", "-C", root, "describe", "--tags", "--exact-match"], {
+      timeoutMs,
+    }).catch(() => null),
+    runCommandWithTimeout(["git", "-C", root, "rev-parse", "--abbrev-ref", "@{upstream}"], {
+      timeoutMs,
+    }).catch(() => null),
+    runCommandWithTimeout(
+      ["git", "-C", root, "status", "--porcelain", "--", ":!dist/control-ui/"],
+      {
+        timeoutMs,
+      },
+    ).catch(() => null),
+  ]);
   if (!branchRes || branchRes.code !== 0) {
     return { ...base, error: branchRes?.stderr?.trim() || "git unavailable" };
   }
   const branch = branchRes.stdout.trim() || null;
 
-  const shaRes = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "HEAD"], {
-    timeoutMs,
-  }).catch(() => null);
   const sha = shaRes && shaRes.code === 0 ? shaRes.stdout.trim() : null;
 
-  const tagRes = await runCommandWithTimeout(
-    ["git", "-C", root, "describe", "--tags", "--exact-match"],
-    { timeoutMs },
-  ).catch(() => null);
   const tag = tagRes && tagRes.code === 0 ? tagRes.stdout.trim() : null;
 
-  const upstreamRes = await runCommandWithTimeout(
-    ["git", "-C", root, "rev-parse", "--abbrev-ref", "@{upstream}"],
-    { timeoutMs },
-  ).catch(() => null);
   const upstream = upstreamRes && upstreamRes.code === 0 ? upstreamRes.stdout.trim() : null;
 
-  const dirtyRes = await runCommandWithTimeout(
-    ["git", "-C", root, "status", "--porcelain", "--", ":!dist/control-ui/"],
-    { timeoutMs },
-  ).catch(() => null);
   const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
 
   const fetchOk = params.fetch
@@ -463,20 +464,24 @@ export async function checkUpdateStatus(params: {
     };
   }
 
-  const pm = await detectPackageManager(root);
-  const gitRoot = await detectGitRoot(root);
+  const [pm, gitRoot, registry] = await Promise.all([
+    detectPackageManager(root),
+    detectGitRoot(root),
+    params.includeRegistry ? fetchNpmLatestVersion({ timeoutMs }) : Promise.resolve(undefined),
+  ]);
   const isGit = gitRoot && path.resolve(gitRoot) === root;
 
   const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
-  const git = isGit
-    ? await checkGitUpdateStatus({
-        root,
-        timeoutMs,
-        fetch: Boolean(params.fetchGit),
-      })
-    : undefined;
-  const deps = await checkDepsStatus({ root, manager: pm });
-  const registry = params.includeRegistry ? await fetchNpmLatestVersion({ timeoutMs }) : undefined;
+  const [git, deps] = await Promise.all([
+    isGit
+      ? checkGitUpdateStatus({
+          root,
+          timeoutMs,
+          fetch: Boolean(params.fetchGit),
+        })
+      : Promise.resolve(undefined),
+    checkDepsStatus({ root, manager: pm }),
+  ]);
 
   return {
     root,

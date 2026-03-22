@@ -1,12 +1,41 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expect, vi } from "vitest";
+import {
+  __testing as discordThreadBindingTesting,
+  createThreadBindingManager as createDiscordThreadBindingManager,
+} from "../../../../extensions/discord/runtime-api.js";
+import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
+import {
+  createMatrixThreadBindingManager,
+  resetMatrixThreadBindingsForTests,
+} from "../../../../extensions/matrix/api.js";
+import { setMatrixRuntime } from "../../../../extensions/matrix/index.js";
+import { createTelegramThreadBindingManager } from "../../../../extensions/telegram/runtime-api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  getSessionBindingService,
+  type SessionBindingCapabilities,
+  type SessionBindingRecord,
+} from "../../../infra/outbound/session-binding-service.js";
 import {
   resolveDefaultLineAccountId,
   resolveLineAccount,
   listLineAccountIds,
 } from "../../../line/accounts.js";
-import { bundledChannelRuntimeSetters, requireBundledChannelPlugin } from "../bundled.js";
+import {
+  bundledChannelPlugins,
+  bundledChannelRuntimeSetters,
+  requireBundledChannelPlugin,
+} from "../bundled.js";
 import type { ChannelPlugin } from "../types.js";
+import {
+  channelPluginSurfaceKeys,
+  type ChannelPluginSurface,
+  sessionBindingContractChannelIds,
+  type SessionBindingContractChannelId,
+} from "./manifest.js";
 
 type PluginContractEntry = {
   id: string;
@@ -57,16 +86,6 @@ type StatusContractEntry = {
   }>;
 };
 
-export type ChannelPluginSurface =
-  | "actions"
-  | "setup"
-  | "status"
-  | "outbound"
-  | "messaging"
-  | "threading"
-  | "directory"
-  | "gateway";
-
 type SurfaceContractEntry = {
   id: string;
   plugin: Pick<
@@ -84,17 +103,85 @@ type SurfaceContractEntry = {
   surfaces: readonly ChannelPluginSurface[];
 };
 
-const telegramListActionsMock = vi.fn();
-const telegramGetCapabilitiesMock = vi.fn();
-const discordListActionsMock = vi.fn();
-const discordGetCapabilitiesMock = vi.fn();
+type ThreadingContractEntry = {
+  id: string;
+  plugin: Pick<ChannelPlugin, "id" | "threading">;
+};
+
+type DirectoryContractEntry = {
+  id: string;
+  plugin: Pick<ChannelPlugin, "id" | "directory">;
+  coverage: "lookups" | "presence";
+  cfg?: OpenClawConfig;
+  accountId?: string;
+};
+
+type SessionBindingContractEntry = {
+  id: string;
+  expectedCapabilities: SessionBindingCapabilities;
+  getCapabilities: () => SessionBindingCapabilities | Promise<SessionBindingCapabilities>;
+  bindAndResolve: () => Promise<SessionBindingRecord>;
+  unbindAndVerify: (binding: SessionBindingRecord) => Promise<void>;
+  cleanup: () => Promise<void> | void;
+};
+
+function expectResolvedSessionBinding(params: {
+  channel: string;
+  accountId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  targetSessionKey: string;
+}) {
+  expect(
+    getSessionBindingService().resolveByConversation({
+      channel: params.channel,
+      accountId: params.accountId,
+      conversationId: params.conversationId,
+      parentConversationId: params.parentConversationId,
+    }),
+  )?.toMatchObject({
+    targetSessionKey: params.targetSessionKey,
+  });
+}
+
+async function unbindAndExpectClearedSessionBinding(binding: SessionBindingRecord) {
+  const service = getSessionBindingService();
+  const removed = await service.unbind({
+    bindingId: binding.bindingId,
+    reason: "contract-test",
+  });
+  expect(removed.map((entry) => entry.bindingId)).toContain(binding.bindingId);
+  expect(service.resolveByConversation(binding.conversation)).toBeNull();
+}
+
+function expectClearedSessionBinding(params: {
+  channel: string;
+  accountId: string;
+  conversationId: string;
+}) {
+  expect(
+    getSessionBindingService().resolveByConversation({
+      channel: params.channel,
+      accountId: params.accountId,
+      conversationId: params.conversationId,
+    }),
+  ).toBeNull();
+}
+
+const telegramDescribeMessageToolMock = vi.fn();
+const discordDescribeMessageToolMock = vi.fn();
+const sendMessageMatrixMock = vi.hoisted(() =>
+  vi.fn(async (to: string, _message: string, opts?: { threadId?: string }) => ({
+    messageId: opts?.threadId ? "$matrix-thread" : "$matrix-root",
+    roomId: to.replace(/^room:/, ""),
+  })),
+);
 
 bundledChannelRuntimeSetters.setTelegramRuntime({
   channel: {
     telegram: {
       messageActions: {
-        listActions: telegramListActionsMock,
-        getCapabilities: telegramGetCapabilitiesMock,
+        describeMessageTool: telegramDescribeMessageToolMock,
       },
     },
   },
@@ -104,8 +191,7 @@ bundledChannelRuntimeSetters.setDiscordRuntime({
   channel: {
     discord: {
       messageActions: {
-        listActions: discordListActionsMock,
-        getCapabilities: discordGetCapabilitiesMock,
+        describeMessageTool: discordDescribeMessageToolMock,
       },
     },
   },
@@ -122,28 +208,54 @@ bundledChannelRuntimeSetters.setLineRuntime({
   },
 } as never);
 
-export const pluginContractRegistry: PluginContractEntry[] = [
-  { id: "bluebubbles", plugin: requireBundledChannelPlugin("bluebubbles") },
-  { id: "discord", plugin: requireBundledChannelPlugin("discord") },
-  { id: "feishu", plugin: requireBundledChannelPlugin("feishu") },
-  { id: "googlechat", plugin: requireBundledChannelPlugin("googlechat") },
-  { id: "imessage", plugin: requireBundledChannelPlugin("imessage") },
-  { id: "irc", plugin: requireBundledChannelPlugin("irc") },
-  { id: "line", plugin: requireBundledChannelPlugin("line") },
-  { id: "matrix", plugin: requireBundledChannelPlugin("matrix") },
-  { id: "mattermost", plugin: requireBundledChannelPlugin("mattermost") },
-  { id: "msteams", plugin: requireBundledChannelPlugin("msteams") },
-  { id: "nextcloud-talk", plugin: requireBundledChannelPlugin("nextcloud-talk") },
-  { id: "nostr", plugin: requireBundledChannelPlugin("nostr") },
-  { id: "signal", plugin: requireBundledChannelPlugin("signal") },
-  { id: "slack", plugin: requireBundledChannelPlugin("slack") },
-  { id: "synology-chat", plugin: requireBundledChannelPlugin("synology-chat") },
-  { id: "telegram", plugin: requireBundledChannelPlugin("telegram") },
-  { id: "tlon", plugin: requireBundledChannelPlugin("tlon") },
-  { id: "whatsapp", plugin: requireBundledChannelPlugin("whatsapp") },
-  { id: "zalo", plugin: requireBundledChannelPlugin("zalo") },
-  { id: "zalouser", plugin: requireBundledChannelPlugin("zalouser") },
-];
+vi.mock("../../../../extensions/matrix/runtime-api.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../../../extensions/matrix/runtime-api.js")
+  >("../../../../extensions/matrix/runtime-api.js");
+  return {
+    ...actual,
+    sendMessageMatrix: sendMessageMatrixMock,
+  };
+});
+
+const matrixSessionBindingStateDir = fs.mkdtempSync(
+  path.join(os.tmpdir(), "openclaw-matrix-session-binding-contract-"),
+);
+const matrixSessionBindingAuth = {
+  accountId: "ops",
+  homeserver: "https://matrix.example.org",
+  userId: "@bot:example.org",
+  accessToken: "token",
+} as const;
+
+function resetMatrixSessionBindingStateDir() {
+  fs.rmSync(matrixSessionBindingStateDir, { recursive: true, force: true });
+  fs.mkdirSync(matrixSessionBindingStateDir, { recursive: true });
+}
+
+async function createContractMatrixThreadBindingManager() {
+  resetMatrixSessionBindingStateDir();
+  setMatrixRuntime({
+    state: {
+      resolveStateDir: () => matrixSessionBindingStateDir,
+    },
+  } as never);
+  return await createMatrixThreadBindingManager({
+    accountId: matrixSessionBindingAuth.accountId,
+    auth: matrixSessionBindingAuth,
+    client: {} as never,
+    idleTimeoutMs: 24 * 60 * 60 * 1000,
+    maxAgeMs: 0,
+    enableSweeper: false,
+  });
+}
+
+export const pluginContractRegistry: PluginContractEntry[] = bundledChannelPlugins.map(
+  (plugin) => ({
+    id: plugin.id,
+    plugin,
+  }),
+);
 
 export const actionContractRegistry: ActionsContractEntry[] = [
   {
@@ -278,10 +390,11 @@ export const actionContractRegistry: ActionsContractEntry[] = [
         expectedActions: ["send", "poll", "react"],
         expectedCapabilities: ["interactive", "buttons"],
         beforeTest: () => {
-          telegramListActionsMock.mockReset();
-          telegramGetCapabilitiesMock.mockReset();
-          telegramListActionsMock.mockReturnValue(["send", "poll", "react"]);
-          telegramGetCapabilitiesMock.mockReturnValue(["interactive", "buttons"]);
+          telegramDescribeMessageToolMock.mockReset();
+          telegramDescribeMessageToolMock.mockReturnValue({
+            actions: ["send", "poll", "react"],
+            capabilities: ["interactive", "buttons"],
+          });
         },
       },
     ],
@@ -296,10 +409,11 @@ export const actionContractRegistry: ActionsContractEntry[] = [
         expectedActions: ["send", "react", "poll"],
         expectedCapabilities: ["interactive", "components"],
         beforeTest: () => {
-          discordListActionsMock.mockReset();
-          discordGetCapabilitiesMock.mockReset();
-          discordListActionsMock.mockReturnValue(["send", "react", "poll"]);
-          discordGetCapabilitiesMock.mockReturnValue(["interactive", "components"]);
+          discordDescribeMessageToolMock.mockReset();
+          discordDescribeMessageToolMock.mockReturnValue({
+            actions: ["send", "react", "poll"],
+            capabilities: ["interactive", "components"],
+          });
         },
       },
     ],
@@ -489,186 +603,270 @@ export const statusContractRegistry: StatusContractEntry[] = [
   },
 ];
 
-export const surfaceContractRegistry: SurfaceContractEntry[] = [
-  {
-    id: "bluebubbles",
-    plugin: requireBundledChannelPlugin("bluebubbles"),
-    surfaces: ["actions", "setup", "status", "outbound", "messaging", "threading", "gateway"],
+export const surfaceContractRegistry: SurfaceContractEntry[] = bundledChannelPlugins.map(
+  (plugin) => ({
+    id: plugin.id,
+    plugin,
+    surfaces: channelPluginSurfaceKeys.filter((surface) => Boolean(plugin[surface])),
+  }),
+);
+
+export const threadingContractRegistry: ThreadingContractEntry[] = surfaceContractRegistry
+  .filter((entry) => entry.surfaces.includes("threading"))
+  .map((entry) => ({
+    id: entry.id,
+    plugin: entry.plugin,
+  }));
+
+const directoryPresenceOnlyIds = new Set(["whatsapp", "zalouser"]);
+
+export const directoryContractRegistry: DirectoryContractEntry[] = surfaceContractRegistry
+  .filter((entry) => entry.surfaces.includes("directory"))
+  .map((entry) => ({
+    id: entry.id,
+    plugin: entry.plugin,
+    coverage: directoryPresenceOnlyIds.has(entry.id) ? "presence" : "lookups",
+  }));
+
+const baseSessionBindingCfg = {
+  session: { mainKey: "main", scope: "per-sender" },
+} satisfies OpenClawConfig;
+
+const sessionBindingContractEntries: Record<
+  SessionBindingContractChannelId,
+  Omit<SessionBindingContractEntry, "id">
+> = {
+  discord: {
+    expectedCapabilities: {
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current", "child"],
+    },
+    getCapabilities: () => {
+      createDiscordThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+      });
+      return getSessionBindingService().getCapabilities({
+        channel: "discord",
+        accountId: "default",
+      });
+    },
+    bindAndResolve: async () => {
+      createDiscordThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+      });
+      const service = getSessionBindingService();
+      const binding = await service.bind({
+        targetSessionKey: "agent:discord:child:thread-1",
+        targetKind: "subagent",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel:123456789012345678",
+        },
+        placement: "current",
+        metadata: {
+          label: "codex-discord",
+        },
+      });
+      expectResolvedSessionBinding({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:123456789012345678",
+        targetSessionKey: "agent:discord:child:thread-1",
+      });
+      return binding;
+    },
+    unbindAndVerify: unbindAndExpectClearedSessionBinding,
+    cleanup: async () => {
+      const manager = createDiscordThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+      });
+      manager.stop();
+      discordThreadBindingTesting.resetThreadBindingsForTests();
+      expectClearedSessionBinding({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:123456789012345678",
+      });
+    },
   },
-  {
-    id: "discord",
-    plugin: requireBundledChannelPlugin("discord"),
-    surfaces: [
-      "actions",
-      "setup",
-      "status",
-      "outbound",
-      "messaging",
-      "threading",
-      "directory",
-      "gateway",
-    ],
+  feishu: {
+    expectedCapabilities: {
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"],
+    },
+    getCapabilities: () => {
+      createFeishuThreadBindingManager({ cfg: baseSessionBindingCfg, accountId: "default" });
+      return getSessionBindingService().getCapabilities({
+        channel: "feishu",
+        accountId: "default",
+      });
+    },
+    bindAndResolve: async () => {
+      createFeishuThreadBindingManager({ cfg: baseSessionBindingCfg, accountId: "default" });
+      const service = getSessionBindingService();
+      const binding = await service.bind({
+        targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+        targetKind: "session",
+        conversation: {
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "oc_group_chat:topic:om_topic_root",
+          parentConversationId: "oc_group_chat",
+        },
+        placement: "current",
+        metadata: {
+          agentId: "codex",
+          label: "codex-main",
+        },
+      });
+      expectResolvedSessionBinding({
+        channel: "feishu",
+        accountId: "default",
+        conversationId: "oc_group_chat:topic:om_topic_root",
+        targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+      });
+      return binding;
+    },
+    unbindAndVerify: unbindAndExpectClearedSessionBinding,
+    cleanup: async () => {
+      const manager = createFeishuThreadBindingManager({
+        cfg: baseSessionBindingCfg,
+        accountId: "default",
+      });
+      manager.stop();
+      expectClearedSessionBinding({
+        channel: "feishu",
+        accountId: "default",
+        conversationId: "oc_group_chat:topic:om_topic_root",
+      });
+    },
   },
-  {
-    id: "feishu",
-    plugin: requireBundledChannelPlugin("feishu"),
-    surfaces: ["actions", "setup", "status", "outbound", "messaging", "directory", "gateway"],
+  matrix: {
+    expectedCapabilities: {
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current", "child"],
+    },
+    getCapabilities: async () => {
+      await createContractMatrixThreadBindingManager();
+      return getSessionBindingService().getCapabilities({
+        channel: "matrix",
+        accountId: matrixSessionBindingAuth.accountId,
+      });
+    },
+    bindAndResolve: async () => {
+      await createContractMatrixThreadBindingManager();
+      const service = getSessionBindingService();
+      const binding = await service.bind({
+        targetSessionKey: "agent:matrix:child:thread-1",
+        targetKind: "subagent",
+        conversation: {
+          channel: "matrix",
+          accountId: matrixSessionBindingAuth.accountId,
+          conversationId: "$thread",
+          parentConversationId: "!room:example",
+        },
+        placement: "current",
+        metadata: {
+          label: "codex-matrix",
+        },
+      });
+      expectResolvedSessionBinding({
+        channel: "matrix",
+        accountId: matrixSessionBindingAuth.accountId,
+        conversationId: "$thread",
+        targetSessionKey: "agent:matrix:child:thread-1",
+      });
+      return binding;
+    },
+    unbindAndVerify: unbindAndExpectClearedSessionBinding,
+    cleanup: async () => {
+      resetMatrixThreadBindingsForTests();
+      resetMatrixSessionBindingStateDir();
+      expectClearedSessionBinding({
+        channel: "matrix",
+        accountId: matrixSessionBindingAuth.accountId,
+        conversationId: "$thread",
+      });
+    },
   },
-  {
-    id: "googlechat",
-    plugin: requireBundledChannelPlugin("googlechat"),
-    surfaces: [
-      "actions",
-      "setup",
-      "status",
-      "outbound",
-      "messaging",
-      "threading",
-      "directory",
-      "gateway",
-    ],
+  telegram: {
+    expectedCapabilities: {
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"],
+    },
+    getCapabilities: () => {
+      createTelegramThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+      });
+      return getSessionBindingService().getCapabilities({
+        channel: "telegram",
+        accountId: "default",
+      });
+    },
+    bindAndResolve: async () => {
+      createTelegramThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+      });
+      const service = getSessionBindingService();
+      const binding = await service.bind({
+        targetSessionKey: "agent:main:subagent:child-1",
+        targetKind: "subagent",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-100200300:topic:77",
+        },
+        placement: "current",
+        metadata: {
+          boundBy: "user-1",
+        },
+      });
+      expectResolvedSessionBinding({
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-100200300:topic:77",
+        targetSessionKey: "agent:main:subagent:child-1",
+      });
+      return binding;
+    },
+    unbindAndVerify: unbindAndExpectClearedSessionBinding,
+    cleanup: async () => {
+      const manager = createTelegramThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+      });
+      manager.stop();
+      expectClearedSessionBinding({
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-100200300:topic:77",
+      });
+    },
   },
-  {
-    id: "imessage",
-    plugin: requireBundledChannelPlugin("imessage"),
-    surfaces: ["setup", "status", "outbound", "messaging", "gateway"],
-  },
-  {
-    id: "irc",
-    plugin: requireBundledChannelPlugin("irc"),
-    surfaces: ["setup", "status", "outbound", "messaging", "directory", "gateway"],
-  },
-  {
-    id: "line",
-    plugin: requireBundledChannelPlugin("line"),
-    surfaces: ["setup", "status", "outbound", "messaging", "directory", "gateway"],
-  },
-  {
-    id: "matrix",
-    plugin: requireBundledChannelPlugin("matrix"),
-    surfaces: [
-      "actions",
-      "setup",
-      "status",
-      "outbound",
-      "messaging",
-      "threading",
-      "directory",
-      "gateway",
-    ],
-  },
-  {
-    id: "mattermost",
-    plugin: requireBundledChannelPlugin("mattermost"),
-    surfaces: [
-      "actions",
-      "setup",
-      "status",
-      "outbound",
-      "messaging",
-      "threading",
-      "directory",
-      "gateway",
-    ],
-  },
-  {
-    id: "msteams",
-    plugin: requireBundledChannelPlugin("msteams"),
-    surfaces: [
-      "actions",
-      "setup",
-      "status",
-      "outbound",
-      "messaging",
-      "threading",
-      "directory",
-      "gateway",
-    ],
-  },
-  {
-    id: "nextcloud-talk",
-    plugin: requireBundledChannelPlugin("nextcloud-talk"),
-    surfaces: ["setup", "status", "outbound", "messaging", "gateway"],
-  },
-  {
-    id: "nostr",
-    plugin: requireBundledChannelPlugin("nostr"),
-    surfaces: ["setup", "status", "outbound", "messaging", "gateway"],
-  },
-  {
-    id: "signal",
-    plugin: requireBundledChannelPlugin("signal"),
-    surfaces: ["actions", "setup", "status", "outbound", "messaging", "gateway"],
-  },
-  {
-    id: "slack",
-    plugin: requireBundledChannelPlugin("slack"),
-    surfaces: [
-      "actions",
-      "setup",
-      "status",
-      "outbound",
-      "messaging",
-      "threading",
-      "directory",
-      "gateway",
-    ],
-  },
-  {
-    id: "synology-chat",
-    plugin: requireBundledChannelPlugin("synology-chat"),
-    surfaces: ["setup", "outbound", "messaging", "directory", "gateway"],
-  },
-  {
-    id: "telegram",
-    plugin: requireBundledChannelPlugin("telegram"),
-    surfaces: [
-      "actions",
-      "setup",
-      "status",
-      "outbound",
-      "messaging",
-      "threading",
-      "directory",
-      "gateway",
-    ],
-  },
-  {
-    id: "tlon",
-    plugin: requireBundledChannelPlugin("tlon"),
-    surfaces: ["setup", "status", "outbound", "messaging", "gateway"],
-  },
-  {
-    id: "whatsapp",
-    plugin: requireBundledChannelPlugin("whatsapp"),
-    surfaces: ["actions", "setup", "status", "outbound", "messaging", "directory", "gateway"],
-  },
-  {
-    id: "zalo",
-    plugin: requireBundledChannelPlugin("zalo"),
-    surfaces: [
-      "actions",
-      "setup",
-      "status",
-      "outbound",
-      "messaging",
-      "threading",
-      "directory",
-      "gateway",
-    ],
-  },
-  {
-    id: "zalouser",
-    plugin: requireBundledChannelPlugin("zalouser"),
-    surfaces: [
-      "actions",
-      "setup",
-      "status",
-      "outbound",
-      "messaging",
-      "threading",
-      "directory",
-      "gateway",
-    ],
-  },
-];
+};
+
+export const sessionBindingContractRegistry: SessionBindingContractEntry[] =
+  sessionBindingContractChannelIds.map((id) => ({
+    id,
+    ...sessionBindingContractEntries[id],
+  }));

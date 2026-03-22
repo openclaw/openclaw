@@ -1,17 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import type {
-  DmPolicy,
-  GroupPolicy,
-  OpenClawConfig,
-  WhatsAppAccountConfig,
-} from "openclaw/plugin-sdk/whatsapp";
-import { createAccountListHelpers } from "../../../src/channels/plugins/account-helpers.js";
-import { resolveOAuthDir } from "../../../src/config/paths.js";
-import { resolveAccountEntry } from "../../../src/routing/account-lookup.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
-import { resolveUserPath } from "../../../src/utils.js";
+import {
+  createAccountListHelpers,
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  resolveAccountEntry,
+  resolveUserPath,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/account-resolution";
+import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 import { hasWebCredsSync } from "./auth-store.js";
+import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "./runtime-api.js";
 
 export type ResolvedWhatsAppAccount = {
   accountId: string;
@@ -19,6 +18,7 @@ export type ResolvedWhatsAppAccount = {
   enabled: boolean;
   sendReadReceipts: boolean;
   messagePrefix?: string;
+  defaultTo?: string;
   authDir: string;
   isLegacyAuthDir: boolean;
   selfChatMode?: boolean;
@@ -136,6 +136,7 @@ export function resolveWhatsAppAccount(params: {
     sendReadReceipts: accountCfg?.sendReadReceipts ?? rootCfg?.sendReadReceipts ?? true,
     messagePrefix:
       accountCfg?.messagePrefix ?? rootCfg?.messagePrefix ?? params.cfg.messages?.messagePrefix,
+    defaultTo: accountCfg?.defaultTo ?? rootCfg?.defaultTo,
     authDir,
     isLegacyAuthDir: isLegacy,
     selfChatMode: accountCfg?.selfChatMode ?? rootCfg?.selfChatMode,

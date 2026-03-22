@@ -1,7 +1,9 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/core";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import { normalizeInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { buildSlackInteractiveBlocks } from "./blocks-render.js";
+import { readNumberParam, readStringParam } from "./runtime-api.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -9,170 +11,11 @@ type SlackActionInvoke = (
   toolContext?: ChannelMessageActionContext["toolContext"],
 ) => Promise<AgentToolResult<unknown>>;
 
-type InteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
-
-type InteractiveReplyButton = {
-  label: string;
-  value: string;
-  style?: InteractiveButtonStyle;
-};
-
-type InteractiveReplyOption = {
-  label: string;
-  value: string;
-};
-
-type InteractiveReplyBlock =
-  | { type: "text"; text: string }
-  | { type: "buttons"; buttons: InteractiveReplyButton[] }
-  | { type: "select"; placeholder?: string; options: InteractiveReplyOption[] };
-
-type InteractiveReply = {
-  blocks: InteractiveReplyBlock[];
-};
-
-function readTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
-function normalizeButtonStyle(value: unknown): InteractiveButtonStyle | undefined {
-  const style = readTrimmedString(value)?.toLowerCase();
-  return style === "primary" || style === "secondary" || style === "success" || style === "danger"
-    ? style
-    : undefined;
-}
-
-function normalizeInteractiveButton(raw: unknown): InteractiveReplyButton | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  const record = raw as Record<string, unknown>;
-  const label = readTrimmedString(record.label) ?? readTrimmedString(record.text);
-  const value =
-    readTrimmedString(record.value) ??
-    readTrimmedString(record.callbackData) ??
-    readTrimmedString(record.callback_data);
-  if (!label || !value) {
-    return undefined;
-  }
-  return { label, value, style: normalizeButtonStyle(record.style) };
-}
-
-function normalizeInteractiveOption(raw: unknown): InteractiveReplyOption | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  const record = raw as Record<string, unknown>;
-  const label = readTrimmedString(record.label) ?? readTrimmedString(record.text);
-  const value = readTrimmedString(record.value);
-  return label && value ? { label, value } : undefined;
-}
-
-function normalizeInteractiveReply(raw: unknown): InteractiveReply | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  const record = raw as Record<string, unknown>;
-  const blocks = Array.isArray(record.blocks)
-    ? record.blocks
-        .map((entry) => {
-          if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-            return undefined;
-          }
-          const block = entry as Record<string, unknown>;
-          const type = readTrimmedString(block.type)?.toLowerCase();
-          if (type === "text") {
-            const text = readTrimmedString(block.text);
-            return text ? ({ type: "text", text } as const) : undefined;
-          }
-          if (type === "buttons") {
-            const buttons = Array.isArray(block.buttons)
-              ? block.buttons
-                  .map((button) => normalizeInteractiveButton(button))
-                  .filter((button): button is InteractiveReplyButton => Boolean(button))
-              : [];
-            return buttons.length > 0 ? ({ type: "buttons", buttons } as const) : undefined;
-          }
-          if (type === "select") {
-            const options = Array.isArray(block.options)
-              ? block.options
-                  .map((option) => normalizeInteractiveOption(option))
-                  .filter((option): option is InteractiveReplyOption => Boolean(option))
-              : [];
-            return options.length > 0
-              ? ({
-                  type: "select",
-                  placeholder: readTrimmedString(block.placeholder),
-                  options,
-                } as const)
-              : undefined;
-          }
-          return undefined;
-        })
-        .filter((entry): entry is InteractiveReplyBlock => Boolean(entry))
-    : [];
-  return blocks.length > 0 ? { blocks } : undefined;
-}
-
-function readStringParam(
-  params: Record<string, unknown>,
-  key: string,
-  options: { required?: boolean; trim?: boolean; label?: string; allowEmpty?: boolean } = {},
-): string | undefined {
-  const { required = false, trim = true, label = key, allowEmpty = false } = options;
-  const raw = params[key];
-  if (typeof raw !== "string") {
-    if (required) {
-      throw new Error(`${label} required`);
-    }
-    return undefined;
-  }
-  const value = trim ? raw.trim() : raw;
-  if (!value && !allowEmpty) {
-    if (required) {
-      throw new Error(`${label} required`);
-    }
-    return undefined;
-  }
-  return value;
-}
-
-function readNumberParam(
-  params: Record<string, unknown>,
-  key: string,
-  options: { required?: boolean; label?: string; integer?: boolean; strict?: boolean } = {},
-): number | undefined {
-  const { required = false, label = key, integer = false, strict = false } = options;
-  const raw = params[key];
-  let value: number | undefined;
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    value = raw;
-  } else if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    if (trimmed) {
-      const parsed = strict ? Number(trimmed) : Number.parseFloat(trimmed);
-      if (Number.isFinite(parsed)) {
-        value = parsed;
-      }
-    }
-  }
-  if (value === undefined) {
-    if (required) {
-      throw new Error(`${label} required`);
-    }
-    return undefined;
-  }
-  return integer ? Math.trunc(value) : value;
-}
-
 function readSlackBlocksParam(actionParams: Record<string, unknown>) {
   return parseSlackBlocksInput(actionParams.blocks) as Record<string, unknown>[] | undefined;
 }
 
+/** Translate generic channel action requests into Slack-specific tool invocations and payload shapes. */
 export async function handleSlackMessageAction(params: {
   providerId: string;
   ctx: ChannelMessageActionContext;
@@ -187,15 +30,15 @@ export async function handleSlackMessageAction(params: {
     const channelId =
       readStringParam(actionParams, "channelId") ??
       readStringParam(actionParams, "to", { required: true });
-    if (!channelId) {
-      throw new Error("channelId required");
-    }
     return normalizeChannelId ? normalizeChannelId(channelId) : channelId;
   };
 
   if (action === "send") {
     const to = readStringParam(actionParams, "to", { required: true });
-    const content = readStringParam(actionParams, "message", { allowEmpty: true });
+    const content = readStringParam(actionParams, "message", {
+      required: false,
+      allowEmpty: true,
+    });
     const mediaUrl = readStringParam(actionParams, "media", { trim: false });
     const interactive = normalizeInteractiveReply(actionParams.interactive);
     const interactiveBlocks = interactive ? buildSlackInteractiveBlocks(interactive) : undefined;
@@ -224,20 +67,37 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "react") {
-    const messageId = readStringParam(actionParams, "messageId", { required: true });
+    const messageId = readStringParam(actionParams, "messageId", {
+      required: true,
+    });
     const emoji = readStringParam(actionParams, "emoji", { allowEmpty: true });
     const remove = typeof actionParams.remove === "boolean" ? actionParams.remove : undefined;
     return await invoke(
-      { action: "react", channelId: resolveChannelId(), messageId, emoji, remove, accountId },
+      {
+        action: "react",
+        channelId: resolveChannelId(),
+        messageId,
+        emoji,
+        remove,
+        accountId,
+      },
       cfg,
     );
   }
 
   if (action === "reactions") {
-    const messageId = readStringParam(actionParams, "messageId", { required: true });
+    const messageId = readStringParam(actionParams, "messageId", {
+      required: true,
+    });
     const limit = readNumberParam(actionParams, "limit", { integer: true });
     return await invoke(
-      { action: "reactions", channelId: resolveChannelId(), messageId, limit, accountId },
+      {
+        action: "reactions",
+        channelId: resolveChannelId(),
+        messageId,
+        limit,
+        accountId,
+      },
       cfg,
     );
   }
@@ -259,7 +119,9 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "edit") {
-    const messageId = readStringParam(actionParams, "messageId", { required: true });
+    const messageId = readStringParam(actionParams, "messageId", {
+      required: true,
+    });
     const content = readStringParam(actionParams, "message", { allowEmpty: true });
     const blocks = readSlackBlocksParam(actionParams);
     if (!content && !blocks) {
@@ -279,9 +141,16 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "delete") {
-    const messageId = readStringParam(actionParams, "messageId", { required: true });
+    const messageId = readStringParam(actionParams, "messageId", {
+      required: true,
+    });
     return await invoke(
-      { action: "deleteMessage", channelId: resolveChannelId(), messageId, accountId },
+      {
+        action: "deleteMessage",
+        channelId: resolveChannelId(),
+        messageId,
+        accountId,
+      },
       cfg,
     );
   }

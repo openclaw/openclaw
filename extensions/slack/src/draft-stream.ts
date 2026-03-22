@@ -1,4 +1,4 @@
-import { createDraftStreamLoop } from "../../../src/channels/draft-stream-loop.js";
+import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
 import { deleteSlackMessage, editSlackMessage } from "./actions.js";
 import { sendMessageSlack } from "./send.js";
 
