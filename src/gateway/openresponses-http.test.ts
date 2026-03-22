@@ -13,8 +13,17 @@ let enabledServer: Awaited<ReturnType<typeof startServer>>;
 let enabledPort: number;
 let openResponsesTesting: {
   resetResponseSessionState(): void;
-  storeResponseSessionAt(responseId: string, sessionKey: string, now: number): void;
-  lookupResponseSessionAt(responseId: string | undefined, now: number): string | undefined;
+  storeResponseSessionAt(
+    responseId: string,
+    sessionKey: string,
+    now: number,
+    scope?: { agentId: string; user?: string; requestedSessionKey?: string },
+  ): void;
+  lookupResponseSessionAt(
+    responseId: string | undefined,
+    now: number,
+    scope?: { agentId: string; user?: string; requestedSessionKey?: string },
+  ): string | undefined;
   getResponseSessionIds(): string[];
 };
 
@@ -768,6 +777,81 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await ensureResponseConsumed(secondResponse);
   });
 
+  it("does not reuse prior sessions across different user scopes", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "First turn." }],
+    } as never);
+
+    const firstResponse = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      user: "alice",
+      input: "hello",
+    });
+    expect(firstResponse.status).toBe(200);
+    const firstJson = (await firstResponse.json()) as { id?: string };
+    const firstOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+      | { sessionKey?: string }
+      | undefined;
+    expect(firstOpts?.sessionKey ?? "").toContain("openresponses-user:alice");
+
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Second turn." }],
+    } as never);
+
+    const secondResponse = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      user: "bob",
+      previous_response_id: firstJson.id,
+      input: "hello again",
+    });
+    expect(secondResponse.status).toBe(200);
+    const secondOpts = (agentCommand.mock.calls[1] as unknown[] | undefined)?.[0] as
+      | { sessionKey?: string }
+      | undefined;
+    expect(secondOpts?.sessionKey).not.toBe(firstOpts?.sessionKey);
+    expect(secondOpts?.sessionKey ?? "").toContain("openresponses-user:bob");
+    await ensureResponseConsumed(secondResponse);
+  });
+
+  it("stores response session mappings when the response is emitted", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+
+    let release: ((value: { payloads: Array<{ text: string }> }) => void) | undefined;
+    agentCommand.mockImplementationOnce(
+      () =>
+        new Promise<{ payloads: Array<{ text: string }> }>((resolve) => {
+          release = resolve;
+        }) as never,
+    );
+
+    const responsePromise = postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "delayed hello",
+    });
+
+    for (let i = 0; i < 20 && agentCommand.mock.calls.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(agentCommand.mock.calls).toHaveLength(1);
+    expect(openResponsesTesting.getResponseSessionIds()).toEqual([]);
+
+    release?.({ payloads: [{ text: "hello" }] });
+
+    const res = await responsePromise;
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { id?: string };
+    expect(json.id).toMatch(/^resp_/);
+    expect(openResponsesTesting.getResponseSessionIds()).toEqual([json.id]);
+    await ensureResponseConsumed(res);
+  });
+
   it("caps response session cache by evicting the oldest entries", () => {
     for (let i = 0; i < 505; i += 1) {
       openResponsesTesting.storeResponseSessionAt(`resp_${i}`, `session_${i}`, i);
@@ -778,6 +862,26 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(openResponsesTesting.lookupResponseSessionAt("resp_4", 505)).toBeUndefined();
     expect(openResponsesTesting.lookupResponseSessionAt("resp_5", 505)).toBe("session_5");
     expect(openResponsesTesting.lookupResponseSessionAt("resp_504", 505)).toBe("session_504");
+  });
+
+  it("does not reuse cached sessions when the user scope changes", () => {
+    openResponsesTesting.storeResponseSessionAt("resp_1", "session_1", 100, {
+      agentId: "main",
+      user: "alice",
+    });
+
+    expect(
+      openResponsesTesting.lookupResponseSessionAt("resp_1", 101, {
+        agentId: "main",
+        user: "alice",
+      }),
+    ).toBe("session_1");
+    expect(
+      openResponsesTesting.lookupResponseSessionAt("resp_1", 101, {
+        agentId: "main",
+        user: "bob",
+      }),
+    ).toBeUndefined();
   });
 
   it("blocks unsafe URL-based file/image inputs", async () => {

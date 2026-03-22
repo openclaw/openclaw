@@ -35,7 +35,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveGatewayRequestContext } from "./http-utils.js";
+import { getHeader, resolveGatewayRequestContext } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
   CreateResponseBodySchema,
@@ -63,7 +63,51 @@ const DEFAULT_MAX_URL_PARTS = 8;
 // Entries are evicted after 30 minutes to bound memory usage.
 const RESPONSE_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_RESPONSE_SESSION_ENTRIES = 500;
-const responseSessionMap = new Map<string, { sessionKey: string; ts: number }>();
+type ResponseSessionScope = {
+  agentId: string;
+  user?: string;
+  requestedSessionKey?: string;
+};
+
+type ResponseSessionEntry = ResponseSessionScope & {
+  sessionKey: string;
+  ts: number;
+};
+
+const responseSessionMap = new Map<string, ResponseSessionEntry>();
+
+function normalizeResponseSessionScope(scope: ResponseSessionScope): ResponseSessionScope {
+  const user = scope.user?.trim();
+  const requestedSessionKey = scope.requestedSessionKey?.trim();
+  return {
+    agentId: scope.agentId,
+    user: user || undefined,
+    requestedSessionKey: requestedSessionKey || undefined,
+  };
+}
+
+function createResponseSessionScope(params: {
+  req: IncomingMessage;
+  agentId: string;
+  user?: string;
+}): ResponseSessionScope {
+  return normalizeResponseSessionScope({
+    agentId: params.agentId,
+    user: params.user,
+    requestedSessionKey: getHeader(params.req, "x-openclaw-session-key"),
+  });
+}
+
+function matchesResponseSessionScope(
+  entry: ResponseSessionEntry,
+  scope: ResponseSessionScope,
+): boolean {
+  return (
+    entry.agentId === scope.agentId &&
+    entry.user === scope.user &&
+    entry.requestedSessionKey === scope.requestedSessionKey
+  );
+}
 
 function pruneExpiredResponseSessions(now: number) {
   while (responseSessionMap.size > 0) {
@@ -89,16 +133,22 @@ function evictOverflowResponseSessions() {
   }
 }
 
-function storeResponseSession(responseId: string, sessionKey: string, now = Date.now()) {
+function storeResponseSession(
+  responseId: string,
+  sessionKey: string,
+  scope: ResponseSessionScope,
+  now = Date.now(),
+) {
   // Reinsert existing keys so the map stays ordered by freshest timestamp.
   responseSessionMap.delete(responseId);
-  responseSessionMap.set(responseId, { sessionKey, ts: now });
+  responseSessionMap.set(responseId, { ...scope, sessionKey, ts: now });
   pruneExpiredResponseSessions(now);
   evictOverflowResponseSessions();
 }
 
 function lookupResponseSession(
   responseId: string | undefined,
+  scope: ResponseSessionScope,
   now = Date.now(),
 ): string | undefined {
   if (!responseId) {
@@ -112,6 +162,9 @@ function lookupResponseSession(
     responseSessionMap.delete(responseId);
     return undefined;
   }
+  if (!matchesResponseSessionScope(entry, scope)) {
+    return undefined;
+  }
   return entry.sessionKey;
 }
 
@@ -119,11 +172,20 @@ export const __testing = {
   resetResponseSessionState() {
     responseSessionMap.clear();
   },
-  storeResponseSessionAt(responseId: string, sessionKey: string, now: number) {
-    storeResponseSession(responseId, sessionKey, now);
+  storeResponseSessionAt(
+    responseId: string,
+    sessionKey: string,
+    now: number,
+    scope: ResponseSessionScope = { agentId: "main" },
+  ) {
+    storeResponseSession(responseId, sessionKey, normalizeResponseSessionScope(scope), now);
   },
-  lookupResponseSessionAt(responseId: string | undefined, now: number) {
-    return lookupResponseSession(responseId, now);
+  lookupResponseSessionAt(
+    responseId: string | undefined,
+    now: number,
+    scope: ResponseSessionScope = { agentId: "main" },
+  ) {
+    return lookupResponseSession(responseId, normalizeResponseSessionScope(scope), now);
   },
   getResponseSessionIds() {
     return [...responseSessionMap.keys()];
@@ -525,9 +587,6 @@ export async function handleOpenResponsesHttpRequest(
     });
     return true;
   }
-  // Resolve session key: prefer previous_response_id lookup for tool-loop continuity,
-  // then fall back to standard header / user-based resolution.
-  const previousSessionKey = lookupResponseSession(payload.previous_response_id);
   const resolved = resolveGatewayRequestContext({
     req,
     model,
@@ -536,6 +595,17 @@ export async function handleOpenResponsesHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: false,
   });
+  const responseSessionScope = createResponseSessionScope({
+    req,
+    agentId: resolved.agentId,
+    user,
+  });
+  // Resolve session key: reuse previous_response_id only when it matches the
+  // same agent/user/requested-session scope as the current request.
+  const previousSessionKey = lookupResponseSession(
+    payload.previous_response_id,
+    responseSessionScope,
+  );
   const sessionKey = previousSessionKey ?? resolved.sessionKey;
   const messageChannel = resolved.messageChannel;
 
@@ -566,9 +636,8 @@ export async function handleOpenResponsesHttpRequest(
   }
 
   const responseId = `resp_${randomUUID()}`;
-  // Store responseId -> sessionKey so continuation turns via previous_response_id
-  // can resolve back to the same agent session.
-  storeResponseSession(responseId, sessionKey);
+  const rememberResponseSession = () =>
+    storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
   const streamParams =
@@ -634,6 +703,7 @@ export async function handleOpenResponsesHttpRequest(
           output,
           usage,
         });
+        rememberResponseSession();
         sendJson(res, 200, response);
         return true;
       }
@@ -656,6 +726,7 @@ export async function handleOpenResponsesHttpRequest(
         usage,
       });
 
+      rememberResponseSession();
       sendJson(res, 200, response);
     } catch (err) {
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
@@ -666,6 +737,7 @@ export async function handleOpenResponsesHttpRequest(
         output: [],
         error: { code: "api_error", message: "internal error" },
       });
+      rememberResponseSession();
       sendJson(res, 500, response);
     }
     return true;
@@ -735,6 +807,7 @@ export async function handleOpenResponsesHttpRequest(
       usage,
     });
 
+    rememberResponseSession();
     writeSseEvent(res, { type: "response.completed", response: finalResponse });
     writeDone(res);
     res.end();
@@ -922,6 +995,7 @@ export async function handleOpenResponsesHttpRequest(
         });
         closed = true;
         unsubscribe();
+        rememberResponseSession();
         writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
         writeDone(res);
         res.end();
@@ -972,6 +1046,7 @@ export async function handleOpenResponsesHttpRequest(
         usage: finalUsage,
       });
 
+      rememberResponseSession();
       writeSseEvent(res, { type: "response.failed", response: errorResponse });
       emitAgentEvent({
         runId: responseId,
