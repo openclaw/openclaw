@@ -4,12 +4,12 @@ services:
     runtime: docker
     plan: standard
     healthCheckPath: /health
-    dockerCommand: "node openclaw.mjs gateway --bind lan --port 8080"
+    dockerCommand: "sh -c 'test -f /data/openclaw.render.json || cp /app/sophia/openclaw.render.json /data/openclaw.render.json; exec node openclaw.mjs gateway --bind lan --port 8080'"
     envVars:
       - key: NODE_OPTIONS
         value: "--max-old-space-size=1536"
       - key: OPENCLAW_CONFIG_PATH
-        value: /app/sophia/openclaw.render.json
+        value: /data/openclaw.render.json
       - key: PORT
         value: "8080"
       - key: SETUP_PASSWORD
