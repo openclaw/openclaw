@@ -1071,7 +1071,7 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
   if (redundantForFinding.length > 0) {
     detailParts.push(
       "Redundant deny entries (real command IDs that are not on any platform default or configured allowlist, so deny has no effect unless you also enable them via allowCommands): " +
-        `${redundantForFinding.join(", ")}`,
+        redundantForFinding.join(", "),
     );
   }
   const examples = Array.from(recognizedIds).slice(0, 8);
