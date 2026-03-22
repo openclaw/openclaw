@@ -523,6 +523,55 @@ describe("recoverOrphanedUserMessagesForPrompt", () => {
     expect(replaceMessages).toHaveBeenCalledTimes(1);
   });
 
+  it("returns recovered images in chronological order without duplicates", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: agentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "seed assistant" }],
+          }),
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: agentMessage({
+            role: "user",
+            content: [{ type: "image", data: "older", mimeType: "image/png" }],
+          }),
+        },
+        {
+          id: "u2",
+          type: "message",
+          parentId: "u1",
+          message: agentMessage({
+            role: "user",
+            content: [
+              { type: "image", data: "newer", mimeType: "image/png" },
+              { type: "image", data: "older", mimeType: "image/png" },
+            ],
+          }),
+        },
+      ],
+      "u2",
+    );
+
+    const replaceMessages = vi.fn();
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "retry",
+      replaceMessages,
+    });
+
+    expect(result.recoveredImages).toEqual([
+      { type: "image", data: "older", mimeType: "image/png" },
+      { type: "image", data: "newer", mimeType: "image/png" },
+    ]);
+  });
+
   it("returns prompt unchanged when no orphaned user leaf exists", () => {
     const sessionManager = createSessionManager(
       [

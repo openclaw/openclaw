@@ -321,6 +321,20 @@ function extractUserMessageImages(message: AgentMessage): ImageContent[] {
   });
 }
 
+function dedupeImageContents(images: ImageContent[]): ImageContent[] {
+  const seen = new Set<string>();
+  const deduped: ImageContent[] = [];
+  for (const image of images) {
+    const key = `${image.mimeType}\u0000${image.data}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(image);
+  }
+  return deduped;
+}
+
 type SessionLeafEntryLike = {
   type?: unknown;
   parentId?: string | null;
@@ -366,6 +380,7 @@ export function recoverOrphanedUserMessagesForPrompt(params: {
   if (orphanedUserCount === 0) {
     return { prompt: params.prompt, recoveredCount: 0, mergedCount: 0, recoveredImages: [] };
   }
+  const chronologicalRecoveredImages = dedupeImageContents(recoveredImages.toReversed());
 
   const sessionContext = params.sessionManager.buildSessionContext();
   params.replaceMessages(sessionContext.messages);
@@ -374,7 +389,7 @@ export function recoverOrphanedUserMessagesForPrompt(params: {
       prompt: params.prompt,
       recoveredCount: orphanedUserCount,
       mergedCount: 0,
-      recoveredImages,
+      recoveredImages: chronologicalRecoveredImages,
     };
   }
 
@@ -405,7 +420,7 @@ export function recoverOrphanedUserMessagesForPrompt(params: {
       prompt: params.prompt,
       recoveredCount: orphanedUserCount,
       mergedCount: 0,
-      recoveredImages,
+      recoveredImages: chronologicalRecoveredImages,
     };
   }
   const carryForwardPrompt = carryForwardEntries.join("\n\n");
@@ -413,7 +428,7 @@ export function recoverOrphanedUserMessagesForPrompt(params: {
     prompt: `${carryForwardPrompt}\n\n${params.prompt}`,
     recoveredCount: orphanedUserCount,
     mergedCount: carryForwardEntries.length,
-    recoveredImages,
+    recoveredImages: chronologicalRecoveredImages,
   };
 }
 
@@ -1583,7 +1598,7 @@ export async function runEmbeddedAttempt(
             model: params.model,
             existingImages:
               recoveredPromptImages.length > 0
-                ? [...(params.images ?? []), ...recoveredPromptImages]
+                ? dedupeImageContents([...(params.images ?? []), ...recoveredPromptImages])
                 : params.images,
             maxBytes: MAX_IMAGE_BYTES,
             maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
