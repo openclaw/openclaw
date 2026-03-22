@@ -81,7 +81,7 @@ async function persistTestSessionStorePath(storePath: string): Promise<void> {
     configPaths.add(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"));
   }
   const parsedConfigs = new Map<string, Record<string, unknown>>();
-  let persistedStoreValue: string | undefined;
+  let preservedTemplateStore: string | undefined;
   for (const configPath of configPaths) {
     let config: Record<string, unknown> = {};
     try {
@@ -104,11 +104,11 @@ async function persistTestSessionStorePath(storePath: string): Promise<void> {
         ? (config.session as Record<string, unknown>)
         : undefined;
     const existingStore = typeof session?.store === "string" ? session.store.trim() : "";
-    if (!persistedStoreValue && existingStore) {
-      persistedStoreValue = existingStore;
+    if (!preservedTemplateStore && existingStore.includes("{agentId}")) {
+      preservedTemplateStore = existingStore;
     }
   }
-  const nextStoreValue = persistedStoreValue || storePath;
+  const nextStoreValue = preservedTemplateStore || storePath;
   for (const configPath of configPaths) {
     const config = { ...parsedConfigs.get(configPath) };
     const session =
