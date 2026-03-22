@@ -513,6 +513,46 @@ describe("applyCustomApiConfig", () => {
     });
   });
 
+  it("preserves authHeader when anthropic base urls differ only by /v1 or trailing slash", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com/v1/", "test-key", "detected-model", "custom", "alias"],
+      select: ["plaintext", "anthropic"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(prompter, {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.com",
+            api: "anthropic-messages",
+            authHeader: true,
+            models: [
+              {
+                id: "detected-model",
+                name: "Detected",
+                contextWindow: 131072,
+                maxTokens: 4096,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                reasoning: false,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const firstCall = fetchMock.mock.calls[0]?.[1] as
+      | { headers?: Record<string, string> }
+      | undefined;
+    expect(firstCall?.headers).toEqual({
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      Authorization: "Bearer test-key",
+    });
+  });
+
   it.each([
     {
       name: "uses hard-min context window for newly added custom models",

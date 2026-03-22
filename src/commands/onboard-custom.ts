@@ -61,6 +61,10 @@ function transformAzureUrl(baseUrl: string, modelId: string): string {
   return `${normalizedUrl}/openai/deployments/${modelId}`;
 }
 
+function normalizeAnthropicProviderBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
+}
+
 export type CustomApiCompatibility = "openai" | "anthropic";
 type CustomApiCompatibilityChoice = CustomApiCompatibility | "unknown";
 export type CustomApiResult = {
@@ -752,6 +756,7 @@ export async function promptCustomApiConfig(params: {
     }
 
     const verifySpinner = prompter.progress("Verifying...");
+    const normalizedAnthropicBaseUrl = normalizeAnthropicProviderBaseUrl(baseUrl);
     const result =
       compatibility === "anthropic"
         ? await requestAnthropicVerification({
@@ -762,7 +767,8 @@ export async function promptCustomApiConfig(params: {
               Object.values(config.models?.providers ?? {}).some(
                 (provider) =>
                   provider?.api === "anthropic-messages" &&
-                  provider?.baseUrl === baseUrl &&
+                  normalizeAnthropicProviderBaseUrl(provider?.baseUrl ?? "") ===
+                    normalizedAnthropicBaseUrl &&
                   provider?.models?.some((existingModel) => existingModel.id === modelId) &&
                   provider?.authHeader === true,
               ) || false,
