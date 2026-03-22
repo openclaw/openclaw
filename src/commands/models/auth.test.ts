@@ -229,4 +229,123 @@ describe("modelsAuthLoginCommand", () => {
       exitSpy.mockRestore();
     }
   });
+
+  it("uses --token directly and skips interactive prompt", async () => {
+    const runtime = createRuntime();
+
+    await modelsAuthPasteTokenCommand(
+      { provider: "anthropic", token: "sk-ant-test-token-123" },
+      runtime,
+    );
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "anthropic:manual",
+      credential: {
+        type: "token",
+        provider: "anthropic",
+        token: "sk-ant-test-token-123",
+      },
+    });
+    expect(mocks.updateConfig).toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("Auth profile: anthropic:manual (anthropic/token)");
+  });
+
+  it("throws when no TTY and no --token provided", async () => {
+    const runtime = createRuntime();
+    const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
+    const savedDescriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
+    Object.defineProperty(stdin, "isTTY", {
+      configurable: true,
+      enumerable: true,
+      get: () => false,
+    });
+    try {
+      await expect(modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime)).rejects.toThrow(
+        "paste-token requires --token",
+      );
+      expect(mocks.clackText).not.toHaveBeenCalled();
+      expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    } finally {
+      if (savedDescriptor) {
+        Object.defineProperty(stdin, "isTTY", savedDescriptor);
+      } else {
+        delete (stdin as { isTTY?: boolean }).isTTY;
+      }
+    }
+  });
+
+  it("reads token from OPENCLAW_PASTE_TOKEN env var", async () => {
+    const runtime = createRuntime();
+    const orig = process.env.OPENCLAW_PASTE_TOKEN;
+    try {
+      process.env.OPENCLAW_PASTE_TOKEN = "env-token-abc";
+      await modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime);
+
+      expect(mocks.clackText).not.toHaveBeenCalled();
+      expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+        profileId: "anthropic:manual",
+        credential: {
+          type: "token",
+          provider: "anthropic",
+          token: "env-token-abc",
+        },
+      });
+    } finally {
+      if (orig === undefined) {
+        delete process.env.OPENCLAW_PASTE_TOKEN;
+      } else {
+        process.env.OPENCLAW_PASTE_TOKEN = orig;
+      }
+    }
+  });
+
+  it("prefers --token over OPENCLAW_PASTE_TOKEN env var", async () => {
+    const runtime = createRuntime();
+    const orig = process.env.OPENCLAW_PASTE_TOKEN;
+    try {
+      process.env.OPENCLAW_PASTE_TOKEN = "env-token";
+      await modelsAuthPasteTokenCommand(
+        { provider: "anthropic", token: "flag-token" },
+        runtime,
+      );
+
+      expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+        profileId: "anthropic:manual",
+        credential: expect.objectContaining({ token: "flag-token" }),
+      });
+    } finally {
+      if (orig === undefined) {
+        delete process.env.OPENCLAW_PASTE_TOKEN;
+      } else {
+        process.env.OPENCLAW_PASTE_TOKEN = orig;
+      }
+    }
+  });
+
+  it("uses --token with custom --profile-id and --expires-in", async () => {
+    const runtime = createRuntime();
+
+    await modelsAuthPasteTokenCommand(
+      {
+        provider: "openai",
+        token: "sk-test-token",
+        profileId: "openai:ci",
+        expiresIn: "30d",
+      },
+      runtime,
+    );
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "openai:ci",
+      credential: expect.objectContaining({
+        type: "token",
+        provider: "openai",
+        token: "sk-test-token",
+        expires: expect.any(Number),
+      }),
+    });
+    expect(runtime.log).toHaveBeenCalledWith("Auth profile: openai:ci (openai/token)");
+  });
 });

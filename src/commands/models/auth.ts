@@ -91,6 +91,18 @@ function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
 }
 
+async function readStdinToken(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.from(chunk as Buffer));
+  }
+  const value = Buffer.concat(chunks).toString("utf-8").trim();
+  if (!value) {
+    throw new Error("No token received from stdin.");
+  }
+  return value;
+}
+
 export async function modelsAuthSetupTokenCommand(
   opts: { provider?: string; yes?: boolean },
   runtime: RuntimeEnv,
@@ -145,6 +157,7 @@ export async function modelsAuthSetupTokenCommand(
 export async function modelsAuthPasteTokenCommand(
   opts: {
     provider?: string;
+    token?: string;
     profileId?: string;
     expiresIn?: string;
   },
@@ -157,11 +170,27 @@ export async function modelsAuthPasteTokenCommand(
   const provider = normalizeProviderId(rawProvider);
   const profileId = opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
 
-  const tokenInput = await text({
-    message: `Paste token for ${provider}`,
-    validate: (value) => (value?.trim() ? undefined : "Required"),
-  });
-  const token = String(tokenInput ?? "").trim();
+  let token: string;
+  const envToken = process.env.OPENCLAW_PASTE_TOKEN?.trim();
+  if (opts.token === "-") {
+    // Read token from stdin (e.g. `echo $TOKEN | openclaw models auth paste-token --provider anthropic --token -`)
+    token = await readStdinToken();
+  } else if (opts.token?.trim()) {
+    token = opts.token.trim();
+  } else if (envToken) {
+    token = envToken;
+  } else {
+    if (!process.stdin.isTTY) {
+      throw new Error(
+        "paste-token requires --token <value>, --token - (stdin), or OPENCLAW_PASTE_TOKEN env var in non-interactive environments.",
+      );
+    }
+    const tokenInput = await text({
+      message: `Paste token for ${provider}`,
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    token = String(tokenInput ?? "").trim();
+  }
 
   const expires =
     opts.expiresIn?.trim() && opts.expiresIn.trim().length > 0
