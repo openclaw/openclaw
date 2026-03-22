@@ -118,7 +118,12 @@ function pickIPv4Matching(
   networkInterfaces: () => ReturnType<typeof os.networkInterfaces>,
   matches: (address: string) => boolean,
 ): string | null {
-  const nets = networkInterfaces();
+  let nets: ReturnType<typeof os.networkInterfaces>;
+  try {
+    nets = networkInterfaces();
+  } catch {
+    return null;
+  }
   for (const entries of Object.values(nets)) {
     if (!entries) {
       continue;
