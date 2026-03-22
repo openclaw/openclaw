@@ -1,8 +1,5 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import {
-  resolveAccountEntry,
-  resolveMergedAccountConfig,
-} from "openclaw/plugin-sdk/account-resolution";
+import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { createAccountListHelpers, type OpenClawConfig } from "../runtime-api.js";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
 import type {
@@ -39,39 +36,19 @@ const {
 } = createAccountListHelpers("mattermost");
 export { listMattermostAccountIds, resolveDefaultMattermostAccountId };
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): MattermostAccountConfig | undefined {
-  return resolveAccountEntry(cfg.channels?.mattermost?.accounts, accountId);
-}
-
 function mergeMattermostAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): MattermostAccountConfig {
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  const merged = resolveMergedAccountConfig<MattermostAccountConfig>({
+  return resolveMergedAccountConfig<MattermostAccountConfig>({
     channelConfig: cfg.channels?.mattermost as MattermostAccountConfig | undefined,
     accounts: cfg.channels?.mattermost?.accounts as
       | Record<string, Partial<MattermostAccountConfig>>
       | undefined,
     accountId,
     omitKeys: ["defaultAccount"],
+    nestedObjectKeys: ["commands"],
   });
-
-  // Shallow merging is fine for most keys, but `commands` should be merged
-  // so that account-specific overrides (callbackPath/callbackUrl) do not
-  // accidentally reset global settings like `native: true`.
-  const mergedCommands = {
-    ...((cfg.channels?.mattermost as MattermostAccountConfig | undefined)?.commands ?? {}),
-    ...(account.commands ?? {}),
-  };
-  if (Object.keys(mergedCommands).length > 0) {
-    merged.commands = mergedCommands;
-  }
-
-  return merged;
 }
 
 function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {
