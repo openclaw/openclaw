@@ -241,6 +241,71 @@ Common registration methods:
 | `registerContextEngine`              | Context engine       |
 | `registerService`                    | Background service   |
 
+## Hook systems
+
+Plugins can register two types of hooks:
+
+### Internal Hooks (command and gateway events)
+
+Use `api.registerHook()` for command and gateway events:
+
+```typescript
+export default function register(api) {
+  api.registerHook("command:new", async () => {
+    // Triggered when user issues /new command
+    api.logger.info("New session started");
+  });
+}
+```
+
+Common internal hook events: `command:new`, `command:reset`, `command:stop`, `gateway:startup`
+
+### Plugin Lifecycle Hooks (agent and tool events)
+
+Use `api.on()` for agent lifecycle and tool execution events:
+
+```typescript
+export default function register(api) {
+  // Tool execution hook
+  api.on("after_tool_call", async (event, ctx) => {
+    api.logger.info(`Tool called: ${event.toolName}`);
+    api.logger.info(`Duration: ${event.durationMs}ms`);
+  });
+
+  // Prompt injection hook
+  api.on("before_prompt_build", async (event, ctx) => {
+    return {
+      prependContext: "Additional context for this turn",
+    };
+  });
+}
+```
+
+Common lifecycle hooks:
+
+- `before_tool_call` / `after_tool_call` — tool execution
+- `before_prompt_build` — inject context before agent runs
+- `message_received` / `message_sent` — message events
+- `session_start` / `session_end` — session lifecycle
+- `before_compaction` / `after_compaction` — memory compaction
+
+See [Plugin Internals](/plugins/architecture#provider-runtime-hooks) for the complete hook list.
+
+### Common mistake
+
+```typescript
+// ❌ Wrong: using registerHook for lifecycle events
+api.registerHook("after_tool_call", handler);
+
+// ✅ Correct: use api.on() for lifecycle events
+api.on("after_tool_call", async (event, ctx) => {
+  // event contains tool execution details
+  // ctx contains agent/session context
+});
+```
+
+**Important**: Lifecycle hooks like `before_tool_call`, `after_tool_call`, and `before_prompt_build` must use `api.on()`, not `api.registerHook()`.
+
 ## Related
 
 - [Building Plugins](/plugins/building-plugins) — create your own plugin
