@@ -118,6 +118,8 @@ Docs: https://docs.openclaw.ai
 - WhatsApp/reconnect: restore the append recency filter in the extension inbox monitor and handle protobuf `Long` timestamps correctly, so fresh post-reconnect append messages are processed while stale history sync stays suppressed. (#42588) Thanks @MonkeyLeeT.
 - WhatsApp/login: wait for pending creds writes before reopening after Baileys `515` pairing restarts in both QR login and `channels login` flows, and keep the restart coverage pinned to the real wrapped error shape plus per-account creds queues. (#27910) Thanks @asyncjason.
 - Telegram/message send: forward `--force-document` through the `sendPayload` path as well as `sendMedia`, so Telegram payload sends with `channelData` keep uploading images as documents instead of silently falling back to compressed photo sends. (#47119) Thanks @thepagent.
+- Android/canvas: serialize A2UI action-status event strings before evaluating WebView JS, so action ids and multiline errors do not break the callback dispatch. (#43784) Thanks @Kaneki-x.
+- Android/camera: recycle intermediate and final snap bitmaps in `camera.snap` so repeated captures do not leak native image memory. (#41902) Thanks @Kaneki-x.
 - Telegram/message chunking: preserve spaces, paragraph separators, and word boundaries when HTML overflow rechunking splits formatted replies. (#47274) Thanks @obviyus.
 - Z.AI/onboarding: detect a working default model even for explicit `zai-coding-*` endpoint choices, so Coding Plan setup can keep the selected endpoint while defaulting to `glm-5` when available or `glm-4.7` as fallback. (#45969) Thanks @obviyus.
 - CI/onboarding smoke: surface `ensure-base-commit` fetch failures as workflow warnings and fail the onboarding Docker smoke when expected setup prompts drift instead of continuing silently. Thanks @Takhoffman.
@@ -226,6 +228,7 @@ Docs: https://docs.openclaw.ai
 - Discord/pickers: keep `/codex_resume --browse-projects` picker callbacks alive in Discord by sharing component callback state across duplicate module graphs, preserving callback fallbacks, and acknowledging matched plugin interactions before dispatch. (#51260) Thanks @huntharo.
 - Agents/memory flush: keep transcript-hash dedup active across memory-flush fallback retries so a write-then-throw flush attempt cannot append duplicate `MEMORY.md` entries before the fallback cycle completes. (#34222) Thanks @lml2468.
 - make `openclaw update status` explicitly say `up to date` when the local version already matches npm latest, while keeping the availability logic unchanged. (#51409) Thanks @dongzhenye.
+- Android/canvas: recycle captured and scaled snapshot bitmaps so repeated canvas snapshots do not leak native image memory. (#41889) Thanks @Kaneki-x.
 
 ### Breaking
 
@@ -240,6 +243,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/Matrix: add a new Matrix plugin backed by the official `matrix-js-sdk`. If you are upgrading from the previous public Matrix plugin, follow the migration guide: https://docs.openclaw.ai/install/migrating-matrix Thanks @gumadeiras.
 - Discord/commands: switch native command deployment to Carbon reconcile by default so Discord restarts stop churning slash commands through OpenClaw’s local deploy path. (#46597) Thanks @huntharo and @thewilloftheshadow.
 - Plugins/Matrix: durably dedupe inbound room events across gateway restarts so previously handled Matrix messages are not replayed as new, while preserving clean-restart backlog delivery for unseen events. (#50922) thanks @gumadeiras
+- Android/contacts search: escape literal `%` and `_` in contact-name queries so searches like `100%` or `_id` no longer match unrelated contacts through SQL `LIKE` wildcards. (#41891) Thanks @Kaneki-x.
 
 ## 2026.3.13
 
@@ -556,6 +560,8 @@ Docs: https://docs.openclaw.ai
 - macOS/remote gateway: stop PortGuardian from killing Docker Desktop and other external listeners on the gateway port in remote mode, so containerized and tunneled gateway setups no longer lose their port-forward owner on app startup. (#6755) Thanks @teslamint.
 - Feishu/streaming recovery: clear stale `streamingStartPromise` when card creation fails (HTTP 400) so subsequent messages can retry streaming instead of silently dropping all future replies. Fixes #43322.
 - Exec/env sandbox: block JVM agent injection (`JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`), Python breakpoint hijack (`PYTHONBREAKPOINT`), and .NET startup hooks (`DOTNET_STARTUP_HOOKS`) from the host exec environment. (#49025)
+- Android/camera clip cleanup: delete temporary clip files even when `readBytes()` fails so failed clip captures do not leak cache storage. (#41890) Thanks @Kaneki-x.
+- Android/photos: recycle decoded and intermediate bitmaps in `photos.latest` so repeated photo fetches stop leaking native memory. (#41888) Thanks @Kaneki-x.
 
 ### Security
 
