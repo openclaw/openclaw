@@ -10,6 +10,8 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -1313,10 +1315,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     let imageModelFallbacks: string[] | undefined;
     if (parsedImages.length > 0) {
       const imageModelConfig = cfg.agents?.defaults?.imageModel;
-      const imageModelPrimary =
-        typeof imageModelConfig === "string"
-          ? imageModelConfig.trim()
-          : imageModelConfig?.primary?.trim();
+      const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
       if (imageModelPrimary) {
         imageModelOverride = imageModelPrimary;
         // Also resolve image model fallbacks for proper failover behavior
@@ -1551,7 +1550,6 @@ export const chatHandlers: GatewayRequestHandlers = {
           images: parsedImages.length > 0 ? parsedImages : undefined,
           modelOverride: imageModelOverride,
           modelOverrideFallbacks: imageModelFallbacks,
-          hasAppliedImageModelOverride: imageModelOverride !== undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
             void emitUserTranscriptUpdate();
