@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   modelKey,
+  resolveDefaultModelForAgent,
   resolveModelRefFromString,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
@@ -90,12 +90,13 @@ function filterFallbacksByAllowlist(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
+  defaultProvider: string;
 }): string[] {
-  const { fallbacks, cfg, agentId, aliasIndex } = params;
+  const { fallbacks, cfg, agentId, aliasIndex, defaultProvider } = params;
   const { allowAny, allowedKeys } = buildAllowedModelSet({
     cfg,
     catalog: [],
-    defaultProvider: DEFAULT_PROVIDER,
+    defaultProvider,
     defaultModel: undefined,
     agentId,
   });
@@ -108,7 +109,7 @@ function filterFallbacksByAllowlist(params: {
     }
     const resolved = resolveModelRefFromString({
       raw: fb.trim(),
-      defaultProvider: DEFAULT_PROVIDER,
+      defaultProvider,
       aliasIndex,
     });
     if (!resolved) {
@@ -1370,8 +1371,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       const imageModelConfig = cfg.agents?.defaults?.imageModel;
       const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
       if (imageModelPrimary) {
+        // Resolve per-agent default provider for correct model resolution
+        const agentDefault = resolveDefaultModelForAgent({ cfg, agentId });
+        const defaultProvider = agentDefault.provider;
         // Build alias index for resolving model aliases (used for checking and filtering)
-        const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: DEFAULT_PROVIDER });
+        const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
 
         // Check if user has a stored model override that is already an image model
         // If so, respect user's choice and don't switch
@@ -1385,7 +1389,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           const addResolvedModelKey = (rawModel: string) => {
             const resolved = resolveModelRefFromString({
               raw: rawModel.trim(),
-              defaultProvider: DEFAULT_PROVIDER,
+              defaultProvider,
               aliasIndex,
             });
             if (resolved) {
@@ -1413,7 +1417,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             : sessionModelOverride;
           const userResolved = resolveModelRefFromString({
             raw: userRawModel,
-            defaultProvider: DEFAULT_PROVIDER,
+            defaultProvider,
             aliasIndex,
           });
           const userModelKey = userResolved
@@ -1437,6 +1441,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 cfg,
                 agentId,
                 aliasIndex,
+                defaultProvider,
               });
             } else {
               imageModelFallbacks = [];
@@ -1455,6 +1460,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               cfg,
               agentId,
               aliasIndex,
+              defaultProvider,
             });
           } else {
             imageModelFallbacks = [];

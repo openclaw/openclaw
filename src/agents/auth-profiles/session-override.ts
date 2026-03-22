@@ -140,14 +140,15 @@ export async function resolveSessionAuthProfileOverride(params: {
     return current;
   }
 
-  // When image model is temporarily switched, skip the rotate/persist logic.
-  // The current profile is for a different provider, and we should preserve it
-  // for when the session returns to the original provider.
-  // Without this, pickNextAvailable() would fall back to the image provider's
-  // first profile and persist it, silently replacing the user's chosen credential.
-  if (hasAppliedImageModelOverride && current) {
-    return current;
-  }
+  // When image model is temporarily switched to a DIFFERENT provider, we still need
+  // to rotate auth profiles for the image provider, but we should NOT persist the
+  // change to the session since the provider switch is transient.
+  // The current stored profile is for the original provider and should be preserved.
+  // However, if the image provider is the SAME as the original provider, we should
+  // persist normally since there's no transient switch.
+  const currentIsForImageProvider =
+    current && isProfileForProvider({ provider, profileId: current, store });
+  const skipPersist = hasAppliedImageModelOverride && current && !currentIsForImageProvider;
 
   let next = current;
   if (isNewSession) {
@@ -161,6 +162,15 @@ export async function resolveSessionAuthProfileOverride(params: {
   if (!next) {
     return current;
   }
+
+  // Skip persisting auth profile changes when image model is temporarily switched
+  // to a different provider. The current stored profile is for the original provider
+  // and should be preserved for when the session returns to the original provider
+  // after the image turn.
+  if (skipPersist) {
+    return next;
+  }
+
   const shouldPersist =
     next !== sessionEntry.authProfileOverride ||
     sessionEntry.authProfileOverrideSource !== "auto" ||
