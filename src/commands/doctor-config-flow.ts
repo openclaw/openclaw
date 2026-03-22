@@ -10,11 +10,7 @@ import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
-import {
-  collectDiscordNumericIdWarnings,
-  maybeRepairDiscordNumericIds,
-  scanDiscordNumericIdEntries,
-} from "./doctor/providers/discord.js";
+import { maybeRepairDiscordNumericIds } from "./doctor/providers/discord.js";
 import {
   applyMatrixDoctorRepair,
   collectMatrixInstallPathWarnings,
@@ -22,10 +18,8 @@ import {
   formatMatrixLegacyStatePreview,
 } from "./doctor/providers/matrix.js";
 import {
-  collectTelegramAllowFromUsernameWarnings,
   collectTelegramEmptyAllowlistExtraWarnings,
   maybeRepairTelegramAllowFromUsernames,
-  scanTelegramAllowFromUsernameEntries,
 } from "./doctor/providers/telegram.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./doctor/shared/allowlist-policy-repair.js";
 import {
@@ -38,26 +32,14 @@ import {
   collectMissingExplicitDefaultAccountWarnings,
 } from "./doctor/shared/default-account-warnings.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./doctor/shared/empty-allowlist-scan.js";
-import {
-  collectExecSafeBinCoverageWarnings,
-  collectExecSafeBinTrustedDirHintWarnings,
-  maybeRepairExecSafeBinProfiles,
-  scanExecSafeBinCoverage,
-  scanExecSafeBinTrustedDirHints,
-} from "./doctor/shared/exec-safe-bins.js";
-import {
-  collectLegacyToolsBySenderWarnings,
-  maybeRepairLegacyToolsBySenderKeys,
-  scanLegacyToolsBySenderKeys,
-} from "./doctor/shared/legacy-tools-by-sender.js";
+import { maybeRepairExecSafeBinProfiles } from "./doctor/shared/exec-safe-bins.js";
+import { maybeRepairLegacyToolsBySenderKeys } from "./doctor/shared/legacy-tools-by-sender.js";
 import {
   collectMutableAllowlistWarnings,
   scanMutableAllowlistEntries,
 } from "./doctor/shared/mutable-allowlist.js";
-import {
-  collectOpenPolicyAllowFromWarnings,
-  maybeRepairOpenPolicyAllowFrom,
-} from "./doctor/shared/open-policy-allowfrom.js";
+import { maybeRepairOpenPolicyAllowFrom } from "./doctor/shared/open-policy-allowfrom.js";
+import { collectDoctorPreviewWarnings } from "./doctor/shared/preview-warnings.js";
 
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
@@ -238,78 +220,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       note(safeBinProfileRepair.warnings.join("\n"), "Doctor warnings");
     }
   } else {
-    const hits = scanTelegramAllowFromUsernameEntries(candidate);
-    if (hits.length > 0) {
-      note(
-        collectTelegramAllowFromUsernameWarnings({
-          hits,
-          doctorFixCommand,
-        }).join("\n"),
-        "Doctor warnings",
-      );
-    }
-
-    const discordHits = scanDiscordNumericIdEntries(candidate);
-    if (discordHits.length > 0) {
-      note(
-        collectDiscordNumericIdWarnings({
-          hits: discordHits,
-          doctorFixCommand,
-        }).join("\n"),
-        "Doctor warnings",
-      );
-    }
-
-    const allowFromScan = maybeRepairOpenPolicyAllowFrom(candidate);
-    if (allowFromScan.changes.length > 0) {
-      note(
-        collectOpenPolicyAllowFromWarnings({
-          changes: allowFromScan.changes,
-          doctorFixCommand,
-        }).join("\n"),
-        "Doctor warnings",
-      );
-    }
-
-    const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(candidate, {
-      doctorFixCommand: formatCliCommand("openclaw doctor --fix"),
-      extraWarningsForAccount: collectTelegramEmptyAllowlistExtraWarnings,
-    });
-    if (emptyAllowlistWarnings.length > 0) {
-      note(
-        emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"),
-        "Doctor warnings",
-      );
-    }
-
-    const toolsBySenderHits = scanLegacyToolsBySenderKeys(candidate);
-    if (toolsBySenderHits.length > 0) {
-      note(
-        collectLegacyToolsBySenderWarnings({
-          hits: toolsBySenderHits,
-          doctorFixCommand,
-        }).join("\n"),
-        "Doctor warnings",
-      );
-    }
-
-    const safeBinCoverage = scanExecSafeBinCoverage(candidate);
-    if (safeBinCoverage.length > 0) {
-      note(
-        collectExecSafeBinCoverageWarnings({
-          hits: safeBinCoverage,
-          doctorFixCommand,
-        }).join("\n"),
-        "Doctor warnings",
-      );
-    }
-
-    const safeBinTrustedDirHints = scanExecSafeBinTrustedDirHints(candidate);
-    if (safeBinTrustedDirHints.length > 0) {
-      note(
-        collectExecSafeBinTrustedDirHintWarnings(safeBinTrustedDirHints).join("\n"),
-        "Doctor warnings",
-      );
+    for (const warning of collectDoctorPreviewWarnings({
+      cfg: candidate,
+      doctorFixCommand,
+    })) {
+      note(warning, "Doctor warnings");
     }
   }
 
