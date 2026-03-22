@@ -25,9 +25,13 @@ function normalizeCommandBodyLite(raw: string, botUsername?: string): string {
   const mentionMatch = normalizedBotUsername
     ? normalized.match(/^\/([^\s@]+)@([^\s]+)(.*)$/)
     : null;
-  return mentionMatch && mentionMatch[2].toLowerCase() === normalizedBotUsername
-    ? `/${mentionMatch[1]}${mentionMatch[3] ?? ""}`
-    : normalized;
+  const mentionNormalized =
+    mentionMatch && mentionMatch[2].toLowerCase() === normalizedBotUsername
+      ? `/${mentionMatch[1]}${mentionMatch[3] ?? ""}`
+      : normalized;
+  return mentionNormalized.replace(/^\/([^\s]+)(.*)$/, (_, command: string, rest: string) => {
+    return `/${command.toLowerCase()}${rest ?? ""}`;
+  });
 }
 
 export function buildCommandContext(params: {
