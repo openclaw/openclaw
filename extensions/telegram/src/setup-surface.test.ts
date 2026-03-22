@@ -14,6 +14,16 @@ async function runPrepare(cfg: OpenClawConfig, accountId: string) {
   });
 }
 
+function expectPreparedResult(prepared: unknown): asserts prepared is { cfg: OpenClawConfig } {
+  if (
+    typeof prepared !== "object" ||
+    prepared === null ||
+    !("cfg" in (prepared as Record<string, unknown>))
+  ) {
+    throw new Error("Expected prepare result with cfg");
+  }
+}
+
 async function runFinalize(cfg: OpenClawConfig, accountId: string) {
   const prompter = {
     note: vi.fn(async () => undefined),
@@ -44,7 +54,8 @@ describe("telegramSetupWizard.prepare", () => {
       DEFAULT_ACCOUNT_ID,
     );
 
-    expect(prepared?.cfg.channels?.telegram?.groups).toEqual({
+    expectPreparedResult(prepared);
+    expect(prepared.cfg.channels?.telegram?.groups).toEqual({
       "*": { requireMention: true },
     });
   });
@@ -64,7 +75,8 @@ describe("telegramSetupWizard.prepare", () => {
       DEFAULT_ACCOUNT_ID,
     );
 
-    expect(prepared?.cfg.channels?.telegram?.groups).toEqual({
+    expectPreparedResult(prepared);
+    expect(prepared.cfg.channels?.telegram?.groups).toEqual({
       "*": { requireMention: false },
     });
   });
