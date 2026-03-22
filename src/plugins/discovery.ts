@@ -476,6 +476,10 @@ function resolvePackageEntrySource(params: {
     rejectHardlinks: params.rejectHardlinks ?? true,
   });
   if (!opened.ok) {
+    if (opened.reason !== "validation") {
+      // File missing (ENOENT) or I/O error — skip silently, not a security violation.
+      return null;
+    }
     params.diagnostics.push({
       level: "error",
       message: `extension entry escapes package directory: ${params.entryPath}`,
