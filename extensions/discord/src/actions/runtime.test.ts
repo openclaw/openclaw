@@ -46,6 +46,7 @@ const discordSendMocks = {
   removeOwnReactionsDiscord: vi.fn(async () => ({ removed: ["👍"] })),
   removeReactionDiscord: vi.fn(async () => ({})),
   searchMessagesDiscord: vi.fn(async () => ({})),
+  sendDiscordComponentMessage: vi.fn(async () => ({})),
   sendMessageDiscord: vi.fn(async () => ({})),
   sendPollDiscord: vi.fn(async () => ({})),
   sendStickerDiscord: vi.fn(async () => ({})),
@@ -71,6 +72,7 @@ const {
   removeOwnReactionsDiscord,
   removeReactionDiscord,
   searchMessagesDiscord,
+  sendDiscordComponentMessage,
   sendMessageDiscord,
   sendPollDiscord,
   sendVoiceMessageDiscord,
@@ -356,6 +358,33 @@ describe("handleDiscordMessagingAction", () => {
       enableAllActions,
       { mediaLocalRoots: ["/tmp/agent-root"] },
     );
+    expect(sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      "hello",
+      expect.objectContaining({
+        mediaUrl: "/tmp/image.png",
+        mediaLocalRoots: ["/tmp/agent-root"],
+      }),
+    );
+  });
+
+  it("ignores empty components objects for regular media sends", async () => {
+    sendMessageDiscord.mockClear();
+    sendDiscordComponentMessage.mockClear();
+
+    await handleDiscordMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "hello",
+        mediaUrl: "/tmp/image.png",
+        components: {},
+      },
+      enableAllActions,
+      { mediaLocalRoots: ["/tmp/agent-root"] },
+    );
+
+    expect(sendDiscordComponentMessage).not.toHaveBeenCalled();
     expect(sendMessageDiscord).toHaveBeenCalledWith(
       "channel:123",
       "hello",
