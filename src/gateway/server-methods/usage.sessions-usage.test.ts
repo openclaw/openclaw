@@ -115,6 +115,22 @@ const BASE_USAGE_RANGE = {
   limit: 10,
 } as const;
 
+function buildSessionUsage(totalTokens: number) {
+  return {
+    input: totalTokens,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens,
+    totalCost: 0,
+    inputCost: 0,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  };
+}
+
 function expectSuccessfulSessionsUsage(
   respond: ReturnType<typeof vi.fn>,
 ): Array<{ key: string; agentId: string }> {
@@ -187,6 +203,58 @@ describe("sessions.usage", () => {
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
+  });
+
+  it("attributes byChannel usage to the originating channel when delivery channels are swapped", async () => {
+    vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      storePath: "(multiple)",
+      store: {
+        "named:webchat-origin": {
+          sessionId: "s-main",
+          label: "Webchat origin",
+          updatedAt: 300,
+          channel: "telegram",
+          origin: {
+            provider: "webchat",
+            chatType: "direct",
+          },
+        },
+        "named:telegram-origin": {
+          sessionId: "s-opus",
+          label: "Telegram origin",
+          updatedAt: 200,
+          channel: "webchat",
+          origin: {
+            provider: "telegram",
+            chatType: "direct",
+          },
+        },
+      },
+    });
+    vi.mocked(loadSessionCostSummary).mockImplementation(async (params) => {
+      if (params?.sessionId === "s-main") {
+        return buildSessionUsage(111);
+      }
+      if (params?.sessionId === "s-opus") {
+        return buildSessionUsage(222);
+      }
+      return buildSessionUsage(0);
+    });
+
+    const respond = await runSessionsUsage(BASE_USAGE_RANGE);
+    const result = respond.mock.calls[0]?.[1] as {
+      aggregates: {
+        byChannel: Array<{ channel: string; totals: { totalTokens: number } }>;
+      };
+    };
+    const totalsByChannel = new Map(
+      result.aggregates.byChannel.map((entry) => [entry.channel, entry.totals.totalTokens]),
+    );
+
+    // Current bug: usage.ts prefers storeEntry.channel (delivery/group channel), which swaps
+    // webchat and telegram attribution for sessions whose origin.provider differs.
+    expect(totalsByChannel.get("webchat")).toBe(111);
+    expect(totalsByChannel.get("telegram")).toBe(222);
   });
 
   it("rejects traversal-style keys in specific session usage lookups", async () => {
