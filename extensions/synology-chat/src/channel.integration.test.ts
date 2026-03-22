@@ -54,7 +54,6 @@ describe("Synology channel wiring integration", () => {
     const registered = firstCall[0];
     expect(registered.path).toBe("/webhook/synology-alerts");
     expect(registered.accountId).toBe("alerts");
-    expect(typeof registered.handler).toBe("function");
 
     const req = makeReq(
       "POST",
