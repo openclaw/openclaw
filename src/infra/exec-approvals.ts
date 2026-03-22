@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { withFileLock } from "./file-lock.ts";
 import { expandHomePrefix } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
@@ -152,6 +153,16 @@ const DEFAULT_ASK_FALLBACK: ExecSecurity = "deny";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
 const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
+const EXEC_APPROVALS_LOCK_OPTIONS = {
+  retries: {
+    retries: 10,
+    factor: 2,
+    minTimeout: 100,
+    maxTimeout: 10_000,
+    randomize: true,
+  },
+  stale: 30_000,
+} as const;
 
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
@@ -495,53 +506,56 @@ export function requiresExecApproval(params: {
   );
 }
 
-export function recordAllowlistUse(
-  approvals: ExecApprovalsFile,
+export async function recordAllowlistUse(
   agentId: string | undefined,
   entry: ExecAllowlistEntry,
   command: string,
   resolvedPath?: string,
 ) {
-  const target = agentId ?? DEFAULT_AGENT_ID;
-  const agents = approvals.agents ?? {};
-  const existing = agents[target] ?? {};
-  const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];
-  const nextAllowlist = allowlist.map((item) =>
-    item.pattern === entry.pattern
-      ? {
-          ...item,
-          id: item.id ?? crypto.randomUUID(),
-          lastUsedAt: Date.now(),
-          lastUsedCommand: command,
-          lastResolvedPath: resolvedPath,
-        }
-      : item,
-  );
-  agents[target] = { ...existing, allowlist: nextAllowlist };
-  approvals.agents = agents;
-  saveExecApprovals(approvals);
+  const filePath = resolveExecApprovalsPath();
+  await withFileLock(filePath, EXEC_APPROVALS_LOCK_OPTIONS, async () => {
+    const approvals = loadExecApprovals();
+    const target = agentId ?? DEFAULT_AGENT_ID;
+    const agents = approvals.agents ?? {};
+    const existing = agents[target] ?? {};
+    const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];
+    const nextAllowlist = allowlist.map((item) =>
+      item.pattern === entry.pattern
+        ? {
+            ...item,
+            id: item.id ?? crypto.randomUUID(),
+            lastUsedAt: Date.now(),
+            lastUsedCommand: command,
+            lastResolvedPath: resolvedPath,
+          }
+        : item,
+    );
+    agents[target] = { ...existing, allowlist: nextAllowlist };
+    approvals.agents = agents;
+    saveExecApprovals(approvals);
+  });
 }
 
-export function addAllowlistEntry(
-  approvals: ExecApprovalsFile,
-  agentId: string | undefined,
-  pattern: string,
-) {
-  const target = agentId ?? DEFAULT_AGENT_ID;
-  const agents = approvals.agents ?? {};
-  const existing = agents[target] ?? {};
-  const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];
+export async function addAllowlistEntry(agentId: string | undefined, pattern: string) {
   const trimmed = pattern.trim();
   if (!trimmed) {
     return;
   }
-  if (allowlist.some((entry) => entry.pattern === trimmed)) {
-    return;
-  }
-  allowlist.push({ id: crypto.randomUUID(), pattern: trimmed, lastUsedAt: Date.now() });
-  agents[target] = { ...existing, allowlist };
-  approvals.agents = agents;
-  saveExecApprovals(approvals);
+  const filePath = resolveExecApprovalsPath();
+  await withFileLock(filePath, EXEC_APPROVALS_LOCK_OPTIONS, async () => {
+    const approvals = loadExecApprovals();
+    const target = agentId ?? DEFAULT_AGENT_ID;
+    const agents = approvals.agents ?? {};
+    const existing = agents[target] ?? {};
+    const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];
+    if (allowlist.some((entry) => entry.pattern === trimmed)) {
+      return;
+    }
+    allowlist.push({ id: crypto.randomUUID(), pattern: trimmed, lastUsedAt: Date.now() });
+    agents[target] = { ...existing, allowlist };
+    approvals.agents = agents;
+    saveExecApprovals(approvals);
+  });
 }
 
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {

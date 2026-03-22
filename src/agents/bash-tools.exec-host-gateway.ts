@@ -128,7 +128,7 @@ export async function processGatewayAllowlist(
     logInfo(`exec: obfuscation detected (gateway): ${obfuscation.reasons.join(", ")}`);
     params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
   }
-  const recordMatchedAllowlistUse = (resolvedPath?: string) => {
+  const recordMatchedAllowlistUse = async (resolvedPath?: string) => {
     if (allowlistMatches.length === 0) {
       return;
     }
@@ -138,7 +138,7 @@ export async function processGatewayAllowlist(
         continue;
       }
       seen.add(match.pattern);
-      recordAllowlistUse(approvals.file, params.agentId, match, params.command, resolvedPath);
+      await recordAllowlistUse(params.agentId, match, params.command, resolvedPath);
     }
   };
   const hasHeredocSegment = allowlistEval.segments.some((segment) =>
@@ -257,7 +257,7 @@ export async function processGatewayAllowlist(
           });
           for (const pattern of patterns) {
             if (pattern) {
-              addAllowlistEntry(approvals.file, params.agentId, pattern);
+              await addAllowlistEntry(params.agentId, pattern);
             }
           }
         }
@@ -275,7 +275,7 @@ export async function processGatewayAllowlist(
         return;
       }
 
-      recordMatchedAllowlistUse(resolvedPath ?? undefined);
+      await recordMatchedAllowlistUse(resolvedPath ?? undefined);
 
       let run: Awaited<ReturnType<typeof runExecProcess>> | null = null;
       try {
@@ -337,7 +337,7 @@ export async function processGatewayAllowlist(
     throw new Error("exec denied: allowlist miss");
   }
 
-  recordMatchedAllowlistUse(allowlistEval.segments[0]?.resolution?.resolvedPath);
+  await recordMatchedAllowlistUse(allowlistEval.segments[0]?.resolution?.resolvedPath);
 
   return { execCommandOverride: enforcedCommand };
 }

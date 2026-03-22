@@ -557,7 +557,7 @@ async function executeSystemRunPhase(
       });
       for (const pattern of patterns) {
         if (pattern) {
-          addAllowlistEntry(phase.approvals.file, phase.agentId, pattern);
+          await addAllowlistEntry(phase.agentId, pattern);
         }
       }
     }
@@ -570,8 +570,7 @@ async function executeSystemRunPhase(
         continue;
       }
       seen.add(match.pattern);
-      recordAllowlistUse(
-        phase.approvals.file,
+      await recordAllowlistUse(
         phase.agentId,
         match,
         phase.commandText,

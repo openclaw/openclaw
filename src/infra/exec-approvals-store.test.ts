@@ -148,14 +148,14 @@ describe("exec approvals store helpers", () => {
     expect(readApprovalsFile(dir).socket).toEqual(ensured.socket);
   });
 
-  it("adds trimmed allowlist entries once and persists generated ids", () => {
+  it("adds trimmed allowlist entries once and persists generated ids", async () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(123_456);
 
-    const approvals = ensureExecApprovals();
-    addAllowlistEntry(approvals, "worker", "  /usr/bin/rg  ");
-    addAllowlistEntry(approvals, "worker", "/usr/bin/rg");
-    addAllowlistEntry(approvals, "worker", "   ");
+    ensureExecApprovals();
+    await addAllowlistEntry("worker", "  /usr/bin/rg  ");
+    await addAllowlistEntry("worker", "/usr/bin/rg");
+    await addAllowlistEntry("worker", "   ");
 
     expect(readApprovalsFile(dir).agents?.worker?.allowlist).toEqual([
       expect.objectContaining({
@@ -166,7 +166,7 @@ describe("exec approvals store helpers", () => {
     expect(readApprovalsFile(dir).agents?.worker?.allowlist?.[0]?.id).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
-  it("records allowlist usage on the matching entry and backfills missing ids", () => {
+  it("records allowlist usage on the matching entry and backfills missing ids", async () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(999_000);
 
@@ -181,8 +181,7 @@ describe("exec approvals store helpers", () => {
     fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
     fs.writeFileSync(approvalsFilePath(dir), JSON.stringify(approvals, null, 2), "utf8");
 
-    recordAllowlistUse(
-      approvals,
+    await recordAllowlistUse(
       undefined,
       { pattern: "/usr/bin/rg" },
       "rg needle",
