@@ -1,4 +1,8 @@
+import os from "node:os";
+import path from "node:path";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
@@ -52,6 +56,15 @@ export async function getMemorySearchManager(params: {
     if (cached) {
       return { manager: cached };
     }
+    if (statusOnly) {
+      const manager = new QmdStatusOnlyManager({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        resolved: resolved.qmd,
+      });
+      QMD_MANAGER_CACHE.set(cacheKey, manager);
+      return { manager };
+    }
     try {
       const { QmdMemoryManager } = await import("./qmd-manager.js");
       const primary = await QmdMemoryManager.create({
@@ -94,6 +107,89 @@ export async function getMemorySearchManager(params: {
     const message = err instanceof Error ? err.message : String(err);
     return { manager: null, error: message };
   }
+}
+
+class QmdStatusOnlyManager implements MemorySearchManager {
+  private readonly workspaceDir: string;
+  private readonly indexPath: string;
+  private readonly sourceSet: Set<"memory" | "sessions">;
+
+  constructor(
+    private readonly params: {
+      cfg: OpenClawConfig;
+      agentId: string;
+      resolved: ResolvedQmdConfig;
+    },
+  ) {
+    this.workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    const stateDir = resolveStateDir(process.env, os.homedir);
+    this.indexPath = path.join(
+      stateDir,
+      "agents",
+      params.agentId,
+      "qmd",
+      "xdg-cache",
+      "qmd",
+      "index.sqlite",
+    );
+    this.sourceSet = new Set(
+      params.resolved.collections.map((collection) =>
+        collection.kind === "sessions" ? "sessions" : "memory",
+      ),
+    );
+  }
+
+  async search(): Promise<never> {
+    throw new Error("memory search unavailable in status-only mode");
+  }
+
+  async readFile(): Promise<never> {
+    throw new Error("memory read unavailable in status-only mode");
+  }
+
+  status() {
+    return {
+      backend: "qmd" as const,
+      provider: "qmd",
+      model: "qmd",
+      requestedProvider: "qmd",
+      files: 0,
+      chunks: 0,
+      dirty: false,
+      workspaceDir: this.workspaceDir,
+      dbPath: this.indexPath,
+      sources: Array.from(this.sourceSet),
+      vector: { enabled: true, available: true },
+      batch: {
+        enabled: false,
+        failures: 0,
+        limit: 0,
+        wait: false,
+        concurrency: 0,
+        pollIntervalMs: 0,
+        timeoutMs: 0,
+      },
+      custom: {
+        qmd: {
+          collections: this.params.resolved.collections.length,
+          lastUpdateAt: null,
+          lightweightStatus: true,
+        },
+      },
+    };
+  }
+
+  async sync(): Promise<void> {}
+
+  async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    return { ok: true };
+  }
+
+  async probeVectorAvailability(): Promise<boolean> {
+    return true;
+  }
+
+  async close(): Promise<void> {}
 }
 
 export async function closeAllMemorySearchManagers(): Promise<void> {
