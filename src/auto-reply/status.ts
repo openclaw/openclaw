@@ -438,8 +438,39 @@ export function buildStatusMessage(args: StatusArgs): string {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
-  const selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
+  let selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
+  let selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
+
+  // When no per-session override exists, apply channel model overrides so
+  // session_status reports the effective model instead of the agent default.
+  let channelModelApplied = false;
+  if (args.config && entry && !entry.providerOverride?.trim() && !entry.modelOverride?.trim()) {
+    const channelOverride = resolveChannelModelOverride({
+      cfg: args.config,
+      channel: entry.channel ?? entry.origin?.provider,
+      groupId: entry.groupId,
+      groupChannel: entry.groupChannel,
+      groupSubject: entry.subject,
+      parentSessionKey: args.parentSessionKey,
+    });
+    if (channelOverride) {
+      const aliasIndex = buildModelAliasIndex({
+        cfg: args.config,
+        defaultProvider: DEFAULT_PROVIDER,
+      });
+      const resolvedOverride = resolveModelRefFromString({
+        raw: channelOverride.model,
+        defaultProvider: DEFAULT_PROVIDER,
+        aliasIndex,
+      });
+      if (resolvedOverride) {
+        selectedProvider = resolvedOverride.ref.provider;
+        selectedModel = resolvedOverride.ref.model;
+        channelModelApplied = true;
+      }
+    }
+  }
+
   const modelRefs = resolveSelectedAndActiveModel({
     selectedProvider,
     selectedModel,
@@ -612,44 +643,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
 
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
-  const channelModelNote = (() => {
-    if (!args.config || !entry) {
-      return undefined;
-    }
-    if (entry.modelOverride?.trim() || entry.providerOverride?.trim()) {
-      return undefined;
-    }
-    const channelOverride = resolveChannelModelOverride({
-      cfg: args.config,
-      channel: entry.channel ?? entry.origin?.provider,
-      groupId: entry.groupId,
-      groupChannel: entry.groupChannel,
-      groupSubject: entry.subject,
-      parentSessionKey: args.parentSessionKey,
-    });
-    if (!channelOverride) {
-      return undefined;
-    }
-    const aliasIndex = buildModelAliasIndex({
-      cfg: args.config,
-      defaultProvider: DEFAULT_PROVIDER,
-    });
-    const resolvedOverride = resolveModelRefFromString({
-      raw: channelOverride.model,
-      defaultProvider: DEFAULT_PROVIDER,
-      aliasIndex,
-    });
-    if (!resolvedOverride) {
-      return undefined;
-    }
-    if (
-      resolvedOverride.ref.provider !== selectedProvider ||
-      resolvedOverride.ref.model !== selectedModel
-    ) {
-      return undefined;
-    }
-    return "channel override";
-  })();
+  const channelModelNote = channelModelApplied ? "channel override" : undefined;
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
