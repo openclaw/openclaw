@@ -85,6 +85,18 @@
       "destination": "/tools/perplexity-search"
     },
     {
+      "source": "/gemini-search",
+      "destination": "/tools/gemini-search"
+    },
+    {
+      "source": "/grok-search",
+      "destination": "/tools/grok-search"
+    },
+    {
+      "source": "/kimi-search",
+      "destination": "/tools/kimi-search"
+    },
+    {
       "source": "/tts",
       "destination": "/tools/tts"
     },
@@ -1112,11 +1124,14 @@
                   "tools/reactions",
                   "tools/thinking",
                   {
-                    "group": "Web and search",
+                    "group": "Web Search",
                     "pages": [
                       "tools/web",
                       "tools/brave-search",
                       "tools/firecrawl",
+                      "tools/gemini-search",
+                      "tools/grok-search",
+                      "tools/kimi-search",
                       "tools/perplexity-search",
                       "tools/tavily"
                     ]
