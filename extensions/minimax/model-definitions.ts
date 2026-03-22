@@ -28,6 +28,9 @@ export const MINIMAX_LM_STUDIO_COST = {
 };
 
 const MINIMAX_MODEL_CATALOG = {
+  "MiniMax-M2": { name: "MiniMax M2", reasoning: true },
+  "MiniMax-M2.1": { name: "MiniMax M2.1", reasoning: true },
+  "MiniMax-M2.1-highspeed": { name: "MiniMax M2.1 Highspeed", reasoning: true },
   "MiniMax-M2.7": { name: "MiniMax M2.7", reasoning: true },
   "MiniMax-M2.7-highspeed": { name: "MiniMax M2.7 Highspeed", reasoning: true },
   "MiniMax-M2.5": { name: "MiniMax M2.5", reasoning: true },

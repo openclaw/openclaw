@@ -41,7 +41,12 @@ function portalModelRef(modelId: string): string {
 
 function isModernMiniMaxModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
-  return lower.startsWith("minimax-m2.7") || lower.startsWith("minimax-m2.5");
+  return (
+    lower === "minimax-m2" ||
+    lower.startsWith("minimax-m2.1") ||
+    lower.startsWith("minimax-m2.5") ||
+    lower.startsWith("minimax-m2.7")
+  );
 }
 
 function buildPortalProviderCatalog(params: { baseUrl: string; apiKey: string }) {
@@ -131,6 +136,11 @@ function createOAuthHandler(region: MiniMaxRegion) {
           agents: {
             defaults: {
               models: {
+                [portalModelRef("MiniMax-M2")]: { alias: "minimax-m2" },
+                [portalModelRef("MiniMax-M2.1")]: { alias: "minimax-m2.1" },
+                [portalModelRef("MiniMax-M2.1-highspeed")]: {
+                  alias: "minimax-m2.1-highspeed",
+                },
                 [portalModelRef("MiniMax-M2.7")]: { alias: "minimax-m2.7" },
                 [portalModelRef("MiniMax-M2.7-highspeed")]: {
                   alias: "minimax-m2.7-highspeed",
