@@ -611,11 +611,12 @@ export async function compactEmbeddedPiSessionDirect(
       tools: toolsEnabled ? toolsRaw : [],
       provider,
     });
+    const shieldDenyNames = shieldPolicy?.deny ?? [];
     const bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
-          reservedToolNames: tools.map((tool) => tool.name),
+          reservedToolNames: [...tools.map((tool) => tool.name), ...shieldDenyNames],
         })
       : undefined;
     const bundleLspRuntime = toolsEnabled
@@ -625,6 +626,7 @@ export async function compactEmbeddedPiSessionDirect(
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
             ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+            ...shieldDenyNames,
           ],
         })
       : undefined;

@@ -1801,6 +1801,9 @@ export async function runEmbeddedAttempt(
       provider: params.provider,
     });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
+    // SHIELD.md deny names must also reserve MCP/LSP tool slots so bundled
+    // servers cannot reclaim names that the policy just blocked.
+    const shieldDenyNames = shieldPolicy?.deny ?? [];
     const bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
           workspaceDir: effectiveWorkspace,
@@ -1808,6 +1811,7 @@ export async function runEmbeddedAttempt(
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
+            ...shieldDenyNames,
           ],
         })
       : undefined;
@@ -1819,6 +1823,7 @@ export async function runEmbeddedAttempt(
             ...tools.map((tool) => tool.name),
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
             ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+            ...shieldDenyNames,
           ],
         })
       : undefined;
