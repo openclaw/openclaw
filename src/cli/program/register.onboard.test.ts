@@ -1,7 +1,7 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const onboardCommandMock = vi.fn();
+const setupWizardCommandMock = vi.fn();
 
 const runtime = {
   log: vi.fn(),
@@ -9,31 +9,62 @@ const runtime = {
   exit: vi.fn(),
 };
 
-vi.mock("../../commands/auth-choice-options.js", () => ({
-  formatAuthChoiceChoicesForCli: () => "token|oauth",
+vi.mock("../../commands/auth-choice-options.static.js", () => ({
+  formatStaticAuthChoiceChoicesForCli: () => "token|oauth",
 }));
 
-vi.mock("../../commands/onboard-provider-auth-flags.js", () => ({
-  ONBOARD_PROVIDER_AUTH_FLAGS: [
+vi.mock("../../commands/auth-choice-options.js", () => ({
+  formatAuthChoiceChoicesForCli: () => "token|oauth|openai-api-key",
+}));
+
+vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
+  CORE_ONBOARD_AUTH_FLAGS: [
     {
       cliOption: "--mistral-api-key <key>",
       description: "Mistral API key",
+      optionKey: "mistralApiKey",
     },
-  ] as Array<{ cliOption: string; description: string }>,
+  ] as Array<{ cliOption: string; description: string; optionKey: string }>,
+}));
+
+vi.mock("../../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderOnboardAuthFlags: () => [
+    {
+      cliOption: "--openai-api-key <key>",
+      description: "OpenAI API key",
+      optionKey: "openaiApiKey",
+    },
+  ],
 }));
 
 vi.mock("../../commands/onboard.js", () => ({
-  onboardCommand: onboardCommandMock,
+  setupWizardCommand: setupWizardCommandMock,
 }));
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+const mockedModuleIds = [
+  "../../commands/auth-choice-options.static.js",
+  "../../commands/auth-choice-options.js",
+  "../../commands/onboard-core-auth-flags.js",
+  "../../plugins/provider-auth-choices.js",
+  "../../commands/onboard.js",
+  "../../runtime.js",
+];
+
 let registerOnboardCommand: typeof import("./register.onboard.js").registerOnboardCommand;
 
 beforeAll(async () => {
   ({ registerOnboardCommand } = await import("./register.onboard.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });
 
 describe("registerOnboardCommand", () => {
@@ -45,13 +76,13 @@ describe("registerOnboardCommand", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    onboardCommandMock.mockResolvedValue(undefined);
+    setupWizardCommandMock.mockResolvedValue(undefined);
   });
 
   it("defaults installDaemon to undefined when no daemon flags are provided", async () => {
     await runCli(["onboard"]);
 
-    expect(onboardCommandMock).toHaveBeenCalledWith(
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
         installDaemon: undefined,
       }),
@@ -61,7 +92,7 @@ describe("registerOnboardCommand", () => {
 
   it("sets installDaemon from explicit install flags and prioritizes --skip-daemon", async () => {
     await runCli(["onboard", "--install-daemon"]);
-    expect(onboardCommandMock).toHaveBeenNthCalledWith(
+    expect(setupWizardCommandMock).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         installDaemon: true,
@@ -70,7 +101,7 @@ describe("registerOnboardCommand", () => {
     );
 
     await runCli(["onboard", "--no-install-daemon"]);
-    expect(onboardCommandMock).toHaveBeenNthCalledWith(
+    expect(setupWizardCommandMock).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         installDaemon: false,
@@ -79,7 +110,7 @@ describe("registerOnboardCommand", () => {
     );
 
     await runCli(["onboard", "--install-daemon", "--skip-daemon"]);
-    expect(onboardCommandMock).toHaveBeenNthCalledWith(
+    expect(setupWizardCommandMock).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
         installDaemon: false,
@@ -90,7 +121,7 @@ describe("registerOnboardCommand", () => {
 
   it("parses numeric gateway port and drops invalid values", async () => {
     await runCli(["onboard", "--gateway-port", "18789"]);
-    expect(onboardCommandMock).toHaveBeenNthCalledWith(
+    expect(setupWizardCommandMock).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         gatewayPort: 18789,
@@ -99,7 +130,7 @@ describe("registerOnboardCommand", () => {
     );
 
     await runCli(["onboard", "--gateway-port", "nope"]);
-    expect(onboardCommandMock).toHaveBeenNthCalledWith(
+    expect(setupWizardCommandMock).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         gatewayPort: undefined,
@@ -108,9 +139,9 @@ describe("registerOnboardCommand", () => {
     );
   });
 
-  it("forwards --reset-scope to onboard command options", async () => {
+  it("forwards --reset-scope to setup wizard options", async () => {
     await runCli(["onboard", "--reset", "--reset-scope", "full"]);
-    expect(onboardCommandMock).toHaveBeenCalledWith(
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
         reset: true,
         resetScope: "full",
@@ -121,7 +152,7 @@ describe("registerOnboardCommand", () => {
 
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {
     await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
-    expect(onboardCommandMock).toHaveBeenCalledWith(
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
         mistralApiKey: "sk-mistral-test", // pragma: allowlist secret
       }),
@@ -131,7 +162,7 @@ describe("registerOnboardCommand", () => {
 
   it("forwards --gateway-token-ref-env", async () => {
     await runCli(["onboard", "--gateway-token-ref-env", "OPENCLAW_GATEWAY_TOKEN"]);
-    expect(onboardCommandMock).toHaveBeenCalledWith(
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
         gatewayTokenRefEnv: "OPENCLAW_GATEWAY_TOKEN",
       }),
@@ -139,12 +170,12 @@ describe("registerOnboardCommand", () => {
     );
   });
 
-  it("reports errors via runtime on onboard command failures", async () => {
-    onboardCommandMock.mockRejectedValueOnce(new Error("onboard failed"));
+  it("reports errors via runtime on setup wizard command failures", async () => {
+    setupWizardCommandMock.mockRejectedValueOnce(new Error("setup failed"));
 
     await runCli(["onboard"]);
 
-    expect(runtime.error).toHaveBeenCalledWith("Error: onboard failed");
+    expect(runtime.error).toHaveBeenCalledWith("Error: setup failed");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

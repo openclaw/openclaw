@@ -1,5 +1,6 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
   isLocalishHost,
   isPrivateOrLoopbackAddress,
@@ -210,10 +211,24 @@ describe("resolveClientIp", () => {
       expected: "10.0.0.9",
     },
     {
+      name: "ignores spoofed loopback X-Forwarded-For hops from trusted proxies",
+      remoteAddr: "10.0.0.50",
+      forwardedFor: "127.0.0.1",
+      trustedProxies: ["10.0.0.0/8"],
+      expected: undefined,
+    },
+    {
       name: "fails closed when all X-Forwarded-For hops are trusted proxies",
       remoteAddr: "127.0.0.1",
       forwardedFor: "127.0.0.1, ::1",
       trustedProxies: ["127.0.0.1", "::1"],
+      expected: undefined,
+    },
+    {
+      name: "fails closed when all non-loopback X-Forwarded-For hops are trusted proxies",
+      remoteAddr: "10.0.0.50",
+      forwardedFor: "10.0.0.2, 10.0.0.1",
+      trustedProxies: ["10.0.0.0/8"],
       expected: undefined,
     },
     {
@@ -307,44 +322,49 @@ describe("pickPrimaryLanIPv4", () => {
     const cases = [
       {
         name: "prefers en0",
-        interfaces: {
-          lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "" }],
-          en0: [{ address: "192.168.1.42", family: "IPv4", internal: false, netmask: "" }],
-        },
+        interfaces: makeNetworkInterfacesSnapshot({
+          lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+          en0: [{ address: "192.168.1.42", family: "IPv4" }],
+        }),
         expected: "192.168.1.42",
       },
       {
         name: "falls back to eth0",
-        interfaces: {
-          lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "" }],
-          eth0: [{ address: "10.0.0.5", family: "IPv4", internal: false, netmask: "" }],
-        },
+        interfaces: makeNetworkInterfacesSnapshot({
+          lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+          eth0: [{ address: "10.0.0.5", family: "IPv4" }],
+        }),
         expected: "10.0.0.5",
       },
       {
         name: "falls back to any non-internal interface",
-        interfaces: {
-          lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "" }],
-          wlan0: [{ address: "172.16.0.99", family: "IPv4", internal: false, netmask: "" }],
-        },
+        interfaces: makeNetworkInterfacesSnapshot({
+          lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+          wlan0: [{ address: "172.16.0.99", family: "IPv4" }],
+        }),
         expected: "172.16.0.99",
       },
       {
         name: "no non-internal interface",
-        interfaces: {
-          lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "" }],
-        },
+        interfaces: makeNetworkInterfacesSnapshot({
+          lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+        }),
         expected: undefined,
       },
     ] as const;
 
     for (const testCase of cases) {
-      vi.spyOn(os, "networkInterfaces").mockReturnValue(
-        testCase.interfaces as unknown as ReturnType<typeof os.networkInterfaces>,
-      );
+      vi.spyOn(os, "networkInterfaces").mockReturnValue(testCase.interfaces);
       expect(pickPrimaryLanIPv4(), testCase.name).toBe(testCase.expected);
       vi.restoreAllMocks();
     }
+  });
+
+  it("returns undefined when interface discovery throws", () => {
+    vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
+      throw new Error("uv_interface_addresses failed");
+    });
+    expect(pickPrimaryLanIPv4()).toBeUndefined();
   });
 });
 

@@ -1,6 +1,7 @@
-// Narrow plugin-sdk surface for the bundled voice-call plugin.
-// Keep this list additive and scoped to symbols used under extensions/voice-call.
+// Private helper surface for the bundled voice-call plugin.
+// Keep this surface narrow and limited to the voice-call feature contract.
 
+export { definePluginEntry } from "./plugin-entry.js";
 export {
   TtsAutoSchema,
   TtsConfigSchema,
@@ -15,5 +16,6 @@ export {
   requestBodyErrorToText,
 } from "../infra/http-body.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+export type { SessionEntry } from "../config/sessions/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
 export { sleep } from "../utils.js";

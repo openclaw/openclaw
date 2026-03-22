@@ -1,5 +1,5 @@
 # OpenClaw gateway — Podman Quadlet (rootless)
-# Installed by setup-podman.sh into openclaw's ~/.config/containers/systemd/
+# Installed by scripts/podman/setup.sh into openclaw's ~/.config/containers/systemd/
 # {{OPENCLAW_HOME}} is replaced at install time.
 
 [Unit]

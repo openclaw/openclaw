@@ -1,4 +1,5 @@
 import { logVerbose } from "../../globals.js";
+import { getSpeechProvider, normalizeSpeechProviderId } from "../../tts/provider-registry.js";
 import {
   getLastTtsAttempt,
   getTtsMaxLength,
@@ -54,7 +55,7 @@ function ttsUsage(): ReplyPayload {
       `• /tts summary [on|off] — View/change auto-summary\n` +
       `• /tts audio <text> — Generate audio from text\n\n` +
       `**Providers:**\n` +
-      `• edge — Free, fast (default)\n` +
+      `• microsoft — Microsoft Edge-backed speech (default fallback)\n` +
       `• openai — High quality (requires API key)\n` +
       `• elevenlabs — Premium voices (requires API key)\n\n` +
       `**Text Limit (default: 1500, max: 4096):**\n` +
@@ -62,7 +63,7 @@ function ttsUsage(): ReplyPayload {
       `• Summary ON: AI summarizes, then generates audio\n` +
       `• Summary OFF: Truncates text, then generates audio\n\n` +
       `**Examples:**\n` +
-      `/tts provider edge\n` +
+      `/tts provider microsoft\n` +
       `/tts limit 2000\n` +
       `/tts audio Hello, this is a test!`,
   };
@@ -161,7 +162,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     if (!args.trim()) {
       const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
       const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
-      const hasEdge = isTtsProviderConfigured(config, "edge");
+      const hasMicrosoft = isTtsProviderConfigured(config, "microsoft", params.cfg);
       return {
         shouldContinue: false,
         reply: {
@@ -170,21 +171,22 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
             `Primary: ${currentProvider}\n` +
             `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
             `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
-            `Edge enabled: ${hasEdge ? "✅" : "❌"}\n` +
-            `Usage: /tts provider openai | elevenlabs | edge`,
+            `Microsoft enabled: ${hasMicrosoft ? "✅" : "❌"}\n` +
+            `Usage: /tts provider openai | elevenlabs | microsoft`,
         },
       };
     }
 
     const requested = args.trim().toLowerCase();
-    if (requested !== "openai" && requested !== "elevenlabs" && requested !== "edge") {
+    if (requested !== "edge" && !getSpeechProvider(requested, params.cfg)) {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 
+    const nextProvider = normalizeSpeechProviderId(requested) ?? requested;
     setTtsProvider(prefsPath, requested);
     return {
       shouldContinue: false,
-      reply: { text: `✅ TTS provider set to ${requested}.` },
+      reply: { text: `✅ TTS provider set to ${nextProvider}.` },
     };
   }
 
@@ -249,7 +251,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "status") {
     const enabled = isTtsEnabled(config, prefsPath);
     const provider = getTtsProvider(config, prefsPath);
-    const hasKey = isTtsProviderConfigured(config, provider);
+    const hasKey = isTtsProviderConfigured(config, provider, params.cfg);
     const maxLength = getTtsMaxLength(prefsPath);
     const summarize = isSummarizationEnabled(prefsPath);
     const last = getLastTtsAttempt();

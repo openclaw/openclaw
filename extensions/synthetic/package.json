@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/synthetic-provider",
+  "version": "2026.3.22",
+  "private": true,
+  "description": "OpenClaw Synthetic provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

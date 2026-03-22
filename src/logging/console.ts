@@ -145,6 +145,12 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
   "Session already open",
 ] as const;
 
+const SUPPRESSED_DISCORD_EVENTQUEUE_LISTENERS = [
+  "DiscordMessageListener",
+  "DiscordReactionListener",
+  "DiscordReactionRemoveListener",
+] as const;
+
 function shouldSuppressConsoleMessage(message: string): boolean {
   if (isVerbose()) {
     return false;
@@ -154,7 +160,7 @@ function shouldSuppressConsoleMessage(message: string): boolean {
   }
   if (
     message.startsWith("[EventQueue] Slow listener detected") &&
-    message.includes("DiscordMessageListener")
+    SUPPRESSED_DISCORD_EVENTQUEUE_LISTENERS.some((listener) => message.includes(listener))
   ) {
     return true;
   }
@@ -282,8 +288,9 @@ export function enableConsoleCapture(): void {
       } catch {
         // never block console output on logging failures
       }
-      if (loggingState.forceConsoleToStderr) {
-        // in RPC/JSON mode, keep stdout clean
+      if (loggingState.forceConsoleToStderr && !isJsonPayload(trimmed)) {
+        // In --json mode, route diagnostic logs to stderr but let JSON
+        // payloads (the actual command output) through to stdout via orig().
         try {
           const line = timestamp ? `${timestamp} ${formatted}` : formatted;
           process.stderr.write(`${line}\n`);

@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const agentCliCommandMock = vi.fn();
 const agentsAddCommandMock = vi.fn();
@@ -44,10 +44,25 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+const mockedModuleIds = [
+  "../../commands/agent-via-gateway.js",
+  "../../commands/agents.js",
+  "../../globals.js",
+  "../deps.js",
+  "../../runtime.js",
+];
+
 let registerAgentCommands: typeof import("./register.agent.js").registerAgentCommands;
 
 beforeAll(async () => {
   ({ registerAgentCommands } = await import("./register.agent.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });
 
 describe("registerAgentCommands", () => {
@@ -174,7 +189,7 @@ describe("registerAgentCommands", () => {
       "--agent",
       "ops",
       "--bind",
-      "matrix-js:ops",
+      "matrix:ops",
       "--bind",
       "telegram",
       "--json",
@@ -182,7 +197,7 @@ describe("registerAgentCommands", () => {
     expect(agentsBindCommandMock).toHaveBeenCalledWith(
       {
         agent: "ops",
-        bind: ["matrix-js:ops", "telegram"],
+        bind: ["matrix:ops", "telegram"],
         json: true,
       },
       runtime,

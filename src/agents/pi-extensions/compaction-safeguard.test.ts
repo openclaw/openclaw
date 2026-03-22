@@ -37,12 +37,18 @@ const {
   resolveQualityGuardMaxRetries,
   extractOpaqueIdentifiers,
   auditSummaryQuality,
+  capCompactionSummary,
+  capCompactionSummaryPreservingSuffix,
+  formatFileOperations,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  MAX_COMPACTION_SUMMARY_CHARS,
+  MAX_FILE_OPS_SECTION_CHARS,
+  SUMMARY_TRUNCATED_MARKER,
 } = __testing;
 
 function stubSessionManager(): ExtensionContext["sessionManager"] {
@@ -138,8 +144,29 @@ async function runCompactionScenario(params: {
   });
   const result = (await compactionHandler(params.event, mockContext)) as {
     cancel?: boolean;
+    compaction?: {
+      summary: string;
+      firstKeptEntryId: string;
+      tokensBefore: number;
+    };
   };
   return { result, getApiKeyMock };
+}
+
+function expectCompactionResult(result: {
+  cancel?: boolean;
+  compaction?: {
+    summary: string;
+    firstKeptEntryId: string;
+    tokensBefore: number;
+  };
+}) {
+  expect(result.cancel).not.toBe(true);
+  expect(result.compaction).toBeDefined();
+  if (!result.compaction) {
+    throw new Error("Expected compaction result");
+  }
+  return result.compaction;
 }
 
 describe("compaction-safeguard tool failures", () => {
@@ -231,6 +258,104 @@ describe("compaction-safeguard tool failures", () => {
     const failures = collectToolFailures(messages);
     const section = formatToolFailuresSection(failures);
     expect(section).toBe("");
+  });
+});
+
+describe("compaction-safeguard summary budgets", () => {
+  it("caps file operations summary and reports omitted entries", () => {
+    const readFiles = Array.from(
+      { length: 200 },
+      (_, i) => `docs/very/long/path/${i}-read-file.md`,
+    );
+    const modifiedFiles = Array.from(
+      { length: 200 },
+      (_, i) => `src/features/${i}/nested/component/file-${i}.ts`,
+    );
+
+    const section = formatFileOperations(readFiles, modifiedFiles);
+
+    expect(section).toContain("<read-files>");
+    expect(section).toContain("<modified-files>");
+    expect(section).toContain("...and ");
+    expect(section.length).toBeLessThanOrEqual(MAX_FILE_OPS_SECTION_CHARS);
+  });
+
+  it("caps final compaction summary with a truncation marker", () => {
+    const oversized = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS + 500);
+    const capped = capCompactionSummary(oversized);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain(SUMMARY_TRUNCATED_MARKER.trim());
+    expect(capped.endsWith(SUMMARY_TRUNCATED_MARKER)).toBe(true);
+  });
+
+  it("preserves workspace critical rules suffix when capping", () => {
+    const suffix =
+      "\n\n<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const body = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+
+    const capped = capCompactionSummaryPreservingSuffix(body, suffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain("<workspace-critical-rules>");
+    expect(capped).toContain("## Session Startup");
+    expect(capped.endsWith(suffix)).toBe(true);
+  });
+
+  it("preserves diagnostic sections (tool failures, file ops) when capping oversized body", () => {
+    const diagnosticSuffix =
+      "\n\n## Tool Failures\n- exec: failed\n\n<read-files>\nfoo.ts\n</read-files>\n\n" +
+      "<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const body = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+
+    const capped = capCompactionSummaryPreservingSuffix(body, diagnosticSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain("## Tool Failures");
+    expect(capped).toContain("<read-files>");
+    expect(capped).toContain("<workspace-critical-rules>");
+    expect(capped.endsWith(diagnosticSuffix)).toBe(true);
+  });
+
+  it("keeps section separator when body ends without newline (e.g. buildStructuredFallbackSummary)", () => {
+    const bodyNoNewline = "## Exact identifiers\nNone.";
+    const suffixNoLeadingNewline = "## Tool Failures\n- exec: failed";
+
+    const capped = capCompactionSummaryPreservingSuffix(
+      bodyNoNewline,
+      `\n\n${suffixNoLeadingNewline}`,
+    );
+
+    expect(capped).toContain("None.\n\n## Tool Failures");
+    expect(capped).not.toMatch(/None\.## Tool Failures/);
+  });
+
+  it("keeps body prefix when truncation marker cannot fit (tiny budget)", () => {
+    const body = "## Decisions\nKeep flow.\n## Constraints\nFollow rules.";
+    const tinyBudget = 10; // Smaller than SUMMARY_TRUNCATED_MARKER.length
+    const capped = capCompactionSummary(body, tinyBudget);
+
+    expect(capped.length).toBeLessThanOrEqual(tinyBudget);
+    expect(capped).toContain("## Decis");
+    expect(capped).not.toContain("[Compaction summary truncated");
+  });
+
+  it("preserves tail sections when suffix exceeds cap (workspace rules, diagnostics over preserved turns)", () => {
+    const criticalTail =
+      "\n\n## Tool Failures\n- exec: failed\n\n<read-files>\nfoo.ts\n</read-files>\n\n" +
+      "<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const preservedTurns =
+      "## Recent turns preserved verbatim\n- User: x\n- Assistant: y\n" +
+      "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+    const oversizedSuffix = preservedTurns + criticalTail;
+
+    const capped = capCompactionSummaryPreservingSuffix("short body", oversizedSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain("<workspace-critical-rules>");
+    expect(capped).toContain("## Tool Failures");
+    expect(capped).toContain("<read-files>");
+    expect(capped).toContain("## Session Startup");
   });
 });
 
@@ -1337,17 +1462,20 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(secondCall?.customInstructions).toContain("latest_user_ask_not_reflected");
   });
 
-  it("keeps last successful summary when a quality retry call fails", async () => {
+  it("preserves split-turn and recent-turn suffixes when retry fallback is capped", async () => {
     mockSummarizeInStages.mockReset();
+    const oversizedHistorySummary = "history detail ".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+    const splitTurnPrefixSummary = "split-turn prefix context that must survive capping";
     mockSummarizeInStages
-      .mockResolvedValueOnce("short summary missing headings")
+      .mockResolvedValueOnce(oversizedHistorySummary)
+      .mockResolvedValueOnce(splitTurnPrefixSummary)
       .mockRejectedValueOnce(new Error("retry transient failure"));
 
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, {
       model,
-      recentTurnsPreserve: 0,
+      recentTurnsPreserve: 1,
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 1,
     });
@@ -1363,8 +1491,16 @@ describe("compaction-safeguard recent-turn preservation", () => {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
           { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          { role: "user", content: "latest ask status", timestamp: 3 },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "latest assistant reply" }],
+            timestamp: 4,
+          } as unknown as AgentMessage,
         ],
-        turnPrefixMessages: [],
+        turnPrefixMessages: [
+          { role: "user", content: "prefix request that was split out", timestamp: 0 },
+        ],
         firstKeptEntryId: "entry-1",
         tokensBefore: 1_500,
         fileOps: {
@@ -1374,7 +1510,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
         },
         settings: { reserveTokens: 4_000 },
         previousSummary: undefined,
-        isSplitTurn: false,
+        isSplitTurn: true,
       },
       customInstructions: "",
       signal: new AbortController().signal,
@@ -1386,8 +1522,15 @@ describe("compaction-safeguard recent-turn preservation", () => {
     };
 
     expect(result.cancel).not.toBe(true);
-    expect(result.compaction?.summary).toContain("short summary missing headings");
-    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const summary = result.compaction?.summary ?? "";
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(summary).toContain(SUMMARY_TRUNCATED_MARKER);
+    expect(summary).toContain("**Turn Context (split turn):**");
+    expect(summary).toContain(splitTurnPrefixSummary);
+    expect(summary).toContain("## Recent turns preserved verbatim");
+    expect(summary).toContain("latest ask status");
+    expect(summary).toContain("latest assistant reply");
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(3);
   });
 
   it("keeps required headings when all turns are preserved and history is carried forward", async () => {
@@ -1524,8 +1667,115 @@ describe("compaction-safeguard double-compaction guard", () => {
       event: mockEvent,
       apiKey: "sk-test", // pragma: allowlist secret
     });
-    expect(result).toEqual({ cancel: true });
+    const compaction = expectCompactionResult(result);
+    // After fix for #41981: returns a compaction result (not cancel) to write
+    // a boundary entry and break the re-trigger loop.
+    // buildStructuredFallbackSummary(undefined) produces a minimal structured summary
+    expect(compaction.summary).toContain("## Decisions");
+    expect(compaction.summary).toContain("No prior history.");
+    expect(compaction.summary).toContain("## Open TODOs");
+    expect(compaction.firstKeptEntryId).toBe("entry-1");
+    expect(compaction.tokensBefore).toBe(1500);
     expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("returns compaction result with structured fallback summary sections", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-2",
+        tokensBefore: 2000,
+        previousSummary: "## Decisions\nUsed approach A.",
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 16384 },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "sk-test", // pragma: allowlist secret
+    });
+    const compaction = expectCompactionResult(result);
+    // Fallback preserves previous summary when it has required sections
+    expect(compaction.summary).toContain("## Decisions");
+    expect(compaction.summary).toContain("## Open TODOs");
+    expect(compaction.firstKeptEntryId).toBe("entry-2");
+  });
+
+  it("writes boundary again on repeated empty preparation (no cancel loop after new assistant message)", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-3",
+        tokensBefore: 1000,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    // First call — writes boundary
+    const { result: result1 } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "sk-test", // pragma: allowlist secret
+    });
+    const compaction1 = expectCompactionResult(result1);
+    expect(compaction1.summary).toContain("## Decisions");
+
+    // Simulate: after the boundary, a new assistant message arrives, SDK
+    // triggers compaction again with another empty preparation. The safeguard
+    // must write another boundary (not cancel) to avoid re-entering the
+    // cancel loop described in the maintainer review.
+    const { result: result2 } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "sk-test", // pragma: allowlist secret
+    });
+    const compaction2 = expectCompactionResult(result2);
+    expect(compaction2.summary).toContain("## Decisions");
+    expect(compaction2.firstKeptEntryId).toBe("entry-3");
+  });
+
+  it("does not write boundary when turnPrefixMessages has real content (split-turn)", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [
+          { role: "user" as const, content: "real turn prefix content" },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-4",
+        tokensBefore: 2000,
+        fileOps: { read: [], edited: [], written: [] },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+    });
+    // Should NOT take the boundary fast-path — falls through to normal compaction
+    // (which cancels due to no API key, but that's the expected normal path)
+    expect(result).toEqual({ cancel: true });
   });
 
   it("continues when messages include real conversation content", async () => {
@@ -1545,21 +1795,100 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).toHaveBeenCalled();
   });
+
+  it("treats tool results as real conversation only when linked to a meaningful user ask", async () => {
+    expect(
+      __testing.isRealConversationMessage(
+        {
+          role: "toolResult",
+          toolCallId: "t1",
+          toolName: "exec",
+          content: [{ type: "text", text: "done" }],
+        } as AgentMessage,
+        [
+          { role: "user", content: "<b>HEARTBEAT_OK</b>" } as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "t1",
+            toolName: "exec",
+            content: [{ type: "text", text: "done" }],
+          } as AgentMessage,
+        ],
+        1,
+      ),
+    ).toBe(false);
+
+    expect(
+      __testing.isRealConversationMessage(
+        {
+          role: "toolResult",
+          toolCallId: "t2",
+          toolName: "exec",
+          content: [{ type: "text", text: "done" }],
+        } as AgentMessage,
+        [
+          { role: "user", content: "please inspect the repo" } as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "t2",
+            toolName: "exec",
+            content: [{ type: "text", text: "done" }],
+          } as AgentMessage,
+        ],
+        1,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat assistant-only tool calls as meaningful conversation", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      } as AgentMessage),
+    ).toBe(false);
+  });
+
+  it("does not treat reasoning-only assistant blocks as meaningful conversation", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "checking" }],
+      } as AgentMessage),
+    ).toBe(false);
+
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "reasoning", summary: [] }],
+      } as unknown as AgentMessage),
+    ).toBe(false);
+  });
+
+  it("treats markup-wrapped heartbeat tokens as boilerplate", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent(
+        castAgentMessage({
+          role: "assistant",
+          content: "<b>HEARTBEAT_OK</b>",
+        }),
+      ),
+    ).toBe(false);
+  });
 });
 
 async function expectWorkspaceSummaryEmptyForAgentsAlias(
   createAlias: (outsidePath: string, agentsPath: string) => void,
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-  const prevCwd = process.cwd();
+  const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
   try {
     const outside = path.join(root, "outside-secret.txt");
     fs.writeFileSync(outside, "secret");
     createAlias(outside, path.join(root, "AGENTS.md"));
-    process.chdir(root);
     await expect(readWorkspaceContextForSummary()).resolves.toBe("");
   } finally {
-    process.chdir(prevCwd);
+    cwdSpy.mockRestore();
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

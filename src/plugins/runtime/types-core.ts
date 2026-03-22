@@ -1,5 +1,6 @@
 import type { LogLevel } from "../../logging/levels.js";
 
+/** Structured logger surface injected into runtime-backed plugin helpers. */
 export type RuntimeLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
   info: (message: string, meta?: Record<string, unknown>) => void;
@@ -7,11 +8,31 @@ export type RuntimeLogger = {
   error: (message: string, meta?: Record<string, unknown>) => void;
 };
 
+/** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
   version: string;
   config: {
     loadConfig: typeof import("../../config/config.js").loadConfig;
     writeConfigFile: typeof import("../../config/config.js").writeConfigFile;
+  };
+  agent: {
+    defaults: {
+      model: typeof import("../../agents/defaults.js").DEFAULT_MODEL;
+      provider: typeof import("../../agents/defaults.js").DEFAULT_PROVIDER;
+    };
+    resolveAgentDir: typeof import("../../agents/agent-scope.js").resolveAgentDir;
+    resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
+    resolveAgentIdentity: typeof import("../../agents/identity.js").resolveAgentIdentity;
+    resolveThinkingDefault: typeof import("../../agents/model-selection.js").resolveThinkingDefault;
+    runEmbeddedPiAgent: typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent;
+    resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
+    ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
+    session: {
+      resolveStorePath: typeof import("../../config/sessions.js").resolveStorePath;
+      loadSessionStore: typeof import("../../config/sessions.js").loadSessionStore;
+      saveSessionStore: typeof import("../../config/sessions.js").saveSessionStore;
+      resolveSessionFilePath: typeof import("../../config/sessions.js").resolveSessionFilePath;
+    };
   };
   system: {
     enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEvent;
@@ -20,7 +41,7 @@ export type PluginRuntimeCore = {
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
   };
   media: {
-    loadWebMedia: typeof import("../../web/media.js").loadWebMedia;
+    loadWebMedia: typeof import("../../media/web-media.js").loadWebMedia;
     detectMime: typeof import("../../media/mime.js").detectMime;
     mediaKindFromMime: typeof import("../../media/constants.js").mediaKindFromMime;
     isVoiceCompatibleAudio: typeof import("../../media/audio.js").isVoiceCompatibleAudio;
@@ -28,7 +49,24 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
   };
   tts: {
-    textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
+    textToSpeech: typeof import("../../tts/runtime.js").textToSpeech;
+    textToSpeechTelephony: typeof import("../../tts/runtime.js").textToSpeechTelephony;
+    listVoices: typeof import("../../tts/runtime.js").listSpeechVoices;
+  };
+  mediaUnderstanding: {
+    runFile: typeof import("../../media-understanding/runtime.js").runMediaUnderstandingFile;
+    describeImageFile: typeof import("../../media-understanding/runtime.js").describeImageFile;
+    describeImageFileWithModel: typeof import("../../media-understanding/runtime.js").describeImageFileWithModel;
+    describeVideoFile: typeof import("../../media-understanding/runtime.js").describeVideoFile;
+    transcribeAudioFile: typeof import("../../media-understanding/runtime.js").transcribeAudioFile;
+  };
+  imageGeneration: {
+    generate: typeof import("../../image-generation/runtime.js").generateImage;
+    listProviders: typeof import("../../image-generation/runtime.js").listRuntimeImageGenerationProviders;
+  };
+  webSearch: {
+    listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;
+    search: typeof import("../../web-search/runtime.js").runWebSearch;
   };
   stt: {
     transcribeAudioFile: typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;

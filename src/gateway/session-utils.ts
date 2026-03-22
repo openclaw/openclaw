@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { lookupContextTokens } from "../agents/context.js";
+import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   inferUniqueProviderFromConfiguredModels,
@@ -9,6 +9,13 @@ import {
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
+import {
+  getSubagentRunByChildSessionKey,
+  getSubagentSessionRuntimeMs,
+  getSubagentSessionStartedAt,
+  listSubagentRunsForController,
+  resolveSubagentSessionStatus,
+} from "../agents/subagent-registry.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -40,7 +47,11 @@ import {
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
-import { readSessionTitleFieldsFromTranscript } from "./session-utils.fs.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import {
+  readLatestSessionUsageFromTranscript,
+  readSessionTitleFieldsFromTranscript,
+} from "./session-utils.fs.js";
 import type {
   GatewayAgentRow,
   GatewaySessionRow,
@@ -51,9 +62,11 @@ import type {
 export {
   archiveFileOnDisk,
   archiveSessionTranscripts,
+  attachOpenClawTranscriptMeta,
   capArrayByJsonBytes,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
+  readLatestSessionUsageFromTranscript,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   readSessionMessages,
@@ -175,6 +188,149 @@ export function deriveSessionTitle(
   }
 
   return undefined;
+}
+
+function resolveSessionRuntimeMs(
+  run: { startedAt?: number; endedAt?: number; accumulatedRuntimeMs?: number } | null,
+  now: number,
+) {
+  return getSubagentSessionRuntimeMs(run, now);
+}
+
+function resolvePositiveNumber(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function resolveNonNegativeNumber(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function resolveEstimatedSessionCostUsd(params: {
+  cfg: OpenClawConfig;
+  provider?: string;
+  model?: string;
+  entry?: Pick<
+    SessionEntry,
+    "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite"
+  >;
+  explicitCostUsd?: number;
+}): number | undefined {
+  const explicitCostUsd = resolveNonNegativeNumber(
+    params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
+  );
+  if (explicitCostUsd !== undefined) {
+    return explicitCostUsd;
+  }
+  const input = resolvePositiveNumber(params.entry?.inputTokens);
+  const output = resolvePositiveNumber(params.entry?.outputTokens);
+  const cacheRead = resolvePositiveNumber(params.entry?.cacheRead);
+  const cacheWrite = resolvePositiveNumber(params.entry?.cacheWrite);
+  if (
+    input === undefined &&
+    output === undefined &&
+    cacheRead === undefined &&
+    cacheWrite === undefined
+  ) {
+    return undefined;
+  }
+  const cost = resolveModelCostConfig({
+    provider: params.provider,
+    model: params.model,
+    config: params.cfg,
+  });
+  if (!cost) {
+    return undefined;
+  }
+  const estimated = estimateUsageCost({
+    usage: {
+      ...(input !== undefined ? { input } : {}),
+      ...(output !== undefined ? { output } : {}),
+      ...(cacheRead !== undefined ? { cacheRead } : {}),
+      ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+    },
+    cost,
+  });
+  return resolveNonNegativeNumber(estimated);
+}
+
+function resolveChildSessionKeys(
+  controllerSessionKey: string,
+  store: Record<string, SessionEntry>,
+): string[] | undefined {
+  const childSessionKeys = new Set(
+    listSubagentRunsForController(controllerSessionKey)
+      .map((entry) => entry.childSessionKey)
+      .filter((value) => typeof value === "string" && value.trim().length > 0),
+  );
+  for (const [key, entry] of Object.entries(store)) {
+    if (!entry || key === controllerSessionKey) {
+      continue;
+    }
+    const spawnedBy = entry.spawnedBy?.trim();
+    const parentSessionKey = entry.parentSessionKey?.trim();
+    if (spawnedBy === controllerSessionKey || parentSessionKey === controllerSessionKey) {
+      childSessionKeys.add(key);
+    }
+  }
+  const childSessions = Array.from(childSessionKeys);
+  return childSessions.length > 0 ? childSessions : undefined;
+}
+
+function resolveTranscriptUsageFallback(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  entry?: SessionEntry;
+  storePath: string;
+  fallbackProvider?: string;
+  fallbackModel?: string;
+}): {
+  estimatedCostUsd?: number;
+  totalTokens?: number;
+  totalTokensFresh?: boolean;
+  contextTokens?: number;
+} | null {
+  const entry = params.entry;
+  if (!entry?.sessionId) {
+    return null;
+  }
+  const parsed = parseAgentSessionKey(params.key);
+  const agentId = parsed?.agentId
+    ? normalizeAgentId(parsed.agentId)
+    : resolveDefaultAgentId(params.cfg);
+  const snapshot = readLatestSessionUsageFromTranscript(
+    entry.sessionId,
+    params.storePath,
+    entry.sessionFile,
+    agentId,
+  );
+  if (!snapshot) {
+    return null;
+  }
+  const modelProvider = snapshot.modelProvider ?? params.fallbackProvider;
+  const model = snapshot.model ?? params.fallbackModel;
+  const contextTokens = resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: modelProvider,
+    model,
+  });
+  const estimatedCostUsd = resolveEstimatedSessionCostUsd({
+    cfg: params.cfg,
+    provider: modelProvider,
+    model,
+    explicitCostUsd: snapshot.costUsd,
+    entry: {
+      inputTokens: snapshot.inputTokens,
+      outputTokens: snapshot.outputTokens,
+      cacheRead: snapshot.cacheRead,
+      cacheWrite: snapshot.cacheWrite,
+    },
+  });
+  return {
+    totalTokens: resolvePositiveNumber(snapshot.totalTokens),
+    totalTokensFresh: snapshot.totalTokensFresh === true,
+    contextTokens: resolvePositiveNumber(contextTokens),
+    estimatedCostUsd,
+  };
 }
 
 export function loadSessionEntry(sessionKey: string) {
@@ -816,6 +972,7 @@ export function resolveSessionModelIdentityRef(
     | SessionEntry
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
   agentId?: string,
+  fallbackModelRef?: string,
 ): { provider?: string; model: string } {
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
@@ -839,8 +996,200 @@ export function resolveSessionModelIdentityRef(
     }
     return { model: runtimeModel };
   }
+  const fallbackRef = fallbackModelRef?.trim();
+  if (fallbackRef) {
+    const parsedFallback = parseModelRef(fallbackRef, DEFAULT_PROVIDER);
+    if (parsedFallback) {
+      return { provider: parsedFallback.provider, model: parsedFallback.model };
+    }
+    const inferredProvider = inferUniqueProviderFromConfiguredModels({
+      cfg,
+      model: fallbackRef,
+    });
+    if (inferredProvider) {
+      return { provider: inferredProvider, model: fallbackRef };
+    }
+    return { model: fallbackRef };
+  }
   const resolved = resolveSessionModelRef(cfg, entry, agentId);
   return { provider: resolved.provider, model: resolved.model };
+}
+
+export function buildGatewaySessionRow(params: {
+  cfg: OpenClawConfig;
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  key: string;
+  entry?: SessionEntry;
+  now?: number;
+  includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
+}): GatewaySessionRow {
+  const { cfg, storePath, store, key, entry } = params;
+  const now = params.now ?? Date.now();
+  const updatedAt = entry?.updatedAt ?? null;
+  const parsed = parseGroupKey(key);
+  const channel = entry?.channel ?? parsed?.channel;
+  const subject = entry?.subject;
+  const groupChannel = entry?.groupChannel;
+  const space = entry?.space;
+  const id = parsed?.id;
+  const origin = entry?.origin;
+  const originLabel = origin?.label;
+  const displayName =
+    entry?.displayName ??
+    (channel
+      ? buildGroupDisplayName({
+          provider: channel,
+          subject,
+          groupChannel,
+          space,
+          id,
+          key,
+        })
+      : undefined) ??
+    entry?.label ??
+    originLabel;
+  const deliveryFields = normalizeSessionDeliveryFields(entry);
+  const parsedAgent = parseAgentSessionKey(key);
+  const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
+  const subagentRun = getSubagentRunByChildSessionKey(key);
+  const subagentStatus = subagentRun ? resolveSubagentSessionStatus(subagentRun) : undefined;
+  const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
+  const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
+  const subagentRuntimeMs = subagentRun ? resolveSessionRuntimeMs(subagentRun, now) : undefined;
+  const resolvedModel = resolveSessionModelIdentityRef(
+    cfg,
+    entry,
+    sessionAgentId,
+    subagentRun?.model,
+  );
+  const modelProvider = resolvedModel.provider;
+  const model = resolvedModel.model ?? DEFAULT_MODEL;
+  const transcriptUsage =
+    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined ||
+    resolvePositiveNumber(entry?.contextTokens) === undefined ||
+    resolveEstimatedSessionCostUsd({
+      cfg,
+      provider: modelProvider,
+      model,
+      entry,
+    }) === undefined
+      ? resolveTranscriptUsageFallback({
+          cfg,
+          key,
+          entry,
+          storePath,
+          fallbackProvider: modelProvider,
+          fallbackModel: model,
+        })
+      : null;
+  const totalTokens =
+    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
+    resolvePositiveNumber(transcriptUsage?.totalTokens);
+  const totalTokensFresh =
+    typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
+      ? true
+      : transcriptUsage?.totalTokensFresh === true;
+  const childSessions = resolveChildSessionKeys(key, store);
+  const estimatedCostUsd =
+    resolveEstimatedSessionCostUsd({
+      cfg,
+      provider: modelProvider,
+      model,
+      entry,
+    }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd);
+  const contextTokens =
+    resolvePositiveNumber(entry?.contextTokens) ??
+    resolvePositiveNumber(transcriptUsage?.contextTokens) ??
+    resolvePositiveNumber(
+      resolveContextTokensForModel({
+        cfg,
+        provider: modelProvider,
+        model,
+      }),
+    );
+
+  let derivedTitle: string | undefined;
+  let lastMessagePreview: string | undefined;
+  if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
+    const fields = readSessionTitleFieldsFromTranscript(
+      entry.sessionId,
+      storePath,
+      entry.sessionFile,
+      sessionAgentId,
+    );
+    if (params.includeDerivedTitles) {
+      derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+    }
+    if (params.includeLastMessage && fields.lastMessagePreview) {
+      lastMessagePreview = fields.lastMessagePreview;
+    }
+  }
+
+  return {
+    key,
+    spawnedBy: entry?.spawnedBy,
+    kind: classifySessionKey(key, entry),
+    label: entry?.label,
+    displayName,
+    derivedTitle,
+    lastMessagePreview,
+    channel,
+    subject,
+    groupChannel,
+    space,
+    chatType: entry?.chatType,
+    origin,
+    updatedAt,
+    sessionId: entry?.sessionId,
+    systemSent: entry?.systemSent,
+    abortedLastRun: entry?.abortedLastRun,
+    thinkingLevel: entry?.thinkingLevel,
+    verboseLevel: entry?.verboseLevel,
+    reasoningLevel: entry?.reasoningLevel,
+    elevatedLevel: entry?.elevatedLevel,
+    sendPolicy: entry?.sendPolicy,
+    inputTokens: entry?.inputTokens,
+    outputTokens: entry?.outputTokens,
+    totalTokens,
+    totalTokensFresh,
+    estimatedCostUsd,
+    status: subagentRun ? subagentStatus : entry?.status,
+    startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
+    endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
+    runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
+    parentSessionKey: entry?.parentSessionKey,
+    childSessions,
+    responseUsage: entry?.responseUsage,
+    modelProvider,
+    model,
+    contextTokens,
+    deliveryContext: deliveryFields.deliveryContext,
+    lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
+    lastTo: deliveryFields.lastTo ?? entry?.lastTo,
+    lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
+  };
+}
+
+export function loadGatewaySessionRow(
+  sessionKey: string,
+  options?: { includeDerivedTitles?: boolean; includeLastMessage?: boolean; now?: number },
+): GatewaySessionRow | null {
+  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(sessionKey);
+  if (!entry) {
+    return null;
+  }
+  return buildGatewaySessionRow({
+    cfg,
+    storePath,
+    store,
+    key: canonicalKey,
+    entry,
+    now: options?.now,
+    includeDerivedTitles: options?.includeDerivedTitles,
+    includeLastMessage: options?.includeLastMessage,
+  });
 }
 
 export function listSessionsFromStore(params: {
@@ -903,76 +1252,18 @@ export function listSessionsFromStore(params: {
       }
       return entry?.label === label;
     })
-    .map(([key, entry]) => {
-      const updatedAt = entry?.updatedAt ?? null;
-      const total = resolveFreshSessionTotalTokens(entry);
-      const totalTokensFresh =
-        typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
-      const parsed = parseGroupKey(key);
-      const channel = entry?.channel ?? parsed?.channel;
-      const subject = entry?.subject;
-      const groupChannel = entry?.groupChannel;
-      const space = entry?.space;
-      const id = parsed?.id;
-      const origin = entry?.origin;
-      const originLabel = origin?.label;
-      const displayName =
-        entry?.displayName ??
-        (channel
-          ? buildGroupDisplayName({
-              provider: channel,
-              subject,
-              groupChannel,
-              space,
-              id,
-              key,
-            })
-          : undefined) ??
-        entry?.label ??
-        originLabel;
-      const deliveryFields = normalizeSessionDeliveryFields(entry);
-      const parsedAgent = parseAgentSessionKey(key);
-      const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
-      const resolvedModel = resolveSessionModelIdentityRef(cfg, entry, sessionAgentId);
-      const modelProvider = resolvedModel.provider;
-      const model = resolvedModel.model ?? DEFAULT_MODEL;
-      return {
+    .map(([key, entry]) =>
+      buildGatewaySessionRow({
+        cfg,
+        storePath,
+        store,
         key,
-        spawnedBy: entry?.spawnedBy,
         entry,
-        kind: classifySessionKey(key, entry),
-        label: entry?.label,
-        displayName,
-        channel,
-        subject,
-        groupChannel,
-        space,
-        chatType: entry?.chatType,
-        origin,
-        updatedAt,
-        sessionId: entry?.sessionId,
-        systemSent: entry?.systemSent,
-        abortedLastRun: entry?.abortedLastRun,
-        thinkingLevel: entry?.thinkingLevel,
-        fastMode: entry?.fastMode,
-        verboseLevel: entry?.verboseLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        elevatedLevel: entry?.elevatedLevel,
-        sendPolicy: entry?.sendPolicy,
-        inputTokens: entry?.inputTokens,
-        outputTokens: entry?.outputTokens,
-        totalTokens: total,
-        totalTokensFresh,
-        responseUsage: entry?.responseUsage,
-        modelProvider,
-        model,
-        contextTokens: entry?.contextTokens,
-        deliveryContext: deliveryFields.deliveryContext,
-        lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
-        lastTo: deliveryFields.lastTo ?? entry?.lastTo,
-        lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
-      };
-    })
+        now,
+        includeDerivedTitles,
+        includeLastMessage,
+      }),
+    )
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
   if (search) {
@@ -992,37 +1283,11 @@ export function listSessionsFromStore(params: {
     sessions = sessions.slice(0, limit);
   }
 
-  const finalSessions: GatewaySessionRow[] = sessions.map((s) => {
-    const { entry, ...rest } = s;
-    let derivedTitle: string | undefined;
-    let lastMessagePreview: string | undefined;
-    if (entry?.sessionId) {
-      if (includeDerivedTitles || includeLastMessage) {
-        const parsed = parseAgentSessionKey(s.key);
-        const agentId =
-          parsed && parsed.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg);
-        const fields = readSessionTitleFieldsFromTranscript(
-          entry.sessionId,
-          storePath,
-          entry.sessionFile,
-          agentId,
-        );
-        if (includeDerivedTitles) {
-          derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
-        }
-        if (includeLastMessage && fields.lastMessagePreview) {
-          lastMessagePreview = fields.lastMessagePreview;
-        }
-      }
-    }
-    return { ...rest, derivedTitle, lastMessagePreview } satisfies GatewaySessionRow;
-  });
-
   return {
     ts: now,
     path: storePath,
-    count: finalSessions.length,
+    count: sessions.length,
     defaults: getSessionDefaults(cfg),
-    sessions: finalSessions,
+    sessions,
   };
 }
