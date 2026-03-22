@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import type { loadConfig } from "../config/config.js";
+import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -408,6 +409,11 @@ export function loadGatewayPlugins(params: {
   const pluginRegistry = loadOpenClawPlugins({
     config: params.cfg,
     workspaceDir: params.workspaceDir,
+    onlyPluginIds: resolveGatewayStartupPluginIds({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+    }),
     logger: {
       info: (msg) => params.log.info(msg),
       warn: (msg) => params.log.warn(msg),
