@@ -361,19 +361,20 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const configured = Boolean(
         account.channelAccessToken?.trim() && account.channelSecret?.trim(),
       );
-      const base = buildComputedAccountStatusSnapshot({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured,
-        runtime,
-        probe,
-      });
-      return {
-        ...base,
-        tokenSource: account.tokenSource,
-        mode: "webhook",
-      };
+      return buildComputedAccountStatusSnapshot(
+        {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured,
+          runtime,
+          probe,
+        },
+        {
+          tokenSource: account.tokenSource,
+          mode: "webhook",
+        },
+      );
     },
   },
   gateway: {

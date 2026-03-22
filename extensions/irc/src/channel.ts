@@ -308,14 +308,17 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
     }),
     probeAccount: async ({ cfg, account, timeoutMs }) =>
       probeIrc(cfg as CoreConfig, { accountId: account.accountId, timeoutMs }),
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      ...buildBaseAccountStatusSnapshot({ account, runtime, probe }),
-      host: account.host,
-      port: account.port,
-      tls: account.tls,
-      nick: account.nick,
-      passwordSource: account.passwordSource,
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) =>
+      buildBaseAccountStatusSnapshot(
+        { account, runtime, probe },
+        {
+          host: account.host,
+          port: account.port,
+          tls: account.tls,
+          nick: account.nick,
+          passwordSource: account.passwordSource,
+        },
+      ),
   },
   gateway: {
     startAccount: async (ctx) => {

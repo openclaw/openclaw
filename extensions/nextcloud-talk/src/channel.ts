@@ -221,22 +221,20 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
     },
     buildAccountSnapshot: ({ account, runtime }) => {
       const configured = Boolean(account.secret?.trim() && account.baseUrl?.trim());
-      const runtimeSnapshot = buildRuntimeAccountStatusSnapshot({ runtime });
-      return {
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured,
-        secretSource: account.secretSource,
-        baseUrl: account.baseUrl ? "[set]" : "[missing]",
-        running: runtimeSnapshot.running,
-        lastStartAt: runtimeSnapshot.lastStartAt,
-        lastStopAt: runtimeSnapshot.lastStopAt,
-        lastError: runtimeSnapshot.lastError,
-        mode: "webhook",
-        lastInboundAt: runtime?.lastInboundAt ?? null,
-        lastOutboundAt: runtime?.lastOutboundAt ?? null,
-      };
+      return buildRuntimeAccountStatusSnapshot(
+        { runtime },
+        {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured,
+          secretSource: account.secretSource,
+          baseUrl: account.baseUrl ? "[set]" : "[missing]",
+          mode: "webhook",
+          lastInboundAt: runtime?.lastInboundAt ?? null,
+          lastOutboundAt: runtime?.lastOutboundAt ?? null,
+        },
+      );
     },
   },
   gateway: {
