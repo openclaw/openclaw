@@ -307,6 +307,32 @@ describe("readScheduledTaskCommand", () => {
     );
   });
 
+  it("falls back to the legacy OS-home script path when OPENCLAW_HOME moves after upgrade", async () => {
+    await withScheduledTaskScript(
+      {
+        env: (tmpDir) => ({
+          OPENCLAW_HOME: path.join(tmpDir, "openclaw-home"),
+        }),
+      },
+      async (env) => {
+        const legacyScriptPath = path.win32.join(env.USERPROFILE!, ".openclaw", "gateway.cmd");
+        await fs.mkdir(path.dirname(legacyScriptPath), { recursive: true });
+        await fs.writeFile(
+          legacyScriptPath,
+          ["@echo off", "node gateway.js --from-legacy-os-home"].join("\r\n"),
+          "utf8",
+        );
+
+        const result = await readScheduledTaskCommand(env);
+
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--from-legacy-os-home"],
+          sourcePath: legacyScriptPath,
+        });
+      },
+    );
+  });
+
   it("parses quoted set assignments with escaped metacharacters", async () => {
     await withScheduledTaskScript(
       {

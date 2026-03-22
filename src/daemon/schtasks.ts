@@ -55,6 +55,26 @@ export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
     : path.join(stateDir, scriptName);
 }
 
+function resolveLegacyOsHomeTaskScriptPath(env: GatewayServiceEnv): string | null {
+  if (env.OPENCLAW_TASK_SCRIPT?.trim()) {
+    return null;
+  }
+  const legacyEnv: GatewayServiceEnv = { ...env };
+  delete legacyEnv.OPENCLAW_HOME;
+  delete legacyEnv.OPENCLAW_STATE_DIR;
+  delete legacyEnv.CLAWDBOT_STATE_DIR;
+  const legacyPath = resolveTaskScriptPath(legacyEnv);
+  const currentPath = resolveTaskScriptPath(env);
+  return path.resolve(legacyPath) === path.resolve(currentPath) ? null : legacyPath;
+}
+
+function resolveTaskScriptCandidates(env: GatewayServiceEnv): string[] {
+  const candidates = [resolveTaskScriptPath(env), resolveLegacyOsHomeTaskScriptPath(env)].filter(
+    (value): value is string => Boolean(value),
+  );
+  return Array.from(new Set(candidates.map((value) => path.normalize(value))));
+}
+
 function resolveWindowsStartupDir(env: GatewayServiceEnv): string {
   const appData = env.APPDATA?.trim();
   if (appData) {
@@ -112,50 +132,52 @@ function resolveTaskUser(env: GatewayServiceEnv): string | null {
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
-  const scriptPath = resolveTaskScriptPath(env);
-  try {
-    const content = await fs.readFile(scriptPath, "utf8");
-    let workingDirectory = "";
-    let commandLine = "";
-    const environment: Record<string, string> = {};
-    for (const rawLine of content.split(/\r?\n/)) {
-      const line = rawLine.trim();
-      if (!line) {
-        continue;
-      }
-      const lower = line.toLowerCase();
-      if (line.startsWith("@echo")) {
-        continue;
-      }
-      if (lower.startsWith("rem ")) {
-        continue;
-      }
-      if (lower.startsWith("set ")) {
-        const assignment = parseCmdSetAssignment(line.slice(4));
-        if (assignment) {
-          environment[assignment.key] = assignment.value;
+  for (const scriptPath of resolveTaskScriptCandidates(env)) {
+    try {
+      const content = await fs.readFile(scriptPath, "utf8");
+      let workingDirectory = "";
+      let commandLine = "";
+      const environment: Record<string, string> = {};
+      for (const rawLine of content.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) {
+          continue;
         }
-        continue;
+        const lower = line.toLowerCase();
+        if (line.startsWith("@echo")) {
+          continue;
+        }
+        if (lower.startsWith("rem ")) {
+          continue;
+        }
+        if (lower.startsWith("set ")) {
+          const assignment = parseCmdSetAssignment(line.slice(4));
+          if (assignment) {
+            environment[assignment.key] = assignment.value;
+          }
+          continue;
+        }
+        if (lower.startsWith("cd /d ")) {
+          workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
+          continue;
+        }
+        commandLine = line;
+        break;
       }
-      if (lower.startsWith("cd /d ")) {
-        workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
-        continue;
+      if (!commandLine) {
+        return null;
       }
-      commandLine = line;
-      break;
+      return {
+        programArguments: parseCmdScriptCommandLine(commandLine),
+        ...(workingDirectory ? { workingDirectory } : {}),
+        ...(Object.keys(environment).length > 0 ? { environment } : {}),
+        sourcePath: scriptPath,
+      };
+    } catch {
+      continue;
     }
-    if (!commandLine) {
-      return null;
-    }
-    return {
-      programArguments: parseCmdScriptCommandLine(commandLine),
-      ...(workingDirectory ? { workingDirectory } : {}),
-      ...(Object.keys(environment).length > 0 ? { environment } : {}),
-      sourcePath: scriptPath,
-    };
-  } catch {
-    return null;
   }
+  return null;
 }
 
 export type ScheduledTaskInfo = {
@@ -382,24 +404,50 @@ const TASK_CONFIG_ROOT_ENV_KEYS = [
 function resolveTaskConfigEnvironment(
   env: GatewayServiceEnv,
   taskEnvironment?: Record<string, string>,
+  sourcePath?: string,
 ): GatewayServiceEnv {
   if (!taskEnvironment) {
+    if (!sourcePath) {
+      return env;
+    }
+    return inferTaskStateDirFromScriptPath(env, sourcePath);
+  }
+  const mergedEnvironment = { ...env, ...taskEnvironment };
+  const hasTaskConfigRoot = TASK_CONFIG_ROOT_ENV_KEYS.some((key) => taskEnvironment[key]?.trim());
+  if (hasTaskConfigRoot) {
+    const merged: GatewayServiceEnv = { ...env };
+    for (const key of TASK_CONFIG_ROOT_ENV_KEYS) {
+      delete merged[key];
+    }
+    return { ...merged, ...taskEnvironment };
+  }
+  return inferTaskStateDirFromScriptPath(mergedEnvironment, sourcePath);
+}
+
+function inferTaskStateDirFromScriptPath(
+  env: GatewayServiceEnv,
+  sourcePath?: string,
+): GatewayServiceEnv {
+  if (!sourcePath) {
     return env;
   }
-  const hasTaskConfigRoot = TASK_CONFIG_ROOT_ENV_KEYS.some((key) => taskEnvironment[key]?.trim());
-  if (!hasTaskConfigRoot) {
-    return { ...env, ...taskEnvironment };
+  const currentScriptPath = resolveTaskScriptPath(env);
+  if (path.resolve(sourcePath) === path.resolve(currentScriptPath)) {
+    return env;
   }
   const merged: GatewayServiceEnv = { ...env };
   for (const key of TASK_CONFIG_ROOT_ENV_KEYS) {
     delete merged[key];
   }
-  return { ...merged, ...taskEnvironment };
+  return {
+    ...merged,
+    OPENCLAW_STATE_DIR: path.dirname(sourcePath),
+  };
 }
 
 async function resolveScheduledTaskPort(env: GatewayServiceEnv): Promise<number | null> {
   const command = await readScheduledTaskCommand(env).catch(() => null);
-  const taskEnv = resolveTaskConfigEnvironment(env, command?.environment);
+  const taskEnv = resolveTaskConfigEnvironment(env, command?.environment, command?.sourcePath);
   return (
     parsePortFromProgramArguments(command?.programArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??

@@ -525,4 +525,47 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expectGatewayTermination(9797);
     });
   });
+
+  it("preserves the legacy OS-home task script/config path across OPENCLAW_HOME upgrades", async () => {
+    await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
+      const upgradedHome = path.join(tmpDir, "openclaw-home");
+      const legacyStateDir = path.join(tmpDir, ".openclaw");
+      const upgradedEnv = { ...env, OPENCLAW_HOME: upgradedHome };
+      const stdout = new PassThrough();
+      delete upgradedEnv.OPENCLAW_GATEWAY_PORT;
+
+      await fs.mkdir(legacyStateDir, { recursive: true });
+      await fs.writeFile(
+        path.join(legacyStateDir, "gateway.cmd"),
+        [
+          "@echo off",
+          '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway',
+          "",
+        ].join("\r\n"),
+        "utf8",
+      );
+      await fs.mkdir(path.join(upgradedHome, ".openclaw"), { recursive: true });
+      await fs.writeFile(
+        path.join(legacyStateDir, "openclaw.json"),
+        JSON.stringify({ gateway: { port: GATEWAY_PORT } }, null, 2),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(upgradedHome, ".openclaw", "openclaw.json"),
+        JSON.stringify({ gateway: { port: 29999 } }, null, 2),
+        "utf8",
+      );
+      pushSuccessfulSchtasksResponses(3);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([9898]);
+      inspectPortUsage
+        .mockResolvedValueOnce(busyPortUsage(9898))
+        .mockResolvedValueOnce(freePortUsage());
+
+      await stopScheduledTask({ env: upgradedEnv, stdout });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expect(inspectPortUsage).not.toHaveBeenCalledWith(29999);
+      expectGatewayTermination(9898);
+    });
+  });
 });
