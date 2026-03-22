@@ -80,6 +80,25 @@ export function createConditionalWarningCollector<Params>(
     });
 }
 
+export function composeAccountWarningCollectors<
+  ResolvedAccount,
+  Params extends { account: ResolvedAccount },
+>(
+  baseCollector: WarningCollector<Params>,
+  ...collectors: Array<(account: ResolvedAccount) => string | string[] | null | undefined | false>
+): WarningCollector<Params> {
+  return composeWarningCollectors(
+    baseCollector,
+    createConditionalWarningCollector<Params>(
+      ...collectors.map(
+        (collector) =>
+          ({ account }: Params) =>
+            collector(account),
+      ),
+    ),
+  );
+}
+
 export function buildOpenGroupPolicyWarning(params: {
   surface: string;
   openBehavior: string;

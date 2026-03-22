@@ -6,9 +6,9 @@ import {
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
+  composeAccountWarningCollectors,
   composeWarningCollectors,
   createAllowlistProviderOpenWarningCollector,
-  createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
@@ -110,23 +110,24 @@ const collectIrcGroupPolicyWarnings =
     },
   });
 
-const collectIrcSecurityWarnings = composeWarningCollectors<{
-  account: ResolvedIrcAccount;
-  cfg: CoreConfig;
-}>(
+const collectIrcSecurityWarnings = composeAccountWarningCollectors<
+  ResolvedIrcAccount,
+  {
+    account: ResolvedIrcAccount;
+    cfg: CoreConfig;
+  }
+>(
   collectIrcGroupPolicyWarnings,
-  createConditionalWarningCollector(
-    ({ account }) =>
-      !account.config.tls &&
-      "- IRC TLS is disabled (channels.irc.tls=false); traffic and credentials are plaintext.",
-    ({ account }) =>
-      account.config.nickserv?.register &&
-      '- IRC NickServ registration is enabled (channels.irc.nickserv.register=true); this sends "REGISTER" on every connect. Disable after first successful registration.',
-    ({ account }) =>
-      account.config.nickserv?.register &&
-      !account.config.nickserv.password?.trim() &&
-      "- IRC NickServ registration is enabled but no NickServ password is resolved; set channels.irc.nickserv.password, channels.irc.nickserv.passwordFile, or IRC_NICKSERV_PASSWORD.",
-  ),
+  (account) =>
+    !account.config.tls &&
+    "- IRC TLS is disabled (channels.irc.tls=false); traffic and credentials are plaintext.",
+  (account) =>
+    account.config.nickserv?.register &&
+    '- IRC NickServ registration is enabled (channels.irc.nickserv.register=true); this sends "REGISTER" on every connect. Disable after first successful registration.',
+  (account) =>
+    account.config.nickserv?.register &&
+    !account.config.nickserv.password?.trim() &&
+    "- IRC NickServ registration is enabled but no NickServ password is resolved; set channels.irc.nickserv.password, channels.irc.nickserv.passwordFile, or IRC_NICKSERV_PASSWORD.",
 );
 
 export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChatChannelPlugin({
