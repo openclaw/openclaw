@@ -100,6 +100,32 @@ describe("resolveDeliveryTarget thread session lookup", () => {
     expect(result.channel).toBe("telegram");
   });
 
+  it("normalizes unscoped session keys before looking up routed session state", async () => {
+    mockStore["/mock/store.json"] = {
+      "agent:main:main": {
+        sessionId: "s1",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-100222",
+      },
+      "agent:main:slack:channel:c123": {
+        sessionId: "s2",
+        updatedAt: 2,
+        lastChannel: "telegram",
+        lastTo: "-100777",
+      },
+    };
+
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "last",
+      sessionKey: "slack:channel:c123",
+    });
+
+    expect(result.to).toBe("-100777");
+    expect(result.threadId).toBeUndefined();
+    expect(result.channel).toBe("telegram");
+  });
+
   it("falls back to main session when no sessionKey is provided", async () => {
     mockStore["/mock/store.json"] = {
       "agent:main:main": {

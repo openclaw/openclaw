@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -7,6 +8,7 @@ import {
   loadSessionStore,
   resolveAgentMainSessionKey,
   resolveStorePath,
+  updateSessionStore,
 } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
@@ -17,10 +19,12 @@ import {
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { logWarn } from "../../logger.js";
+import { isCronSessionKey } from "../../routing/session-key.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.js";
+import { resolveCronAgentSessionKey } from "./session-key.js";
 import {
   expectsSubagentFollowup,
   isLikelyInterimCronMessage,
@@ -83,6 +87,7 @@ type DispatchCronDeliveryParams = {
   deps: CliDeps;
   job: CronJob;
   agentId: string;
+  sessionKey?: string;
   agentSessionKey: string;
   runSessionId: string;
   runStartedAt: number;
@@ -235,9 +240,10 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
 
 function buildCronAwarenessIdempotencyKey(params: {
   runSessionId: string;
+  runStartedAt: number;
   sessionKey: string;
 }): string {
-  return `cron-awareness:v1:${params.runSessionId}:${params.sessionKey}`;
+  return `cron-awareness:v2:${params.runSessionId}:${params.runStartedAt}:${params.sessionKey}`;
 }
 
 function resolveCronAwarenessSessionKey(params: {
@@ -252,20 +258,54 @@ function resolveCronAwarenessSessionKey(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
   const store = loadSessionStore(storePath);
   const requestedSessionKey = params.sessionKey?.trim();
-  const requestedEntry = requestedSessionKey ? store[requestedSessionKey] : undefined;
+  const canonicalRequestedSessionKey = requestedSessionKey
+    ? resolveCronAgentSessionKey({ sessionKey: requestedSessionKey, agentId })
+    : undefined;
+  const requestedIsCronScratch =
+    Boolean(requestedSessionKey && requestedSessionKey.toLowerCase().startsWith("cron:")) ||
+    Boolean(canonicalRequestedSessionKey && isCronSessionKey(canonicalRequestedSessionKey));
+  const requestedEntry = canonicalRequestedSessionKey
+    ? store[canonicalRequestedSessionKey]
+    : undefined;
   if (
-    requestedSessionKey &&
+    !requestedIsCronScratch &&
+    canonicalRequestedSessionKey &&
     typeof requestedEntry?.sessionId === "string" &&
     requestedEntry.sessionId.trim()
   ) {
-    return requestedSessionKey;
+    return canonicalRequestedSessionKey;
   }
   const mainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
-  const mainEntry = store[mainSessionKey];
-  if (typeof mainEntry?.sessionId === "string" && mainEntry.sessionId.trim()) {
-    return mainSessionKey;
+  if (!requestedIsCronScratch && canonicalRequestedSessionKey) {
+    return canonicalRequestedSessionKey;
   }
-  return undefined;
+  return mainSessionKey;
+}
+
+async function ensureCronAwarenessSessionEntry(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+}): Promise<void> {
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+  const now = Date.now();
+  await updateSessionStore(storePath, (store) => {
+    const existing = store[params.sessionKey];
+    if (typeof existing?.sessionId === "string" && existing.sessionId.trim()) {
+      if ((existing.updatedAt ?? 0) < now) {
+        store[params.sessionKey] = {
+          ...existing,
+          updatedAt: now,
+        };
+      }
+      return;
+    }
+    store[params.sessionKey] = {
+      ...existing,
+      sessionId: existing?.sessionId?.trim() || randomUUID(),
+      updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+    };
+  });
 }
 
 async function injectCronDeliveryAwareness(params: {
@@ -274,6 +314,7 @@ async function injectCronDeliveryAwareness(params: {
   sessionKey?: string;
   message?: string;
   runSessionId: string;
+  runStartedAt: number;
   signal?: AbortSignal;
 }): Promise<void> {
   if (params.signal?.aborted) {
@@ -292,6 +333,11 @@ async function injectCronDeliveryAwareness(params: {
     return;
   }
   try {
+    await ensureCronAwarenessSessionEntry({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      sessionKey: awarenessSessionKey,
+    });
     await callGateway({
       method: "chat.inject",
       params: {
@@ -300,6 +346,7 @@ async function injectCronDeliveryAwareness(params: {
         label: "Cron delivery",
         idempotencyKey: buildCronAwarenessIdempotencyKey({
           runSessionId: params.runSessionId,
+          runStartedAt: params.runStartedAt,
           sessionKey: awarenessSessionKey,
         }),
       },
@@ -504,9 +551,10 @@ export async function dispatchCronDelivery(
         await injectCronDeliveryAwareness({
           cfg: params.cfg,
           agentId: params.agentId,
-          sessionKey: params.job.sessionKey,
+          sessionKey: params.sessionKey,
           message: outputText?.trim() ? outputText : synthesizedText,
           runSessionId: params.runSessionId,
+          runStartedAt: params.runStartedAt,
           signal: params.abortSignal,
         });
       }

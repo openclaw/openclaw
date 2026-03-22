@@ -17,6 +17,7 @@ import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
+import { resolveCronAgentSessionKey } from "./session-key.js";
 
 export type DeliveryTargetResolution =
   | {
@@ -59,7 +60,10 @@ export async function resolveDeliveryTarget(
 
   // Look up thread-specific session first (e.g. agent:main:main:thread:1234),
   // then fall back to the main session entry.
-  const threadSessionKey = jobPayload.sessionKey?.trim();
+  const threadSessionKeyRaw = jobPayload.sessionKey?.trim();
+  const threadSessionKey = threadSessionKeyRaw
+    ? resolveCronAgentSessionKey({ sessionKey: threadSessionKeyRaw, agentId })
+    : undefined;
   const threadEntry = threadSessionKey ? store[threadSessionKey] : undefined;
   const main = threadEntry ?? store[mainSessionKey];
 

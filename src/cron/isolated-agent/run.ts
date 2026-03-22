@@ -39,7 +39,11 @@ import {
 } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  isCronSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import {
   buildSafeExternalPrompt,
   detectSuspiciousPatterns,
@@ -111,10 +115,53 @@ function resolveCronToolPolicy(params: {
   };
 }
 
+function isCronScratchSessionKey(params: { sessionKey?: string; agentId: string }): boolean {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return false;
+  }
+  if (sessionKey.toLowerCase().startsWith("cron:")) {
+    return true;
+  }
+  return isCronSessionKey(
+    resolveCronAgentSessionKey({
+      sessionKey,
+      agentId: params.agentId,
+    }),
+  );
+}
+
+function resolveCronDeliverySessionKey(params: {
+  runtimeSessionKey?: string;
+  jobSessionKey?: string;
+  agentId: string;
+}): string | undefined {
+  const runtimeSessionKey = params.runtimeSessionKey?.trim();
+  const runtimeSessionRest = runtimeSessionKey
+    ? parseAgentSessionKey(
+        resolveCronAgentSessionKey({ sessionKey: runtimeSessionKey, agentId: params.agentId }),
+      )?.rest
+    : undefined;
+  if (
+    runtimeSessionKey &&
+    !isExternalHookSession(runtimeSessionKey) &&
+    !(runtimeSessionRest && isExternalHookSession(runtimeSessionRest)) &&
+    !isCronScratchSessionKey({
+      sessionKey: runtimeSessionKey,
+      agentId: params.agentId,
+    })
+  ) {
+    return runtimeSessionKey;
+  }
+  const jobSessionKey = params.jobSessionKey?.trim();
+  return jobSessionKey || undefined;
+}
+
 async function resolveCronDeliveryContext(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
+  sessionKey: string;
   deliveryContract: IsolatedDeliveryContract;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
@@ -139,11 +186,16 @@ async function resolveCronDeliveryContext(params: {
       }),
     };
   }
+  const deliverySessionKey = resolveCronDeliverySessionKey({
+    runtimeSessionKey: params.sessionKey,
+    jobSessionKey: params.job.sessionKey,
+    agentId: params.agentId,
+  });
   const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
     accountId: deliveryPlan.accountId,
-    sessionKey: params.job.sessionKey,
+    sessionKey: deliverySessionKey,
   });
   return {
     deliveryPlan,
@@ -328,6 +380,7 @@ export async function runCronIsolatedAgentTurn(params: {
     cfg: cfgWithAgentDefaults,
     job: params.job,
     agentId,
+    sessionKey: baseSessionKey,
     deliveryContract,
   });
 
@@ -734,6 +787,11 @@ export async function runCronIsolatedAgentTurn(params: {
     deps: params.deps,
     job: params.job,
     agentId,
+    sessionKey: resolveCronDeliverySessionKey({
+      runtimeSessionKey: baseSessionKey,
+      jobSessionKey: params.job.sessionKey,
+      agentId,
+    }),
     agentSessionKey,
     runSessionId,
     runStartedAt,

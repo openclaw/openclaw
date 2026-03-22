@@ -34,7 +34,12 @@ vi.mock("../../cli/outbound-send-deps.js", () => ({
   createOutboundSendDeps: vi.fn().mockReturnValue({}),
 }));
 
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
 vi.mock("../../logger.js", () => ({
+  logDebug: vi.fn(),
   logWarn: vi.fn(),
 }));
 
@@ -105,6 +110,7 @@ function makeBaseParams(overrides: {
       payload: { kind: "agentTurn", message: "hello" },
     } as never,
     agentId: "main",
+    sessionKey: "agent:main:main",
     agentSessionKey: "agent:main",
     runSessionId: overrides.runSessionId ?? "run-123",
     runStartedAt: Date.now(),
