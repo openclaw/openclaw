@@ -4,7 +4,7 @@ services:
     runtime: docker
     plan: standard
     healthCheckPath: /health
-    dockerCommand: "sh -c 'test -f /data/openclaw.render.json || cp /app/sophia/openclaw.render.json /data/openclaw.render.json; exec node openclaw.mjs gateway --bind lan --port 8080'"
+    dockerCommand: "sh -c 'cp -rn /app/sophia/. /data/ || true; exec node openclaw.mjs gateway --bind lan --port 8080'"
     envVars:
       - key: NODE_OPTIONS
         value: "--max-old-space-size=1536"
