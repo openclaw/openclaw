@@ -2780,54 +2780,6 @@ public struct SkillsBinsResult: Codable, Sendable {
     }
 }
 
-public struct SkillsInstallParams: Codable, Sendable {
-    public let name: String
-    public let installid: String
-    public let timeoutms: Int?
-
-    public init(
-        name: String,
-        installid: String,
-        timeoutms: Int?)
-    {
-        self.name = name
-        self.installid = installid
-        self.timeoutms = timeoutms
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case name
-        case installid = "installId"
-        case timeoutms = "timeoutMs"
-    }
-}
-
-public struct SkillsUpdateParams: Codable, Sendable {
-    public let skillkey: String
-    public let enabled: Bool?
-    public let apikey: String?
-    public let env: [String: AnyCodable]?
-
-    public init(
-        skillkey: String,
-        enabled: Bool?,
-        apikey: String?,
-        env: [String: AnyCodable]?)
-    {
-        self.skillkey = skillkey
-        self.enabled = enabled
-        self.apikey = apikey
-        self.env = env
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case skillkey = "skillKey"
-        case enabled
-        case apikey = "apiKey"
-        case env
-    }
-}
-
 public struct CronJob: Codable, Sendable {
     public let id: String
     public let agentid: String?
