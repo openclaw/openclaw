@@ -369,6 +369,7 @@ export const ChatEditor = forwardRef<ChatEditorHandle, ChatEditorProps>(
 						const html = editor.getHTML();
 						submitRef.current(text, mentionedFiles, html);
 						editor.commands.clearContent(true);
+						requestAnimationFrame(() => editor.commands.focus());
 					}
 				}
 			};
@@ -415,6 +416,7 @@ export const ChatEditor = forwardRef<ChatEditorHandle, ChatEditorProps>(
 					const html = editor.getHTML();
 					submitRef.current(text, mentionedFiles, html);
 					editor.commands.clearContent(true);
+					requestAnimationFrame(() => editor.commands.focus());
 				}
 			},
 			setText: (text: string) => {

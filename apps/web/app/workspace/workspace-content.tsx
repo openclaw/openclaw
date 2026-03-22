@@ -2594,6 +2594,7 @@ function WorkspacePageInner() {
                         gatewaySessionKey={isGateway ? tab.sessionKey : undefined}
                         gatewaySessionId={isGateway ? tab.sessionId : undefined}
                         gatewayChannel={isGateway ? tab.channel : undefined}
+                        visible={isVisible}
                       />
                     </div>
                   );

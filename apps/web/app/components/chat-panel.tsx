@@ -835,6 +835,8 @@ type ChatPanelProps = {
 	gatewaySessionId?: string;
 	/** Channel identifier for the gateway session (e.g. "telegram"). */
 	gatewayChannel?: string;
+	/** Whether this panel's tab is currently visible/active. Used to focus the editor on tab switch. */
+	visible?: boolean;
 };
 
 export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
@@ -861,6 +863,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			gatewaySessionKey,
 			gatewaySessionId,
 			gatewayChannel: _gatewayChannel,
+			visible,
 		},
 		ref,
 	) {
@@ -885,11 +888,12 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		useEffect(() => { setMounted(true); }, []);
 
 		useEffect(() => {
+			if (visible === false) return;
 			const timer = setTimeout(() => {
 				editorRef.current?.focus();
 			}, 150);
 			return () => clearTimeout(timer);
-		}, []);
+		}, [visible]);
 
 		// ── Reconnection state ──
 		const [isReconnecting, setIsReconnecting] = useState(false);
@@ -1758,6 +1762,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				} else {
 					void sendMessage({ text: messageText });
 				}
+
+				setTimeout(() => {
+					editorRef.current?.focus();
+				}, 200);
 			},
 			[
 				attachedFiles,
@@ -2209,7 +2217,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								disabled={(editorEmpty && attachedFiles.length === 0) || loadingSession}
 								className={`${compact ? "w-6 h-6" : "w-7 h-7"} rounded-full flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed`}
 								style={{
-									background: !editorEmpty || attachedFiles.length > 0 ? "var(--color-accent)" : "var(--color-text-muted)",
+									background: !editorEmpty || attachedFiles.length > 0 ? "linear-gradient(to top, #0065A2, #0075AA)" : "var(--color-text-muted)",
 									color: !editorEmpty || attachedFiles.length > 0 ? "white" : "var(--color-bg)",
 								}}
 								title="Send message"
