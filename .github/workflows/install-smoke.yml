@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: install-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.event_name == 'pull_request' && format('install-smoke-pr-{0}', github.event.pull_request.number) || format('install-smoke-push-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
