@@ -51,6 +51,7 @@
 7. **Project scaffolding** — `projects.add` only registers; scaffold RPC needed separately
 8. **Telegram images** — copy to workspace before processing
 9. **NotebookLM** — use `infographic` type for visuals; `mind_map` is JSON-only
+10. **Dirty git blocks gateway** — uncommitted changes prevent gateway restart; MCP tools can fail with module import errors
 
 _Details archived in `memory/archive-2026-q1.md`_
 
