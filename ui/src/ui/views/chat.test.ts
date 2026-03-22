@@ -111,6 +111,7 @@ function createChatHeaderState(
     chatModelOverrides: {},
     chatModelCatalog: catalog,
     chatModelsLoading: false,
+    newChatSessionPending: false,
     client: { request } as unknown as GatewayBrowserClient,
     settings: {
       gatewayUrl: "",
@@ -866,6 +867,17 @@ describe("chat view", () => {
     );
     expect(modelSelect).not.toBeNull();
     expect(modelSelect?.disabled).toBe(true);
+  });
+
+  it("disables the new chat button while a new session request is in flight", () => {
+    const { state } = createChatHeaderState();
+    state.newChatSessionPending = true;
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+    expect(newChatButton).not.toBeNull();
+    expect(newChatButton?.disabled).toBe(true);
   });
 
   it("keeps the selected model visible when the active session is absent from sessions.list", async () => {

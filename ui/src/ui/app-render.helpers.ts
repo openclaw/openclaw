@@ -171,7 +171,7 @@ export function renderChatSessionSelect(state: AppViewState) {
         class="chat-controls__new-chat"
         title="New chat session"
         aria-label="New chat session"
-        ?disabled=${!state.connected || Boolean(state.chatRunId)}
+        ?disabled=${!state.connected || Boolean(state.chatRunId) || state.newChatSessionPending}
         @click=${() => createNewChatSession(state)}
       >
         ${icons.plus}
@@ -521,15 +521,13 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   void refreshSessionOptions(state);
 }
 
-let newChatSessionPending = false;
-
 async function createNewChatSession(state: AppViewState) {
   const client = (state as unknown as OpenClawApp).client;
   if (!client || !state.connected) {
     return;
   }
   // Prevent concurrent invocations while the RPC is in-flight
-  if (newChatSessionPending) {
+  if (state.newChatSessionPending) {
     return;
   }
   // window.prompt returns null when cancelled — treat as explicit cancel, not an error
@@ -543,7 +541,7 @@ async function createNewChatSession(state: AppViewState) {
   const agentId = parsed?.agentId ?? state.agentsList?.defaultId ?? "main";
   // Carry over the current model override so the new session starts on the same model
   const currentModel = resolveModelOverrideValue(state) || undefined;
-  newChatSessionPending = true;
+  state.newChatSessionPending = true;
   state.lastError = null;
   try {
     const result = await client.request<{ ok: boolean; key: string }>("sessions.create", {
@@ -559,7 +557,7 @@ async function createNewChatSession(state: AppViewState) {
   } catch (err) {
     state.lastError = String(err);
   } finally {
-    newChatSessionPending = false;
+    state.newChatSessionPending = false;
   }
 }
 
