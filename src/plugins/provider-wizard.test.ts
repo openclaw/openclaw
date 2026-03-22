@@ -409,6 +409,43 @@ describe("provider wizard boundaries", () => {
     expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
   });
 
+  it("invalidates provider-wizard snapshots when cache-control env values change in place", () => {
+    const provider = makeProvider({
+      id: "sglang",
+      label: "SGLang",
+      auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
+      wizard: {
+        setup: {
+          choiceLabel: "SGLang setup",
+          groupId: "sglang",
+          groupLabel: "SGLang",
+        },
+      },
+    });
+    const config = {};
+    const env = {
+      OPENCLAW_HOME: "/tmp/openclaw-home",
+      OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "1000",
+    } as NodeJS.ProcessEnv;
+    resolvePluginProviders.mockReturnValue([provider]);
+
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+
+    env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS = "5";
+
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+
+    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+  });
+
   it("routes model-selected hooks only to the matching provider", async () => {
     const matchingHook = vi.fn(async () => {});
     const otherHook = vi.fn(async () => {});
