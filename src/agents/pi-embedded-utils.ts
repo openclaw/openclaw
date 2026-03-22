@@ -260,14 +260,10 @@ type ThinkTaggedSplitBlock =
   | { type: "text"; text: string };
 
 export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
-  const trimmedStart = text.trimStart();
-  if (!trimmedStart.startsWith("<")) {
-    return null;
-  }
   const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
   const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
 
-  if (!openRe.test(trimmedStart)) {
+  if (!openRe.test(text)) {
     return null;
   }
   // NOTE: We used to support unclosed tags here for streams, but Codex pointed out
@@ -415,10 +411,13 @@ export function extractThinkingFromTaggedStream(text: string): string {
   }
   const closeMatches = [...text.matchAll(closeRe)];
   const lastOpen = openMatches[openMatches.length - 1];
-  const lastClose = closeMatches[lastOpen.index ? openMatches.length - 1 : 0]; // safety
-  if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
+
+  // Find the last closing tag that appears AFTER the last opening tag.
+  const lastClose = closeMatches.toReversed().find((m) => (m.index ?? -1) > (lastOpen.index ?? -1));
+  if (lastClose) {
     return closed;
   }
+
   const start = (lastOpen.index ?? 0) + lastOpen[0].length;
   return text.slice(start).trim();
 }
@@ -433,7 +432,6 @@ export function inferToolMetaFromArgs(toolName: string, args: unknown): string |
  */
 export function unescapeXmlEntities(text: string): string {
   return text
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
@@ -459,7 +457,8 @@ export function unescapeXmlEntities(text: string): string {
         }
       }
       return match;
-    });
+    })
+    .replace(/&amp;/g, "&"); // Handle &amp; last to avoid double-decoding
 }
 
 /**

@@ -139,6 +139,28 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     });
   });
 
+  it("avoids double-decoding escaped XML entities", () => {
+    // Standard XML unescaping should handle &amp; last.
+    // If &amp; is handled first, &amp;lt; becomes &lt; then becomes <.
+    // It should stay as &lt; (the literal entity).
+    const text = `<minimax:tool_call>
+  <invoke name="Message">
+    <parameter name="text">Sample &amp;lt;div&amp;gt; &amp;#39; code</parameter>
+  </invoke>
+</minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    const toolCall = msg.content.find((c) => c && typeof c === "object" && c.type === "toolCall");
+    const args = (toolCall as { arguments?: { text?: string } })?.arguments;
+    expect(args?.text).toBe("Sample &lt;div&gt; &#39; code");
+  });
+
   it("unescapes numeric XML entities", () => {
     const text = `<minimax:tool_call>
   <invoke name="Bash">
@@ -280,6 +302,25 @@ describe("promoteMinimaxToolCallsToBlocks", () => {
     expect(
       prose[0] && typeof prose[0] === "object" && "text" in prose[0] ? prose[0].text : "",
     ).toContain("<think>Internal thinking...");
+  });
+
+  it("handles inline <think> blocks preceded by ordinary prose", () => {
+    const text = `Okay. <think>Internal thoughts...</think> <minimax:tool_call><invoke name="Bash"><parameter name="command">ls</parameter></invoke></minimax:tool_call>`;
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: text as unknown as AssistantMessage["content"],
+      timestamp: Date.now(),
+    });
+
+    promoteMinimaxToolCallsToBlocks(msg);
+
+    // Should result in [text, thinking, text, toolCall]
+    // Note: The space after </think> becomes a text block.
+    expect(msg.content.length).toBe(4);
+    expect(msg.content[0]).toMatchObject({ type: "text", text: "Okay. " });
+    expect(msg.content[1]).toMatchObject({ type: "thinking", thinking: "Internal thoughts..." });
+    expect(msg.content[2]).toMatchObject({ type: "text", text: " " });
+    expect(msg.content[3]).toMatchObject({ type: "toolCall", name: "exec" });
   });
 
   it("preserves leading/trailing whitespace in arguments", () => {
