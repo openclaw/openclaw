@@ -218,6 +218,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "cron.remove",
     "cron.run",
     "memory.reindex",
+    "memory.embed",
     "sessions.patch",
     "sessions.reset",
     "sessions.delete",

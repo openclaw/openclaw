@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   Clock,
   HardDrive,
+  Zap,
   Layers,
   ChevronRight,
   ChevronDown,
@@ -263,15 +264,21 @@ function IndexStatusTab() {
     indexStatus,
     indexLoading,
     reindexing,
+    embedding,
     embeddingOk,
     embeddingError,
     healthy,
     healthScore,
   } = useMemoryStore();
-  const { getMemoryStatus, reindexMemory } = useMemory();
+  const { getMemoryStatus, reindexMemory, embedMemory } = useMemory();
 
   const handleReindex = async () => {
     await reindexMemory();
+    await getMemoryStatus();
+  };
+
+  const handleEmbed = async () => {
+    await embedMemory();
     await getMemoryStatus();
   };
 
@@ -355,6 +362,22 @@ function IndexStatusTab() {
           )}
           {reindexing ? "Re-indexing..." : "Re-index Now"}
         </Button>
+        {isQmd && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleEmbed}
+            disabled={embedding || reindexing}
+            className="gap-1.5"
+          >
+            {embedding ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Zap className="size-3.5" />
+            )}
+            {embedding ? "Embedding..." : "Embed Now"}
+          </Button>
+        )}
         {indexLoading && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
       </div>
 

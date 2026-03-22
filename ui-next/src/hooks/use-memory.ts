@@ -291,10 +291,30 @@ export function useMemory() {
     [sendRpc],
   );
 
+  const embedMemory = useCallback(async () => {
+    const store = useMemoryStore.getState();
+    store.setEmbedding(true);
+    try {
+      const result = await sendRpc<MemoryReindexResult>("memory.embed");
+      if (!result.ok) {
+        console.error("[memory] embed failed:", result.error);
+      }
+      return result;
+    } catch (err) {
+      if (!isGatewayTeardownError(err)) {
+        console.error("[memory] embed failed:", err);
+        throw err;
+      }
+    } finally {
+      store.setEmbedding(false);
+    }
+  }, [sendRpc]);
+
   return {
     getMemoryStatus,
     searchMemory,
     reindexMemory,
+    embedMemory,
     listMemoryFiles,
     getMemoryFile,
     setMemoryFile,

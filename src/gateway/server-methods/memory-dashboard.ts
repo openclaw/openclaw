@@ -213,6 +213,35 @@ export const memoryDashboardHandlers: GatewayRequestHandlers = {
     }
   },
 
+  "memory.embed": async ({ respond }) => {
+    const cfg = loadConfig();
+    const agentId = resolveDefaultAgentId(cfg);
+    const { manager, error } = await getMemorySearchManager({ cfg, agentId });
+    if (!manager) {
+      const payload: MemoryReindexPayload = {
+        ok: false,
+        error: error ?? "memory search unavailable",
+      };
+      respond(true, payload, undefined);
+      return;
+    }
+
+    try {
+      // Force sync with embed — bypasses interval check and backoff
+      await manager.sync?.({ reason: "embed-dashboard", force: true });
+      const payload: MemoryReindexPayload = { ok: true };
+      respond(true, payload, undefined);
+    } catch (err) {
+      const payload: MemoryReindexPayload = {
+        ok: false,
+        error: `embed failed: ${formatError(err)}`,
+      };
+      respond(true, payload, undefined);
+    } finally {
+      await manager.close?.().catch(() => {});
+    }
+  },
+
   "memory.activity": async ({ respond }) => {
     try {
       const cfg = loadConfig();

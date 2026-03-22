@@ -113,6 +113,7 @@ export type MemoryState = {
   indexStatus: MemoryProviderStatusUI | null;
   indexLoading: boolean;
   reindexing: boolean;
+  embedding: boolean;
   embeddingOk: boolean;
   embeddingError: string | null;
   healthy: boolean;
@@ -158,6 +159,7 @@ export type MemoryState = {
   setIndexStatus: (status: MemoryProviderStatusUI | null) => void;
   setIndexLoading: (loading: boolean) => void;
   setReindexing: (reindexing: boolean) => void;
+  setEmbedding: (embedding: boolean) => void;
   setEmbeddingOk: (ok: boolean) => void;
   setEmbeddingError: (error: string | null) => void;
   setHealthy: (healthy: boolean) => void;
@@ -227,6 +229,7 @@ const initialState = {
   indexStatus: null as MemoryProviderStatusUI | null,
   indexLoading: false,
   reindexing: false,
+  embedding: false,
   embeddingOk: false,
   embeddingError: null as string | null,
   healthy: false,
@@ -289,6 +292,7 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   setIndexStatus: (status) => set({ indexStatus: status }),
   setIndexLoading: (loading) => set({ indexLoading: loading }),
   setReindexing: (reindexing) => set({ reindexing: reindexing }),
+  setEmbedding: (embedding) => set({ embedding }),
   setEmbeddingOk: (ok) => set({ embeddingOk: ok }),
   setEmbeddingError: (error) => set({ embeddingError: error }),
   setHealthy: (healthy) => set({ healthy: healthy }),

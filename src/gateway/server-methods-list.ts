@@ -132,6 +132,7 @@ const BASE_METHODS = [
   "memory.status",
   "memory.search",
   "memory.reindex",
+  "memory.embed",
   "memory.activity",
   "clawhub.sync",
   "clawhub.catalog",
