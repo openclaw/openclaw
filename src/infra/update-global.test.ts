@@ -93,7 +93,7 @@ describe("update global helpers", () => {
     expect(isExplicitPackageInstallSpec("beta")).toBe(false);
 
     expect(canResolveRegistryVersionForPackageTarget("latest")).toBe(true);
-    expect(canResolveRegistryVersionForPackageTarget("2026.3.14")).toBe(true);
+    expect(canResolveRegistryVersionForPackageTarget("2026.3.22")).toBe(true);
     expect(canResolveRegistryVersionForPackageTarget("main")).toBe(false);
     expect(canResolveRegistryVersionForPackageTarget("github:openclaw/openclaw#main")).toBe(false);
   });

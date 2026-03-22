@@ -76,7 +76,7 @@ describe("installPluginFromClawHub", () => {
       integrity: "sha256-demo",
     });
     satisfiesPluginApiRangeMock.mockReturnValue(true);
-    resolveRuntimeServiceVersionMock.mockReturnValue("2026.3.14");
+    resolveRuntimeServiceVersionMock.mockReturnValue("2026.3.22");
     satisfiesGatewayMinimumMock.mockReturnValue(true);
     installPluginFromArchiveMock.mockResolvedValue({
       ok: true,
