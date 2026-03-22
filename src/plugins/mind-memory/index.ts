@@ -462,12 +462,14 @@ export default function register(api: PluginApi) {
         ).catch(() => undefined);
         const agents = await resolveNarrativeAgents();
         if (agents) {
+          const queriesStart = Date.now();
           const queries = await subconscious.generateSeekerQueries(
             "",
             effectiveRecentMessages,
             agents.observerAgent ?? agents.narrativeAgent,
             glossaryContext,
           );
+          const queriesMs = Date.now() - queriesStart;
           if (queries.length > 0) {
             // Get session start time to filter out facts created after this session began
             let sessionStartMs = Date.now();
@@ -489,9 +491,11 @@ export default function register(api: PluginApi) {
               }
             }
 
+            const graphStart = Date.now();
             const results = await Promise.all(
               queries.map((q) => graphService.searchFacts(sessionId, q).catch(() => [])),
             );
+            const graphMs = Date.now() - graphStart;
             const seen = new Set<string>();
             const combined = results
               .flat()
@@ -513,7 +517,7 @@ export default function register(api: PluginApi) {
                 return true;
               })
               .slice(0, queries.length * 3);
-            respond(true, { facts: combined, query: queries[0] });
+            respond(true, { facts: combined, query: queries[0], timings: { queriesMs, graphMs } });
             return;
           }
         }
@@ -524,8 +528,10 @@ export default function register(api: PluginApi) {
         return;
       }
 
+      const graphStart = Date.now();
       const facts = await graphService.searchFacts(sessionId, searchQuery);
-      respond(true, { facts, query: searchQuery });
+      const graphMs = Date.now() - graphStart;
+      respond(true, { facts, query: searchQuery, timings: { queriesMs: 0, graphMs } });
     } catch (e: unknown) {
       respond(false, { error: e instanceof Error ? e.message : String(e) });
     }
