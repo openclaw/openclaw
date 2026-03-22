@@ -27,11 +27,13 @@ function createChatHeaderState(
     model?: string | null;
     models?: ModelCatalogEntry[];
     omitSessionFromList?: boolean;
+    createResult?: { ok: boolean; key?: string };
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
   let currentModel = overrides.model ?? null;
   let currentModelProvider = currentModel ? "openai" : null;
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
+  const createResult = overrides.createResult ?? { ok: true, key: "new-session" };
   const catalog = overrides.models ?? [
     { id: "gpt-5", name: "GPT-5", provider: "openai" },
     { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
@@ -62,6 +64,9 @@ function createChatHeaderState(
     }
     if (method === "chat.history") {
       return { messages: [], thinkingLevel: null };
+    }
+    if (method === "sessions.create") {
+      return createResult;
     }
     if (method === "sessions.list") {
       return {
@@ -878,6 +883,23 @@ describe("chat view", () => {
     const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
     expect(newChatButton).not.toBeNull();
     expect(newChatButton?.disabled).toBe(true);
+  });
+
+  it("refreshes session options when create returns without a session key", async () => {
+    vi.stubGlobal("prompt", vi.fn().mockReturnValue("Session label"));
+    const { state, request } = createChatHeaderState({ createResult: { ok: true } });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+    expect(newChatButton).not.toBeNull();
+
+    newChatButton!.click();
+    await flushTasks();
+
+    expect(state.lastError).toBe("Session was created but no session key was returned.");
+    expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
+    vi.unstubAllGlobals();
   });
 
   it("keeps the selected model visible when the active session is absent from sessions.list", async () => {

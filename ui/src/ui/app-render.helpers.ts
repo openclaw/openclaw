@@ -553,6 +553,7 @@ async function createNewChatSession(state: AppViewState) {
       switchChatSession(state, result.key);
     } else {
       state.lastError = "Session was created but no session key was returned.";
+      void refreshSessionOptions(state);
     }
   } catch (err) {
     state.lastError = String(err);
