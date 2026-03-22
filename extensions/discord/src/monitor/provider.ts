@@ -81,7 +81,7 @@ import {
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
-import { resolveDiscordRestFetch } from "./rest-fetch.js";
+import { applyProxyToRequestClient, resolveDiscordRestFetch } from "./rest-fetch.js";
 import { formatDiscordStartupStatusMessage } from "./startup-status.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 import { formatThreadBindingDurationLabel } from "./thread-bindings.messages.js";
@@ -904,6 +904,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       runtime,
     });
 
+    // Route Carbon REST calls (deploy-commands, fetch-bot-identity) through the
+    // configured HTTP proxy. Carbon's RequestClient has no fetch injection point,
+    // so we patch the instance after construction.
+    applyProxyToRequestClient(client.rest, rawDiscordCfg.proxy, runtime);
+
     const lifecycleGateway = client.getPlugin<GatewayPlugin>("gateway");
     earlyGatewayEmitter = gatewaySupervisor.emitter;
     onEarlyGatewayDebug = (msg: unknown) => {
@@ -1158,6 +1163,7 @@ export const __testing = {
   resolveDiscordRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveDiscordRestFetch,
+  applyProxyToRequestClient,
   resolveThreadBindingsEnabled: resolveThreadBindingsEnabledForTesting,
   formatDiscordDeployErrorDetails,
 };
