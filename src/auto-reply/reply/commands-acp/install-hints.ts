@@ -17,7 +17,7 @@ export function resolveAcpInstallCommandHint(cfg: OpenClawConfig): string {
     if (existsSync(localPath)) {
       return `openclaw plugins install ${localPath}`;
     }
-    return "openclaw plugins install acpx";
+    return "openclaw plugins install @openclaw/acpx-plugin";
   }
   return `Install and enable the plugin that provides ACP backend "${backendId}".`;
 }

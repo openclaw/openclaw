@@ -51,7 +51,7 @@ describe("copyBundledPluginMetadata", () => {
       skills: ["./skills"],
     });
     writeJson(path.join(pluginDir, "package.json"), {
-      name: "@openclaw/acpx",
+      name: "@openclaw/acpx-plugin",
       openclaw: { extensions: ["./index.ts"] },
     });
 
