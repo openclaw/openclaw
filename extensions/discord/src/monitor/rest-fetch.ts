@@ -74,12 +74,20 @@ export function applyProxyToRequestClient(
       this: RequestClient,
       request: AnyRecord,
     ) {
-      const savedFetch = globalThis.fetch;
-      globalThis.fetch = proxyFetch;
+      // Re-entrancy guard: if a concurrent call already installed proxyFetch,
+      // skip the swap entirely. Without this guard, two interleaved calls can
+      // permanently install proxyFetch as globalThis.fetch:
+      //   Call A saves originalFetch, installs proxyFetch → yields
+      //   Call B saves proxyFetch (!) as its savedFetch → yields
+      //   Call A finally: restores originalFetch ✓
+      //   Call B finally: restores proxyFetch ✗ (permanently installed)
+      const alreadySwapped = globalThis.fetch === proxyFetch;
+      const savedFetch = alreadySwapped ? undefined : globalThis.fetch;
+      if (!alreadySwapped) globalThis.fetch = proxyFetch;
       try {
         return await origExecute.call(this, request);
       } finally {
-        globalThis.fetch = savedFetch;
+        if (!alreadySwapped) globalThis.fetch = savedFetch!;
       }
     };
 

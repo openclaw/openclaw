@@ -149,6 +149,25 @@ describe("applyProxyToRequestClient", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
+  it("re-entrancy guard prevents permanent proxyFetch installation under concurrent calls", async () => {
+    const runtime = makeRuntime();
+    const originalFetch = globalThis.fetch;
+    undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
+
+    const restClient = new MockRequestClient() as unknown as RequestClient;
+    applyProxyToRequestClient(restClient, "http://proxy.test:8080", runtime);
+
+    const exec = (restClient as unknown as MockRequestClient).executeRequest.bind(restClient);
+
+    // Simulate two concurrent executeRequest calls
+    const [r1, r2] = await Promise.all([exec({}), exec({})]);
+    expect(r1).toBeDefined();
+    expect(r2).toBeDefined();
+
+    // globalThis.fetch must be fully restored after both complete
+    expect(globalThis.fetch).toBe(originalFetch);
+  });
+
   it("logs error and skips patching when executeRequest is absent from prototype", () => {
     const runtime = makeRuntime();
     // Plain object — prototype is Object.prototype, no executeRequest
