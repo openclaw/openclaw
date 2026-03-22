@@ -539,18 +539,20 @@ async function createNewChatSession(state: AppViewState) {
   // Resolve the current agent ID from the active session key
   const parsed = parseAgentSessionKey(state.sessionKey);
   const agentId = parsed?.agentId ?? state.agentsList?.defaultId ?? "main";
-  // Carry over the current model override so the new session starts on the same model
-  const currentModel = resolveModelOverrideValue(state) || undefined;
+  const originSessionKey = state.sessionKey;
   state.newChatSessionPending = true;
   state.lastError = null;
   try {
     const result = await client.request<{ ok: boolean; key: string }>("sessions.create", {
       agentId,
       ...(label ? { label } : {}),
-      ...(currentModel ? { model: currentModel } : {}),
     });
     if (result?.key) {
-      switchChatSession(state, result.key);
+      if (state.sessionKey === originSessionKey) {
+        switchChatSession(state, result.key);
+      } else {
+        void refreshSessionOptions(state);
+      }
     } else {
       state.lastError = "Session was created but no session key was returned.";
       void refreshSessionOptions(state);

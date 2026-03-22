@@ -28,12 +28,35 @@ function createChatHeaderState(
     models?: ModelCatalogEntry[];
     omitSessionFromList?: boolean;
     createResult?: { ok: boolean; key?: string };
+    createRequest?: (params: Record<string, unknown>) => Promise<{ ok: boolean; key?: string }>;
+    historyRequest?: (params: Record<string, unknown>) => Promise<{
+      messages?: Array<unknown>;
+      thinkingLevel?: string | null;
+    }>;
+    sessionsResult?: SessionsListResult;
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
   let currentModel = overrides.model ?? null;
   let currentModelProvider = currentModel ? "openai" : null;
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
   const createResult = overrides.createResult ?? { ok: true, key: "new-session" };
+  const sessionsResult = overrides.sessionsResult ?? {
+    ts: 0,
+    path: "",
+    count: omitSessionFromList ? 0 : 1,
+    defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+    sessions: omitSessionFromList
+      ? []
+      : [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: null,
+            modelProvider: currentModelProvider,
+            model: currentModel,
+          },
+        ],
+  };
   const catalog = overrides.models ?? [
     { id: "gpt-5", name: "GPT-5", provider: "openai" },
     { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
@@ -60,32 +83,27 @@ function createChatHeaderState(
             matchingProviders.length === 1 ? matchingProviders[0] : currentModelProvider;
         }
       }
+      const currentSession = sessionsResult.sessions.find((session) => session.key === "main");
+      if (currentSession) {
+        currentSession.model = currentModel;
+        currentSession.modelProvider = currentModelProvider;
+      }
       return { ok: true, key: "main" };
     }
     if (method === "chat.history") {
+      if (overrides.historyRequest) {
+        return overrides.historyRequest(params);
+      }
       return { messages: [], thinkingLevel: null };
     }
     if (method === "sessions.create") {
+      if (overrides.createRequest) {
+        return overrides.createRequest(params);
+      }
       return createResult;
     }
     if (method === "sessions.list") {
-      return {
-        ts: 0,
-        path: "",
-        count: omitSessionFromList ? 0 : 1,
-        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-        sessions: omitSessionFromList
-          ? []
-          : [
-              {
-                key: "main",
-                kind: "direct",
-                updatedAt: null,
-                modelProvider: currentModelProvider,
-                model: currentModel,
-              },
-            ],
-      };
+      return sessionsResult;
     }
     if (method === "models.list") {
       return { models: catalog };
@@ -96,23 +114,7 @@ function createChatHeaderState(
     sessionKey: "main",
     connected: true,
     sessionsHideCron: true,
-    sessionsResult: {
-      ts: 0,
-      path: "",
-      count: omitSessionFromList ? 0 : 1,
-      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-      sessions: omitSessionFromList
-        ? []
-        : [
-            {
-              key: "main",
-              kind: "direct",
-              updatedAt: null,
-              modelProvider: currentModelProvider,
-              model: currentModel,
-            },
-          ],
-    },
+    sessionsResult,
     chatModelOverrides: {},
     chatModelCatalog: catalog,
     chatModelsLoading: false,
@@ -923,8 +925,78 @@ describe("chat view", () => {
       expect(state.settings.sessionKey).toBe("new-session");
       expect(state.settings.lastActiveSessionKey).toBe("new-session");
       expect(state.newChatSessionPending).toBe(false);
-      expect(request).toHaveBeenCalledWith("sessions.create", expect.anything());
+      expect(request).toHaveBeenCalledWith("sessions.create", {
+        agentId: "main",
+        label: "Session label",
+      });
       expect(request).toHaveBeenCalledWith("chat.history", {
+        sessionKey: "new-session",
+        limit: 200,
+      });
+      expect(request.mock.calls.map(([method]) => method)).toContain("sessions.list");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not auto-switch away from a newer session after a delayed create response", async () => {
+    vi.stubGlobal("prompt", vi.fn().mockReturnValue("Session label"));
+    try {
+      let resolveCreate: ((value: { ok: boolean; key?: string }) => void) | undefined;
+      const createPromise = new Promise<{ ok: boolean; key?: string }>((resolve) => {
+        resolveCreate = resolve;
+      });
+      const sessionsResult = {
+        ts: 0,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: null,
+          },
+          {
+            key: "other",
+            kind: "direct",
+            updatedAt: null,
+          },
+        ],
+      } satisfies SessionsListResult;
+      const { state, request } = createChatHeaderState({
+        sessionsResult,
+        createRequest: vi.fn(async () => createPromise),
+      });
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
+
+      const newChatButton = container.querySelector<HTMLButtonElement>(".chat-controls__new-chat");
+      expect(newChatButton).not.toBeNull();
+
+      newChatButton!.click();
+      await flushTasks();
+      expect(state.newChatSessionPending).toBe(true);
+
+      const sessionSelect = container.querySelector<HTMLSelectElement>(
+        ".chat-controls__session select",
+      );
+      expect(sessionSelect).not.toBeNull();
+      sessionSelect!.value = "other";
+      sessionSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+      await flushTasks();
+
+      expect(state.sessionKey).toBe("other");
+
+      resolveCreate?.({ ok: true, key: "new-session" });
+      await flushTasks();
+      await flushTasks();
+
+      expect(state.sessionKey).toBe("other");
+      expect(state.settings.sessionKey).toBe("other");
+      expect(state.settings.lastActiveSessionKey).toBe("other");
+      expect(state.newChatSessionPending).toBe(false);
+      expect(request).not.toHaveBeenCalledWith("chat.history", {
         sessionKey: "new-session",
         limit: 200,
       });
