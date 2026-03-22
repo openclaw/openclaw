@@ -137,4 +137,4 @@ than basic-only scraping.
 2. Firecrawl (if configured)
 3. Basic HTML cleanup (last fallback)
 
-See [Web tools](/tools/web) for the full web tool setup.
+See [Web Search](/tools/web) for the full provider setup and comparison.
