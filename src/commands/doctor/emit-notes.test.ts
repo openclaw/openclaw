@@ -17,4 +17,24 @@ describe("doctor note emission", () => {
       ["warning one", "Doctor warnings"],
     ]);
   });
+
+  it("emits only warning notes when changeNotes is omitted", () => {
+    const note = vi.fn();
+
+    emitDoctorNotes({
+      note,
+      warningNotes: ["warning only"],
+    });
+
+    expect(note.mock.calls).toEqual([["warning only", "Doctor warnings"]]);
+  });
+
+  it("emits nothing when note groups are omitted or empty", () => {
+    const note = vi.fn();
+
+    emitDoctorNotes({ note });
+    emitDoctorNotes({ note, changeNotes: [], warningNotes: [] });
+
+    expect(note).not.toHaveBeenCalled();
+  });
 });
