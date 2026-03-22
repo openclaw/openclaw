@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import { describe, expect, it } from "vitest";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 
 describe("collectTelegramStatusIssues", () => {

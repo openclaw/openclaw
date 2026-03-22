@@ -75,9 +75,7 @@ describe("createDiscordDraftStream", () => {
     await stream.flush();
 
     expect(rest.post).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("discord stream preview stopped"),
-    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("discord stream preview stopped"));
     expect(stream.messageId()).toBeUndefined();
   });
 });
