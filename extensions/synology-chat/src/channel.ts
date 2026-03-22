@@ -17,20 +17,19 @@ import {
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
-import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { sendMessage, sendFileUrl } from "./client.js";
-import { getSynologyRuntime } from "./runtime.js";
-import { buildSynologyChatInboundSessionKey } from "./session-key.js";
+import {
+  registerSynologyWebhookRoute,
+  validateSynologyGatewayAccountStartup,
+  waitUntilAbort,
+} from "./gateway-runtime.js";
 import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surface.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
-import { createWebhookHandler } from "./webhook-handler.js";
 
 const CHANNEL_ID = "synology-chat";
 const SynologyChatConfigSchema = buildChannelConfigSchema(z.object({}).passthrough());
-
-const activeRouteUnregisters = new Map<string, () => void>();
 
 const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynologyChatAccount>({
   channelKey: CHANNEL_ID,
@@ -82,23 +81,6 @@ const collectSynologyChatSecurityWarnings =
       account.allowedUserIds.length === 0 &&
       '- Synology Chat: dmPolicy="allowlist" with empty allowedUserIds blocks all senders. Add users or set dmPolicy="open".',
   );
-
-function waitUntilAbort(signal?: AbortSignal, onAbort?: () => void): Promise<void> {
-  return new Promise((resolve) => {
-    const complete = () => {
-      onAbort?.();
-      resolve();
-    };
-    if (!signal) {
-      return;
-    }
-    if (signal.aborted) {
-      complete();
-      return;
-    }
-    signal.addEventListener("abort", complete, { once: true });
-  });
-}
 
 export function createSynologyChatPlugin() {
   return {
@@ -215,122 +197,14 @@ export function createSynologyChatPlugin() {
       startAccount: async (ctx: any) => {
         const { cfg, accountId, log } = ctx;
         const account = resolveAccount(cfg, accountId);
-
-        if (!account.enabled) {
-          log?.info?.(`Synology Chat account ${accountId} is disabled, skipping`);
-          return waitUntilAbort(ctx.abortSignal);
-        }
-
-        if (!account.token || !account.incomingUrl) {
-          log?.warn?.(
-            `Synology Chat account ${accountId} not fully configured (missing token or incomingUrl)`,
-          );
-          return waitUntilAbort(ctx.abortSignal);
-        }
-        if (account.dmPolicy === "allowlist" && account.allowedUserIds.length === 0) {
-          log?.warn?.(
-            `Synology Chat account ${accountId} has dmPolicy=allowlist but empty allowedUserIds; refusing to start route`,
-          );
+        if (!validateSynologyGatewayAccountStartup({ account, accountId, log }).ok) {
           return waitUntilAbort(ctx.abortSignal);
         }
 
         log?.info?.(
           `Starting Synology Chat channel (account: ${accountId}, path: ${account.webhookPath})`,
         );
-
-        const handler = createWebhookHandler({
-          account,
-          deliver: async (msg) => {
-            const rt = getSynologyRuntime();
-            const currentCfg = await rt.config.loadConfig();
-
-            // The Chat API user_id (for sending) may differ from the webhook
-            // user_id (used for sessions/pairing). Use chatUserId for API calls.
-            const sendUserId = msg.chatUserId ?? msg.from;
-            const route = rt.channel.routing.resolveAgentRoute({
-              cfg: currentCfg,
-              channel: CHANNEL_ID,
-              accountId: account.accountId,
-              peer: {
-                kind: "direct",
-                id: msg.from,
-              },
-            });
-            const sessionKey = buildSynologyChatInboundSessionKey({
-              agentId: route.agentId,
-              accountId: account.accountId,
-              userId: msg.from,
-              identityLinks: currentCfg.session?.identityLinks,
-            });
-
-            // Build MsgContext using SDK's finalizeInboundContext for proper normalization
-            const msgCtx = rt.channel.reply.finalizeInboundContext({
-              Body: msg.body,
-              RawBody: msg.body,
-              CommandBody: msg.body,
-              From: `synology-chat:${msg.from}`,
-              To: `synology-chat:${msg.from}`,
-              SessionKey: sessionKey,
-              AccountId: account.accountId,
-              OriginatingChannel: CHANNEL_ID,
-              OriginatingTo: `synology-chat:${msg.from}`,
-              ChatType: msg.chatType,
-              SenderName: msg.senderName,
-              SenderId: msg.from,
-              Provider: CHANNEL_ID,
-              Surface: CHANNEL_ID,
-              ConversationLabel: msg.senderName || msg.from,
-              Timestamp: Date.now(),
-              CommandAuthorized: msg.commandAuthorized,
-            });
-
-            // Dispatch via the SDK's buffered block dispatcher
-            await rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-              ctx: msgCtx,
-              cfg: currentCfg,
-              dispatcherOptions: {
-                deliver: async (payload: { text?: string; body?: string }) => {
-                  const text = payload?.text ?? payload?.body;
-                  if (text) {
-                    await sendMessage(
-                      account.incomingUrl,
-                      text,
-                      sendUserId,
-                      account.allowInsecureSsl,
-                    );
-                  }
-                },
-                onReplyStart: () => {
-                  log?.info?.(`Agent reply started for ${msg.from}`);
-                },
-              },
-            });
-
-            return null;
-          },
-          log,
-        });
-
-        // Deregister any stale route from a previous start (e.g. on auto-restart)
-        // to avoid "already registered" collisions that trigger infinite loops.
-        const routeKey = `${accountId}:${account.webhookPath}`;
-        const prevUnregister = activeRouteUnregisters.get(routeKey);
-        if (prevUnregister) {
-          log?.info?.(`Deregistering stale route before re-registering: ${account.webhookPath}`);
-          prevUnregister();
-          activeRouteUnregisters.delete(routeKey);
-        }
-
-        const unregister = registerPluginHttpRoute({
-          path: account.webhookPath,
-          auth: "plugin",
-          replaceExisting: true,
-          pluginId: CHANNEL_ID,
-          accountId: account.accountId,
-          log: (msg: string) => log?.info?.(msg),
-          handler,
-        });
-        activeRouteUnregisters.set(routeKey, unregister);
+        const unregister = registerSynologyWebhookRoute({ account, accountId, log });
 
         log?.info?.(`Registered HTTP route: ${account.webhookPath} for Synology Chat`);
 
@@ -339,8 +213,7 @@ export function createSynologyChatPlugin() {
         // Resolving immediately triggers a restart loop.
         return waitUntilAbort(ctx.abortSignal, () => {
           log?.info?.(`Stopping Synology Chat channel (account: ${accountId})`);
-          if (typeof unregister === "function") unregister();
-          activeRouteUnregisters.delete(routeKey);
+          unregister();
         });
       },
 
