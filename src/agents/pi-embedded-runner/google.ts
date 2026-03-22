@@ -604,9 +604,9 @@ export async function sanitizeSessionHistory(params: {
     }).messages;
   }
 
-  // Strict OpenAI-compatible providers (vLLM, Gemma, etc.) also reject
-  // conversations that start with an assistant turn (e.g. delivery-mirror
-  // messages after /new).  Apply the same ordering fix without the
-  // Google-specific session markers.  See #38962.
+  // Strict OpenAI-compatible providers (vLLM, Gemma, non-OpenAI responses
+  // hosts, etc.) also reject conversations that start with an assistant turn
+  // (e.g. after compaction or model switching).  Apply the same ordering fix
+  // without Google-specific session markers.  See #38962, #37546.
   return sanitizeGoogleTurnOrdering(sanitizedOpenAI);
 }

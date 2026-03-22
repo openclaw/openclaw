@@ -308,6 +308,67 @@ describe("sanitizeSessionHistory", () => {
     ).toBe(false);
   });
 
+  it("prepends a bootstrap user turn for non-OpenAI openai-responses assistant-first history (#37546)", async () => {
+    setNonGoogleModelApi();
+    const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "compacted reply" }],
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "custom",
+      modelId: "custom-model",
+      sessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result[0]?.role).toBe("user");
+    expect((result[0] as { content?: unknown } | undefined)?.content).toBe("(session bootstrap)");
+    expect(result[1]?.role).toBe("assistant");
+    expect(
+      sessionEntries.some((entry) => entry.customType === "google-turn-ordering-bootstrap"),
+    ).toBe(false);
+  });
+
+  it("prepends bootstrap after model switch from anthropic to non-OpenAI responses provider (#37546)", async () => {
+    setNonGoogleModelApi();
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "reply from previous anthropic session" }],
+      },
+      { role: "user", content: "new message after model switch" },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "custom",
+      modelId: "custom-model",
+      sessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result[0]?.role).toBe("user");
+    expect((result[0] as { content?: unknown } | undefined)?.content).toBe("(session bootstrap)");
+    expect(result[1]?.role).toBe("assistant");
+    expect(result[2]?.role).toBe("user");
+  });
+
   it("annotates inter-session user messages before context sanitization", async () => {
     setNonGoogleModelApi();
 

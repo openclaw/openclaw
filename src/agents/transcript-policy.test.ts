@@ -143,6 +143,37 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
+  it.each([
+    {
+      title: "non-OpenAI openai-responses provider",
+      provider: "custom",
+      modelId: "custom-model",
+      modelApi: "openai-responses" as const,
+    },
+    {
+      title: "non-OpenAI openai-codex-responses provider",
+      provider: "custom",
+      modelId: "codex-model",
+      modelApi: "openai-codex-responses" as const,
+    },
+  ])("enables turn-ordering for $title (#37546)", ({ provider, modelId, modelApi }) => {
+    const policy = resolveTranscriptPolicy({ provider, modelId, modelApi });
+    expect(policy.applyGoogleTurnOrdering).toBe(true);
+    expect(policy.validateGeminiTurns).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
+  it("does not enable turn-ordering for native OpenAI openai-responses provider (#37546)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai",
+      modelId: "gpt-5.2",
+      modelApi: "openai-responses",
+    });
+    expect(policy.applyGoogleTurnOrdering).toBe(false);
+    expect(policy.validateGeminiTurns).toBe(false);
+    expect(policy.validateAnthropicTurns).toBe(false);
+  });
+
   it("keeps OpenRouter on its existing turn-validation path", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openrouter",

@@ -68,9 +68,11 @@ export function resolveTranscriptPolicy(params: {
   const isAnthropic = isAnthropicApi(params.modelApi, provider);
   const isOpenAi = isOpenAiProvider(provider) || (!provider && isOpenAiApi(params.modelApi));
   const isStrictOpenAiCompatible =
-    params.modelApi === "openai-completions" &&
     !isOpenAi &&
-    supportsOpenAiCompatTurnValidation(provider);
+    supportsOpenAiCompatTurnValidation(provider) &&
+    (params.modelApi === "openai-completions" ||
+      params.modelApi === "openai-responses" ||
+      params.modelApi === "openai-codex-responses");
   const providerToolCallIdMode = resolveTranscriptToolCallIdMode(provider, modelId);
   const isMistral = providerToolCallIdMode === "strict9";
   const shouldSanitizeGeminiThoughtSignaturesForProvider =
