@@ -40,6 +40,10 @@
         "reason": "Clean in isolation, but can hang after sharing the broad lane."
       },
       {
+        "file": "src/plugins/provider-wizard.test.ts",
+        "reason": "Retained ~318 MiB in an isolated memory trace and is safer outside the shared unit-fast lane."
+      },
+      {
         "file": "src/config/doc-baseline.integration.test.ts",
         "reason": "Builds the full bundled config schema graph and is safer outside the shared unit-fast heap."
       },
@@ -982,6 +986,22 @@
       {
         "file": "src/channels/plugins/contracts/inbound.telegram.contract.test.ts",
         "reason": "Needs the vmForks lane when targeted."
+      }
+    ]
+  },
+  "extensions": {
+    "singletonIsolated": [
+      {
+        "file": "extensions/bluebubbles/src/setup-surface.test.ts",
+        "reason": "Loads the setup-wizard/plugin-sdk graph and retained ~576 MiB in an isolated memory trace."
+      },
+      {
+        "file": "extensions/feishu/index.test.ts",
+        "reason": "Plugin entry registration coverage loads a broad channel graph and is safer outside the shared extensions lane."
+      },
+      {
+        "file": "extensions/msteams/src/monitor.test.ts",
+        "reason": "Webhook timeout coverage is startup-heavy but showed no material retained heap growth across repeated snapshots."
       }
     ]
   }
