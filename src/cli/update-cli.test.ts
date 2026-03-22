@@ -1,6 +1,6 @@
-import { Command } from "commander";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
