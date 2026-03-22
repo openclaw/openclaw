@@ -200,7 +200,7 @@ export function registerGatewayCli(program: Command) {
     .option("--password <password>", "Gateway password (applies to all probes)")
     .option(
       "--timeout <ms>",
-      "Overall probe budget in ms (default: 5000, increased for WSL2 loopback)",
+      "Overall probe budget in ms",
       "5000",
     )
     .option("--json", "Output JSON", false)
