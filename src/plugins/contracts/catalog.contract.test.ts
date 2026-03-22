@@ -6,7 +6,7 @@ import {
 } from "../provider-runtime.test-support.js";
 import { requireProviderContractProvider } from "./registry.js";
 
-type ResolvePluginProviders = typeof import("../providers.js").resolvePluginProviders;
+type ResolvePluginProviders = typeof import("../providers.runtime.js").resolvePluginProviders;
 type ResolveOwningPluginIdsForProvider =
   typeof import("../providers.js").resolveOwningPluginIdsForProvider;
 type ResolveNonBundledProviderPluginIds =
@@ -23,11 +23,14 @@ const resolveNonBundledProviderPluginIdsMock = vi.hoisted(() =>
 );
 
 vi.mock("../providers.js", () => ({
-  resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
   resolveOwningPluginIdsForProvider: (params: unknown) =>
     resolveOwningPluginIdsForProviderMock(params as never),
   resolveNonBundledProviderPluginIds: (params: unknown) =>
     resolveNonBundledProviderPluginIdsMock(params as never),
+}));
+
+vi.mock("../providers.runtime.js", () => ({
+  resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
 }));
 
 let augmentModelCatalogWithProviderPlugins: typeof import("../provider-runtime.js").augmentModelCatalogWithProviderPlugins;

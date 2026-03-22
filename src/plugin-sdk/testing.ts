@@ -12,6 +12,7 @@ export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
+/** Create a tiny Windows `.cmd` shim fixture for plugin tests that spawn CLIs. */
 export async function createWindowsCmdShimFixture(params: {
   shimPath: string;
   scriptPath: string;
@@ -37,6 +38,7 @@ type ResolveTargetFn = (params: {
   allowFrom: string[];
 }) => ResolveTargetResult;
 
+/** Install a shared test matrix for target-resolution error handling. */
 export function installCommonResolveTargetErrorCases(params: {
   resolveTarget: ResolveTargetFn;
   implicitAllowFrom: string[];

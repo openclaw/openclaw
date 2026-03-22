@@ -32,6 +32,10 @@
         "reason": "Builds the full bundled config schema graph and is safer outside the shared unit-fast heap."
       },
       {
+        "file": "src/config/schema.help.quality.test.ts",
+        "reason": "Help quality coverage loads a broad schema/help data graph and retained a top shared unit-fast heap spike on Linux CI."
+      },
+      {
         "file": "src/secrets/runtime.test.ts",
         "reason": "Secrets runtime coverage retained the largest unit-fast heap spike in CI and is safer outside the shared lane."
       },
@@ -138,10 +142,6 @@
       {
         "file": "src/cron/service.runs-one-shot-main-job-disables-it.test.ts",
         "reason": "One-shot cron service coverage retained a top shared unit-fast heap spike in the March 19, 2026 Linux Node 22 OOM lane."
-      },
-      {
-        "file": "src/cron/isolated-agent/run.sandbox-config-preserved.test.ts",
-        "reason": "Isolated-agent sandbox config coverage retained a large shared unit-fast heap spike on Linux CI."
       },
       {
         "file": "src/cron/isolated-agent.direct-delivery-core-channels.test.ts",

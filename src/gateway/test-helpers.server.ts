@@ -4,7 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
+import {
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+  parseConfigJson5,
+} from "../config/config.js";
+import {
+  clearSessionStoreCacheForTest,
+  resolveMainSessionKeyFromConfig,
+  type SessionEntry,
+} from "../config/sessions.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -14,6 +23,7 @@ import {
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
+import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
@@ -25,7 +35,9 @@ import {
   agentCommand,
   cronIsolatedRun,
   embeddedRunMock,
+  getReplyFromConfig,
   piSdkMock,
+  resetTestPluginRegistry,
   sessionStoreSaveDelayMs,
   setTestConfigRoot,
   testIsNixMode,
@@ -63,6 +75,58 @@ let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
 let suiteConfigRootSeq = 0;
 
+async function persistTestSessionStorePath(storePath: string): Promise<void> {
+  const configPaths = new Set<string>();
+  if (process.env.OPENCLAW_CONFIG_PATH) {
+    configPaths.add(process.env.OPENCLAW_CONFIG_PATH);
+  }
+  if (process.env.OPENCLAW_STATE_DIR) {
+    configPaths.add(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"));
+  }
+  const parsedConfigs = new Map<string, Record<string, unknown>>();
+  let preservedTemplateStore: string | undefined;
+  for (const configPath of configPaths) {
+    let config: Record<string, unknown> = {};
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      const parsed = parseConfigJson5(raw);
+      if (
+        parsed.ok &&
+        parsed.parsed &&
+        typeof parsed.parsed === "object" &&
+        !Array.isArray(parsed.parsed)
+      ) {
+        config = parsed.parsed as Record<string, unknown>;
+      }
+    } catch {
+      config = {};
+    }
+    parsedConfigs.set(configPath, config);
+    const session =
+      config.session && typeof config.session === "object" && !Array.isArray(config.session)
+        ? (config.session as Record<string, unknown>)
+        : undefined;
+    const existingStore = typeof session?.store === "string" ? session.store.trim() : "";
+    if (!preservedTemplateStore && existingStore.includes("{agentId}")) {
+      preservedTemplateStore = existingStore;
+    }
+  }
+  const nextStoreValue = preservedTemplateStore || storePath;
+  for (const configPath of configPaths) {
+    const config = { ...parsedConfigs.get(configPath) };
+    const session =
+      config.session && typeof config.session === "object" && !Array.isArray(config.session)
+        ? { ...(config.session as Record<string, unknown>) }
+        : {};
+    session.store = nextStoreValue;
+    config.session = session;
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+  }
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+}
+
 export async function writeSessionStore(params: {
   entries: Record<string, Partial<SessionEntry>>;
   storePath?: string;
@@ -87,8 +151,13 @@ export async function writeSessionStore(params: {
           });
     store[storeKey] = entry;
   }
+  // Gateway suites often reuse the same store path across tests while writing the
+  // file directly; clear the in-process cache so handlers reload the seeded state.
+  clearSessionStoreCacheForTest();
+  await persistTestSessionStorePath(storePath);
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+  clearSessionStoreCacheForTest();
 }
 
 async function setupGatewayTestHome() {
@@ -121,6 +190,11 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
     throw new Error("resetGatewayTestState called before temp home was initialized");
   }
   applyGatewaySkipEnv();
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (stateDir) {
+    await fs.rm(stateDir, { recursive: true, force: true });
+    await fs.mkdir(stateDir, { recursive: true });
+  }
   if (options.uniqueConfigRoot) {
     const suiteRoot = path.join(tempHome, ".openclaw-test-suite");
     await fs.mkdir(suiteRoot, { recursive: true });
@@ -133,6 +207,10 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
     await fs.mkdir(tempConfigRoot, { recursive: true });
   }
   setTestConfigRoot(tempConfigRoot);
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+  resetTestPluginRegistry();
+  clearGatewaySubagentRuntime();
   sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
@@ -155,8 +233,12 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   testState.channelsConfig = undefined;
   testState.allowFrom = undefined;
   testIsNixMode.value = false;
-  cronIsolatedRun.mockClear();
-  agentCommand.mockClear();
+  cronIsolatedRun.mockReset();
+  cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
+  agentCommand.mockReset();
+  agentCommand.mockResolvedValue(undefined);
+  getReplyFromConfig.mockReset();
+  getReplyFromConfig.mockResolvedValue(undefined);
   embeddedRunMock.activeIds.clear();
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
@@ -172,6 +254,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
+  clearGatewaySubagentRuntime();
   resetLogger();
   if (options.restoreEnv) {
     gatewayEnvSnapshot?.restore();
@@ -197,10 +280,10 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   if (scope === "suite") {
     beforeAll(async () => {
       await setupGatewayTestHome();
-      await resetGatewayTestState({ uniqueConfigRoot: true });
+      await resetGatewayTestState({ uniqueConfigRoot: false });
     });
     beforeEach(async () => {
-      await resetGatewayTestState({ uniqueConfigRoot: true });
+      await resetGatewayTestState({ uniqueConfigRoot: false });
     }, 60_000);
     afterEach(async () => {
       await cleanupGatewayTestHome({ restoreEnv: false });

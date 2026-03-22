@@ -12,7 +12,7 @@ vi.mock("../plugins/provider-wizard.js", () => ({
   resolveProviderPluginChoice,
 }));
 
-vi.mock("../plugins/providers.js", () => ({
+vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProviders,
 }));
 

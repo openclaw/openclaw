@@ -1,5 +1,6 @@
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
   __testing,
   consumeGatewaySigusr1RestartAuthorization,
@@ -217,28 +218,27 @@ describe("infra runtime", () => {
 
   describe("tailnet address detection", () => {
     it("detects tailscale IPv4 and IPv6 addresses", () => {
-      vi.spyOn(os, "networkInterfaces").mockReturnValue({
-        lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "" }],
-        utun9: [
-          {
-            address: "100.123.224.76",
-            family: "IPv4",
-            internal: false,
-            netmask: "",
-          },
-          {
-            address: "fd7a:115c:a1e0::8801:e04c",
-            family: "IPv6",
-            internal: false,
-            netmask: "",
-          },
-        ],
-        // oxlint-disable-next-line typescript/no-explicit-any
-      } as any);
+      vi.spyOn(os, "networkInterfaces").mockReturnValue(
+        makeNetworkInterfacesSnapshot({
+          lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+          utun9: [
+            { address: "100.123.224.76", family: "IPv4" },
+            { address: "fd7a:115c:a1e0::8801:e04c", family: "IPv6" },
+          ],
+        }),
+      );
 
       const out = listTailnetAddresses();
       expect(out.ipv4).toEqual(["100.123.224.76"]);
       expect(out.ipv6).toEqual(["fd7a:115c:a1e0::8801:e04c"]);
+    });
+
+    it("returns empty address lists when interface discovery throws", () => {
+      vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
+        throw new Error("uv_interface_addresses failed");
+      });
+
+      expect(listTailnetAddresses()).toEqual({ ipv4: [], ipv6: [] });
     });
   });
 });

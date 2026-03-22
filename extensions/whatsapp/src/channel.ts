@@ -70,7 +70,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   },
   allowlist: buildDmGroupAccountAllowlistAdapter({
     channelId: "whatsapp",
-    resolveAccount: ({ cfg, accountId }) => resolveWhatsAppAccount({ cfg, accountId }),
+    resolveAccount: resolveWhatsAppAccount,
     normalize: ({ values }) => formatWhatsAppConfigAllowFromEntries(values),
     resolveDmAllowFrom: (account) => account.allowFrom,
     resolveGroupAllowFrom: (account) => account.groupAllowFrom,
@@ -208,9 +208,11 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       reconnectAttempts: 0,
       lastConnectedAt: null,
       lastDisconnect: null,
+      lastInboundAt: null,
       lastMessageAt: null,
       lastEventAt: null,
       lastError: null,
+      healthState: "stopped",
     },
     collectStatusIssues: collectWhatsAppStatusIssues,
     buildChannelSummary: async ({ account, snapshot }) => {
@@ -237,9 +239,11 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         lastConnectedAt: snapshot.lastConnectedAt ?? null,
         lastDisconnect: snapshot.lastDisconnect ?? null,
         reconnectAttempts: snapshot.reconnectAttempts,
+        lastInboundAt: snapshot.lastInboundAt ?? snapshot.lastMessageAt ?? null,
         lastMessageAt: snapshot.lastMessageAt ?? null,
         lastEventAt: snapshot.lastEventAt ?? null,
         lastError: snapshot.lastError ?? null,
+        healthState: snapshot.healthState ?? undefined,
       };
     },
     buildAccountSnapshot: async ({ account, runtime }) => {
@@ -255,9 +259,11 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         reconnectAttempts: runtime?.reconnectAttempts,
         lastConnectedAt: runtime?.lastConnectedAt ?? null,
         lastDisconnect: runtime?.lastDisconnect ?? null,
+        lastInboundAt: runtime?.lastInboundAt ?? runtime?.lastMessageAt ?? null,
         lastMessageAt: runtime?.lastMessageAt ?? null,
         lastEventAt: runtime?.lastEventAt ?? null,
         lastError: runtime?.lastError ?? null,
+        healthState: runtime?.healthState ?? undefined,
         dmPolicy: account.dmPolicy,
         allowFrom: account.allowFrom,
       };

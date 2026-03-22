@@ -1795,21 +1795,100 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).toHaveBeenCalled();
   });
+
+  it("treats tool results as real conversation only when linked to a meaningful user ask", async () => {
+    expect(
+      __testing.isRealConversationMessage(
+        {
+          role: "toolResult",
+          toolCallId: "t1",
+          toolName: "exec",
+          content: [{ type: "text", text: "done" }],
+        } as AgentMessage,
+        [
+          { role: "user", content: "<b>HEARTBEAT_OK</b>" } as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "t1",
+            toolName: "exec",
+            content: [{ type: "text", text: "done" }],
+          } as AgentMessage,
+        ],
+        1,
+      ),
+    ).toBe(false);
+
+    expect(
+      __testing.isRealConversationMessage(
+        {
+          role: "toolResult",
+          toolCallId: "t2",
+          toolName: "exec",
+          content: [{ type: "text", text: "done" }],
+        } as AgentMessage,
+        [
+          { role: "user", content: "please inspect the repo" } as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "t2",
+            toolName: "exec",
+            content: [{ type: "text", text: "done" }],
+          } as AgentMessage,
+        ],
+        1,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat assistant-only tool calls as meaningful conversation", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      } as AgentMessage),
+    ).toBe(false);
+  });
+
+  it("does not treat reasoning-only assistant blocks as meaningful conversation", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "checking" }],
+      } as AgentMessage),
+    ).toBe(false);
+
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "reasoning", summary: [] }],
+      } as unknown as AgentMessage),
+    ).toBe(false);
+  });
+
+  it("treats markup-wrapped heartbeat tokens as boilerplate", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent(
+        castAgentMessage({
+          role: "assistant",
+          content: "<b>HEARTBEAT_OK</b>",
+        }),
+      ),
+    ).toBe(false);
+  });
 });
 
 async function expectWorkspaceSummaryEmptyForAgentsAlias(
   createAlias: (outsidePath: string, agentsPath: string) => void,
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-  const prevCwd = process.cwd();
+  const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
   try {
     const outside = path.join(root, "outside-secret.txt");
     fs.writeFileSync(outside, "secret");
     createAlias(outside, path.join(root, "AGENTS.md"));
-    process.chdir(root);
     await expect(readWorkspaceContextForSummary()).resolves.toBe("");
   } finally {
-    process.chdir(prevCwd);
+    cwdSpy.mockRestore();
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

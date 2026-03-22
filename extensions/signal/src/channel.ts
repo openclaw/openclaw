@@ -1,15 +1,12 @@
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import {
-  createPairingPrefixStripper,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-pairing";
+import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   attachChannelToResult,
   attachChannelToResults,
-  createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
@@ -38,10 +35,9 @@ import {
 import { getSignalRuntime } from "./runtime.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import {
-  collectSignalSecurityWarnings,
   signalConfigAdapter,
   createSignalPluginBase,
-  signalResolveDmPolicy,
+  signalSecurityAdapter,
   signalSetupWizard,
 } from "./shared.js";
 type SignalSendFn = ReturnType<typeof getSignalRuntime>["channel"]["signal"]["sendMessageSignal"];
@@ -271,139 +267,140 @@ async function sendFormattedSignalMedia(ctx: {
   return attachChannelToResult("signal", result);
 }
 
-export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
-  ...createSignalPluginBase({
-    setupWizard: signalSetupWizard,
-    setup: signalSetupAdapter,
-  }),
-  pairing: createTextPairingAdapter({
-    idLabel: "signalNumber",
-    message: PAIRING_APPROVED_MESSAGE,
-    normalizeAllowEntry: createPairingPrefixStripper(/^signal:/i),
-    notify: async ({ id, message }) => {
-      await getSignalRuntime().channel.signal.sendMessageSignal(id, message);
-    },
-  }),
-  actions: signalMessageActions,
-  allowlist: buildDmGroupAccountAllowlistAdapter({
-    channelId: "signal",
-    resolveAccount: ({ cfg, accountId }) => resolveSignalAccount({ cfg, accountId }),
-    normalize: ({ cfg, accountId, values }) =>
-      signalConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
-    resolveDmAllowFrom: (account) => account.config.allowFrom,
-    resolveGroupAllowFrom: (account) => account.config.groupAllowFrom,
-    resolveDmPolicy: (account) => account.config.dmPolicy,
-    resolveGroupPolicy: (account) => account.config.groupPolicy,
-  }),
-  security: {
-    resolveDmPolicy: signalResolveDmPolicy,
-    collectWarnings: collectSignalSecurityWarnings,
-  },
-  messaging: {
-    normalizeTarget: normalizeSignalMessagingTarget,
-    parseExplicitTarget: ({ raw }) => parseSignalExplicitTarget(raw),
-    inferTargetChatType: ({ to }) => inferSignalTargetChatType(to),
-    resolveOutboundSessionRoute: (params) => resolveSignalOutboundSessionRoute(params),
-    targetResolver: {
-      looksLikeId: looksLikeSignalTargetId,
-      hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
-    },
-  },
-  setup: signalSetupAdapter,
-  outbound: {
-    deliveryMode: "direct",
-    chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
-    chunkerMode: "text",
-    textChunkLimit: 4000,
-    sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) =>
-      await sendFormattedSignalText({
-        cfg,
-        to,
-        text,
-        accountId,
-        deps,
-        abortSignal,
+export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
+  createChatChannelPlugin({
+    base: {
+      ...createSignalPluginBase({
+        setupWizard: signalSetupWizard,
+        setup: signalSetupAdapter,
       }),
-    sendFormattedMedia: async ({
-      cfg,
-      to,
-      text,
-      mediaUrl,
-      mediaLocalRoots,
-      accountId,
-      deps,
-      abortSignal,
-    }) =>
-      await sendFormattedSignalMedia({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaLocalRoots,
-        accountId,
-        deps,
-        abortSignal,
+      actions: signalMessageActions,
+      allowlist: buildDmGroupAccountAllowlistAdapter({
+        channelId: "signal",
+        resolveAccount: resolveSignalAccount,
+        normalize: ({ cfg, accountId, values }) =>
+          signalConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+        resolveDmAllowFrom: (account) => account.config.allowFrom,
+        resolveGroupAllowFrom: (account) => account.config.groupAllowFrom,
+        resolveDmPolicy: (account) => account.config.dmPolicy,
+        resolveGroupPolicy: (account) => account.config.groupPolicy,
       }),
-    ...createAttachedChannelResultAdapter({
-      channel: "signal",
-      sendText: async ({ cfg, to, text, accountId, deps }) =>
-        await sendSignalOutbound({
-          cfg,
-          to,
-          text,
-          accountId: accountId ?? undefined,
-          deps,
-        }),
-      sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps }) =>
-        await sendSignalOutbound({
+      messaging: {
+        normalizeTarget: normalizeSignalMessagingTarget,
+        parseExplicitTarget: ({ raw }) => parseSignalExplicitTarget(raw),
+        inferTargetChatType: ({ to }) => inferSignalTargetChatType(to),
+        resolveOutboundSessionRoute: (params) => resolveSignalOutboundSessionRoute(params),
+        targetResolver: {
+          looksLikeId: looksLikeSignalTargetId,
+          hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
+        },
+      },
+      status: {
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+        collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("signal", accounts),
+        buildChannelSummary: ({ snapshot }) =>
+          buildBaseChannelStatusSummary(snapshot, {
+            baseUrl: snapshot.baseUrl ?? null,
+            probe: snapshot.probe,
+            lastProbeAt: snapshot.lastProbeAt ?? null,
+          }),
+        probeAccount: async ({ account, timeoutMs }) => {
+          const baseUrl = account.baseUrl;
+          return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);
+        },
+        formatCapabilitiesProbe: ({ probe }) =>
+          (probe as SignalProbe | undefined)?.version
+            ? [{ text: `Signal daemon: ${(probe as SignalProbe).version}` }]
+            : [],
+        buildAccountSnapshot: ({ account, runtime, probe }) =>
+          buildBaseAccountStatusSnapshot({ account, runtime, probe }, { baseUrl: account.baseUrl }),
+      },
+      gateway: {
+        startAccount: async (ctx) => {
+          const account = ctx.account;
+          ctx.setStatus({
+            accountId: account.accountId,
+            baseUrl: account.baseUrl,
+          });
+          ctx.log?.info(`[${account.accountId}] starting provider (${account.baseUrl})`);
+          // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
+          return getSignalRuntime().channel.signal.monitorSignalProvider({
+            accountId: account.accountId,
+            config: ctx.cfg,
+            runtime: ctx.runtime,
+            abortSignal: ctx.abortSignal,
+            mediaMaxMb: account.config.mediaMaxMb,
+          });
+        },
+      },
+    },
+    pairing: {
+      text: {
+        idLabel: "signalNumber",
+        message: PAIRING_APPROVED_MESSAGE,
+        normalizeAllowEntry: createPairingPrefixStripper(/^signal:/i),
+        notify: async ({ id, message }) => {
+          await getSignalRuntime().channel.signal.sendMessageSignal(id, message);
+        },
+      },
+    },
+    security: signalSecurityAdapter,
+    outbound: {
+      base: {
+        deliveryMode: "direct",
+        chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
+        chunkerMode: "text",
+        textChunkLimit: 4000,
+        sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) =>
+          await sendFormattedSignalText({
+            cfg,
+            to,
+            text,
+            accountId,
+            deps,
+            abortSignal,
+          }),
+        sendFormattedMedia: async ({
           cfg,
           to,
           text,
           mediaUrl,
           mediaLocalRoots,
-          accountId: accountId ?? undefined,
+          accountId,
           deps,
-        }),
-    }),
-  },
-  status: {
-    defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("signal", accounts),
-    buildChannelSummary: ({ snapshot }) => ({
-      ...buildBaseChannelStatusSummary(snapshot),
-      baseUrl: snapshot.baseUrl ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
-    probeAccount: async ({ account, timeoutMs }) => {
-      const baseUrl = account.baseUrl;
-      return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);
+          abortSignal,
+        }) =>
+          await sendFormattedSignalMedia({
+            cfg,
+            to,
+            text,
+            mediaUrl,
+            mediaLocalRoots,
+            accountId,
+            deps,
+            abortSignal,
+          }),
+      },
+      attachedResults: {
+        channel: "signal",
+        sendText: async ({ cfg, to, text, accountId, deps }) =>
+          await sendSignalOutbound({
+            cfg,
+            to,
+            text,
+            accountId: accountId ?? undefined,
+            deps,
+          }),
+        sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps }) =>
+          await sendSignalOutbound({
+            cfg,
+            to,
+            text,
+            mediaUrl,
+            mediaLocalRoots,
+            accountId: accountId ?? undefined,
+            deps,
+          }),
+      },
     },
-    formatCapabilitiesProbe: ({ probe }) =>
-      (probe as SignalProbe | undefined)?.version
-        ? [{ text: `Signal daemon: ${(probe as SignalProbe).version}` }]
-        : [],
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      ...buildBaseAccountStatusSnapshot({ account, runtime, probe }),
-      baseUrl: account.baseUrl,
-    }),
-  },
-  gateway: {
-    startAccount: async (ctx) => {
-      const account = ctx.account;
-      ctx.setStatus({
-        accountId: account.accountId,
-        baseUrl: account.baseUrl,
-      });
-      ctx.log?.info(`[${account.accountId}] starting provider (${account.baseUrl})`);
-      // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-      return getSignalRuntime().channel.signal.monitorSignalProvider({
-        accountId: account.accountId,
-        config: ctx.cfg,
-        runtime: ctx.runtime,
-        abortSignal: ctx.abortSignal,
-        mediaMaxMb: account.config.mediaMaxMb,
-      });
-    },
-  },
-};
+  });

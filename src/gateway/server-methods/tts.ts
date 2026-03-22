@@ -1,5 +1,9 @@
 import { loadConfig } from "../../config/config.js";
-import { listSpeechProviders, normalizeSpeechProviderId } from "../../tts/provider-registry.js";
+import {
+  getSpeechProvider,
+  listSpeechProviders,
+  normalizeSpeechProviderId,
+} from "../../tts/provider-registry.js";
 import {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
@@ -104,8 +108,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       typeof params.provider === "string" ? params.provider.trim() : "",
     );
     const cfg = loadConfig();
-    const knownProviders = new Set(listSpeechProviders(cfg).map((entry) => entry.id));
-    if (!provider || !knownProviders.has(provider)) {
+    if (!provider || !getSpeechProvider(provider, cfg)) {
       respond(
         false,
         undefined,

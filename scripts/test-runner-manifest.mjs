@@ -1,5 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
+import { normalizeTrackedRepoPath, tryReadJsonFile } from "./test-report-utils.mjs";
 
 export const behaviorManifestPath = "test/fixtures/test-parallel.behavior.json";
 export const unitTimingManifestPath = "test/fixtures/test-timings.unit.json";
@@ -16,27 +15,6 @@ const defaultMemoryHotspotManifest = {
   files: {},
 };
 
-const readJson = (filePath, fallback) => {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return fallback;
-  }
-};
-
-const normalizeRepoPath = (value) => value.split(path.sep).join("/");
-const repoRoot = path.resolve(process.cwd());
-const normalizeTrackedRepoPath = (value) => {
-  const normalizedValue = typeof value === "string" ? value : String(value ?? "");
-  const repoRelative = path.isAbsolute(normalizedValue)
-    ? path.relative(repoRoot, path.resolve(normalizedValue))
-    : normalizedValue;
-  if (path.isAbsolute(repoRelative) || repoRelative.startsWith("..") || repoRelative === "") {
-    return normalizeRepoPath(normalizedValue);
-  }
-  return normalizeRepoPath(repoRelative);
-};
-
 const normalizeManifestEntries = (entries) =>
   entries
     .map((entry) =>
@@ -49,21 +27,45 @@ const normalizeManifestEntries = (entries) =>
     )
     .filter((entry) => entry.file.length > 0);
 
+const mergeManifestEntries = (section, keys) => {
+  const merged = [];
+  const seenFiles = new Set();
+  for (const key of keys) {
+    const normalizedEntries = normalizeManifestEntries(section?.[key] ?? []);
+    for (const entry of normalizedEntries) {
+      if (seenFiles.has(entry.file)) {
+        continue;
+      }
+      seenFiles.add(entry.file);
+      merged.push(entry);
+    }
+  }
+  return merged;
+};
+
 export function loadTestRunnerBehavior() {
-  const raw = readJson(behaviorManifestPath, {});
+  const raw = tryReadJsonFile(behaviorManifestPath, {});
   const unit = raw.unit ?? {};
+  const base = raw.base ?? {};
+  const extensions = raw.extensions ?? {};
   return {
+    base: {
+      threadPinned: mergeManifestEntries(base, ["threadPinned", "threadSingleton"]),
+    },
     unit: {
-      isolated: normalizeManifestEntries(unit.isolated ?? []),
-      singletonIsolated: normalizeManifestEntries(unit.singletonIsolated ?? []),
-      threadSingleton: normalizeManifestEntries(unit.threadSingleton ?? []),
-      vmForkSingleton: normalizeManifestEntries(unit.vmForkSingleton ?? []),
+      isolated: mergeManifestEntries(unit, ["isolated"]),
+      forkBatched: mergeManifestEntries(unit, ["forkBatched", "singletonIsolated"]),
+      threadPinned: mergeManifestEntries(unit, ["threadPinned", "threadSingleton"]),
+      vmForkPinned: mergeManifestEntries(unit, ["vmForkPinned", "vmForkSingleton"]),
+    },
+    extensions: {
+      isolated: mergeManifestEntries(extensions, ["isolated", "singletonIsolated"]),
     },
   };
 }
 
 export function loadUnitTimingManifest() {
-  const raw = readJson(unitTimingManifestPath, defaultTimingManifest);
+  const raw = tryReadJsonFile(unitTimingManifestPath, defaultTimingManifest);
   const defaultDurationMs =
     Number.isFinite(raw.defaultDurationMs) && raw.defaultDurationMs > 0
       ? raw.defaultDurationMs
@@ -100,7 +102,7 @@ export function loadUnitTimingManifest() {
 }
 
 export function loadUnitMemoryHotspotManifest() {
-  const raw = readJson(unitMemoryHotspotManifestPath, defaultMemoryHotspotManifest);
+  const raw = tryReadJsonFile(unitMemoryHotspotManifestPath, defaultMemoryHotspotManifest);
   const defaultMinDeltaKb =
     Number.isFinite(raw.defaultMinDeltaKb) && raw.defaultMinDeltaKb > 0
       ? raw.defaultMinDeltaKb
