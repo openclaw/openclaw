@@ -161,7 +161,7 @@ const baseCfg = {
   acp: {
     enabled: true,
     dispatch: { enabled: true },
-    backend: "acpx-plugin",
+    backend: "acpx",
   },
   channels: {
     discord: {
@@ -222,7 +222,7 @@ function createAcpSessionEntry(options?: {
     sessionKey,
     storeSessionKey: sessionKey,
     acp: {
-      backend: "acpx-plugin",
+      backend: "acpx",
       agent: "codex",
       runtimeSessionName: "runtime-1",
       ...(options?.identity ? { identity: options.identity } : {}),
@@ -442,7 +442,7 @@ describe("/acp command", () => {
       sessionId: "session-1",
       updatedAt: Date.now(),
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "run-1",
         mode: "persistent",
@@ -469,7 +469,7 @@ describe("/acp command", () => {
       .mockReset()
       .mockImplementation(async (input: { sessionKey: string }) => ({
         sessionKey: input.sessionKey,
-        backend: "acpx-plugin",
+        backend: "acpx",
         runtimeSessionName: `${input.sessionKey}:runtime`,
       }));
     hoisted.runTurnMock.mockReset().mockImplementation(async function* () {
@@ -492,7 +492,7 @@ describe("/acp command", () => {
     });
 
     const runtimeBackend = {
-      id: "acpx-plugin",
+      id: "acpx",
       runtime: {
         ensureSession: hoisted.ensureSessionMock,
         runTurn: hoisted.runTurnMock,
@@ -523,7 +523,7 @@ describe("/acp command", () => {
   it("spawns an ACP session and binds a Discord thread", async () => {
     hoisted.ensureSessionMock.mockResolvedValueOnce({
       sessionKey: "agent:codex:acp:s1",
-      backend: "acpx-plugin",
+      backend: "acpx",
       runtimeSessionName: "agent:codex:acp:s1:runtime",
       agentSessionId: "codex-inner-1",
       backendSessionId: "acpx-1",
@@ -533,7 +533,7 @@ describe("/acp command", () => {
 
     expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
     expect(result?.reply?.text).toContain("Created thread thread-created and bound it");
-    expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("acpx-plugin");
+    expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("acpx");
     expect(hoisted.ensureSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         agent: "codex",
@@ -571,7 +571,7 @@ describe("/acp command", () => {
       | undefined;
     expect(upsertArgs?.sessionKey).toMatch(/^agent:codex:acp:/);
     const seededWithoutEntry = upsertArgs?.mutate(undefined, undefined);
-    expect(seededWithoutEntry?.backend).toBe("acpx-plugin");
+    expect(seededWithoutEntry?.backend).toBe("acpx");
     expect(seededWithoutEntry?.runtimeSessionName).toContain(":runtime");
   });
 
@@ -794,7 +794,7 @@ describe("/acp command", () => {
     expect(hoisted.cancelMock).toHaveBeenCalledWith({
       handle: expect.objectContaining({
         sessionKey: defaultAcpSessionKey,
-        backend: "acpx-plugin",
+        backend: "acpx",
       }),
       reason: "manual-cancel",
     });
@@ -904,7 +904,7 @@ describe("/acp command", () => {
         updatedAt: Date.now(),
         label: "codex-main",
         acp: {
-          backend: "acpx-plugin",
+          backend: "acpx",
           agent: "codex",
           runtimeSessionName: "runtime-1",
           mode: "persistent",
@@ -940,7 +940,7 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("ACP status:");
     expect(result?.reply?.text).toContain(`session: ${defaultAcpSessionKey}`);
     expect(result?.reply?.text).toContain("agent session id: codex-sid-1");
-    expect(result?.reply?.text).toContain("acpx-plugin session id: acpx-sid-1");
+    expect(result?.reply?.text).toContain("acpx session id: acpx-sid-1");
     expect(result?.reply?.text).toContain("capabilities:");
     expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
   });
@@ -1056,7 +1056,7 @@ describe("/acp command", () => {
     hoisted.requireAcpRuntimeBackendMock.mockImplementation(() => {
       throw new AcpRuntimeError(
         "ACP_BACKEND_MISSING",
-        "ACP runtime backend is not configured. Install and enable the acpx-plugin runtime plugin.",
+        "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
       );
     });
 

@@ -29,24 +29,24 @@ describe("ACP install hints", () => {
     );
   });
 
-  it("uses local acpx-plugin extension path when present", () => {
+  it("uses local acpx extension path when present", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acp-install-hint-"));
     tempDirs.push(tempRoot);
-    fs.mkdirSync(path.join(tempRoot, "extensions", "acpx-plugin"), { recursive: true });
+    fs.mkdirSync(path.join(tempRoot, "extensions", "acpx"), { recursive: true });
     process.chdir(tempRoot);
 
-    const cfg = withAcpConfig({ backend: "acpx-plugin" });
+    const cfg = withAcpConfig({ backend: "acpx" });
     const hint = resolveAcpInstallCommandHint(cfg);
     expect(hint).toContain("openclaw plugins install ");
-    expect(hint).toContain(path.join("extensions", "acpx-plugin"));
+    expect(hint).toContain(path.join("extensions", "acpx"));
   });
 
-  it("falls back to scoped install hint for acpx-plugin when local extension is absent", () => {
+  it("falls back to scoped install hint for acpx when local extension is absent", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acp-install-hint-"));
     tempDirs.push(tempRoot);
     process.chdir(tempRoot);
 
-    const cfg = withAcpConfig({ backend: "acpx-plugin" });
+    const cfg = withAcpConfig({ backend: "acpx" });
     expect(resolveAcpInstallCommandHint(cfg)).toBe(
       "openclaw plugins install @openclaw/acpx-plugin",
     );

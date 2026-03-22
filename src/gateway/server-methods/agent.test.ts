@@ -300,7 +300,7 @@ async function invokeAgentIdentityGet(
 describe("gateway agent handler", () => {
   it("preserves ACP metadata from the current stored session entry", async () => {
     const existingAcpMeta = {
-      backend: "acpx-plugin",
+      backend: "acpx",
       agent: "codex",
       runtimeSessionName: "runtime-1",
       mode: "persistent",

@@ -314,7 +314,7 @@ describe("session store lock (Promise chain mutex)", () => {
   it("preserves ACP metadata when replacing a session entry wholesale", async () => {
     const key = "agent:codex:acp:binding:discord:default:feedface";
     const acp = {
-      backend: "acpx-plugin",
+      backend: "acpx",
       agent: "codex",
       runtimeSessionName: "codex-discord",
       mode: "persistent" as const,
@@ -351,7 +351,7 @@ describe("session store lock (Promise chain mutex)", () => {
         sessionId: "sess-acp-clear",
         updatedAt: 100,
         acp: {
-          backend: "acpx-plugin",
+          backend: "acpx",
           agent: "codex",
           runtimeSessionName: "codex-discord",
           mode: "persistent",

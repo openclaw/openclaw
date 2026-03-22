@@ -134,7 +134,7 @@ Example:
           type: "acp",
           acp: {
             agent: "codex",
-            backend: "acpx-plugin",
+            backend: "acpx",
             mode: "persistent",
             cwd: "/workspace/openclaw",
           },
@@ -144,7 +144,7 @@ Example:
         id: "claude",
         runtime: {
           type: "acp",
-          acp: { agent: "claude", backend: "acpx-plugin", mode: "persistent" },
+          acp: { agent: "claude", backend: "acpx", mode: "persistent" },
         },
       },
     ],
@@ -462,7 +462,7 @@ Core ACP baseline:
     enabled: true,
     // Optional. Default is true; set false to pause ACP dispatch while keeping /acp controls.
     dispatch: { enabled: true },
-    backend: "acpx-plugin",
+    backend: "acpx",
     defaultAgent: "codex",
     allowedAgents: ["pi", "claude", "codex", "opencode", "gemini", "kimi"],
     maxConcurrentSessions: 8,
@@ -511,13 +511,13 @@ Install and enable plugin:
 
 ```bash
 openclaw plugins install @openclaw/acpx-plugin
-openclaw config set plugins.entries.acpx-plugin.enabled true
+openclaw config set plugins.entries.acpx.enabled true
 ```
 
 Local workspace install during development:
 
 ```bash
-openclaw plugins install ./extensions/acpx-plugin
+openclaw plugins install ./extensions/acpx
 ```
 
 Then verify backend health:
@@ -530,7 +530,7 @@ Then verify backend health:
 
 By default, the acpx backend plugin package (`@openclaw/acpx-plugin`) uses the plugin-local pinned binary:
 
-1. Command defaults to `extensions/acpx-plugin/node_modules/.bin/acpx`.
+1. Command defaults to `extensions/acpx/node_modules/.bin/acpx`.
 2. Expected version defaults to the extension pin.
 3. Startup registers ACP backend immediately as not-ready.
 4. A background ensure job verifies `acpx --version`.
@@ -593,8 +593,8 @@ Controls what happens when a permission prompt would be shown but no interactive
 Set via plugin config:
 
 ```bash
-openclaw config set plugins.entries.acpx-plugin.config.permissionMode approve-all
-openclaw config set plugins.entries.acpx-plugin.config.nonInteractivePermissions fail
+openclaw config set plugins.entries.acpx.config.permissionMode approve-all
+openclaw config set plugins.entries.acpx.config.nonInteractivePermissions fail
 ```
 
 Restart the gateway after changing these values.
@@ -618,6 +618,6 @@ Restart the gateway after changing these values.
 | `Sandboxed sessions cannot spawn ACP sessions ...`                       | ACP runtime is host-side; requester session is sandboxed.                       | Use `runtime="subagent"` from sandboxed sessions, or run ACP spawn from a non-sandboxed session.                                                                  |
 | `sessions_spawn sandbox="require" is unsupported for runtime="acp" ...`  | `sandbox="require"` requested for ACP runtime.                                  | Use `runtime="subagent"` for required sandboxing, or use ACP with `sandbox="inherit"` from a non-sandboxed session.                                               |
 | Missing ACP metadata for bound session                                   | Stale/deleted ACP session metadata.                                             | Recreate with `/acp spawn`, then rebind/focus thread.                                                                                                             |
-| `AcpRuntimeError: Permission prompt unavailable in non-interactive mode` | `permissionMode` blocks writes/exec in non-interactive ACP session.             | Set `plugins.entries.acpx-plugin.config.permissionMode` to `approve-all` and restart gateway. See [Permission configuration](#permission-configuration).          |
+| `AcpRuntimeError: Permission prompt unavailable in non-interactive mode` | `permissionMode` blocks writes/exec in non-interactive ACP session.             | Set `plugins.entries.acpx.config.permissionMode` to `approve-all` and restart gateway. See [Permission configuration](#permission-configuration).                 |
 | ACP session fails early with little output                               | Permission prompts are blocked by `permissionMode`/`nonInteractivePermissions`. | Check gateway logs for `AcpRuntimeError`. For full permissions, set `permissionMode=approve-all`; for graceful degradation, set `nonInteractivePermissions=deny`. |
 | ACP session stalls indefinitely after completing work                    | Harness process finished but ACP session did not report completion.             | Monitor with `ps aux \| grep acpx`; kill stale processes manually.                                                                                                |

@@ -50,7 +50,7 @@
         "advanced"
       ],
       "label": "ACP Backend",
-      "help": "Default ACP runtime backend id (for example: acpx-plugin). Must match a registered ACP runtime plugin backend.",
+      "help": "Default ACP runtime backend id (for example: acpx). Must match a registered ACP runtime plugin backend.",
       "hasChildren": false
     },
     {
@@ -6864,16 +6864,6 @@
         "allowlist",
         "full"
       ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "agents.list.*.tools.exec.strictInlineEval",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -42157,46 +42147,6 @@
       "hasChildren": true
     },
     {
-      "path": "hooks.internal.installs.*.clawhubChannel",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "hooks.internal.installs.*.clawhubFamily",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "hooks.internal.installs.*.clawhubPackage",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "hooks.internal.installs.*.clawhubUrl",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "hooks.internal.installs.*.hooks",
       "kind": "core",
       "type": "array",
@@ -45978,7 +45928,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin",
+      "path": "plugins.entries.acpx",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -45988,11 +45938,11 @@
         "advanced"
       ],
       "label": "ACPX Runtime",
-      "help": "ACP runtime backend powered by acpx with configurable command path and version policy. (plugin: acpx-plugin)",
+      "help": "ACP runtime backend powered by acpx with configurable command path and version policy. (plugin: acpx)",
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.acpx-plugin.config",
+      "path": "plugins.entries.acpx.config",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46002,11 +45952,11 @@
         "advanced"
       ],
       "label": "ACPX Runtime Config",
-      "help": "Plugin-defined config payload for acpx-plugin.",
+      "help": "Plugin-defined config payload for acpx.",
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.command",
+      "path": "plugins.entries.acpx.config.command",
       "kind": "plugin",
       "type": "string",
       "required": false,
@@ -46020,7 +45970,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.cwd",
+      "path": "plugins.entries.acpx.config.cwd",
       "kind": "plugin",
       "type": "string",
       "required": false,
@@ -46034,7 +45984,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.expectedVersion",
+      "path": "plugins.entries.acpx.config.expectedVersion",
       "kind": "plugin",
       "type": "string",
       "required": false,
@@ -46048,7 +45998,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.mcpServers",
+      "path": "plugins.entries.acpx.config.mcpServers",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46062,7 +46012,7 @@
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.mcpServers.*",
+      "path": "plugins.entries.acpx.config.mcpServers.*",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46072,7 +46022,7 @@
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.mcpServers.*.args",
+      "path": "plugins.entries.acpx.config.mcpServers.*.args",
       "kind": "plugin",
       "type": "array",
       "required": false,
@@ -46082,7 +46032,7 @@
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.mcpServers.*.args.*",
+      "path": "plugins.entries.acpx.config.mcpServers.*.args.*",
       "kind": "plugin",
       "type": "string",
       "required": false,
@@ -46092,7 +46042,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.mcpServers.*.command",
+      "path": "plugins.entries.acpx.config.mcpServers.*.command",
       "kind": "plugin",
       "type": "string",
       "required": true,
@@ -46102,7 +46052,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.mcpServers.*.env",
+      "path": "plugins.entries.acpx.config.mcpServers.*.env",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46112,7 +46062,7 @@
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.mcpServers.*.env.*",
+      "path": "plugins.entries.acpx.config.mcpServers.*.env.*",
       "kind": "plugin",
       "type": "string",
       "required": false,
@@ -46122,7 +46072,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.nonInteractivePermissions",
+      "path": "plugins.entries.acpx.config.nonInteractivePermissions",
       "kind": "plugin",
       "type": "string",
       "required": false,
@@ -46140,7 +46090,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.permissionMode",
+      "path": "plugins.entries.acpx.config.permissionMode",
       "kind": "plugin",
       "type": "string",
       "required": false,
@@ -46159,7 +46109,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.queueOwnerTtlSeconds",
+      "path": "plugins.entries.acpx.config.queueOwnerTtlSeconds",
       "kind": "plugin",
       "type": "number",
       "required": false,
@@ -46174,7 +46124,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.strictWindowsCmdWrapper",
+      "path": "plugins.entries.acpx.config.strictWindowsCmdWrapper",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -46188,7 +46138,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin.config.timeoutSeconds",
+      "path": "plugins.entries.acpx.config.timeoutSeconds",
       "kind": "plugin",
       "type": "number",
       "required": false,
@@ -46203,7 +46153,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin.enabled",
+      "path": "plugins.entries.acpx.enabled",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -46216,7 +46166,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin.hooks",
+      "path": "plugins.entries.acpx.hooks",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46230,7 +46180,7 @@
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.acpx-plugin.hooks.allowPromptInjection",
+      "path": "plugins.entries.acpx.hooks.allowPromptInjection",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -46244,7 +46194,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin.subagent",
+      "path": "plugins.entries.acpx.subagent",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46258,7 +46208,7 @@
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.acpx-plugin.subagent.allowedModels",
+      "path": "plugins.entries.acpx.subagent.allowedModels",
       "kind": "plugin",
       "type": "array",
       "required": false,
@@ -46272,7 +46222,7 @@
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.acpx-plugin.subagent.allowedModels.*",
+      "path": "plugins.entries.acpx.subagent.allowedModels.*",
       "kind": "plugin",
       "type": "string",
       "required": false,
@@ -46282,7 +46232,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.acpx-plugin.subagent.allowModelOverride",
+      "path": "plugins.entries.acpx.subagent.allowModelOverride",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -57725,46 +57675,6 @@
       "hasChildren": true
     },
     {
-      "path": "plugins.installs.*.clawhubChannel",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.installs.*.clawhubFamily",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.installs.*.clawhubPackage",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.installs.*.clawhubUrl",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "plugins.installs.*.installedAt",
       "kind": "core",
       "type": "string",
@@ -60518,20 +60428,6 @@
       ],
       "label": "Exec Security",
       "help": "Execution security posture selector controlling sandbox/approval expectations for command execution. Keep strict security mode for untrusted prompts and relax only for trusted operator workflows.",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.exec.strictInlineEval",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Require Inline-Eval Approval",
-      "help": "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
       "hasChildren": false
     },
     {

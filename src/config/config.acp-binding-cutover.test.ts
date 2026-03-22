@@ -13,7 +13,7 @@ describe("ACP binding cutover schema", () => {
               type: "acp",
               acp: {
                 agent: "codex",
-                backend: "acpx-plugin",
+                backend: "acpx",
                 mode: "persistent",
                 cwd: "/workspace/openclaw",
               },
@@ -37,7 +37,7 @@ describe("ACP binding cutover schema", () => {
           },
           acp: {
             label: "codex-main",
-            backend: "acpx-plugin",
+            backend: "acpx",
           },
         },
       ],

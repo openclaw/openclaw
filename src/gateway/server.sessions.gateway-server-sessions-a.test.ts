@@ -1159,7 +1159,7 @@ describe("gateway server sessions", () => {
           sessionId: "sess-acp",
           updatedAt: Date.now(),
           acp: {
-            backend: "acpx-plugin",
+            backend: "acpx",
             agent: "codex",
             runtimeSessionName: "runtime:delete",
             mode: "persistent",
@@ -1170,11 +1170,11 @@ describe("gateway server sessions", () => {
       },
     });
     acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime: {
         ensureSession: vi.fn(async () => ({
           sessionKey: "agent:main:discord:group:dev",
-          backend: "acpx-plugin",
+          backend: "acpx",
           runtimeSessionName: "runtime:delete",
         })),
         runTurn: vi.fn(async function* () {}),
@@ -1192,7 +1192,7 @@ describe("gateway server sessions", () => {
     expect(acpRuntimeMocks.close).toHaveBeenCalledWith({
       handle: {
         sessionKey: "agent:main:discord:group:dev",
-        backend: "acpx-plugin",
+        backend: "acpx",
         runtimeSessionName: "runtime:delete",
       },
       reason: "session-delete",
@@ -1200,7 +1200,7 @@ describe("gateway server sessions", () => {
     expect(acpRuntimeMocks.cancel).toHaveBeenCalledWith({
       handle: {
         sessionKey: "agent:main:discord:group:dev",
-        backend: "acpx-plugin",
+        backend: "acpx",
         runtimeSessionName: "runtime:delete",
       },
       reason: "session-delete",
@@ -1398,7 +1398,7 @@ describe("gateway server sessions", () => {
           sessionId: "sess-main",
           updatedAt: Date.now(),
           acp: {
-            backend: "acpx-plugin",
+            backend: "acpx",
             agent: "codex",
             runtimeSessionName: "runtime:reset",
             mode: "persistent",
@@ -1409,11 +1409,11 @@ describe("gateway server sessions", () => {
       },
     });
     acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime: {
         ensureSession: vi.fn(async () => ({
           sessionKey: "agent:main:main",
-          backend: "acpx-plugin",
+          backend: "acpx",
           runtimeSessionName: "runtime:reset",
         })),
         runTurn: vi.fn(async function* () {}),
@@ -1430,7 +1430,7 @@ describe("gateway server sessions", () => {
     expect(acpRuntimeMocks.close).toHaveBeenCalledWith({
       handle: {
         sessionKey: "agent:main:main",
-        backend: "acpx-plugin",
+        backend: "acpx",
         runtimeSessionName: "runtime:reset",
       },
       reason: "session-reset",

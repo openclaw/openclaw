@@ -239,7 +239,7 @@ describe("config plugin validation", () => {
       {
         agents: { list: [{ id: "pi" }] },
         plugins: {
-          entries: { "acpx-plugin": { enabled: true } },
+          entries: { acpx: { enabled: true } },
         },
       },
       {

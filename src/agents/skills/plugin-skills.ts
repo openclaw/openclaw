@@ -48,7 +48,7 @@ export function resolvePluginSkillDirs(params: {
       continue;
     }
     // ACP router skills should not be attached when ACP is explicitly disabled.
-    if (!acpEnabled && record.id === "acpx-plugin") {
+    if (!acpEnabled && record.id === "acpx") {
       continue;
     }
     const memoryDecision = resolveMemorySlotDecision({

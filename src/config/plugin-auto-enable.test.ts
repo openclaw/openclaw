@@ -352,7 +352,7 @@ describe("applyPluginAutoEnable", () => {
       env: {},
     });
 
-    expect(result.config.plugins?.entries?.["acpx-plugin"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.acpx?.enabled).toBe(true);
     expect(result.changes.join("\n")).toContain("ACP runtime configured, enabled automatically.");
   });
 
@@ -367,7 +367,7 @@ describe("applyPluginAutoEnable", () => {
       env: {},
     });
 
-    expect(result.config.plugins?.entries?.["acpx-plugin"]?.enabled).toBeUndefined();
+    expect(result.config.plugins?.entries?.acpx?.enabled).toBeUndefined();
   });
 
   it("skips when plugins are globally disabled", () => {

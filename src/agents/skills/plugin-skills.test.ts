@@ -22,7 +22,7 @@ function buildRegistry(params: { acpxRoot: string; helperRoot: string }): Plugin
     diagnostics: [],
     plugins: [
       {
-        id: "acpx-plugin",
+        id: "acpx",
         name: "ACPX Runtime",
         channels: [],
         providers: [],

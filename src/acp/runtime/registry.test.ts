@@ -31,10 +31,10 @@ describe("acp runtime registry", () => {
 
   it("registers and resolves backends by id", () => {
     const runtime = createRuntimeStub();
-    registerAcpRuntimeBackend({ id: "acpx-plugin", runtime });
+    registerAcpRuntimeBackend({ id: "acpx", runtime });
 
-    const backend = getAcpRuntimeBackend("acpx-plugin");
-    expect(backend?.id).toBe("acpx-plugin");
+    const backend = getAcpRuntimeBackend("acpx");
+    expect(backend?.id).toBe("acpx");
     expect(backend?.runtime).toBe(runtime);
   });
 
@@ -64,13 +64,13 @@ describe("acp runtime registry", () => {
 
   it("throws a typed unavailable error when the requested backend is unhealthy", () => {
     registerAcpRuntimeBackend({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime: createRuntimeStub(),
       healthy: () => false,
     });
 
     try {
-      requireAcpRuntimeBackend("acpx-plugin");
+      requireAcpRuntimeBackend("acpx");
       throw new Error("expected requireAcpRuntimeBackend to throw");
     } catch (err) {
       expect(err).toBeInstanceOf(AcpRuntimeError);
@@ -79,21 +79,21 @@ describe("acp runtime registry", () => {
   });
 
   it("unregisters a backend by id", () => {
-    registerAcpRuntimeBackend({ id: "acpx-plugin", runtime: createRuntimeStub() });
-    unregisterAcpRuntimeBackend("acpx-plugin");
-    expect(getAcpRuntimeBackend("acpx-plugin")).toBeNull();
+    registerAcpRuntimeBackend({ id: "acpx", runtime: createRuntimeStub() });
+    unregisterAcpRuntimeBackend("acpx");
+    expect(getAcpRuntimeBackend("acpx")).toBeNull();
   });
 
   it("keeps backend state on a global registry for cross-loader access", () => {
     const runtime = createRuntimeStub();
     const sharedState = __testing.getAcpRuntimeRegistryGlobalStateForTests();
 
-    sharedState.backendsById.set("acpx-plugin", {
-      id: "acpx-plugin",
+    sharedState.backendsById.set("acpx", {
+      id: "acpx",
       runtime,
     });
 
-    const backend = getAcpRuntimeBackend("acpx-plugin");
+    const backend = getAcpRuntimeBackend("acpx");
     expect(backend?.runtime).toBe(runtime);
   });
 });

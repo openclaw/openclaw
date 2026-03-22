@@ -38,7 +38,7 @@ export type AcpConfig = {
   /** Global ACP runtime gate. */
   enabled?: boolean;
   dispatch?: AcpDispatchConfig;
-  /** Backend id registered by ACP runtime plugin (for example: acpx-plugin). */
+  /** Backend id registered by ACP runtime plugin (for example: acpx). */
   backend?: string;
   defaultAgent?: string;
   allowedAgents?: string[];

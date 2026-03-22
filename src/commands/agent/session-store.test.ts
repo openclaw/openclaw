@@ -9,7 +9,7 @@ import { updateSessionStoreAfterAgentRun } from "./session-store.js";
 
 function acpMeta() {
   return {
-    backend: "acpx-plugin",
+    backend: "acpx",
     agent: "codex",
     runtimeSessionName: "runtime-1",
     mode: "persistent" as const,

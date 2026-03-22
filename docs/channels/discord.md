@@ -711,7 +711,7 @@ Default slash command settings:
           type: "acp",
           acp: {
             agent: "codex",
-            backend: "acpx-plugin",
+            backend: "acpx",
             mode: "persistent",
             cwd: "/workspace/openclaw",
           },

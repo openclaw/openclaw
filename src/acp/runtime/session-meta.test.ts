@@ -45,7 +45,7 @@ describe("listAcpSessionEntries", () => {
       "agent:ops:acp:s1": {
         updatedAt: 123,
         acp: {
-          backend: "acpx-plugin",
+          backend: "acpx",
           agent: "ops",
           mode: "persistent",
           state: "idle",

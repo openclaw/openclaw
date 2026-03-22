@@ -555,7 +555,7 @@ Use top-level typed ACP bindings to pin a Feishu DM or topic conversation to a p
           type: "acp",
           acp: {
             agent: "codex",
-            backend: "acpx-plugin",
+            backend: "acpx",
             mode: "persistent",
             cwd: "/workspace/openclaw",
           },

@@ -225,7 +225,7 @@ function createAcpRuntime(events: Array<Record<string, unknown>>) {
       async (input: { sessionKey: string; mode: string; agent: string }) =>
         ({
           sessionKey: input.sessionKey,
-          backend: "acpx-plugin",
+          backend: "acpx",
           runtimeSessionName: `${input.sessionKey}:${input.mode}`,
         }) as { sessionKey: string; backend: string; runtimeSessionName: string },
     ),
@@ -933,7 +933,7 @@ describe("dispatchReplyFromConfig", () => {
       storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "runtime:1",
         mode: "persistent",
@@ -942,7 +942,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
     acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime,
     });
 
@@ -991,7 +991,7 @@ describe("dispatchReplyFromConfig", () => {
         async (input: { sessionKey: string; mode: string; agent: string }) =>
           ({
             sessionKey: input.sessionKey,
-            backend: "acpx-plugin",
+            backend: "acpx",
             runtimeSessionName: `${input.sessionKey}:${input.mode}`,
           }) as { sessionKey: string; backend: string; runtimeSessionName: string },
       ),
@@ -1017,7 +1017,7 @@ describe("dispatchReplyFromConfig", () => {
       storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "runtime:1",
         mode: "persistent",
@@ -1026,7 +1026,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
     acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime,
     });
 
@@ -1070,7 +1070,7 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "text_delta", text: "hello" }, { type: "done" }]);
     const pendingAcp = {
-      backend: "acpx-plugin",
+      backend: "acpx",
       agent: "codex",
       runtimeSessionName: "runtime:1",
       identity: {
@@ -1104,7 +1104,7 @@ describe("dispatchReplyFromConfig", () => {
       };
     });
     acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime,
     });
 
@@ -1130,7 +1130,7 @@ describe("dispatchReplyFromConfig", () => {
     const finalPayload = finalCalls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.text).toContain("Session ids resolved");
     expect(finalPayload?.text).toContain("agent session id: inner-123");
-    expect(finalPayload?.text).toContain("acpx-plugin session id: acpx-123");
+    expect(finalPayload?.text).toContain("acpx session id: acpx-123");
     expect(finalPayload?.text).toContain("codex resume inner-123");
   });
 
@@ -1138,7 +1138,7 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "text_delta", text: "hello" }, { type: "done" }]);
     const pendingAcp = {
-      backend: "acpx-plugin",
+      backend: "acpx",
       agent: "codex",
       runtimeSessionName: "runtime:1",
       identity: {
@@ -1172,7 +1172,7 @@ describe("dispatchReplyFromConfig", () => {
       };
     });
     acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime,
     });
     sessionBindingMocks.listBySession.mockReturnValue([
@@ -1213,7 +1213,7 @@ describe("dispatchReplyFromConfig", () => {
     const finalPayload = finalCalls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.text).toContain("Session ids resolved");
     expect(finalPayload?.text).toContain("agent session id: inner-123");
-    expect(finalPayload?.text).toContain("acpx-plugin session id: acpx-123");
+    expect(finalPayload?.text).toContain("acpx session id: acpx-123");
   });
 
   it("honors send-policy deny before ACP runtime dispatch", async () => {
@@ -1229,7 +1229,7 @@ describe("dispatchReplyFromConfig", () => {
       storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "runtime:1",
         mode: "persistent",
@@ -1238,7 +1238,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
     acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime,
     });
 
@@ -1278,7 +1278,7 @@ describe("dispatchReplyFromConfig", () => {
       storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "runtime:1",
         mode: "persistent",
@@ -1287,7 +1287,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
     acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime,
     });
 
@@ -1335,7 +1335,7 @@ describe("dispatchReplyFromConfig", () => {
       storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "runtime:1",
         mode: "persistent",
@@ -1344,7 +1344,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
     acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime,
     });
 
@@ -1399,7 +1399,7 @@ describe("dispatchReplyFromConfig", () => {
       storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "runtime:1",
         mode: "persistent",
@@ -1408,7 +1408,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
     acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime,
     });
 
@@ -1455,7 +1455,7 @@ describe("dispatchReplyFromConfig", () => {
       storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "runtime:1",
         mode: "persistent",
@@ -1464,7 +1464,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
     acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime,
     });
 
@@ -1508,7 +1508,7 @@ describe("dispatchReplyFromConfig", () => {
       storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "runtime:1",
         mode: "persistent",
@@ -1517,7 +1517,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
     acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime,
     });
 
@@ -1574,7 +1574,7 @@ describe("dispatchReplyFromConfig", () => {
       storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "runtime:1",
         mode: "persistent",
@@ -1583,7 +1583,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
     acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime,
     });
 
@@ -1625,7 +1625,7 @@ describe("dispatchReplyFromConfig", () => {
       storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "runtime:1",
         mode: "persistent",
@@ -1634,7 +1634,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
     acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime,
     });
 
@@ -1675,7 +1675,7 @@ describe("dispatchReplyFromConfig", () => {
       storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "runtime:1",
         mode: "persistent",
@@ -1684,7 +1684,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
     acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime,
     });
 
@@ -1728,7 +1728,7 @@ describe("dispatchReplyFromConfig", () => {
       storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "runtime:oneshot",
         mode: "oneshot",
@@ -1737,7 +1737,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
     acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx-plugin",
+      id: "acpx",
       runtime,
     });
 
@@ -1773,7 +1773,7 @@ describe("dispatchReplyFromConfig", () => {
       storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "runtime:1",
         mode: "persistent",
@@ -1843,7 +1843,7 @@ describe("dispatchReplyFromConfig", () => {
       storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
-        backend: "acpx-plugin",
+        backend: "acpx",
         agent: "codex",
         runtimeSessionName: "runtime:1",
         mode: "persistent",
@@ -1854,7 +1854,7 @@ describe("dispatchReplyFromConfig", () => {
     acpMocks.requireAcpRuntimeBackend.mockImplementation(() => {
       throw new AcpRuntimeErrorClass(
         "ACP_BACKEND_MISSING",
-        "ACP runtime backend is not configured. Install and enable the acpx-plugin runtime plugin.",
+        "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
       );
     });
 
@@ -1879,7 +1879,7 @@ describe("dispatchReplyFromConfig", () => {
     const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.text).toContain("ACP error (ACP_BACKEND_MISSING)");
-    expect(finalPayload?.text).toContain("Install and enable the acpx-plugin runtime plugin");
+    expect(finalPayload?.text).toContain("Install and enable the acpx runtime plugin");
   });
 
   it("deduplicates inbound messages by MessageSid and origin", async () => {

@@ -296,7 +296,7 @@ function mockReadySession(params: {
     kind: "ready",
     sessionKey,
     meta: {
-      backend: "acpx-plugin",
+      backend: "acpx",
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       runtimeSessionName: "existing",
       mode: params.spec.mode,
@@ -469,7 +469,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
       createTelegramGroupBinding({
         agentId: "claude",
         conversationId: "-1001234567890:topic:42",
-        acp: { backend: "acpx-plugin" },
+        acp: { backend: "acpx" },
       }),
     ]);
 
@@ -490,7 +490,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
     expect(canonical?.spec.conversationId).toBe("-1001234567890:topic:42");
     expect(splitIds?.spec.conversationId).toBe("-1001234567890:topic:42");
     expect(canonical?.spec.agentId).toBe("claude");
-    expect(canonical?.spec.backend).toBe("acpx-plugin");
+    expect(canonical?.spec.backend).toBe("acpx");
     expect(splitIds?.record.targetSessionKey).toBe(canonical?.record.targetSessionKey);
   });
 
@@ -556,7 +556,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
       createFeishuBinding({
         agentId: "claude",
         conversationId: "oc_group_chat:topic:om_topic_root",
-        acp: { backend: "acpx-plugin" },
+        acp: { backend: "acpx" },
       }),
     ]);
 
@@ -578,7 +578,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
       createFeishuBinding({
         agentId: "claude",
         conversationId: "oc_group_chat:topic:om_topic_root",
-        acp: { backend: "acpx-plugin" },
+        acp: { backend: "acpx" },
       }),
     ]);
 
@@ -592,7 +592,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
 
     expect(resolved?.spec.conversationId).toBe("oc_group_chat:topic:om_topic_root");
     expect(resolved?.spec.agentId).toBe("claude");
-    expect(resolved?.spec.backend).toBe("acpx-plugin");
+    expect(resolved?.spec.backend).toBe("acpx");
     expect(resolved?.record.conversation.conversationId).toBe("oc_group_chat:topic:om_topic_root");
   });
 
@@ -651,7 +651,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
                 type: "acp",
                 acp: {
                   agent: "codex",
-                  backend: "acpx-plugin",
+                  backend: "acpx",
                   mode: "oneshot",
                   cwd: "/workspace/repo-a",
                 },
@@ -667,7 +667,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
     expect(resolved?.spec.acpAgentId).toBe("codex");
     expect(resolved?.spec.mode).toBe("oneshot");
     expect(resolved?.spec.cwd).toBe("/workspace/repo-a");
-    expect(resolved?.spec.backend).toBe("acpx-plugin");
+    expect(resolved?.spec.backend).toBe("acpx");
   });
 
   it("derives configured binding cwd from an explicit agent workspace", () => {
@@ -696,7 +696,7 @@ describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {
       createDiscordBinding({
         agentId: "codex",
         conversationId: defaultDiscordConversationId,
-        acp: { backend: "acpx-plugin" },
+        acp: { backend: "acpx" },
       }),
     ]);
     const spec = resolveDiscordBindingSpecBySession(cfg);
@@ -704,7 +704,7 @@ describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {
     expect(spec?.channel).toBe("discord");
     expect(spec?.conversationId).toBe(defaultDiscordConversationId);
     expect(spec?.agentId).toBe("codex");
-    expect(spec?.backend).toBe("acpx-plugin");
+    expect(spec?.backend).toBe("acpx");
   });
 
   it("returns null for unknown session keys", () => {
@@ -739,7 +739,7 @@ describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {
       createFeishuBinding({
         agentId: "codex",
         conversationId: "user_123",
-        acp: { backend: "acpx-plugin" },
+        acp: { backend: "acpx" },
       }),
     ]);
     const resolved = persistentBindings.resolveConfiguredAcpBindingRecord({
@@ -756,7 +756,7 @@ describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {
     expect(spec?.channel).toBe("feishu");
     expect(spec?.conversationId).toBe("user_123");
     expect(spec?.agentId).toBe("codex");
-    expect(spec?.backend).toBe("acpx-plugin");
+    expect(spec?.backend).toBe("acpx");
   });
 });
 
@@ -872,7 +872,7 @@ describe("resetAcpSessionInPlace", () => {
         conversationId: "1478844424791396446",
         acp: {
           mode: "persistent",
-          backend: "acpx-plugin",
+          backend: "acpx",
         },
       }),
     ]);
@@ -882,7 +882,7 @@ describe("resetAcpSessionInPlace", () => {
       conversationId: "1478844424791396446",
       agentId: "claude",
       mode: "persistent",
-      backend: "acpx-plugin",
+      backend: "acpx",
     });
     managerMocks.resolveSession.mockReturnValue({ kind: "none" });
 
@@ -898,7 +898,7 @@ describe("resetAcpSessionInPlace", () => {
         sessionKey,
         agent: "claude",
         mode: "persistent",
-        backendId: "acpx-plugin",
+        backendId: "acpx",
       }),
     );
   });
@@ -909,7 +909,7 @@ describe("resetAcpSessionInPlace", () => {
       acp: {
         agent: "claude",
         mode: "persistent",
-        backend: "acpx-plugin",
+        backend: "acpx",
         runtimeOptions: { cwd: "/home/bob/clawd" },
       },
     });
@@ -942,7 +942,7 @@ describe("resetAcpSessionInPlace", () => {
       acp: {
         agent: "codex",
         mode: "persistent",
-        backend: "acpx-plugin",
+        backend: "acpx",
       },
     });
 
@@ -979,7 +979,7 @@ describe("resetAcpSessionInPlace", () => {
                 type: "acp",
                 acp: {
                   agent: "codex",
-                  backend: "acpx-plugin",
+                  backend: "acpx",
                   mode: "persistent",
                 },
               },
@@ -996,12 +996,12 @@ describe("resetAcpSessionInPlace", () => {
       agentId: "coding",
       acpAgentId: "codex",
       mode: "persistent",
-      backend: "acpx-plugin",
+      backend: "acpx",
     });
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
       acp: {
         mode: "persistent",
-        backend: "acpx-plugin",
+        backend: "acpx",
       },
     });
 
@@ -1016,7 +1016,7 @@ describe("resetAcpSessionInPlace", () => {
       expect.objectContaining({
         sessionKey,
         agent: "codex",
-        backendId: "acpx-plugin",
+        backendId: "acpx",
       }),
     );
   });

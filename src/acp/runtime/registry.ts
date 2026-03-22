@@ -90,7 +90,7 @@ export function requireAcpRuntimeBackend(id?: string): AcpRuntimeBackend {
   if (!backend) {
     throw new AcpRuntimeError(
       "ACP_BACKEND_MISSING",
-      "ACP runtime backend is not configured. Install and enable the acpx-plugin runtime plugin.",
+      "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
     );
   }
   if (!isBackendHealthy(backend)) {

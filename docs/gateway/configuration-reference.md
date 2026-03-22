@@ -1388,7 +1388,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
           type: "acp",
           acp: {
             agent: "codex",
-            backend: "acpx-plugin",
+            backend: "acpx",
             mode: "persistent",
             cwd: "/workspace/openclaw",
           },
