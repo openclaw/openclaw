@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
@@ -579,13 +580,13 @@ describe("local embedding ensureContext concurrency", () => {
           throw new Error("transient init failure");
         }
         if (params?.initializationDelayMs) {
-          await new Promise((r) => setTimeout(r, params.initializationDelayMs));
+          await sleep(params.initializationDelayMs);
         }
         return {
           loadModel: async (...modelArgs: unknown[]) => {
             loadModelSpy(...modelArgs);
             if (params?.initializationDelayMs) {
-              await new Promise((r) => setTimeout(r, params.initializationDelayMs));
+              await sleep(params.initializationDelayMs);
             }
             return {
               createEmbeddingContext: async () => {

@@ -4,6 +4,7 @@ import {
   shouldRetryTelegramTransportFallback,
 } from "../../extensions/telegram/src/fetch.js";
 import { makeProxyFetch } from "../../extensions/telegram/src/proxy.js";
+import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "../infra/net/undici-runtime.js";
 import { fetchRemoteMedia } from "./fetch.js";
 
 const undiciMocks = vi.hoisted(() => {
@@ -35,6 +36,11 @@ describe("fetchRemoteMedia telegram network policy", () => {
     undiciMocks.agentCtor.mockClear();
     undiciMocks.envHttpProxyAgentCtor.mockClear();
     undiciMocks.proxyAgentCtor.mockClear();
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: undiciMocks.agentCtor,
+      EnvHttpProxyAgent: undiciMocks.envHttpProxyAgentCtor,
+      ProxyAgent: undiciMocks.proxyAgentCtor,
+    };
   });
 
   function createTelegramFetchFailedError(code: string): Error {
@@ -44,6 +50,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
   }
 
   afterEach(() => {
+    Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
     vi.unstubAllEnvs();
   });
 
