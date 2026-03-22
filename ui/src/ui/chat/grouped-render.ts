@@ -24,45 +24,60 @@ type ImageBlock = {
 };
 
 function extractImages(message: unknown): ImageBlock[] {
-  const m = message as Record<string, unknown>;
-  const content = m.content;
   const images: ImageBlock[] = [];
+  const m = message as Record<string, unknown>;
+  collectImagesFromContent(m.content, images);
+  return images;
+}
 
-  if (Array.isArray(content)) {
-    for (const block of content) {
-      if (typeof block !== "object" || block === null) {
+function collectImagesFromContent(content: unknown, images: ImageBlock[]) {
+  if (!Array.isArray(content)) {
+    return;
+  }
+  for (const block of content) {
+    if (typeof block !== "object" || block === null) {
+      continue;
+    }
+    const b = block as Record<string, unknown>;
+    const type = typeof b.type === "string" ? b.type.toLowerCase() : "";
+
+    if (type === "image") {
+      // Handle source object format (from sendChatMessage)
+      const source = b.source as Record<string, unknown> | undefined;
+      if (source?.type === "base64" && typeof source.data === "string") {
+        const data = source.data;
+        const mediaType = (source.media_type as string) || "image/png";
+        // If data is already a data URL, use it directly
+        const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
+        images.push({ url });
         continue;
       }
-      const b = block as Record<string, unknown>;
-
-      if (b.type === "image") {
-        // Handle source object format (from sendChatMessage)
-        const source = b.source as Record<string, unknown> | undefined;
-        if (source?.type === "base64" && typeof source.data === "string") {
-          const data = source.data;
-          const mediaType = (source.media_type as string) || "image/png";
-          // If data is already a data URL, use it directly
-          const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
-          images.push({ url });
-        } else if (typeof b.data === "string") {
-          const data = b.data;
-          const mediaType = typeof b.mimeType === "string" ? b.mimeType : "image/png";
-          const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
-          images.push({ url });
-        } else if (typeof b.url === "string") {
-          images.push({ url: b.url });
-        }
-      } else if (b.type === "image_url") {
-        // OpenAI format
-        const imageUrl = b.image_url as Record<string, unknown> | undefined;
-        if (typeof imageUrl?.url === "string") {
-          images.push({ url: imageUrl.url });
-        }
+      if (typeof b.data === "string") {
+        const data = b.data;
+        const mediaType = typeof b.mimeType === "string" ? b.mimeType : "image/png";
+        const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
+        images.push({ url });
+        continue;
       }
+      if (typeof b.url === "string") {
+        images.push({ url: b.url });
+      }
+      continue;
+    }
+
+    if (type === "image_url") {
+      // OpenAI format
+      const imageUrl = b.image_url as Record<string, unknown> | undefined;
+      if (typeof imageUrl?.url === "string") {
+        images.push({ url: imageUrl.url });
+      }
+      continue;
+    }
+
+    if (Array.isArray(b.content)) {
+      collectImagesFromContent(b.content, images);
     }
   }
-
-  return images;
 }
 
 export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, basePath?: string) {

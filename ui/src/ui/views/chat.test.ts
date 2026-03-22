@@ -301,6 +301,34 @@ describe("chat view", () => {
     expect(image?.getAttribute("src")).toBe("data:image/png;base64,Rk9PQg==");
   });
 
+  it("renders nested tool result images inline", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "toolResult",
+                  toolUseId: "tool-read-image-3",
+                  content: [{ type: "image", data: "SU1H", mimeType: "image/png" }],
+                },
+              ],
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(image).not.toBeNull();
+    expect(image?.getAttribute("src")).toBe("data:image/png;base64,SU1H");
+  });
+
   it("hides the context notice when only cumulative inputTokens exceed the limit", () => {
     const container = document.createElement("div");
     render(
