@@ -32,6 +32,19 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
   return { runtime, runEmbeddedPiAgent };
 }
 
+function requireEmbeddedAgentArgs(runEmbeddedPiAgent: ReturnType<typeof vi.fn>) {
+  const calls = runEmbeddedPiAgent.mock.calls as unknown[][];
+  const firstCall = calls[0];
+  if (!firstCall) {
+    throw new Error("voice response generator did not invoke the embedded agent");
+  }
+  const args = firstCall[0] as { extraSystemPrompt?: string } | undefined;
+  if (!args?.extraSystemPrompt) {
+    throw new Error("voice response generator did not pass the spoken-output contract prompt");
+  }
+  return args;
+}
+
 async function runGenerateVoiceResponse(
   payloads: Array<Record<string, unknown>>,
   overrides?: {
@@ -68,15 +81,7 @@ describe("generateVoiceResponse", () => {
 
     expect(result.text).toBe("Hello from JSON.");
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    const calls = runEmbeddedPiAgent.mock.calls as unknown[][];
-    const firstCall = calls[0];
-    if (!firstCall) {
-      throw new Error("voice response generator did not invoke the embedded agent");
-    }
-    const args = firstCall[0] as { extraSystemPrompt?: string } | undefined;
-    if (!args?.extraSystemPrompt) {
-      throw new Error("voice response generator did not pass the spoken-output contract prompt");
-    }
+    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
     expect(args.extraSystemPrompt).toContain('{"spoken":"..."}');
   });
 

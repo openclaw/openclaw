@@ -46,12 +46,25 @@ function expectReplayVerification(
 ) {
   expect(results.map((result) => result.ok)).toEqual([true, true]);
   expect(results.map((result) => Boolean(result.isReplay))).toEqual([false, true]);
-  const firstKey = results[0]?.verifiedRequestKey;
-  if (!firstKey) {
+  const firstResult = results[0];
+  if (!firstResult?.verifiedRequestKey) {
     throw new Error("expected Telnyx verification to produce a request key");
   }
-  expect(firstKey).toEqual(expect.any(String));
-  expect(results[1]?.verifiedRequestKey).toBe(firstKey);
+  const secondResult = results[1];
+  if (!secondResult?.verifiedRequestKey) {
+    throw new Error("expected replayed Telnyx verification to preserve the request key");
+  }
+  const firstKey = firstResult.verifiedRequestKey;
+  const secondKey = secondResult.verifiedRequestKey;
+  expect(firstKey.length).toBeGreaterThan(0);
+  expect(secondKey).toBe(firstKey);
+}
+
+function requireJwkX(jwk: JsonWebKey) {
+  if (typeof jwk.x !== "string" || jwk.x.length === 0) {
+    throw new Error("expected Ed25519 JWK export to expose x");
+  }
+  return jwk.x;
 }
 
 function expectWebhookVerificationSucceeds(params: {
@@ -110,9 +123,8 @@ describe("TelnyxProvider.verifyWebhook", () => {
     const jwk = publicKey.export({ format: "jwk" }) as JsonWebKey;
     expect(jwk.kty).toBe("OKP");
     expect(jwk.crv).toBe("Ed25519");
-    expect(typeof jwk.x).toBe("string");
 
-    const rawPublicKey = decodeBase64Url(jwk.x as string);
+    const rawPublicKey = decodeBase64Url(requireJwkX(jwk));
     const rawPublicKeyBase64 = rawPublicKey.toString("base64");
     expectWebhookVerificationSucceeds({ publicKey: rawPublicKeyBase64, privateKey });
   });
@@ -167,6 +179,10 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
     );
 
     expect(result.events).toHaveLength(1);
-    expect(result.events[0]?.dedupeKey).toBe("telnyx:req:abc");
+    const event = result.events[0];
+    if (!event) {
+      throw new Error("expected Telnyx parseWebhookEvent to produce one event");
+    }
+    expect(event.dedupeKey).toBe("telnyx:req:abc");
   });
 });
