@@ -51,16 +51,8 @@ const cleanupTempArtifacts = () => {
 const existingUnitConfigFiles = (entries) => existingFiles(entries).filter(isUnitConfigTestFile);
 const baseThreadPinnedFiles = existingFiles(behaviorManifest.base?.threadPinned ?? []);
 const unitForkIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.isolated);
-const unitForkBatchedConfiguredFiles = existingUnitConfigFiles(behaviorManifest.unit.forkBatched);
 const unitThreadPinnedFiles = existingUnitConfigFiles(behaviorManifest.unit.threadPinned);
-const unitVmForkPinnedFiles = existingUnitConfigFiles(behaviorManifest.unit.vmForkPinned);
-const extensionIsolatedFiles = existingFiles(behaviorManifest.extensions.isolated);
-const unitBehaviorOverrideSet = new Set([
-  ...unitForkIsolatedFiles,
-  ...unitForkBatchedConfiguredFiles,
-  ...unitThreadPinnedFiles,
-  ...unitVmForkPinnedFiles,
-]);
+const unitBehaviorOverrideSet = new Set([...unitForkIsolatedFiles, ...unitThreadPinnedFiles]);
 const channelSingletonFiles = [];
 
 const children = new Set();
@@ -87,14 +79,10 @@ const isMacMiniProfile = testProfile === "macmini";
 // Vitest executes Node tests through Vite's SSR/module-runner pipeline, so the
 // shared unit lane still retains transformed ESM/module state even when the
 // tests themselves are not "server rendering" a website. We previously kept
-// forks as the default after vmFork OOM regressions on constrained hosts. On
+// forks as the default after VM-pool regressions on constrained hosts. On
 // 2026-03-22, a direct full-unit threads run finished 1109/1110 green; the sole
 // correctness exception stayed on the manifest fork lane, so the wrapper now
-// defaults unit runs to threads while preserving explicit fork/vmFork escapes.
-// Preserve OPENCLAW_TEST_UNIT_DEFAULT_POOL=forks or OPENCLAW_TEST_VM_FORKS=1 as
-// explicit debug escape hatches.
-const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor <= 24 : true;
-const useVmForks = process.env.OPENCLAW_TEST_VM_FORKS === "1" && supportsVmForks;
+// defaults unit runs to threads while preserving explicit fork escapes.
 const forceIsolation =
   process.env.OPENCLAW_TEST_ISOLATE === "1" || process.env.OPENCLAW_TEST_ISOLATE === "true";
 const disableIsolation =
@@ -106,9 +94,6 @@ const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === 
 const parsePoolOverride = (value, fallback) => {
   if (value === "threads" || value === "forks") {
     return value;
-  }
-  if (value === "vmForks") {
-    return supportsVmForks ? value : "forks";
   }
   return fallback;
 };
@@ -275,7 +260,6 @@ const allKnownTestFiles = [
 const defaultUnitPool = parsePoolOverride(process.env.OPENCLAW_TEST_UNIT_DEFAULT_POOL, "threads");
 const isTargetedIsolatedUnitFile = (fileFilter) =>
   unitForkIsolatedFiles.includes(fileFilter) ||
-  unitForkBatchFiles.includes(fileFilter) ||
   unitMemoryIsolatedFiles.includes(fileFilter);
 const inferTarget = (fileFilter) => {
   const isolated = isTargetedIsolatedUnitFile(fileFilter);
@@ -369,40 +353,14 @@ const { memoryHeavyFiles: memoryHeavyUnitFiles, timedHeavyFiles: timedHeavyUnitF
         memoryHeavyFiles: [],
         timedHeavyFiles: [],
       };
-const unitForkBatchFiles = dedupeFilesPreserveOrder(
-  unitForkBatchedConfiguredFiles,
-  new Set(unitForkIsolatedFiles),
-);
 const unitMemoryIsolatedFiles = dedupeFilesPreserveOrder(
   memoryHeavyUnitFiles,
-  new Set([...unitBehaviorOverrideSet, ...unitForkBatchFiles]),
+  unitBehaviorOverrideSet,
 );
 const unitSchedulingOverrideSet = new Set([...unitBehaviorOverrideSet, ...memoryHeavyUnitFiles]);
 const unitFastExcludedFiles = [
   ...new Set([...unitSchedulingOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
 ];
-const defaultForkBatchLaneCount =
-  testProfile === "serial"
-    ? 0
-    : unitForkBatchFiles.length === 0
-      ? 0
-      : isCI
-        ? Math.ceil(unitForkBatchFiles.length / 6)
-        : testProfile === "low" && highMemLocalHost
-          ? Math.ceil(unitForkBatchFiles.length / 8) + 1
-          : highMemLocalHost
-            ? Math.ceil(unitForkBatchFiles.length / 8)
-            : lowMemLocalHost
-              ? Math.ceil(unitForkBatchFiles.length / 12)
-              : Math.ceil(unitForkBatchFiles.length / 10);
-const configuredForkBatchLaneCount = parseEnvNumber(
-  "OPENCLAW_TEST_UNIT_FORK_BATCH_LANES",
-  defaultForkBatchLaneCount,
-);
-const forkBatchLaneCount =
-  unitForkBatchFiles.length === 0
-    ? 0
-    : Math.min(unitForkBatchFiles.length, Math.max(1, configuredForkBatchLaneCount));
 const estimateUnitDurationMs = (file) =>
   unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
 const splitFilesByDurationBudget = (files, targetDurationMs, estimateDurationMs) => {
@@ -431,18 +389,11 @@ const splitFilesByDurationBudget = (files, targetDurationMs, estimateDurationMs)
 
   return batches;
 };
-const unitForkBatchBuckets =
-  forkBatchLaneCount > 0
-    ? packFilesByDuration(unitForkBatchFiles, forkBatchLaneCount, estimateUnitDurationMs)
-    : [];
 const unitFastExcludedFileSet = new Set(unitFastExcludedFiles);
 const unitFastCandidateFiles = allKnownUnitFiles.filter(
   (file) => !unitFastExcludedFileSet.has(file),
 );
-const extensionIsolatedExcludedFileSet = new Set(extensionIsolatedFiles);
-const extensionSharedCandidateFiles = allKnownTestFiles.filter(
-  (file) => file.startsWith("extensions/") && !extensionIsolatedExcludedFileSet.has(file),
-);
+const extensionSharedCandidateFiles = allKnownTestFiles.filter((file) => file.startsWith("extensions/"));
 const defaultUnitFastLaneCount = isCI && !isWindows ? 3 : 1;
 const unitFastLaneCount = Math.max(
   1,
@@ -498,11 +449,6 @@ const unitHeavyEntries = heavyUnitBuckets.map((files, index) => ({
   name: `unit-heavy-${String(index + 1)}`,
   args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
 }));
-const unitForkBatchEntries = unitForkBatchBuckets.map((files, index) => ({
-  name:
-    unitForkBatchBuckets.length === 1 ? "unit-fork-batch" : `unit-fork-batch-${String(index + 1)}`,
-  args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
-}));
 const unitThreadEntries =
   unitThreadPinnedFiles.length > 0
     ? [
@@ -523,17 +469,12 @@ const unitIsolatedEntries = unitForkIsolatedFiles.map((file) => ({
   name: `unit-${path.basename(file, ".test.ts")}-isolated`,
   args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", file],
 }));
-const extensionIsolatedEntries = extensionIsolatedFiles.map((file) => ({
-  name: `${path.basename(file, ".test.ts")}-extensions-isolated`,
-  args: ["vitest", "run", "--config", "vitest.extensions.config.ts", "--pool=forks", file],
-}));
 const baseRuns = [
   ...(shouldSplitUnitRuns
     ? [
         ...unitFastEntries,
         ...unitIsolatedEntries,
         ...unitHeavyEntries,
-        ...unitForkBatchEntries,
         ...unitMemoryIsolatedFiles.map((file) => ({
           name: `unit-${path.basename(file, ".test.ts")}-memory-isolated`,
           args: [
@@ -541,23 +482,11 @@ const baseRuns = [
             "run",
             "--config",
             "vitest.unit.config.ts",
-            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            "--pool=forks",
             file,
           ],
         })),
         ...unitThreadEntries,
-        ...unitVmForkPinnedFiles.map((file) => ({
-          name: `${path.basename(file, ".test.ts")}-vmforks`,
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.unit.config.ts",
-            `--pool=${useVmForks ? "vmForks" : "forks"}`,
-            ...(disableIsolation ? ["--isolate=false"] : []),
-            file,
-          ],
-        })),
         ...channelSingletonFiles.map((file) => ({
           name: `${path.basename(file, ".test.ts")}-channels-isolated`,
           args: ["vitest", "run", "--config", "vitest.channels.config.ts", "--pool=forks", file],
@@ -571,7 +500,7 @@ const baseRuns = [
             "run",
             "--config",
             "vitest.unit.config.ts",
-            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            "--pool=forks",
             ...(disableIsolation ? ["--isolate=false"] : []),
           ],
         },
@@ -594,10 +523,8 @@ const baseRuns = [
             "run",
             "--config",
             "vitest.extensions.config.ts",
-            ...(useVmForks ? ["--pool=vmForks"] : []),
           ],
         },
-        ...extensionIsolatedEntries,
       ]
     : []),
   ...(includeGatewaySuite
@@ -633,26 +560,11 @@ const resolveFilterMatches = (fileFilter) => {
   }
   return allKnownTestFiles.filter((file) => file.includes(normalizedFilter));
 };
-const isVmForkPinnedUnitFile = (fileFilter) => unitVmForkPinnedFiles.includes(fileFilter);
 const isThreadPinnedUnitFile = (fileFilter) => unitThreadPinnedFiles.includes(fileFilter);
 const isBaseThreadPinnedFile = (fileFilter) => baseThreadPinnedFiles.includes(fileFilter);
 const createTargetedEntry = (owner, isolated, filters) => {
   const name = isolated ? `${owner}-isolated` : owner;
   const forceForks = isolated;
-  if (owner === "unit-vmforks") {
-    return {
-      name,
-      args: [
-        "vitest",
-        "run",
-        "--config",
-        "vitest.unit.config.ts",
-        `--pool=${useVmForks ? "vmForks" : "forks"}`,
-        ...(disableIsolation ? ["--isolate=false"] : []),
-        ...filters,
-      ],
-    };
-  }
   if (owner === "unit") {
     return {
       name,
@@ -682,14 +594,7 @@ const createTargetedEntry = (owner, isolated, filters) => {
   if (owner === "extensions") {
     return {
       name,
-      args: [
-        "vitest",
-        "run",
-        "--config",
-        "vitest.extensions.config.ts",
-        ...(forceForks ? ["--pool=forks"] : useVmForks ? ["--pool=vmForks"] : []),
-        ...filters,
-      ],
+      args: ["vitest", "run", "--config", "vitest.extensions.config.ts", ...filters],
     };
   }
   if (owner === "gateway") {
@@ -701,14 +606,7 @@ const createTargetedEntry = (owner, isolated, filters) => {
   if (owner === "channels") {
     return {
       name,
-      args: [
-        "vitest",
-        "run",
-        "--config",
-        "vitest.channels.config.ts",
-        ...(forceForks ? ["--pool=forks"] : useVmForks ? ["--pool=vmForks"] : []),
-        ...filters,
-      ],
+      args: ["vitest", "run", "--config", "vitest.channels.config.ts", ...filters],
     };
   }
   if (owner === "live") {
@@ -747,9 +645,7 @@ const createPerFileTargetedEntry = (file) => {
   const target = inferTarget(file);
   const owner = isThreadPinnedUnitFile(file)
     ? "unit-threads"
-    : isVmForkPinnedUnitFile(file)
-      ? "unit-vmforks"
-      : isBaseThreadPinnedFile(file)
+    : isBaseThreadPinnedFile(file)
         ? "base-threads"
         : target.owner;
   return {
@@ -768,9 +664,7 @@ const targetedEntries = (() => {
       const target = inferTarget(normalizedFile);
       const owner = isThreadPinnedUnitFile(normalizedFile)
         ? "unit-threads"
-        : isVmForkPinnedUnitFile(normalizedFile)
-          ? "unit-vmforks"
-          : isBaseThreadPinnedFile(normalizedFile)
+        : isBaseThreadPinnedFile(normalizedFile)
             ? "base-threads"
             : target.owner;
       const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
@@ -783,9 +677,7 @@ const targetedEntries = (() => {
       const target = inferTarget(matchedFile);
       const owner = isThreadPinnedUnitFile(matchedFile)
         ? "unit-threads"
-        : isVmForkPinnedUnitFile(matchedFile)
-          ? "unit-vmforks"
-          : isBaseThreadPinnedFile(matchedFile)
+        : isBaseThreadPinnedFile(matchedFile)
             ? "base-threads"
             : target.owner;
       const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
@@ -925,16 +817,13 @@ const maxWorkersForRun = (name) => {
   if (resolvedOverride) {
     return resolvedOverride;
   }
-  if (name === "unit-fork-batch" || name.startsWith("unit-fork-batch-")) {
-    return 1;
-  }
   if (isCI && !isMacOS) {
     return null;
   }
   if (isCI && isMacOS) {
     return 1;
   }
-  if (name.endsWith("-threads") || name.endsWith("-vmforks")) {
+  if (name.endsWith("-threads")) {
     return 1;
   }
   if (name.endsWith("-isolated")) {
@@ -1012,12 +901,7 @@ const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
     const startedAt = Date.now();
     const maxWorkers = maxWorkersForRun(entry.name);
-    // vmForks with a single worker has shown cross-file leakage in extension suites.
-    // Fall back to process forks when we intentionally clamp that lane to one worker.
-    const entryArgs =
-      entry.name === "extensions" && maxWorkers === 1 && entry.args.includes("--pool=vmForks")
-        ? entry.args.map((arg) => (arg === "--pool=vmForks" ? "--pool=forks" : arg))
-        : entry.args;
+    const entryArgs = entry.args;
     const explicitEntryFilters = getExplicitEntryFilters(entryArgs);
     const args = maxWorkers
       ? [
