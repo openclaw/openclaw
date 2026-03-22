@@ -81,7 +81,11 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   // Gateway agent/chat.send handlers inject their own timestamps before reaching here;
   // channel messages arrive without one. See: https://github.com/openclaw/openclaw/issues/25334
   if (normalized.BodyForAgent) {
-    normalized.BodyForAgent = injectTimestamp(normalized.BodyForAgent, opts.timestampOpts);
+    const stampOpts = { ...opts.timestampOpts };
+    if (normalized.Timestamp) {
+      stampOpts.now ??= new Date(normalized.Timestamp);
+    }
+    normalized.BodyForAgent = injectTimestamp(normalized.BodyForAgent, stampOpts);
   }
 
   const bodyForCommandsSource = opts.forceBodyForCommands
