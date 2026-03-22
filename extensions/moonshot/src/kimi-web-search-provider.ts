@@ -74,7 +74,7 @@ function resolveKimiConfig(searchConfig?: SearchConfigRecord): KimiConfig {
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
   return (
     readConfiguredSecretString(kimi?.apiKey, "tools.web.search.kimi.apiKey") ??
-    readProviderEnvValue(["KIMI_API_KEY", "MOONSHOT_API_KEY"])
+    readProviderEnvValue(["MOONSHOT_API_KEY", "KIMI_API_KEY"])
   );
 }
 
@@ -86,6 +86,50 @@ function resolveKimiModel(kimi?: KimiConfig): string {
 function resolveKimiBaseUrl(kimi?: KimiConfig): string {
   const baseUrl = typeof kimi?.baseUrl === "string" ? kimi.baseUrl.trim() : "";
   return baseUrl || DEFAULT_KIMI_BASE_URL;
+}
+
+function resolveMoonshotProviderBaseUrlFromConfig(
+  config: Record<string, unknown> | undefined,
+): string {
+  const baseUrl =
+    config &&
+    typeof config === "object" &&
+    !Array.isArray(config) &&
+    typeof (config as { models?: unknown }).models === "object" &&
+    (config as { models?: unknown }).models !== null &&
+    !Array.isArray((config as { models?: unknown }).models) &&
+    typeof (config as { models?: unknown } & { models: { providers?: unknown } }).models
+      .providers === "object" &&
+    (config as { models?: unknown } & { models: { providers?: unknown } }).models.providers !==
+      null &&
+    !Array.isArray(
+      (config as { models?: unknown } & { models: { providers?: unknown } }).models.providers,
+    ) &&
+    typeof (
+      (config as { models?: unknown } & { models: { providers: Record<string, unknown> } }).models
+        .providers.moonshot as { baseUrl?: unknown } | undefined
+    )?.baseUrl === "string"
+      ? String(
+          (
+            (config as { models?: unknown } & { models: { providers: Record<string, unknown> } })
+              .models.providers.moonshot as { baseUrl?: unknown } | undefined
+          )?.baseUrl,
+        ).trim()
+      : "";
+  return baseUrl;
+}
+
+function resolveKimiWebSearchBaseUrl(params: {
+  kimiConfig: KimiConfig;
+  config: Record<string, unknown> | undefined;
+}): string {
+  const explicitBaseUrl =
+    typeof params.kimiConfig.baseUrl === "string" ? params.kimiConfig.baseUrl.trim() : "";
+  if (explicitBaseUrl) {
+    return explicitBaseUrl;
+  }
+  const inferred = resolveMoonshotProviderBaseUrlFromConfig(params.config);
+  return inferred || DEFAULT_KIMI_BASE_URL;
 }
 
 function extractKimiMessageText(message: KimiMessage | undefined): string | undefined {
@@ -172,7 +216,9 @@ async function runKimiSearch(params: {
       ): Promise<{ done: true; content: string; citations: string[] } | { done: false }> => {
         if (!res.ok) {
           const detail = await res.text();
-          throw new Error(`Kimi API error (${res.status}): ${detail || res.statusText}`);
+          throw new Error(
+            `Kimi API error (${res.status} @ ${endpoint}): ${detail || res.statusText}`,
+          );
         }
 
         const data = (await res.json()) as KimiSearchResponse;
@@ -243,6 +289,7 @@ function createKimiSchema() {
 
 function createKimiToolDefinition(
   searchConfig?: SearchConfigRecord,
+  config?: Record<string, unknown>,
 ): WebSearchProviderToolDefinition {
   return {
     description:
@@ -272,7 +319,7 @@ function createKimiToolDefinition(
         searchConfig?.maxResults ??
         undefined;
       const model = resolveKimiModel(kimiConfig);
-      const baseUrl = resolveKimiBaseUrl(kimiConfig);
+      const baseUrl = resolveKimiWebSearchBaseUrl({ kimiConfig, config });
       const cacheKey = buildSearchCacheKey([
         "kimi",
         query,
@@ -341,6 +388,7 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
           "kimi",
           resolveProviderWebSearchPluginConfig(ctx.config, "moonshot"),
         ) as SearchConfigRecord | undefined,
+        ctx.config as Record<string, unknown> | undefined,
       ),
   };
 }
@@ -349,5 +397,6 @@ export const __testing = {
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
+  resolveKimiWebSearchBaseUrl,
   extractKimiCitations,
 } as const;
