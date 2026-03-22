@@ -475,6 +475,8 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
+      /** Allow web search requests to RFC1918 private networks (e.g. for self-hosted SearXNG). */
+      allowPrivateNetwork?: boolean;
       /** @deprecated Legacy Brave scoped config. */
       brave?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Firecrawl scoped config. */
@@ -487,6 +489,15 @@ export type ToolsConfig = {
       kimi?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Perplexity scoped config. */
       perplexity?: WebSearchLegacyProviderConfig;
+      /** Tavily configuration. */
+      tavily?: {
+        apiKey?: SecretInput;
+      };
+      searxng?: {
+        baseUrl?: string;
+        apiKey?: SecretInput;
+        allowPrivateNetwork?: boolean;
+      };
     } & Record<string, unknown>;
     fetch?: {
       /** Enable web fetch tool (default: true). */

@@ -238,5 +238,13 @@
   {
     "source": "env var",
     "target": "环境变量"
+  },
+  {
+    "source": "SearXNG (Self-hosted)",
+    "target": "SearXNG（自托管）"
+  },
+  {
+    "source": "Web Search Overview",
+    "target": "Web 搜索概览"
   }
 ]

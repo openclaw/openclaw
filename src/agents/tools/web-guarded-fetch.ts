@@ -49,7 +49,7 @@ export async function fetchWithWebToolsNetworkGuard(
   );
 }
 
-async function withWebToolsNetworkGuard<T>(
+export async function withWebToolsNetworkGuard<T>(
   params: WebToolGuardedFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
 ): Promise<T> {

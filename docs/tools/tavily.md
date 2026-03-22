@@ -58,7 +58,8 @@ Notes:
 - Choosing Tavily in onboarding or `openclaw configure --section web` enables
   the bundled Tavily plugin automatically.
 - Store Tavily config under `plugins.entries.tavily.config.webSearch.*`.
-- `web_search` with Tavily supports `query` and `count` (up to 20 results).
+- `web_search` with Tavily supports `query`, `count` (up to 20 results), and `freshness`.
+- `freshness` maps to Tavily's `days` parameter: `pd` (1 day), `pw` (7 days), `pm` (30 days), `py` (365 days).
 - For Tavily-specific controls like `search_depth`, `topic`, `include_answer`,
   or domain filters, use `tavily_search`.
 

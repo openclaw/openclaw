@@ -34,6 +34,7 @@ export type TavilySearchParams = {
   maxResults?: number;
   includeAnswer?: boolean;
   timeRange?: string;
+  days?: number;
   includeDomains?: string[];
   excludeDomains?: string[];
   timeoutSeconds?: number;
@@ -91,6 +92,7 @@ export async function runTavilySearch(
       topic: params.topic,
       includeAnswer: params.includeAnswer,
       timeRange: params.timeRange,
+      days: params.days,
       includeDomains: params.includeDomains,
       excludeDomains: params.excludeDomains,
     }),
@@ -108,6 +110,7 @@ export async function runTavilySearch(
   if (params.topic) body.topic = params.topic;
   if (params.includeAnswer) body.include_answer = true;
   if (params.timeRange) body.time_range = params.timeRange;
+  if (params.days) body.days = params.days;
   if (params.includeDomains?.length) body.include_domains = params.includeDomains;
   if (params.excludeDomains?.length) body.exclude_domains = params.excludeDomains;
 
