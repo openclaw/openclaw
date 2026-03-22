@@ -30,17 +30,64 @@ export type BrowserProps = {
   autoRefreshActive: boolean;
 };
 
+/** Return just the hostname (e.g. "github.com") for display; falls back to full URL. */
+function tabHost(url: string): string {
+  try {
+    return new URL(url).hostname || url;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Background tabs are internal browser pages the user never navigates to
+ * intentionally: service workers, cookie-rotation pages, chrome-extension
+ * pages, etc. They are collapsed into a "details" dropdown.
+ */
+function isBackgroundTab(tab: BrowserTab): boolean {
+  const u = tab.url;
+  if (u.startsWith("chrome-extension://")) {
+    return true;
+  }
+  if (u.startsWith("chrome://")) {
+    return true;
+  }
+  if (u.startsWith("about:")) {
+    return true;
+  }
+  if (u.includes("service-worker")) {
+    return true;
+  }
+  if (u.includes("RotateCookies")) {
+    return true;
+  }
+  if (u.includes("/_/chrome/")) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Filter out the built-in "existing-session" attach-only profile (the user's
+ * own system Chrome). We only manage OpenClaw-controlled browser profiles here.
+ */
+function isManagedProfile(p: BrowserProfile): boolean {
+  return p.driver !== "existing-session";
+}
+
 export function renderBrowser(props: BrowserProps) {
-  const runningProfiles = props.profiles.filter((p) => p.running);
-  const stoppedProfiles = props.profiles.filter((p) => !p.running);
+  const managed = props.profiles.filter(isManagedProfile);
+  const runningProfiles = managed.filter((p) => p.running);
+  const stoppedProfiles = managed.filter((p) => !p.running);
   const totalTabs = runningProfiles.reduce((n, p) => n + p.tabs.length, 0);
+  const hasAttachedProfile = props.profiles.some((p) => !isManagedProfile(p));
 
   return html`
     <section class="card">
       <!-- Header row -->
       <div class="row" style="justify-content: space-between; align-items: center;">
         <div>
-          <div class="card-title">Browser Sessions</div>
+          <div class="card-title">OpenClaw Browser</div>
           <div class="card-subtitle">
             ${
               props.loading
@@ -76,7 +123,7 @@ export function renderBrowser(props: BrowserProps) {
           ? html`
               <div class="row" style="margin-top:14px; gap:8px; flex-wrap:wrap;">
                 ${
-                  props.profiles.length > 1
+                  managed.length > 1
                     ? html`
                         <select
                           class="input input-sm"
@@ -85,7 +132,7 @@ export function renderBrowser(props: BrowserProps) {
                           @change=${(e: Event) =>
                             props.onNewTabProfileChange((e.target as HTMLSelectElement).value)}
                         >
-                          ${props.profiles
+                          ${managed
                             .filter((p) => p.running)
                             .map(
                               (p) => html`
@@ -137,13 +184,20 @@ export function renderBrowser(props: BrowserProps) {
 
       <!-- Empty state -->
       ${
-        !props.loading && props.profiles.length === 0
+        !props.loading && managed.length === 0
           ? html`
               <div class="empty-state" style="margin-top: 24px; text-align: center; color: var(--fg-muted)">
                 <div style="font-size: 2rem">🌐</div>
-                <div style="margin-top: 8px">No browser profiles configured.</div>
+                <div style="margin-top: 8px">No OpenClaw browser profiles configured.</div>
                 <div style="font-size: 0.85rem; margin-top: 4px">
-                  Create a profile below to get started, or enable OpenClaw's browser service.
+                  Create a profile below to get started.
+                  ${
+                    hasAttachedProfile
+                      ? html`
+                          <br />Your system browser is detected but managed separately.
+                        `
+                      : nothing
+                  }
                 </div>
               </div>
             `
@@ -185,83 +239,92 @@ export function renderBrowser(props: BrowserProps) {
             </div>
 
             <!-- Tabs -->
-            ${
-              p.tabs.length === 0
-                ? html`
-                    <div style="margin-top: 10px; font-size: 0.85rem; color: var(--fg-muted)">No open tabs.</div>
-                  `
-                : html`
-                    <div style="margin-top:10px; display:flex; flex-direction:column; gap:6px;">
-                      ${p.tabs.map(
-                        (t) => html`
-                          <div
-                            class="row"
-                            style="justify-content:space-between; align-items:center; padding:6px 8px; background:var(--bg-subtle,var(--bg-2)); border-radius:6px; gap:8px;"
-                          >
-                            <div style="min-width:0; flex:1;">
-                              <div style="font-size:0.85rem; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-                                ${t.title || t.url}
-                              </div>
-                              <div style="font-size:0.75rem; color:var(--fg-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-                                ${t.url}
-                              </div>
-                              ${
-                                props.tappedTabs.has(t.targetId)
-                                  ? html`
-                                      <span class="badge badge-warn" style="font-size: 0.72rem; margin-top: 3px">👤 Human Viewing</span>
-                                    `
-                                  : nothing
-                              }
-                            </div>
-                            <div class="row" style="gap:6px; flex-shrink:0; flex-wrap:wrap; justify-content:flex-end;">
-                              <!-- Copy URL -->
-                              <button
-                                class="btn btn-sm"
-                                title="Copy URL to clipboard"
-                                @click=${() => {
-                                  void navigator.clipboard.writeText(t.url);
-                                }}
-                              >
-                                Copy
-                              </button>
-                              <!-- Tap In / Tap Out -->
-                              ${
-                                props.tappedTabs.has(t.targetId)
-                                  ? html`
-                                      <button
-                                        class="btn btn-sm"
-                                        title="Hand back to agent"
-                                        @click=${() => props.onTapOut(t.targetId)}
-                                      >
-                                        Tap Out
-                                      </button>
-                                    `
-                                  : html`
-                                      <button
-                                        class="btn btn-sm btn-primary"
-                                        title="Open in your browser and mark as human-controlled"
-                                        @click=${() => props.onTapIn(t, p.name)}
-                                      >
-                                        Tap In
-                                      </button>
-                                    `
-                              }
-                              <!-- Close tab -->
-                              <button
-                                class="btn btn-sm btn-danger"
-                                title="Close tab"
-                                ?disabled=${props.actionBusy}
-                                @click=${() => props.onCloseTab(p.name, t.targetId)}
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          </div>
-                        `,
-                      )}
+            ${(() => {
+              const primaryTabs = p.tabs.filter((t) => !isBackgroundTab(t));
+              const bgTabs = p.tabs.filter((t) => isBackgroundTab(t));
+
+              const renderPrimaryTab = (t: BrowserTab) => html`
+                <div
+                  class="row"
+                  style="justify-content:space-between; align-items:center; padding:6px 8px; background:var(--bg-subtle,var(--bg-2)); border-radius:6px; gap:8px;"
+                >
+                  <div style="min-width:0; flex:1;">
+                    <div style="font-size:0.85rem; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                      ${t.title || tabHost(t.url)}
                     </div>
-                  `
-            }
+                    <div style="font-size:0.75rem; color:var(--fg-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                      ${tabHost(t.url)}
+                    </div>
+                    ${
+                      props.tappedTabs.has(t.targetId)
+                        ? html`
+                            <span class="badge badge-warn" style="font-size: 0.72rem; margin-top: 3px">👤 Human Viewing</span>
+                          `
+                        : nothing
+                    }
+                  </div>
+                  <div class="row" style="gap:6px; flex-shrink:0; flex-wrap:wrap; justify-content:flex-end;">
+                    <button
+                      class="btn btn-sm"
+                      title="Copy URL"
+                      @click=${() => {
+                        void navigator.clipboard.writeText(t.url);
+                      }}
+                    >Copy</button>
+                    ${
+                      props.tappedTabs.has(t.targetId)
+                        ? html`
+                            <button class="btn btn-sm" title="Hand back to agent" @click=${() => props.onTapOut(t.targetId)}>
+                              Tap Out
+                            </button>
+                          `
+                        : html`
+                            <button class="btn btn-sm btn-primary" title="Bring to front and mark human-controlled" @click=${() => props.onTapIn(t, p.name)}>
+                              Tap In
+                            </button>
+                          `
+                    }
+                    <button class="btn btn-sm btn-danger" title="Close tab" ?disabled=${props.actionBusy} @click=${() => props.onCloseTab(p.name, t.targetId)}>✕</button>
+                  </div>
+                </div>
+              `;
+
+              return html`
+                <div style="margin-top:10px; display:flex; flex-direction:column; gap:6px;">
+                  ${
+                    primaryTabs.length === 0
+                      ? html`
+                          <div style="font-size: 0.85rem; color: var(--fg-muted)">No open tabs.</div>
+                        `
+                      : primaryTabs.map(renderPrimaryTab)
+                  }
+                  ${
+                    bgTabs.length > 0
+                      ? html`
+                          <details style="margin-top:4px;">
+                            <summary style="font-size:0.75rem; color:var(--fg-muted); cursor:pointer; user-select:none; list-style:none; display:flex; align-items:center; gap:4px;">
+                              <span>▸</span>
+                              <span>${bgTabs.length} background page${bgTabs.length !== 1 ? "s" : ""}</span>
+                            </summary>
+                            <div style="margin-top:6px; display:flex; flex-direction:column; gap:4px; padding-left:8px; border-left:2px solid var(--border);">
+                              ${bgTabs.map(
+                                (t) => html`
+                                  <div class="row" style="justify-content:space-between; align-items:center; padding:4px 6px; background:var(--bg-subtle,var(--bg-2)); border-radius:4px; gap:6px; opacity:0.75;">
+                                    <div style="min-width:0; flex:1; font-size:0.78rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--fg-muted);">
+                                      ${tabHost(t.url)}
+                                    </div>
+                                    <button class="btn btn-sm btn-danger" style="font-size:0.72rem; padding:2px 6px;" title="Close" ?disabled=${props.actionBusy} @click=${() => props.onCloseTab(p.name, t.targetId)}>✕</button>
+                                  </div>
+                                `,
+                              )}
+                            </div>
+                          </details>
+                        `
+                      : nothing
+                  }
+                </div>
+              `;
+            })()}
           </div>
         `,
       )}
@@ -351,9 +414,9 @@ export function renderBrowser(props: BrowserProps) {
 
       <!-- Footer hint -->
       <div style="margin-top:14px; font-size:0.8rem; color:var(--fg-muted);">
-        <strong>Tap In</strong> opens the tab in your browser and marks it as human-controlled.
-        <strong>Tap Out</strong> hands it back to the agent. Agents can see which tabs are open
-        and will avoid interfering with human-controlled tabs.
+        <strong>Tap In</strong> brings that tab to the front of OpenClaw's browser so you can
+        take over (fill passwords, guide navigation, etc.) — the agent pauses and waits.
+        <strong>Tap Out</strong> hands full control back to the agent.
       </div>
     </section>
   `;

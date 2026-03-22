@@ -15,6 +15,7 @@ import {
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
 } from "./app-render.helpers.ts";
+import { switchChatSession } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
@@ -2036,8 +2037,8 @@ export function renderApp(state: AppViewState) {
                   onDeleteProfile: (name) => {
                     void deleteBrowserProfile(state, name);
                   },
-                  onTapIn: (tab) => {
-                    tapInBrowserTab(state, tab);
+                  onTapIn: (tab, profile) => {
+                    void tapInBrowserTab(state, tab, profile);
                   },
                   onTapOut: (targetId) => {
                     tapOutBrowserTab(state, targetId);

@@ -227,9 +227,15 @@ export async function deleteBrowserProfile(state: BrowserState, name: string) {
   }
 }
 
-/** Open the tab URL in a new browser window — signals "human is taking over" */
-export function tapInBrowserTab(state: BrowserState, tab: BrowserTab) {
-  window.open(tab.url, "_blank", "noopener,noreferrer");
+/**
+ * Tap In — focuses the tab inside OpenClaw's managed browser (brings it to
+ * front so the human can interact) and marks it as human-controlled so the
+ * agent pauses and waits until Tap Out.
+ */
+export async function tapInBrowserTab(state: BrowserState, tab: BrowserTab, profile: string) {
+  // Bring the tab to the front inside OpenClaw's browser
+  await focusBrowserTab(state, profile, tab.targetId);
+  // Mark as human-controlled (agent will see this and wait)
   const next = new Set(state.browserTappedTabs);
   next.add(tab.targetId);
   state.browserTappedTabs = next;
@@ -249,7 +255,7 @@ export function startBrowserPolling(state: BrowserState) {
   state.browserAutoRefreshActive = true;
   state.browserPollInterval = window.setInterval(() => {
     void loadBrowserSessions(state);
-  }, 8_000) as unknown as number;
+  }, 3_000) as unknown as number;
 }
 
 export function stopBrowserPolling(state: BrowserState) {
