@@ -45,8 +45,8 @@ export async function resolveCurrentDirectiveLevels(params: {
     sessionReasoningLevel ??
     (currentThinkLevel === "off"
       ? ((params.agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
-         (params.agentCfg?.reasoningDefault as ReasoningLevel | undefined) ??
-         "off")
+        (params.agentCfg?.reasoningDefault as ReasoningLevel | undefined) ??
+        "off")
       : "off");
   const currentElevatedLevel =
     (params.sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??

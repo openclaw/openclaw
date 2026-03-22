@@ -2985,6 +2985,16 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.reasoningDefault",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.repoRoot",
       "kind": "core",
       "type": "string",
