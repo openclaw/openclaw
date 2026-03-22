@@ -26,72 +26,7 @@
         "reason": "Passes alone but flakes in the shared fork lane; keep it in a dedicated fork worker."
       }
     ],
-    "forkBatched": [
-      {
-        "file": "src/plugins/provider-wizard.test.ts",
-        "reason": "Retained ~318 MiB in an isolated memory trace and is safer outside the shared unit-fast lane."
-      },
-      {
-        "file": "src/secrets/runtime.test.ts",
-        "reason": "Secrets runtime coverage retained the largest unit-fast heap spike in CI and is safer outside the shared lane."
-      },
-      {
-        "file": "src/memory/index.test.ts",
-        "reason": "Memory index coverage retained nearly 1 GiB in unit-fast on Linux CI and is safer in its own fork."
-      },
-      {
-        "file": "src/plugins/http-registry.test.ts",
-        "reason": "Plugin HTTP registry coverage retained a broad plugin graph in unit-fast and is safer outside the shared lane."
-      },
-      {
-        "file": "src/infra/channel-summary.test.ts",
-        "reason": "Channel summary coverage retained a large channel/plugin graph in unit-fast on Linux CI."
-      },
-      {
-        "file": "src/config/redact-snapshot.test.ts",
-        "reason": "Snapshot redaction coverage produced a large retained heap jump in unit-fast on Linux CI."
-      },
-      {
-        "file": "src/config/redact-snapshot.restore.test.ts",
-        "reason": "Snapshot restore coverage retains a broad schema/redaction graph and is safer outside the shared lane."
-      },
-      {
-        "file": "src/config/redact-snapshot.schema.test.ts",
-        "reason": "Schema-backed redaction round-trip coverage loads the full config schema graph and is safer outside the shared lane."
-      },
-      {
-        "file": "src/plugin-sdk/index.test.ts",
-        "reason": "Plugin SDK index coverage retained a broad export graph in unit-fast and is safer outside the shared lane."
-      },
-      {
-        "file": "src/plugin-sdk/index.bundle.test.ts",
-        "reason": "Plugin SDK bundle validation builds and imports the full bundled export graph and is safer outside the shared lane."
-      },
-      {
-        "file": "src/secrets/runtime.coverage.test.ts",
-        "reason": "Secrets runtime coverage tests retained substantial heap in unit-fast and are safer isolated."
-      },
-      {
-        "file": "src/channels/plugins/contracts/registry.contract.test.ts",
-        "reason": "Plugin contract registry coverage retained a large cross-plugin graph in both failing unit-fast shards."
-      },
-      {
-        "file": "src/tui/tui-command-handlers.test.ts",
-        "reason": "TUI command handler coverage retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
-      },
-      {
-        "file": "src/tui/tui-event-handlers.test.ts",
-        "reason": "Missing from unit timings and retained the largest shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 1 OOM lane."
-      },
-      {
-        "file": "src/cron/delivery.test.ts",
-        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
-      },
-      {
-        "file": "src/tui/tui.test.ts",
-        "reason": "Missing from unit timings and retained a top shared unit-fast heap spike in the March 20, 2026 Linux Node 24 shard 2 OOM lane."
-      }
-    ],
+    "forkBatched": [],
     "threadPinned": [
       {
         "file": "test/git-hooks-pre-commit.test.ts",
@@ -753,19 +688,6 @@
     "vmForkPinned": []
   },
   "extensions": {
-    "isolated": [
-      {
-        "file": "extensions/bluebubbles/src/setup-surface.test.ts",
-        "reason": "Loads the setup-wizard/plugin-sdk graph and retained ~576 MiB in an isolated memory trace."
-      },
-      {
-        "file": "extensions/feishu/index.test.ts",
-        "reason": "Plugin entry registration coverage loads a broad channel graph and is safer outside the shared extensions lane."
-      },
-      {
-        "file": "extensions/msteams/src/monitor.test.ts",
-        "reason": "Webhook timeout coverage is startup-heavy but showed no material retained heap growth across repeated snapshots."
-      }
-    ]
+    "isolated": []
   }
 }
