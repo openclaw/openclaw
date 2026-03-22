@@ -178,6 +178,9 @@ type RunPreparedReplyParams = {
   storePath?: string;
   workspaceDir: string;
   abortedLastRun: boolean;
+  /** True when images triggered a model switch to imageModel.
+   *  Used to preserve auth profile overrides during temporary model switches. */
+  hasAppliedImageModelOverride?: boolean;
 };
 
 export async function runPreparedReply(
@@ -229,6 +232,7 @@ export async function runPreparedReply(
     resolvedElevatedLevel,
     execOverrides,
     abortedLastRun,
+    hasAppliedImageModelOverride,
   } = params;
   let currentSystemSent = systemSent;
 
@@ -470,6 +474,7 @@ export async function runPreparedReply(
     sessionKey,
     storePath,
     isNewSession,
+    hasAppliedImageModelOverride,
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
   const followupRun = {

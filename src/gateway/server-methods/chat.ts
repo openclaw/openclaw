@@ -1317,17 +1317,56 @@ export const chatHandlers: GatewayRequestHandlers = {
       const imageModelConfig = cfg.agents?.defaults?.imageModel;
       const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
       if (imageModelPrimary) {
-        imageModelOverride = imageModelPrimary;
-        // Resolve image model fallbacks. If no fallbacks are configured,
-        // use an empty array to prevent falling back to text-only models.
-        if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
-          imageModelFallbacks = imageModelConfig.fallbacks;
+        // Check if user has a stored model override that is already an image model
+        // If so, respect user's choice and don't switch
+        const sessionModelOverride = entry?.modelOverride;
+        const sessionProviderOverride = entry?.providerOverride;
+        if (sessionModelOverride) {
+          // Collect all image model keys for checking
+          const imageModelKeys = new Set<string>();
+          if (imageModelPrimary) {
+            imageModelKeys.add(imageModelPrimary);
+          }
+          if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
+            for (const fb of imageModelConfig.fallbacks) {
+              if (fb?.trim()) {
+                imageModelKeys.add(fb.trim());
+              }
+            }
+          }
+          // Check if user's stored model is an image model
+          const userModelKey = sessionProviderOverride
+            ? `${sessionProviderOverride}/${sessionModelOverride}`
+            : sessionModelOverride;
+          if (imageModelKeys.has(userModelKey) || imageModelKeys.has(sessionModelOverride)) {
+            context.logGateway.info(
+              `[image-model-switch] User's stored model ${userModelKey} is already an image model, respecting user choice`,
+            );
+            // Don't set imageModelOverride, let user's choice take precedence
+          } else {
+            // User's stored model is not an image model, switch to imageModel
+            imageModelOverride = imageModelPrimary;
+            if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
+              imageModelFallbacks = imageModelConfig.fallbacks;
+            } else {
+              imageModelFallbacks = [];
+            }
+            context.logGateway.info(
+              `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks && imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
+            );
+          }
         } else {
-          imageModelFallbacks = []; // No fallbacks = don't use text model fallbacks
+          // No stored override, switch to imageModel
+          imageModelOverride = imageModelPrimary;
+          if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
+            imageModelFallbacks = imageModelConfig.fallbacks;
+          } else {
+            imageModelFallbacks = [];
+          }
+          context.logGateway.info(
+            `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks && imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
+          );
         }
-        context.logGateway.debug(
-          `[image-model-switch] Detected ${parsedImages.length} image(s), switching to model: ${imageModelOverride}${imageModelFallbacks && imageModelFallbacks.length > 0 ? ` with ${imageModelFallbacks.length} fallback(s)` : " (no fallbacks)"}`,
-        );
       }
     }
     const timeoutMs = resolveAgentTimeoutMs({

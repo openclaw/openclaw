@@ -56,6 +56,9 @@ export async function resolveSessionAuthProfileOverride(params: {
   sessionKey?: string;
   storePath?: string;
   isNewSession: boolean;
+  /** True when images triggered a model switch to imageModel.
+   *  In that case, preserve the saved auth profile even if provider differs. */
+  hasAppliedImageModelOverride?: boolean;
 }): Promise<string | undefined> {
   const {
     cfg,
@@ -66,6 +69,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     sessionKey,
     storePath,
     isNewSession,
+    hasAppliedImageModelOverride,
   } = params;
   if (!sessionEntry || !sessionStore || !sessionKey) {
     return sessionEntry?.authProfileOverride;
@@ -81,8 +85,12 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   if (current && !isProfileForProvider({ provider, profileId: current, store })) {
-    await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
-    current = undefined;
+    // Skip clearing auth profile when image model is temporarily switched.
+    // The provider mismatch is transient and should not clear saved credentials.
+    if (!hasAppliedImageModelOverride) {
+      await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+      current = undefined;
+    }
   }
 
   if (current && order.length > 0 && !order.includes(current)) {
