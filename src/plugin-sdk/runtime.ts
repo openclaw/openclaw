@@ -19,6 +19,7 @@ export * from "../logging.js";
 export { waitForAbortSignal } from "../infra/abort-signal.js";
 export { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 
+/** Minimal logger contract accepted by runtime-adapter helpers. */
 type LoggerLike = {
   info: (message: string) => void;
   error: (message: string) => void;
