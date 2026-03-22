@@ -78,7 +78,7 @@ const discoveryResolvers = [
 
 describe("resolveSessionStoreTargets", () => {
   it("resolves all configured agent stores", async () => {
-    await withTempHome(async (home) => {
+    await withTempHome(async () => {
       const cfg: OpenClawConfig = {
         session: {
           store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
