@@ -13,7 +13,9 @@ function getTypeScript() {
     } catch {
       // Some lightweight CI jobs intentionally do not install full JS deps.
       // Helpers that rely on TS AST should fail lazily only when invoked.
-      throw new Error("typescript dependency is required for AST guard helpers but is not installed");
+      throw new Error(
+        "typescript dependency is required for AST guard helpers but is not installed",
+      );
     }
   }
   return tsCache;
