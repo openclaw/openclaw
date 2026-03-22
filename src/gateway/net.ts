@@ -414,8 +414,9 @@ function parseHostForAddressChecks(
   }
   return {
     isLocalhost: false,
-    // Bare hostnames (no dots, not IP addresses) are internal service names
-    // (Docker, Kubernetes, mDNS, etc.) and cannot exist on the public internet.
+    // Bare hostnames (no dots, not IP addresses) are typically internal service names
+    // (Docker, Kubernetes, etc.) — they are not routable on the public internet
+    // by convention, although DNS search domains can make them resolve to any IP.
     isBareName:
       !normalizedHost.includes(".") &&
       !normalizedHost.startsWith("[") &&

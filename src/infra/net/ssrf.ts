@@ -159,8 +159,17 @@ export function isBlockedHostname(hostname: string): boolean {
   return isBlockedHostnameNormalized(normalized);
 }
 
+function isBareHostname(normalized: string): boolean {
+  // Bare hostnames (no dots) are typically internal service names (Docker,
+  // Kubernetes, etc.) that are not routable on the public internet.
+  return normalized.length > 0 && !normalized.includes(".") && !normalized.includes(":");
+}
+
 function isBlockedHostnameNormalized(normalized: string): boolean {
   if (BLOCKED_HOSTNAMES.has(normalized)) {
+    return true;
+  }
+  if (isBareHostname(normalized)) {
     return true;
   }
   return (
