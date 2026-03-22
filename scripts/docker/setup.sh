@@ -222,6 +222,20 @@ fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
+
+# Warn if OPENCLAW_CONFIG_DIR is /root (will fail in Docker for non-root users).
+# This catches the silent-failure bug: /root/.openclaw is owned by root with 700 permissions,
+# so the node user (uid 1000) in a Docker container cannot write to it.
+if [[ "$OPENCLAW_CONFIG_DIR" == "/root/.openclaw" || "$OPENCLAW_CONFIG_DIR" == "/root" ]]; then
+  echo "WARNING: OPENCLAW_CONFIG_DIR=$OPENCLAW_CONFIG_DIR is not writable by non-root Docker containers." >&2
+  echo "In Docker, the node user (uid 1000) cannot write to /root (owned by root, 700 permissions)." >&2
+  echo "This will cause silent write failures: Telegram/channel configs won't persist, etc." >&2
+  echo "Fix: Set OPENCLAW_CONFIG_DIR to a user-home path writable by non-root, e.g.:" >&2
+  echo "  export OPENCLAW_CONFIG_DIR=\$HOME/.openclaw" >&2
+  echo "  scripts/docker/setup.sh" >&2
+  fail "OPENCLAW_CONFIG_DIR must be writable by non-root Docker users. Use \$HOME/.openclaw or similar."
+fi
+
 # Seed directory tree eagerly so bind mounts work even on Docker Desktop/Windows
 # where the container (even as root) cannot create new host subdirectories.
 mkdir -p "$OPENCLAW_CONFIG_DIR/identity"
