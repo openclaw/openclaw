@@ -43,6 +43,8 @@ You wake up fresh each session. These files are your continuity:
 
 ### 📝 Write It Down
 
+**MANDATORY at end of every substantive session (>5 messages):** Write a daily note to `memory/YYYY-MM-DD.md` summarizing what happened, what was decided, and what is pending.
+
 Memory is limited. If you want to remember something, write it to a file. "Mental notes" don't survive sessions. Files do.
 
 - Significant architecture decision → `memory/architecture-decisions.md`
@@ -50,6 +52,11 @@ Memory is limited. If you want to remember something, write it to a file. "Menta
 - Tool/library evaluated → `memory/evaluations.md`
 - Incident resolved → `memory/incidents.md`
 - User preference learned → `memory/preferences.md`
+
+**Session end checklist (after any substantive task):**
+
+1. Write `memory/YYYY-MM-DD.md` — what happened today, decisions made, pending items
+2. Update the relevant topic file if anything significant changed
 
 ### 🧠 MEMORY.md
 
