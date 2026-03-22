@@ -404,6 +404,8 @@ def cmd_run():
 
     if quality < 5.0:
         print("  Quality below threshold (5.0). Skipping.")
+        state["replied_tweets"].append(tweet['url'])  # Mark as handled to avoid re-selection
+        save_state(state)
         log_action("skip", {
             "reason": "low_quality",
             "account": tweet['account'],
