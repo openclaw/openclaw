@@ -23,6 +23,8 @@ import {
   isPluginHookName,
   isPromptInjectionHookName,
   stripPromptMutationFieldsFromLegacyHookResult,
+  type PluginHookAgentContext,
+  type PluginHookBeforeLlmCallEvent,
 } from "./types.js";
 import type {
   ImageGenerationProviderPlugin,
@@ -819,7 +821,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           message: `typed hook "${hookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false — messages/systemPrompt mutations will be stripped; block/tools/toolCalls still allowed`,
         });
         const original = handler as PluginHookHandlerMap["before_llm_call"];
-        effectiveHandler = (async (event, ctx) => {
+        effectiveHandler = (async (event: PluginHookBeforeLlmCallEvent, ctx: PluginHookAgentContext) => {
           const result = await original(event, ctx);
           if (!result) {
             return result;
