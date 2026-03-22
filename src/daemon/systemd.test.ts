@@ -158,7 +158,7 @@ describe("systemd availability", () => {
         stderr?: string;
         code?: number;
       };
-      err.stderr = "Failed to connect to bus: Transport endpoint is not connected";
+      err.stderr = "Transport endpoint is not connected";
       err.code = 1;
       cb(err, "", "");
     });
@@ -169,10 +169,9 @@ describe("systemd availability", () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args).toEqual(["--user", "status"]);
-        const err = createExecFileError(
-          "Failed to connect to bus: Transport endpoint is not connected",
-          { stderr: "Failed to connect to bus: Transport endpoint is not connected" },
-        );
+        const err = createExecFileError("Transport endpoint is not connected", {
+          stderr: "Transport endpoint is not connected",
+        });
         cb(err, "", "");
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -380,9 +379,7 @@ describe("isNonFatalSystemdInstallProbeError", () => {
 
   it("matches transport endpoint is not connected probe failures", () => {
     expect(
-      isNonFatalSystemdInstallProbeError(
-        new Error("Failed to connect to bus: Transport endpoint is not connected"),
-      ),
+      isNonFatalSystemdInstallProbeError(new Error("Transport endpoint is not connected")),
     ).toBe(true);
   });
 
