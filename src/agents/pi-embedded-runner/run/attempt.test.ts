@@ -729,6 +729,55 @@ describe("recoverOrphanedUserMessagesForPrompt", () => {
     });
     expect(replaceMessages).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps older matching orphaned turns when only the newest turn differs", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: agentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "seed assistant" }],
+          }),
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: agentMessage({
+            role: "user",
+            content: [{ type: "text", text: "retry me" }],
+          }),
+        },
+        {
+          id: "u2",
+          type: "message",
+          parentId: "u1",
+          message: agentMessage({
+            role: "user",
+            content: [{ type: "text", text: "latest orphan" }],
+          }),
+        },
+      ],
+      "u2",
+    );
+
+    const replaceMessages = vi.fn();
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "retry me",
+      replaceMessages,
+    });
+
+    expect(result).toEqual({
+      prompt: "retry me\n\nlatest orphan\n\nretry me",
+      recoveredCount: 2,
+      mergedCount: 2,
+      recoveredImages: [],
+    });
+    expect(replaceMessages).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("resolveAttemptFsWorkspaceOnly", () => {

@@ -407,12 +407,11 @@ export function recoverOrphanedUserMessagesForPrompt(params: {
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
   if (normalizedPromptCandidates.size > 0) {
-    // Drop only one prompt-echo entry so repeated identical user turns still survive recovery.
-    const promptEchoIndex = carryForwardEntries.findLastIndex((entry) =>
-      normalizedPromptCandidates.has(entry),
-    );
-    if (promptEchoIndex >= 0) {
-      carryForwardEntries.splice(promptEchoIndex, 1);
+    const newestRecoveredEntry = orphanedUserCarryForward[0]?.trim();
+    // Only strip a prompt echo when the newest orphaned turn is the same message
+    // the user is currently retrying. Older matching turns are real history.
+    if (newestRecoveredEntry && normalizedPromptCandidates.has(newestRecoveredEntry)) {
+      carryForwardEntries.pop();
     }
   }
   if (carryForwardEntries.length === 0) {
