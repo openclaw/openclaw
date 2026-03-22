@@ -112,6 +112,7 @@ export function startGatewayMaintenanceTimers(params: {
           chatAbortControllers: params.chatAbortControllers,
           chatRunBuffers: params.chatRunBuffers,
           chatDeltaSentAt: params.chatDeltaSentAt,
+          chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
           chatAbortedRuns: params.chatRunState.abortedRuns,
           removeChatRun: params.removeChatRun,
           agentRunSeq: params.agentRunSeq,
@@ -130,14 +131,18 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatRunState.abortedRuns.delete(runId);
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
+      params.chatDeltaLastBroadcastLen.delete(runId);
     }
 
     // Sweep stale buffers for runs that were never explicitly aborted.
-    // If a buffer has not been updated for longer than ABORTED_RUN_TTL_MS,
-    // the run is stuck — clean up its state to prevent unbounded heap growth.
+    // Only reap orphaned buffers after the abort controller is gone; active
+    // runs can legitimately sit idle while tools/models work.
     for (const [runId, lastSentAt] of params.chatDeltaSentAt) {
       if (params.chatRunState.abortedRuns.has(runId)) {
         continue; // already handled above
+      }
+      if (params.chatAbortControllers.has(runId)) {
+        continue;
       }
       if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
         continue;
