@@ -5,6 +5,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
+  buildComputedAccountStatusSnapshot,
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
   formatTrimmedAllowFromEntries,
@@ -206,21 +207,21 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       }),
     probeAccount: async ({ timeoutMs }) =>
       await (await loadIMessageChannelRuntime()).probeIMessageAccount(timeoutMs),
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      cliPath: runtime?.cliPath ?? account.config.cliPath ?? null,
-      dbPath: runtime?.dbPath ?? account.config.dbPath ?? null,
-      probe,
-      lastInboundAt: runtime?.lastInboundAt ?? null,
-      lastOutboundAt: runtime?.lastOutboundAt ?? null,
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) =>
+      buildComputedAccountStatusSnapshot(
+        {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: account.configured,
+          runtime,
+          probe,
+        },
+        {
+          cliPath: runtime?.cliPath ?? account.config.cliPath ?? null,
+          dbPath: runtime?.dbPath ?? account.config.dbPath ?? null,
+        },
+      ),
     resolveAccountState: ({ enabled }) => (enabled ? "enabled" : "disabled"),
   },
   gateway: {
