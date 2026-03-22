@@ -232,23 +232,24 @@ describe("channel-auth", () => {
     );
   });
 
+  const whatsappCatalogEntry = {
+    id: "whatsapp",
+    pluginId: "@openclaw/whatsapp",
+    meta: {
+      id: "whatsapp",
+      label: "WhatsApp",
+      selectionLabel: "WhatsApp",
+      docsPath: "/channels/whatsapp",
+      blurb: "wa",
+      aliases: ["wa"],
+    },
+    install: { npmSpec: "@openclaw/whatsapp" },
+  };
+
   it("resolves catalog-backed channel when normalizeChannelId returns undefined (login)", async () => {
     mocks.normalizeChannelId.mockReturnValue(undefined);
     mocks.getChannelPlugin.mockReturnValue(undefined);
-    const catalogEntry = {
-      id: "whatsapp",
-      pluginId: "@openclaw/whatsapp",
-      meta: {
-        id: "whatsapp",
-        label: "WhatsApp",
-        selectionLabel: "WhatsApp",
-        docsPath: "/channels/whatsapp",
-        blurb: "wa",
-        aliases: ["wa"],
-      },
-      install: { npmSpec: "@openclaw/whatsapp" },
-    };
-    mocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([whatsappCatalogEntry]);
     mocks.loadChannelSetupPluginRegistrySnapshotForChannel
       .mockReturnValueOnce({ channels: [], channelSetups: [] })
       .mockReturnValueOnce({ channels: [{ plugin }], channelSetups: [] });
@@ -266,20 +267,7 @@ describe("channel-auth", () => {
   it("resolves catalog-backed channel when normalizeChannelId returns undefined (logout)", async () => {
     mocks.normalizeChannelId.mockReturnValue(undefined);
     mocks.getChannelPlugin.mockReturnValue(undefined);
-    const catalogEntry = {
-      id: "whatsapp",
-      pluginId: "@openclaw/whatsapp",
-      meta: {
-        id: "whatsapp",
-        label: "WhatsApp",
-        selectionLabel: "WhatsApp",
-        docsPath: "/channels/whatsapp",
-        blurb: "wa",
-        aliases: ["wa"],
-      },
-      install: { npmSpec: "@openclaw/whatsapp" },
-    };
-    mocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([whatsappCatalogEntry]);
     mocks.loadChannelSetupPluginRegistrySnapshotForChannel
       .mockReturnValueOnce({ channels: [], channelSetups: [] })
       .mockReturnValueOnce({ channels: [{ plugin }], channelSetups: [] });
