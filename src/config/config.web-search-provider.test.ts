@@ -182,13 +182,12 @@ describe("web search provider config", () => {
       return;
     }
     expect(res.config.tools?.web?.search?.provider).toBe("tavily");
-    // Must not produce the old "Invalid input (allowed: ...)" error
-    expect(res).not.toMatchObject({
-      issues: expect.arrayContaining([
-        expect.objectContaining({ path: "tools.web.search.provider" }),
-      ]),
-    });
-  });
+    expect(res.config.tools?.web?.search?.provider).toBe("tavily");
+    // res.ok === true already guarantees no validation error occurred.
+    // Optionally assert no warnings were emitted for this path:
+    expect(res.warnings ?? []).not.toContainEqual(
+      expect.objectContaining({ path: "tools.web.search.provider" }),
+    );
 
   it("accepts perplexity provider and config", () => {
     const res = validateConfigObjectWithPlugins(
