@@ -26,6 +26,7 @@ function createMaintenanceTimerDeps() {
     chatRunState: { abortedRuns: new Map() },
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
+    chatDeltaLastBroadcastLen: new Map(),
     removeChatRun: () => undefined,
     agentRunSeq: new Map(),
     nodeSendToSession: () => {},
