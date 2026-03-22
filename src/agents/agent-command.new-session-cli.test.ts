@@ -340,6 +340,7 @@ function createSessionResolution(params?: {
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
   systemPromptReport?: TestSessionEntry["systemPromptReport"];
+  skillsSnapshot?: TestSessionEntry["skillsSnapshot"];
 }): {
   sessionId: string;
   sessionKey: string;
@@ -361,6 +362,7 @@ function createSessionResolution(params?: {
     cliSessionIds,
     claudeCliSessionId: params?.claudeCliSessionId,
     systemPromptReport: params?.systemPromptReport,
+    skillsSnapshot: params?.skillsSnapshot,
   };
   hoisted.sessionStore[sessionKey] = sessionEntry;
   return {
@@ -477,6 +479,31 @@ describe("agentCommand CLI session rollover", () => {
       sessionId: "session-new",
     });
     expect(hoisted.sessionStore[sessionResolution.sessionKey]?.cliSessionIds).toBeUndefined();
+  });
+
+  it("drops stale skills snapshots when the first post-reset turn fails before startup", async () => {
+    const sessionResolution = createSessionResolution({
+      isNewSession: true,
+      skillsSnapshot: {
+        prompt: "stale snapshot",
+        skills: [{ id: "old-skill" }],
+      },
+    });
+    hoisted.resolveSessionMock.mockReturnValue(sessionResolution);
+    hoisted.sendPolicy = "deny";
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        agentId: "main",
+        deliver: true,
+      }),
+    ).rejects.toThrow("send blocked by session policy");
+
+    expect(hoisted.sessionStore[sessionResolution.sessionKey]).toMatchObject({
+      sessionId: "session-new",
+    });
+    expect(hoisted.sessionStore[sessionResolution.sessionKey]?.skillsSnapshot).toBeUndefined();
   });
 
   it("resets stale bootstrap warning state for the first turn in a new CLI session", async () => {
