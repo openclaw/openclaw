@@ -53,6 +53,12 @@ export function buildEmbeddedSystemPrompt(params: {
   contextFiles?: EmbeddedContextFile[];
   bootstrapTruncationWarningLines?: string[];
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Channel surface type (e.g. "telegram", "discord") for the Current Channel section. */
+  channelType?: string;
+  /** Account/sender ID for the Current Channel section. */
+  channelId?: string;
+  /** Thread/topic ID for the Current Channel section. */
+  topicId?: string;
 }): string {
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
@@ -83,6 +89,9 @@ export function buildEmbeddedSystemPrompt(params: {
     contextFiles: params.contextFiles,
     bootstrapTruncationWarningLines: params.bootstrapTruncationWarningLines,
     memoryCitationsMode: params.memoryCitationsMode,
+    channelType: params.channelType,
+    channelId: params.channelId,
+    topicId: params.topicId,
   });
 }
 

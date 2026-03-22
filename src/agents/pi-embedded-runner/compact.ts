@@ -641,6 +641,9 @@ export async function compactEmbeddedPiSessionDirect(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      // Thread channel context so the compaction system prompt "Current Channel" section has real values.
+      channelType: runtimeChannel ?? undefined,
+      channelId: params.agentAccountId ?? undefined,
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 

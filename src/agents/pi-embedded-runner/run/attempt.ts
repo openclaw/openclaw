@@ -1031,6 +1031,10 @@ export async function runEmbeddedAttempt(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      // Thread channel context so the system prompt "Current Channel" section has real values.
+      channelType: runtimeChannel ?? undefined,
+      channelId: params.agentAccountId ?? undefined,
+      topicId: params.messageThreadId != null ? String(params.messageThreadId) : undefined,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
