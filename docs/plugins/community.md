@@ -129,12 +129,12 @@ We welcome community plugins that are useful, documented, and safe to operate.
 
 ## Quality bar
 
-| Requirement          | Why                                           |
-| -------------------- | --------------------------------------------- |
+| Requirement                 | Why                                           |
+| --------------------------- | --------------------------------------------- |
 | Published on ClawHub or npm | Users need `openclaw plugins install` to work |
-| Public GitHub repo   | Source review, issue tracking, transparency   |
-| Setup and usage docs | Users need to know how to configure it        |
-| Active maintenance   | Recent updates or responsive issue handling   |
+| Public GitHub repo          | Source review, issue tracking, transparency   |
+| Setup and usage docs        | Users need to know how to configure it        |
+| Active maintenance          | Recent updates or responsive issue handling   |
 
 Low-effort wrappers, unclear ownership, or unmaintained packages may be declined.
 
